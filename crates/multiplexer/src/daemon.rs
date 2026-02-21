@@ -13,6 +13,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::{fs, io};
+use tracing::{debug, info, trace};
 
 /// The multiplexer daemon that manages agents and dispatches tasks.
 pub struct Multiplexer {
@@ -21,7 +22,6 @@ pub struct Multiplexer {
     socket_path: PathBuf,
     agents: HashMap<String, AgentState>,
     pending_tasks: VecDeque<PendingTask>,
-    verbose: bool,
 }
 
 struct PendingTask {
@@ -37,7 +37,7 @@ enum AgentState {
 
 impl Multiplexer {
     /// Create a new multiplexer for the given root folder.
-    pub fn new(root: impl AsRef<Path>, verbose: bool) -> io::Result<Self> {
+    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         let agents_folder = root.join(AGENTS_DIR);
         let lock_path = root.join(LOCK_FILE);
@@ -59,18 +59,11 @@ impl Multiplexer {
             socket_path,
             agents: HashMap::new(),
             pending_tasks: VecDeque::new(),
-            verbose,
         };
 
         multiplexer.scan_existing_agents()?;
 
         Ok(multiplexer)
-    }
-
-    fn log(&self, msg: &str) {
-        if self.verbose {
-            eprintln!("[daemon] {msg}");
-        }
     }
 
     /// Run the multiplexer event loop.
@@ -106,7 +99,7 @@ impl Multiplexer {
             .watch(&self.agents_folder, RecursiveMode::Recursive)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-        eprintln!("[daemon] listening on {}", self.socket_path.display());
+        info!(socket = %self.socket_path.display(), "listening");
 
         self.event_loop(listener, fs_rx)
     }
@@ -149,13 +142,13 @@ impl Multiplexer {
         if self.agents.contains_key(agent_id) {
             return;
         }
-        eprintln!("[daemon] agent registered: {agent_id}");
+        info!(agent_id, "agent registered");
         self.agents.insert(agent_id.to_string(), AgentState::Available);
     }
 
     fn unregister_agent(&mut self, agent_id: &str) {
         if self.agents.remove(agent_id).is_some() {
-            eprintln!("[daemon] agent unregistered: {agent_id}");
+            info!(agent_id, "agent unregistered");
         }
     }
 
@@ -178,11 +171,11 @@ impl Multiplexer {
             Err(_) => return Ok(()),
         };
 
-        eprintln!(
-            "[daemon] task received ({} bytes), {} pending, {} agents",
-            content.len(),
-            self.pending_tasks.len(),
-            self.agents.len()
+        info!(
+            bytes = content.len(),
+            pending = self.pending_tasks.len(),
+            agents = self.agents.len(),
+            "task received"
         );
         self.pending_tasks.push_back(PendingTask {
             content,
@@ -193,11 +186,11 @@ impl Multiplexer {
     }
 
     fn handle_fs_event(&mut self, event: Event) -> io::Result<()> {
-        self.log(&format!("fs event: {:?} paths={:?}", event.kind, event.paths));
+        trace!(kind = ?event.kind, paths = ?event.paths, "fs event");
 
         for path in &event.paths {
             if !path.starts_with(&self.agents_folder) {
-                self.log(&format!("  skipping (not in agents folder): {}", path.display()));
+                trace!(path = %path.display(), "skipping path outside agents folder");
                 continue;
             }
 
@@ -218,7 +211,7 @@ impl Multiplexer {
                 continue;
             }
 
-            self.log(&format!("  agent_id={agent_id} components={}", components.len()));
+            debug!(agent_id, components = components.len(), "processing fs event");
 
             match components.len() {
                 1 => self.handle_agent_folder_event(&event, agent_id),
@@ -237,16 +230,13 @@ impl Multiplexer {
 
     fn handle_agent_folder_event(&mut self, event: &Event, agent_id: &str) {
         let agent_folder = self.agents_folder.join(agent_id);
+        let is_dir = agent_folder.is_dir();
 
-        self.log(&format!(
-            "  folder event: agent={agent_id} kind={:?} is_dir={}",
-            event.kind,
-            agent_folder.is_dir()
-        ));
+        debug!(agent_id, kind = ?event.kind, is_dir, "folder event");
 
         if matches!(event.kind, EventKind::Remove(_)) {
             self.unregister_agent(agent_id);
-        } else if agent_folder.is_dir() {
+        } else if is_dir {
             // Register on any event if folder exists (Create, Modify, etc.)
             self.register_agent(agent_id);
         }
@@ -303,7 +293,7 @@ impl Multiplexer {
 
         self.send_response(response_stream, &output)?;
 
-        eprintln!("[daemon] task completed by {agent_id}");
+        info!(agent_id, "task completed");
         self.agents.insert(agent_id.to_string(), AgentState::Available);
 
         Ok(())
@@ -335,7 +325,7 @@ impl Multiplexer {
             let task_path = self.agents_folder.join(&agent_id).join(NEXT_TASK_FILE);
             fs::write(&task_path, &task.content)?;
 
-            eprintln!("[daemon] task dispatched to {agent_id}");
+            info!(agent_id, "task dispatched");
             self.agents.insert(
                 agent_id,
                 AgentState::Busy {

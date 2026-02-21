@@ -1,9 +1,28 @@
 //! CLI for the multiplexer.
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use multiplexer::{stop, submit, Multiplexer};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+/// Log level for the multiplexer.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum LogLevel {
+    /// No logging
+    Off,
+    /// Error messages only
+    Error,
+    /// Warnings and errors
+    Warn,
+    /// Informational messages (default)
+    #[default]
+    Info,
+    /// Debug messages
+    Debug,
+    /// Trace messages (very verbose)
+    Trace,
+}
 
 const AGENT_PROTOCOL: &str = include_str!("../AGENT_PROTOCOL.md");
 
@@ -21,9 +40,9 @@ enum Command {
     Start {
         /// Root directory for the multiplexer
         root: PathBuf,
-        /// Enable verbose logging
-        #[arg(short, long)]
-        verbose: bool,
+        /// Log level
+        #[arg(short, long, default_value = "info")]
+        log_level: LogLevel,
     },
     /// Stop a running multiplexer server
     Stop {
@@ -41,12 +60,30 @@ enum Command {
     Protocol,
 }
 
+fn init_tracing(level: LogLevel) {
+    let filter = match level {
+        LogLevel::Off => EnvFilter::new("off"),
+        LogLevel::Error => EnvFilter::new("error"),
+        LogLevel::Warn => EnvFilter::new("warn"),
+        LogLevel::Info => EnvFilter::new("info"),
+        LogLevel::Debug => EnvFilter::new("debug"),
+        LogLevel::Trace => EnvFilter::new("trace"),
+    };
+
+    tracing_subscriber::registry()
+        .with(fmt::layer().without_time().with_target(false))
+        .with(filter)
+        .init();
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Start { root, verbose } => {
-            let mut multiplexer = match Multiplexer::new(&root, verbose) {
+        Command::Start { root, log_level } => {
+            init_tracing(log_level);
+
+            let mut multiplexer = match Multiplexer::new(&root) {
                 Ok(m) => m,
                 Err(e) => {
                     eprintln!("Failed to start: {e}");

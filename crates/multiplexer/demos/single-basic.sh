@@ -32,9 +32,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Start multiplexer in background (use -v for verbose mode)
+# Start multiplexer in background (use LOG_LEVEL=debug or trace for more output)
 echo "Starting multiplexer..."
-$MULTIPLEXER start "$ROOT" ${VERBOSE:+-v} &
+$MULTIPLEXER start "$ROOT" --log-level "${LOG_LEVEL:-info}" &
 MULTIPLEXER_PID=$!
 sleep 0.5
 
