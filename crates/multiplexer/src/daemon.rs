@@ -85,13 +85,17 @@ impl Multiplexer {
 
         let (fs_tx, fs_rx) = mpsc::channel();
 
+        // Use a short poll interval for responsive agent detection
+        let config = notify::Config::default()
+            .with_poll_interval(Duration::from_millis(100));
+
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
                     let _ = fs_tx.send(event);
                 }
             },
-            notify::Config::default(),
+            config,
         )
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
@@ -109,6 +113,9 @@ impl Multiplexer {
         listener: Listener,
         fs_rx: mpsc::Receiver<Event>,
     ) -> io::Result<()> {
+        let mut last_scan = std::time::Instant::now();
+        let scan_interval = Duration::from_millis(200);
+
         loop {
             match listener.accept() {
                 Ok(stream) => self.handle_submit(stream)?,
@@ -118,6 +125,13 @@ impl Multiplexer {
 
             while let Ok(event) = fs_rx.try_recv() {
                 self.handle_fs_event(event)?;
+            }
+
+            // Periodic rescan to catch agents that file watching might miss
+            // (e.g., due to FSEvents latency on macOS)
+            if last_scan.elapsed() >= scan_interval {
+                self.scan_existing_agents()?;
+                last_scan = std::time::Instant::now();
             }
 
             self.try_dispatch_tasks()?;
