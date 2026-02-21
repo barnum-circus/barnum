@@ -5,8 +5,10 @@ use gsd_multiplexer::{stop, submit, Multiplexer};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+const AGENT_PROTOCOL: &str = include_str!("../AGENT_PROTOCOL.md");
+
 #[derive(Parser)]
-#[command(name = "gsd_multiplexer")]
+#[command(name = "multiplexer")]
 #[command(about = "Multiplexer for managing agent pools")]
 struct Cli {
     #[command(subcommand)]
@@ -32,6 +34,8 @@ enum Command {
         /// Task input to send
         input: String,
     },
+    /// Print the agent protocol documentation
+    Protocol,
 }
 
 fn main() -> ExitCode {
@@ -68,6 +72,9 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
+        Command::Protocol => {
+            print!("{AGENT_PROTOCOL}");
+        }
     }
 
     ExitCode::SUCCESS
