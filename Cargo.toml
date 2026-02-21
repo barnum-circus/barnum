@@ -14,11 +14,9 @@ clap = { version = "4.5", features = ["derive"] }
 convert_case = "0.8.0"
 interprocess = "2.2"
 deluxe = "0.5.0"
-hex = "0.4"
 notify = "7.0"
 proc-macro2 = "1.0.92"
 quote = "1.0.38"
-rand = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.108"
 syn = "2.0.96"
