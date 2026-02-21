@@ -1,16 +1,21 @@
-#![allow(missing_docs)]
+//! Tests that the task queue respects max concurrency limits.
 
 use task_queue::{process_queue, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
+/// A task that tracks how many tasks are running concurrently.
 struct ConcurrencyTask {
+    /// Shared counter of currently running tasks.
     current_count: Arc<AtomicUsize>,
+    /// Shared tracker of the maximum concurrent tasks observed.
     max_observed: Arc<AtomicUsize>,
 }
 
+/// In-progress state that holds the counter for decrementing on cleanup.
 struct ConcurrencyInProgress {
+    /// Reference to the current count for decrementing when done.
     current_count: Arc<AtomicUsize>,
 }
 

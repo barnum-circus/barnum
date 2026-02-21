@@ -1,37 +1,58 @@
-#![allow(missing_docs)]
+//! Tests for fan-out pattern: one task spawning multiple follow-up tasks.
+//!
+//! This test manually implements the Task enum dispatch logic to verify
+//! the pattern works correctly before using the derive macro.
 
 use task_queue::{process_queue, IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use std::collections::HashSet;
 use std::process::Command;
 
+/// Test context tracking task lifecycle events.
 #[derive(Default)]
 struct Context {
+    /// Values collected from completed Print tasks.
     collected: HashSet<String>,
+    /// Number of Split tasks started.
     splits_started: usize,
+    /// Number of Split tasks cleaned up.
     splits_cleaned_up: usize,
+    /// Number of Print tasks created by Split cleanup.
     prints_created: usize,
+    /// Number of Print tasks started.
     prints_started: usize,
+    /// Number of Print tasks cleaned up.
     prints_cleaned_up: usize,
 }
 
+/// The top-level task enum wrapping all task types.
 enum Task {
+    /// A task that splits CSV into individual values.
     Split(Split),
+    /// A task that collects a single value.
     Print(Print),
 }
 
+/// Task that splits a CSV string into individual Print tasks.
 struct Split {
+    /// Comma-separated values to split.
     csv: String,
 }
 
+/// Task that collects a single value into the context.
 struct Print {
+    /// The value to collect.
     value: String,
 }
 
+/// In-progress state for Split task.
 struct SplitInProgress {
+    /// The CSV string being processed.
     csv: String,
 }
 
+/// In-progress state for Print task.
 struct PrintInProgress {
+    /// The value being processed.
     value: String,
 }
 
@@ -47,8 +68,11 @@ impl From<Print> for Task {
     }
 }
 
+/// In-progress state for the Task enum.
 enum TaskInProgress {
+    /// In-progress Split task.
     Split(SplitInProgress),
+    /// In-progress Print task.
     Print(PrintInProgress),
 }
 

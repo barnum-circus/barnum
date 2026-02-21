@@ -1,38 +1,59 @@
-#![allow(missing_docs)]
+//! Tests for the GsdTask derive macro.
+//!
+//! This is the same test as split_print.rs but uses `#[derive(GsdTask)]`
+//! instead of manually implementing the Task enum dispatch.
 
 use task_queue::{process_queue, GsdTask, IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use std::collections::HashSet;
 use std::process::Command;
 
+/// Test context tracking task lifecycle events.
 #[derive(Default)]
 struct Context {
+    /// Values collected from completed Print tasks.
     collected: HashSet<String>,
+    /// Number of Split tasks started.
     splits_started: usize,
+    /// Number of Split tasks cleaned up.
     splits_cleaned_up: usize,
+    /// Number of Print tasks created by Split cleanup.
     prints_created: usize,
+    /// Number of Print tasks started.
     prints_started: usize,
+    /// Number of Print tasks cleaned up.
     prints_cleaned_up: usize,
 }
 
+/// The top-level task enum using the derive macro.
 #[derive(GsdTask)]
 enum Task {
+    /// A task that splits CSV into individual values.
     Split(Split),
+    /// A task that collects a single value.
     Print(Print),
 }
 
+/// Task that splits a CSV string into individual Print tasks.
 struct Split {
+    /// Comma-separated values to split.
     csv: String,
 }
 
+/// Task that collects a single value into the context.
 struct Print {
+    /// The value to collect.
     value: String,
 }
 
+/// In-progress state for Split task.
 struct SplitInProgress {
+    /// The CSV string being processed.
     csv: String,
 }
 
+/// In-progress state for Print task.
 struct PrintInProgress {
+    /// The value being processed.
     value: String,
 }
 

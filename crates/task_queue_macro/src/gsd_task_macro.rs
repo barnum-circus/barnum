@@ -43,7 +43,11 @@ pub(crate) fn gsd_task_macro(item: TokenStream) -> TokenStream {
         .iter()
         .zip(variant_types.iter())
         .map(|(name, ty)| {
-            quote! { #name(<#ty as QueueItem<Ctx>>::InProgress) }
+            let doc = format!("In-progress state for [`{name}`].");
+            quote! {
+                #[doc = #doc]
+                #name(<#ty as QueueItem<Ctx>>::InProgress)
+            }
         });
 
     let from_impls = variant_names
@@ -79,7 +83,9 @@ pub(crate) fn gsd_task_macro(item: TokenStream) -> TokenStream {
             }
         });
 
+    let in_progress_doc = format!("In-progress state for [`{enum_name}`].");
     let output = quote! {
+        #[doc = #in_progress_doc]
         pub enum #in_progress_enum_name<Ctx>
         where
             #(#variant_types: QueueItem<Ctx>,)*

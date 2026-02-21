@@ -1,19 +1,25 @@
-#![allow(missing_docs)]
+//! Tests for basic task queue functionality with JSON deserialization.
 
 use task_queue::{process_queue, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use serde::Deserialize;
 use std::process::Command;
 
+/// Response deserialized from the echo command's JSON output.
 #[derive(Deserialize)]
 struct SimpleResponse {
+    /// The integer value from the JSON.
     value: i32,
 }
 
+/// A task that echoes JSON and expects it to be deserialized.
 struct SimpleTask {
+    /// The JSON string to echo.
     json_to_echo: String,
 }
 
+/// Context that captures the task result.
 struct SimpleContext {
+    /// The result of processing, if any.
     result: Option<Result<SimpleResponse, String>>,
 }
 
