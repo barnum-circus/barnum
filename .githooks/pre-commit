@@ -1,0 +1,19 @@
+#!/bin/bash
+# Pre-commit hook: runs cargo check, cargo test, and cargo udeps
+
+set -e
+
+echo "Running cargo check..."
+cargo check --workspace --all-targets
+
+echo "Running cargo test..."
+cargo test --workspace
+
+echo "Running cargo udeps (requires nightly)..."
+if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
+    cargo +nightly udeps --workspace --all-targets
+else
+    echo "Warning: cargo-udeps not installed or nightly not available, skipping"
+fi
+
+echo "Pre-commit checks passed!"

@@ -40,7 +40,7 @@ sleep 0.5
 
 # Start agent in background
 echo "Starting agent..."
-"$SCRIPT_DIR/../scripts/agent.sh" "$ROOT" "agent-1" 0.1 &
+"$SCRIPT_DIR/../scripts/echo-agent.sh" "$ROOT" "agent-1" 0.1 &
 AGENT_PID=$!
 sleep 0.3
 

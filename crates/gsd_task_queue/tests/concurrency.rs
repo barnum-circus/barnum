@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use gsd_task_queue::{process_queue, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};

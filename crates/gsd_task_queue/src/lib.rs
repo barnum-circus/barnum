@@ -40,6 +40,7 @@ impl<T> From<NoMoreTasks> for Vec<T> {
 
 /// Trait for converting cleanup results into a Vec of tasks.
 pub trait IntoTasks<T> {
+    /// Convert this value into a vector of tasks.
     fn into_tasks(self) -> Vec<T>;
 }
 
@@ -57,13 +58,16 @@ impl<T, U: Into<T>> IntoTasks<T> for Vec<U> {
 
 /// Options for processing the queue.
 pub struct ProcessQueueOptions {
+    /// Maximum number of tasks to run concurrently.
     pub max_concurrency: usize,
 }
 
 /// Errors that can occur while processing the queue.
 #[derive(Debug)]
 pub enum ProcessQueueError {
+    /// An I/O error occurred while spawning or reading from a command.
     Io(std::io::Error),
+    /// A spawned task panicked before completing.
     TaskPanicked,
 }
 

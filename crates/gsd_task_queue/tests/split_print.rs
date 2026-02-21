@@ -1,3 +1,5 @@
+#![allow(missing_docs)]
+
 use gsd_task_queue::{process_queue, IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem};
 use std::collections::HashSet;
 use std::process::Command;

@@ -53,6 +53,28 @@ A folder is either a **HashMap** or a **Struct**:
 
 **Never mix these.** A folder of demos should only contain demos, not utilities. Put utilities elsewhere (e.g., `scripts/`).
 
+## Script dependencies
+
+Scripts that are expected to be run directly by users should know about their dependencies and build them if necessary. For example:
+
+- `demos/demo-single-basic.sh` runs `cargo build -p gsd_multiplexer` because users run it directly
+- `scripts/echo-agent.sh` does NOT build anything - it's a utility called by other scripts that have already built the binary
+
+The rule: if a script is an entry point (user runs it), it handles its own dependencies. If it's a utility (called by other scripts), it assumes dependencies are already built.
+
+## Pre-commit hooks
+
+This repo uses git hooks in `.githooks/`. To enable them:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook runs:
+- `cargo check --workspace --all-targets`
+- `cargo test --workspace`
+- `cargo +nightly udeps --workspace --all-targets` (if available)
+
 ## Dependency hygiene
 
 Use `cargo-udeps` to check for unused dependencies:

@@ -40,11 +40,11 @@ sleep 0.5
 
 # Start agents with different sleep times
 echo "Starting agents with varying response times..."
-"$SCRIPT_DIR/../scripts/agent.sh" "$ROOT" "fast-agent" 0.1 &
+"$SCRIPT_DIR/../scripts/echo-agent.sh" "$ROOT" "fast-agent" 0.1 &
 AGENT1_PID=$!
-"$SCRIPT_DIR/../scripts/agent.sh" "$ROOT" "medium-agent" 0.3 &
+"$SCRIPT_DIR/../scripts/echo-agent.sh" "$ROOT" "medium-agent" 0.3 &
 AGENT2_PID=$!
-"$SCRIPT_DIR/../scripts/agent.sh" "$ROOT" "slow-agent" 0.5 &
+"$SCRIPT_DIR/../scripts/echo-agent.sh" "$ROOT" "slow-agent" 0.5 &
 AGENT3_PID=$!
 sleep 0.3
 
