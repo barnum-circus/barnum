@@ -4,7 +4,6 @@
   "description": "Multiplexer for managing agent pools. Provides the `gsd` command.",
   "main": "index.js",
   "bin": {
-    "gsd": "cli.js",
     "multiplexer": "cli.js"
   },
   "author": "Robert Balicki",

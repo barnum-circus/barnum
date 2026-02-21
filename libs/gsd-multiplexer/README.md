@@ -12,13 +12,19 @@ npm install -g @gsd-now/multiplexer@main
 
 ```bash
 # Start the multiplexer server
-gsd start ./workspace
+multiplexer start ./workspace
 
 # Submit a task and wait for result
-gsd submit ./workspace "task payload"
+multiplexer submit ./workspace "task payload"
 
 # Stop a running server
-gsd stop ./workspace
+multiplexer stop ./workspace
+```
+
+Or with npx:
+
+```bash
+npx @gsd-now/multiplexer start ./workspace
 ```
 
 ## Agent Protocol
