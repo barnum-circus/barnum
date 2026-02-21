@@ -220,14 +220,11 @@ impl Multiplexer {
     fn handle_agent_folder_event(&mut self, event: &Event, agent_id: &str) {
         let agent_folder = self.agents_folder.join(agent_id);
 
-        match &event.kind {
-            EventKind::Create(_) if agent_folder.is_dir() => {
-                self.register_agent(agent_id);
-            }
-            EventKind::Remove(_) => {
-                self.unregister_agent(agent_id);
-            }
-            _ => {}
+        if matches!(event.kind, EventKind::Remove(_)) {
+            self.unregister_agent(agent_id);
+        } else if agent_folder.is_dir() {
+            // Register on any event if folder exists (Create, Modify, etc.)
+            self.register_agent(agent_id);
         }
     }
 
@@ -238,6 +235,12 @@ impl Multiplexer {
         filename: &str,
         path: &Path,
     ) -> io::Result<()> {
+        // Any file event in an agent folder means the agent exists
+        let agent_folder = self.agents_folder.join(agent_id);
+        if agent_folder.is_dir() {
+            self.register_agent(agent_id);
+        }
+
         if filename == OUTPUT_FILE
             && matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
             && path.exists()
