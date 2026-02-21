@@ -27,3 +27,9 @@ Your singular mission is creating S-tier libraries where:
 - Error handling that guides, not obscures
 - APIs that are impossible to misuse
 - Code that a junior engineer could read and understand
+
+## Git practices
+
+- Prefer small, atomic commits
+- **NEVER amend commits that have been pushed** - always check `git log origin/master` vs `git log` before amending
+- If a commit has been pushed, make changes as a new commit instead
