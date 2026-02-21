@@ -1,0 +1,27 @@
+{
+  "name": "@gsd-now/multiplexer",
+  "version": "0.1.0",
+  "description": "Multiplexer for managing agent pools. Provides the `gsd` command.",
+  "main": "index.js",
+  "bin": {
+    "gsd": "cli.js"
+  },
+  "author": "Robert Balicki",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rbalicki2/gsd"
+  },
+  "keywords": [
+    "agent",
+    "multiplexer",
+    "task-queue",
+    "cli"
+  ],
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*"
+  ],
+  "sideEffects": false
+}

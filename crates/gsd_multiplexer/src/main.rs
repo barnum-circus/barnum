@@ -1,61 +1,73 @@
-use gsd_multiplexer::{submit, Multiplexer};
-use std::env;
+//! CLI for the GSD multiplexer.
+
+use clap::{Parser, Subcommand};
+use gsd_multiplexer::{stop, submit, Multiplexer};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[derive(Parser)]
+#[command(name = "gsd_multiplexer")]
+#[command(about = "Multiplexer for managing agent pools")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Start the multiplexer server
+    Start {
+        /// Root directory for the multiplexer
+        root: PathBuf,
+    },
+    /// Stop a running multiplexer server
+    Stop {
+        /// Root directory where the server is running
+        root: PathBuf,
+    },
+    /// Submit a task and wait for the result
+    Submit {
+        /// Root directory where the server is running
+        root: PathBuf,
+        /// Task input to send
+        input: String,
+    },
+}
+
 fn main() -> ExitCode {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() < 2 {
-        eprintln!("Usage: gsd_multiplexer <command> [args...]");
-        eprintln!("Commands:");
-        eprintln!("  daemon <root>        - Run as daemon");
-        eprintln!("  submit <root> <input> - Submit task and wait for result");
-        return ExitCode::FAILURE;
-    }
-
-    match args[1].as_str() {
-        "daemon" => {
-            if args.len() < 3 {
-                eprintln!("Usage: gsd_multiplexer daemon <root>");
-                return ExitCode::FAILURE;
-            }
-            let root = &args[2];
-
-            let mut multiplexer = match Multiplexer::new(root) {
+    match cli.command {
+        Command::Start { root } => {
+            let mut multiplexer = match Multiplexer::new(&root) {
                 Ok(m) => m,
                 Err(e) => {
-                    eprintln!("Failed to create multiplexer: {}", e);
+                    eprintln!("Failed to start: {e}");
                     return ExitCode::FAILURE;
                 }
             };
 
             if let Err(e) = multiplexer.run() {
-                eprintln!("Multiplexer error: {}", e);
+                eprintln!("Server error: {e}");
                 return ExitCode::FAILURE;
             }
         }
-        "submit" => {
-            if args.len() < 4 {
-                eprintln!("Usage: gsd_multiplexer submit <root> <input>");
+        Command::Stop { root } => {
+            if let Err(e) = stop(&root) {
+                eprintln!("Failed to stop: {e}");
                 return ExitCode::FAILURE;
             }
-            let root = &args[2];
-            let input = &args[3];
-
-            match submit(root, input) {
-                Ok(output) => {
-                    print!("{}", output);
-                }
-                Err(e) => {
-                    eprintln!("Submit error: {}", e);
-                    return ExitCode::FAILURE;
-                }
+            eprintln!("Server stopped");
+        }
+        Command::Submit { root, input } => match submit(&root, &input) {
+            Ok(output) => {
+                print!("{output}");
             }
-        }
-        _ => {
-            eprintln!("Unknown command: {}", args[1]);
-            return ExitCode::FAILURE;
-        }
+            Err(e) => {
+                eprintln!("Submit error: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
     }
 
     ExitCode::SUCCESS

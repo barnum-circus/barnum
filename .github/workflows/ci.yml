@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests
+        run: cargo test --all
+
+  build-macos-x64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target x86_64-apple-darwin -p gsd_multiplexer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-macos-x64
+          path: target/x86_64-apple-darwin/release/gsd_multiplexer
+
+  build-macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target aarch64-apple-darwin -p gsd_multiplexer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-macos-arm64
+          path: target/aarch64-apple-darwin/release/gsd_multiplexer
+
+  build-linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install musl-tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target x86_64-unknown-linux-musl -p gsd_multiplexer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-linux-x64
+          path: target/x86_64-unknown-linux-musl/release/gsd_multiplexer
+
+  build-linux-arm64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cross build --release --target aarch64-unknown-linux-musl -p gsd_multiplexer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/gsd_multiplexer
+
+  build-windows-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --target x86_64-pc-windows-msvc -p gsd_multiplexer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-win-x64
+          path: target/x86_64-pc-windows-msvc/release/gsd_multiplexer.exe
+
+  publish:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download macOS x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-macos-x64
+          path: libs/gsd-multiplexer/artifacts/macos-x64
+
+      - name: Download macOS arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-macos-arm64
+          path: libs/gsd-multiplexer/artifacts/macos-arm64
+
+      - name: Download Linux x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-linux-x64
+          path: libs/gsd-multiplexer/artifacts/linux-x64
+
+      - name: Download Linux arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-linux-arm64
+          path: libs/gsd-multiplexer/artifacts/linux-arm64
+
+      - name: Download Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-win-x64
+          path: libs/gsd-multiplexer/artifacts/win-x64
+
+      - name: Make binaries executable
+        run: |
+          chmod +x libs/gsd-multiplexer/artifacts/macos-x64/gsd_multiplexer
+          chmod +x libs/gsd-multiplexer/artifacts/macos-arm64/gsd_multiplexer
+          chmod +x libs/gsd-multiplexer/artifacts/linux-x64/gsd_multiplexer
+          chmod +x libs/gsd-multiplexer/artifacts/linux-arm64/gsd_multiplexer
+
+      - name: Set version for main branch
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        run: |
+          VERSION="0.0.0-main-${GITHUB_SHA::8}"
+          cd libs/gsd-multiplexer
+          npm version $VERSION --no-git-tag-version
+
+      - name: Publish to npm (main tag)
+        if: "!startsWith(github.ref, 'refs/tags/v')"
+        run: npm publish --access public --tag main --provenance
+        working-directory: libs/gsd-multiplexer
+
+      - name: Publish to npm (latest tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: npm publish --access public --tag latest --provenance
+        working-directory: libs/gsd-multiplexer

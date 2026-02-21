@@ -3,8 +3,15 @@ name = "gsd_multiplexer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Multiplexer daemon for managing agent pools with file-based task dispatch"
+keywords = ["agent", "multiplexer", "task-queue", "daemon", "ipc"]
+categories = ["command-line-utilities", "concurrency"]
 
 [dependencies]
+clap = { workspace = true }
+interprocess = { workspace = true }
 notify = { workspace = true }
 tokio = { workspace = true }
 

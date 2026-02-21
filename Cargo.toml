@@ -6,9 +6,13 @@ resolver = "2"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/rbalicki2/gsd"
+authors = ["Robert Balicki <robert.balicki@gmail.com>"]
 
 [workspace.dependencies]
+clap = { version = "4.5", features = ["derive"] }
 convert_case = "0.8.0"
+interprocess = "2.2"
 deluxe = "0.5.0"
 hex = "0.4"
 notify = "7.0"

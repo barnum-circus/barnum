@@ -3,6 +3,11 @@ name = "gsd_macro"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Derive macro for GSD task queue"
+keywords = ["macro", "derive", "task-queue"]
+categories = ["development-tools::procedural-macro-helpers"]
 
 [dependencies]
 convert_case = { workspace = true }
