@@ -111,6 +111,36 @@ Wait for response (up to keepalive_timeout)
 
 **Key point:** Periodic keepalives only go to idle agents. There is never in-flight work to worry about during a keepalive timeout - we simply deregister the unresponsive agent.
 
+### Recovery After Timeout
+
+When an agent times out and is deregistered, it's treated exactly like a normal deregistration:
+
+```
+Agent times out on keepalive
+    │
+    ▼
+Daemon removes agent directory
+    │
+    ▼
+Agent is no longer in the pool
+    │
+    ▼
+If agent is still alive and calls get_task:
+    │
+    ▼
+get_task creates agent directory (re-registers)
+    │
+    ▼
+Daemon detects new agent, sends initial keepalive
+    │
+    ▼
+Agent responds, becomes available again
+```
+
+This means keepalive timeout is not a permanent failure - it's just a temporary removal. If the agent was merely slow (not dead), it can recover by simply calling `get_task` again. The re-registration triggers a fresh initial keepalive, and the agent rejoins the pool.
+
+**Why this matters:** AI agents might occasionally be slow due to rate limits, user interaction delays, or other transient issues. Automatic recovery means the system is resilient - agents that come back online seamlessly rejoin without manual intervention.
+
 ## Implementation Tasks
 
 ### Task 1: Add Keepalive task kind to protocol
@@ -304,6 +334,7 @@ Test cases:
 - Agent not available for real tasks until keepalive response
 - Periodic keepalive sent after interval (to idle agents only)
 - Agent deregistered on keepalive timeout
+- Agent can re-register after timeout by calling get_task
 - Keepalives disabled via config
 
 **Commit:** `test(agent_pool): add keepalive behavior tests`
