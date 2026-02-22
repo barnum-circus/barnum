@@ -295,6 +295,78 @@ If we need to support agents that can't use the CLI (e.g., non-Rust agents, embe
 
 For now, the CLI abstracts this away. Expose only if there's a concrete use case.
 
+## Default Entry Step
+
+Currently, `gsd run` requires `--initial` to specify starting tasks. For simple workflows with a single entry point, this is verbose:
+
+```bash
+gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+```
+
+Could support a `default_step` in config that makes `--initial` optional:
+
+```json
+{
+  "default_step": "Start",
+  "steps": [
+    {"name": "Start", "next": ["Analyze"]},
+    ...
+  ]
+}
+```
+
+Then `gsd run config.json --pool /tmp/pool` would automatically start with `[{"kind": "Start", "value": {}}]`.
+
+Rules:
+- If `default_step` is set and `--initial` is provided, use `--initial` (explicit wins)
+- If `default_step` is set and no `--initial`, use the default step with empty value `{}`
+- If no `default_step` and no `--initial`, error (current behavior)
+
+The default step should probably require `value_schema` to either be absent or accept an empty object.
+
+## Agent Heartbeats
+
+Agents should periodically signal they're still alive while processing a task. Without heartbeats, the daemon can't distinguish between:
+- An agent working on a slow task
+- An agent that has crashed/hung
+
+### Proposed Design
+
+**Agent side**: While processing a task, periodically touch a heartbeat file or send a heartbeat signal:
+```bash
+# File-based
+touch agents/my-agent/heartbeat
+
+# Or via CLI
+agent_pool heartbeat --pool /tmp/pool
+```
+
+**Daemon side**: Track last heartbeat time per in-flight agent. If heartbeat stale beyond threshold:
+1. Mark task as `NotProcessed { reason: AgentUnresponsive }`
+2. Respond to submitter
+3. Optionally deregister agent
+
+### Configuration
+
+```json
+{
+  "options": {
+    "heartbeat_interval": 30,
+    "heartbeat_timeout": 90
+  }
+}
+```
+
+- `heartbeat_interval`: Expected time between heartbeats (seconds)
+- `heartbeat_timeout`: Time without heartbeat before agent considered dead (typically 2-3x interval)
+
+### Open Questions
+
+- Should heartbeats be optional (backward compatible) or required?
+- Should the daemon auto-restart agents or just remove them?
+- How should agents know the expected heartbeat interval?
+- Should heartbeat carry progress info (e.g., "50% done")?
+
 ## Full Socket-Based Protocol
 
 Remove filesystem-based IPC entirely:
