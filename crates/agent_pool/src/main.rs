@@ -58,12 +58,18 @@ enum Command {
         /// Output pool info as JSON (for scripts)
         #[arg(long)]
         json: bool,
-        /// Send health check when agent first registers
-        #[arg(long, default_value = "false")]
-        initial_health_check: bool,
-        /// Send periodic health checks to idle agents
-        #[arg(long, default_value = "false")]
-        periodic_health_check: bool,
+        /// Skip all health checks (for command servers that don't need agent liveness checks).
+        /// Cannot be combined with --skip-initial-health-check or --skip-periodic-health-checks.
+        #[arg(long, conflicts_with_all = ["skip_initial_health_check", "skip_periodic_health_checks"])]
+        skip_health_checks: bool,
+        /// Skip the initial health check when an agent registers.
+        /// By default, a health check is sent on registration to verify the agent is responsive.
+        #[arg(long)]
+        skip_initial_health_check: bool,
+        /// Skip periodic health checks to idle agents.
+        /// By default, idle agents receive periodic health checks to verify they're still alive.
+        #[arg(long)]
+        skip_periodic_health_checks: bool,
         /// Health check interval in seconds (how often to check idle agents)
         #[arg(long, default_value = "60")]
         health_check_interval_secs: u64,
@@ -122,11 +128,6 @@ enum Command {
         /// Agent name
         #[arg(long)]
         name: String,
-        /// Automatically respond to health checks (agent never sees them).
-        /// Default: false - agents should see and respond to health checks
-        /// to demonstrate they're still actively listening.
-        #[arg(long, default_value = "false")]
-        auto_health_check: bool,
     },
 }
 
@@ -155,8 +156,9 @@ fn main() -> ExitCode {
             pool,
             log_level,
             json,
-            initial_health_check,
-            periodic_health_check,
+            skip_health_checks,
+            skip_initial_health_check,
+            skip_periodic_health_checks,
             health_check_interval_secs,
             health_check_timeout_secs,
         } => {
@@ -190,8 +192,8 @@ fn main() -> ExitCode {
             }
 
             let config = DaemonConfig {
-                initial_health_check,
-                periodic_health_check,
+                initial_health_check: !skip_health_checks && !skip_initial_health_check,
+                periodic_health_check: !skip_health_checks && !skip_periodic_health_checks,
                 health_check_interval: Duration::from_secs(health_check_interval_secs),
                 health_check_timeout: Duration::from_secs(health_check_timeout_secs),
             };
@@ -310,11 +312,7 @@ fn main() -> ExitCode {
 
             eprintln!("Deregistered agent '{name}'");
         }
-        Command::GetTask {
-            pool,
-            name,
-            auto_health_check,
-        } => {
+        Command::GetTask { pool, name } => {
             let root = resolve_pool(&pool);
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
@@ -357,19 +355,8 @@ fn main() -> ExitCode {
                         .cloned()
                         .unwrap_or(serde_json::Value::Null);
 
-                    // Handle health checks automatically if enabled
-                    if auto_health_check && kind == "HealthCheck" {
-                        // Respond to health check and continue polling
-                        if let Err(e) = fs::write(&response_file, "{}") {
-                            eprintln!("Failed to respond to health check: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                        // Wait for daemon to clean up files before polling again
-                        thread::sleep(Duration::from_millis(100));
-                        continue;
-                    }
-
                     // Output task info with stable response file path
+                    // Agent sees both Task and HealthCheck - must respond to both
                     let output = serde_json::json!({
                         "kind": kind,
                         "response_file": response_file.display().to_string(),
