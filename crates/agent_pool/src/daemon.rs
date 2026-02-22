@@ -239,6 +239,20 @@ enum InFlight {
     Task { respond_to: ResponseTarget },
 }
 
+impl InFlight {
+    /// Complete the in-flight work, consuming self.
+    ///
+    /// For tasks, this sends the response to the submitter.
+    fn complete(self, output: String) -> io::Result<()> {
+        match self {
+            InFlight::Task { respond_to } => {
+                let response = Response::processed(output);
+                send_response(respond_to, &response)
+            }
+        }
+    }
+}
+
 /// State for a single agent.
 struct AgentState {
     status: AgentStatus,
@@ -452,9 +466,16 @@ impl PoolState {
             return Err(io::Error::other("agent not found"));
         };
 
+        // Wrap task content in envelope with kind
+        let envelope = serde_json::json!({
+            "kind": "Task",
+            "content": serde_json::from_str::<serde_json::Value>(&task.content)
+                .unwrap_or_else(|_| serde_json::Value::String(task.content.clone()))
+        });
+
         let task_path = self.agents_dir.join(agent_id).join(TASK_FILE);
         debug!(agent_id, path = %task_path.display(), bytes = task.content.len(), "writing task file");
-        fs::write(&task_path, &task.content)?;
+        fs::write(&task_path, envelope.to_string())?;
 
         info!(agent_id, "task dispatched");
         agent.status = AgentStatus::Busy(InFlight::Task {
@@ -487,9 +508,7 @@ impl PoolState {
         let _ = fs::remove_file(agent_dir.join(TASK_FILE));
         let _ = fs::remove_file(response_path);
 
-        let InFlight::Task { respond_to } = in_flight;
-        let response = Response::processed(output);
-        send_response(respond_to, &response)?;
+        in_flight.complete(output)?;
 
         info!(agent_id, "task completed");
         Ok(())

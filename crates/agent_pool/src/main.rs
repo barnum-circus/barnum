@@ -298,8 +298,8 @@ fn main() -> ExitCode {
             // Poll for task file
             loop {
                 if task_file.exists() {
-                    // Read the task content
-                    let content = match fs::read_to_string(&task_file) {
+                    // Read the task envelope (daemon writes {"kind": "...", "content": ...})
+                    let raw = match fs::read_to_string(&task_file) {
                         Ok(c) => c,
                         Err(e) => {
                             eprintln!("Failed to read task: {e}");
@@ -307,18 +307,29 @@ fn main() -> ExitCode {
                         }
                     };
 
-                    // Parse content as JSON if possible, otherwise wrap as string
-                    // Note: must use unwrap_or_else because `content` is borrowed in from_str
-                    // and moved into String on failure
-                    #[allow(clippy::unnecessary_lazy_evaluations)]
-                    let content_json: serde_json::Value = serde_json::from_str(&content)
-                        .unwrap_or_else(|_| serde_json::Value::String(content));
+                    // Parse envelope and extract kind/content
+                    let envelope: serde_json::Value = match serde_json::from_str(&raw) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!("Failed to parse task envelope: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    };
+
+                    let kind = envelope
+                        .get("kind")
+                        .and_then(|k| k.as_str())
+                        .unwrap_or("Task");
+                    let content = envelope
+                        .get("content")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
 
                     // Output task info with stable response file path
                     let output = serde_json::json!({
-                        "kind": "Task",
+                        "kind": kind,
                         "response_file": response_file.display().to_string(),
-                        "content": content_json
+                        "content": content
                     });
 
                     println!(

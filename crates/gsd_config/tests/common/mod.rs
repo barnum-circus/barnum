@@ -72,6 +72,20 @@ pub fn is_ipc_available(_test_dir: &Path) -> bool {
 // GSD Test Agent
 // =============================================================================
 
+/// Extract task content from the envelope format.
+///
+/// The daemon writes `{"kind": "Task", "content": ...}` to task.json.
+/// This extracts the content field, or returns the raw input if not in envelope format.
+fn extract_task_content(raw: &str) -> String {
+    if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Some(content) = envelope.get("content") {
+            return content.to_string();
+        }
+    }
+    // Not an envelope, return as-is
+    raw.to_string()
+}
+
 /// A test agent that understands the GSD protocol.
 ///
 /// GSD sends JSON payloads like:
@@ -110,10 +124,13 @@ impl GsdTestAgent {
             while running_clone.load(Ordering::SeqCst) {
                 // Check for task file
                 if task_file.exists() && !response_file.exists() {
-                    let Ok(payload) = fs::read_to_string(&task_file) else {
+                    let Ok(raw) = fs::read_to_string(&task_file) else {
                         thread::sleep(Duration::from_millis(10));
                         continue;
                     };
+
+                    // Extract content from envelope {"kind": "...", "content": ...}
+                    let payload = extract_task_content(&raw);
 
                     thread::sleep(processing_delay);
 
