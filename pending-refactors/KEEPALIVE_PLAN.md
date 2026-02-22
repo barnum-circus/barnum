@@ -46,21 +46,39 @@ pub struct DaemonConfig {
 
 ## Protocol
 
-### Ping Task Format
+### Task Format
 
-A keepalive is just a regular task with a special marker:
+A keepalive uses the exact same format as any other task. The agent receives (via `get_task`):
 
 ```json
 {
-    "task": {
-        "kind": "Keepalive",
-        "value": {}
-    },
+  "kind": "Task",
+  "response_file": "/tmp/gsd/abc123/agents/claude-1/response.json",
+  "content": {
+    "task": {"kind": "Keepalive", "value": {}},
     "instructions": "Respond with any value to confirm you are alive."
+  }
 }
 ```
 
-Expected response: anything. The daemon just checks that a response file appeared - the content doesn't matter.
+Compare to a normal task:
+
+```json
+{
+  "kind": "Task",
+  "response_file": "/tmp/gsd/abc123/agents/claude-1/response.json",
+  "content": {
+    "task": {"kind": "Analyze", "value": {"files": ["main.rs"]}},
+    "instructions": "Analyze these files..."
+  }
+}
+```
+
+The only difference is `task.kind` is `"Keepalive"` instead of a step name. Fully introspectable.
+
+### Response
+
+Any response works. The daemon just checks that a response file appeared.
 
 ```json
 {}
@@ -68,7 +86,15 @@ Expected response: anything. The daemon just checks that a response file appeare
 
 ### Agent Handling
 
-Agents treat keepalives like any other task. The instructions tell them what to do. No special client-side code needed beyond following the instructions - just write any response.
+Agents can check `task.kind` to detect keepalives:
+
+```bash
+if [ "$(echo "$TASK" | jq -r '.content.task.kind')" = "Keepalive" ]; then
+    echo "{}" > "$RESPONSE_FILE"
+fi
+```
+
+Or they can just follow the instructions like any other task - the instructions say "respond with any value", so `{}` works.
 
 ## Daemon Flow
 
