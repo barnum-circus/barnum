@@ -2,8 +2,10 @@
 
 ## Dependencies
 
-**Must complete after**: DAEMON_REFACTOR.md
-- The traits defined here use `async fn`
+**Phase 1 can start now** - sync traits with `Box<dyn Trait>`
+
+**Phase 2 (async) requires**: DAEMON_REFACTOR.md
+- Converting traits from sync to async
 - Requires tokio runtime to be established first
 
 ## Problem
@@ -342,3 +344,203 @@ The `--file` flag (or similar) determines which transport to use.
 3. **Testability:** Can mock the trait for unit tests
 4. **Flexibility:** Easy to add new transports later (e.g., TCP for remote pools)
 5. **Performance:** Socket-based agents would be faster than file polling
+
+---
+
+## Implementation Tasks
+
+### Phase 1: Sync Traits (before daemon refactor)
+
+Use sync traits with `Box<dyn Trait>`. This provides the abstraction benefits without requiring async runtime.
+
+| Status | Task | Description |
+|--------|------|-------------|
+| [ ] | 1.1 | Define sync `PoolClient` trait in new `transport.rs` module |
+| [ ] | 1.2 | Implement `SocketPoolClient` (wraps current `submit()` logic) |
+| [ ] | 1.3 | Implement `FilePoolClient` (wraps current `submit_file()` logic) |
+| [ ] | 1.4 | Update public API: `submit()` and `submit_file()` become thin wrappers |
+| [ ] | 1.5 | Define sync `AgentChannel` trait for daemon→agent communication |
+| [ ] | 1.6 | Implement `FileAgentChannel` (current behavior) |
+| [ ] | 1.7 | Update `AgentState` to use `Box<dyn AgentChannel>` |
+| [ ] | 1.8 | Update tests |
+
+### Phase 2: Async Traits (after daemon refactor)
+
+After the daemon uses tokio, convert traits to async:
+
+| Status | Task | Description |
+|--------|------|-------------|
+| [ ] | 2.1 | Add `async_trait` dependency |
+| [ ] | 2.2 | Convert `PoolClient` to async trait |
+| [ ] | 2.3 | Convert `AgentChannel` to async trait |
+| [ ] | 2.4 | Update implementations to use async I/O |
+
+### Phase 3: Socket-based Agents (optional, after Phase 2)
+
+| Status | Task | Description |
+|--------|------|-------------|
+| [ ] | 3.1 | Define socket agent protocol (JSON lines) |
+| [ ] | 3.2 | Implement `SocketAgentChannel` |
+| [ ] | 3.3 | Update daemon to accept agent socket connections |
+| [ ] | 3.4 | Implement `SocketAgent` for agents |
+| [ ] | 3.5 | Add `--socket` flag to `get_task` CLI |
+
+---
+
+## Task 1.1: Define sync `PoolClient` trait
+
+**File:** `crates/agent_pool/src/transport.rs` (new)
+
+```rust
+use crate::Response;
+use std::io;
+use std::path::Path;
+
+/// A connection to the pool for submitting tasks.
+///
+/// Both implementations have identical usage:
+///   let response = client.submit(&task)?;
+///
+/// The transport details (socket connection vs file I/O) are handled internally.
+pub trait PoolClient: Send + Sync {
+    /// Submit a task and wait for the response.
+    fn submit(&self, task: &str) -> io::Result<Response>;
+}
+```
+
+## Task 1.2: Implement `SocketPoolClient`
+
+```rust
+pub struct SocketPoolClient {
+    socket_path: PathBuf,
+}
+
+impl SocketPoolClient {
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        let socket_path = root.as_ref().join(SOCKET_NAME);
+        Self { socket_path }
+    }
+}
+
+impl PoolClient for SocketPoolClient {
+    fn submit(&self, task: &str) -> io::Result<Response> {
+        // Current submit() logic moves here
+        // Connect to socket, write task, read response
+    }
+}
+```
+
+## Task 1.3: Implement `FilePoolClient`
+
+```rust
+pub struct FilePoolClient {
+    pending_dir: PathBuf,
+}
+
+impl FilePoolClient {
+    pub fn new(root: impl AsRef<Path>) -> Self {
+        let pending_dir = root.as_ref().join(PENDING_DIR);
+        Self { pending_dir }
+    }
+}
+
+impl PoolClient for FilePoolClient {
+    fn submit(&self, task: &str) -> io::Result<Response> {
+        // Current submit_file() logic moves here
+        // Write task.json, poll for response.json, clean up
+    }
+}
+```
+
+## Task 1.5: Define sync `AgentChannel` trait
+
+```rust
+/// Trait for daemon's communication with an agent.
+/// The daemon calls these methods without knowing the transport.
+pub trait AgentChannel: Send {
+    /// Send a task to the agent.
+    fn dispatch(&mut self, envelope: &str) -> io::Result<()>;
+
+    /// Check if a response is available (non-blocking).
+    fn poll_response(&mut self) -> io::Result<Option<String>>;
+
+    /// Clean up after task completion.
+    fn cleanup(&mut self) -> io::Result<()>;
+}
+```
+
+## Task 1.6: Implement `FileAgentChannel`
+
+```rust
+pub struct FileAgentChannel {
+    agent_dir: PathBuf,
+}
+
+impl FileAgentChannel {
+    pub fn new(agent_dir: PathBuf) -> Self {
+        Self { agent_dir }
+    }
+}
+
+impl AgentChannel for FileAgentChannel {
+    fn dispatch(&mut self, envelope: &str) -> io::Result<()> {
+        fs::write(self.agent_dir.join(TASK_FILE), envelope)
+    }
+
+    fn poll_response(&mut self) -> io::Result<Option<String>> {
+        let response_path = self.agent_dir.join(RESPONSE_FILE);
+        match fs::read_to_string(&response_path) {
+            Ok(content) => Ok(Some(content)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn cleanup(&mut self) -> io::Result<()> {
+        let _ = fs::remove_file(self.agent_dir.join(TASK_FILE));
+        let _ = fs::remove_file(self.agent_dir.join(RESPONSE_FILE));
+        Ok(())
+    }
+}
+```
+
+## Task 1.7: Update `AgentState` to use trait
+
+```rust
+struct AgentState {
+    status: AgentStatus,
+    last_activity: Instant,
+    channel: Box<dyn AgentChannel>,
+}
+
+impl AgentState {
+    fn new(agent_dir: PathBuf) -> Self {
+        Self {
+            status: AgentStatus::Idle,
+            last_activity: Instant::now(),
+            channel: Box::new(FileAgentChannel::new(agent_dir)),
+        }
+    }
+}
+```
+
+In `dispatch_to()`:
+```rust
+// Before:
+fs::write(&task_path, envelope.to_string())?;
+
+// After:
+agent.channel.dispatch(&envelope.to_string())?;
+```
+
+In `complete_task()`:
+```rust
+// Before:
+let output = fs::read_to_string(response_path)?;
+let _ = fs::remove_file(agent_dir.join(TASK_FILE));
+let _ = fs::remove_file(response_path);
+
+// After:
+let output = agent.channel.poll_response()?.ok_or_else(|| ...)?;
+agent.channel.cleanup()?;
+```

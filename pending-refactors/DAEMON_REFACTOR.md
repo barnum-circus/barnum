@@ -2,13 +2,12 @@
 
 ## Dependencies
 
-**Must complete before**: TRANSPORT_ABSTRACTION.md
-- The transport traits are designed as `async fn`
-- Requires tokio runtime to be established first
+**Must complete before**: TRANSPORT_ABSTRACTION.md Phase 2 (async)
+- Converting traits from sync to async requires tokio runtime
 
-**Must complete after**: HEALTH_CHECK_PLAN.md
-- Health checks work with current sync polling
-- Converting to async is separate concern
+**Can happen in parallel with**: TRANSPORT_ABSTRACTION.md Phase 1 (sync)
+- Sync traits don't need tokio
+- Both refactors are independent until async conversion
 
 ## Scope: agent_pool Only
 
