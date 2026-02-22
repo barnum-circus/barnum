@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, INPUT_EXT, ResponseKind};
+use agent_pool::{AGENTS_DIR, Response};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -49,13 +49,10 @@ fn multiple_agents_parallel_tasks() {
         .collect();
 
     for result in &results {
-        assert_eq!(result.kind, ResponseKind::Processed);
-        assert!(
-            result
-                .stdout
-                .as_ref()
-                .is_some_and(|s| s.contains("[processed]"))
-        );
+        let Response::Processed { stdout, .. } = result else {
+            panic!("Expected Processed response, got {result:?}");
+        };
+        assert!(stdout.contains("[processed]"));
     }
 
     let processed1 = agent1.stop();
@@ -78,25 +75,19 @@ fn multiple_agents_direct_dispatch() {
 
     thread::sleep(Duration::from_millis(50));
 
-    // Write tasks directly to each agent via file protocol (id.input)
+    // Write tasks directly to each agent via file protocol (task.json)
     fs::write(
-        root.join(AGENTS_DIR)
-            .join("agent-a")
-            .join(format!("1.{INPUT_EXT}")),
+        root.join(AGENTS_DIR).join("agent-a").join("task.json"),
         "Task A",
     )
     .expect("Failed to write task A");
     fs::write(
-        root.join(AGENTS_DIR)
-            .join("agent-b")
-            .join(format!("1.{INPUT_EXT}")),
+        root.join(AGENTS_DIR).join("agent-b").join("task.json"),
         "Task B",
     )
     .expect("Failed to write task B");
     fs::write(
-        root.join(AGENTS_DIR)
-            .join("agent-c")
-            .join(format!("1.{INPUT_EXT}")),
+        root.join(AGENTS_DIR).join("agent-c").join("task.json"),
         "Task C",
     )
     .expect("Failed to write task C");

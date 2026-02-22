@@ -25,17 +25,17 @@ fn strict_config() -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "instructions": "Only allowed to go to Middle.",
+                    "action": {"kind": "Pool", "instructions": "Only allowed to go to Middle."},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "instructions": "Only allowed to go to End.",
+                    "action": {"kind": "Pool", "instructions": "Only allowed to go to End."},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "instructions": "Terminal.",
+                    "action": {"kind": "Pool", "instructions": "Terminal."},
                     "next": []
                 }
             ]

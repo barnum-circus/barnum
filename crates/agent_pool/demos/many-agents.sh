@@ -33,7 +33,7 @@ cleanup() {
     # Kill and wait for agents to fully terminate (suppresses shutdown message timing issues)
     kill $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
     wait $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
-    $AGENT_POOL stop "$ROOT" 2>/dev/null || true
+    $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
     rm -rf "$ROOT"
     echo "Done."
 }
@@ -41,7 +41,7 @@ trap cleanup EXIT
 
 # Start agent pool in background
 echo "Starting agent pool..."
-$AGENT_POOL start "$ROOT" &
+$AGENT_POOL start --pool "$ROOT" &
 POOL_PID=$!
 sleep 0.5
 
@@ -62,7 +62,7 @@ echo ""
 
 submit_task() {
     local task="$1"
-    result=$($AGENT_POOL submit "$ROOT" "$task")
+    result=$($AGENT_POOL submit_task --pool "$ROOT" --input "$task")
     echo "Result: $result"
 }
 

@@ -5,11 +5,10 @@
 #
 # The agent:
 # 1. Creates its directory under <root>/agents/<agent-id>
-# 2. Polls for next_task file
-# 3. When found: atomically renames to in_progress (prevents race conditions)
-# 4. Processes the task (simulated with sleep)
-# 5. Writes output and cleans up in_progress
-# 6. Output is: "<input> [processed by <agent-id>]"
+# 2. Polls for task.json
+# 3. When found (and response.json doesn't exist): processes the task
+# 4. Writes response.json
+# 5. Output is: "<input> [processed by <agent-id>]"
 
 set -e
 
@@ -34,19 +33,15 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 while true; do
-    if [ -f "$AGENT_DIR/next_task" ]; then
-        # Atomically rename next_task to in_progress to claim the task
-        # This prevents race conditions - if rename fails, another process took it
-        if mv "$AGENT_DIR/next_task" "$AGENT_DIR/in_progress" 2>/dev/null; then
-            task=$(cat "$AGENT_DIR/in_progress")
-            echo "[$AGENT_ID] Processing: $task" >&2
+    # Process if task.json exists and response.json doesn't
+    if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
+        task=$(cat "$AGENT_DIR/task.json")
+        echo "[$AGENT_ID] Processing: $task" >&2
 
-            sleep "$SLEEP_TIME"
+        sleep "$SLEEP_TIME"
 
-            echo "$task [processed by $AGENT_ID]" > "$AGENT_DIR/output"
-            rm -f "$AGENT_DIR/in_progress"
-            echo "[$AGENT_ID] Done" >&2
-        fi
+        echo "$task [processed by $AGENT_ID]" > "$AGENT_DIR/response.json"
+        echo "[$AGENT_ID] Done" >&2
     fi
     sleep 0.05
 done

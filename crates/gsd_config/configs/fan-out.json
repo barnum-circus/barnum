@@ -1,0 +1,20 @@
+{
+  "steps": [
+    {
+      "name": "Distribute",
+      "action": {
+        "kind": "Pool",
+        "instructions": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks."
+      },
+      "next": ["Worker"]
+    },
+    {
+      "name": "Worker",
+      "action": {
+        "kind": "Pool",
+        "instructions": "Process your assigned work item. Return [] when done."
+      },
+      "next": []
+    }
+  ]
+}

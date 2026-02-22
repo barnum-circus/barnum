@@ -6,7 +6,7 @@
 
 mod common;
 
-use agent_pool::ResponseKind;
+use agent_pool::Response;
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::thread;
 use std::time::Duration;
@@ -30,19 +30,18 @@ fn greeting_casual_and_formal() {
     thread::sleep(Duration::from_millis(200));
 
     let casual = agent_pool::submit(&root, "casual").expect("Submit failed");
-    assert_eq!(casual.kind, ResponseKind::Processed);
-    assert_eq!(
-        casual.stdout.as_deref().map(str::trim),
-        Some("Hi friendly-bot, how are ya?")
-    );
+    let Response::Processed { stdout, .. } = casual else {
+        panic!("Expected Processed response, got {casual:?}");
+    };
+    assert_eq!(stdout.trim(), "Hi friendly-bot, how are ya?");
 
     let formal = agent_pool::submit(&root, "formal").expect("Submit failed");
-    assert_eq!(formal.kind, ResponseKind::Processed);
+    let Response::Processed { stdout, .. } = formal else {
+        panic!("Expected Processed response, got {formal:?}");
+    };
     assert_eq!(
-        formal.stdout.as_deref().map(str::trim),
-        Some(
-            "Salutations friendly-bot, how are you doing on this most splendiferous and utterly magnificent day?"
-        )
+        stdout.trim(),
+        "Salutations friendly-bot, how are you doing on this most splendiferous and utterly magnificent day?"
     );
 
     let processed = agent.stop();

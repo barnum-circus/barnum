@@ -27,7 +27,7 @@ cleanup() {
     echo "=== Cleaning up ==="
     kill $AGENT_PID 2>/dev/null || true
     wait $AGENT_PID 2>/dev/null || true
-    $AGENT_POOL stop "$ROOT" 2>/dev/null || true
+    $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
     rm -rf "$ROOT"
     echo "Done."
 }
@@ -35,7 +35,7 @@ trap cleanup EXIT
 
 # Start agent pool
 echo "Starting agent pool..."
-$AGENT_POOL start "$ROOT" &
+$AGENT_POOL start --pool "$ROOT" &
 POOL_PID=$!
 sleep 0.5
 
@@ -48,12 +48,12 @@ sleep 0.3
 # Submit greeting requests
 echo ""
 echo "Requesting casual greeting..."
-result=$($AGENT_POOL submit "$ROOT" "casual")
+result=$($AGENT_POOL submit_task --pool "$ROOT" --input "casual")
 echo "Response: $result"
 echo ""
 
 echo "Requesting formal greeting..."
-result=$($AGENT_POOL submit "$ROOT" "formal")
+result=$($AGENT_POOL submit_task --pool "$ROOT" --input "formal")
 echo "Response: $result"
 echo ""
 

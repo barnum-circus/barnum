@@ -371,6 +371,7 @@ dependencies = [
 name = "gsd_cli"
 version = "0.1.0"
 dependencies = [
+ "agent_pool",
  "clap",
  "gsd_config",
  "serde_json",
@@ -382,6 +383,7 @@ name = "gsd_config"
 version = "0.1.0"
 dependencies = [
  "agent_pool",
+ "interprocess",
  "jsonschema",
  "serde",
  "serde_json",

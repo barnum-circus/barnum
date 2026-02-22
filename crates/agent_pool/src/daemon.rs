@@ -18,9 +18,14 @@
 //! handle.shutdown();  // Gracefully stops the daemon
 //! ```
 
-use crate::constants::{AGENTS_DIR, INPUT_EXT, LOCK_FILE, OUTPUT_EXT, SOCKET_NAME};
+use crate::constants::{AGENTS_DIR, LOCK_FILE, SOCKET_NAME};
 use crate::lock::acquire_lock;
 use crate::response::Response;
+
+/// Stable filename for task input.
+const TASK_FILE: &str = "task.json";
+/// Stable filename for agent response.
+const RESPONSE_FILE: &str = "response.json";
 use interprocess::local_socket::{
     GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, prelude::*,
 };
@@ -208,18 +213,13 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
 
 /// State for a single agent.
 struct AgentState {
-    /// Next task ID to assign to this agent.
-    next_task_id: u64,
-    /// If busy: (`task_id`, response stream).
-    in_flight: Option<(u64, Stream)>,
+    /// If busy, holds the stream to respond to when task completes.
+    in_flight: Option<Stream>,
 }
 
 impl AgentState {
     const fn new() -> Self {
-        Self {
-            next_task_id: 1,
-            in_flight: None,
-        }
+        Self { in_flight: None }
     }
 
     const fn is_available(&self) -> bool {
@@ -271,20 +271,14 @@ impl PoolState {
         let busy: Vec<_> = self
             .agents
             .iter()
-            .filter_map(|(id, a)| {
-                a.in_flight
-                    .as_ref()
-                    .map(|(task_id, _)| (id.clone(), *task_id))
-            })
+            .filter(|(_, a)| a.in_flight.is_some())
+            .map(|(id, _)| id.clone())
             .collect();
 
-        for (agent_id, task_id) in busy {
-            let output_path = self
-                .agents_dir
-                .join(&agent_id)
-                .join(format!("{task_id}.{OUTPUT_EXT}"));
-            if output_path.exists() {
-                self.complete_task(&agent_id, task_id, &output_path)?;
+        for agent_id in busy {
+            let response_path = self.agents_dir.join(&agent_id).join(RESPONSE_FILE);
+            if response_path.exists() {
+                self.complete_task(&agent_id, &response_path)?;
             }
         }
         Ok(())
@@ -334,60 +328,43 @@ impl PoolState {
         let Some(agent) = self.agents.get_mut(agent_id) else {
             return Err(io::Error::other("agent not found"));
         };
-        let task_id = agent.next_task_id;
-        agent.next_task_id += 1;
 
-        let input_path = self
-            .agents_dir
-            .join(agent_id)
-            .join(format!("{task_id}.{INPUT_EXT}"));
-        fs::write(&input_path, &task.content)?;
+        let task_path = self.agents_dir.join(agent_id).join(TASK_FILE);
+        fs::write(&task_path, &task.content)?;
 
-        info!(agent_id, task_id, "task dispatched");
-        agent.in_flight = Some((task_id, task.respond_to));
+        info!(agent_id, "task dispatched");
+        agent.in_flight = Some(task.respond_to);
         Ok(())
     }
 
-    fn complete_task(
-        &mut self,
-        agent_id: &str,
-        task_id: u64,
-        output_path: &Path,
-    ) -> io::Result<()> {
+    fn complete_task(&mut self, agent_id: &str, response_path: &Path) -> io::Result<()> {
         let Some(agent) = self.agents.get_mut(agent_id) else {
             return Ok(());
         };
 
-        let Some((current_id, stream)) = agent.in_flight.take() else {
+        let Some(stream) = agent.in_flight.take() else {
             return Ok(());
         };
 
-        // Verify this output matches our current task
-        if current_id != task_id {
-            // Stale output from a timed-out task, ignore it
-            agent.in_flight = Some((current_id, stream));
-            let _ = fs::remove_file(output_path);
-            return Ok(());
-        }
-
-        let output = match fs::read_to_string(output_path) {
+        let output = match fs::read_to_string(response_path) {
             Ok(o) => o,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                agent.in_flight = Some((task_id, stream));
+                agent.in_flight = Some(stream);
                 return Ok(());
             }
             Err(e) => return Err(e),
         };
 
-        // Clean up task files
+        // Clean up task files - remove task.json first to prevent the agent from
+        // re-processing (agent checks: task.json exists && !response.json exists)
         let agent_dir = self.agents_dir.join(agent_id);
-        let _ = fs::remove_file(output_path);
-        let _ = fs::remove_file(agent_dir.join(format!("{task_id}.{INPUT_EXT}")));
+        let _ = fs::remove_file(agent_dir.join(TASK_FILE));
+        let _ = fs::remove_file(response_path);
 
         let response = Response::processed(output);
         send_response(stream, &response)?;
 
-        info!(agent_id, task_id, "task completed");
+        info!(agent_id, "task completed");
         Ok(())
     }
 }
@@ -557,13 +534,12 @@ fn handle_agent_file_event(
         state.register(agent_id);
     }
 
-    // Check for output file: {id}.output
-    if let Some(stem) = filename.strip_suffix(&format!(".{OUTPUT_EXT}"))
-        && let Ok(task_id) = stem.parse::<u64>()
+    // Check for response file
+    if filename == RESPONSE_FILE
         && matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
         && path.exists()
     {
-        state.complete_task(agent_id, task_id, path)?;
+        state.complete_task(agent_id, path)?;
     }
 
     Ok(())

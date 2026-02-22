@@ -55,43 +55,27 @@ get_next_step() {
 }
 
 while true; do
-    # Find an input file (*.input)
-    input_file=$(ls "$AGENT_DIR"/*.input 2>/dev/null | head -1)
-
-    if [ -n "$input_file" ] && [ -f "$input_file" ]; then
-        # Get task ID from filename (e.g., "1.input" -> "1")
-        task_id=$(basename "$input_file" .input)
-
-        payload=$(cat "$input_file")
+    # Process if task.json exists and response.json doesn't
+    if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
+        payload=$(cat "$AGENT_DIR/task.json")
 
         if command -v jq &> /dev/null; then
             kind=$(echo "$payload" | jq -r '.task.kind')
-            instructions=$(echo "$payload" | jq -r '.instructions')
         else
             kind=$(echo "$payload" | grep -o '"kind"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-            instructions="(install jq to see full instructions)"
         fi
 
-        echo "[$AGENT_ID] Task $task_id: $kind" >&2
-        echo "[$AGENT_ID] Instructions:" >&2
-        echo "$instructions" >&2
-        echo "" >&2
+        echo "[$AGENT_ID] Processing: $kind" >&2
 
         sleep "$SLEEP_TIME"
 
-        # Check if we were timed out (input deleted)
-        if [ -f "$input_file" ]; then
-            next=$(get_next_step "$kind")
-            if [ -z "$next" ]; then
-                echo "[$AGENT_ID] -> []" >&2
-                echo '[]' > "$AGENT_DIR/$task_id.output"
-            else
-                echo "[$AGENT_ID] -> $next" >&2
-                echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/$task_id.output"
-            fi
-            rm -f "$input_file"
+        next=$(get_next_step "$kind")
+        if [ -z "$next" ]; then
+            echo "[$AGENT_ID] -> [] (done)" >&2
+            echo '[]' > "$AGENT_DIR/response.json"
         else
-            echo "[$AGENT_ID] Timed out, skipping" >&2
+            echo "[$AGENT_ID] -> $next" >&2
+            echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/response.json"
         fi
     fi
     sleep 0.05

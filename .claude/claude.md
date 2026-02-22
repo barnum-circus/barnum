@@ -43,6 +43,7 @@ This codebase has a small surface area. Every single component should be absolut
 ## Git practices
 
 - Prefer small, atomic commits
+- **COMMIT FREQUENTLY** - Whenever the code is in a good state (tests pass, feature complete), commit immediately. Don't accumulate changes across multiple features.
 - **NEVER amend commits that have been pushed** - always check `git log origin/master` vs `git log` before amending
 - If a commit has been pushed, make changes as a new commit instead
 
@@ -86,7 +87,13 @@ cargo test --workspace
 
 Each test file uses its own subdirectory in `.test-data/` so tests can run in parallel without conflicts.
 
-**IPC tests in sandboxed environments:** Some tests use Unix sockets for IPC. In sandboxed environments (like Claude Code's sandbox), the `connect()` syscall is blocked. These tests detect this at runtime and skip gracefully with a message. They still report "ok" status so CI passes.
+**IPC tests in sandboxed environments:** Some tests use Unix sockets for IPC. In sandboxed environments (like Claude Code's sandbox), the `connect()` syscall is blocked. To skip IPC tests, set `SKIP_IPC_TESTS=1`:
+
+```bash
+SKIP_IPC_TESTS=1 cargo test --workspace
+```
+
+Tests run by default and will fail if IPC is blocked. The env var is the explicit opt-out.
 
 ## Pre-commit hooks
 
@@ -107,7 +114,7 @@ When running in Claude Code's sandbox:
 
 - **WebFetch is blocked** - cannot fetch URLs
 - **`cargo install` works** - can install crates normally
-- **Unix sockets blocked** - IPC tests skip gracefully
+- **Unix sockets blocked** - set `SKIP_IPC_TESTS=1` when running tests
 
 ## Dependency hygiene
 

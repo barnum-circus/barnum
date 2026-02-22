@@ -47,22 +47,19 @@ process_task() {
 }
 
 while true; do
-    if [ -f "$AGENT_DIR/next_task" ]; then
-        # Atomically rename next_task to in_progress to claim the task
-        if mv "$AGENT_DIR/next_task" "$AGENT_DIR/in_progress" 2>/dev/null; then
-            task=$(cat "$AGENT_DIR/in_progress")
-            # Trim whitespace
-            task=$(echo "$task" | tr -d '[:space:]')
-            echo "[$AGENT_ID] Processing: $task" >&2
+    # Process if task.json exists and response.json doesn't
+    if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
+        task=$(cat "$AGENT_DIR/task.json")
+        # Trim whitespace
+        task=$(echo "$task" | tr -d '[:space:]')
+        echo "[$AGENT_ID] Processing: $task" >&2
 
-            sleep "$SLEEP_TIME"
+        sleep "$SLEEP_TIME"
 
-            # Process and write result
-            result=$(process_task "$task")
-            echo "$result" > "$AGENT_DIR/output"
-            rm -f "$AGENT_DIR/in_progress"
-            echo "[$AGENT_ID] Done: $result" >&2
-        fi
+        # Process and write result
+        result=$(process_task "$task")
+        echo "$result" > "$AGENT_DIR/response.json"
+        echo "[$AGENT_ID] Done: $result" >&2
     fi
     sleep 0.05
 done

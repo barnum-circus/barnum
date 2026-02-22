@@ -10,6 +10,7 @@ keywords = ["cli", "task", "orchestrator", "state-machine"]
 categories = ["command-line-utilities"]
 
 [dependencies]
+agent_pool = { path = "../agent_pool" }
 gsd_config = { path = "../gsd_config" }
 clap = { workspace = true }
 serde_json = { workspace = true }

@@ -269,3 +269,41 @@ Agents can hang (infinite loops, deadlocks, waiting on unavailable resources). T
 - Agent recovery: option to auto-restart agents or remove them from pool
 
 This is distinct from task-level timeouts (handled by the submit wrapper). The daemon needs to know when an agent itself is stuck, not just when a particular task is taking too long.
+
+## Agent Auto-Deregistration on Repeated Timeouts
+
+Track timeouts per agent. After N timeouts (e.g., 3), auto-deregister the agent from the pool:
+
+- Daemon tracks timeout count per agent
+- On timeout, increment counter
+- At threshold (configurable, default 3), remove agent directory
+- `get_task` should return an error if the agent was deregistered, explaining why
+- Agent can re-register to reset their timeout count and try again
+
+This prevents slow/broken agents from clogging the pool indefinitely.
+
+## Low-Level File Protocol Documentation
+
+Currently the agent protocol documentation only covers the CLI commands (`get_task`, `deregister_agent`). The underlying file protocol (`task.json`, `response.json`) is an implementation detail.
+
+If we need to support agents that can't use the CLI (e.g., non-Rust agents, embedded systems), we should document the raw file protocol:
+
+- Agent creates directory in `agents/`
+- Daemon writes `task.json` when task is assigned
+- Agent writes `response.json` when done
+- Daemon cleans up both files
+
+For now, the CLI abstracts this away. Expose only if there's a concrete use case.
+
+## Full Socket-Based Protocol
+
+Remove filesystem-based IPC entirely:
+
+- Pool ID becomes just a PID or similar in-memory identifier
+- All communication via socket (daemon ↔ agents, daemon ↔ submitters)
+- `get_task` blocks on socket until task assigned
+- `complete_task` sends response over socket
+- No temp files, no directory watching
+- Simpler, faster, easier to reason about
+
+The CLI commands (`register`, `get_task`, `complete_task`) already abstract away the filesystem, so this would be a transparent change for agents using the CLI.

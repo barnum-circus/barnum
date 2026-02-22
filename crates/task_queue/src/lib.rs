@@ -120,7 +120,7 @@ pub trait AsyncLendingIterator {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```text
 /// let mut runner = TaskRunner::new(tasks, &mut ctx, Some(4));
 /// while let Some(ctx) = runner.next().await? {
 ///     println!("Tasks completed: {}", ctx.completed_count);

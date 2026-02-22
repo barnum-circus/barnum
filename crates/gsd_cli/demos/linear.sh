@@ -49,7 +49,7 @@ if [ -n "$EXISTING_POOL" ]; then
     # Run GSD against existing pool
     echo "Running GSD with linear config..."
     $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
-        --root "$ROOT" \
+        --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
 
@@ -67,7 +67,7 @@ else
         echo "=== Cleaning up ==="
         kill $AGENT_PID 2>/dev/null || true
         wait $AGENT_PID 2>/dev/null || true
-        $AGENT_POOL stop "$ROOT" 2>/dev/null || true
+        $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
         rm -rf "$ROOT"
         echo "Done."
     }
@@ -75,7 +75,7 @@ else
 
     # Start agent pool
     echo "Starting agent pool..."
-    $AGENT_POOL start "$ROOT" --log-level "${LOG_LEVEL:-info}" &
+    $AGENT_POOL start --pool "$ROOT" --log-level "${LOG_LEVEL:-info}" &
     POOL_PID=$!
     sleep 0.5
 
@@ -89,7 +89,7 @@ else
     echo ""
     echo "Running GSD with linear config..."
     $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
-        --root "$ROOT" \
+        --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]'
 
     echo ""

@@ -75,9 +75,9 @@ pub struct Step {
     #[serde(default)]
     pub value_schema: Option<SchemaRef>,
 
-    /// Markdown instructions shown to agents.
+    /// How this step processes tasks.
     #[serde(default)]
-    pub instructions: String,
+    pub action: Action,
 
     /// Valid next step names (empty = terminal step).
     #[serde(default)]
@@ -86,6 +86,43 @@ pub struct Step {
     /// Per-step options that override global options.
     #[serde(default)]
     pub options: StepOptions,
+}
+
+/// How a step processes tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum Action {
+    /// Send to the agent pool for processing.
+    Pool {
+        /// Markdown instructions shown to agents.
+        #[serde(default)]
+        instructions: Instructions,
+    },
+    /// Run a local command.
+    Command {
+        /// Shell script to execute. Receives the task JSON on stdin,
+        /// must output response JSON (array of next tasks) on stdout.
+        script: String,
+    },
+}
+
+impl Default for Action {
+    fn default() -> Self {
+        Self::Pool {
+            instructions: Instructions::default(),
+        }
+    }
+}
+
+impl Action {
+    /// Get the instructions if this is a pool action.
+    #[must_use]
+    pub const fn instructions(&self) -> Option<&Instructions> {
+        match self {
+            Self::Pool { instructions } => Some(instructions),
+            Self::Command { .. } => None,
+        }
+    }
 }
 
 /// Per-step options that override global defaults.
@@ -138,13 +175,60 @@ impl EffectiveOptions {
 }
 
 /// Reference to a JSON Schema (inline or external file).
+///
+/// In config files:
+/// - String → link to schema file
+/// - Object → inline JSON Schema
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value")]
+#[serde(untagged)]
 pub enum SchemaRef {
-    /// Inline JSON Schema.
-    Inline(serde_json::Value),
     /// Path to a JSON Schema file.
     Link(String),
+    /// Inline JSON Schema.
+    Inline(serde_json::Value),
+}
+
+/// Markdown instructions (inline or external file).
+///
+/// In config files:
+/// - String → inline markdown
+/// - `{"link": "path"}` → link to markdown file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Instructions {
+    /// Inline markdown text.
+    Inline(String),
+    /// Link to a markdown file.
+    Link {
+        /// Path to the markdown file.
+        link: String,
+    },
+}
+
+impl Default for Instructions {
+    fn default() -> Self {
+        Self::Inline(String::new())
+    }
+}
+
+impl Instructions {
+    /// Get the inline string if this is inline instructions.
+    #[must_use]
+    pub fn as_inline(&self) -> Option<&str> {
+        match self {
+            Self::Inline(s) => Some(s),
+            Self::Link { .. } => None,
+        }
+    }
+
+    /// Get the link path if this is a link.
+    #[must_use]
+    pub fn as_link(&self) -> Option<&str> {
+        match self {
+            Self::Inline(_) => None,
+            Self::Link { link } => Some(link),
+        }
+    }
 }
 
 impl Config {
@@ -259,8 +343,8 @@ mod tests {
             "steps": [
                 {
                     "name": "Analyze",
-                    "value_schema": {"kind": "Inline", "value": {"type": "object"}},
-                    "instructions": "Analyze the input.",
+                    "value_schema": {"type": "object"},
+                    "action": {"kind": "Pool", "instructions": "Analyze the input."},
                     "next": ["Done"]
                 },
                 {
@@ -390,5 +474,103 @@ mod tests {
         assert_eq!(effective.max_retries, 5);
         assert!(effective.retry_on_timeout);
         assert!(effective.retry_on_invalid_response);
+    }
+
+    #[test]
+    fn action_pool_inline_instructions() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "action": {"kind": "Pool", "instructions": "Inline markdown here."},
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(
+            &config.steps[0].action,
+            Action::Pool { instructions: Instructions::Inline(s) } if s == "Inline markdown here."
+        ));
+    }
+
+    #[test]
+    fn action_pool_link_instructions() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "action": {"kind": "Pool", "instructions": {"link": "path/to/instructions.md"}},
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(
+            &config.steps[0].action,
+            Action::Pool { instructions: Instructions::Link { link } } if link == "path/to/instructions.md"
+        ));
+    }
+
+    #[test]
+    fn action_command() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "action": {"kind": "Command", "script": "jq '.value'"},
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(
+            &config.steps[0].action,
+            Action::Command { script } if script == "jq '.value'"
+        ));
+    }
+
+    #[test]
+    fn action_defaults_to_pool() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(&config.steps[0].action, Action::Pool { .. }));
+    }
+
+    #[test]
+    fn schema_inline_object() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "value_schema": {"type": "object"},
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(
+            &config.steps[0].value_schema,
+            Some(SchemaRef::Inline(_))
+        ));
+    }
+
+    #[test]
+    fn schema_link_string() {
+        let json = r#"{
+            "steps": [{
+                "name": "Test",
+                "value_schema": "schemas/test.json",
+                "next": []
+            }]
+        }"#;
+
+        let config: Config = serde_json::from_str(json).expect("parse failed");
+        assert!(matches!(
+            &config.steps[0].value_schema,
+            Some(SchemaRef::Link(path)) if path == "schemas/test.json"
+        ));
     }
 }

@@ -4,11 +4,23 @@
 #![expect(clippy::print_stdout)]
 #![expect(clippy::print_stderr)]
 
-use agent_pool::{run, stop, submit};
+use agent_pool::{
+    AGENTS_DIR, cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool, run, stop,
+    submit,
+};
+
+/// Stable filename for task input.
+const TASK_FILE: &str = "task.json";
+/// Stable filename for agent response.
+const RESPONSE_FILE: &str = "response.json";
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::{fs, thread};
+use std::time::Duration;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+
+const AGENT_PROTOCOL: &str = include_str!("../AGENT_PROTOCOL.md");
 
 /// Log level for the agent pool.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -28,8 +40,6 @@ enum LogLevel {
     Trace,
 }
 
-const AGENT_PROTOCOL: &str = include_str!("../AGENT_PROTOCOL.md");
-
 #[derive(Parser)]
 #[command(name = "agent_pool")]
 #[command(about = "Agent pool for managing workers with file-based task dispatch")]
@@ -42,26 +52,66 @@ struct Cli {
 enum Command {
     /// Start the agent pool server
     Start {
-        /// Root directory for the agent pool
-        root: PathBuf,
+        /// Pool ID or path. If omitted, generates a new ID.
+        /// IDs resolve to /tmp/gsd/<id>/
+        #[arg(long)]
+        pool: Option<String>,
         /// Log level
         #[arg(short, long, default_value = "info")]
         log_level: LogLevel,
+        /// Output pool info as JSON (for scripts)
+        #[arg(long)]
+        json: bool,
     },
     /// Stop a running agent pool server
     Stop {
-        /// Root directory where the server is running
-        root: PathBuf,
+        /// Pool ID or path
+        #[arg(long)]
+        pool: String,
     },
     /// Submit a task and wait for the result
-    Submit {
-        /// Root directory where the server is running
-        root: PathBuf,
+    #[command(name = "submit_task")]
+    SubmitTask {
+        /// Pool ID or path
+        #[arg(long)]
+        pool: String,
         /// Task input to send
+        #[arg(long)]
         input: String,
     },
+    /// List all pools
+    List,
+    /// Clean up stopped pools
+    Cleanup,
     /// Print the agent protocol documentation
-    Protocol,
+    Protocol {
+        /// Pool ID to include in the instructions
+        #[arg(long)]
+        pool: Option<String>,
+        /// Agent name to include in the instructions
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Deregister an agent from the pool
+    #[command(name = "deregister_agent")]
+    DeregisterAgent {
+        /// Pool ID or path
+        #[arg(long)]
+        pool: String,
+        /// Agent name
+        #[arg(long)]
+        name: String,
+    },
+    /// Wait for and return the next task (for agents)
+    #[command(name = "get_task")]
+    GetTask {
+        /// Pool ID or path
+        #[arg(long)]
+        pool: String,
+        /// Agent name
+        #[arg(long)]
+        name: String,
+    },
 }
 
 fn init_tracing(level: LogLevel) {
@@ -84,8 +134,39 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Start { root, log_level } => {
+        Command::Start {
+            pool,
+            log_level,
+            json,
+        } => {
             init_tracing(log_level);
+
+            // Resolve pool reference or generate new ID
+            let (id, root) = match pool {
+                Some(p) if p.contains('/') => {
+                    // It's a path
+                    (None, PathBuf::from(p))
+                }
+                Some(id) => {
+                    // It's an ID
+                    (Some(id.clone()), id_to_path(&id))
+                }
+                None => {
+                    // Generate new ID
+                    let id = generate_id();
+                    (Some(id.clone()), id_to_path(&id))
+                }
+            };
+
+            // Print pool info
+            if json {
+                let info = serde_json::json!({ "id": id });
+                println!("{}", serde_json::to_string(&info).unwrap_or_default());
+            } else if let Some(id) = &id {
+                eprintln!("Starting pool {id}");
+            } else {
+                eprintln!("Starting pool");
+            }
 
             // run() returns Result<Infallible, _>, so Ok case never happens
             match run(&root) {
@@ -96,31 +177,138 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::Stop { root } => {
+        Command::Stop { pool } => {
+            let root = resolve_pool(&pool);
             if let Err(e) = stop(&root) {
                 eprintln!("Failed to stop: {e}");
                 return ExitCode::FAILURE;
             }
             eprintln!("Server stopped");
         }
-        Command::Submit { root, input } => match submit(&root, &input) {
-            Ok(response) => {
-                // Output structured JSON response
-                match serde_json::to_string(&response) {
-                    Ok(json) => println!("{json}"),
-                    Err(e) => {
-                        eprintln!("Failed to serialize response: {e}");
-                        return ExitCode::FAILURE;
+        Command::SubmitTask { pool, input } => {
+            let root = resolve_pool(&pool);
+            match submit(&root, &input) {
+                Ok(response) => {
+                    // Output structured JSON response
+                    match serde_json::to_string(&response) {
+                        Ok(json) => println!("{json}"),
+                        Err(e) => {
+                            eprintln!("Failed to serialize response: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Submit error: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        Command::List => match list_pools() {
+            Ok(pools) => {
+                if pools.is_empty() {
+                    eprintln!("No pools found");
+                } else {
+                    println!("{:<12} {:<8} PATH", "ID", "STATUS");
+                    for pool in pools {
+                        let status = if pool.running { "running" } else { "stopped" };
+                        println!("{:<12} {:<8} {}", pool.id, status, pool.path.display());
                     }
                 }
             }
             Err(e) => {
-                eprintln!("Submit error: {e}");
+                eprintln!("Failed to list pools: {e}");
                 return ExitCode::FAILURE;
             }
         },
-        Command::Protocol => {
-            print!("{AGENT_PROTOCOL}");
+        Command::Cleanup => match cleanup_stopped() {
+            Ok(count) => {
+                eprintln!("Cleaned up {count} stopped pool(s)");
+            }
+            Err(e) => {
+                eprintln!("Cleanup failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        Command::Protocol { pool, name } => {
+            let mut output = AGENT_PROTOCOL.to_string();
+
+            if let Some(id) = &pool {
+                let path = id_to_path(id);
+                output = output
+                    .replace("<POOL_ID>", id)
+                    .replace("abc12345", id)
+                    .replace("/tmp/gsd/<POOL_ID>", &path.display().to_string());
+            }
+
+            if let Some(agent_name) = &name {
+                output = output
+                    .replace("<YOUR_NAME>", agent_name)
+                    .replace("claude-1", agent_name);
+            }
+
+            print!("{output}");
+        }
+        Command::DeregisterAgent { pool, name } => {
+            let root = resolve_pool(&pool);
+            let agent_dir = root.join(AGENTS_DIR).join(&name);
+
+            // Remove the agent directory
+            if agent_dir.exists() {
+                if let Err(e) = fs::remove_dir_all(&agent_dir) {
+                    eprintln!("Failed to remove agent directory: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+
+            eprintln!("Deregistered agent '{name}'");
+        }
+        Command::GetTask { pool, name } => {
+            let root = resolve_pool(&pool);
+            let agent_dir = root.join(AGENTS_DIR).join(&name);
+
+            // Create agent directory if it doesn't exist (registers the agent)
+            if let Err(e) = fs::create_dir_all(&agent_dir) {
+                eprintln!("Failed to create agent directory: {e}");
+                return ExitCode::FAILURE;
+            }
+
+            let task_file = agent_dir.join(TASK_FILE);
+            let response_file = agent_dir.join(RESPONSE_FILE);
+
+            // Poll for task file
+            loop {
+                if task_file.exists() {
+                    // Read the task content
+                    let content = match fs::read_to_string(&task_file) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            eprintln!("Failed to read task: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                    };
+
+                    // Parse content as JSON if possible, otherwise wrap as string
+                    let content_json: serde_json::Value = serde_json::from_str(&content)
+                        .unwrap_or_else(|_| serde_json::Value::String(content));
+
+                    // Output task info with stable response file path
+                    let output = serde_json::json!({
+                        "kind": "Task",
+                        "response_file": response_file.display().to_string(),
+                        "content": content_json
+                    });
+
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&output).unwrap_or_default()
+                    );
+                    return ExitCode::SUCCESS;
+                }
+
+                // No task yet, wait and try again
+                thread::sleep(Duration::from_millis(100));
+            }
         }
     }
 

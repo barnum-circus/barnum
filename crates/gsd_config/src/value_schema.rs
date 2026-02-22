@@ -250,7 +250,7 @@ mod tests {
             "steps": [
                 {
                     "name": "Start",
-                    "value_schema": {"kind": "Inline", "value": {"type": "object", "properties": {"x": {"type": "number"}}}},
+                    "value_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
                     "next": ["End"]
                 },
                 {

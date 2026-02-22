@@ -22,22 +22,22 @@ fn branching_config() -> Config {
             "steps": [
                 {
                     "name": "Decide",
-                    "instructions": "Decide which path to take: PathA or PathB",
+                    "action": {"kind": "Pool", "instructions": "Decide which path to take: PathA or PathB"},
                     "next": ["PathA", "PathB"]
                 },
                 {
                     "name": "PathA",
-                    "instructions": "You chose path A. Go to Done.",
+                    "action": {"kind": "Pool", "instructions": "You chose path A. Go to Done."},
                     "next": ["Done"]
                 },
                 {
                     "name": "PathB",
-                    "instructions": "You chose path B. Go to Done.",
+                    "action": {"kind": "Pool", "instructions": "You chose path B. Go to Done."},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "instructions": "All done.",
+                    "action": {"kind": "Pool", "instructions": "All done."},
                     "next": []
                 }
             ]

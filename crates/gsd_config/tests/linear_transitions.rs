@@ -20,17 +20,17 @@ fn linear_config() -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "instructions": "You are at the start. Transition to Middle.",
+                    "action": {"kind": "Pool", "instructions": "You are at the start. Transition to Middle."},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "instructions": "You are in the middle. Transition to End.",
+                    "action": {"kind": "Pool", "instructions": "You are in the middle. Transition to End."},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "instructions": "You are at the end. Return empty array.",
+                    "action": {"kind": "Pool", "instructions": "You are at the end. Return empty array."},
                     "next": []
                 }
             ]

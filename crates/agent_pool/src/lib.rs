@@ -31,16 +31,14 @@
 mod constants;
 mod daemon;
 mod lock;
+mod pool;
 mod response;
 mod stop;
 mod submit;
 
-pub use constants::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT};
+pub use constants::AGENTS_DIR;
 pub use daemon::{DaemonHandle, run, spawn};
+pub use pool::{PoolInfo, cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool};
 pub use response::{NotProcessedReason, Response, ResponseKind};
 pub use stop::stop;
 pub use submit::submit;
-
-// Legacy exports for backwards compatibility during transition
-#[doc(hidden)]
-pub use constants::{IN_PROGRESS_FILE, NEXT_TASK_FILE, OUTPUT_FILE};

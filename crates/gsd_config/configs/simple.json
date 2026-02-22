@@ -3,7 +3,10 @@
   "steps": [
     {
       "name": "Start",
-      "instructions": "This is the starting step. Return an empty array to finish.",
+      "action": {
+        "kind": "Pool",
+        "instructions": "This is the starting step. Return an empty array to finish."
+      },
       "next": []
     }
   ]

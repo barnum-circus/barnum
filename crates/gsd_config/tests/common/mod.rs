@@ -5,7 +5,7 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::collapsible_if)]
 
-use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT};
+use agent_pool::AGENTS_DIR;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -14,6 +14,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
+
+/// Stable filename for task input.
+const TASK_FILE: &str = "task.json";
+/// Stable filename for agent response.
+const RESPONSE_FILE: &str = "response.json";
 
 /// Get the path to the test data directory for a given test file.
 pub fn test_data_dir(test_file: &str) -> PathBuf {
@@ -105,22 +110,27 @@ impl GsdTestAgent {
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
+            let task_file = agent_dir.join(TASK_FILE);
+            let response_file = agent_dir.join(RESPONSE_FILE);
 
             while running_clone.load(Ordering::SeqCst) {
-                if let Some((task_id, payload)) = find_input_file(&agent_dir) {
-                    let input_path = agent_dir.join(format!("{task_id}.{INPUT_EXT}"));
+                // Check for task file
+                if task_file.exists() && !response_file.exists() {
+                    let payload = match fs::read_to_string(&task_file) {
+                        Ok(p) => p,
+                        Err(_) => {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                    };
 
                     thread::sleep(processing_delay);
 
                     let response = processor(&payload);
                     processed_tasks.push(payload.trim().to_string());
 
-                    // Check if we were timed out
-                    if input_path.exists() {
-                        let output_path = agent_dir.join(format!("{task_id}.{OUTPUT_EXT}"));
-                        let _ = fs::write(&output_path, &response);
-                        let _ = fs::remove_file(&input_path);
-                    }
+                    // Write response (daemon handles cleanup of both files)
+                    let _ = fs::write(&response_file, &response);
                 }
 
                 thread::sleep(Duration::from_millis(10));
@@ -197,28 +207,6 @@ impl GsdTestAgent {
             .join()
             .expect("Agent thread panicked")
     }
-}
-
-/// Find an input file in the agent directory, returning (`task_id`, content).
-fn find_input_file(agent_dir: &Path) -> Option<(u64, String)> {
-    let Ok(entries) = fs::read_dir(agent_dir) else {
-        return None;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if let Some(stem) = name.strip_suffix(&format!(".{INPUT_EXT}")) {
-                if let Ok(task_id) = stem.parse::<u64>() {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        return Some((task_id, content));
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }
 
 // =============================================================================

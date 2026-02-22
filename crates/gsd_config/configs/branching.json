@@ -5,22 +5,34 @@
   "steps": [
     {
       "name": "Decide",
-      "instructions": "Make a decision. Choose either PathA or PathB.",
+      "action": {
+        "kind": "Pool",
+        "instructions": "Make a decision. Choose either PathA or PathB."
+      },
       "next": ["PathA", "PathB"]
     },
     {
       "name": "PathA",
-      "instructions": "You chose path A. Proceed to Done.",
+      "action": {
+        "kind": "Pool",
+        "instructions": "You chose path A. Proceed to Done."
+      },
       "next": ["Done"]
     },
     {
       "name": "PathB",
-      "instructions": "You chose path B. Proceed to Done.",
+      "action": {
+        "kind": "Pool",
+        "instructions": "You chose path B. Proceed to Done."
+      },
       "next": ["Done"]
     },
     {
       "name": "Done",
-      "instructions": "All done. Return an empty array.",
+      "action": {
+        "kind": "Pool",
+        "instructions": "All done. Return an empty array."
+      },
       "next": []
     }
   ]

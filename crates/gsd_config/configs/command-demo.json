@@ -1,0 +1,29 @@
+{
+  "$schema": "../schemas/config.schema.json",
+  "steps": [
+    {
+      "name": "Split",
+      "action": {
+        "kind": "Command",
+        "script": "jq -c '.value.items[] | {kind: \"Process\", value: .}' | jq -s"
+      },
+      "next": ["Process"]
+    },
+    {
+      "name": "Process",
+      "action": {
+        "kind": "Command",
+        "script": "jq -c '{kind: \"Collect\", value: {processed: .value, doubled: (.value.n * 2)}}' | jq -s"
+      },
+      "next": ["Collect"]
+    },
+    {
+      "name": "Collect",
+      "action": {
+        "kind": "Command",
+        "script": "echo '[]'"
+      },
+      "next": []
+    }
+  ]
+}

@@ -135,13 +135,23 @@ gsd docs <config>
   "steps": [
     {
       "name": "Analyze",
-      "schema": { "kind": "Inline", "value": { "type": "object" } },
-      "instructions": "Analyze the input.",
+      "value_schema": { "type": "object" },
+      "action": { "kind": "Pool", "instructions": "Analyze the input." },
       "next": ["Implement", "Done"]
+    },
+    {
+      "name": "Transform",
+      "action": { "kind": "Command", "script": "jq '.value' | process.sh" },
+      "next": ["Done"]
     }
   ]
 }
 ```
+
+### Action Types
+
+- **pool**: Send to agent pool (default). Has `instructions` for the LLM agent.
+- **command**: Run a local script. Task JSON on stdin, response array on stdout.
 
 ### Task Format
 

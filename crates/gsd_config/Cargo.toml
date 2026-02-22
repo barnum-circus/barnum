@@ -16,5 +16,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+interprocess = { workspace = true }
+
 [lints]
 workspace = true

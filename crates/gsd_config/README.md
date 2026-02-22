@@ -24,13 +24,19 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
   "steps": [
     {
       "name": "Analyze",
-      "value_schema": { "kind": "Inline", "value": { "type": "object" } },
-      "instructions": "Analyze the given file.",
+      "value_schema": { "type": "object" },
+      "action": {
+        "kind": "Pool",
+        "instructions": "Analyze the given file."
+      },
       "next": ["Implement", "Done"]
     },
     {
       "name": "Implement",
-      "instructions": "Implement the changes.",
+      "action": {
+        "kind": "Pool",
+        "instructions": { "link": "implement-instructions.md" }
+      },
       "next": ["Test"],
       "options": {
         "timeout": 300,
@@ -40,9 +46,12 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
       }
     },
     {
-      "name": "Test",
-      "instructions": "Run tests.",
-      "next": ["Done", "Implement"]
+      "name": "Transform",
+      "action": {
+        "kind": "Command",
+        "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"
+      },
+      "next": ["Done"]
     },
     {
       "name": "Done",
@@ -65,11 +74,25 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
 - `name`: Step identifier
 - `value_schema`: JSON Schema for validating the task's `value` field (optional)
   - Omitted → accepts any value
-  - `{ "kind": "Inline", "value": {...} }` → inline schema
-  - `{ "kind": "Link", "value": "path/to/schema.json" }` → external file
-- `instructions`: Markdown shown to agents
+  - Object → inline JSON schema (e.g., `{"type": "object"}`)
+  - String → path to external schema file (e.g., `"schemas/analyze.json"`)
+- `action`: How the step processes tasks
+  - `{"kind": "Pool", "instructions": "..."}` → send to agent pool (default)
+  - `{"kind": "Command", "script": "..."}` → run local command
 - `next`: Valid next step names (empty = terminal)
 - `options`: Per-step overrides for global options
+
+### Action Types
+
+**Pool** (default): Sends tasks to the agent pool for processing by LLM agents.
+```json
+{"kind": "Pool", "instructions": "Analyze the input."}
+```
+
+**Command**: Runs a local shell script. The task JSON is piped to stdin, and the script must output a JSON array of next tasks on stdout.
+```json
+{"kind": "Command", "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}
+```
 
 ## Task Format
 

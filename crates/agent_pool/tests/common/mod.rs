@@ -5,7 +5,12 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::collapsible_if)]
 
-use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT};
+use agent_pool::AGENTS_DIR;
+
+/// Stable filename for task input.
+const TASK_FILE: &str = "task.json";
+/// Stable filename for agent response.
+const RESPONSE_FILE: &str = "response.json";
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -100,23 +105,27 @@ impl TestAgent {
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
+            let task_file = agent_dir.join(TASK_FILE);
+            let response_file = agent_dir.join(RESPONSE_FILE);
 
             while running_clone.load(Ordering::SeqCst) {
-                // Find an input file
-                if let Some((task_id, task)) = find_input_file(&agent_dir) {
-                    let input_path = agent_dir.join(format!("{task_id}.{INPUT_EXT}"));
+                // Check for task file
+                if task_file.exists() && !response_file.exists() {
+                    let task = match fs::read_to_string(&task_file) {
+                        Ok(t) => t,
+                        Err(_) => {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                    };
 
                     thread::sleep(processing_delay);
 
                     let response = processor(&task, &agent_id_owned);
                     processed_tasks.push(task.trim().to_string());
 
-                    // Check if we were timed out (input deleted)
-                    if input_path.exists() {
-                        let output_path = agent_dir.join(format!("{task_id}.{OUTPUT_EXT}"));
-                        let _ = fs::write(&output_path, &response);
-                        let _ = fs::remove_file(&input_path);
-                    }
+                    // Write response (daemon handles cleanup of both files)
+                    let _ = fs::write(&response_file, &response);
                 }
 
                 thread::sleep(Duration::from_millis(10));
@@ -165,27 +174,6 @@ impl TestAgent {
     }
 }
 
-/// Find an input file in the agent directory, returning (`task_id`, content).
-fn find_input_file(agent_dir: &Path) -> Option<(u64, String)> {
-    let Ok(entries) = fs::read_dir(agent_dir) else {
-        return None;
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if let Some(stem) = name.strip_suffix(&format!(".{INPUT_EXT}")) {
-                if let Ok(task_id) = stem.parse::<u64>() {
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        return Some((task_id, content));
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
 
 // =============================================================================
 // Agent Pool Handle

@@ -1,62 +1,46 @@
 # Agent Protocol
 
-How to be an agent in the pool.
+You are an agent in a task pool. You'll be given a **pool ID** and your **agent name**.
 
-## Setup
-
-Create your agent directory:
-
-```
-mkdir -p /path/to/pool/agents/my-agent
-```
-
-## The Protocol
-
-Tasks use numbered files: `{id}.input` and `{id}.output`.
-
-**When you see a `.input` file:**
-
-1. Read it
-2. Do the work
-3. Check if the `.input` file still exists:
-   - **If yes**: Write `{id}.output`, then delete `{id}.input`
-   - **If no**: Task was timed out, don't write output
-
-The pool cleans up both files after reading your output.
-
-## Example
+## Getting tasks
 
 ```bash
-AGENT_DIR="/path/to/pool/agents/my-agent"
-
-while true; do
-    # Find the input file (there's only ever one)
-    input_file=$(ls "$AGENT_DIR"/*.input 2>/dev/null | head -1)
-
-    if [ -n "$input_file" ]; then
-        task=$(cat "$input_file")
-
-        # Do your work here...
-        result="done"
-
-        # Check if we were timed out
-        if [ -f "$input_file" ]; then
-            # Get the task ID from filename (e.g., "1.input" -> "1")
-            id=$(basename "$input_file" .input)
-            echo "$result" > "$AGENT_DIR/$id.output"
-            rm -f "$input_file"
-        fi
-    fi
-    sleep 0.1
-done
+agent_pool get_task --pool <POOL_ID> --name <YOUR_NAME>
 ```
 
-## For Claude Code
+This registers you with the pool and waits until a task is available. When a task arrives, it prints JSON:
 
-If you're a Claude Code instance acting as an agent:
+```json
+{
+  "kind": "Task",
+  "response_file": "/tmp/gsd/<POOL_ID>/agents/<YOUR_NAME>/response.json",
+  "content": {
+    "task": {"kind": "StepName", "value": {...}},
+    "instructions": "What you should do..."
+  }
+}
+```
 
-1. Create your directory: `mkdir -p /path/to/pool/agents/YOUR_NAME`
-2. Watch for `*.input` files
-3. Read the input, do the work
-4. Before writing output, verify the input file still exists (if not, you were timed out)
-5. Write `{id}.output` and delete `{id}.input`
+## Doing the work
+
+Follow the instructions from the task. The instructions will tell you what valid responses look like.
+
+## Writing your response
+
+Use your **Write tool** (not bash) to write your response to `response_file`. The format depends on the task's instructions.
+
+**Important:** Always use the Write file tool, not bash commands like `echo`. Bash file operations may trigger permission prompts that interrupt the workflow.
+
+## Getting the next task
+
+Call `get_task` again. It will wait for the next task.
+
+**Important:** Always call `get_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
+
+## Shutting down
+
+Only call `deregister_agent` if you need to stop accepting tasks (e.g., user interrupted you, you're out of resources). This is for agent shutdown, not for signaling task completion:
+
+```bash
+agent_pool deregister_agent --pool <POOL_ID> --name <YOUR_NAME>
+```

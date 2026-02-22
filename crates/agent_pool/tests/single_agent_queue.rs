@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT, ResponseKind};
+use agent_pool::{AGENTS_DIR, Response};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -47,13 +47,10 @@ fn single_agent_queues_multiple_tasks() {
         .collect();
 
     for result in &results {
-        assert_eq!(result.kind, ResponseKind::Processed);
-        assert!(
-            result
-                .stdout
-                .as_ref()
-                .is_some_and(|s| s.contains("[processed]"))
-        );
+        let Response::Processed { stdout, .. } = result else {
+            panic!("Expected Processed response, got {result:?}");
+        };
+        assert!(stdout.contains("[processed]"));
     }
 
     let processed = agent.stop();
@@ -69,22 +66,23 @@ fn sequential_tasks_same_agent() {
     let agent = TestAgent::echo(&root, "seq-agent", Duration::from_millis(10));
 
     let agent_dir = root.join(AGENTS_DIR).join("seq-agent");
+    let task_file = agent_dir.join("task.json");
+    let response_file = agent_dir.join("response.json");
 
     // Process three tasks sequentially via file protocol
     for i in 1..=3 {
         let task = format!("Task-{i}");
-        let input_file = agent_dir.join(format!("{i}.{INPUT_EXT}"));
-        let output_file = agent_dir.join(format!("{i}.{OUTPUT_EXT}"));
 
-        fs::write(&input_file, &task).expect("Failed to write task");
+        fs::write(&task_file, &task).expect("Failed to write task");
 
         thread::sleep(Duration::from_millis(100));
 
-        let output = fs::read_to_string(&output_file).expect("Failed to read output");
+        let output = fs::read_to_string(&response_file).expect("Failed to read output");
         assert_eq!(output, format!("{task} [processed]"));
 
-        // Agent cleans up, but we can clean output too if needed
-        let _ = fs::remove_file(&output_file);
+        // Clean up both files (daemon would do this normally)
+        let _ = fs::remove_file(&task_file);
+        let _ = fs::remove_file(&response_file);
     }
 
     let processed = agent.stop();

@@ -31,9 +31,9 @@ enum Command {
         #[arg(long)]
         initial: String,
 
-        /// Agent pool root directory (default: temp directory)
+        /// Agent pool ID or path (e.g., "abc123" or "/tmp/gsd/abc123")
         #[arg(long)]
-        root: Option<PathBuf>,
+        pool: Option<String>,
 
         /// Wake script to call before starting
         #[arg(long)]
@@ -64,7 +64,7 @@ fn main() -> io::Result<()> {
         Command::Run {
             config,
             initial,
-            root,
+            pool,
             wake,
             log_file,
         } => {
@@ -80,12 +80,15 @@ fn main() -> io::Result<()> {
             // Parse initial tasks
             let initial_tasks = parse_initial_tasks(&initial)?;
 
-            // Determine agent_pool root
-            let pool_root = root.unwrap_or_else(|| {
-                let temp = std::env::temp_dir().join("gsd-pool");
-                std::fs::create_dir_all(&temp).ok();
-                temp
-            });
+            // Resolve pool ID or path
+            let pool_root = pool.map_or_else(
+                || {
+                    let temp = std::env::temp_dir().join("gsd-pool");
+                    std::fs::create_dir_all(&temp).ok();
+                    temp
+                },
+                |p| agent_pool::resolve_pool(&p),
+            );
 
             let runner_config = RunnerConfig {
                 agent_pool_root: &pool_root,

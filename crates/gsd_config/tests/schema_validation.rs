@@ -23,28 +23,22 @@ fn config_with_schema() -> Config {
                 {
                     "name": "Input",
                     "value_schema": {
-                        "kind": "Inline",
-                        "value": {
-                            "type": "object",
-                            "properties": {
-                                "count": {"type": "integer", "minimum": 1}
-                            },
-                            "required": ["count"]
-                        }
+                        "type": "object",
+                        "properties": {
+                            "count": {"type": "integer", "minimum": 1}
+                        },
+                        "required": ["count"]
                     },
                     "next": ["Output"]
                 },
                 {
                     "name": "Output",
                     "value_schema": {
-                        "kind": "Inline",
-                        "value": {
-                            "type": "object",
-                            "properties": {
-                                "result": {"type": "string"}
-                            },
-                            "required": ["result"]
-                        }
+                        "type": "object",
+                        "properties": {
+                            "result": {"type": "string"}
+                        },
+                        "required": ["result"]
                     },
                     "next": []
                 }
@@ -151,21 +145,15 @@ fn invalid_response_causes_retry() {
             "steps": [
                 {
                     "name": "Input",
-                    "value_schema": {
-                        "kind": "Inline",
-                        "value": {"type": "object"}
-                    },
+                    "value_schema": {"type": "object"},
                     "next": ["Output"]
                 },
                 {
                     "name": "Output",
                     "value_schema": {
-                        "kind": "Inline",
-                        "value": {
-                            "type": "object",
-                            "properties": {"result": {"type": "string"}},
-                            "required": ["result"]
-                        }
+                        "type": "object",
+                        "properties": {"result": {"type": "string"}},
+                        "required": ["result"]
                     },
                     "next": []
                 }

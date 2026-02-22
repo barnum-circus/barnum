@@ -2,8 +2,26 @@
 //!
 //! Generates instructions that tell agents what they can do at each step.
 
-use crate::config::{Config, SchemaRef, Step};
+use crate::config::{Action, Config, Instructions, SchemaRef, Step};
 use std::fmt::Write;
+
+/// Write instructions to a doc string, handling both inline and linked variants.
+fn write_instructions(doc: &mut String, action: &Action) {
+    let Some(instructions) = action.instructions() else {
+        return;
+    };
+    match instructions {
+        Instructions::Inline(text) if !text.is_empty() => {
+            writeln!(doc, "{text}").ok();
+            writeln!(doc).ok();
+        }
+        Instructions::Link { link } => {
+            writeln!(doc, "*See instructions in `{link}`*").ok();
+            writeln!(doc).ok();
+        }
+        Instructions::Inline(_) => {}
+    }
+}
 
 /// Generate markdown documentation for a specific step.
 ///
@@ -18,11 +36,7 @@ pub fn generate_step_docs(step: &Step, config: &Config) -> String {
     writeln!(doc).ok();
 
     // Step instructions
-    if !step.instructions.is_empty() {
-        let instructions = &step.instructions;
-        writeln!(doc, "{instructions}").ok();
-        writeln!(doc).ok();
-    }
+    write_instructions(&mut doc, &step.action);
 
     // Valid responses section
     if step.next.is_empty() {
@@ -132,11 +146,7 @@ pub fn generate_full_docs(config: &Config) -> String {
         writeln!(doc, "### {name}").ok();
         writeln!(doc).ok();
 
-        if !step.instructions.is_empty() {
-            let instructions = &step.instructions;
-            writeln!(doc, "{instructions}").ok();
-            writeln!(doc).ok();
-        }
+        write_instructions(&mut doc, &step.action);
 
         if step.next.is_empty() {
             writeln!(doc, "**Terminal step** - no further transitions.").ok();
@@ -161,7 +171,7 @@ mod tests {
         let config: Config = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "Start", "instructions": "Begin here.", "next": ["End"]},
+                {"name": "Start", "action": {"kind": "Pool", "instructions": "Begin here."}, "next": ["End"]},
                 {"name": "End", "next": []}
             ]
         }"#,
@@ -196,7 +206,7 @@ mod tests {
             r#"{
             "options": {"timeout": 60, "max_retries": 2},
             "steps": [
-                {"name": "Start", "instructions": "Begin.", "next": ["End"]},
+                {"name": "Start", "action": {"kind": "Pool", "instructions": "Begin."}, "next": ["End"]},
                 {"name": "End", "next": []}
             ]
         }"#,
