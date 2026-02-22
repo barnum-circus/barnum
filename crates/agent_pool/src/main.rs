@@ -5,9 +5,9 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, RESPONSE_FILE, TASK_FILE,
-    cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool, run, stop, submit,
-    submit_file,
+    AGENTS_DIR, DaemonConfig, RESPONSE_FILE, TASK_FILE,
+    cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool, run_with_config, stop,
+    submit, submit_file,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -58,6 +58,18 @@ enum Command {
         /// Output pool info as JSON (for scripts)
         #[arg(long)]
         json: bool,
+        /// Send health check when agent first registers
+        #[arg(long, default_value = "false")]
+        initial_health_check: bool,
+        /// Send periodic health checks to idle agents
+        #[arg(long, default_value = "false")]
+        periodic_health_check: bool,
+        /// Health check interval in seconds (how often to check idle agents)
+        #[arg(long, default_value = "60")]
+        health_check_interval_secs: u64,
+        /// Health check timeout in seconds (how long to wait for response)
+        #[arg(long, default_value = "30")]
+        health_check_timeout_secs: u64,
     },
     /// Stop a running agent pool server
     Stop {
@@ -138,6 +150,10 @@ fn main() -> ExitCode {
             pool,
             log_level,
             json,
+            initial_health_check,
+            periodic_health_check,
+            health_check_interval_secs,
+            health_check_timeout_secs,
         } => {
             init_tracing(log_level);
 
@@ -168,8 +184,15 @@ fn main() -> ExitCode {
                 eprintln!("Starting pool");
             }
 
-            // run() returns Result<Infallible, _>, so Ok case never happens
-            match run(&root) {
+            let config = DaemonConfig {
+                initial_health_check,
+                periodic_health_check,
+                health_check_interval: Duration::from_secs(health_check_interval_secs),
+                health_check_timeout: Duration::from_secs(health_check_timeout_secs),
+            };
+
+            // run_with_config() returns Result<Infallible, _>, so Ok case never happens
+            match run_with_config(&root, config) {
                 Ok(never) => match never {},
                 Err(e) => {
                     eprintln!("Server error: {e}");
