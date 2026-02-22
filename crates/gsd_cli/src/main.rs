@@ -7,6 +7,7 @@
 
 use clap::{Parser, Subcommand};
 use gsd_json::{CompiledSchemas, Config, RunnerConfig, Task, generate_full_docs, run};
+use std::fs::File;
 use std::io;
 use std::path::PathBuf;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -37,6 +38,10 @@ enum Command {
         /// Initial tasks (JSON array string or path to file)
         #[arg(long)]
         initial: Option<String>,
+
+        /// Log file path (logs emitted in addition to stderr)
+        #[arg(long)]
+        log_file: Option<PathBuf>,
     },
 
     /// Generate markdown documentation from config
@@ -53,12 +58,6 @@ enum Command {
 }
 
 fn main() -> io::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(fmt::layer().without_time().with_target(false))
-        .with(EnvFilter::from_default_env().add_directive("gsd=info".parse().unwrap_or_default()))
-        .init();
-
     let cli = Cli::parse();
 
     match cli.command {
@@ -67,7 +66,10 @@ fn main() -> io::Result<()> {
             root,
             wake,
             initial,
+            log_file,
         } => {
+            // Initialize tracing with optional log file
+            init_tracing(log_file.as_ref())?;
             let cfg = Config::load(&config)?;
             cfg.validate()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -151,4 +153,32 @@ fn parse_initial_tasks(initial: Option<String>) -> io::Result<Vec<Task>> {
             format!("invalid initial tasks JSON: {e}"),
         )
     })
+}
+
+fn init_tracing(log_file: Option<&PathBuf>) -> io::Result<()> {
+    let filter =
+        EnvFilter::from_default_env().add_directive("gsd=info".parse().unwrap_or_default());
+
+    let stderr_layer = fmt::layer().without_time().with_target(false);
+
+    if let Some(path) = log_file {
+        let file = File::create(path)?;
+        let file_layer = fmt::layer()
+            .with_ansi(false)
+            .with_writer(file)
+            .with_target(true);
+
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stderr_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stderr_layer)
+            .init();
+    }
+
+    Ok(())
 }

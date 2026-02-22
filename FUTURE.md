@@ -88,6 +88,60 @@ Tasks pass accumulator through `value` - state travels with tasks, no daemon tra
 
 Option 2 is most "JSON-native" but requires agents to understand the accumulator pattern. Need more real-world use cases before committing.
 
+## Sequential Processing by Key
+
+Sometimes you want multiple tasks for the same entity (e.g., file) to be processed sequentially rather than in parallel. Example: three refactors for `main.rs` should be applied one at a time with commits between each.
+
+### Workaround: Self-Looping Step
+
+This is achievable today by having the agent pass remaining items through the value:
+
+```json
+{
+  "steps": [
+    {
+      "name": "Analyze",
+      "instructions": "Analyze files. Return list of refactors grouped by file.",
+      "next": ["ProcessRefactorList"]
+    },
+    {
+      "name": "ProcessRefactorList",
+      "instructions": "Apply first refactor from the list. Return remaining list (or empty to finish).",
+      "next": ["ProcessRefactorList", "Commit", "Done"]
+    },
+    {
+      "name": "Commit",
+      "instructions": "Commit changes for the file. Could also re-analyze.",
+      "next": ["ProcessRefactorList", "Done"]
+    },
+    {
+      "name": "Done",
+      "next": []
+    }
+  ]
+}
+```
+
+The agent receives `{"refactors": [...], "current_file": "..."}` and:
+1. Applies the first refactor for `current_file`
+2. Returns the same task with one fewer refactor
+3. When the file's refactors are exhausted, emits `Commit` or moves to next file
+
+**Limitation**: Requires agents to understand the list-processing pattern. The daemon has no concept of "key" for sequential ordering.
+
+### Potential Future Primitive
+
+Could add `sequential_key` to steps:
+```json
+{
+  "name": "ApplyRefactor",
+  "sequential_key": "{{value.file}}",
+  "instructions": "..."
+}
+```
+
+Tasks with the same key value would be queued and processed one at a time. This would require daemon-side tracking of in-flight keys.
+
 ## Durability
 
 Currently no durability guarantees. Tasks in flight are lost on crash. Document this clearly and consider:

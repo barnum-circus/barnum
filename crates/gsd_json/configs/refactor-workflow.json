@@ -1,0 +1,32 @@
+{
+  "options": {
+    "max_retries": 2
+  },
+  "steps": [
+    {
+      "name": "Analyze",
+      "instructions": "Analyze the codebase and identify refactors needed.\n\nReturn a list of refactors grouped by file:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename X to Y\", \"extract function Z\"]\n}}]\n```\n\nEach file gets its own task to ensure sequential processing per file.",
+      "next": ["ProcessRefactorList"]
+    },
+    {
+      "name": "ProcessRefactorList",
+      "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: {\"file\": \"...\", \"refactors\": [...]}\n\nAfter applying:\n- If more refactors remain, return [{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]\n- If no refactors remain, return [{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]\n\nThis ensures refactors for the same file are applied sequentially.",
+      "next": ["ProcessRefactorList", "CommitFile"]
+    },
+    {
+      "name": "CommitFile",
+      "instructions": "Commit the changes made to the file.\n\nInput: {\"file\": \"...\"}\n\nOptions:\n- Return [] to finish\n- Return [{\"kind\": \"Analyze\", \"value\": {}}] to re-analyze for more refactors\n- Return [{\"kind\": \"VerifyFile\", \"value\": {\"file\": \"...\"}}] to run verification",
+      "next": ["Analyze", "VerifyFile", "Done"]
+    },
+    {
+      "name": "VerifyFile",
+      "instructions": "Run tests or verification for the refactored file.\n\nReturn [] when done, or emit more tasks if issues found.",
+      "next": ["ProcessRefactorList", "Done"]
+    },
+    {
+      "name": "Done",
+      "instructions": "All refactors complete.",
+      "next": []
+    }
+  ]
+}
