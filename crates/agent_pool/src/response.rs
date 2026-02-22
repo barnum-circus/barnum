@@ -16,17 +16,22 @@ use serde::{Deserialize, Serialize};
 pub enum ResponseKind {
     /// Task was fully processed by an agent.
     Processed,
-    /// Task was not processed (timeout, shutdown, etc.).
+    /// Task completion status is unknown.
+    ///
+    /// The task may still be running, may have completed, or may have failed -
+    /// we simply didn't receive confirmation. This can happen due to timeout,
+    /// shutdown, or other interruptions. The caller should decide whether to
+    /// retry based on the reason and idempotency of the task.
     NotProcessed,
 }
 
-/// Reason why a task was not processed.
+/// Reason why task completion couldn't be confirmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotProcessedReason {
     /// The daemon is shutting down.
     Shutdown,
-    /// Task timed out waiting for an agent.
+    /// Timed out waiting for confirmation.
     Timeout,
 }
 
