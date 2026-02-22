@@ -72,18 +72,35 @@ pub fn is_ipc_available(_test_dir: &Path) -> bool {
 // GSD Test Agent
 // =============================================================================
 
-/// Extract task content from the envelope format.
+/// Parsed task envelope.
+struct TaskEnvelope {
+    kind: String,
+    content: String,
+}
+
+/// Extract task kind and content from the envelope format.
 ///
 /// The daemon writes `{"kind": "Task", "content": ...}` to task.json.
-/// This extracts the content field, or returns the raw input if not in envelope format.
-fn extract_task_content(raw: &str) -> String {
+fn extract_task_envelope(raw: &str) -> TaskEnvelope {
     if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(raw) {
-        if let Some(content) = envelope.get("content") {
-            return content.to_string();
-        }
+        let kind = envelope
+            .get("kind")
+            .and_then(|k| k.as_str())
+            .unwrap_or("Task")
+            .to_string();
+
+        let content = envelope
+            .get("content")
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| raw.to_string());
+
+        return TaskEnvelope { kind, content };
     }
     // Not an envelope, return as-is
-    raw.to_string()
+    TaskEnvelope {
+        kind: "Task".to_string(),
+        content: raw.to_string(),
+    }
 }
 
 /// A test agent that understands the GSD protocol.
@@ -129,13 +146,20 @@ impl GsdTestAgent {
                         continue;
                     };
 
-                    // Extract content from envelope {"kind": "...", "content": ...}
-                    let payload = extract_task_content(&raw);
+                    // Extract kind/content from envelope
+                    let envelope = extract_task_envelope(&raw);
+
+                    // Handle health checks immediately
+                    if envelope.kind == "HealthCheck" {
+                        let _ = fs::write(&response_file, "{}");
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
 
                     thread::sleep(processing_delay);
 
-                    let response = processor(&payload);
-                    processed_tasks.push(payload.trim().to_string());
+                    let response = processor(&envelope.content);
+                    processed_tasks.push(envelope.content.trim().to_string());
 
                     // Write response (daemon handles cleanup of both files)
                     let _ = fs::write(&response_file, &response);
