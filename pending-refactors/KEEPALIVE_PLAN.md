@@ -54,20 +54,21 @@ A keepalive is just a regular task with a special marker:
 {
     "task": {
         "kind": "Keepalive",
-        "value": { "id": "ping-12345" }
+        "value": {}
     },
-    "instructions": "Respond with the exact same id to confirm you are alive."
+    "instructions": "Respond with any value to confirm you are alive."
 }
 ```
 
-Expected response:
+Expected response: anything. The daemon just checks that a response file appeared - the content doesn't matter.
+
 ```json
-{ "id": "ping-12345" }
+{}
 ```
 
 ### Agent Handling
 
-Agents treat keepalives like any other task. The instructions tell them what to do. No special client-side code needed beyond following the instructions.
+Agents treat keepalives like any other task. The instructions tell them what to do. No special client-side code needed beyond following the instructions - just write any response.
 
 ## Daemon Flow
 
@@ -285,8 +286,7 @@ Scripts that act as agents must handle Keepalive tasks:
 KIND=$(echo "$TASK_JSON" | jq -r '.content.task.kind // empty')
 if [ "$KIND" = "Keepalive" ]; then
     echo "[$NAME] Responding to keepalive" >&2
-    ID=$(echo "$TASK_JSON" | jq -r '.content.task.value.id')
-    echo "{\"id\": \"$ID\"}" > "$RESPONSE_FILE"
+    echo "{}" > "$RESPONSE_FILE"
     continue
 fi
 ```
@@ -315,8 +315,7 @@ For demos that test the full protocol, agents should handle keepalives:
 ```bash
 # In the fake agent loop
 if echo "$TASK" | jq -e '.content.task.kind == "Keepalive"' > /dev/null 2>&1; then
-    ID=$(echo "$TASK" | jq -r '.content.task.value.id')
-    echo "{\"id\": \"$ID\"}" > "$RESPONSE_FILE"
+    echo "{}" > "$RESPONSE_FILE"
     continue
 fi
 ```
