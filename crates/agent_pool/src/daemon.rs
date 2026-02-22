@@ -253,24 +253,32 @@ enum ResponseTarget {
     File(PathBuf),
 }
 
-/// State for a single agent.
-struct AgentState {
-    /// If busy, holds the stream to respond to when task completes.
-    in_flight: Option<InFlightTask>,
+/// The current status of an agent.
+enum AgentStatus {
+    /// Agent is idle, available for work.
+    Idle,
+    /// Agent is busy with an in-flight task.
+    Busy(InFlight),
 }
 
-/// A task that has been dispatched but not yet completed.
-struct InFlightTask {
-    respond_to: ResponseTarget,
+/// What the agent is currently working on.
+enum InFlight {
+    /// A real task from a submitter.
+    Task { respond_to: ResponseTarget },
+}
+
+/// State for a single agent.
+struct AgentState {
+    status: AgentStatus,
 }
 
 impl AgentState {
     const fn new() -> Self {
-        Self { in_flight: None }
+        Self { status: AgentStatus::Idle }
     }
 
-    const fn is_available(&self) -> bool {
-        self.in_flight.is_none()
+    const fn is_idle(&self) -> bool {
+        matches!(self.status, AgentStatus::Idle)
     }
 }
 
@@ -378,7 +386,7 @@ impl PoolState {
     fn in_flight_count(&self) -> usize {
         self.agents
             .values()
-            .filter(|a| a.in_flight.is_some())
+            .filter(|a| !a.is_idle())
             .count()
     }
 
@@ -386,7 +394,7 @@ impl PoolState {
         let busy: Vec<_> = self
             .agents
             .iter()
-            .filter(|(_, a)| a.in_flight.is_some())
+            .filter(|(_, a)| !a.is_idle())
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -446,19 +454,19 @@ impl PoolState {
     }
 
     fn find_available_agent(&mut self) -> Option<String> {
-        // Find an available agent with a valid directory
+        // Find an idle agent with a valid directory
         let candidate = self
             .agents
             .iter()
-            .find(|(id, a)| a.is_available() && self.agents_dir.join(id).is_dir())
+            .find(|(id, a)| a.is_idle() && self.agents_dir.join(id).is_dir())
             .map(|(id, _)| id.clone());
 
-        // Clean up any stale agents (available but directory missing)
+        // Clean up any stale agents (idle but directory missing)
         if candidate.is_none() {
             let stale: Vec<_> = self
                 .agents
                 .iter()
-                .filter(|(id, a)| a.is_available() && !self.agents_dir.join(id).is_dir())
+                .filter(|(id, a)| a.is_idle() && !self.agents_dir.join(id).is_dir())
                 .map(|(id, _)| id.clone())
                 .collect();
             for id in stale {
@@ -480,7 +488,7 @@ impl PoolState {
         fs::write(&task_path, &task.content)?;
 
         info!(agent_id, "task dispatched");
-        agent.in_flight = Some(InFlightTask {
+        agent.status = AgentStatus::Busy(InFlight::Task {
             respond_to: task.respond_to,
         });
         Ok(())
@@ -491,14 +499,14 @@ impl PoolState {
             return Ok(());
         };
 
-        let Some(in_flight) = agent.in_flight.take() else {
+        let AgentStatus::Busy(in_flight) = std::mem::replace(&mut agent.status, AgentStatus::Idle) else {
             return Ok(());
         };
 
         let output = match fs::read_to_string(response_path) {
             Ok(o) => o,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                agent.in_flight = Some(in_flight);
+                agent.status = AgentStatus::Busy(in_flight);
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -510,8 +518,9 @@ impl PoolState {
         let _ = fs::remove_file(agent_dir.join(TASK_FILE));
         let _ = fs::remove_file(response_path);
 
+        let InFlight::Task { respond_to } = in_flight;
         let response = Response::processed(output);
-        send_response(in_flight.respond_to, &response)?;
+        send_response(respond_to, &response)?;
 
         info!(agent_id, "task completed");
         Ok(())
