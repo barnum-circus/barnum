@@ -2,22 +2,25 @@
 # Demo: Branching GSD task queue
 #
 # Usage:
-#   ./branching.sh                    # Run with demo agent pool
-#   ./branching.sh /path/to/pool      # Run against existing agent pool (e.g., Claude Code)
+#   ./branching.sh                              # Run with demo agent pool
+#   ./branching.sh /path/to/pool                # Run against existing pool
+#   ./branching.sh /path/to/pool /path/to/wake  # Run with wake script
 #
 # This demonstrates a branching task queue:
 # Decide -> PathA or PathB -> Done
 #
 # When using an existing pool, we skip starting the pool and demo agent.
 # The agent always chooses PathA in the demo mode.
+# The wake script is called before GSD starts to notify agents.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
 
-# Check if user provided an existing pool path
+# Check if user provided an existing pool path and wake script
 EXISTING_POOL="$1"
+WAKE_SCRIPT="$2"
 
 # Build the binaries first
 echo "Building binaries..."
@@ -33,13 +36,23 @@ if [ -n "$EXISTING_POOL" ]; then
     ROOT="$EXISTING_POOL"
     echo "=== Demo: Branching Task Queue (using existing pool) ==="
     echo "Pool directory: $ROOT"
+    if [ -n "$WAKE_SCRIPT" ]; then
+        echo "Wake script: $WAKE_SCRIPT"
+    fi
     echo ""
+
+    # Build wake argument if provided
+    WAKE_ARG=""
+    if [ -n "$WAKE_SCRIPT" ]; then
+        WAKE_ARG="--wake $WAKE_SCRIPT"
+    fi
 
     # Run GSD against existing pool
     echo "Running GSD with branching config..."
     $GSD run "$SCRIPT_DIR/../../gsd_config/configs/branching.json" \
         --root "$ROOT" \
-        --initial '[{"kind": "Decide", "value": {}}]'
+        --initial '[{"kind": "Decide", "value": {}}]' \
+        $WAKE_ARG
 
     echo ""
     echo "=== Success! ==="
