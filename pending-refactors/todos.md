@@ -359,19 +359,24 @@ Task-based ping-pong health checks. Benefits:
 - Periodic health checks to idle agents detect disconnected agents
 - Agents can recover from timeout by simply calling `get_task` again
 
-### Improvement: Hide Health Checks from Agents ✓
+### Health Check Visibility
 
-**Status: IMPLEMENTED**
+The `get_task` CLI has `--auto-health-check` (default: **false**).
 
-The `get_task` CLI now has `--auto-health-check` (default: true) which handles health checks internally. Agents never see HealthCheck tasks unless they explicitly disable this:
+**Why agents should see health checks (default):**
+- Health checks require the agent to actively respond
+- This prevents Claude from deciding "nothing's happening, I'll leave"
+- The ping-pong provides forward progress that keeps agents engaged
 
 ```bash
-# Default: get_task handles health checks automatically
+# Default: agent sees and must respond to health checks
 task=$(agent_pool get_task --pool $POOL --name $NAME)
-# task.kind is always "Task"
+# task.kind can be "Task" or "HealthCheck"
+# Agent must write response for both
 
-# Opt-out: agent sees and handles health checks
-task=$(agent_pool get_task --pool $POOL --name $NAME --auto-health-check=false)
+# Opt-in for dumb scripts: CLI handles health checks automatically
+task=$(agent_pool get_task --pool $POOL --name $NAME --auto-health-check=true)
+# task.kind is always "Task"
 ```
 
 ## Typestate Pattern for State Transitions

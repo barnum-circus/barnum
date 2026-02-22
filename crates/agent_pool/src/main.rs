@@ -122,8 +122,10 @@ enum Command {
         /// Agent name
         #[arg(long)]
         name: String,
-        /// Automatically respond to health checks (agent never sees them)
-        #[arg(long, default_value = "true")]
+        /// Automatically respond to health checks (agent never sees them).
+        /// Default: false - agents should see and respond to health checks
+        /// to demonstrate they're still actively listening.
+        #[arg(long, default_value = "false")]
         auto_health_check: bool,
     },
 }
