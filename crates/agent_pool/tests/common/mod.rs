@@ -3,7 +3,6 @@
 // Test utilities can be more relaxed
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
-#![expect(clippy::items_after_statements)]
 #![expect(clippy::collapsible_if)]
 
 use agent_pool::{AGENTS_DIR, IN_PROGRESS_FILE, NEXT_TASK_FILE, OUTPUT_FILE};

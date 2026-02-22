@@ -72,7 +72,7 @@ fn branch_to_path_a() {
         agent_pool_root: &root,
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
-            };
+    };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
@@ -116,7 +116,7 @@ fn branch_to_path_b() {
         agent_pool_root: &root,
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
-            };
+    };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
@@ -179,7 +179,7 @@ fn fan_out_multiple_tasks() {
         agent_pool_root: &root,
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
-            };
+    };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 

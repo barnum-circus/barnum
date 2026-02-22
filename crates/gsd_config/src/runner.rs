@@ -9,7 +9,7 @@
 use crate::config::{Config, EffectiveOptions, Step};
 use crate::docs::generate_step_docs;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
-use agent_pool::{NotProcessedReason, Response, ResponseKind};
+use agent_pool::{Response, ResponseKind};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::Path;
@@ -96,10 +96,16 @@ impl<'a> TaskRunner<'a> {
         }
 
         if let Some(max) = config.options.max_concurrency {
-            debug!(max_concurrency = max, "concurrency limit configured (not yet enforced)");
+            debug!(
+                max_concurrency = max,
+                "concurrency limit configured (not yet enforced)"
+            );
         }
 
-        info!(tasks = runner_config.initial_tasks.len(), "starting task queue");
+        info!(
+            tasks = runner_config.initial_tasks.len(),
+            "starting task queue"
+        );
 
         Ok(Self {
             config,
@@ -113,6 +119,7 @@ impl<'a> TaskRunner<'a> {
     /// Process the next task in the queue.
     ///
     /// Returns `None` when the queue is empty.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TaskOutcome> {
         let task = self.queue.pop_front()?;
         Some(self.process_task(task))
@@ -222,12 +229,9 @@ impl<'a> TaskRunner<'a> {
                 let reason = response
                     .reason
                     .map_or_else(|| "unknown".to_string(), |r| format!("{r:?}"));
-                let failure_kind = match response.reason {
-                    Some(NotProcessedReason::Timeout) => FailureKind::Timeout,
-                    _ => FailureKind::Timeout,
-                };
+                // All NotProcessed cases currently treated as timeout-like failures
                 warn!(kind = task.kind, reason, "task outcome unknown");
-                self.requeue_with_retry(task, effective, failure_kind)
+                self.requeue_with_retry(task, effective, FailureKind::Timeout)
             }
         }
     }

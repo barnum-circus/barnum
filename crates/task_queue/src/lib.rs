@@ -173,9 +173,11 @@ where
     T: QueueItem<Ctx, InProgress = InProgress>,
     T::NextTasks: Into<Vec<T>>,
 {
-    type Item<'a> = &'a mut Ctx where Self: 'a;
+    type Item<'a>
+        = &'a mut Ctx
+    where
+        Self: 'a;
 
-    #[expect(clippy::future_not_send)]
     async fn next(&mut self) -> Result<Option<Self::Item<'_>>, ProcessQueueError> {
         if self.is_done() {
             return Ok(None);
@@ -192,7 +194,10 @@ where
 
             let (in_progress, cmd) = item.start(self.ctx);
             let handle = spawn_command(cmd);
-            self.in_flight.push(InFlightTask { in_progress, handle });
+            self.in_flight.push(InFlightTask {
+                in_progress,
+                handle,
+            });
         }
 
         // Wait for one to complete
@@ -225,7 +230,6 @@ where
 /// Returns an error if:
 /// - A spawned command fails with an I/O error
 /// - A spawned task panics
-#[expect(clippy::future_not_send)]
 pub async fn process_queue<T, Ctx>(
     initial_queue: Vec<T>,
     ctx: &mut Ctx,
@@ -262,8 +266,9 @@ fn spawn_command(cmd: Command) -> tokio::task::JoinHandle<Result<String, std::io
     })
 }
 
-#[expect(clippy::future_not_send)]
-async fn wait_for_any_completion<T>(in_flight: &mut Vec<InFlightTask<T>>) -> Option<InFlightTask<T>> {
+async fn wait_for_any_completion<T>(
+    in_flight: &mut Vec<InFlightTask<T>>,
+) -> Option<InFlightTask<T>> {
     if in_flight.is_empty() {
         return None;
     }

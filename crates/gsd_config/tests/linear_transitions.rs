@@ -65,7 +65,7 @@ fn three_step_linear_machine() {
         agent_pool_root: &root,
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-            };
+    };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
@@ -106,7 +106,7 @@ fn instructions_included_in_payload() {
         agent_pool_root: &root,
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-            };
+    };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
