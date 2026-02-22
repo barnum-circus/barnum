@@ -39,16 +39,6 @@ use std::{fs, io, thread};
 use tracing::{debug, info, trace, warn};
 
 // =============================================================================
-// Configuration
-// =============================================================================
-
-/// Configuration for the agent pool daemon.
-#[derive(Debug, Clone, Default)]
-pub struct DaemonConfig {
-    // Reserved for future configuration options (e.g., keepalive settings)
-}
-
-// =============================================================================
 // Public API
 // =============================================================================
 
@@ -128,21 +118,12 @@ impl DaemonHandle {
     }
 }
 
-/// Spawn the daemon in a background thread with default configuration.
+/// Spawn the daemon in a background thread.
 ///
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or setup fails.
 pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
-    spawn_with_config(root, DaemonConfig::default())
-}
-
-/// Spawn the daemon in a background thread with custom configuration.
-///
-/// # Errors
-///
-/// Returns an error if the lock can't be acquired or setup fails.
-pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<DaemonHandle> {
     let root = root.as_ref().to_path_buf();
 
     fs::create_dir_all(&root)?;
@@ -175,7 +156,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
 
         info!(socket = %socket_path.display(), "listening");
 
-        let mut state = PoolState::new(&root, config);
+        let mut state = PoolState::new(&root);
         state.scan_agents()?;
 
         event_loop(&listener, &fs_events, &mut state, &signals_clone)
@@ -189,21 +170,12 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     })
 }
 
-/// Run the agent pool daemon with default configuration (blocking, never returns on success).
+/// Run the agent pool daemon (blocking, never returns on success).
 ///
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or an I/O error occurs.
 pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
-    run_with_config(root, DaemonConfig::default())
-}
-
-/// Run the agent pool daemon with custom configuration (blocking, never returns on success).
-///
-/// # Errors
-///
-/// Returns an error if the lock can't be acquired or an I/O error occurs.
-pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<Infallible> {
     let root = root.as_ref().to_path_buf();
 
     fs::create_dir_all(&root)?;
@@ -231,7 +203,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 
     info!(socket = %socket_path.display(), "listening");
 
-    let mut state = PoolState::new(&root, config);
+    let mut state = PoolState::new(&root);
     state.scan_agents()?;
 
     let signals = DaemonSignals::new();
@@ -288,8 +260,6 @@ struct PoolState {
     pending_dir: PathBuf,
     agents: HashMap<String, AgentState>,
     pending: VecDeque<Task>,
-    #[expect(dead_code, reason = "will be used for keepalive config")]
-    config: DaemonConfig,
 }
 
 struct Task {
@@ -298,7 +268,7 @@ struct Task {
 }
 
 impl PoolState {
-    fn new(root: &Path, config: DaemonConfig) -> Self {
+    fn new(root: &Path) -> Self {
         let agents_dir = root.join(AGENTS_DIR);
         let pending_dir = root.join(PENDING_DIR);
         Self {
@@ -306,7 +276,6 @@ impl PoolState {
             pending_dir,
             agents: HashMap::new(),
             pending: VecDeque::new(),
-            config,
         }
     }
 

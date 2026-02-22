@@ -39,7 +39,7 @@ mod submit_file;
 mod types;
 
 pub use constants::{AGENTS_DIR, PENDING_DIR, RESPONSE_FILE, TASK_FILE};
-pub use daemon::{DaemonConfig, DaemonHandle, run, run_with_config, spawn, spawn_with_config};
+pub use daemon::{DaemonHandle, run, spawn};
 pub use pool::{PoolInfo, cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool};
 pub use response::{NotProcessedReason, Response, ResponseKind};
 pub use stop::stop;
