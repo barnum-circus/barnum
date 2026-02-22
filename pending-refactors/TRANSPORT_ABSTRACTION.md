@@ -65,7 +65,21 @@ loop {
 
 ## Communication Patterns
 
-There are two communication channels:
+**Note:** This section describes internal implementation. External agents (like Claude Code) don't need to know any of this - they just use the CLI:
+
+```bash
+# Agent's entire interface:
+task=$(agent_pool get_task --pool $POOL --name $NAME)
+# ... do work ...
+echo "$result" > "$(echo $task | jq -r '.response_file')"
+# loop
+```
+
+The traits and abstractions below are about how we organize the code internally, not about agent requirements.
+
+---
+
+There are two internal communication channels:
 
 ### 1. Submitter → Daemon (task submission)
 
