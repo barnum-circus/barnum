@@ -118,12 +118,21 @@ impl DaemonHandle {
     }
 }
 
-/// Spawn the daemon in a background thread.
+/// Spawn the daemon in a background thread with default configuration.
 ///
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or setup fails.
 pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
+    spawn_with_config(root, DaemonConfig::default())
+}
+
+/// Spawn the daemon in a background thread with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if the lock can't be acquired or setup fails.
+pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<DaemonHandle> {
     let root = root.as_ref().to_path_buf();
 
     fs::create_dir_all(&root)?;
@@ -156,7 +165,7 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
 
         info!(socket = %socket_path.display(), "listening");
 
-        let mut state = PoolState::new(&root);
+        let mut state = PoolState::new(&root, config);
         state.scan_agents()?;
 
         event_loop(&listener, &fs_events, &mut state, &signals_clone)
@@ -176,6 +185,15 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
 ///
 /// Returns an error if the lock can't be acquired or an I/O error occurs.
 pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
+    run_with_config(root, DaemonConfig::default())
+}
+
+/// Run the agent pool daemon with custom configuration (blocking, never returns on success).
+///
+/// # Errors
+///
+/// Returns an error if the lock can't be acquired or an I/O error occurs.
+pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<Infallible> {
     let root = root.as_ref().to_path_buf();
 
     fs::create_dir_all(&root)?;
@@ -203,7 +221,7 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
 
     info!(socket = %socket_path.display(), "listening");
 
-    let mut state = PoolState::new(&root);
+    let mut state = PoolState::new(&root, config);
     state.scan_agents()?;
 
     let signals = DaemonSignals::new();
@@ -237,17 +255,24 @@ enum AgentStatus {
 enum InFlight {
     /// A real task from a submitter.
     Task { respond_to: ResponseTarget },
+    /// A health check ping to verify the agent is alive.
+    HealthCheck,
 }
 
 impl InFlight {
     /// Complete the in-flight work, consuming self.
     ///
     /// For tasks, this sends the response to the submitter.
+    /// For health checks, this just logs success (no response needed).
     fn complete(self, output: String) -> io::Result<()> {
         match self {
             InFlight::Task { respond_to } => {
                 let response = Response::processed(output);
                 send_response(respond_to, &response)
+            }
+            InFlight::HealthCheck => {
+                debug!(output, "health check completed");
+                Ok(())
             }
         }
     }
@@ -256,15 +281,47 @@ impl InFlight {
 /// State for a single agent.
 struct AgentState {
     status: AgentStatus,
+    last_activity: Instant,
 }
 
 impl AgentState {
-    const fn new() -> Self {
-        Self { status: AgentStatus::Idle }
+    fn new() -> Self {
+        Self {
+            status: AgentStatus::Idle,
+            last_activity: Instant::now(),
+        }
     }
 
     const fn is_idle(&self) -> bool {
         matches!(self.status, AgentStatus::Idle)
+    }
+
+    fn touch(&mut self) {
+        self.last_activity = Instant::now();
+    }
+}
+
+/// Configuration for the daemon.
+#[derive(Debug, Clone)]
+pub struct DaemonConfig {
+    /// Send a health check when an agent first registers.
+    pub initial_health_check: bool,
+    /// Periodically send health checks to idle agents.
+    pub periodic_health_check: bool,
+    /// How often to send health checks to idle agents.
+    pub health_check_interval: Duration,
+    /// How long to wait for a health check response before deregistering.
+    pub health_check_timeout: Duration,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            initial_health_check: false,
+            periodic_health_check: false,
+            health_check_interval: Duration::from_secs(60),
+            health_check_timeout: Duration::from_secs(30),
+        }
     }
 }
 
@@ -274,6 +331,7 @@ struct PoolState {
     pending_dir: PathBuf,
     agents: HashMap<String, AgentState>,
     pending: VecDeque<Task>,
+    config: DaemonConfig,
 }
 
 struct Task {
@@ -282,7 +340,7 @@ struct Task {
 }
 
 impl PoolState {
-    fn new(root: &Path) -> Self {
+    fn new(root: &Path, config: DaemonConfig) -> Self {
         let agents_dir = root.join(AGENTS_DIR);
         let pending_dir = root.join(PENDING_DIR);
         Self {
@@ -290,6 +348,7 @@ impl PoolState {
             pending_dir,
             agents: HashMap::new(),
             pending: VecDeque::new(),
+            config,
         }
     }
 
@@ -406,6 +465,10 @@ impl PoolState {
         if !self.agents.contains_key(agent_id) {
             info!(agent_id, "agent registered");
             self.agents.insert(agent_id.to_string(), AgentState::new());
+
+            if self.config.initial_health_check {
+                let _ = self.dispatch_health_check(agent_id);
+            }
         }
     }
 
@@ -459,6 +522,33 @@ impl PoolState {
         }
 
         candidate
+    }
+
+    /// Dispatch a health check to an idle agent.
+    ///
+    /// Transition: Idle → Busy(HealthCheck)
+    fn dispatch_health_check(&mut self, agent_id: &str) -> io::Result<()> {
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return Err(io::Error::other("agent not found"));
+        };
+
+        if !agent.is_idle() {
+            return Ok(()); // Already busy, skip
+        }
+
+        let envelope = serde_json::json!({
+            "kind": "HealthCheck",
+            "content": { "instructions": "Respond with any value to confirm you are alive." }
+        });
+
+        let task_path = self.agents_dir.join(agent_id).join(TASK_FILE);
+        debug!(agent_id, "dispatching health check");
+        fs::write(&task_path, envelope.to_string())?;
+
+        agent.status = AgentStatus::Busy(InFlight::HealthCheck);
+        agent.touch();
+        info!(agent_id, "health check dispatched");
+        Ok(())
     }
 
     fn dispatch_to(&mut self, agent_id: &str, task: Task) -> io::Result<()> {
