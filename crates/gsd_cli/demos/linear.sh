@@ -1,16 +1,22 @@
 #!/bin/bash
 # Demo: Linear three-step GSD task queue
 #
+# Usage:
+#   ./linear.sh                    # Run with demo agent pool
+#   ./linear.sh /path/to/pool      # Run against existing agent pool (e.g., Claude Code)
+#
 # This demonstrates a linear task queue:
 # Start -> Middle -> End
 #
-# The agent follows the transition map exactly.
+# When using an existing pool, we skip starting the pool and demo agent.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
-ROOT=$(mktemp -d)
+
+# Check if user provided an existing pool path
+EXISTING_POOL="$1"
 
 # Build the binaries first
 echo "Building binaries..."
@@ -21,39 +27,58 @@ echo ""
 AGENT_POOL="${AGENT_POOL:-$WORKSPACE_ROOT/target/debug/agent_pool}"
 GSD="${GSD:-$WORKSPACE_ROOT/target/debug/gsd}"
 
-echo "=== Demo: Linear Task Queue (Start -> Middle -> End) ==="
-echo "Working directory: $ROOT"
-echo ""
-
-cleanup() {
+if [ -n "$EXISTING_POOL" ]; then
+    # Use existing pool
+    ROOT="$EXISTING_POOL"
+    echo "=== Demo: Linear Task Queue (using existing pool) ==="
+    echo "Pool directory: $ROOT"
     echo ""
-    echo "=== Cleaning up ==="
-    kill $AGENT_PID 2>/dev/null || true
-    wait $AGENT_PID 2>/dev/null || true
-    $AGENT_POOL stop "$ROOT" 2>/dev/null || true
-    rm -rf "$ROOT"
-    echo "Done."
-}
-trap cleanup EXIT
 
-# Start agent pool
-echo "Starting agent pool..."
-$AGENT_POOL start "$ROOT" --log-level "${LOG_LEVEL:-info}" &
-POOL_PID=$!
-sleep 0.5
+    # Run GSD against existing pool
+    echo "Running GSD with linear config..."
+    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
+        --root "$ROOT" \
+        --initial '[{"kind": "Start", "value": {}}]'
 
-# Start GSD-aware agent with transition map
-echo "Starting GSD agent with transitions: Start->Middle->End..."
-"$SCRIPT_DIR/../scripts/gsd-agent.sh" "$ROOT" "linear-agent" "Start:Middle,Middle:End,End:" 0.1 &
-AGENT_PID=$!
-sleep 0.3
+    echo ""
+    echo "=== Success! ==="
+else
+    # Create demo pool
+    ROOT=$(mktemp -d)
+    echo "=== Demo: Linear Task Queue (Start -> Middle -> End) ==="
+    echo "Working directory: $ROOT"
+    echo ""
 
-# Run GSD
-echo ""
-echo "Running GSD with linear config..."
-$GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
-    --root "$ROOT" \
-    --initial '[{"kind": "Start", "value": {}}]'
+    cleanup() {
+        echo ""
+        echo "=== Cleaning up ==="
+        kill $AGENT_PID 2>/dev/null || true
+        wait $AGENT_PID 2>/dev/null || true
+        $AGENT_POOL stop "$ROOT" 2>/dev/null || true
+        rm -rf "$ROOT"
+        echo "Done."
+    }
+    trap cleanup EXIT
 
-echo ""
-echo "=== Success! ==="
+    # Start agent pool
+    echo "Starting agent pool..."
+    $AGENT_POOL start "$ROOT" --log-level "${LOG_LEVEL:-info}" &
+    POOL_PID=$!
+    sleep 0.5
+
+    # Start GSD-aware agent with transition map
+    echo "Starting GSD agent with transitions: Start->Middle->End..."
+    "$SCRIPT_DIR/../scripts/gsd-agent.sh" "$ROOT" "linear-agent" "Start:Middle,Middle:End,End:" 0.1 &
+    AGENT_PID=$!
+    sleep 0.3
+
+    # Run GSD
+    echo ""
+    echo "Running GSD with linear config..."
+    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
+        --root "$ROOT" \
+        --initial '[{"kind": "Start", "value": {}}]'
+
+    echo ""
+    echo "=== Success! ==="
+fi
