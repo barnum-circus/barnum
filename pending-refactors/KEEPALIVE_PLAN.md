@@ -1,6 +1,6 @@
 # Keepalive Plan
 
-Replace file-based heartbeats with task-based keepalives (ping-pong).
+Task-based keepalives (ping-pong) to verify agent health and pre-approve tool use.
 
 ## Motivation
 
@@ -11,20 +11,17 @@ When an agent (like Claude) first connects, we send a dummy "ping" task that for
 2. Agent writes response
 3. Daemon confirms receipt
 
-**Why this matters:** For AI agents that require human approval for tool use, the initial keepalive gets approval out of the way with a harmless dummy task. After that, subsequent real tasks have already been "approved" by the same pattern, so they don't block on human interaction.
+**Why this matters:** For AI agents that require human approval for tool use, the initial keepalive gets approval out of the way with a harmless dummy task. After that, subsequent real tasks follow the same pattern, so they don't block on human interaction.
 
 ### Periodic Keepalive
 
-Periodically send ping tasks to **idle** agents to verify they're still alive and responsive. This only happens when an agent has no task in progress - the purpose is to keep agents from sleeping and to detect agents that have disconnected.
+Periodically send ping tasks to **idle** agents to verify they're still alive and responsive. This only happens when an agent has no task in progress - the purpose is to:
+1. Keep agents from sleeping/timing out
+2. Detect agents that have disconnected
 
-**Key distinction from heartbeats:** Keepalives are sent *to* idle agents, not *from* busy agents. There is no in-flight work to worry about during a keepalive - if an agent fails to respond, we simply deregister it.
+If an agent fails to respond within the timeout, we deregister it from the pool.
 
-If an agent fails to respond within the timeout:
-1. Log a warning
-2. Remove the agent's directory (deregister)
-3. The agent is no longer part of the pool
-
-## Target State
+## Configuration
 
 ```rust
 pub struct DaemonConfig {
@@ -33,19 +30,21 @@ pub struct DaemonConfig {
     /// Default: true
     pub initial_keepalive: bool,
 
-    /// Send periodic ping tasks to check agent health.
+    /// Send periodic ping tasks to idle agents.
     /// Default: true
     pub periodic_keepalive: bool,
 
-    /// Interval between periodic keepalives.
+    /// Interval between periodic keepalives for idle agents.
     /// Default: 60 seconds
     pub keepalive_interval: Duration,
 
-    /// How long to wait for keepalive response before marking agent dead.
+    /// How long to wait for keepalive response before deregistering agent.
     /// Default: 30 seconds
     pub keepalive_timeout: Duration,
 }
 ```
+
+## Protocol
 
 ### Ping Task Format
 
@@ -68,23 +67,17 @@ Expected response:
 
 ### Agent Handling
 
-Agents treat keepalives like any other task. The instructions tell them what to do. No special client-side code needed - just follow the instructions.
+Agents treat keepalives like any other task. The instructions tell them what to do. No special client-side code needed beyond following the instructions.
 
-For the command-agent.sh, we'd add handling:
-```bash
-KIND=$(echo "$TASK_JSON" | jq -r '.content.task.kind')
-if [ "$KIND" = "Keepalive" ]; then
-    ID=$(echo "$TASK_JSON" | jq -r '.content.task.value.id')
-    echo "{\"id\": \"$ID\"}" > "$RESPONSE_FILE"
-    continue
-fi
+## Daemon Flow
+
+### Initial Keepalive (on registration)
+
 ```
-
-### Daemon Flow
-
-**Initial keepalive (on agent registration):**
-```
-Agent registers
+Agent registers (creates directory)
+    │
+    ▼
+Daemon detects new agent
     │
     ▼
 Daemon sends Keepalive task
@@ -94,15 +87,16 @@ Agent responds (or times out)
     │
     ├─ Success: Agent marked as available for real tasks
     │
-    └─ Timeout: Agent removed from pool
+    └─ Timeout: Agent directory removed (deregistered)
 ```
 
-**Periodic keepalive:**
+### Periodic Keepalive (idle agents only)
+
 ```
 Timer fires (every keepalive_interval)
     │
     ▼
-For each idle agent:
+For each idle agent (no in-flight task):
     │
     ▼
 Send Keepalive task
@@ -110,10 +104,12 @@ Send Keepalive task
     ▼
 Wait for response (up to keepalive_timeout)
     │
-    ├─ Success: Agent stays in pool
+    ├─ Success: Agent stays in pool, timer resets
     │
-    └─ Timeout: Agent removed from pool
+    └─ Timeout: Agent directory removed (deregistered)
 ```
+
+**Key point:** Periodic keepalives only go to idle agents. There is never in-flight work to worry about during a keepalive timeout - we simply deregister the unresponsive agent.
 
 ## Implementation Tasks
 
@@ -121,7 +117,7 @@ Wait for response (up to keepalive_timeout)
 
 **Files:** `crates/agent_pool/AGENT_PROTOCOL.md`
 
-Add documentation about Keepalive tasks. No code changes.
+Document the Keepalive task kind and expected response format.
 
 **Commit:** `docs: document Keepalive task kind in agent protocol`
 
@@ -137,8 +133,6 @@ pub struct DaemonConfig {
     pub periodic_keepalive: bool,     // default: true
     pub keepalive_interval: Duration, // default: 60s
     pub keepalive_timeout: Duration,  // default: 30s
-    // Keep existing heartbeat_timeout for backward compat (deprecated)
-    pub heartbeat_timeout: Option<Duration>,
 }
 ```
 
@@ -175,7 +169,7 @@ When an agent registers:
 1. If `initial_keepalive` is true, mark agent as "pending_keepalive"
 2. Dispatch a Keepalive task immediately
 3. On response, mark agent as "available"
-4. On timeout, remove agent
+4. On timeout, remove agent directory
 
 ```rust
 fn register(&mut self, agent_id: &str) {
@@ -196,12 +190,12 @@ fn register(&mut self, agent_id: &str) {
 
 **Files:** `crates/agent_pool/src/daemon.rs`
 
-In the event loop, track last keepalive time per agent. When interval elapses for an idle agent, send a keepalive.
+Track last activity time per agent. When interval elapses for an idle agent, send a keepalive.
 
 ```rust
 struct AgentState {
     status: AgentStatus,
-    last_keepalive: Option<Instant>,
+    last_activity: Instant,
     in_flight: Option<InFlightTask>,
 }
 
@@ -217,7 +211,7 @@ fn check_periodic_keepalives(&mut self) {
 }
 ```
 
-**Commit:** `feat(agent_pool): implement periodic keepalive checks`
+**Commit:** `feat(agent_pool): implement periodic keepalive for idle agents`
 
 ---
 
@@ -230,7 +224,7 @@ When a keepalive task times out:
 2. Remove agent directory (deregister)
 3. Remove agent from internal state
 
-Since keepalives only happen to idle agents, there's no in-flight work to worry about.
+Since keepalives only happen to idle agents, there's no in-flight work to handle.
 
 ```rust
 fn handle_keepalive_timeout(&mut self, agent_id: &str) {
@@ -249,11 +243,13 @@ fn handle_keepalive_timeout(&mut self, agent_id: &str) {
 
 ---
 
-### Task 7: Update command-agent.sh to handle keepalives
+### Task 7: Update scripts to handle keepalives
 
-**Files:** `crates/agent_pool/scripts/command-agent.sh`
+**Files:**
+- `crates/agent_pool/scripts/command-agent.sh`
+- `crates/agent_pool/scripts/echo-agent.sh` (if exists)
 
-Add special handling for Keepalive tasks:
+Scripts that act as agents must handle Keepalive tasks:
 
 ```bash
 KIND=$(echo "$TASK_JSON" | jq -r '.content.task.kind // empty')
@@ -265,20 +261,50 @@ if [ "$KIND" = "Keepalive" ]; then
 fi
 ```
 
-**Commit:** `feat(agent_pool): handle keepalive tasks in command-agent.sh`
+**Commit:** `feat(agent_pool): handle keepalive tasks in shell agent scripts`
 
 ---
 
-### Task 8: Add tests for keepalive behavior
+### Task 8: Update demos to handle keepalives
+
+**Files:**
+- `crates/agent_pool/demos/*.sh`
+
+Demo scripts that spawn fake agents must either:
+1. Handle Keepalive tasks (respond with the ping id), or
+2. Start the daemon with `--initial-keepalive=false --periodic-keepalive=false`
+
+For simple demos, disabling keepalives is cleaner:
+
+```bash
+agent_pool start --pool "$POOL" --initial-keepalive=false --periodic-keepalive=false &
+```
+
+For demos that test the full protocol, agents should handle keepalives:
+
+```bash
+# In the fake agent loop
+if echo "$TASK" | jq -e '.content.task.kind == "Keepalive"' > /dev/null 2>&1; then
+    ID=$(echo "$TASK" | jq -r '.content.task.value.id')
+    echo "{\"id\": \"$ID\"}" > "$RESPONSE_FILE"
+    continue
+fi
+```
+
+**Commit:** `feat(agent_pool): update demos to handle or disable keepalives`
+
+---
+
+### Task 9: Add tests for keepalive behavior
 
 **Files:** `crates/agent_pool/tests/keepalive.rs`
 
 Test cases:
-- Initial keepalive sent on registration
-- Agent not available until keepalive response
-- Periodic keepalive sent after interval
-- Agent removed on keepalive timeout
-- In-flight task requeued on timeout
+- Initial keepalive sent on registration (when enabled)
+- Agent not available for real tasks until keepalive response
+- Periodic keepalive sent after interval (to idle agents only)
+- Agent deregistered on keepalive timeout
+- Keepalives disabled via config
 
 **Commit:** `test(agent_pool): add keepalive behavior tests`
 
@@ -294,9 +320,8 @@ Test cases:
 | 4 | Initial keepalive | 2 |
 | 5 | Periodic keepalive | 2 |
 | 6 | Timeout handling | 4, 5 |
-| 7 | Update command-agent.sh | 1 |
-| 8 | Add tests | 4, 5, 6 |
+| 7 | Update shell scripts | 1 |
+| 8 | Update demos | 3, 7 |
+| 9 | Add tests | 4, 5, 6 |
 
-Tasks 1, 2, 7 can be done in parallel. Tasks 4, 5 can be done in parallel after 2. The goal is small, atomic commits that each leave the system in a working state.
-
-**Note:** Heartbeat mechanism was already removed in a prior commit.
+Tasks 1, 2, 7 can be done in parallel. Tasks 4, 5 can be done in parallel after 2.
