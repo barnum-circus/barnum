@@ -1,4 +1,30 @@
-# Future Directions
+# To-Dos and Future Directions
+
+## Agent --continue Flag
+
+When an agent starts with a specific ID via `get_task --name <ID>`, we might want to distinguish between:
+
+1. **Fresh start**: This is a brand new agent with this ID
+2. **Resume**: This agent existed before and we want to continue where we left off
+
+Potential approach:
+- Add `--continue` flag to `get_task`
+- Without `--continue`: If agent directory exists, error (or delete it first)
+- With `--continue`: If agent directory exists, resume (check for pending task.json, etc.)
+
+Use cases:
+- Agent process restarts mid-task and wants to pick up where it left off
+- Graceful recovery from crashes
+- Session continuity for long-running agents
+
+Open questions:
+- What exactly constitutes "state" to continue? Just the directory existence, or pending task/response files?
+- Should the daemon track agent state beyond the directory?
+- How does this interact with keepalives? (Probably: if continuing, skip initial keepalive?)
+
+This needs more thought before implementation.
+
+---
 
 ## Iterator Yielded Items
 
@@ -324,22 +350,15 @@ Rules:
 
 The default step should probably require `value_schema` to either be absent or accept an empty object.
 
-## Agent Heartbeats
+## Agent Health Checks (Keepalives)
 
-**Status: Implemented** in `crates/agent_pool/src/daemon.rs`.
+**Status: Planned** - see `pending-refactors/KEEPALIVE_PLAN.md`.
 
-Agents can periodically signal they're still alive while processing long tasks. The daemon tracks heartbeat file mtime and times out tasks if heartbeats go stale.
-
-**Agent side**: Use the CLI command while processing:
-```bash
-agent_pool heartbeat --pool <POOL_ID> --name <YOUR_NAME>
-```
-
-**Daemon side**: Configure via `DaemonConfig::with_heartbeat_timeout(duration)`. If heartbeat file mtime becomes stale beyond the timeout, the task is marked as `NotProcessed { reason: HeartbeatTimeout }`.
-
-Heartbeats are optional and disabled by default (`DaemonConfig::default()` or `DaemonConfig::without_heartbeats()`). Pools without heartbeat configuration don't require agents to send heartbeats.
-
-See `AGENT_PROTOCOL.md` for agent-side documentation.
+Replacing file-based heartbeats with task-based keepalives (ping-pong). Benefits:
+- Initial keepalive gets tool-use approvals out of the way
+- Periodic keepalives to idle agents detect disconnected agents
+- No special agent code needed beyond following task instructions
+- Agents can recover from timeout by simply calling `get_task` again
 
 ## Full Socket-Based Protocol
 
