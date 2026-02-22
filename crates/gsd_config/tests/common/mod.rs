@@ -5,7 +5,7 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::collapsible_if)]
 
-use agent_pool::AGENTS_DIR;
+use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -14,11 +14,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
-
-/// Stable filename for task input.
-const TASK_FILE: &str = "task.json";
-/// Stable filename for agent response.
-const RESPONSE_FILE: &str = "response.json";
 
 /// Get the path to the test data directory for a given test file.
 pub fn test_data_dir(test_file: &str) -> PathBuf {

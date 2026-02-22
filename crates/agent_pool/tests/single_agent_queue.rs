@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, Response};
+use agent_pool::{AGENTS_DIR, RESPONSE_FILE, Response, TASK_FILE};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -66,8 +66,8 @@ fn sequential_tasks_same_agent() {
     let agent = TestAgent::echo(&root, "seq-agent", Duration::from_millis(10));
 
     let agent_dir = root.join(AGENTS_DIR).join("seq-agent");
-    let task_file = agent_dir.join("task.json");
-    let response_file = agent_dir.join("response.json");
+    let task_file = agent_dir.join(TASK_FILE);
+    let response_file = agent_dir.join(RESPONSE_FILE);
 
     // Process three tasks sequentially via file protocol
     for i in 1..=3 {

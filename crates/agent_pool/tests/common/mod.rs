@@ -5,12 +5,7 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::collapsible_if)]
 
-use agent_pool::AGENTS_DIR;
-
-/// Stable filename for task input.
-const TASK_FILE: &str = "task.json";
-/// Stable filename for agent response.
-const RESPONSE_FILE: &str = "response.json";
+use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};

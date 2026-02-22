@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, Response};
+use agent_pool::{AGENTS_DIR, Response, TASK_FILE};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -75,19 +75,19 @@ fn multiple_agents_direct_dispatch() {
 
     thread::sleep(Duration::from_millis(50));
 
-    // Write tasks directly to each agent via file protocol (task.json)
+    // Write tasks directly to each agent via file protocol
     fs::write(
-        root.join(AGENTS_DIR).join("agent-a").join("task.json"),
+        root.join(AGENTS_DIR).join("agent-a").join(TASK_FILE),
         "Task A",
     )
     .expect("Failed to write task A");
     fs::write(
-        root.join(AGENTS_DIR).join("agent-b").join("task.json"),
+        root.join(AGENTS_DIR).join("agent-b").join(TASK_FILE),
         "Task B",
     )
     .expect("Failed to write task B");
     fs::write(
-        root.join(AGENTS_DIR).join("agent-c").join("task.json"),
+        root.join(AGENTS_DIR).join("agent-c").join(TASK_FILE),
         "Task C",
     )
     .expect("Failed to write task C");

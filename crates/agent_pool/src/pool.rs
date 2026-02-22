@@ -100,6 +100,7 @@ pub fn list_pools() -> io::Result<Vec<PoolInfo>> {
 }
 
 /// Check if a pool is running by testing if its socket is connectable.
+#[cfg(unix)]
 fn is_pool_running(pool_path: &std::path::Path) -> bool {
     use std::os::unix::net::UnixStream;
 
@@ -111,6 +112,14 @@ fn is_pool_running(pool_path: &std::path::Path) -> bool {
 
     // Try to connect - if successful, pool is running
     UnixStream::connect(&socket_path).is_ok()
+}
+
+/// Check if a pool is running (Windows stub - always returns false).
+#[cfg(not(unix))]
+fn is_pool_running(_pool_path: &std::path::Path) -> bool {
+    // On Windows, we can't easily check if the named pipe is active
+    // without more complex logic. For now, assume not running.
+    false
 }
 
 /// Resolve a pool reference (ID or path) to a full path.

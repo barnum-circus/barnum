@@ -132,4 +132,18 @@ mod tests {
             matches!(parsed, Response::NotProcessed { reason } if reason == NotProcessedReason::Timeout)
         );
     }
+
+    #[test]
+    fn heartbeat_timeout_serializes_correctly() {
+        let response = Response::not_processed(NotProcessedReason::HeartbeatTimeout);
+        let json = serde_json::to_string(&response).expect("serialize failed");
+        assert!(json.contains(r#""kind":"NotProcessed""#));
+        assert!(json.contains(r#""reason":"heartbeattimeout""#));
+
+        // Roundtrip
+        let parsed: Response = serde_json::from_str(&json).expect("deserialize failed");
+        assert!(
+            matches!(parsed, Response::NotProcessed { reason } if reason == NotProcessedReason::HeartbeatTimeout)
+        );
+    }
 }
