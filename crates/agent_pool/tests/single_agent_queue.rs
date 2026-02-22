@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, NEXT_TASK_FILE, OUTPUT_FILE, ResponseKind};
+use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT, ResponseKind};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -69,19 +69,21 @@ fn sequential_tasks_same_agent() {
     let agent = TestAgent::echo(&root, "seq-agent", Duration::from_millis(10));
 
     let agent_dir = root.join(AGENTS_DIR).join("seq-agent");
-    let task_file = agent_dir.join(NEXT_TASK_FILE);
-    let output_file = agent_dir.join(OUTPUT_FILE);
 
     // Process three tasks sequentially via file protocol
     for i in 1..=3 {
         let task = format!("Task-{i}");
-        fs::write(&task_file, &task).expect("Failed to write task");
+        let input_file = agent_dir.join(format!("{i}.{INPUT_EXT}"));
+        let output_file = agent_dir.join(format!("{i}.{OUTPUT_EXT}"));
+
+        fs::write(&input_file, &task).expect("Failed to write task");
 
         thread::sleep(Duration::from_millis(100));
 
         let output = fs::read_to_string(&output_file).expect("Failed to read output");
         assert_eq!(output, format!("{task} [processed]"));
 
+        // Agent cleans up, but we can clean output too if needed
         let _ = fs::remove_file(&output_file);
     }
 

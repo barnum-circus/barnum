@@ -2,7 +2,7 @@
 //!
 //! The pool watches a directory for agents and dispatches incoming tasks
 //! to whichever agent is available. Each agent is a subdirectory that
-//! processes tasks via the file protocol (`next_task` → `in_progress` → `output`).
+//! processes tasks via the file protocol (`{id}.input` → `{id}.output`).
 //!
 //! # Usage
 //!
@@ -18,9 +18,7 @@
 //! handle.shutdown();  // Gracefully stops the daemon
 //! ```
 
-use crate::constants::{
-    AGENTS_DIR, IN_PROGRESS_FILE, LOCK_FILE, NEXT_TASK_FILE, OUTPUT_FILE, SOCKET_NAME,
-};
+use crate::constants::{AGENTS_DIR, INPUT_EXT, LOCK_FILE, OUTPUT_EXT, SOCKET_NAME};
 use crate::lock::acquire_lock;
 use crate::response::Response;
 use interprocess::local_socket::{
@@ -44,9 +42,7 @@ use tracing::{debug, info, trace};
 /// Shared control signals for the daemon.
 #[derive(Clone)]
 struct DaemonSignals {
-    /// When true, initiate graceful shutdown.
     shutdown: Arc<AtomicBool>,
-    /// When true, pause dispatching new tasks (but keep accepting and queuing).
     paused: Arc<AtomicBool>,
 }
 
@@ -76,10 +72,6 @@ impl DaemonSignals {
 }
 
 /// Handle to a running daemon, allowing control and graceful shutdown.
-///
-/// When dropped without calling `shutdown()`, the daemon continues running
-/// in the background thread (fire-and-forget). Call `shutdown()` to
-/// gracefully stop the daemon and wait for it to finish.
 pub struct DaemonHandle {
     signals: DaemonSignals,
     thread: Option<thread::JoinHandle<io::Result<()>>>,
@@ -87,20 +79,11 @@ pub struct DaemonHandle {
 
 impl DaemonHandle {
     /// Pause task dispatching.
-    ///
-    /// While paused:
-    /// - New connections are still accepted
-    /// - Tasks are queued but not dispatched to agents
-    /// - In-flight tasks continue to completion
-    ///
-    /// Use [`resume()`](Self::resume) to resume normal operation.
     pub fn pause(&self) {
         self.signals.set_paused(true);
     }
 
     /// Resume task dispatching after a pause.
-    ///
-    /// Queued tasks will begin dispatching to available agents.
     pub fn resume(&self) {
         self.signals.set_paused(false);
     }
@@ -113,11 +96,6 @@ impl DaemonHandle {
 
     /// Request graceful shutdown and wait for the daemon to stop.
     ///
-    /// This will:
-    /// 1. Stop accepting new socket connections
-    /// 2. Complete any in-flight tasks
-    /// 3. Clean up resources
-    ///
     /// # Errors
     ///
     /// Returns an error if the daemon thread panicked or encountered an I/O error.
@@ -126,9 +104,6 @@ impl DaemonHandle {
         self.join()
     }
 
-    /// Wait for the daemon to stop without triggering shutdown.
-    ///
-    /// This is useful if shutdown was triggered by another clone of the handle.
     fn join(&mut self) -> io::Result<()> {
         if let Some(handle) = self.thread.take() {
             handle
@@ -142,17 +117,12 @@ impl DaemonHandle {
 
 /// Spawn the daemon in a background thread with graceful shutdown support.
 ///
-/// Returns a handle that can be used to shut down the daemon gracefully.
-///
 /// # Errors
 ///
-/// Returns an error if:
-/// - The lock can't be acquired (another instance is running)
-/// - Directory or socket setup fails
+/// Returns an error if the lock can't be acquired or setup fails.
 pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
     let root = root.as_ref().to_path_buf();
 
-    // Do initial setup synchronously so errors propagate to caller
     fs::create_dir_all(&root)?;
 
     let lock_path = root.join(LOCK_FILE);
@@ -173,7 +143,6 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
     let signals_clone = signals.clone();
 
     let thread = thread::spawn(move || {
-        // These guards ensure cleanup on drop
         let _lock = lock;
         let _cleanup = SocketCleanup(socket_path.clone());
         let _watcher = watcher;
@@ -186,7 +155,6 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
         event_loop(&listener, &fs_events, &mut state, &signals_clone)
     });
 
-    // Give daemon time to start listening
     thread::sleep(Duration::from_millis(50));
 
     Ok(DaemonHandle {
@@ -195,33 +163,19 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
     })
 }
 
-/// Run the agent pool daemon (blocking).
-///
-/// This is the entry point for CLI usage. It acquires the lock, sets up the
-/// socket, and runs the event loop until the process is killed.
-///
-/// This function never returns on success - it runs forever until killed.
-/// The return type encodes this: `Infallible` can never be constructed.
-///
-/// For programmatic control with graceful shutdown, use [`spawn()`] instead.
+/// Run the agent pool daemon (blocking, never returns on success).
 ///
 /// # Errors
 ///
-/// Returns an error if:
-/// - The lock can't be acquired (another instance is running)
-/// - Directory or socket setup fails
-/// - An I/O error occurs during event processing
+/// Returns an error if the lock can't be acquired or an I/O error occurs.
 pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
     let root = root.as_ref();
 
-    // Ensure root exists (needed for lock file)
     fs::create_dir_all(root)?;
 
-    // Acquire lock FIRST - don't create anything else until we know we own this
     let lock_path = root.join(LOCK_FILE);
     let _lock = acquire_lock(&lock_path)?;
 
-    // Now we own the lock - safe to set up
     let agents_dir = root.join(AGENTS_DIR);
     fs::create_dir_all(&agents_dir)?;
 
@@ -230,25 +184,20 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
         fs::remove_file(&socket_path)?;
     }
 
-    // Set up cleanup on drop (lock guard handles lock file, Cleanup handles socket)
     let _cleanup = SocketCleanup(socket_path.clone());
 
     let listener = create_listener(&socket_path)?;
     let (watcher, fs_events) = create_watcher(&agents_dir)?;
-    let _watcher = watcher; // Keep alive
+    let _watcher = watcher;
 
     info!(socket = %socket_path.display(), "listening");
 
     let mut state = PoolState::new(agents_dir);
     state.scan_agents()?;
 
-    // No shutdown signal - run forever
     let signals = DaemonSignals::new();
     match event_loop(&listener, &fs_events, &mut state, &signals) {
-        Ok(()) => {
-            // Event loop only returns Ok(()) on shutdown signal, which we never trigger
-            unreachable!("event loop returned without shutdown signal")
-        }
+        Ok(()) => unreachable!("event loop returned without shutdown signal"),
         Err(e) => Err(e),
     }
 }
@@ -257,12 +206,31 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
 // Pool State
 // =============================================================================
 
+/// State for a single agent.
+struct AgentState {
+    /// Next task ID to assign to this agent.
+    next_task_id: u64,
+    /// If busy: (`task_id`, response stream).
+    in_flight: Option<(u64, Stream)>,
+}
+
+impl AgentState {
+    const fn new() -> Self {
+        Self {
+            next_task_id: 1,
+            in_flight: None,
+        }
+    }
+
+    const fn is_available(&self) -> bool {
+        self.in_flight.is_none()
+    }
+}
+
 /// Runtime state of the agent pool.
 struct PoolState {
     agents_dir: PathBuf,
-    /// Maps `agent_id` to their pending response stream (`None` = available).
-    agents: HashMap<String, Option<Stream>>,
-    /// Tasks waiting for an available agent
+    agents: HashMap<String, AgentState>,
     pending: VecDeque<Task>,
 }
 
@@ -292,11 +260,10 @@ impl PoolState {
         Ok(())
     }
 
-    /// Count of tasks currently being processed by agents.
     fn in_flight_count(&self) -> usize {
         self.agents
             .values()
-            .filter(|stream| stream.is_some())
+            .filter(|a| a.in_flight.is_some())
             .count()
     }
 
@@ -304,14 +271,20 @@ impl PoolState {
         let busy: Vec<_> = self
             .agents
             .iter()
-            .filter(|(_, stream)| stream.is_some())
-            .map(|(id, _)| id.clone())
+            .filter_map(|(id, a)| {
+                a.in_flight
+                    .as_ref()
+                    .map(|(task_id, _)| (id.clone(), *task_id))
+            })
             .collect();
 
-        for agent_id in busy {
-            let output_path = self.agents_dir.join(&agent_id).join(OUTPUT_FILE);
+        for (agent_id, task_id) in busy {
+            let output_path = self
+                .agents_dir
+                .join(&agent_id)
+                .join(format!("{task_id}.{OUTPUT_EXT}"));
             if output_path.exists() {
-                self.complete_task(&agent_id, &output_path)?;
+                self.complete_task(&agent_id, task_id, &output_path)?;
             }
         }
         Ok(())
@@ -320,7 +293,7 @@ impl PoolState {
     fn register(&mut self, agent_id: &str) {
         if !self.agents.contains_key(agent_id) {
             info!(agent_id, "agent registered");
-            self.agents.insert(agent_id.to_string(), None);
+            self.agents.insert(agent_id.to_string(), AgentState::new());
         }
     }
 
@@ -353,30 +326,54 @@ impl PoolState {
     fn find_available_agent(&self) -> Option<String> {
         self.agents
             .iter()
-            .find(|(_, stream)| stream.is_none())
+            .find(|(_, a)| a.is_available())
             .map(|(id, _)| id.clone())
     }
 
     fn dispatch_to(&mut self, agent_id: &str, task: Task) -> io::Result<()> {
-        let task_path = self.agents_dir.join(agent_id).join(NEXT_TASK_FILE);
-        fs::write(&task_path, &task.content)?;
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return Err(io::Error::other("agent not found"));
+        };
+        let task_id = agent.next_task_id;
+        agent.next_task_id += 1;
 
-        info!(agent_id, "task dispatched");
-        self.agents
-            .insert(agent_id.to_string(), Some(task.respond_to));
+        let input_path = self
+            .agents_dir
+            .join(agent_id)
+            .join(format!("{task_id}.{INPUT_EXT}"));
+        fs::write(&input_path, &task.content)?;
+
+        info!(agent_id, task_id, "task dispatched");
+        agent.in_flight = Some((task_id, task.respond_to));
         Ok(())
     }
 
-    fn complete_task(&mut self, agent_id: &str, output_path: &Path) -> io::Result<()> {
-        let Some(stream) = self.agents.get_mut(agent_id).and_then(Option::take) else {
-            return Ok(()); // Not busy or not registered
+    fn complete_task(
+        &mut self,
+        agent_id: &str,
+        task_id: u64,
+        output_path: &Path,
+    ) -> io::Result<()> {
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return Ok(());
         };
+
+        let Some((current_id, stream)) = agent.in_flight.take() else {
+            return Ok(());
+        };
+
+        // Verify this output matches our current task
+        if current_id != task_id {
+            // Stale output from a timed-out task, ignore it
+            agent.in_flight = Some((current_id, stream));
+            let _ = fs::remove_file(output_path);
+            return Ok(());
+        }
 
         let output = match fs::read_to_string(output_path) {
             Ok(o) => o,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                // Output disappeared - put stream back
-                self.agents.insert(agent_id.to_string(), Some(stream));
+                agent.in_flight = Some((task_id, stream));
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -385,14 +382,12 @@ impl PoolState {
         // Clean up task files
         let agent_dir = self.agents_dir.join(agent_id);
         let _ = fs::remove_file(output_path);
-        let _ = fs::remove_file(agent_dir.join(NEXT_TASK_FILE));
-        let _ = fs::remove_file(agent_dir.join(IN_PROGRESS_FILE));
+        let _ = fs::remove_file(agent_dir.join(format!("{task_id}.{INPUT_EXT}")));
 
         let response = Response::processed(output);
         send_response(stream, &response)?;
 
-        info!(agent_id, "task completed");
-        self.agents.insert(agent_id.to_string(), None);
+        info!(agent_id, task_id, "task completed");
         Ok(())
     }
 }
@@ -411,7 +406,6 @@ fn event_loop(
     let mut last_scan = Instant::now();
 
     loop {
-        // Check for shutdown request
         if signals.is_shutdown_triggered() {
             info!(
                 in_flight = state.in_flight_count(),
@@ -420,24 +414,20 @@ fn event_loop(
             return drain_and_shutdown(fs_events, state);
         }
 
-        // Handle incoming task submissions
         if let Some(task) = accept_task(listener)? {
             state.enqueue(task);
         }
 
-        // Handle filesystem events
         while let Ok(event) = fs_events.try_recv() {
             handle_fs_event(&event, state)?;
         }
 
-        // Periodic rescan (FSEvents on macOS can be laggy)
         if last_scan.elapsed() >= scan_interval {
             state.scan_agents()?;
             state.scan_outputs()?;
             last_scan = Instant::now();
         }
 
-        // Match pending tasks with available agents (unless paused)
         if !signals.is_paused() {
             state.dispatch_pending()?;
         }
@@ -446,18 +436,15 @@ fn event_loop(
     }
 }
 
-/// Drain in-flight tasks during shutdown (don't accept new ones).
 fn drain_and_shutdown(fs_events: &mpsc::Receiver<Event>, state: &mut PoolState) -> io::Result<()> {
     let scan_interval = Duration::from_millis(100);
     let mut last_scan = Instant::now();
 
     while state.in_flight_count() > 0 {
-        // Process filesystem events to detect task completion
         while let Ok(event) = fs_events.try_recv() {
             handle_fs_event(&event, state)?;
         }
 
-        // Periodic rescan for completion
         if last_scan.elapsed() >= scan_interval {
             state.scan_outputs()?;
             last_scan = Instant::now();
@@ -565,18 +552,18 @@ fn handle_agent_file_event(
     path: &Path,
     state: &mut PoolState,
 ) -> io::Result<()> {
-    // Any file event means the agent exists
     let agent_dir = state.agents_dir.join(agent_id);
     if agent_dir.is_dir() {
         state.register(agent_id);
     }
 
-    // Check for output file
-    if filename == OUTPUT_FILE
+    // Check for output file: {id}.output
+    if let Some(stem) = filename.strip_suffix(&format!(".{OUTPUT_EXT}"))
+        && let Ok(task_id) = stem.parse::<u64>()
         && matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_))
         && path.exists()
     {
-        state.complete_task(agent_id, path)?;
+        state.complete_task(agent_id, task_id, path)?;
     }
 
     Ok(())
@@ -625,7 +612,6 @@ fn create_watcher(agents_dir: &Path) -> io::Result<(RecommendedWatcher, mpsc::Re
     Ok((watcher, rx))
 }
 
-/// Cleans up the socket file on drop.
 struct SocketCleanup(PathBuf);
 
 impl Drop for SocketCleanup {

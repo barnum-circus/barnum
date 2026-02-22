@@ -9,12 +9,16 @@ pub const LOCK_FILE: &str = "daemon.lock";
 /// Socket name for IPC (file path on Unix, named pipe on Windows).
 pub const SOCKET_NAME: &str = "daemon.sock";
 
-/// File written by daemon when assigning work to an agent.
+/// File extension for task input files (e.g., `1.input`).
+pub const INPUT_EXT: &str = "input";
+
+/// File extension for task output files (e.g., `1.output`).
+pub const OUTPUT_EXT: &str = "output";
+
+// Legacy constants for backwards compatibility during transition
+#[doc(hidden)]
 pub const NEXT_TASK_FILE: &str = "next_task";
-
-/// File the agent renames `next_task` to when it starts processing.
-/// This atomic rename prevents race conditions.
+#[doc(hidden)]
 pub const IN_PROGRESS_FILE: &str = "in_progress";
-
-/// File written by agent when work is complete.
+#[doc(hidden)]
 pub const OUTPUT_FILE: &str = "output";

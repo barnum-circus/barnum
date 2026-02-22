@@ -5,7 +5,7 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::collapsible_if)]
 
-use agent_pool::{AGENTS_DIR, IN_PROGRESS_FILE, NEXT_TASK_FILE, OUTPUT_FILE};
+use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -107,20 +107,19 @@ impl GsdTestAgent {
             let mut processed_tasks = Vec::new();
 
             while running_clone.load(Ordering::SeqCst) {
-                let task_file = agent_dir.join(NEXT_TASK_FILE);
-                let in_progress_file = agent_dir.join(IN_PROGRESS_FILE);
-                let output_file = agent_dir.join(OUTPUT_FILE);
+                if let Some((task_id, payload)) = find_input_file(&agent_dir) {
+                    let input_path = agent_dir.join(format!("{task_id}.{INPUT_EXT}"));
 
-                if task_file.exists() {
-                    if fs::rename(&task_file, &in_progress_file).is_ok() {
-                        if let Ok(payload) = fs::read_to_string(&in_progress_file) {
-                            thread::sleep(processing_delay);
+                    thread::sleep(processing_delay);
 
-                            let response = processor(&payload);
-                            processed_tasks.push(payload.trim().to_string());
-                            let _ = fs::write(&output_file, &response);
-                            let _ = fs::remove_file(&in_progress_file);
-                        }
+                    let response = processor(&payload);
+                    processed_tasks.push(payload.trim().to_string());
+
+                    // Check if we were timed out
+                    if input_path.exists() {
+                        let output_path = agent_dir.join(format!("{task_id}.{OUTPUT_EXT}"));
+                        let _ = fs::write(&output_path, &response);
+                        let _ = fs::remove_file(&input_path);
                     }
                 }
 
@@ -198,6 +197,28 @@ impl GsdTestAgent {
             .join()
             .expect("Agent thread panicked")
     }
+}
+
+/// Find an input file in the agent directory, returning (`task_id`, content).
+fn find_input_file(agent_dir: &Path) -> Option<(u64, String)> {
+    let Ok(entries) = fs::read_dir(agent_dir) else {
+        return None;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if let Some(stem) = name.strip_suffix(&format!(".{INPUT_EXT}")) {
+                if let Ok(task_id) = stem.parse::<u64>() {
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        return Some((task_id, content));
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 // =============================================================================

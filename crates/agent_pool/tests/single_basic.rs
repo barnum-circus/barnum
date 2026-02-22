@@ -6,7 +6,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, NEXT_TASK_FILE, OUTPUT_FILE, ResponseKind};
+use agent_pool::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT, ResponseKind};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -50,14 +50,14 @@ fn file_protocol_basic() {
     let agent_dir = root.join(AGENTS_DIR).join("test-agent");
     fs::create_dir_all(&agent_dir).expect("Failed to create agent directory");
 
-    // Write task directly to test the file protocol
-    let task_file = agent_dir.join(NEXT_TASK_FILE);
-    fs::write(&task_file, "Test task").expect("Failed to write task");
+    // Write task directly to test the file protocol (1.input)
+    let input_file = agent_dir.join(format!("1.{INPUT_EXT}"));
+    fs::write(&input_file, "Test task").expect("Failed to write task");
 
     let agent = TestAgent::echo(&root, "test-agent", Duration::from_millis(10));
     thread::sleep(Duration::from_millis(100));
 
-    let output_file = agent_dir.join(OUTPUT_FILE);
+    let output_file = agent_dir.join(format!("1.{OUTPUT_EXT}"));
     let output = fs::read_to_string(&output_file).expect("Failed to read output");
     assert_eq!(output, "Test task [processed]");
 

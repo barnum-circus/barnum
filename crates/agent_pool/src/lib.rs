@@ -2,7 +2,7 @@
 //!
 //! The daemon communicates with:
 //! - **Submitters** via Unix socket - connect, send task, receive result
-//! - **Agents** via files - rename `next_task` to `in_progress`, write `output`
+//! - **Agents** via files - read `{id}.input`, write `{id}.output`
 //!
 //! See `AGENT_PROTOCOL.md` for details on the agent file protocol.
 //!
@@ -35,8 +35,12 @@ mod response;
 mod stop;
 mod submit;
 
-pub use constants::{AGENTS_DIR, IN_PROGRESS_FILE, NEXT_TASK_FILE, OUTPUT_FILE};
+pub use constants::{AGENTS_DIR, INPUT_EXT, OUTPUT_EXT};
 pub use daemon::{DaemonHandle, run, spawn};
 pub use response::{NotProcessedReason, Response, ResponseKind};
 pub use stop::stop;
 pub use submit::submit;
+
+// Legacy exports for backwards compatibility during transition
+#[doc(hidden)]
+pub use constants::{IN_PROGRESS_FILE, NEXT_TASK_FILE, OUTPUT_FILE};

@@ -1,7 +1,7 @@
 #!/bin/bash
 # GSD-aware demo agent that understands the GSD protocol.
 #
-# Usage: ./gsd-agent.sh <root> <agent-id> [transition-map]
+# Usage: ./gsd-agent.sh <root> <agent-id> [transition-map] [sleep-seconds]
 #
 # The agent receives JSON payloads like:
 #   {"task": {"kind": "Start", "value": {...}}, "instructions": "..."}
@@ -29,31 +29,21 @@ fi
 AGENT_DIR="$ROOT/agents/$AGENT_ID"
 mkdir -p "$AGENT_DIR"
 
-echo "[$AGENT_ID] GSD agent started, watching $AGENT_DIR" >&2
+echo "[$AGENT_ID] Started, watching $AGENT_DIR" >&2
 if [ -n "$TRANSITION_MAP" ]; then
     echo "[$AGENT_ID] Transitions: $TRANSITION_MAP" >&2
 fi
 
-cleanup() {
-    echo "[$AGENT_ID] Agent shutting down" >&2
-    exit 0
-}
-trap cleanup SIGINT SIGTERM
+trap 'echo "[$AGENT_ID] Shutting down" >&2; exit 0' SIGINT SIGTERM
 
-# Parse transition map into associative array format for lookup
-# Format: "Start:Middle,Middle:End,End:"
 get_next_step() {
     local kind="$1"
-    local map="$TRANSITION_MAP"
-
-    # If no map, always terminate
-    if [ -z "$map" ]; then
+    if [ -z "$TRANSITION_MAP" ]; then
         echo ""
         return
     fi
 
-    # Parse comma-separated pairs
-    IFS=',' read -ra pairs <<< "$map"
+    IFS=',' read -ra pairs <<< "$TRANSITION_MAP"
     for pair in "${pairs[@]}"; do
         IFS=':' read -r from to <<< "$pair"
         if [ "$from" = "$kind" ]; then
@@ -61,50 +51,47 @@ get_next_step() {
             return
         fi
     done
-
-    # No match found, terminate
     echo ""
 }
 
 while true; do
-    if [ -f "$AGENT_DIR/next_task" ]; then
-        if mv "$AGENT_DIR/next_task" "$AGENT_DIR/in_progress" 2>/dev/null; then
-            payload=$(cat "$AGENT_DIR/in_progress")
+    # Find an input file (*.input)
+    input_file=$(ls "$AGENT_DIR"/*.input 2>/dev/null | head -1)
 
-            # Extract fields from JSON payload using jq if available
-            # Payload format: {"task": {"kind": "...", "value": ...}, "instructions": "..."}
-            if command -v jq &> /dev/null; then
-                kind=$(echo "$payload" | jq -r '.task.kind')
-                instructions=$(echo "$payload" | jq -r '.instructions')
-            else
-                # Fallback: basic parsing
-                kind=$(echo "$payload" | grep -o '"kind"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-                instructions="(install jq to see instructions)"
-            fi
+    if [ -n "$input_file" ] && [ -f "$input_file" ]; then
+        # Get task ID from filename (e.g., "1.input" -> "1")
+        task_id=$(basename "$input_file" .input)
 
-            echo "[$AGENT_ID] Processing task kind: $kind" >&2
-            echo "[$AGENT_ID] Instructions received:" >&2
-            echo "$instructions" >&2
-            echo "" >&2
+        payload=$(cat "$input_file")
 
-            sleep "$SLEEP_TIME"
+        if command -v jq &> /dev/null; then
+            kind=$(echo "$payload" | jq -r '.task.kind')
+            instructions=$(echo "$payload" | jq -r '.instructions')
+        else
+            kind=$(echo "$payload" | grep -o '"kind"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
+            instructions="(install jq to see full instructions)"
+        fi
 
-            # Get next step from transition map
+        echo "[$AGENT_ID] Task $task_id: $kind" >&2
+        echo "[$AGENT_ID] Instructions:" >&2
+        echo "$instructions" >&2
+        echo "" >&2
+
+        sleep "$SLEEP_TIME"
+
+        # Check if we were timed out (input deleted)
+        if [ -f "$input_file" ]; then
             next=$(get_next_step "$kind")
-
             if [ -z "$next" ]; then
-                # Terminate
-                echo "[$AGENT_ID] Returning: []" >&2
-                echo '[]' > "$AGENT_DIR/output"
+                echo "[$AGENT_ID] -> []" >&2
+                echo '[]' > "$AGENT_DIR/$task_id.output"
             else
-                # Transition to next step
-                response="[{\"kind\": \"$next\", \"value\": {}}]"
-                echo "[$AGENT_ID] Returning: $response" >&2
-                echo "$response" > "$AGENT_DIR/output"
+                echo "[$AGENT_ID] -> $next" >&2
+                echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/$task_id.output"
             fi
-
-            rm -f "$AGENT_DIR/in_progress"
-            echo "[$AGENT_ID] Done" >&2
+            rm -f "$input_file"
+        else
+            echo "[$AGENT_ID] Timed out, skipping" >&2
         fi
     fi
     sleep 0.05
