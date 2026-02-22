@@ -49,9 +49,19 @@ process_task() {
 while true; do
     # Process if task.json exists and response.json doesn't
     if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
-        # Read envelope and extract content
+        # Read envelope and extract kind/content
         envelope=$(cat "$AGENT_DIR/task.json")
+        kind=$(echo "$envelope" | jq -r '.kind // "Task"')
         task=$(echo "$envelope" | jq -r '.content // .')
+
+        # Handle health checks immediately
+        if [ "$kind" = "HealthCheck" ]; then
+            echo "[$AGENT_ID] Health check" >&2
+            echo "{}" > "$AGENT_DIR/response.json"
+            sleep 0.05
+            continue
+        fi
+
         # Trim whitespace
         task=$(echo "$task" | tr -d '[:space:]')
         echo "[$AGENT_ID] Processing: $task" >&2
