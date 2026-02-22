@@ -3,8 +3,8 @@
 //! This test manually implements the Task enum dispatch logic to verify
 //! the pattern works correctly before using the derive macro.
 
-#![allow(clippy::expect_used)]
-#![allow(clippy::use_self)]
+#![expect(clippy::expect_used)]
+#![expect(clippy::use_self)]
 
 use std::collections::HashSet;
 use std::process::Command;

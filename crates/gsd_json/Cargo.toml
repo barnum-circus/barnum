@@ -1,0 +1,20 @@
+[package]
+name = "gsd_json"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "JSON-based task orchestrator library for state machine workflows"
+keywords = ["task", "orchestrator", "state-machine", "json", "agent"]
+categories = ["development-tools"]
+
+[dependencies]
+agent_pool = { path = "../agent_pool" }
+jsonschema = "0.29"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

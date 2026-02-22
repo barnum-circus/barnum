@@ -17,9 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Run tests
-        run: cargo test --all
+        run: cargo test --workspace -- --test-threads=1
 
   build-macos-x64:
     runs-on: macos-latest
@@ -30,11 +36,15 @@ jobs:
           targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-apple-darwin -p multiplexer
+        run: cargo build --release --target x86_64-apple-darwin -p agent_pool -p gsd_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_pool-macos-x64
+          path: target/x86_64-apple-darwin/release/agent_pool
       - uses: actions/upload-artifact@v4
         with:
           name: gsd-macos-x64
-          path: target/x86_64-apple-darwin/release/multiplexer
+          path: target/x86_64-apple-darwin/release/gsd
 
   build-macos-arm64:
     runs-on: macos-latest
@@ -45,11 +55,15 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target aarch64-apple-darwin -p multiplexer
+        run: cargo build --release --target aarch64-apple-darwin -p agent_pool -p gsd_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_pool-macos-arm64
+          path: target/aarch64-apple-darwin/release/agent_pool
       - uses: actions/upload-artifact@v4
         with:
           name: gsd-macos-arm64
-          path: target/aarch64-apple-darwin/release/multiplexer
+          path: target/aarch64-apple-darwin/release/gsd
 
   build-linux-x64:
     runs-on: ubuntu-latest
@@ -62,11 +76,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl -p multiplexer
+        run: cargo build --release --target x86_64-unknown-linux-musl -p agent_pool -p gsd_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_pool-linux-x64
+          path: target/x86_64-unknown-linux-musl/release/agent_pool
       - uses: actions/upload-artifact@v4
         with:
           name: gsd-linux-x64
-          path: target/x86_64-unknown-linux-musl/release/multiplexer
+          path: target/x86_64-unknown-linux-musl/release/gsd
 
   build-linux-arm64:
     runs-on: ubuntu-latest
@@ -79,11 +97,15 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cross build --release --target aarch64-unknown-linux-musl -p multiplexer
+        run: cross build --release --target aarch64-unknown-linux-musl -p agent_pool -p gsd_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_pool-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/agent_pool
       - uses: actions/upload-artifact@v4
         with:
           name: gsd-linux-arm64
-          path: target/aarch64-unknown-linux-musl/release/multiplexer
+          path: target/aarch64-unknown-linux-musl/release/gsd
 
   build-windows-x64:
     runs-on: windows-latest
@@ -94,11 +116,15 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-pc-windows-msvc -p multiplexer
+        run: cargo build --release --target x86_64-pc-windows-msvc -p agent_pool -p gsd_cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent_pool-win-x64
+          path: target/x86_64-pc-windows-msvc/release/agent_pool.exe
       - uses: actions/upload-artifact@v4
         with:
           name: gsd-win-x64
-          path: target/x86_64-pc-windows-msvc/release/multiplexer.exe
+          path: target/x86_64-pc-windows-msvc/release/gsd.exe
 
   publish:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
@@ -115,56 +141,56 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Download macOS x64 artifact
+      - name: Download agent_pool macOS x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-macos-x64
-          path: libs/multiplexer/artifacts/macos-x64
+          name: agent_pool-macos-x64
+          path: libs/agent_pool/artifacts/macos-x64
 
-      - name: Download macOS arm64 artifact
+      - name: Download agent_pool macOS arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-macos-arm64
-          path: libs/multiplexer/artifacts/macos-arm64
+          name: agent_pool-macos-arm64
+          path: libs/agent_pool/artifacts/macos-arm64
 
-      - name: Download Linux x64 artifact
+      - name: Download agent_pool Linux x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-linux-x64
-          path: libs/multiplexer/artifacts/linux-x64
+          name: agent_pool-linux-x64
+          path: libs/agent_pool/artifacts/linux-x64
 
-      - name: Download Linux arm64 artifact
+      - name: Download agent_pool Linux arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-linux-arm64
-          path: libs/multiplexer/artifacts/linux-arm64
+          name: agent_pool-linux-arm64
+          path: libs/agent_pool/artifacts/linux-arm64
 
-      - name: Download Windows x64 artifact
+      - name: Download agent_pool Windows x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-win-x64
-          path: libs/multiplexer/artifacts/win-x64
+          name: agent_pool-win-x64
+          path: libs/agent_pool/artifacts/win-x64
 
       - name: Make binaries executable
         run: |
-          chmod +x libs/multiplexer/artifacts/macos-x64/multiplexer
-          chmod +x libs/multiplexer/artifacts/macos-arm64/multiplexer
-          chmod +x libs/multiplexer/artifacts/linux-x64/multiplexer
-          chmod +x libs/multiplexer/artifacts/linux-arm64/multiplexer
+          chmod +x libs/agent_pool/artifacts/macos-x64/agent_pool
+          chmod +x libs/agent_pool/artifacts/macos-arm64/agent_pool
+          chmod +x libs/agent_pool/artifacts/linux-x64/agent_pool
+          chmod +x libs/agent_pool/artifacts/linux-arm64/agent_pool
 
       - name: Set version for main branch
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: |
           VERSION="0.0.0-main-${GITHUB_SHA::8}"
-          cd libs/multiplexer
+          cd libs/agent_pool
           npm version $VERSION --no-git-tag-version
 
       - name: Publish to npm (main tag)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: npm publish --access public --tag main --provenance
-        working-directory: libs/multiplexer
+        working-directory: libs/agent_pool
 
       - name: Publish to npm (latest tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish --access public --tag latest --provenance
-        working-directory: libs/multiplexer
+        working-directory: libs/agent_pool

@@ -1,0 +1,27 @@
+{
+  "name": "@gsd-now/agent-pool",
+  "version": "0.1.0",
+  "description": "Agent pool daemon for managing workers with file-based task dispatch.",
+  "main": "index.js",
+  "bin": {
+    "agent_pool": "cli.js"
+  },
+  "author": "Robert Balicki",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rbalicki2/gsd"
+  },
+  "keywords": [
+    "agent",
+    "pool",
+    "task-queue",
+    "cli"
+  ],
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*"
+  ],
+  "sideEffects": false
+}

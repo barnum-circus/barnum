@@ -1,6 +1,6 @@
 //! Tests for basic task queue functionality with JSON deserialization.
 
-#![allow(clippy::expect_used)]
+#![expect(clippy::expect_used)]
 
 use serde::Deserialize;
 use std::process::Command;

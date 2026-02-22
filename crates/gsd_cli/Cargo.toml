@@ -1,0 +1,23 @@
+[package]
+name = "gsd_cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "CLI for GSD - Get Sh*** Done"
+keywords = ["cli", "task", "orchestrator", "state-machine"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+gsd_json = { path = "../gsd_json" }
+clap = { workspace = true }
+serde_json = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[bin]]
+name = "gsd"
+path = "src/main.rs"
+
+[lints]
+workspace = true

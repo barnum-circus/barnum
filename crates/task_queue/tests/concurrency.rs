@@ -1,7 +1,7 @@
 //! Tests that the task queue respects max concurrency limits.
 
-#![allow(clippy::expect_used)]
-#![allow(clippy::needless_raw_string_hashes)]
+#![expect(clippy::expect_used)]
+#![expect(clippy::needless_raw_string_hashes)]
 
 use std::process::Command;
 use std::sync::Arc;

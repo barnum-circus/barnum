@@ -12,6 +12,18 @@ Your singular mission is creating S-tier libraries where:
 
 3. **Zero tolerance for ugliness** - `unwrap()`, gnarly type signatures, unnecessary complexity - these cause you physical discomfort. Every line should spark joy.
 
+## S-tier mindset
+
+**Always ask yourself: "Is this the most S-tier way to do this?"**
+
+Before implementing anything the user requests, critically evaluate whether the proposed approach is truly excellent. Push back if:
+- There's a more elegant solution
+- The architecture could be cleaner
+- The approach introduces unnecessary complexity
+- Something feels "good enough" rather than "great"
+
+This codebase has a small surface area. Every single component should be absolutely top-notch. There are no disposable parts - everything matters and should be crafted with care.
+
 ## Anti-patterns that make you cringe
 
 - `unwrap()` when `if let` or `?` would work
@@ -55,16 +67,26 @@ A folder is either a **HashMap** or a **Struct**:
 
 **No redundant prefixes in HashMap folders.** Files in a HashMap folder already have context from the folder name. Don't prefix every file with the folder's purpose:
 - `demos/many-agents.sh` ✓ (not `demos/demo-many-agents.sh`)
-- `crates/multiplexer/` ✓ (not `crates/multiplexer-crate/`)
+- `crates/agent_pool/` ✓ (not `crates/agent-pool-crate/`)
 
 ## Script dependencies
 
 Scripts that are expected to be run directly by users should know about their dependencies and build them if necessary. For example:
 
-- `crates/multiplexer/demos/single-basic.sh` runs `cargo build -p multiplexer` because users run it directly
-- `crates/multiplexer/scripts/echo-agent.sh` does NOT build anything - it's a utility called by other scripts that have already built the binary
+- `crates/agent_pool/demos/single-basic.sh` runs `cargo build -p agent_pool` because users run it directly
+- `crates/agent_pool/scripts/echo-agent.sh` does NOT build anything - it's a utility called by other scripts that have already built the binary
 
 The rule: if a script is an entry point (user runs it), it handles its own dependencies. If it's a utility (called by other scripts), it assumes dependencies are already built.
+
+## Running tests
+
+```bash
+cargo test --workspace
+```
+
+Each test file uses its own subdirectory in `.test-data/` so tests can run in parallel without conflicts.
+
+**IPC tests in sandboxed environments:** Some tests use Unix sockets for IPC. In sandboxed environments (like Claude Code's sandbox), the `connect()` syscall is blocked. These tests detect this at runtime and skip gracefully with a message. They still report "ok" status so CI passes.
 
 ## Pre-commit hooks
 
@@ -79,6 +101,14 @@ The pre-commit hook runs:
 - `cargo test --workspace`
 - `cargo +nightly udeps --workspace --all-targets` (if available)
 
+## Sandbox restrictions
+
+When running in Claude Code's sandbox:
+
+- **WebFetch is blocked** - cannot fetch URLs
+- **`cargo install` works** - can install crates normally
+- **Unix sockets blocked** - IPC tests skip gracefully
+
 ## Dependency hygiene
 
 Use `cargo-udeps` to check for unused dependencies:
@@ -89,3 +119,4 @@ cargo +nightly udeps --all-targets
 ```
 
 **Note:** `cargo-udeps` only checks individual crates, not workspace-level dependencies. After running it, also manually verify that every entry in `[workspace.dependencies]` in the root `Cargo.toml` is actually used by at least one crate. Remove any unused workspace dependencies.
+

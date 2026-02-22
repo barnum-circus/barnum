@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "name": "Start",
+      "instructions": "You are at the start. Transition to Middle.",
+      "next": ["Middle"]
+    },
+    {
+      "name": "Middle",
+      "instructions": "You are in the middle. Transition to End.",
+      "next": ["End"]
+    },
+    {
+      "name": "End",
+      "instructions": "You have reached the end. Return an empty array.",
+      "next": []
+    }
+  ]
+}

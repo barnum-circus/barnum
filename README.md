@@ -1,107 +1,90 @@
-# Get SH*** Done
+# GSD (Get Sh*** Done)
 
-A task queue and multiplexer for reliably getting shell scripts done.
+A set of libraries and binaries for defining task queues managed by pools of agents.
 
-## Overview
+## What is this?
 
-GSD executes arbitrary shell scripts and deserializes their stdout. It is agnostic to what the script does - it could be a simple bash command, a Python script, or an invocation of `multiplexer submit` to dispatch work to a pool of persistent agents.
+GSD provides two complementary systems for parallel task processing:
 
-The typical workflow is:
-1. Write a small Rust `main.rs` that defines your tasks and how they're processed
-2. Compile it
-3. Run the resulting binary to process your task queue
+### 1. Task Queue (`crates/task_queue`)
 
-GSD can also be used as part of a larger program.
+A Rust library for defining task queues as type-safe state machines. Tasks execute arbitrary shell scripts and deserialize their stdout.
 
-## Concepts
+**Interfaces:**
+- **Rust API** - Define tasks with compile-time type safety, state machine semantics, and automatic task chaining
+- **Binary API** *(planned)* - Submit tasks via JSON for use from any language
 
-- **Queue Items** - Items that implement the `QueueItem` trait
-- **Task Enum** - Wraps queue items, dispatches to underlying impl (can be derived with `#[derive(GsdTask)]`)
-- **Task Results** - Deserialized from script stdout
+See [crates/task_queue/README.md](crates/task_queue/README.md) for API documentation.
 
-Tasks returned from `cleanup` are added back to the queue. Only script execution is parallel; everything else is synchronous.
+### 2. Agent Pool (`crates/agent_pool`)
 
-## Example Usage
-
-```rust
-use task_queue::{GsdTask, QueueItem, NoMoreTasks, ProcessQueueOptions, process_queue};
-use serde::Deserialize;
-use std::process::Command;
-
-#[derive(GsdTask)]
-enum Task {
-    AnalyzeFile(AnalyzeFile),
-}
-
-struct AnalyzeFile {
-    path: String,
-}
-
-struct AnalyzeFileInProgress {
-    path: String,
-}
-
-struct Context {
-    results: Vec<String>,
-}
-
-impl QueueItem<Context> for AnalyzeFile {
-    type InProgress = AnalyzeFileInProgress;
-    type Response = serde_json::Value;
-    type NextTasks = NoMoreTasks;
-
-    fn start(self, _ctx: &mut Context) -> (Self::InProgress, Command) {
-        let mut cmd = Command::new("./analyze.sh");
-        cmd.arg(&self.path);
-        (AnalyzeFileInProgress { path: self.path }, cmd)
-    }
-
-    fn cleanup(
-        in_progress: Self::InProgress,
-        result: Result<Self::Response, serde_json::Error>,
-        ctx: &mut Context,
-    ) -> Self::NextTasks {
-        match result {
-            Ok(response) => {
-                ctx.results.push(format!("{}: {:?}", in_progress.path, response));
-            }
-            Err(e) => {
-                ctx.results.push(format!("{}: error - {}", in_progress.path, e));
-            }
-        }
-        NoMoreTasks
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let mut ctx = Context { results: vec![] };
-
-    let queue = vec![
-        Task::AnalyzeFile(AnalyzeFile { path: "src/main.rs".into() }),
-        Task::AnalyzeFile(AnalyzeFile { path: "src/lib.rs".into() }),
-    ];
-
-    process_queue(queue, &mut ctx, ProcessQueueOptions { max_concurrency: 4 })
-        .await
-        .expect("process_queue failed");
-
-    for result in &ctx.results {
-        println!("{}", result);
-    }
-}
-```
-
-## Multiplexer
-
-For long-running agent pools, use `multiplexer`:
+A daemon that manages a pool of long-running agents. Tasks are dispatched to available agents via a file-based protocol, enabling persistent workers that don't pay startup costs per task.
 
 ```bash
-# Start the daemon (watches <root>/tasks/ and <root>/agents/)
-multiplexer daemon /path/to/root
+# Start the daemon
+agent_pool start /path/to/root
 
-# Submit a task (from your script)
-multiplexer submit /path/to/root "task input here"
+# Submit a task (blocks until complete)
+agent_pool submit /path/to/root "task input"
+
+# Stop the daemon
+agent_pool stop /path/to/root
 ```
 
-See `MENTAL_MODEL.md` for details on the multiplexer protocol.
+## Example Use Cases
+
+### Code Analysis and Refactoring Pipeline
+
+A queue with two task types that form a pipeline:
+
+1. **AnalyzeFile** - An agent analyzes a source file, identifying potential refactors
+2. **PerformRefactor** - An agent executes a specific refactor
+
+The workflow:
+- Seed the queue with `AnalyzeFile` tasks for each source file
+- Analysis agents process files and emit `PerformRefactor` tasks back to the queue
+- Refactor agents pick up those tasks and apply changes
+- The queue drains when all analysis is complete and all refactors are applied
+
+### Invariant Enforcement
+
+A self-healing linter that finds and fixes violations:
+
+1. **Seed** - Find all `invariant.md` files in a codebase. Each describes (in English) invariants that must hold for that folder.
+
+2. **ValidateInvariant** - An agent checks if a folder satisfies its invariants. On violation, it emits `QuickFix` tasks.
+
+3. **QuickFix** - An agent applies a fix. When the last fix for a folder completes, re-queue `ValidateInvariant` for that folder.
+
+4. **Retry limit** - Each `ValidateInvariant` tracks attempt count in context. After 3 failures, emit a catastrophic error instead of retrying.
+
+```
+Context {
+    attempts: HashMap<PathBuf, u32>,      // folder -> attempt count
+    pending_fixes: HashMap<PathBuf, u32>, // folder -> remaining fixes
+    catastrophic_errors: Vec<PathBuf>,    // folders that couldn't be fixed
+}
+```
+
+Setting `max_attempts = 1` turns this into a pure linter (validate only, no fixes).
+
+### 3. GSD Runner (`crates/gsd`)
+
+A high-level JSON-based orchestrator that sits on top of agent_pool. Define state machines via JSON config with JSON Schema validation.
+
+```bash
+# Run a state machine
+gsd run config.json --root /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+
+# Validate a config file
+gsd validate config.json
+
+# Generate documentation
+gsd docs config.json
+```
+
+See [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
+
+## Future Work
+
+See [FUTURE.md](FUTURE.md) for the full roadmap.

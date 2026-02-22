@@ -3,7 +3,7 @@
 //! This is the same test as `split_print.rs` but uses `#[derive(GsdTask)]`
 //! instead of manually implementing the Task enum dispatch.
 
-#![allow(clippy::expect_used)]
+#![expect(clippy::expect_used)]
 
 use std::collections::HashSet;
 use std::process::Command;

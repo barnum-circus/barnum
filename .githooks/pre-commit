@@ -7,7 +7,7 @@ echo "Running cargo check..."
 cargo check --workspace --all-targets
 
 echo "Running cargo test..."
-cargo test --workspace
+cargo test --workspace -- --test-threads=1
 
 echo "Running cargo udeps (requires nightly)..."
 if rustup run nightly cargo udeps --help > /dev/null 2>&1; then

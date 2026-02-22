@@ -175,7 +175,7 @@ where
 {
     type Item<'a> = &'a mut Ctx where Self: 'a;
 
-    #[allow(clippy::future_not_send)]
+    #[expect(clippy::future_not_send)]
     async fn next(&mut self) -> Result<Option<Self::Item<'_>>, ProcessQueueError> {
         if self.is_done() {
             return Ok(None);
@@ -225,7 +225,7 @@ where
 /// Returns an error if:
 /// - A spawned command fails with an I/O error
 /// - A spawned task panics
-#[allow(clippy::future_not_send)]
+#[expect(clippy::future_not_send)]
 pub async fn process_queue<T, Ctx>(
     initial_queue: Vec<T>,
     ctx: &mut Ctx,
@@ -247,7 +247,7 @@ struct InFlightTask<InProgress> {
     handle: tokio::task::JoinHandle<Result<String, std::io::Error>>,
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 fn spawn_command(cmd: Command) -> tokio::task::JoinHandle<Result<String, std::io::Error>> {
     let program = cmd.get_program().to_owned();
     let args: Vec<_> = cmd.get_args().map(ToOwned::to_owned).collect();
@@ -262,7 +262,7 @@ fn spawn_command(cmd: Command) -> tokio::task::JoinHandle<Result<String, std::io
     })
 }
 
-#[allow(clippy::future_not_send)]
+#[expect(clippy::future_not_send)]
 async fn wait_for_any_completion<T>(in_flight: &mut Vec<InFlightTask<T>>) -> Option<InFlightTask<T>> {
     if in_flight.is_empty() {
         return None;
@@ -279,7 +279,7 @@ async fn wait_for_any_completion<T>(in_flight: &mut Vec<InFlightTask<T>>) -> Opt
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
