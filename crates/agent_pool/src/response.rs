@@ -19,6 +19,8 @@ pub enum NotProcessedReason {
     Shutdown,
     /// Timed out waiting for confirmation.
     Timeout,
+    /// Agent stopped sending heartbeats.
+    HeartbeatTimeout,
 }
 
 /// A structured response from task execution.

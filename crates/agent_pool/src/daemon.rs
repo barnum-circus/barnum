@@ -2,7 +2,7 @@
 //!
 //! The pool watches a directory for agents and dispatches incoming tasks
 //! to whichever agent is available. Each agent is a subdirectory that
-//! processes tasks via the file protocol (`{id}.input` → `{id}.output`).
+//! processes tasks via the file protocol (`task.json` → `response.json`).
 //!
 //! # Usage
 //!
@@ -14,18 +14,20 @@
 //! For programmatic control with graceful shutdown:
 //! ```ignore
 //! let handle = daemon::spawn(&root)?;
-//! // ... do work ...
-//! handle.shutdown();  // Gracefully stops the daemon
+//! // ... submit tasks ...
+//! handle.shutdown()?;  // Gracefully stops the daemon
 //! ```
+//!
+//! # Heartbeats
+//!
+//! When enabled, agents must periodically touch a `heartbeat` file in their
+//! directory to signal they're still alive. If the file's mtime becomes stale
+//! beyond the configured timeout, the task is marked as `NotProcessed` with
+//! reason `HeartbeatTimeout`.
 
-use crate::constants::{AGENTS_DIR, LOCK_FILE, SOCKET_NAME};
+use crate::constants::{AGENTS_DIR, HEARTBEAT_FILE, LOCK_FILE, RESPONSE_FILE, SOCKET_NAME, TASK_FILE};
 use crate::lock::acquire_lock;
-use crate::response::Response;
-
-/// Stable filename for task input.
-const TASK_FILE: &str = "task.json";
-/// Stable filename for agent response.
-const RESPONSE_FILE: &str = "response.json";
+use crate::response::{NotProcessedReason, Response};
 use interprocess::local_socket::{
     GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, prelude::*,
 };
@@ -36,9 +38,49 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use std::{fs, io, thread};
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+/// Configuration for the agent pool daemon.
+#[derive(Debug, Clone)]
+pub struct DaemonConfig {
+    /// Heartbeat timeout in seconds. If an agent hasn't updated its heartbeat
+    /// file within this duration, the task is considered timed out.
+    /// Set to `None` to disable heartbeat checking.
+    pub heartbeat_timeout: Option<Duration>,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            // Default: heartbeats disabled for backward compatibility
+            heartbeat_timeout: None,
+        }
+    }
+}
+
+impl DaemonConfig {
+    /// Create a config with heartbeat checking enabled.
+    #[must_use]
+    pub fn with_heartbeat_timeout(timeout: Duration) -> Self {
+        Self {
+            heartbeat_timeout: Some(timeout),
+        }
+    }
+
+    /// Create a config with heartbeat checking disabled.
+    #[must_use]
+    pub fn without_heartbeats() -> Self {
+        Self {
+            heartbeat_timeout: None,
+        }
+    }
+}
 
 // =============================================================================
 // Public API
@@ -120,12 +162,21 @@ impl DaemonHandle {
     }
 }
 
-/// Spawn the daemon in a background thread with graceful shutdown support.
+/// Spawn the daemon in a background thread with default configuration.
 ///
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or setup fails.
 pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
+    spawn_with_config(root, DaemonConfig::default())
+}
+
+/// Spawn the daemon in a background thread with custom configuration.
+///
+/// # Errors
+///
+/// Returns an error if the lock can't be acquired or setup fails.
+pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<DaemonHandle> {
     let root = root.as_ref().to_path_buf();
 
     fs::create_dir_all(&root)?;
@@ -154,7 +205,7 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
 
         info!(socket = %socket_path.display(), "listening");
 
-        let mut state = PoolState::new(agents_dir);
+        let mut state = PoolState::new(agents_dir, config);
         state.scan_agents()?;
 
         event_loop(&listener, &fs_events, &mut state, &signals_clone)
@@ -168,12 +219,21 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
     })
 }
 
-/// Run the agent pool daemon (blocking, never returns on success).
+/// Run the agent pool daemon with default configuration (blocking, never returns on success).
 ///
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or an I/O error occurs.
 pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
+    run_with_config(root, DaemonConfig::default())
+}
+
+/// Run the agent pool daemon with custom configuration (blocking, never returns on success).
+///
+/// # Errors
+///
+/// Returns an error if the lock can't be acquired or an I/O error occurs.
+pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<Infallible> {
     let root = root.as_ref();
 
     fs::create_dir_all(root)?;
@@ -197,7 +257,7 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
 
     info!(socket = %socket_path.display(), "listening");
 
-    let mut state = PoolState::new(agents_dir);
+    let mut state = PoolState::new(agents_dir, config);
     state.scan_agents()?;
 
     let signals = DaemonSignals::new();
@@ -214,7 +274,13 @@ pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
 /// State for a single agent.
 struct AgentState {
     /// If busy, holds the stream to respond to when task completes.
-    in_flight: Option<Stream>,
+    in_flight: Option<InFlightTask>,
+}
+
+/// A task that has been dispatched but not yet completed.
+struct InFlightTask {
+    respond_to: Stream,
+    dispatched_at: Instant,
 }
 
 impl AgentState {
@@ -232,6 +298,7 @@ struct PoolState {
     agents_dir: PathBuf,
     agents: HashMap<String, AgentState>,
     pending: VecDeque<Task>,
+    config: DaemonConfig,
 }
 
 struct Task {
@@ -240,11 +307,12 @@ struct Task {
 }
 
 impl PoolState {
-    fn new(agents_dir: PathBuf) -> Self {
+    fn new(agents_dir: PathBuf, config: DaemonConfig) -> Self {
         Self {
             agents_dir,
             agents: HashMap::new(),
             pending: VecDeque::new(),
+            config,
         }
     }
 
@@ -281,6 +349,67 @@ impl PoolState {
                 self.complete_task(&agent_id, &response_path)?;
             }
         }
+        Ok(())
+    }
+
+    fn check_heartbeat_timeouts(&mut self) -> io::Result<()> {
+        let Some(timeout) = self.config.heartbeat_timeout else {
+            return Ok(());
+        };
+
+        let now = SystemTime::now();
+        let timed_out: Vec<_> = self
+            .agents
+            .iter()
+            .filter_map(|(id, agent)| {
+                let in_flight = agent.in_flight.as_ref()?;
+
+                // Check heartbeat file mtime
+                let heartbeat_path = self.agents_dir.join(id).join(HEARTBEAT_FILE);
+                let mtime = fs::metadata(&heartbeat_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    // If no heartbeat file, use dispatch time as baseline
+                    .unwrap_or_else(|| {
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(in_flight.dispatched_at.elapsed().as_secs())
+                    });
+
+                let age = now.duration_since(mtime).unwrap_or(Duration::MAX);
+                if age > timeout {
+                    Some(id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for agent_id in timed_out {
+            warn!(agent_id, "heartbeat timeout, marking task as not processed");
+            self.timeout_task(&agent_id)?;
+        }
+
+        Ok(())
+    }
+
+    fn timeout_task(&mut self, agent_id: &str) -> io::Result<()> {
+        let Some(agent) = self.agents.get_mut(agent_id) else {
+            return Ok(());
+        };
+
+        let Some(in_flight) = agent.in_flight.take() else {
+            return Ok(());
+        };
+
+        // Clean up task files
+        let agent_dir = self.agents_dir.join(agent_id);
+        let _ = fs::remove_file(agent_dir.join(TASK_FILE));
+        let _ = fs::remove_file(agent_dir.join(RESPONSE_FILE));
+        let _ = fs::remove_file(agent_dir.join(HEARTBEAT_FILE));
+
+        let response = Response::not_processed(NotProcessedReason::HeartbeatTimeout);
+        send_response(in_flight.respond_to, &response)?;
+
+        info!(agent_id, "task timed out due to heartbeat");
         Ok(())
     }
 
@@ -332,8 +461,17 @@ impl PoolState {
         let task_path = self.agents_dir.join(agent_id).join(TASK_FILE);
         fs::write(&task_path, &task.content)?;
 
+        // Initialize heartbeat file so agents have a baseline
+        if self.config.heartbeat_timeout.is_some() {
+            let heartbeat_path = self.agents_dir.join(agent_id).join(HEARTBEAT_FILE);
+            let _ = fs::write(&heartbeat_path, "");
+        }
+
         info!(agent_id, "task dispatched");
-        agent.in_flight = Some(task.respond_to);
+        agent.in_flight = Some(InFlightTask {
+            respond_to: task.respond_to,
+            dispatched_at: Instant::now(),
+        });
         Ok(())
     }
 
@@ -342,14 +480,14 @@ impl PoolState {
             return Ok(());
         };
 
-        let Some(stream) = agent.in_flight.take() else {
+        let Some(in_flight) = agent.in_flight.take() else {
             return Ok(());
         };
 
         let output = match fs::read_to_string(response_path) {
             Ok(o) => o,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                agent.in_flight = Some(stream);
+                agent.in_flight = Some(in_flight);
                 return Ok(());
             }
             Err(e) => return Err(e),
@@ -360,9 +498,10 @@ impl PoolState {
         let agent_dir = self.agents_dir.join(agent_id);
         let _ = fs::remove_file(agent_dir.join(TASK_FILE));
         let _ = fs::remove_file(response_path);
+        let _ = fs::remove_file(agent_dir.join(HEARTBEAT_FILE));
 
         let response = Response::processed(output);
-        send_response(stream, &response)?;
+        send_response(in_flight.respond_to, &response)?;
 
         info!(agent_id, "task completed");
         Ok(())
@@ -402,6 +541,7 @@ fn event_loop(
         if last_scan.elapsed() >= scan_interval {
             state.scan_agents()?;
             state.scan_outputs()?;
+            state.check_heartbeat_timeouts()?;
             last_scan = Instant::now();
         }
 

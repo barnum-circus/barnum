@@ -36,8 +36,8 @@ mod response;
 mod stop;
 mod submit;
 
-pub use constants::AGENTS_DIR;
-pub use daemon::{DaemonHandle, run, spawn};
+pub use constants::{AGENTS_DIR, HEARTBEAT_FILE, RESPONSE_FILE, TASK_FILE};
+pub use daemon::{DaemonConfig, DaemonHandle, run, run_with_config, spawn, spawn_with_config};
 pub use pool::{PoolInfo, cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool};
 pub use response::{NotProcessedReason, Response, ResponseKind};
 pub use stop::stop;
