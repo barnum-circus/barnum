@@ -67,10 +67,10 @@ loop {
 
 There are two communication channels:
 
-### 1. Client → Daemon (task submission)
+### 1. Submitter → Daemon (task submission)
 
 ```
-Client                    Daemon
+Submitter                 Daemon
    |                         |
    |---- submit task ------->|
    |                         |
@@ -79,14 +79,15 @@ Client                    Daemon
 ```
 
 **Socket transport:**
-- Client connects to `daemon.sock`
-- Client writes task, reads response
+- Submitter connects to `daemon.sock`
+- Submitter writes task, reads response
 - Connection closed after each request
 
 **File transport:**
-- Client writes `pending/<uuid>/task.json`
-- Client polls for `pending/<uuid>/response.json`
-- Client cleans up directory
+- Submitter creates `pending/<uuid>/` directory
+- Submitter writes `pending/<uuid>/task.json`
+- Daemon reads task.json, later writes response.json
+- Submitter polls for response.json, reads it, cleans up its own directory
 
 ### 2. Daemon → Agent (task dispatch)
 
@@ -113,50 +114,57 @@ Daemon                    Agent
 
 ## Proposed Traits
 
-### For Clients (submitting tasks)
+### For Submitters (sending tasks to the pool)
+
+A **submitter** is code that wants to run a task on an agent. Examples: `gsd` CLI, test code, other programs.
 
 ```rust
 /// A connection to the pool for submitting tasks.
 ///
 /// Both implementations have identical usage:
-///   let response = client.submit(&task).await?;
+///   let response = submitter.submit(&task).await?;
 ///
 /// The transport details (socket connection vs file I/O) are handled internally.
 #[async_trait]
-pub trait PoolClient: Send + Sync {
+pub trait PoolSubmitter: Send + Sync {
     /// Submit a task and wait for the response.
     /// Returns the Response directly - caller never deals with files or sockets.
     async fn submit(&self, task: &str) -> io::Result<Response>;
 }
 
-/// Socket-based client (fast, requires socket access)
-pub struct SocketClient {
+/// Socket-based submitter (fast, requires socket access)
+pub struct SocketSubmitter {
     socket_path: PathBuf,
 }
 
-/// File-based client (works in sandboxes)
-/// Internally: writes task.json, polls for response.json, cleans up
-pub struct FileClient {
+/// File-based submitter (works in sandboxes)
+/// Internally: writes task.json, polls for response.json, cleans up its own directory
+pub struct FileSubmitter {
     pending_dir: PathBuf,
 }
 
-impl PoolClient for SocketClient { ... }
-impl PoolClient for FileClient { ... }
+impl PoolSubmitter for SocketSubmitter { ... }
+impl PoolSubmitter for FileSubmitter { ... }
 ```
 
-### For Agents (receiving tasks)
+### For Agents (receiving tasks via get_task CLI)
+
+An **agent** is a worker that processes tasks. The `get_task` CLI is how agents receive tasks.
+
+Note: This is separate from `AgentChannel` (daemon-side). Here we're talking about what the agent uses.
 
 ```rust
-/// A connection to the pool for receiving and completing tasks.
+/// Agent-side connection to the pool for receiving and completing tasks.
+/// Used by the `get_task` CLI internally.
 ///
 /// Both implementations have identical usage:
-///   let task = agent.recv().await?;
-///   // ... do work ...
-///   agent.send(&response).await?;
+///   let task = agent_conn.recv().await?;
+///   // ... agent does work (outside this code) ...
+///   agent_conn.send(&response).await?;
 ///
 /// The transport details are handled internally.
 #[async_trait]
-pub trait AgentConnection: Send {
+pub trait AgentReceiver: Send {
     /// Wait for the next task. Blocks until a task is available.
     async fn recv(&mut self) -> io::Result<TaskPayload>;
 
@@ -164,20 +172,21 @@ pub trait AgentConnection: Send {
     async fn send(&mut self, response: &str) -> io::Result<()>;
 }
 
-/// File-based agent (current implementation)
+/// File-based agent receiver (current implementation)
 /// Internally: polls for task.json, writes response.json
-pub struct FileAgent {
+/// Daemon cleans up the files after reading the response.
+pub struct FileAgentReceiver {
     agent_dir: PathBuf,
 }
 
-/// Socket-based agent (keeps persistent connection to daemon)
+/// Socket-based agent receiver (keeps persistent connection to daemon)
 /// Internally: reads task from stream, writes response to stream
-pub struct SocketAgent {
+pub struct SocketAgentReceiver {
     stream: UnixStream,
 }
 
-impl AgentConnection for FileAgent { ... }
-impl AgentConnection for SocketAgent { ... }
+impl AgentReceiver for FileAgentReceiver { ... }
+impl AgentReceiver for SocketAgentReceiver { ... }
 ```
 
 ## Socket-Based Agent Protocol
@@ -278,25 +287,25 @@ The daemon code never matches on transport type. All transport-specific logic is
 The CLI explicitly chooses transport:
 
 ```rust
-// submit_task command
-let client: Box<dyn PoolClient> = if use_file {
-    Box::new(FileClient::new(&pool_path)?)
+// submit_task command (for submitters)
+let submitter: Box<dyn PoolSubmitter> = if use_file {
+    Box::new(FileSubmitter::new(&pool_path)?)
 } else {
-    Box::new(SocketClient::connect(&pool_path)?)
+    Box::new(SocketSubmitter::connect(&pool_path)?)
 };
-let response = client.submit(&task_json).await?;
+let response = submitter.submit(&task_json).await?;
 
-// get_task command (for agents)
-let agent: Box<dyn AgentConnection> = if use_file {
-    Box::new(FileAgent::new(&pool_path, &name)?)
+// get_task command (used by agents to receive tasks)
+let receiver: Box<dyn AgentReceiver> = if use_file {
+    Box::new(FileAgentReceiver::new(&pool_path, &name)?)
 } else {
-    Box::new(SocketAgent::connect(&pool_path, &name)?)
+    Box::new(SocketAgentReceiver::connect(&pool_path, &name)?)
 };
 loop {
-    let task = agent.recv().await?;
+    let task = receiver.recv().await?;
     println!("{}", serde_json::to_string(&task)?);
-    // ... agent does work ...
-    agent.send(&response).await?;
+    // ... agent does work (externally, not in this code) ...
+    receiver.send(&response).await?;
 }
 ```
 
@@ -355,9 +364,9 @@ Use sync traits with `Box<dyn Trait>`. This provides the abstraction benefits wi
 
 | Status | Task | Description |
 |--------|------|-------------|
-| [ ] | 1.1 | Define sync `PoolClient` trait in new `transport.rs` module |
-| [ ] | 1.2 | Implement `SocketPoolClient` (wraps current `submit()` logic) |
-| [ ] | 1.3 | Implement `FilePoolClient` (wraps current `submit_file()` logic) |
+| [ ] | 1.1 | Define sync `PoolSubmitter` trait in new `transport.rs` module |
+| [ ] | 1.2 | Implement `SocketSubmitter` (wraps current `submit()` logic) |
+| [ ] | 1.3 | Implement `FileSubmitter` (wraps current `submit_file()` logic) |
 | [ ] | 1.4 | Update public API: `submit()` and `submit_file()` become thin wrappers |
 | [ ] | 1.5 | Define sync `AgentChannel` trait for daemon→agent communication |
 | [ ] | 1.6 | Implement `FileAgentChannel` (current behavior) |
@@ -371,7 +380,7 @@ After the daemon uses tokio, convert traits to async:
 | Status | Task | Description |
 |--------|------|-------------|
 | [ ] | 2.1 | Add `async_trait` dependency |
-| [ ] | 2.2 | Convert `PoolClient` to async trait |
+| [ ] | 2.2 | Convert `PoolSubmitter` to async trait |
 | [ ] | 2.3 | Convert `AgentChannel` to async trait |
 | [ ] | 2.4 | Update implementations to use async I/O |
 
@@ -380,14 +389,14 @@ After the daemon uses tokio, convert traits to async:
 | Status | Task | Description |
 |--------|------|-------------|
 | [ ] | 3.1 | Define socket agent protocol (JSON lines) |
-| [ ] | 3.2 | Implement `SocketAgentChannel` |
+| [ ] | 3.2 | Implement `SocketAgentChannel` (daemon-side) |
 | [ ] | 3.3 | Update daemon to accept agent socket connections |
-| [ ] | 3.4 | Implement `SocketAgent` for agents |
+| [ ] | 3.4 | Implement `SocketAgentReceiver` (for `get_task` CLI) |
 | [ ] | 3.5 | Add `--socket` flag to `get_task` CLI |
 
 ---
 
-## Task 1.1: Define sync `PoolClient` trait
+## Task 1.1: Define sync `PoolSubmitter` trait
 
 **File:** `crates/agent_pool/src/transport.rs` (new)
 
@@ -396,33 +405,33 @@ use crate::Response;
 use std::io;
 use std::path::Path;
 
-/// A connection to the pool for submitting tasks.
+/// Trait for submitting tasks to the pool.
 ///
 /// Both implementations have identical usage:
-///   let response = client.submit(&task)?;
+///   let response = submitter.submit(&task)?;
 ///
 /// The transport details (socket connection vs file I/O) are handled internally.
-pub trait PoolClient: Send + Sync {
+pub trait PoolSubmitter: Send + Sync {
     /// Submit a task and wait for the response.
     fn submit(&self, task: &str) -> io::Result<Response>;
 }
 ```
 
-## Task 1.2: Implement `SocketPoolClient`
+## Task 1.2: Implement `SocketSubmitter`
 
 ```rust
-pub struct SocketPoolClient {
+pub struct SocketSubmitter {
     socket_path: PathBuf,
 }
 
-impl SocketPoolClient {
+impl SocketSubmitter {
     pub fn new(root: impl AsRef<Path>) -> Self {
         let socket_path = root.as_ref().join(SOCKET_NAME);
         Self { socket_path }
     }
 }
 
-impl PoolClient for SocketPoolClient {
+impl PoolSubmitter for SocketSubmitter {
     fn submit(&self, task: &str) -> io::Result<Response> {
         // Current submit() logic moves here
         // Connect to socket, write task, read response
@@ -430,41 +439,49 @@ impl PoolClient for SocketPoolClient {
 }
 ```
 
-## Task 1.3: Implement `FilePoolClient`
+## Task 1.3: Implement `FileSubmitter`
 
 ```rust
-pub struct FilePoolClient {
+pub struct FileSubmitter {
     pending_dir: PathBuf,
 }
 
-impl FilePoolClient {
+impl FileSubmitter {
     pub fn new(root: impl AsRef<Path>) -> Self {
         let pending_dir = root.as_ref().join(PENDING_DIR);
         Self { pending_dir }
     }
 }
 
-impl PoolClient for FilePoolClient {
+impl PoolSubmitter for FileSubmitter {
     fn submit(&self, task: &str) -> io::Result<Response> {
-        // Current submit_file() logic moves here
-        // Write task.json, poll for response.json, clean up
+        // Current submit_file() logic moves here:
+        // 1. Create pending/<uuid>/ directory (submitter owns this)
+        // 2. Write pending/<uuid>/task.json
+        // 3. Poll for pending/<uuid>/response.json
+        // 4. Read response, clean up directory (submitter's responsibility)
     }
 }
 ```
 
 ## Task 1.5: Define sync `AgentChannel` trait
 
+This is **daemon-side** - how the daemon communicates with agents. Not used by agents themselves.
+
 ```rust
 /// Trait for daemon's communication with an agent.
 /// The daemon calls these methods without knowing the transport.
+///
+/// Cleanup is the daemon's responsibility since it owns the agent communication.
 pub trait AgentChannel: Send {
-    /// Send a task to the agent.
+    /// Send a task to the agent (daemon → agent).
     fn dispatch(&mut self, envelope: &str) -> io::Result<()>;
 
     /// Check if a response is available (non-blocking).
+    /// Returns the response content if available.
     fn poll_response(&mut self) -> io::Result<Option<String>>;
 
-    /// Clean up after task completion.
+    /// Clean up after task completion (daemon cleans up both task and response files).
     fn cleanup(&mut self) -> io::Result<()>;
 }
 ```
