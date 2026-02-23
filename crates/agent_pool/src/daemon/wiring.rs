@@ -604,8 +604,11 @@ fn handle_agent_dir(
         if let Some(agent_id) = agent_map.get_id_by_path(agent_path) {
             let _ = events_tx.send(Event::AgentDeregistered { agent_id });
         }
-    } else if agent_path.is_dir() && !kicked_paths.contains(agent_path) {
-        // Only register if not kicked
+    } else if agent_path.is_dir()
+        && !kicked_paths.contains(agent_path)
+        && !is_kicked_agent(agent_path)
+    {
+        // Only register if not kicked (in-memory or via task.json)
         if let Some(agent_id) = agent_map.register_directory(agent_path.to_path_buf(), ()) {
             let _ = events_tx.send(Event::AgentRegistered {
                 agent_id,
@@ -718,8 +721,13 @@ fn scan_agents(
         }
 
         let agent_path = entry.path();
-        // Skip kicked agents
+        // Skip kicked agents (in-memory tracking)
         if kicked_paths.contains(&agent_path) {
+            continue;
+        }
+        // Skip agents with Kicked task.json (survives daemon restart)
+        if is_kicked_agent(&agent_path) {
+            trace!(?agent_path, "skipping kicked agent directory");
             continue;
         }
         if let Some(agent_id) = agent_map.register_directory(agent_path, ()) {
@@ -733,6 +741,21 @@ fn scan_agents(
     }
 
     Ok(())
+}
+
+/// Check if an agent directory contains a Kicked task.json.
+///
+/// This handles the case where the daemon restarts and finds old kicked
+/// agent directories from a previous run.
+fn is_kicked_agent(agent_path: &Path) -> bool {
+    let task_path = agent_path.join(TASK_FILE);
+    if let Ok(content) = fs::read_to_string(&task_path) {
+        // Quick check for "Kicked" in the JSON
+        if content.contains("\"kind\":\"Kicked\"") || content.contains("\"kind\": \"Kicked\"") {
+            return true;
+        }
+    }
+    false
 }
 
 /// Scan the pending directory for new tasks.
