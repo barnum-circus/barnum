@@ -1,279 +1,179 @@
-# Daemon Event Loop Refactor: Sync Polling → Async Select
+# Daemon Event Loop Refactor
 
 ## Goal
 
-Replace the current poll-based event loop with a `tokio::select!`-based async loop. This eliminates CPU-wasting polling and periodic scans.
+Replace the current poll-based event loop with a blocking approach that wakes on any event. This eliminates CPU-wasting polling.
 
 ## Current Architecture
 
 ### Event Loop Location
-`crates/agent_pool/src/daemon/wiring.rs:440-556` - `io_loop()`
+`crates/agent_pool/src/daemon/wiring.rs` - `io_loop()`
 
 ### Current Flow (Polling)
 
 ```rust
-// wiring.rs:455-456
 let poll_timeout = Duration::from_millis(100);
-let scan_interval = Duration::from_millis(500);
 
 loop {
-    // wiring.rs:467-490 - Non-blocking socket accept
+    // Non-blocking socket accept
     if let Some((raw, stream)) = accept_socket_task(listener)? { ... }
 
-    // wiring.rs:493-529 - Block with 100ms timeout for FS events
+    // Block with 100ms timeout for FS events
     match fs_events.recv_timeout(poll_timeout) { ... }
 
-    // wiring.rs:532-547 - Drain effects (non-blocking)
+    // Drain effects (non-blocking)
     while let Ok(effect) = effects_rx.try_recv() { ... }
-
-    // wiring.rs:550-554 - Periodic scans every 500ms
-    if last_scan.elapsed() >= scan_interval {
-        scan_agents(...)?;
-        scan_pending(...)?;
-    }
 }
 ```
 
 ### Problems
 
 1. **CPU waste**: Polling at 100ms intervals even when idle
-2. **Periodic scans**: `scan_agents` and `scan_pending` run every 500ms as a safety net for missed FS events
-3. **Three separate event sources**: Socket, FS events, and effects channel are checked sequentially, not concurrently
+2. **Sequential checking**: Socket, FS events, and effects are checked one at a time
 
 ### Current Code Structure
 
 | File | Purpose |
 |------|---------|
-| `wiring.rs:440` | `io_loop()` - main event loop |
-| `wiring.rs:380` | `run_event_loop_with_shutdown()` - core event loop (processes events → effects) |
-| `wiring.rs:320` | `run_daemon()` - sets up watcher, spawns event loop thread |
-| `io.rs:380-430` | `execute_effect()` - handles effects (writes files, starts timers) |
-| `core.rs:350` | `step()` - pure state machine |
+| `wiring.rs` | `io_loop()` - main event loop |
+| `wiring.rs` | `run_event_loop_with_shutdown()` - core event loop (processes events → effects) |
+| `wiring.rs` | `run_daemon()` - sets up watcher, spawns event loop thread |
+| `io.rs` | `execute_effect()` - handles effects (writes files, starts timers) |
+| `core.rs` | `step()` - pure state machine |
 
 The core/io split is already clean. The refactor is purely in the I/O layer.
 
 ---
 
-## Target Architecture
+## Phase 1: Wake Channel Pattern
 
-Use `tokio::select!` to wait on multiple async sources simultaneously. No polling.
+Use a shared "wake" channel that all event sources ping. The main loop blocks on this channel, then drains all sources non-blocking.
+
+### Target Architecture
 
 ```rust
+// Each event source has its own channel + pings the wake channel
+let (wake_tx, wake_rx) = mpsc::channel::<()>();
+
+// FS watcher thread
+let wake_tx_fs = wake_tx.clone();
+std::thread::spawn(move || {
+    while let Ok(event) = notify_rx.recv() {
+        let _ = fs_tx.send(event);
+        let _ = wake_tx_fs.send(());  // Wake main loop
+    }
+});
+
+// Socket accept thread
+let wake_tx_socket = wake_tx.clone();
+std::thread::spawn(move || {
+    loop {
+        if let Ok((raw, stream)) = accept_connection(&listener) {
+            let _ = socket_tx.send((raw, stream));
+            let _ = wake_tx_socket.send(());  // Wake main loop
+        }
+    }
+});
+
+// Effects are sent from the event loop thread, which also pings wake
+// (Already has wake_tx from being spawned)
+
+// Main loop
 loop {
-    tokio::select! {
-        // Graceful shutdown
-        _ = shutdown.cancelled() => break,
+    wake_rx.recv()?;  // Block until any source has something
 
-        // Socket-based task submission
-        result = listener.accept() => { ... }
-
-        // Filesystem events (agent responses, registrations, file submissions)
-        Some(event) = fs_rx.recv() => { ... }
-
-        // Effects from core (task assignments, completions)
-        Some(effect) = effects_rx.recv() => { ... }
-
-        // Periodic heartbeat checks (only timer remaining)
-        _ = heartbeat_interval.tick() => { ... }
+    // Drain all sources (non-blocking)
+    while let Ok(event) = fs_rx.try_recv() {
+        handle_fs_event(&event, ...);
+    }
+    while let Ok((raw, stream)) = socket_rx.try_recv() {
+        handle_socket_submission(raw, stream, ...);
+    }
+    while let Ok(effect) = effects_rx.try_recv() {
+        execute_effect(effect, ...)?;
     }
 }
 ```
 
----
+### Benefits
 
-## Migration Tasks
+1. **Zero polling**: Main loop blocks until there's actual work
+2. **No new dependencies**: Just `std::sync::mpsc`
+3. **Simple mental model**: Each producer sends to its channel AND pings wake
+4. **Predictable**: No async runtime surprises
 
-### Task 1: Add tokio dependencies
+### Implementation Tasks
 
-**File:** `crates/agent_pool/Cargo.toml`
-
-```toml
-# Add:
-tokio = { version = "1", features = ["net", "sync", "time", "rt-multi-thread", "macros"] }
-tokio-util = "0.7"  # For CancellationToken
-```
-
-### Task 2: Create async channel bridge for notify
+#### Task 1: Add wake channel and socket accept thread
 
 **File:** `crates/agent_pool/src/daemon/wiring.rs`
 
-The `notify` crate uses `std::sync::mpsc`. We need to bridge to `tokio::sync::mpsc`.
+1. Create the wake channel in `run_daemon()`
+2. Spawn a dedicated thread for socket accepts (currently inline in io_loop)
+3. Each thread gets a clone of `wake_tx`
 
-**Current code (wiring.rs:270-290):**
+#### Task 2: Update io_loop to block on wake channel
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs`
+
+Replace:
 ```rust
-let (fs_tx, fs_events) = mpsc::channel();  // std::sync::mpsc
-let mut watcher = notify::recommended_watcher(move |event| {
-    if let Ok(event) = event {
-        let _ = fs_tx.send(event);
-    }
-})?;
+let poll_timeout = Duration::from_millis(100);
+loop {
+    // ... poll-based checks ...
+    match fs_events.recv_timeout(poll_timeout) { ... }
+}
 ```
 
-**New code:**
-```rust
-let (fs_tx, mut fs_rx) = tokio::sync::mpsc::channel(256);
-
-// Bridge thread: forwards std channel to tokio channel
-let (notify_tx, notify_rx) = std::sync::mpsc::channel();
-std::thread::spawn(move || {
-    while let Ok(event) = notify_rx.recv() {
-        if fs_tx.blocking_send(event).is_err() {
-            break;
-        }
-    }
-});
-
-let mut watcher = notify::recommended_watcher(move |event| {
-    if let Ok(event) = event {
-        let _ = notify_tx.send(event);
-    }
-})?;
-```
-
-### Task 3: Convert io_loop to async
-
-**File:** `crates/agent_pool/src/daemon/wiring.rs:440-556`
-
-**Current signature:**
-```rust
-fn io_loop(
-    listener: &Listener,
-    fs_events: &mpsc::Receiver<notify::Event>,
-    events_tx: &mpsc::Sender<Event>,
-    effects_rx: &mpsc::Receiver<Effect>,
-    // ... other params
-) -> io::Result<()>
-```
-
-**New signature:**
-```rust
-async fn io_loop(
-    listener: tokio::net::UnixListener,
-    mut fs_rx: tokio::sync::mpsc::Receiver<notify::Event>,
-    events_tx: tokio::sync::mpsc::Sender<Event>,
-    mut effects_rx: tokio::sync::mpsc::Receiver<Effect>,
-    shutdown: tokio_util::sync::CancellationToken,
-    // ... other params
-) -> io::Result<()>
-```
-
-**New loop body:**
+With:
 ```rust
 loop {
-    tokio::select! {
-        biased;  // Check shutdown first
-
-        _ = shutdown.cancelled() => {
-            info!("shutdown requested");
-            return Ok(());
-        }
-
-        result = listener.accept() => {
-            let (stream, _) = result?;
-            handle_socket_submission(stream, &events_tx, /* ... */).await?;
-        }
-
-        Some(event) = fs_rx.recv() => {
-            handle_fs_event(&event, &events_tx, /* ... */);
-        }
-
-        Some(effect) = effects_rx.recv() => {
-            execute_effect(effect, /* ... */)?;
-        }
-    }
+    wake_rx.recv()?;  // Block until woken
+    // Drain all sources...
 }
 ```
 
-### Task 4: Convert event loop thread to tokio task
+#### Task 3: Wire up effects channel to wake
 
-**File:** `crates/agent_pool/src/daemon/wiring.rs:344-346`
+**File:** `crates/agent_pool/src/daemon/wiring.rs`
 
-**Current code:**
-```rust
-let event_loop_handle = thread::spawn(move || {
-    run_event_loop_with_shutdown(events_rx, effects_tx, event_loop_signals)
-});
-```
+The event loop thread (which runs core) needs to ping `wake_tx` after sending effects. This requires passing `wake_tx` to `run_event_loop_with_shutdown()`.
 
-**Options:**
-1. Run core event loop in `tokio::task::spawn_blocking` (keeps it sync)
-2. Convert core event loop to async (more work, less benefit since it's pure computation)
+---
 
-Recommend option 1 - core is pure computation, doesn't benefit from async.
+## Phase 2: Consider Tokio
 
-### Task 5: Update run_daemon entry point
+After Phase 1 is working, evaluate whether tokio adds value.
 
-**File:** `crates/agent_pool/src/daemon/wiring.rs:250`
+### What Tokio Would Give Us
 
-**Current:**
-```rust
-pub fn run_daemon(root: &Path, config: DaemonConfig) -> io::Result<Infallible> {
-    // ... sync setup ...
-    io_loop(...)?;
-}
-```
+1. **Cleaner syntax**: `tokio::select!` vs manual wake+drain
+2. **Built-in timeouts**: `tokio::time::timeout()` for operations
+3. **Cancellation tokens**: Structured shutdown with `CancellationToken`
+4. **Ecosystem**: Easy to add HTTP, timers, or other async I/O later
 
-**New:**
-```rust
-pub fn run_daemon(root: &Path, config: DaemonConfig) -> io::Result<Infallible> {
-    let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(async {
-        // ... async setup ...
-        io_loop(...).await
-    })
-}
-```
+### What Tokio Costs
 
-### Task 6: Remove periodic scans
+1. **~100+ transitive dependencies**: Slower compile, bigger binary
+2. **Runtime complexity**: `spawn` vs `spawn_blocking`, blocking in async context
+3. **Learning curve**: Async Rust has footguns (holding locks across await, etc.)
+4. **Startup time**: Runtime initialization isn't free
 
-**File:** `crates/agent_pool/src/daemon/wiring.rs:550-554`
+### Honest Assessment
 
-**Remove:**
-```rust
-// Periodic scans for reliability
-if last_scan.elapsed() >= scan_interval {
-    scan_agents(...)?;
-    scan_pending(...)?;
-    last_scan = Instant::now();
-}
-```
+**For our current use case, the wake channel pattern is sufficient.** We have:
+- 3 event sources (FS, socket, effects)
+- No need for timeouts on individual operations
+- No HTTP or external async I/O
+- Simple shutdown semantics (AtomicBool already works)
 
-Keep `scan_agents` and `scan_pending` functions for:
-- Initial startup scan (existing at wiring.rs:349)
-- Manual recovery if needed
+**Tokio becomes worth it if we add:**
+- HTTP webhooks for task completion notifications
+- Remote agent connections over TCP
+- Complex timeout/retry logic
+- Multiple concurrent operations that need cancellation
 
-### Task 7: Update DaemonHandle for async shutdown
-
-**File:** `crates/agent_pool/src/daemon/wiring.rs:77-120`
-
-Currently uses `DaemonSignals` with `AtomicBool`. Replace with `CancellationToken`:
-
-```rust
-pub struct DaemonHandle {
-    shutdown: CancellationToken,
-    handle: Option<thread::JoinHandle<...>>,
-}
-
-impl DaemonHandle {
-    pub fn shutdown(self) -> io::Result<()> {
-        self.shutdown.cancel();
-        // ...
-    }
-}
-```
-
-### Task 8: Update tests
-
-**File:** `crates/agent_pool/src/daemon/wiring.rs` (tests module at bottom)
-
-Tests that spawn the daemon need `#[tokio::test]` attribute:
-
-```rust
-#[tokio::test]
-async fn event_loop_processes_events_and_emits_effects() {
-    // ...
-}
-```
+**Recommendation:** Implement Phase 1. Re-evaluate tokio if/when we need its features. The core/io split means we can add tokio later without touching the state machine.
 
 ---
 
@@ -286,21 +186,8 @@ async fn event_loop_processes_events_and_emits_effects() {
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-1. **Keep interprocess crate?** Currently using `interprocess::local_socket` for cross-platform sockets. With tokio, we could use `tokio::net::UnixListener` directly. Windows would need separate handling.
-
-2. **Async file I/O?** Currently using sync `std::fs`. Could use `tokio::fs` but probably overkill - file ops are fast and we're not I/O bound.
-
-3. **Remove scans entirely?** Or keep as a low-frequency fallback (every 30s instead of 500ms)?
-
----
-
-## Estimated Scope
-
-- ~300 lines of code changes in `wiring.rs`
-- ~50 lines in `io.rs` for async channel types
-- ~20 lines in `Cargo.toml`
-- Test updates
-
-The core/io split is already clean, so this is primarily a wiring change.
+1. **Keep interprocess crate?** Yes, for cross-platform socket support.
+2. **Async file I/O?** No, sync is fine for our use case.
+3. **Remove periodic scans?** Already done - we watch root recursively now.
