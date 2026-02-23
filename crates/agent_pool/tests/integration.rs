@@ -63,6 +63,12 @@ fn wait_for_response(submission_dir: &Path, timeout_ms: u64) -> Option<String> {
     None
 }
 
+/// Extract stdout from a response JSON.
+fn extract_stdout(response: &str) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(response).ok()?;
+    json.get("stdout")?.as_str().map(String::from)
+}
+
 /// Test file-based submission.
 #[test]
 fn file_based_submit() {
@@ -401,9 +407,13 @@ fn response_isolation() {
     let response_b = wait_for_response(&pending_dir.join("task-b"), 2000);
     let response_c = wait_for_response(&pending_dir.join("task-c"), 2000);
 
-    assert!(response_a.expect("response A").contains(r#""id": "A""#));
-    assert!(response_b.expect("response B").contains(r#""id": "B""#));
-    assert!(response_c.expect("response C").contains(r#""id": "C""#));
+    let stdout_a = extract_stdout(&response_a.expect("response A")).expect("stdout A");
+    let stdout_b = extract_stdout(&response_b.expect("response B")).expect("stdout B");
+    let stdout_c = extract_stdout(&response_c.expect("response C")).expect("stdout C");
+
+    assert!(stdout_a.contains(r#""id": "A""#));
+    assert!(stdout_b.contains(r#""id": "B""#));
+    assert!(stdout_c.contains(r#""id": "C""#));
 
     agent.stop();
     cleanup_test_dir(&format!("{TEST_DIR}_isolation"));

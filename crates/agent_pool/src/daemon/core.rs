@@ -512,6 +512,15 @@ fn handle_assign_task_to_agent_if_epoch_matches(
 /// Used when a task is submitted and we need to find an agent for it.
 #[allow(clippy::expect_used)]
 fn try_assign_task_to_idle_agent(state: &mut PoolState, task_id: TaskId) -> Option<Effect> {
+    let idle_count = state.agents.values().filter(|a| a.is_idle()).count();
+    let total_count = state.agents.len();
+    tracing::debug!(
+        ?task_id,
+        idle_count,
+        total_count,
+        "try_assign_task_to_idle_agent"
+    );
+
     let agent_id = state
         .agents
         .iter()
@@ -527,6 +536,7 @@ fn try_assign_task_to_idle_agent(state: &mut PoolState, task_id: TaskId) -> Opti
         .try_become_busy(task_id)
         .expect("just verified agent is idle");
 
+    tracing::debug!(agent_id = agent_id.0, "task assigned to agent");
     Some(Effect::TaskAssigned { task_id, epoch })
 }
 
