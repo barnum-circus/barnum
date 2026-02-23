@@ -20,7 +20,7 @@ use tracing::{debug, trace, warn};
 
 use crate::constants::{RESPONSE_FILE, TASK_FILE};
 
-use super::core::{AgentId, Effect, Epoch, Event, TaskId};
+use super::core::{AgentId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
 
 // =============================================================================
 // Configuration
@@ -73,9 +73,10 @@ impl Transport {
     }
 
     /// Get the path for directory-based transports.
-    pub fn path(&self) -> &Path {
+    /// Returns `None` for socket-based transports.
+    pub fn path(&self) -> Option<&Path> {
         match self {
-            Transport::Directory(path) => path,
+            Transport::Directory(path) => Some(path),
         }
     }
 }
@@ -95,39 +96,14 @@ impl TransportId for AgentId {
 }
 
 // =============================================================================
-// Task ID Types (I/O Layer)
+// Task ID Allocator
 // =============================================================================
 
-/// External task ID - a real submission with a respond-to transport.
-///
-/// Wraps `core::TaskId` to distinguish external tasks from heartbeats at the type level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct ExternalTaskId(pub(super) TaskId);
-
-impl ExternalTaskId {
-    /// Get the underlying core task ID.
-    pub fn core_id(self) -> TaskId {
-        self.0
-    }
-}
-
-/// Heartbeat ID - a synthetic task with no transport.
-///
-/// Wraps `core::TaskId` to distinguish heartbeats from external tasks at the type level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) struct HeartbeatId(pub(super) TaskId);
-
-impl HeartbeatId {
-    /// Get the underlying core task ID.
-    pub fn core_id(self) -> TaskId {
-        self.0
-    }
-}
-
-/// Allocates task IDs for core, tracking whether each is external or heartbeat.
+/// Allocates task IDs.
 #[derive(Debug, Default)]
 pub(super) struct TaskIdAllocator {
-    next_id: u32,
+    next_external_id: u32,
+    next_heartbeat_id: u32,
 }
 
 impl TaskIdAllocator {
@@ -135,18 +111,18 @@ impl TaskIdAllocator {
         Self::default()
     }
 
-    /// Allocate an ID for an external task.
+    /// Allocate an external task ID.
     pub fn allocate_external(&mut self) -> ExternalTaskId {
-        let id = TaskId(self.next_id);
-        self.next_id += 1;
-        ExternalTaskId(id)
+        let id = ExternalTaskId(self.next_external_id);
+        self.next_external_id += 1;
+        id
     }
 
-    /// Allocate an ID for a heartbeat.
-    pub fn allocate_heartbeat(&mut self) -> HeartbeatId {
-        let id = TaskId(self.next_id);
-        self.next_id += 1;
-        HeartbeatId(id)
+    /// Allocate a heartbeat ID (as TaskId for sending to core).
+    pub fn allocate_heartbeat(&mut self) -> TaskId {
+        let id = HeartbeatId(self.next_heartbeat_id);
+        self.next_heartbeat_id += 1;
+        TaskId::Heartbeat(id)
     }
 }
 
@@ -165,7 +141,7 @@ impl TransportId for ExternalTaskId {
 
 impl From<u32> for ExternalTaskId {
     fn from(id: u32) -> Self {
-        ExternalTaskId(TaskId(id))
+        ExternalTaskId(id)
     }
 }
 
@@ -278,7 +254,7 @@ impl<Id: TransportId> TransportMap<Id> {
 
     /// Get the path for the given ID (for directory-based transports).
     pub fn get_path(&self, id: Id) -> Option<&Path> {
-        self.get_transport(id).map(Transport::path)
+        self.get_transport(id).and_then(Transport::path)
     }
 }
 
@@ -308,16 +284,6 @@ impl ExternalTaskMap {
         Ok(data)
     }
 
-    /// Look up an external task by its core task ID.
-    pub fn get_by_core_id(&self, core_id: TaskId) -> Option<ExternalTaskId> {
-        // ExternalTaskId wraps TaskId, so we can construct it and check if it exists
-        let external_id = ExternalTaskId(core_id);
-        if self.get_transport(external_id).is_some() {
-            Some(external_id)
-        } else {
-            None
-        }
-    }
 }
 
 // =============================================================================
@@ -325,17 +291,6 @@ impl ExternalTaskMap {
 // =============================================================================
 
 /// Execute an effect, performing the actual I/O.
-///
-/// # Arguments
-///
-/// * `effect` - The effect to execute
-/// * `agent_map` - Map of agents to transports
-/// * `external_task_map` - Map of external tasks to transports/data
-/// * `heartbeat_ids` - Set of heartbeat IDs (synthetic tasks with no transport)
-/// * `task_id_allocator` - Allocator for new task IDs
-/// * `kicked_paths` - Set of agent paths that have been kicked (for rejection on re-register)
-/// * `events_tx` - Channel to send timeout events
-/// * `config` - I/O configuration
 ///
 /// # Errors
 ///
@@ -350,7 +305,6 @@ pub(super) fn execute_effect(
     effect: Effect,
     agent_map: &mut AgentMap,
     external_task_map: &mut ExternalTaskMap,
-    heartbeat_ids: &mut HashSet<HeartbeatId>,
     task_id_allocator: &mut TaskIdAllocator,
     kicked_paths: &mut HashSet<PathBuf>,
     events_tx: &mpsc::Sender<Event>,
@@ -358,67 +312,60 @@ pub(super) fn execute_effect(
 ) -> io::Result<()> {
     match effect {
         Effect::TaskAssigned { task_id, epoch } => {
-            // Check if this is an external task or heartbeat
-            if let Some(external_id) = external_task_map.get_by_core_id(task_id) {
-                // External task - write task content
-                let task_data = external_task_map
-                    .get_data(external_id)
-                    .expect("TaskAssigned for unknown task - core bug");
+            match task_id {
+                TaskId::External(external_id) => {
+                    let task_data = external_task_map
+                        .get_data(external_id)
+                        .expect("TaskAssigned for unknown task - core bug");
 
-                let content_value = serde_json::from_str::<serde_json::Value>(&task_data.content)
-                    .unwrap_or_else(|_| serde_json::Value::String(task_data.content.clone()));
-                let envelope = serde_json::json!({
-                    "kind": "Task",
-                    "content": content_value,
-                });
-                agent_map
-                    .write_to(epoch.agent_id, TASK_FILE, &envelope.to_string())
-                    .expect("TaskAssigned for unknown agent - core bug");
+                    let content_value = serde_json::from_str::<serde_json::Value>(&task_data.content)
+                        .unwrap_or_else(|_| serde_json::Value::String(task_data.content.clone()));
+                    let envelope = serde_json::json!({
+                        "kind": "Task",
+                        "content": content_value,
+                    });
+                    agent_map
+                        .write_to(epoch.agent_id, TASK_FILE, &envelope.to_string())
+                        .expect("TaskAssigned for unknown agent - core bug");
 
-                debug!(
-                    agent_id = epoch.agent_id.0,
-                    task_id = task_id.0,
-                    "dispatched task"
-                );
+                    debug!(
+                        agent_id = epoch.agent_id.0,
+                        external_task_id = external_id.0,
+                        "dispatched task"
+                    );
 
-                // Start timeout timer for task
-                start_timeout_timer(events_tx.clone(), epoch, task_data.timeout);
-            } else if heartbeat_ids.contains(&HeartbeatId(task_id)) {
-                // Heartbeat - write heartbeat message
-                let heartbeat = serde_json::json!({
-                    "kind": "Heartbeat",
-                });
-                agent_map
-                    .write_to(epoch.agent_id, TASK_FILE, &heartbeat.to_string())
-                    .expect("TaskAssigned for unknown agent - core bug");
+                    start_timeout_timer(events_tx.clone(), epoch, task_data.timeout);
+                }
+                TaskId::Heartbeat(heartbeat_id) => {
+                    let heartbeat = serde_json::json!({
+                        "kind": "Heartbeat",
+                    });
+                    agent_map
+                        .write_to(epoch.agent_id, TASK_FILE, &heartbeat.to_string())
+                        .expect("TaskAssigned for unknown agent - core bug");
 
-                debug!(
-                    agent_id = epoch.agent_id.0,
-                    task_id = task_id.0,
-                    "dispatched heartbeat"
-                );
+                    debug!(
+                        agent_id = epoch.agent_id.0,
+                        heartbeat_id = heartbeat_id.0,
+                        "dispatched heartbeat"
+                    );
 
-                // Start timeout timer for heartbeat
-                start_timeout_timer(events_tx.clone(), epoch, config.idle_agent_timeout);
-            } else {
-                panic!("TaskAssigned for unknown task {task_id:?} - core bug");
+                    start_timeout_timer(events_tx.clone(), epoch, config.idle_agent_timeout);
+                }
             }
         }
         Effect::AgentIdled { epoch } => {
-            // Allocate a heartbeat ID
-            let heartbeat_id = task_id_allocator.allocate_heartbeat();
-            heartbeat_ids.insert(heartbeat_id);
+            let task_id = task_id_allocator.allocate_heartbeat();
 
-            // Start idle timer - when it fires, core will assign the heartbeat
             start_idle_timer(
                 events_tx.clone(),
                 epoch,
-                heartbeat_id.core_id(),
+                task_id,
                 config.idle_agent_timeout,
             );
             trace!(
                 agent_id = epoch.agent_id.0,
-                heartbeat_task_id = heartbeat_id.core_id().0,
+                ?task_id,
                 "started idle timer"
             );
         }
@@ -427,52 +374,47 @@ pub(super) fn execute_effect(
                 .get_path(agent_id)
                 .expect("TaskCompleted for unknown agent - core bug");
 
-            if heartbeat_ids.remove(&HeartbeatId(task_id)) {
-                // Heartbeat completed - no submitter to notify, just clean up
-                let _ = fs::remove_file(agent_path.join(TASK_FILE));
-                let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
+            match task_id {
+                TaskId::Heartbeat(heartbeat_id) => {
+                    let _ = fs::remove_file(agent_path.join(TASK_FILE));
+                    let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
 
-                debug!(agent_id = agent_id.0, task_id = task_id.0, "heartbeat completed");
-            } else if let Some(external_id) = external_task_map.get_by_core_id(task_id) {
-                // External task - read response first, then clean up
-                let response = agent_map
-                    .read_from(agent_id, RESPONSE_FILE)
-                    .expect("TaskCompleted for unknown agent - core bug");
+                    debug!(agent_id = agent_id.0, heartbeat_id = heartbeat_id.0, "heartbeat completed");
+                }
+                TaskId::External(external_id) => {
+                    let response = agent_map
+                        .read_from(agent_id, RESPONSE_FILE)
+                        .expect("TaskCompleted for unknown agent - core bug");
 
-                // Clean up agent's task and response files so it can receive new tasks
-                let _ = fs::remove_file(agent_path.join(TASK_FILE));
-                let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
+                    let _ = fs::remove_file(agent_path.join(TASK_FILE));
+                    let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
 
-                // Send response to submitter
-                external_task_map.finish(external_id, &response)?;
+                    external_task_map.finish(external_id, &response)?;
 
-                debug!(agent_id = agent_id.0, task_id = task_id.0, "task completed");
-            } else {
-                panic!("TaskCompleted for unknown task {task_id:?} - core bug");
+                    debug!(agent_id = agent_id.0, external_task_id = external_id.0, "task completed");
+                }
             }
         }
         Effect::TaskFailed { task_id } => {
-            if heartbeat_ids.remove(&HeartbeatId(task_id)) {
-                // Heartbeat timed out - no submitter to notify
-                debug!(task_id = task_id.0, "heartbeat timed out");
-            } else if let Some(external_id) = external_task_map.get_by_core_id(task_id) {
-                // External task timed out - notify submitter
-                let error = serde_json::json!({
-                    "status": "NotProcessed",
-                    "reason": "AgentTimeout"
-                });
-                external_task_map.finish(external_id, &error.to_string())?;
+            match task_id {
+                TaskId::Heartbeat(heartbeat_id) => {
+                    debug!(heartbeat_id = heartbeat_id.0, "heartbeat timed out");
+                }
+                TaskId::External(external_id) => {
+                    let error = serde_json::json!({
+                        "status": "NotProcessed",
+                        "reason": "AgentTimeout"
+                    });
+                    external_task_map.finish(external_id, &error.to_string())?;
 
-                warn!(task_id = task_id.0, "task failed (timeout)");
-            } else {
-                panic!("TaskFailed for unknown task {task_id:?} - core bug");
+                    warn!(external_task_id = external_id.0, "task failed (timeout)");
+                }
             }
         }
         Effect::AgentRemoved { agent_id } => {
             let (transport, ()) = agent_map
                 .remove(agent_id)
                 .expect("AgentRemoved for unknown agent - core bug");
-            let agent_path = transport.path().to_path_buf();
 
             // Write kicked message so agent knows it was removed
             let kicked_msg = serde_json::json!({
@@ -482,7 +424,9 @@ pub(super) fn execute_effect(
             let _ = transport.write(TASK_FILE, &kicked_msg.to_string());
 
             // Track this path so we reject re-registration attempts
-            kicked_paths.insert(agent_path);
+            if let Some(agent_path) = transport.path() {
+                kicked_paths.insert(agent_path.to_path_buf());
+            }
 
             debug!(agent_id = agent_id.0, "agent kicked");
         }
@@ -643,7 +587,7 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(id, ExternalTaskId(TaskId(0)));
+        assert_eq!(id, ExternalTaskId(0));
         assert_eq!(map.get_data(id).unwrap().content, "test content");
 
         // Finish the task

@@ -30,19 +30,22 @@ use std::collections::{BTreeMap, VecDeque};
 // ID Types
 // =============================================================================
 
-/// Unique identifier for a task submission.
-///
-/// Tasks are tracked by ID throughout their lifecycle:
-/// submitted → dispatched → completed/failed
-///
-/// I/O layer maps `TaskId` to actual content and response channel.
+/// External task ID - a real submission from a client.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(super) struct TaskId(pub(super) u32);
+pub(super) struct ExternalTaskId(pub(super) u32);
 
-impl From<u32> for TaskId {
-    fn from(id: u32) -> Self {
-        TaskId(id)
-    }
+/// Heartbeat ID - a synthetic task to validate agent liveness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) struct HeartbeatId(pub(super) u32);
+
+/// Task identifier - either an external submission or a heartbeat.
+///
+/// Core treats both variants uniformly for scheduling. The I/O layer
+/// uses the variant to determine response handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum TaskId {
+    External(ExternalTaskId),
+    Heartbeat(HeartbeatId),
 }
 
 /// Unique identifier for a registered agent.
@@ -556,6 +559,11 @@ fn try_assign_pending_to_agent(state: &mut PoolState, agent_id: AgentId) -> Opti
 mod tests {
     use super::*;
 
+    /// Helper to create external task IDs in tests.
+    fn ext(id: u32) -> TaskId {
+        TaskId::External(ExternalTaskId(id))
+    }
+
     // -------------------------------------------------------------------------
     // Task Submission Tests
     // -------------------------------------------------------------------------
@@ -563,10 +571,10 @@ mod tests {
     #[test]
     fn task_submitted_queues_when_no_agents() {
         let state = PoolState::new();
-        let (state, effects) = step(state, Event::TaskSubmitted { task_id: TaskId(1) });
+        let (state, effects) = step(state, Event::TaskSubmitted { task_id: ext(1) });
 
         assert_eq!(state.pending_count(), 1);
-        assert!(state.has_pending_task(TaskId(1)));
+        assert!(state.has_pending_task(ext(1)));
         assert!(effects.is_empty(), "No agents, so no dispatch");
     }
 
@@ -578,7 +586,7 @@ mod tests {
         let (state, effects) = step(
             state,
             Event::TaskSubmitted {
-                task_id: TaskId(42),
+                task_id: ext(42),
             },
         );
 
@@ -589,7 +597,7 @@ mod tests {
         assert_eq!(
             agent.status,
             AgentStatus::Busy {
-                task_id: TaskId(42)
+                task_id: ext(42)
             }
         );
         assert_eq!(
@@ -600,8 +608,8 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { task_id: TaskId(42), epoch }
-                if epoch.agent_id == AgentId(1) && epoch.sequence == 1
+            Effect::TaskAssigned { task_id, epoch }
+                if *task_id == ext(42) && epoch.agent_id == AgentId(1) && epoch.sequence == 1
         ));
     }
 
@@ -609,18 +617,18 @@ mod tests {
     fn task_submitted_queues_when_all_agents_busy() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        agent.try_become_busy(TaskId(99)).unwrap();
+        agent.try_become_busy(ext(99)).unwrap();
         state.agents.insert(AgentId(1), agent);
 
         let (state, effects) = step(
             state,
             Event::TaskSubmitted {
-                task_id: TaskId(42),
+                task_id: ext(42),
             },
         );
 
         assert_eq!(state.pending_count(), 1);
-        assert!(state.has_pending_task(TaskId(42)));
+        assert!(state.has_pending_task(ext(42)));
         assert!(effects.is_empty());
     }
 
@@ -631,13 +639,13 @@ mod tests {
         state.agents.insert(AgentId(2), AgentState::new(AgentId(2)));
 
         // Submit a task - should dispatch to exactly one agent
-        let (state, effects) = step(state, Event::TaskSubmitted { task_id: TaskId(1) });
+        let (state, effects) = step(state, Event::TaskSubmitted { task_id: ext(1) });
 
         assert_eq!(state.busy_count(), 1);
         assert_eq!(state.idle_count(), 1);
         assert_eq!(state.pending_count(), 0);
         assert_eq!(effects.len(), 1);
-        assert!(matches!(&effects[0], Effect::TaskAssigned { task_id: TaskId(1), .. }));
+        assert!(matches!(&effects[0], Effect::TaskAssigned { task_id, .. } if *task_id == ext(1)));
     }
 
     // -------------------------------------------------------------------------
@@ -647,16 +655,16 @@ mod tests {
     #[test]
     fn task_withdrawn_removes_from_pending() {
         let mut state = PoolState::new();
-        state.pending_tasks.push_back(TaskId(1));
-        state.pending_tasks.push_back(TaskId(2));
-        state.pending_tasks.push_back(TaskId(3));
+        state.pending_tasks.push_back(ext(1));
+        state.pending_tasks.push_back(ext(2));
+        state.pending_tasks.push_back(ext(3));
 
-        let (state, effects) = step(state, Event::TaskWithdrawn { task_id: TaskId(2) });
+        let (state, effects) = step(state, Event::TaskWithdrawn { task_id: ext(2) });
 
         assert_eq!(state.pending_count(), 2);
-        assert!(!state.has_pending_task(TaskId(2)));
-        assert!(state.has_pending_task(TaskId(1)));
-        assert!(state.has_pending_task(TaskId(3)));
+        assert!(!state.has_pending_task(ext(2)));
+        assert!(state.has_pending_task(ext(1)));
+        assert!(state.has_pending_task(ext(3)));
         assert!(effects.is_empty());
     }
 
@@ -666,7 +674,7 @@ mod tests {
         let (state, effects) = step(
             state,
             Event::TaskWithdrawn {
-                task_id: TaskId(999),
+                task_id: ext(999),
             },
         );
 
@@ -678,14 +686,14 @@ mod tests {
     fn task_withdrawn_noop_for_dispatched_task() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        agent.try_become_busy(TaskId(42)).unwrap();
+        agent.try_become_busy(ext(42)).unwrap();
         state.agents.insert(AgentId(1), agent);
 
         // Try to withdraw a task that's already dispatched
         let (state, effects) = step(
             state,
             Event::TaskWithdrawn {
-                task_id: TaskId(42),
+                task_id: ext(42),
             },
         );
 
@@ -723,7 +731,7 @@ mod tests {
     #[test]
     fn agent_registered_dispatches_pending_task() {
         let mut state = PoolState::new();
-        state.pending_tasks.push_back(TaskId(42));
+        state.pending_tasks.push_back(ext(42));
 
         let (state, effects) = step(
             state,
@@ -740,10 +748,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned {
-                task_id: TaskId(42),
-                ..
-            }
+            Effect::TaskAssigned { task_id, .. } if *task_id == ext(42)
         ));
     }
 
@@ -771,7 +776,7 @@ mod tests {
     fn agent_deregistered_fails_in_flight_task() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        agent.try_become_busy(TaskId(42)).unwrap();
+        agent.try_become_busy(ext(42)).unwrap();
         state.agents.insert(AgentId(1), agent);
 
         let (state, effects) = step(
@@ -785,9 +790,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskFailed {
-                task_id: TaskId(42)
-            }
+            Effect::TaskFailed { task_id } if *task_id == ext(42)
         ));
     }
 
@@ -813,7 +816,7 @@ mod tests {
     fn agent_responded_completes_task() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        agent.try_become_busy(TaskId(42)).unwrap();
+        agent.try_become_busy(ext(42)).unwrap();
         state.agents.insert(AgentId(1), agent);
 
         let (state, effects) = step(
@@ -830,10 +833,7 @@ mod tests {
         assert_eq!(effects.len(), 2);
         assert!(matches!(
             &effects[0],
-            Effect::TaskCompleted {
-                agent_id: AgentId(1),
-                task_id: TaskId(42)
-            }
+            Effect::TaskCompleted { agent_id: AgentId(1), task_id } if *task_id == ext(42)
         ));
         assert!(matches!(
             &effects[1],
@@ -845,9 +845,9 @@ mod tests {
     fn agent_responded_dispatches_next_task() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        agent.try_become_busy(TaskId(1)).unwrap();
+        agent.try_become_busy(ext(1)).unwrap();
         state.agents.insert(AgentId(1), agent);
-        state.pending_tasks.push_back(TaskId(2));
+        state.pending_tasks.push_back(ext(2));
 
         let (state, effects) = step(
             state,
@@ -857,7 +857,7 @@ mod tests {
         );
 
         let agent = state.get_agent(AgentId(1)).unwrap();
-        assert_eq!(agent.status, AgentStatus::Busy { task_id: TaskId(2) });
+        assert_eq!(agent.status, AgentStatus::Busy { task_id: ext(2) });
         assert_eq!(
             agent.epoch.sequence, 3,
             "Epoch: 1 (busy) + 2 (idle) + 3 (busy)"
@@ -868,10 +868,7 @@ mod tests {
         assert!(matches!(&effects[0], Effect::TaskCompleted { .. }));
         assert!(matches!(
             &effects[1],
-            Effect::TaskAssigned {
-                task_id: TaskId(2),
-                ..
-            }
+            Effect::TaskAssigned { task_id, .. } if *task_id == ext(2)
         ));
     }
 
@@ -924,7 +921,7 @@ mod tests {
     fn timeout_deregisters_busy_agent_and_fails_task() {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
-        let epoch = agent.try_become_busy(TaskId(42)).unwrap();
+        let epoch = agent.try_become_busy(ext(42)).unwrap();
         state.agents.insert(AgentId(1), agent);
 
         let (state, effects) = step(state, Event::AgentTimedOut { epoch });
@@ -934,9 +931,7 @@ mod tests {
         // TaskFailed should come first (logical ordering)
         assert!(matches!(
             &effects[0],
-            Effect::TaskFailed {
-                task_id: TaskId(42)
-            }
+            Effect::TaskFailed { task_id } if *task_id == ext(42)
         ));
         assert!(matches!(
             &effects[1],
@@ -951,7 +946,7 @@ mod tests {
         let mut state = PoolState::new();
         let mut agent = AgentState::new(AgentId(1));
         let old_epoch = agent.epoch;
-        agent.try_become_busy(TaskId(42)).unwrap(); // Epoch is now 1
+        agent.try_become_busy(ext(42)).unwrap(); // Epoch is now 1
         state.agents.insert(AgentId(1), agent);
 
         // Fire timeout with old epoch (sequence 0)
@@ -999,8 +994,8 @@ mod tests {
         assert_eq!(epoch0.sequence, 0);
 
         // Submit task - agent becomes busy, epoch 1
-        state.pending_tasks.push_back(TaskId(1));
-        let (state, effects) = step(state, Event::TaskSubmitted { task_id: TaskId(2) });
+        state.pending_tasks.push_back(ext(1));
+        let (state, effects) = step(state, Event::TaskSubmitted { task_id: ext(2) });
         // First dispatch is task 1
         let epoch1 = match &effects[0] {
             Effect::TaskAssigned { epoch, .. } => *epoch,
@@ -1040,14 +1035,14 @@ mod tests {
 
         let (_state, effects) = step(
             state,
-            Event::TaskSubmitted { task_id: TaskId(1) },
+            Event::TaskSubmitted { task_id: ext(1) },
         );
 
         // Should dispatch to AgentId(1) - lowest ID
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { task_id: TaskId(1), epoch } if epoch.agent_id == AgentId(1)
+            Effect::TaskAssigned { task_id, epoch } if *task_id == ext(1) && epoch.agent_id == AgentId(1)
         ));
     }
 }

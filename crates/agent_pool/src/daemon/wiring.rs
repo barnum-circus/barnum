@@ -24,9 +24,9 @@ use std::collections::HashSet;
 use crate::constants::{AGENTS_DIR, LOCK_FILE, PENDING_DIR, SOCKET_NAME, TASK_FILE};
 use crate::lock::acquire_lock;
 
-use super::core::{AgentId, Effect, Event};
+use super::core::{AgentId, Effect, Event, TaskId};
 use super::io::{
-    AgentMap, ExternalTaskData, ExternalTaskMap, HeartbeatId, IoConfig, PathCategory,
+    AgentMap, ExternalTaskData, ExternalTaskMap, IoConfig, PathCategory,
     TaskIdAllocator, categorize_path, execute_effect,
 };
 
@@ -288,9 +288,6 @@ fn run_daemon(
     // Track kicked agent paths to reject re-registration attempts
     let mut kicked_paths: HashSet<PathBuf> = HashSet::new();
 
-    // Track heartbeat IDs (synthetic tasks with no transport)
-    let mut heartbeat_ids: HashSet<HeartbeatId> = HashSet::new();
-
     // Clone signals for the event loop thread
     let event_loop_signals = signals.clone();
 
@@ -312,7 +309,6 @@ fn run_daemon(
         &mut external_task_map,
         &mut task_id_allocator,
         &mut pending_responses,
-        &mut heartbeat_ids,
         &mut kicked_paths,
         agents_dir,
         pending_dir,
@@ -397,7 +393,6 @@ fn io_loop(
     external_task_map: &mut ExternalTaskMap,
     task_id_allocator: &mut TaskIdAllocator,
     pending_responses: &mut HashSet<AgentId>,
-    heartbeat_ids: &mut HashSet<HeartbeatId>,
     kicked_paths: &mut HashSet<PathBuf>,
     agents_dir: &Path,
     pending_dir: &Path,
@@ -429,7 +424,7 @@ fn io_loop(
             {
                 debug!("socket task submitted: {:?}", external_id);
                 let _ = events_tx.send(Event::TaskSubmitted {
-                    task_id: external_id.core_id(),
+                    task_id: TaskId::External(external_id),
                 });
             }
         }
@@ -484,7 +479,6 @@ fn io_loop(
                 effect,
                 agent_map,
                 external_task_map,
-                heartbeat_ids,
                 task_id_allocator,
                 kicked_paths,
                 events_tx,
@@ -629,9 +623,9 @@ fn register_pending_task(
             timeout: io_config.default_task_timeout,
         },
     ) {
-        info!(task_id = external_id.core_id().0, "file-based task registered");
+        info!(external_task_id = external_id.0, "file-based task registered");
         let _ = events_tx.send(Event::TaskSubmitted {
-            task_id: external_id.core_id(),
+            task_id: TaskId::External(external_id),
         });
     }
 }
@@ -812,9 +806,14 @@ impl Drop for SocketCleanup {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::super::core::TaskId;
+    use super::super::core::{ExternalTaskId, TaskId};
     use super::*;
     use tempfile::TempDir;
+
+    /// Helper to create external task IDs in tests.
+    fn ext(id: u32) -> TaskId {
+        TaskId::External(ExternalTaskId(id))
+    }
 
     #[test]
     fn daemon_config_converts_to_io_config() {
@@ -877,7 +876,7 @@ mod tests {
 
         // Should have received one TaskSubmitted event
         let event = events_rx.try_recv().unwrap();
-        assert!(matches!(event, Event::TaskSubmitted { task_id: TaskId(0) }));
+        assert!(matches!(event, Event::TaskSubmitted { task_id } if task_id == ext(0)));
     }
 
     // =========================================================================
@@ -944,17 +943,14 @@ mod tests {
 
         events_tx
             .send(Event::TaskSubmitted {
-                task_id: TaskId(42),
+                task_id: ext(42),
             })
             .unwrap();
 
         let effect = effects_rx.recv().unwrap();
         assert!(matches!(
             effect,
-            Effect::TaskAssigned {
-                task_id: TaskId(42),
-                ..
-            }
+            Effect::TaskAssigned { task_id, .. } if task_id == ext(42)
         ));
 
         drop(events_tx);
