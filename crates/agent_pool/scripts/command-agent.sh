@@ -59,6 +59,8 @@ cleanup() {
     if [ -n "$NAME" ]; then
         echo "[$NAME] Deregistering and shutting down..." >&2
         "$AGENT_POOL" deregister_agent --pool "$POOL" --name "$NAME" 2>/dev/null || true
+        # Clean up agent directory
+        rm -rf "$AGENT_DIR" 2>/dev/null || true
     fi
     exit 0
 }
@@ -83,6 +85,7 @@ while true; do
     # Extract agent name, response file path, and command
     NAME=$(echo "$TASK_JSON" | jq -r '.agent_name')
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
+    AGENT_DIR=$(dirname "$RESPONSE_FILE")
     CMD=$(echo "$TASK_JSON" | jq -r '.content.data.cmd // empty')
 
     echo "[$NAME] Got task" >&2
