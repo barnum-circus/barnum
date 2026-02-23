@@ -40,7 +40,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build binaries
-        run: cargo build -p agent_pool -p gsd_cli
+        run: cargo build -p agent_pool_cli -p gsd_cli
       - name: Run tests
         run: cargo test --workspace -- --test-threads=1
       - name: Upload debug binaries
@@ -61,10 +61,8 @@ jobs:
         with:
           name: debug-binaries
           path: bin
-      - name: Debug artifact structure
-        run: find bin -type f
       - name: Make binaries executable
-        run: chmod +x bin/agent_pool bin/gsd || chmod +x bin/target/debug/agent_pool bin/target/debug/gsd && cp bin/target/debug/* bin/
+        run: chmod +x bin/agent_pool bin/gsd
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq bc
       - name: Check .dot files are up-to-date
