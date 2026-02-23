@@ -52,31 +52,27 @@ else
     AGENT_POOL="agent_pool"
 fi
 
-# Agent name will be assigned on first get_task call
-NAME=""
+# Generate agent name once at startup (8 random alphanumeric chars)
+NAME=$(LC_ALL=C tr -dc 'a-z0-9' < /dev/urandom | head -c 8)
+AGENT_DIR=""
 
 cleanup() {
-    if [ -n "$NAME" ]; then
-        echo "[$NAME] Deregistering and shutting down..." >&2
-        "$AGENT_POOL" deregister_agent --pool "$POOL" --name "$NAME" 2>/dev/null || true
-        # Clean up agent directory
+    echo "[$NAME] Deregistering and shutting down..." >&2
+    "$AGENT_POOL" deregister_agent --pool "$POOL" --name "$NAME" 2>/dev/null || true
+    # Clean up agent directory
+    if [ -n "$AGENT_DIR" ]; then
         rm -rf "$AGENT_DIR" 2>/dev/null || true
     fi
     exit 0
 }
 trap cleanup SIGINT SIGTERM
 
-echo "[agent] Starting, connecting to pool $POOL..." >&2
+echo "[agent] Starting as $NAME, connecting to pool $POOL..." >&2
 
 while true; do
-    # Wait for a task (reuse name after first call for persistent identity)
     echo "[agent] Calling get_task..." >&2
     set +e
-    if [ -n "$NAME" ]; then
-        TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$NAME" 2>&1)
-    else
-        TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" 2>&1)
-    fi
+    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$NAME" 2>&1)
     GET_TASK_EXIT=$?
     set -e
     echo "[agent] get_task returned (exit=$GET_TASK_EXIT): $TASK_JSON" >&2
@@ -86,8 +82,7 @@ while true; do
         exit 1
     fi
 
-    # Extract agent name, response file path, and command
-    NAME=$(echo "$TASK_JSON" | jq -r '.agent_name')
+    # Extract response file path and command
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
     AGENT_DIR=$(dirname "$RESPONSE_FILE")
     CMD=$(echo "$TASK_JSON" | jq -r '.content.data.cmd // empty')

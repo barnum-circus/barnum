@@ -111,9 +111,9 @@ enum Command {
         /// Pool ID or path
         #[arg(long)]
         pool: String,
-        /// Agent name to reuse (for persistent agents). If omitted, generates a new ID.
+        /// Agent name (must be unique within the pool)
         #[arg(long)]
-        name: Option<String>,
+        name: String,
     },
 }
 
@@ -291,7 +291,6 @@ fn main() -> ExitCode {
         }
         Command::GetTask { pool, name } => {
             let root = resolve_pool(&pool);
-            let name = name.unwrap_or_else(generate_id);
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
             // Create agent directory if it doesn't exist (registers the agent)
