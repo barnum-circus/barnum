@@ -40,8 +40,17 @@ if [ -n "$LOG_FILE" ]; then
     echo "=== Agent started at $(date) ===" >&2
 fi
 
-# Use agent_pool from PATH, or override with AGENT_POOL env var
-AGENT_POOL="${AGENT_POOL:-agent_pool}"
+# Find agent_pool binary:
+# 1. Use AGENT_POOL env var if set
+# 2. Try target/debug/agent_pool relative to repo root
+# 3. Fall back to PATH
+if [ -n "$AGENT_POOL" ]; then
+    : # Use env var
+elif [ -f "$(dirname "$0")/../../../target/debug/agent_pool" ]; then
+    AGENT_POOL="$(dirname "$0")/../../../target/debug/agent_pool"
+else
+    AGENT_POOL="agent_pool"
+fi
 
 # Agent name will be assigned on first get_task call
 NAME=""
