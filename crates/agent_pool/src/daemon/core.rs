@@ -439,7 +439,9 @@ fn handle_agent_responded(mut state: PoolState, agent_id: AgentId) -> (PoolState
     };
 
     let Some((new_epoch, task_id)) = agent.try_become_idle() else {
-        panic!("AgentResponded for idle agent - I/O layer bug");
+        // Agent is already idle - this is a duplicate FS event that arrived after
+        // we processed the first response. Safe to ignore.
+        return (state, vec![]);
     };
 
     let mut effects = vec![Effect::TaskCompleted { agent_id, task_id }];
@@ -897,18 +899,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "AgentResponded for idle agent")]
-    fn agent_responded_panics_for_idle_agent() {
+    fn agent_responded_ignores_idle_agent() {
         let mut state = PoolState::new();
         state.agents.insert(AgentId(1), AgentState::new(AgentId(1)));
 
-        // This should panic - idle agents shouldn't respond
-        let _ = step(
+        // Idle agent responding is ignored (duplicate FS event race condition)
+        let (new_state, effects) = step(
             state,
             Event::AgentResponded {
                 agent_id: AgentId(1),
             },
         );
+
+        assert!(effects.is_empty());
+        assert_eq!(new_state.agent_count(), 1);
     }
 
     // -------------------------------------------------------------------------
