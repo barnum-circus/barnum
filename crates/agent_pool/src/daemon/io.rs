@@ -88,12 +88,20 @@ impl Transport {
         }
     }
 
-    /// Write content to a file in this transport.
+    /// Write content to a file in this transport atomically.
+    ///
+    /// Writes to a temp file first, then renames. This prevents readers from
+    /// seeing partial writes (e.g., empty file during truncation).
     ///
     /// Only valid for directory-based transports.
     pub fn write(&self, filename: &str, content: &str) -> io::Result<()> {
         match self {
-            Transport::Directory(path) => fs::write(path.join(filename), content),
+            Transport::Directory(path) => {
+                let target = path.join(filename);
+                let temp = path.join(format!(".{}.tmp", filename));
+                fs::write(&temp, content)?;
+                fs::rename(&temp, &target)
+            }
             Transport::Socket(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "cannot write files to socket transport",
