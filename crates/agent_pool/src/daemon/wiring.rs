@@ -993,7 +993,7 @@ mod tests {
         // Create a pending task
         let task_dir = pending_dir.join("task-1");
         fs::create_dir_all(&task_dir).unwrap();
-        fs::write(task_dir.join(TASK_FILE), r#"{"test": true}"#).unwrap();
+        fs::write(task_dir.join(TASK_FILE), r#"{"kind": "Inline", "content": "test task"}"#).unwrap();
 
         let (events_tx, events_rx) = mpsc::channel();
         let mut external_task_map = ExternalTaskMap::new();
@@ -1233,7 +1233,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let submission_dir = tmp.path().join("task-1");
         fs::create_dir(&submission_dir).unwrap();
-        fs::write(submission_dir.join(TASK_FILE), r#"{"task": "data"}"#).unwrap();
+        fs::write(submission_dir.join(TASK_FILE), r#"{"kind": "Inline", "content": "test task"}"#).unwrap();
 
         let (events_tx, events_rx) = mpsc::channel();
         let mut external_task_map = ExternalTaskMap::new();
@@ -1252,7 +1252,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let submission_dir = tmp.path().join("task-1");
         fs::create_dir(&submission_dir).unwrap();
-        fs::write(submission_dir.join(TASK_FILE), r#"{"task": "data"}"#).unwrap();
+        fs::write(submission_dir.join(TASK_FILE), r#"{"kind": "Inline", "content": "test task"}"#).unwrap();
 
         let (events_tx, events_rx) = mpsc::channel();
         let mut external_task_map = ExternalTaskMap::new();
@@ -1273,7 +1273,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let submission_dir = tmp.path().join("task-1");
         fs::create_dir(&submission_dir).unwrap();
-        fs::write(submission_dir.join(TASK_FILE), r#"{"task": "data"}"#).unwrap();
+        fs::write(submission_dir.join(TASK_FILE), r#"{"kind": "Inline", "content": "test task"}"#).unwrap();
         fs::write(submission_dir.join(crate::constants::RESPONSE_FILE), r#"{"done": true}"#).unwrap();
 
         let (events_tx, events_rx) = mpsc::channel();
