@@ -552,6 +552,7 @@ pub fn event_loop(
 ```rust
 /// How Layer 3 communicates with an agent.
 /// Agents are anonymous - they get a unique AgentId, no "name" identity.
+/// This is just data - registration logic lives on AgentMap.
 enum AgentChannel {
     /// Filesystem-based: write task.json, read response.json
     Directory(PathBuf),
@@ -560,28 +561,6 @@ enum AgentChannel {
 }
 
 impl AgentChannel {
-    /// Try to register this channel with the map.
-    /// Returns None if this channel is already registered (duplicate FS event).
-    fn register(self, map: &mut AgentMap) -> Option<AgentId> {
-        match &self {
-            AgentChannel::Directory(path) => {
-                if map.path_to_id.contains_key(path) {
-                    return None;  // Duplicate, ignore
-                }
-                let id = map.next_agent_id();
-                map.path_to_id.insert(path.clone(), id);
-                map.agents.insert(id, self);
-                Some(id)
-            }
-            // AgentChannel::Socket(_) => {
-            //     // Sockets are always unique - no deduplication needed
-            //     let id = map.next_agent_id();
-            //     map.agents.insert(id, self);
-            //     Some(id)
-            // }
-        }
-    }
-
     /// Write a task to this agent.
     fn write_task(&self, envelope: &str) -> io::Result<()> {
         match self {
@@ -627,6 +606,25 @@ impl AgentMap {
         id
     }
 
+    /// Register a directory-based agent. Returns None if path already registered.
+    fn register_directory(&mut self, path: PathBuf) -> Option<AgentId> {
+        if self.path_to_id.contains_key(&path) {
+            return None;  // Duplicate FS event, ignore
+        }
+        let id = self.next_agent_id();
+        self.path_to_id.insert(path.clone(), id);
+        self.agents.insert(id, AgentChannel::Directory(path));
+        Some(id)
+    }
+
+    // TODO: Socket-based registration (future refactor)
+    // fn register_socket(&mut self, socket: Stream) -> AgentId {
+    //     // Sockets are always unique - no deduplication needed
+    //     let id = self.next_agent_id();
+    //     self.agents.insert(id, AgentChannel::Socket(socket));
+    //     id
+    // }
+
     fn get(&self, id: AgentId) -> Option<&AgentChannel> {
         self.agents.get(&id)
     }
@@ -634,10 +632,12 @@ impl AgentMap {
     fn remove(&mut self, id: AgentId) {
         let channel = self.agents.remove(&id)
             .expect("remove() called for unknown AgentId - Layer 1 bug");
-        // Clean up path_to_id if this was a directory-based agent
-        if let AgentChannel::Directory(path) = channel {
-            self.path_to_id.remove(&path);
+        // Clean up path_to_id for directory-based agents
+        if let AgentChannel::Directory(ref path) = channel {
+            self.path_to_id.remove(path);
         }
+        // Clean up the channel itself (delete directory, close socket, etc.)
+        channel.cleanup();
     }
 }
 
@@ -805,11 +805,7 @@ fn execute_effect(
             responder.send(&error)?;
         }
         Effect::DeregisterAgent { agent_id } => {
-            // remove() returns the channel and cleans up internal maps
-            // We need to get the channel first to clean it up, then remove
-            if let Some(channel) = agent_map.get(agent_id) {
-                channel.cleanup();
-            }
+            // remove() cleans up internal maps and the channel itself
             agent_map.remove(agent_id);
         }
         // TODO: Handle ShutdownComplete
