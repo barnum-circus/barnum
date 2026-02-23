@@ -1,4 +1,4 @@
-//! CLI commands for interacting with the agent pool daemon.
+//! Client operations for interacting with the agent pool daemon.
 
 mod stop;
 mod submit;

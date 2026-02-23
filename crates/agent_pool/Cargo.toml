@@ -7,24 +7,15 @@ repository.workspace = true
 authors.workspace = true
 description = "Agent pool daemon for managing workers with file-based task dispatch"
 keywords = ["agent", "pool", "task-queue", "daemon", "ipc"]
-categories = ["command-line-utilities", "concurrency"]
+categories = ["concurrency"]
 
 [dependencies]
-clap = { workspace = true }
 interprocess = { workspace = true }
 notify = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
-
-[[bin]]
-name = "agent_pool"
-path = "src/main.rs"
-
-[lib]
-path = "src/lib.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -5,8 +5,9 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, DaemonConfig, RESPONSE_FILE, TASK_FILE, cleanup_stopped, generate_id, id_to_path,
-    list_pools, resolve_pool, run_with_config, stop, submit, submit_file,
+    AGENTS_DIR, DaemonConfig, RESPONSE_FILE, TASK_FILE,
+    cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool,
+    run_with_config, stop, submit, submit_file,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use std::time::Duration;
 use std::{fs, thread};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-const AGENT_PROTOCOL: &str = include_str!("../AGENT_PROTOCOL.md");
+const AGENT_PROTOCOL: &str = include_str!("../../agent_pool/AGENT_PROTOCOL.md");
 
 /// Log level for the agent pool.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
