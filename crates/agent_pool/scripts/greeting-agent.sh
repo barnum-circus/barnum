@@ -54,9 +54,15 @@ while true; do
         kind=$(echo "$envelope" | jq -r '.kind // "Task"')
         task=$(echo "$envelope" | jq -r '.content // .')
 
-        # Handle health checks immediately
-        if [ "$kind" = "HealthCheck" ]; then
-            echo "[$AGENT_ID] Health check" >&2
+        # Handle kicked - exit gracefully
+        if [ "$kind" = "Kicked" ]; then
+            echo "[$AGENT_ID] Kicked by daemon, exiting" >&2
+            exit 0
+        fi
+
+        # Handle heartbeat/health checks immediately
+        if [ "$kind" = "HealthCheck" ] || [ "$kind" = "Heartbeat" ]; then
+            echo "[$AGENT_ID] $kind" >&2
             echo "{}" > "$AGENT_DIR/response.json"
             sleep 0.05
             continue

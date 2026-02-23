@@ -82,12 +82,26 @@ while true; do
         exit 1
     fi
 
-    # Extract response file path and command
+    # Extract response file path, kind, and command
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
     AGENT_DIR=$(dirname "$RESPONSE_FILE")
+    KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
     CMD=$(echo "$TASK_JSON" | jq -r '.content.data.cmd // empty')
 
-    echo "[$NAME] Got task" >&2
+    echo "[$NAME] Got task (kind=$KIND)" >&2
+
+    # Handle kicked - exit gracefully
+    if [ "$KIND" = "Kicked" ]; then
+        echo "[$NAME] Kicked by daemon, exiting" >&2
+        exit 0
+    fi
+
+    # Handle heartbeat - respond immediately
+    if [ "$KIND" = "Heartbeat" ]; then
+        echo "[$NAME] Heartbeat, responding" >&2
+        echo "{}" > "$RESPONSE_FILE"
+        continue
+    fi
 
     if [ -z "$CMD" ]; then
         echo "[$NAME] No 'cmd' field in task, responding with empty" >&2
