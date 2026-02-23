@@ -229,32 +229,119 @@ This is similar to the "remote socket" case discussed below. For now, we assume 
 2. Add `--notify socket|file` CLI flag
 3. Default to socket, fall back to file in sandboxed environments
 
-### Phase 3: Daemon Traits (Internal Refactor)
+### Phase 3: Daemon Changes
 
-Abstract the notification mechanism behind traits so daemon code doesn't branch on it:
+The daemon needs to handle incoming messages uniformly, regardless of source (submitter or agent) or notification mechanism (socket or fs events).
+
+**Current daemon behavior:**
+```
+Socket listener ──► accept ──► read submission ──► enqueue task
+                                                        │
+FS watch pending/ ──► read task.json ──► enqueue task ──┤
+                                                        ▼
+                                                   Task Queue
+                                                        │
+                                                        ▼
+                                              Dispatch to agent
+                                              (write task.json)
+                                                        │
+FS watch agents/ ──► response.json appeared ──► complete task
+```
+
+**Problems with current design:**
+1. Two code paths for receiving submissions (socket vs fs events)
+2. Agents only support fs events (task.json/response.json)
+3. Daemon pushes tasks; agents poll
+
+**New model - daemon receives messages uniformly:**
 
 ```rust
-trait SubmissionReceiver {
-    fn recv(&mut self) -> io::Result<Submission>;
+/// Every incoming message (submission or agent response) becomes this.
+struct IncomingMessage {
+    /// What kind of message?
+    kind: MessageKind,
+    /// The content (read file if FileReference)
+    content: String,
+    /// How to send the response back
+    respond_to: ResponseTarget,
 }
 
-trait AgentChannel {
-    fn dispatch(&mut self, task: &Task) -> io::Result<()>;
-    fn poll_response(&mut self) -> io::Result<Option<String>>;
+enum MessageKind {
+    /// New task submission from a submitter
+    Submission,
+    /// Agent registering (first contact)
+    AgentRegister { agent_name: String },
+    /// Agent responding to previous task, wants next task
+    AgentNextTask { agent_name: String },
+}
+
+enum ResponseTarget {
+    /// Send response over this socket connection
+    Socket(UnixStream),
+    /// Write response to this file path
+    File(PathBuf),
 }
 ```
 
-Implementations for socket and file-based notification are separate; daemon logic is unified.
+**Daemon event loop (conceptual):**
+
+```rust
+loop {
+    // All sources produce the same IncomingMessage type
+    let msg = select! {
+        // Socket: could be submission OR agent register/next_task
+        stream = socket.accept() => parse_socket_message(stream),
+
+        // FS: could be submission (pending/) OR agent response (agents/)
+        event = fs_watcher.next() => parse_fs_message(event),
+    };
+
+    match msg.kind {
+        MessageKind::Submission => {
+            let task = Task::new(msg.content, msg.respond_to);
+            queue.push(task);
+        }
+        MessageKind::AgentRegister { agent_name } => {
+            // Agent wants to join pool, send them first task (health check)
+            agents.register(agent_name, msg.respond_to);
+            dispatch_health_check(&agent_name);
+        }
+        MessageKind::AgentNextTask { agent_name } => {
+            // Agent completed previous task, give them next one
+            complete_current_task(&agent_name, msg.content);
+            // respond_to is stored; daemon sends next task when available
+        }
+    }
+}
+```
+
+**Key insight:** The daemon doesn't need separate traits for submissions vs agents. It just receives messages and sends responses. The `respond_to` field tracks how to reply.
+
+**Concrete changes needed:**
+
+1. **Parse incoming messages uniformly**: Whether from socket or fs events, produce `IncomingMessage`
+
+2. **Track response targets**: Store `ResponseTarget` so daemon knows how to send responses/tasks back
+
+3. **Support agent socket connections**: Currently only submitters use sockets. Agents need to connect too:
+   - Agent sends: `{"kind": "register", "name": "agent-1"}`
+   - Agent sends: `{"kind": "next_task", "name": "agent-1", "response": "..."}`
+   - Daemon responds with next task on same connection
+
+4. **Handle file reference payloads**: When `payload.file` is set, read the file to get content
+
+**What stays the same:**
+- Task queue logic
+- Agent selection/dispatch logic
+- Health check logic
 
 ---
 
 ## Dependencies
 
-**Phase 1 and 2 can start now** - no async runtime needed.
+**Phase 1 and 2 can start now** - CLI changes only, no daemon changes.
 
-**Phase 3 (daemon traits)** can happen in parallel or after.
-
-**Async conversion** (if desired) requires DAEMON_REFACTOR.md to be completed first.
+**Phase 3** requires more thought on the daemon event loop. May benefit from async (tokio) but not required.
 
 ---
 
