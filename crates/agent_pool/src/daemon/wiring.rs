@@ -26,7 +26,8 @@ use crate::lock::acquire_lock;
 
 use super::core::{AgentId, Effect, Event};
 use super::io::{
-    AgentMap, IoConfig, PathCategory, TaskData, TaskMap, categorize_path, execute_effect,
+    AgentMap, ExternalTaskData, ExternalTaskMap, HeartbeatId, IoConfig, PathCategory,
+    TaskIdAllocator, categorize_path, execute_effect,
 };
 
 // =============================================================================
@@ -279,15 +280,16 @@ fn run_daemon(
 
     // I/O state
     let mut agent_map = AgentMap::new();
-    let mut task_map = TaskMap::new();
+    let mut external_task_map = ExternalTaskMap::new();
+    let mut task_id_allocator = TaskIdAllocator::new();
     // Track agents with pending responses to deduplicate FSWatcher events
     let mut pending_responses: HashSet<AgentId> = HashSet::new();
 
     // Track kicked agent paths to reject re-registration attempts
     let mut kicked_paths: HashSet<PathBuf> = HashSet::new();
 
-    // Track heartbeat task IDs (tasks with no submitter)
-    let mut heartbeat_task_ids: HashSet<super::core::TaskId> = HashSet::new();
+    // Track heartbeat IDs (synthetic tasks with no transport)
+    let mut heartbeat_ids: HashSet<HeartbeatId> = HashSet::new();
 
     // Clone signals for the event loop thread
     let event_loop_signals = signals.clone();
@@ -307,9 +309,10 @@ fn run_daemon(
         &events_tx,
         &effects_rx,
         &mut agent_map,
-        &mut task_map,
+        &mut external_task_map,
+        &mut task_id_allocator,
         &mut pending_responses,
-        &mut heartbeat_task_ids,
+        &mut heartbeat_ids,
         &mut kicked_paths,
         agents_dir,
         pending_dir,
@@ -391,9 +394,10 @@ fn io_loop(
     events_tx: &mpsc::Sender<Event>,
     effects_rx: &mpsc::Receiver<Effect>,
     agent_map: &mut AgentMap,
-    task_map: &mut TaskMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
     pending_responses: &mut HashSet<AgentId>,
-    heartbeat_task_ids: &mut HashSet<super::core::TaskId>,
+    heartbeat_ids: &mut HashSet<HeartbeatId>,
     kicked_paths: &mut HashSet<PathBuf>,
     agents_dir: &Path,
     pending_dir: &Path,
@@ -416,16 +420,17 @@ fn io_loop(
         if !signals.is_paused()
             && let Some((content, respond_to)) = accept_task(listener)?
         {
-            let task_id = task_map.register_directory(
-                respond_to,
-                TaskData {
+            let external_id = task_id_allocator.allocate_external();
+            if external_task_map
+                .register(external_id, respond_to, ExternalTaskData {
                     content,
                     timeout: io_config.default_task_timeout,
-                },
-            );
-            if let Some(task_id) = task_id {
-                debug!("socket task submitted: {:?}", task_id);
-                let _ = events_tx.send(Event::TaskSubmitted { task_id });
+                })
+            {
+                debug!("socket task submitted: {:?}", external_id);
+                let _ = events_tx.send(Event::TaskSubmitted {
+                    task_id: external_id.core_id(),
+                });
             }
         }
 
@@ -437,7 +442,8 @@ fn io_loop(
                     &event,
                     events_tx,
                     agent_map,
-                    task_map,
+                    external_task_map,
+                    task_id_allocator,
                     pending_responses,
                     kicked_paths,
                     agents_dir,
@@ -451,7 +457,8 @@ fn io_loop(
                         &event,
                         events_tx,
                         agent_map,
-                        task_map,
+                        external_task_map,
+                        task_id_allocator,
                         pending_responses,
                         kicked_paths,
                         agents_dir,
@@ -476,8 +483,9 @@ fn io_loop(
             execute_effect(
                 effect,
                 agent_map,
-                task_map,
-                heartbeat_task_ids,
+                external_task_map,
+                heartbeat_ids,
+                task_id_allocator,
                 kicked_paths,
                 events_tx,
                 io_config,
@@ -487,7 +495,7 @@ fn io_loop(
         // Periodic scans for reliability
         if last_scan.elapsed() >= scan_interval {
             scan_agents(agents_dir, events_tx, agent_map, kicked_paths)?;
-            scan_pending(pending_dir, events_tx, task_map, io_config)?;
+            scan_pending(pending_dir, events_tx, external_task_map, task_id_allocator, io_config)?;
             last_scan = Instant::now();
         }
     }
@@ -503,7 +511,8 @@ fn handle_fs_event(
     event: &notify::Event,
     events_tx: &mpsc::Sender<Event>,
     agent_map: &mut AgentMap,
-    task_map: &mut TaskMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
     pending_responses: &mut HashSet<AgentId>,
     kicked_paths: &mut HashSet<PathBuf>,
     agents_dir: &Path,
@@ -566,13 +575,13 @@ fn handle_fs_event(
                 let submission_dir = pending_dir.join(&uuid);
                 let task_path = submission_dir.join(TASK_FILE);
                 if task_path.exists() {
-                    register_pending_task(&submission_dir, events_tx, task_map, io_config);
+                    register_pending_task(&submission_dir, events_tx, external_task_map, task_id_allocator, io_config);
                 }
             }
             PathCategory::PendingTask { uuid } => {
                 let submission_dir = pending_dir.join(&uuid);
                 if path.exists() {
-                    register_pending_task(&submission_dir, events_tx, task_map, io_config);
+                    register_pending_task(&submission_dir, events_tx, external_task_map, task_id_allocator, io_config);
                 }
             }
         }
@@ -583,14 +592,15 @@ fn handle_fs_event(
 fn register_pending_task(
     submission_dir: &Path,
     events_tx: &mpsc::Sender<Event>,
-    task_map: &mut TaskMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
     io_config: &IoConfig,
 ) {
     let task_path = submission_dir.join(TASK_FILE);
     let response_path = submission_dir.join(crate::constants::RESPONSE_FILE);
 
     // Already registered?
-    if task_map.get_id_by_path(submission_dir).is_some() {
+    if external_task_map.get_id_by_path(submission_dir).is_some() {
         return;
     }
 
@@ -610,15 +620,19 @@ fn register_pending_task(
     };
 
     // Register the task
-    if let Some(task_id) = task_map.register_directory(
+    let external_id = task_id_allocator.allocate_external();
+    if external_task_map.register(
+        external_id,
         submission_dir.to_path_buf(),
-        TaskData {
+        ExternalTaskData {
             content,
             timeout: io_config.default_task_timeout,
         },
     ) {
-        info!(task_id = task_id.0, "file-based task registered");
-        let _ = events_tx.send(Event::TaskSubmitted { task_id });
+        info!(task_id = external_id.core_id().0, "file-based task registered");
+        let _ = events_tx.send(Event::TaskSubmitted {
+            task_id: external_id.core_id(),
+        });
     }
 }
 
@@ -665,7 +679,8 @@ fn scan_agents(
 fn scan_pending(
     pending_dir: &Path,
     events_tx: &mpsc::Sender<Event>,
-    task_map: &mut TaskMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
     io_config: &IoConfig,
 ) -> io::Result<()> {
     if !pending_dir.exists() {
@@ -683,7 +698,7 @@ fn scan_pending(
 
         // Only process if task.json exists
         if task_path.exists() {
-            register_pending_task(&submission_dir, events_tx, task_map, io_config);
+            register_pending_task(&submission_dir, events_tx, external_task_map, task_id_allocator, io_config);
         }
     }
 
@@ -854,10 +869,11 @@ mod tests {
         fs::write(task_dir.join(TASK_FILE), r#"{"test": true}"#).unwrap();
 
         let (events_tx, events_rx) = mpsc::channel();
-        let mut task_map = TaskMap::new();
+        let mut external_task_map = ExternalTaskMap::new();
+        let mut task_id_allocator = TaskIdAllocator::new();
         let io_config = IoConfig::default();
 
-        scan_pending(&pending_dir, &events_tx, &mut task_map, &io_config).unwrap();
+        scan_pending(&pending_dir, &events_tx, &mut external_task_map, &mut task_id_allocator, &io_config).unwrap();
 
         // Should have received one TaskSubmitted event
         let event = events_rx.try_recv().unwrap();
