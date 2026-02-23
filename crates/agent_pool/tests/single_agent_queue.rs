@@ -8,7 +8,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, Response, TASK_FILE};
+use agent_pool::{AGENTS_DIR, Payload, RESPONSE_FILE, Response, TASK_FILE};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -38,7 +38,7 @@ fn single_agent_queues_multiple_tasks() {
         .map(|task| {
             let root = root.clone();
             let task = (*task).to_string();
-            thread::spawn(move || agent_pool::submit(&root, &task).expect("Submit failed"))
+            thread::spawn(move || agent_pool::submit(&root, &Payload::inline(task)).expect("Submit failed"))
         })
         .collect();
 

@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::Response;
+use agent_pool::{Payload, Response};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::thread;
 use std::time::Duration;
@@ -30,13 +30,13 @@ fn greeting_casual_and_formal() {
     // Give agent time to register
     thread::sleep(Duration::from_millis(200));
 
-    let casual = agent_pool::submit(&root, "casual").expect("Submit failed");
+    let casual = agent_pool::submit(&root, &Payload::inline("casual")).expect("Submit failed");
     let Response::Processed { stdout, .. } = casual else {
         panic!("Expected Processed response, got {casual:?}");
     };
     assert_eq!(stdout.trim(), "Hi friendly-bot, how are ya?");
 
-    let formal = agent_pool::submit(&root, "formal").expect("Submit failed");
+    let formal = agent_pool::submit(&root, &Payload::inline("formal")).expect("Submit failed");
     let Response::Processed { stdout, .. } = formal else {
         panic!("Expected Processed response, got {formal:?}");
     };

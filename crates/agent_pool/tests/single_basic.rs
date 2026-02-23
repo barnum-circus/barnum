@@ -7,7 +7,7 @@
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, Response, TASK_FILE, submit_file};
+use agent_pool::{AGENTS_DIR, Payload, RESPONSE_FILE, Response, TASK_FILE, submit_file};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::thread;
@@ -31,7 +31,7 @@ fn single_agent_single_task() {
     // Give agent time to register
     thread::sleep(Duration::from_millis(200));
 
-    let response = agent_pool::submit(&root, "Hello, World!").expect("Submit failed");
+    let response = agent_pool::submit(&root, &Payload::inline("Hello, World!")).expect("Submit failed");
     let Response::Processed { stdout, .. } = response else {
         panic!("Expected Processed response, got {response:?}");
     };
@@ -86,7 +86,7 @@ fn file_based_submit() {
     thread::sleep(Duration::from_millis(200));
 
     // Submit using file-based protocol
-    let response = submit_file(&root, "Hello via file!").expect("File submit failed");
+    let response = submit_file(&root, &Payload::inline("Hello via file!")).expect("File submit failed");
     let Response::Processed { stdout, .. } = response else {
         panic!("Expected Processed response, got {response:?}");
     };
