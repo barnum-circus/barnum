@@ -270,26 +270,16 @@ fn main() -> ExitCode {
         Command::SubmitTask { pool, data, file, notify } => {
             let root = resolve_pool(&pool);
 
-            // Get content from --data or --file
-            let content = match (data, file) {
-                (Some(d), None) => d,
-                (None, Some(path)) => {
-                    match fs::read_to_string(&path) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Failed to read file {}: {e}", path.display());
-                            return ExitCode::FAILURE;
-                        }
-                    }
-                }
-                (Some(d), Some(_)) => d, // --data takes precedence
+            // Build payload from --data (inline) or --file (file reference)
+            let payload = match (data, file) {
+                (Some(d), None) => Payload::inline(d),
+                (None, Some(path)) => Payload::file_ref(path),
+                (Some(d), Some(_)) => Payload::inline(d), // --data takes precedence
                 (None, None) => {
                     eprintln!("Either --data or --file must be provided");
                     return ExitCode::FAILURE;
                 }
             };
-
-            let payload = Payload::inline(content);
 
             // Send via chosen notification method
             let result = match notify {
