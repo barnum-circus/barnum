@@ -195,12 +195,20 @@ fn event_loop(
 /// Specifies associated storage type for each ID.
 pub trait ChannelId: From<u32> + Copy + Eq + std::hash::Hash {
     /// Additional data stored alongside the channel.
-    /// () for agents, String (content) for tasks.
+    /// () for agents, TaskData for tasks.
     type Storage;
 }
 
+/// Data stored per task submission.
+pub struct TaskData {
+    /// The task content to send to the agent.
+    pub content: String,
+    /// How long the agent has to complete this task.
+    pub timeout: Duration,
+}
+
 /// Unique identifier for a task.
-/// Layer 3 maps this to content + channel.
+/// Layer 3 maps this to TaskData + channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TaskId(u32);
 
@@ -211,7 +219,7 @@ impl From<u32> for TaskId {
 }
 
 impl ChannelId for TaskId {
-    type Storage = String;  // Task content
+    type Storage = TaskData;
 }
 
 /// Unique identifier for an agent.
@@ -684,7 +692,7 @@ impl<Id: ChannelId> ChannelMap<Id> {
 /// Agent map - no additional storage per agent.
 type AgentMap = ChannelMap<AgentId>;
 
-/// Task map - stores content string per task.
+/// Task map - stores TaskData (content + timeout) per task.
 type TaskMap = ChannelMap<TaskId>;
 
 /// Convenience methods for AgentMap (Storage = ())
@@ -694,19 +702,32 @@ impl AgentMap {
     }
 }
 
-/// Convenience methods for TaskMap (Storage = String)
+/// Convenience methods for TaskMap (Storage = TaskData)
 impl TaskMap {
-    fn register_task_directory(&mut self, path: PathBuf, content: String) -> Option<TaskId> {
-        self.register_directory(path, content)
+    fn register_task_directory(
+        &mut self,
+        path: PathBuf,
+        content: String,
+        timeout: Duration,
+    ) -> Option<TaskId> {
+        self.register_directory(path, TaskData { content, timeout })
+    }
+
+    fn get_task_data(&self, id: TaskId) -> &TaskData {
+        self.get_storage(id).expect("get_task_data for unknown TaskId")
     }
 
     fn get_content(&self, id: TaskId) -> &str {
-        self.get_storage(id).expect("get_content for unknown TaskId")
+        &self.get_task_data(id).content
+    }
+
+    fn get_timeout(&self, id: TaskId) -> Duration {
+        self.get_task_data(id).timeout
     }
 
     /// Complete a task: send response via channel, then clean up.
     fn complete(&mut self, id: TaskId, response: &str) -> io::Result<()> {
-        let (channel, _content) = self.remove(id);
+        let (channel, _data) = self.remove(id);
         // Send response (don't cleanup directory - submitter needs to read it)
         channel.write("response.json", response)
     }
@@ -717,13 +738,12 @@ impl TaskMap {
     }
 }
 
-/// Layer 3 configuration - all policy decisions live here, not in Layer 1
+/// Layer 3 configuration - global settings (not per-task)
 pub struct IoConfig {
-    /// How long before an agent times out (busy or idle).
-    /// Busy agents: task fails, agent deregistered.
-    /// Idle agents: agent deregistered.
+    /// How long an idle agent can wait before being deregistered.
     /// Alive agents will re-register by calling get_task again.
-    pub agent_timeout: Duration,
+    /// Note: Task timeouts are per-task, stored in TaskData.
+    pub idle_agent_timeout: Duration,
 }
 
 /// Layer 3: All I/O happens here
@@ -783,20 +803,20 @@ fn execute_effect(
         Effect::DispatchTask { task_id, epoch } => {
             let channel = agent_map.get(epoch.agent_id)
                 .expect("DispatchTask for unknown agent - Layer 1 bug");
-            let content = task_map.get_content(task_id);
+            let task_data = task_map.get_task_data(task_id);
             let envelope = serde_json::json!({
                 "kind": "Task",
-                "content": serde_json::from_str::<serde_json::Value>(content)
-                    .unwrap_or(serde_json::Value::String(content.to_string())),
+                "content": serde_json::from_str::<serde_json::Value>(&task_data.content)
+                    .unwrap_or(serde_json::Value::String(task_data.content.clone())),
             }).to_string();
             channel.write("task.json", &envelope)?;
 
-            // Start timeout timer
-            start_timeout_timer(events_tx.clone(), epoch, config.agent_timeout);
+            // Start timeout timer using the task's timeout (from submission)
+            start_timeout_timer(events_tx.clone(), epoch, task_data.timeout);
         }
         Effect::AgentBecameIdle { epoch } => {
-            // Start timeout timer - if agent doesn't get work, they'll be deregistered
-            start_timeout_timer(events_tx.clone(), epoch, config.agent_timeout);
+            // Start idle timeout timer - if agent doesn't get work, they'll be deregistered
+            start_timeout_timer(events_tx.clone(), epoch, config.idle_agent_timeout);
         }
         Effect::TaskCompleted { agent_id, task_id } => {
             let response_content = pending_responses.remove(&agent_id)
@@ -1075,12 +1095,12 @@ crates/agent_pool/src/
 |------|-------|--------|
 | `pending_tasks: VecDeque<TaskId>` | 1 | Core queue logic (just IDs) |
 | `agents: BTreeMap<AgentId, AgentState>` | 1 | Core dispatch logic |
-| `IoConfig` | 3 | All policy (timeouts) |
+| `IoConfig` | 3 | Global settings (idle agent timeout) |
 | `Channel` | 3 | Unified communication channel (Directory or Socket) |
 | `ChannelId` trait | 3 | ID types specify their associated Storage type |
 | `ChannelMap<Id: ChannelId>` | 3 | Generic map: Id → (Channel, Id::Storage) |
 | `AgentMap` = `ChannelMap<AgentId>` | 3 | Storage = () (no extra data) |
-| `TaskMap` = `ChannelMap<TaskId>` | 3 | Storage = String (task content) |
+| `TaskMap` = `ChannelMap<TaskId>` | 3 | Storage = TaskData (content + timeout) |
 | `pending_responses` | 3 | Temporary storage for agent response content |
 | `Listener` | 3 | Socket I/O for submissions |
 | `Watcher` | 3 | FS I/O |
@@ -1093,7 +1113,8 @@ crates/agent_pool/src/
 - **Agents are anonymous** - no "names", just unique AgentIds and communication channels
 - **Unified Channel type** - both agents and submissions use the same Channel enum
 - **ChannelId trait** - ID types specify associated storage via `type Storage`
-- **Single ChannelMap<Id>** - stores (Channel, Id::Storage) tuples, type aliases for AgentMap/TaskMap
+- **Per-task timeouts** - each task submission includes its own timeout (in TaskData)
+- **Global idle timeout** - agents share a global idle timeout (in IoConfig)
 
 ---
 
