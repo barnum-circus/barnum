@@ -1,5 +1,22 @@
 # To-Dos and Future Directions
 
+## Socket-Based Task Submissions
+
+**Status: NOT IMPLEMENTED** - The daemon creates a socket and listens on it, but socket-based task submissions are stubbed out with a warning. Only file-based submissions (`pending/` directory) work.
+
+The infrastructure is in place:
+- `cli/submit.rs` has the client-side socket code
+- `daemon/wiring.rs` accepts socket connections but drops task submissions
+
+What needs to be done:
+1. Store the socket stream handle when a submission arrives
+2. Map TaskId to the stream so responses can be sent back
+3. Handle the response path in `execute_effect` for `TaskCompleted`
+
+This is lower priority since file-based submissions work well, but socket submissions would be faster (no filesystem polling).
+
+---
+
 ## Document: Inaccessible Filesystem Edge Case
 
 When implementing file reference payload support, add an internal comment or doc explaining:
