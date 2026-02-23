@@ -60,9 +60,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: debug-binaries
-          path: bin
+          path: artifacts
       - name: Make binaries executable
-        run: chmod +x bin/agent_pool bin/gsd
+        run: |
+          mkdir -p bin
+          cp artifacts/target/debug/agent_pool bin/
+          cp artifacts/target/debug/gsd bin/
+          chmod +x bin/agent_pool bin/gsd
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq bc
       - name: Check .dot files are up-to-date
