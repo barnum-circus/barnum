@@ -1,5 +1,45 @@
 # Three-Layer Daemon Refactor
 
+## Design Principles
+
+### Serial Event Processing
+
+Events are processed **serially, one at a time**. Layer 2 receives events from a channel and processes them in order:
+
+```rust
+while let Ok(event) = events_rx.recv() {
+    let (new_state, effects) = step(state, event);
+    state = new_state;
+    // execute effects...
+}
+```
+
+The mental model: a **linear vector of events** that we process sequentially. No concurrent state mutation, no race conditions within the state machine.
+
+### Byzantine Resilience
+
+The outside world is adversarial. Events can arrive in any order:
+- Agent responds before being registered? Handle it.
+- Response arrives for unknown task? Ignore it.
+- Duplicate registration? Idempotent.
+- Event for deregistered agent? No-op.
+
+The `step()` function must be **resilient to any event sequence**. We never assume:
+- Events arrive in "logical" order
+- FS events are reliable or ordered
+- Agents behave correctly
+
+Each event is handled based solely on **current state**, not assumptions about what "should have" happened before.
+
+### Determinism
+
+Given the same `(state, event)` pair, `step()` always returns the same `(state, effects)`. No randomness, no time, no I/O. This makes the state machine:
+- **Testable**: Unit tests are deterministic
+- **Debuggable**: Replay event sequence to reproduce bugs
+- **Auditable**: Log events, reconstruct state at any point
+
+---
+
 ## Target Architecture
 
 ```
