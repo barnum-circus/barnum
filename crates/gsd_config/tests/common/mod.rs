@@ -148,11 +148,18 @@ impl GsdTestAgent {
                     // Extract kind/content from envelope
                     let envelope = extract_task_envelope(&raw);
 
-                    // Handle health checks immediately
-                    if envelope.kind == "HealthCheck" {
-                        let _ = fs::write(&response_file, "{}");
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
+                    // Handle daemon control messages immediately
+                    match envelope.kind.as_str() {
+                        "HealthCheck" | "Heartbeat" => {
+                            let _ = fs::write(&response_file, "{}");
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        "Kicked" => {
+                            // Agent is being kicked, exit gracefully
+                            break;
+                        }
+                        _ => {}
                     }
 
                     thread::sleep(processing_delay);
