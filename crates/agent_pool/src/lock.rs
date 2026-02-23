@@ -59,3 +59,17 @@ fn is_process_running(pid: u32) -> bool {
 fn is_process_running(_pid: u32) -> bool {
     true
 }
+
+/// Check if a daemon is running for the given pool root.
+///
+/// Returns `true` if the lock file exists and the PID is still alive.
+pub fn is_daemon_running(root: impl AsRef<Path>) -> bool {
+    let lock_path = root.as_ref().join(crate::constants::LOCK_FILE);
+    if let Ok(pid_str) = fs::read_to_string(&lock_path)
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+    {
+        is_process_running(pid)
+    } else {
+        false
+    }
+}

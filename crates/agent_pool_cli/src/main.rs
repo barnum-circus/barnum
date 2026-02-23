@@ -6,7 +6,7 @@
 
 use agent_pool::{
     AGENTS_DIR, DaemonConfig, Payload, RESPONSE_FILE, TASK_FILE,
-    cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool,
+    cleanup_stopped, generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool,
     run_with_config, stop, submit, submit_file,
 };
 use clap::{Parser, Subcommand, ValueEnum};
@@ -78,6 +78,13 @@ enum Command {
         /// Disable heartbeat checks for idle agents.
         #[arg(long)]
         no_heartbeat: bool,
+        /// Clear existing pool directory before starting.
+        /// Required if the directory exists but daemon is not running.
+        #[arg(long)]
+        clear: bool,
+        /// Stop existing daemon before starting. Requires --clear.
+        #[arg(long, requires = "clear")]
+        stop: bool,
     },
     /// Stop a running agent pool server
     Stop {
@@ -214,6 +221,8 @@ fn main() -> ExitCode {
             idle_agent_timeout_secs,
             task_timeout_secs,
             no_heartbeat,
+            clear,
+            stop: stop_flag,
         } => {
             init_tracing(log_level);
 
@@ -233,6 +242,56 @@ fn main() -> ExitCode {
                     (Some(id.clone()), id_to_path(&id))
                 }
             };
+
+            // Check startup conditions based on directory and daemon state
+            if root.exists() {
+                let daemon_running = is_daemon_running(&root);
+
+                if daemon_running {
+                    if stop_flag {
+                        // --stop --clear: Stop daemon, then clear
+                        if let Err(e) = stop(&root) {
+                            eprintln!("Failed to stop daemon: {e}");
+                            return ExitCode::FAILURE;
+                        }
+                        // Wait for daemon to actually exit
+                        for _ in 0..50 {
+                            if !is_daemon_running(&root) {
+                                break;
+                            }
+                            thread::sleep(Duration::from_millis(100));
+                        }
+                        if is_daemon_running(&root) {
+                            eprintln!("Daemon did not exit in time");
+                            return ExitCode::FAILURE;
+                        }
+                        eprintln!("Stopped existing daemon");
+                    } else if clear {
+                        // --clear alone but daemon running
+                        eprintln!("Daemon is running. Use --stop --clear to stop and restart.");
+                        return ExitCode::FAILURE;
+                    } else {
+                        // No flags, daemon running
+                        eprintln!("Daemon is already running. Use --stop --clear to restart.");
+                        return ExitCode::FAILURE;
+                    }
+                } else if !clear {
+                    // Directory exists, daemon not running, no --clear
+                    eprintln!("Pool directory exists with stale state. Use --clear to wipe and restart.");
+                    return ExitCode::FAILURE;
+                }
+
+                // Clear the directory
+                if let Err(e) = fs::remove_dir_all(&root) {
+                    eprintln!("Failed to clear pool directory: {e}");
+                    return ExitCode::FAILURE;
+                }
+                eprintln!("Cleared pool directory");
+            } else if stop_flag {
+                // --stop but no directory exists
+                eprintln!("No pool directory exists. Nothing to stop.");
+                return ExitCode::FAILURE;
+            }
 
             // Print pool info
             if json {
