@@ -219,8 +219,11 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         fs::remove_file(&socket_path)?;
     }
 
+    // Create wake channel for event-driven I/O
+    let (wake_tx, wake_rx) = mpsc::channel();
+
     let listener = create_socket_listener(&socket_path)?;
-    let (watcher, fs_events) = create_fs_watcher(&root)?;
+    let (watcher, fs_events) = create_fs_watcher(&root, wake_tx.clone())?;
 
     // Create pending_dir AFTER watcher is running.
     // Clients use pending_dir existence as the "ready" signal.
@@ -238,8 +241,10 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         info!(socket = %socket_path.display(), "daemon listening");
 
         run_daemon(
-            &listener,
-            &fs_events,
+            listener,
+            fs_events,
+            wake_rx,
+            wake_tx,
             &agents_dir,
             &pending_dir,
             &config.into(),
@@ -292,8 +297,11 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 
     let _cleanup = SocketCleanup(socket_path.clone());
 
+    // Create wake channel for event-driven I/O
+    let (wake_tx, wake_rx) = mpsc::channel();
+
     let listener = create_socket_listener(&socket_path)?;
-    let (watcher, fs_events) = create_fs_watcher(&root)?;
+    let (watcher, fs_events) = create_fs_watcher(&root, wake_tx.clone())?;
     let _watcher = watcher;
 
     // Create pending_dir AFTER watcher is running.
@@ -306,8 +314,10 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let signals = DaemonSignals::new();
     let io_config = config.into();
     match run_daemon(
-        &listener,
-        &fs_events,
+        listener,
+        fs_events,
+        wake_rx,
+        wake_tx,
         &agents_dir,
         &pending_dir,
         &io_config,
@@ -324,8 +334,10 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 
 /// The main daemon function that orchestrates core and I/O.
 fn run_daemon(
-    listener: &Listener,
-    fs_events: &mpsc::Receiver<notify::Event>,
+    listener: Listener,
+    fs_events: mpsc::Receiver<notify::Event>,
+    wake_rx: mpsc::Receiver<()>,
+    wake_tx: mpsc::Sender<()>,
     agents_dir: &Path,
     pending_dir: &Path,
     io_config: &IoConfig,
@@ -334,6 +346,10 @@ fn run_daemon(
     // Create channels between event loop and I/O
     let (events_tx, events_rx) = mpsc::channel::<Event>();
     let (effects_tx, effects_rx) = mpsc::channel::<Effect>();
+
+    // Create socket channel and spawn accept thread
+    let (socket_tx, socket_rx) = mpsc::channel();
+    let _socket_thread = spawn_socket_accept_thread(listener, socket_tx, wake_tx.clone());
 
     // I/O state
     let mut agent_map = AgentMap::new();
@@ -350,7 +366,7 @@ fn run_daemon(
 
     // Spawn event loop in a separate thread
     let event_loop_handle = thread::spawn(move || {
-        run_event_loop_with_shutdown(events_rx, effects_tx, event_loop_signals)
+        run_event_loop_with_shutdown(events_rx, effects_tx, wake_tx, event_loop_signals)
     });
 
     // Do initial scan of existing agents (kicked_paths is empty at startup)
@@ -358,10 +374,11 @@ fn run_daemon(
 
     // Run the I/O loop
     let result = io_loop(
-        listener,
+        wake_rx,
         fs_events,
+        socket_rx,
+        effects_rx,
         &events_tx,
-        &effects_rx,
         &mut agent_map,
         &mut external_task_map,
         &mut task_id_allocator,
@@ -395,6 +412,7 @@ fn run_daemon(
 fn run_event_loop_with_shutdown(
     events_rx: mpsc::Receiver<Event>,
     effects_tx: mpsc::Sender<Effect>,
+    wake_tx: mpsc::Sender<()>,
     signals: DaemonSignals,
 ) -> super::core::PoolState {
     use super::core::{PoolState, step};
@@ -418,6 +436,7 @@ fn run_event_loop_with_shutdown(
                 for effect in effects {
                     trace!(?effect, "emitting effect");
                     let _ = effects_tx.send(effect);
+                    let _ = wake_tx.send(()); // Wake main loop
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -440,12 +459,16 @@ fn run_event_loop_with_shutdown(
 }
 
 /// The I/O loop that handles filesystem events, socket connections, and effects.
+///
+/// Uses the wake channel pattern: blocks until any event source has work,
+/// then drains all sources non-blocking. Only wakes on actual events.
 #[allow(clippy::too_many_arguments)]
 fn io_loop(
-    listener: &Listener,
-    fs_events: &mpsc::Receiver<notify::Event>,
+    wake_rx: mpsc::Receiver<()>,
+    fs_events: mpsc::Receiver<notify::Event>,
+    socket_rx: mpsc::Receiver<(String, Stream)>,
+    effects_rx: mpsc::Receiver<Effect>,
     events_tx: &mpsc::Sender<Event>,
-    effects_rx: &mpsc::Receiver<Effect>,
     agent_map: &mut AgentMap,
     external_task_map: &mut ExternalTaskMap,
     task_id_allocator: &mut TaskIdAllocator,
@@ -456,81 +479,76 @@ fn io_loop(
     io_config: &IoConfig,
     signals: &DaemonSignals,
 ) -> io::Result<()> {
-    let poll_timeout = Duration::from_millis(100);
-
     debug!("io_loop starting, agents_dir={:?}, pending_dir={:?}", agents_dir, pending_dir);
 
     loop {
+        // Block until woken or timeout (for shutdown check)
+        match wake_rx.recv_timeout(Duration::from_secs(1)) {
+            Ok(()) => {} // Woken by an event source
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Check shutdown on timeout
+                if signals.is_shutdown_triggered() {
+                    info!("shutdown requested");
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                // All senders dropped, shutdown
+                info!("wake channel disconnected, shutting down");
+                return Ok(());
+            }
+        }
+
+        // Check shutdown after being woken
         if signals.is_shutdown_triggered() {
             info!("shutdown requested");
             return Ok(());
         }
 
-        // Check for socket-based task submissions (non-blocking)
-        if !signals.is_paused()
-            && let Some((raw, stream)) = accept_socket_task(listener)?
-        {
-            let content = match resolve_payload(&raw) {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!(error = %e, "failed to resolve socket payload");
-                    continue;
-                }
-            };
+        // Drain socket submissions (non-blocking)
+        if !signals.is_paused() {
+            while let Ok((raw, stream)) = socket_rx.try_recv() {
+                let content = match resolve_payload(&raw) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        warn!(error = %e, "failed to resolve socket payload");
+                        continue;
+                    }
+                };
 
-            let external_id = external_task_map.register_socket(
-                stream,
-                ExternalTaskData {
-                    content,
-                    timeout: io_config.default_task_timeout,
-                },
-            );
-            info!(external_task_id = external_id.0, "socket task submitted");
-            let _ = events_tx.send(Event::TaskSubmitted {
-                task_id: TaskId::External(external_id),
-            });
-        }
-
-        // Process filesystem events (non-blocking drain)
-        match fs_events.recv_timeout(poll_timeout) {
-            Ok(event) => {
-                trace!(kind = ?event.kind, "fs event received");
-                handle_fs_event(
-                    &event,
-                    events_tx,
-                    agent_map,
-                    external_task_map,
-                    task_id_allocator,
-                    pending_responses,
-                    kicked_paths,
-                    agents_dir,
-                    pending_dir,
-                    io_config,
+                let external_id = external_task_map.register_socket(
+                    stream,
+                    ExternalTaskData {
+                        content,
+                        timeout: io_config.default_task_timeout,
+                    },
                 );
-                // Drain any additional queued events
-                while let Ok(event) = fs_events.try_recv() {
-                    trace!(kind = ?event.kind, "fs event (drained)");
-                    handle_fs_event(
-                        &event,
-                        events_tx,
-                        agent_map,
-                        external_task_map,
-                        task_id_allocator,
-                        pending_responses,
-                        kicked_paths,
-                        agents_dir,
-                        pending_dir,
-                        io_config,
-                    );
-                }
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(io::Error::other("fs event channel disconnected"));
+                info!(external_task_id = external_id.0, "socket task submitted");
+                let _ = events_tx.send(Event::TaskSubmitted {
+                    task_id: TaskId::External(external_id),
+                });
             }
         }
 
-        // Process effects from event loop (non-blocking drain)
+        // Drain filesystem events (non-blocking)
+        while let Ok(event) = fs_events.try_recv() {
+            trace!(kind = ?event.kind, "fs event");
+            handle_fs_event(
+                &event,
+                events_tx,
+                agent_map,
+                external_task_map,
+                task_id_allocator,
+                pending_responses,
+                kicked_paths,
+                agents_dir,
+                pending_dir,
+                io_config,
+            );
+        }
+
+        // Drain effects from event loop (non-blocking)
         while let Ok(effect) = effects_rx.try_recv() {
             trace!(?effect, "executing effect");
             // Clear pending response tracking when TaskCompleted cleans up the response file
@@ -547,7 +565,6 @@ fn io_loop(
                 io_config,
             )?;
         }
-
     }
 }
 
@@ -803,6 +820,35 @@ fn is_kicked_agent(agent_path: &Path) -> bool {
 // Socket Handling
 // =============================================================================
 
+/// Spawn a thread that accepts socket connections and forwards them to the main loop.
+fn spawn_socket_accept_thread(
+    listener: Listener,
+    socket_tx: mpsc::Sender<(String, Stream)>,
+    wake_tx: mpsc::Sender<()>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        loop {
+            match accept_socket_task(&listener) {
+                Ok(Some((raw, stream))) => {
+                    if socket_tx.send((raw, stream)).is_err() {
+                        // Receiver dropped, shutdown
+                        break;
+                    }
+                    let _ = wake_tx.send(());
+                }
+                Ok(None) => {
+                    // Non-blocking, no connection waiting
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => {
+                    warn!("Socket accept error: {}", e);
+                    break;
+                }
+            }
+        }
+    })
+}
+
 /// Accept a task from the socket listener (non-blocking).
 ///
 /// Returns the task content and the directory path for the response.
@@ -893,6 +939,7 @@ fn create_socket_listener(socket_path: &Path) -> io::Result<Listener> {
 
 fn create_fs_watcher(
     root: &Path,
+    wake_tx: mpsc::Sender<()>,
 ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>)> {
     let (tx, rx) = mpsc::channel();
 
@@ -902,6 +949,7 @@ fn create_fs_watcher(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 let _ = tx.send(event);
+                let _ = wake_tx.send(()); // Wake main loop
             }
         },
         config,
