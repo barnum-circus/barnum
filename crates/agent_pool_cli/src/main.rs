@@ -199,6 +199,13 @@ fn wait_for_task(
     name: &str,
 ) -> Result<String, String> {
     loop {
+        // Ensure agent directory exists (may have been deleted by daemon restart)
+        if let Some(agent_dir) = task_file.parent() {
+            if !agent_dir.exists() {
+                let _ = fs::create_dir_all(agent_dir);
+            }
+        }
+
         // Wait for task.json to exist AND response.json to NOT exist
         // (response.json existing means we already processed this task)
         if task_file.exists() && !response_file.exists() {
