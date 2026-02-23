@@ -21,6 +21,7 @@ use tracing::{debug, info, trace, warn};
 
 use std::collections::HashSet;
 
+use crate::client::Payload;
 use crate::constants::{AGENTS_DIR, LOCK_FILE, PENDING_DIR, SOCKET_NAME, TASK_FILE};
 use crate::lock::acquire_lock;
 
@@ -457,8 +458,16 @@ fn io_loop(
 
         // Check for socket-based task submissions (non-blocking)
         if !signals.is_paused()
-            && let Some((content, stream)) = accept_socket_task(listener)?
+            && let Some((raw, stream)) = accept_socket_task(listener)?
         {
+            let content = match resolve_payload(&raw) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "failed to resolve socket payload");
+                    continue;
+                }
+            };
+
             let external_id = external_task_map.register_socket(
                 stream,
                 ExternalTaskData {
@@ -672,12 +681,20 @@ fn register_pending_task(
         return;
     }
 
-    // Read task content
-    let content = match fs::read_to_string(&task_path) {
+    // Read and resolve payload
+    let raw = match fs::read_to_string(&task_path) {
         Ok(c) => c,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return,
         Err(e) => {
             warn!(path = %task_path.display(), error = %e, "failed to read pending task");
+            return;
+        }
+    };
+
+    let content = match resolve_payload(&raw) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(path = %task_path.display(), error = %e, "failed to resolve payload");
             return;
         }
     };
@@ -838,6 +855,24 @@ fn accept_socket_task(listener: &Listener) -> io::Result<Option<(String, Stream)
             e.kind(),
             format!("socket accept failed: {e}"),
         )),
+    }
+}
+
+// =============================================================================
+// Payload Resolution
+// =============================================================================
+
+/// Resolve a payload to its content.
+///
+/// For inline payloads, returns the content directly.
+/// For file references, reads the file and returns its contents.
+fn resolve_payload(raw: &str) -> io::Result<String> {
+    let payload: Payload = serde_json::from_str(raw)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+    match payload {
+        Payload::Inline { content } => Ok(content),
+        Payload::FileReference { path } => fs::read_to_string(path),
     }
 }
 

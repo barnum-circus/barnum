@@ -5,7 +5,7 @@
 //!
 //! # Protocol
 //!
-//! 1. Submitter creates `<pool>/pending/<uuid>/task.json` with the task content
+//! 1. Submitter creates `<pool>/pending/<uuid>/task.json` with the payload
 //! 2. Daemon detects the new task and dispatches it to an agent
 //! 3. When the agent completes, daemon writes `<pool>/pending/<uuid>/response.json`
 //! 4. Submitter reads the response and cleans up the directory
@@ -16,6 +16,7 @@
 //! - If submitter is killed, it tries to delete the directory on signal
 //! - Daemon may clean up stale pending directories after a timeout
 
+use super::payload::Payload;
 use crate::response::Response;
 use std::fs;
 use std::io;
@@ -46,7 +47,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///
 /// # Protocol
 ///
-/// 1. Creates `<root>/pending/<uuid>/task.json` with the input
+/// 1. Creates `<root>/pending/<uuid>/task.json` with the payload
 /// 2. Polls for `<root>/pending/<uuid>/response.json`
 /// 3. Returns the response and cleans up
 ///
@@ -57,14 +58,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// - The task file cannot be written
 /// - The response times out
 /// - The response contains invalid JSON
-pub fn submit_file(root: impl AsRef<Path>, input: &str) -> io::Result<Response> {
-    submit_file_with_timeout(root, input, DEFAULT_TIMEOUT)
+pub fn submit_file(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response> {
+    submit_file_with_timeout(root, payload, DEFAULT_TIMEOUT)
 }
 
 /// Submit a task with a custom timeout.
 pub fn submit_file_with_timeout(
     root: impl AsRef<Path>,
-    input: &str,
+    payload: &Payload,
     timeout: Duration,
 ) -> io::Result<Response> {
     let root = root.as_ref();
@@ -83,8 +84,10 @@ pub fn submit_file_with_timeout(
     let task_path = submission_dir.join(PENDING_TASK_FILE);
     let response_path = submission_dir.join(PENDING_RESPONSE_FILE);
 
-    // Write task file
-    fs::write(&task_path, input)?;
+    // Write task file with serialized payload
+    let content = serde_json::to_string(payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    fs::write(&task_path, content)?;
 
     // Poll for response (task file removal just means daemon picked it up)
     let start = Instant::now();

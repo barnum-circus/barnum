@@ -1,5 +1,6 @@
 //! Task submission to the agent pool daemon.
 
+use super::payload::Payload;
 use crate::constants::SOCKET_NAME;
 use crate::response::Response;
 use interprocess::local_socket::{GenericFilePath, Stream, prelude::*};
@@ -18,12 +19,15 @@ use std::path::Path;
 /// - The daemon socket doesn't exist or can't be connected to
 /// - Communication with the daemon fails
 /// - The response contains invalid JSON
-pub fn submit(root: impl AsRef<Path>, input: &str) -> io::Result<Response> {
+pub fn submit(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response> {
     let socket_path = root.as_ref().join(SOCKET_NAME);
 
     let name = socket_path
         .to_fs_name::<GenericFilePath>()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+    let input = serde_json::to_string(payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     let mut stream =
         Stream::connect(name).map_err(|e| io::Error::new(io::ErrorKind::ConnectionRefused, e))?;

@@ -5,7 +5,7 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, DaemonConfig, RESPONSE_FILE, TASK_FILE,
+    AGENTS_DIR, DaemonConfig, Payload, RESPONSE_FILE, TASK_FILE,
     cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool,
     run_with_config, stop, submit, submit_file,
 };
@@ -231,10 +231,12 @@ fn main() -> ExitCode {
                 }
             };
 
+            let payload = Payload::inline(content);
+
             // Send via chosen notification method
             let result = match notify {
-                NotifyMethod::Socket => submit(&root, &content),
-                NotifyMethod::File => submit_file(&root, &content),
+                NotifyMethod::Socket => submit(&root, &payload),
+                NotifyMethod::File => submit_file(&root, &payload),
             };
 
             match result {
