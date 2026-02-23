@@ -1,8 +1,8 @@
 //! Agent pool daemon for managing workers.
 //!
 //! The daemon communicates with:
-//! - **Submitters** via Unix socket - connect, send task, receive result
-//! - **Agents** via files - read `{id}.input`, write `{id}.output`
+//! - **Submitters** via Unix socket or file-based submission
+//! - **Agents** via filesystem polling (`task.json`, `response.json`)
 //!
 //! See `AGENT_PROTOCOL.md` for details on the agent file protocol.
 //!
@@ -20,6 +20,12 @@
 //! handle.shutdown()?;  // Gracefully stops the daemon
 //! ```
 //!
+//! # Architecture
+//!
+//! The daemon separates pure logic from I/O:
+//! - **core**: Pure state machine - `step(state, event) -> (state, effects)`
+//! - **io**: Filesystem, timers, effect execution
+//!
 //! # Response Protocol
 //!
 //! The daemon returns structured JSON responses (keys lowercase, values `UpperCamelCase`):
@@ -28,22 +34,20 @@
 //! {"kind": "NotProcessed", "reason": "shutdown"}
 //! ```
 
+// Shared modules
 mod constants;
-mod daemon;
 mod lock;
 mod pool;
 mod response;
-mod stop;
-mod submit;
-mod submit_file;
 mod types;
-pub mod v2;
+
+// Grouped modules
+mod cli;
+mod daemon;
 
 pub use constants::{AGENTS_DIR, PENDING_DIR, RESPONSE_FILE, TASK_FILE};
 pub use daemon::{DaemonConfig, DaemonHandle, run, run_with_config, spawn, spawn_with_config};
 pub use pool::{PoolInfo, cleanup_stopped, generate_id, id_to_path, list_pools, resolve_pool};
 pub use response::{NotProcessedReason, Response, ResponseKind};
-pub use stop::stop;
-pub use submit::submit;
-pub use submit_file::{cleanup_submission, submit_file};
-pub use types::{AgentId, PoolId};
+pub use cli::{cleanup_submission, stop, submit, submit_file};
+pub use types::{AgentName, PoolId};

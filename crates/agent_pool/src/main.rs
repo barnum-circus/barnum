@@ -57,24 +57,13 @@ enum Command {
         /// Output pool info as JSON (for scripts)
         #[arg(long)]
         json: bool,
-        /// Skip all health checks (for command servers that don't need agent liveness checks).
-        /// Cannot be combined with --skip-initial-health-check or --skip-periodic-health-checks.
-        #[arg(long, conflicts_with_all = ["skip_initial_health_check", "skip_periodic_health_checks"])]
-        skip_health_checks: bool,
-        /// Skip the initial health check when an agent registers.
-        /// By default, a health check is sent on registration to verify the agent is responsive.
-        #[arg(long)]
-        skip_initial_health_check: bool,
-        /// Skip periodic health checks to idle agents.
-        /// By default, idle agents receive periodic health checks to verify they're still alive.
-        #[arg(long)]
-        skip_periodic_health_checks: bool,
-        /// Health check interval in seconds (how often to check idle agents)
+        /// How long an idle agent can wait before being deregistered (in seconds).
+        /// Agents that are still alive will re-register by calling `get_task` again.
         #[arg(long, default_value = "60")]
-        health_check_interval_secs: u64,
-        /// Health check timeout in seconds (how long to wait for response)
-        #[arg(long, default_value = "30")]
-        health_check_timeout_secs: u64,
+        idle_agent_timeout_secs: u64,
+        /// Default timeout for tasks in seconds.
+        #[arg(long, default_value = "300")]
+        task_timeout_secs: u64,
     },
     /// Stop a running agent pool server
     Stop {
@@ -155,11 +144,8 @@ fn main() -> ExitCode {
             pool,
             log_level,
             json,
-            skip_health_checks,
-            skip_initial_health_check,
-            skip_periodic_health_checks,
-            health_check_interval_secs,
-            health_check_timeout_secs,
+            idle_agent_timeout_secs,
+            task_timeout_secs,
         } => {
             init_tracing(log_level);
 
@@ -191,10 +177,8 @@ fn main() -> ExitCode {
             }
 
             let config = DaemonConfig {
-                initial_health_check: !skip_health_checks && !skip_initial_health_check,
-                periodic_health_check: !skip_health_checks && !skip_periodic_health_checks,
-                health_check_interval: Duration::from_secs(health_check_interval_secs),
-                health_check_timeout: Duration::from_secs(health_check_timeout_secs),
+                idle_agent_timeout: Duration::from_secs(idle_agent_timeout_secs),
+                default_task_timeout: Duration::from_secs(task_timeout_secs),
             };
 
             // run_with_config() returns Result<Infallible, _>, so Ok case never happens

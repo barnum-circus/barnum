@@ -17,6 +17,7 @@ proc-macro2 = "1.0.92"
 quote = "1.0.38"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.108"
+tempfile = "3"
 syn = "2.0.96"
 tokio = { version = "1.35", features = ["full"] }
 tracing = "0.1"
