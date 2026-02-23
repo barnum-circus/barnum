@@ -191,8 +191,16 @@ fn event_loop(
 ### Layer 1: Pure State (no I/O, no time)
 
 ```rust
+/// Trait for ID types used with ChannelMap.
+/// Specifies associated storage type for each ID.
+pub trait ChannelId: From<u32> + Copy + Eq + std::hash::Hash {
+    /// Additional data stored alongside the channel.
+    /// () for agents, String (content) for tasks.
+    type Storage;
+}
+
 /// Unique identifier for a task.
-/// Layer 3 maps this to content, responder, and task kind.
+/// Layer 3 maps this to content + channel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TaskId(u32);
 
@@ -202,8 +210,12 @@ impl From<u32> for TaskId {
     }
 }
 
+impl ChannelId for TaskId {
+    type Storage = String;  // Task content
+}
+
 /// Unique identifier for an agent.
-/// Layer 3 maps this to the actual directory name.
+/// Layer 3 maps this to just a channel (no additional storage).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AgentId(u32);
 
@@ -211,6 +223,10 @@ impl From<u32> for AgentId {
     fn from(id: u32) -> Self {
         AgentId(id)
     }
+}
+
+impl ChannelId for AgentId {
+    type Storage = ();  // No additional storage
 }
 
 /// Agent epoch - identifies a specific point in an agent's lifecycle.
@@ -594,19 +610,20 @@ impl Channel {
 }
 
 /// Generic map for channels keyed by ID.
-/// Used for both agents (AgentId) and submissions (TaskId).
-/// ID type must be constructible from u32.
-struct ChannelMap<Id> {
-    channels: HashMap<Id, Channel>,
+/// Stores (Channel, Id::Storage) tuples where Storage is defined by the ChannelId trait.
+/// - AgentMap: ChannelMap<AgentId> where Storage = ()
+/// - TaskMap: ChannelMap<TaskId> where Storage = String (content)
+struct ChannelMap<Id: ChannelId> {
+    entries: HashMap<Id, (Channel, Id::Storage)>,
     /// For deduplicating FS events - tracks which paths are registered
     path_to_id: HashMap<PathBuf, Id>,
     next_id: u32,
 }
 
-impl<Id: From<u32> + Copy + Eq + std::hash::Hash> ChannelMap<Id> {
+impl<Id: ChannelId> ChannelMap<Id> {
     fn new() -> Self {
         Self {
-            channels: HashMap::new(),
+            entries: HashMap::new(),
             path_to_id: HashMap::new(),
             next_id: 0,
         }
@@ -619,90 +636,77 @@ impl<Id: From<u32> + Copy + Eq + std::hash::Hash> ChannelMap<Id> {
     }
 
     /// Register a directory-based channel. Returns None if path already registered.
-    fn register_directory(&mut self, path: PathBuf) -> Option<Id> {
+    fn register_directory(&mut self, path: PathBuf, storage: Id::Storage) -> Option<Id> {
         if self.path_to_id.contains_key(&path) {
             return None;  // Duplicate FS event, ignore
         }
         let id = self.next_id();
         self.path_to_id.insert(path.clone(), id);
-        self.channels.insert(id, Channel::Directory(path));
+        self.entries.insert(id, (Channel::Directory(path), storage));
         Some(id)
     }
 
     // TODO: Socket-based registration (future refactor)
-    // fn register_socket(&mut self, socket: Stream) -> Id {
+    // fn register_socket(&mut self, socket: Stream, storage: Id::Storage) -> Id {
     //     // Sockets are always unique - no deduplication needed
     //     let id = self.next_id();
-    //     self.channels.insert(id, Channel::Socket(socket));
+    //     self.entries.insert(id, (Channel::Socket(socket), storage));
     //     id
     // }
 
     fn get(&self, id: Id) -> Option<&Channel> {
-        self.channels.get(&id)
+        self.entries.get(&id).map(|(ch, _)| ch)
     }
 
-    fn remove(&mut self, id: Id) {
-        let channel = self.channels.remove(&id)
+    fn get_storage(&self, id: Id) -> Option<&Id::Storage> {
+        self.entries.get(&id).map(|(_, s)| s)
+    }
+
+    /// Remove entry, clean up path_to_id, and return the entry.
+    /// Does NOT call channel.cleanup() - caller decides cleanup behavior.
+    fn remove(&mut self, id: Id) -> (Channel, Id::Storage) {
+        let (channel, storage) = self.entries.remove(&id)
             .expect("remove() called for unknown Id - Layer 1 bug");
-        // Clean up path_to_id for directory-based channels
         if let Channel::Directory(ref path) = channel {
             self.path_to_id.remove(path);
         }
-        // Clean up the channel itself (delete directory, close socket, etc.)
+        (channel, storage)
+    }
+
+    /// Remove and cleanup the channel (delete directory, close socket, etc.)
+    fn remove_and_cleanup(&mut self, id: Id) -> Id::Storage {
+        let (channel, storage) = self.remove(id);
         channel.cleanup();
+        storage
     }
 }
 
-/// Agent map is just a ChannelMap keyed by AgentId.
+/// Agent map - no additional storage per agent.
 type AgentMap = ChannelMap<AgentId>;
 
-/// Task map extends ChannelMap with content storage.
-/// Submissions have content (the task) plus a channel (to respond on).
-struct TaskMap {
-    channels: ChannelMap<TaskId>,
-    content: HashMap<TaskId, String>,
+/// Task map - stores content string per task.
+type TaskMap = ChannelMap<TaskId>;
+
+/// Convenience methods for AgentMap (Storage = ())
+impl AgentMap {
+    fn register_agent_directory(&mut self, path: PathBuf) -> Option<AgentId> {
+        self.register_directory(path, ())
+    }
 }
 
+/// Convenience methods for TaskMap (Storage = String)
 impl TaskMap {
-    fn new() -> Self {
-        Self {
-            channels: ChannelMap::new(),
-            content: HashMap::new(),
-        }
+    fn register_task_directory(&mut self, path: PathBuf, content: String) -> Option<TaskId> {
+        self.register_directory(path, content)
     }
-
-    /// Register a directory-based submission. Returns None if path already registered.
-    fn register_directory(&mut self, path: PathBuf, task_content: String) -> Option<TaskId> {
-        let id = self.channels.register_directory(path)?;
-        self.content.insert(id, task_content);
-        Some(id)
-    }
-
-    // TODO: Socket-based registration (future refactor)
-    // fn register_socket(&mut self, socket: Stream, task_content: String) -> TaskId {
-    //     let id = self.channels.register_socket(socket);
-    //     self.content.insert(id, task_content);
-    //     id
-    // }
 
     fn get_content(&self, id: TaskId) -> &str {
-        self.content.get(&id)
-            .expect("get_content for unknown TaskId")
-    }
-
-    fn get_channel(&self, id: TaskId) -> Option<&Channel> {
-        self.channels.get(id)
+        self.get_storage(id).expect("get_content for unknown TaskId")
     }
 
     /// Complete a task: send response via channel, then clean up.
     fn complete(&mut self, id: TaskId, response: &str) -> io::Result<()> {
-        self.content.remove(&id);
-        let channel = self.channels.channels.remove(&id)
-            .expect("complete() for unknown TaskId");
-        // Clean up path_to_id for directory-based channels
-        if let Channel::Directory(ref path) = channel {
-            self.channels.path_to_id.remove(path);
-        }
+        let (channel, _content) = self.remove(id);
         // Send response (don't cleanup directory - submitter needs to read it)
         channel.write("response.json", response)
     }
@@ -807,8 +811,8 @@ fn execute_effect(
             task_map.fail(task_id, &error)?;
         }
         Effect::DeregisterAgent { agent_id } => {
-            // remove() cleans up internal maps and the channel itself
-            agent_map.remove(agent_id);
+            // remove_and_cleanup() cleans up internal maps and the channel itself
+            agent_map.remove_and_cleanup(agent_id);
         }
         // TODO: Handle ShutdownComplete
     }
@@ -1073,9 +1077,10 @@ crates/agent_pool/src/
 | `agents: BTreeMap<AgentId, AgentState>` | 1 | Core dispatch logic |
 | `IoConfig` | 3 | All policy (timeouts) |
 | `Channel` | 3 | Unified communication channel (Directory or Socket) |
-| `ChannelMap<Id>` | 3 | Generic map from ID to Channel with deduplication |
-| `AgentMap` = `ChannelMap<AgentId>` | 3 | Maps AgentId to Channel |
-| `TaskMap` | 3 | Extends ChannelMap with content storage |
+| `ChannelId` trait | 3 | ID types specify their associated Storage type |
+| `ChannelMap<Id: ChannelId>` | 3 | Generic map: Id → (Channel, Id::Storage) |
+| `AgentMap` = `ChannelMap<AgentId>` | 3 | Storage = () (no extra data) |
+| `TaskMap` = `ChannelMap<TaskId>` | 3 | Storage = String (task content) |
 | `pending_responses` | 3 | Temporary storage for agent response content |
 | `Listener` | 3 | Socket I/O for submissions |
 | `Watcher` | 3 | FS I/O |
@@ -1087,7 +1092,8 @@ crates/agent_pool/src/
 - **Epochs validate timeouts** - stale timers (wrong epoch) are silently ignored
 - **Agents are anonymous** - no "names", just unique AgentIds and communication channels
 - **Unified Channel type** - both agents and submissions use the same Channel enum
-- **Generic ChannelMap** - AgentMap and TaskMap share the same base implementation
+- **ChannelId trait** - ID types specify associated storage via `type Storage`
+- **Single ChannelMap<Id>** - stores (Channel, Id::Storage) tuples, type aliases for AgentMap/TaskMap
 
 ---
 
