@@ -196,10 +196,22 @@ fn event_loop(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TaskId(u32);
 
+impl From<u32> for TaskId {
+    fn from(id: u32) -> Self {
+        TaskId(id)
+    }
+}
+
 /// Unique identifier for an agent.
 /// Layer 3 maps this to the actual directory name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AgentId(u32);
+
+impl From<u32> for AgentId {
+    fn from(id: u32) -> Self {
+        AgentId(id)
+    }
+}
 
 /// Agent epoch - identifies a specific point in an agent's lifecycle.
 /// Contains the agent_id so epochs from different agent registrations
@@ -550,90 +562,90 @@ pub fn event_loop(
 ### Layer 3: I/O
 
 ```rust
-/// How Layer 3 communicates with an agent.
-/// Agents are anonymous - they get a unique AgentId, no "name" identity.
-/// This is just data - registration logic lives on AgentMap.
-enum AgentChannel {
-    /// Filesystem-based: write task.json, read response.json
+/// Communication channel - used for both agents and submissions.
+/// Identical protocol: directory-based or socket-based.
+enum Channel {
+    /// Filesystem-based: directory containing task.json/response.json
     Directory(PathBuf),
     // TODO: Socket-based communication (future refactor)
     // Socket(Stream),
 }
 
-impl AgentChannel {
-    /// Write a task to this agent.
-    fn write_task(&self, envelope: &str) -> io::Result<()> {
+impl Channel {
+    /// Write content to a file in this channel.
+    fn write(&self, filename: &str, content: &str) -> io::Result<()> {
         match self {
-            AgentChannel::Directory(path) => {
-                fs::write(path.join("task.json"), envelope)
+            Channel::Directory(path) => {
+                fs::write(path.join(filename), content)
             }
-            // AgentChannel::Socket(stream) => { ... }
+            // Channel::Socket(stream) => { ... }
         }
     }
 
     /// Clean up this channel (remove directory, close socket, etc.)
     fn cleanup(&self) {
         match self {
-            AgentChannel::Directory(path) => {
+            Channel::Directory(path) => {
                 let _ = fs::remove_dir_all(path);
             }
-            // AgentChannel::Socket(_) => { /* socket closes on drop */ }
+            // Channel::Socket(_) => { /* socket closes on drop */ }
         }
     }
 }
 
-/// Maps AgentId to communication channel.
-/// AgentId is globally unique - each registration gets a new ID.
-struct AgentMap {
-    agents: HashMap<AgentId, AgentChannel>,
+/// Generic map for channels keyed by ID.
+/// Used for both agents (AgentId) and submissions (TaskId).
+/// ID type must be constructible from u32.
+struct ChannelMap<Id> {
+    channels: HashMap<Id, Channel>,
     /// For deduplicating FS events - tracks which paths are registered
-    path_to_id: HashMap<PathBuf, AgentId>,
+    path_to_id: HashMap<PathBuf, Id>,
     next_id: u32,
 }
 
-impl AgentMap {
+impl<Id: From<u32> + Copy + Eq + std::hash::Hash> ChannelMap<Id> {
     fn new() -> Self {
         Self {
-            agents: HashMap::new(),
+            channels: HashMap::new(),
             path_to_id: HashMap::new(),
             next_id: 0,
         }
     }
 
-    fn next_agent_id(&mut self) -> AgentId {
-        let id = AgentId(self.next_id);
+    fn next_id(&mut self) -> Id {
+        let id = Id::from(self.next_id);
         self.next_id += 1;
         id
     }
 
-    /// Register a directory-based agent. Returns None if path already registered.
-    fn register_directory(&mut self, path: PathBuf) -> Option<AgentId> {
+    /// Register a directory-based channel. Returns None if path already registered.
+    fn register_directory(&mut self, path: PathBuf) -> Option<Id> {
         if self.path_to_id.contains_key(&path) {
             return None;  // Duplicate FS event, ignore
         }
-        let id = self.next_agent_id();
+        let id = self.next_id();
         self.path_to_id.insert(path.clone(), id);
-        self.agents.insert(id, AgentChannel::Directory(path));
+        self.channels.insert(id, Channel::Directory(path));
         Some(id)
     }
 
     // TODO: Socket-based registration (future refactor)
-    // fn register_socket(&mut self, socket: Stream) -> AgentId {
+    // fn register_socket(&mut self, socket: Stream) -> Id {
     //     // Sockets are always unique - no deduplication needed
-    //     let id = self.next_agent_id();
-    //     self.agents.insert(id, AgentChannel::Socket(socket));
+    //     let id = self.next_id();
+    //     self.channels.insert(id, Channel::Socket(socket));
     //     id
     // }
 
-    fn get(&self, id: AgentId) -> Option<&AgentChannel> {
-        self.agents.get(&id)
+    fn get(&self, id: Id) -> Option<&Channel> {
+        self.channels.get(&id)
     }
 
-    fn remove(&mut self, id: AgentId) {
-        let channel = self.agents.remove(&id)
-            .expect("remove() called for unknown AgentId - Layer 1 bug");
-        // Clean up path_to_id for directory-based agents
-        if let AgentChannel::Directory(ref path) = channel {
+    fn remove(&mut self, id: Id) {
+        let channel = self.channels.remove(&id)
+            .expect("remove() called for unknown Id - Layer 1 bug");
+        // Clean up path_to_id for directory-based channels
+        if let Channel::Directory(ref path) = channel {
             self.path_to_id.remove(path);
         }
         // Clean up the channel itself (delete directory, close socket, etc.)
@@ -641,77 +653,63 @@ impl AgentMap {
     }
 }
 
-/// Stores task content and response routing.
-/// Layer 1 only knows TaskIds; Layer 3 maps them to actual data.
+/// Agent map is just a ChannelMap keyed by AgentId.
+type AgentMap = ChannelMap<AgentId>;
+
+/// Task map extends ChannelMap with content storage.
+/// Submissions have content (the task) plus a channel (to respond on).
 struct TaskMap {
-    /// For submissions: stores content and responder
-    /// For health checks: not stored (Layer 3 generates content on dispatch)
-    submissions: HashMap<TaskId, SubmissionData>,
-    next_id: u32,
-}
-
-struct SubmissionData {
-    content: String,
-    responder: Responder,
-}
-
-// TODO: Unify Responder and AgentChannel into a single Channel enum.
-// Both are communication channels with write capabilities:
-// - Socket: write to stream
-// - Directory/File: write to filesystem
-// The main difference is submitters write to a file, agents write to task.json in a dir.
-// Consider making submitter protocol also directory-based for consistency.
-enum Responder {
-    Socket(Stream),
-    File(PathBuf),
+    channels: ChannelMap<TaskId>,
+    content: HashMap<TaskId, String>,
 }
 
 impl TaskMap {
     fn new() -> Self {
         Self {
-            submissions: HashMap::new(),
-            next_id: 0,
+            channels: ChannelMap::new(),
+            content: HashMap::new(),
         }
     }
 
-    fn next_task_id(&mut self) -> TaskId {
-        let id = TaskId(self.next_id);
-        self.next_id += 1;
-        id
+    /// Register a directory-based submission. Returns None if path already registered.
+    fn register_directory(&mut self, path: PathBuf, task_content: String) -> Option<TaskId> {
+        let id = self.channels.register_directory(path)?;
+        self.content.insert(id, task_content);
+        Some(id)
     }
 
-    fn register_submission(&mut self, content: String, responder: Responder) -> TaskId {
-        let id = self.next_task_id();
-        self.submissions.insert(id, SubmissionData { content, responder });
-        id
-    }
+    // TODO: Socket-based registration (future refactor)
+    // fn register_socket(&mut self, socket: Stream, task_content: String) -> TaskId {
+    //     let id = self.channels.register_socket(socket);
+    //     self.content.insert(id, task_content);
+    //     id
+    // }
 
     fn get_content(&self, id: TaskId) -> &str {
-        &self.submissions.get(&id)
+        self.content.get(&id)
             .expect("get_content for unknown TaskId")
-            .content
     }
 
-    /// Complete a task: remove from map, return responder.
-    fn complete(&mut self, id: TaskId) -> Responder {
-        self.submissions.remove(&id)
-            .expect("complete() for unknown TaskId")
-            .responder
+    fn get_channel(&self, id: TaskId) -> Option<&Channel> {
+        self.channels.get(id)
     }
-}
 
-impl Responder {
-    fn send(self, content: &str) -> io::Result<()> {
-        match self {
-            Responder::Socket(mut stream) => {
-                writeln!(stream, "{}", content.len())?;
-                stream.write_all(content.as_bytes())?;
-                stream.flush()
-            }
-            Responder::File(path) => {
-                fs::write(&path, content)
-            }
+    /// Complete a task: send response via channel, then clean up.
+    fn complete(&mut self, id: TaskId, response: &str) -> io::Result<()> {
+        self.content.remove(&id);
+        let channel = self.channels.channels.remove(&id)
+            .expect("complete() for unknown TaskId");
+        // Clean up path_to_id for directory-based channels
+        if let Channel::Directory(ref path) = channel {
+            self.channels.path_to_id.remove(path);
         }
+        // Send response (don't cleanup directory - submitter needs to read it)
+        channel.write("response.json", response)
+    }
+
+    /// Fail a task: send error via channel, then clean up.
+    fn fail(&mut self, id: TaskId, error: &str) -> io::Result<()> {
+        self.complete(id, error)
     }
 }
 
@@ -787,7 +785,7 @@ fn execute_effect(
                 "content": serde_json::from_str::<serde_json::Value>(content)
                     .unwrap_or(serde_json::Value::String(content.to_string())),
             }).to_string();
-            channel.write_task(&envelope)?;
+            channel.write("task.json", &envelope)?;
 
             // Start timeout timer
             start_timeout_timer(events_tx.clone(), epoch, config.agent_timeout);
@@ -799,16 +797,14 @@ fn execute_effect(
         Effect::TaskCompleted { agent_id, task_id } => {
             let response_content = pending_responses.remove(&agent_id)
                 .expect("TaskCompleted for agent with no pending response - Layer 3 bug");
-            let responder = task_map.complete(task_id);
-            responder.send(&response_content)?;
+            task_map.complete(task_id, &response_content)?;
         }
         Effect::TaskFailed { task_id } => {
-            let responder = task_map.complete(task_id);
             let error = serde_json::json!({
                 "status": "NotProcessed",
                 "reason": "AgentTimeout"
             }).to_string();
-            responder.send(&error)?;
+            task_map.fail(task_id, &error)?;
         }
         Effect::DeregisterAgent { agent_id } => {
             // remove() cleans up internal maps and the channel itself
@@ -1076,13 +1072,13 @@ crates/agent_pool/src/
 | `pending_tasks: VecDeque<TaskId>` | 1 | Core queue logic (just IDs) |
 | `agents: BTreeMap<AgentId, AgentState>` | 1 | Core dispatch logic |
 | `IoConfig` | 3 | All policy (timeouts) |
-| `TaskMap` | 3 | Maps TaskId to content + Responder; generates TaskIds |
-| `AgentMap` | 3 | Maps AgentId to AgentChannel; generates AgentIds |
-| `AgentChannel` | 3 | Communication channel (Directory or Socket) |
+| `Channel` | 3 | Unified communication channel (Directory or Socket) |
+| `ChannelMap<Id>` | 3 | Generic map from ID to Channel with deduplication |
+| `AgentMap` = `ChannelMap<AgentId>` | 3 | Maps AgentId to Channel |
+| `TaskMap` | 3 | Extends ChannelMap with content storage |
 | `pending_responses` | 3 | Temporary storage for agent response content |
 | `Listener` | 3 | Socket I/O for submissions |
 | `Watcher` | 3 | FS I/O |
-| `pending_dir: PathBuf` | 3 | File paths for submission protocol |
 
 **Key insights:**
 - **Layer 1 has no config** - it's purely reactive, processing events and emitting effects
@@ -1090,11 +1086,11 @@ crates/agent_pool/src/
 - **Layer 1 has no concept of time** - timeout events come from Layer 3 timers
 - **Epochs validate timeouts** - stale timers (wrong epoch) are silently ignored
 - **Agents are anonymous** - no "names", just unique AgentIds and communication channels
-- **No health checks** - idle agents just timeout and get deregistered; alive ones re-register
+- **Unified Channel type** - both agents and submissions use the same Channel enum
+- **Generic ChannelMap** - AgentMap and TaskMap share the same base implementation
 
 ---
 
 ## TODO
 
 - [ ] Extract architectural principles (serial event processing, Byzantine resilience, three-layer separation, IDs vs handles) to a prominent document (README.md or CLAUDE.md) for project-wide guidance.
-- [ ] Unify `Responder` and `AgentChannel` into a single `Channel` enum. Both are communication channels (Socket or filesystem-based). May require making submitter file protocol directory-based for consistency.
