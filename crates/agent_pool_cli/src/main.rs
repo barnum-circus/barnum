@@ -172,6 +172,33 @@ fn init_tracing(level: LogLevel) {
         .init();
 }
 
+/// Wait for a task file to appear and return the formatted output JSON.
+fn wait_for_task(task_file: &std::path::Path, response_file: &std::path::Path, name: &str) -> Result<String, String> {
+    loop {
+        if task_file.exists() {
+            let raw = fs::read_to_string(task_file)
+                .map_err(|e| format!("Failed to read task: {e}"))?;
+
+            let envelope: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| format!("Failed to parse task envelope: {e}"))?;
+
+            let kind = envelope.get("kind").and_then(|k| k.as_str()).unwrap_or("Task");
+            let content = envelope.get("task").cloned().unwrap_or(serde_json::Value::Null);
+
+            let output = serde_json::json!({
+                "kind": kind,
+                "agent_name": name,
+                "response_file": response_file.display().to_string(),
+                "content": content
+            });
+
+            return Ok(serde_json::to_string_pretty(&output).unwrap_or_default());
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -335,72 +362,7 @@ fn main() -> ExitCode {
 
             eprintln!("Deregistered agent '{name}'");
         }
-        Command::GetTask { pool, name } => {
-            let root = resolve_pool(&pool);
-            let agent_dir = root.join(AGENTS_DIR).join(&name);
-
-            // Create agent directory if it doesn't exist (registers the agent)
-            if let Err(e) = fs::create_dir_all(&agent_dir) {
-                eprintln!("Failed to create agent directory: {e}");
-                return ExitCode::FAILURE;
-            }
-
-            let task_file = agent_dir.join(TASK_FILE);
-            let response_file = agent_dir.join(RESPONSE_FILE);
-
-            // Poll for task file
-            loop {
-                if task_file.exists() {
-                    // Read the task envelope (daemon writes {"kind": "...", "content": ...})
-                    let raw = match fs::read_to_string(&task_file) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Failed to read task: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    // TODO: Add type-safe envelope structs instead of parsing as serde_json::Value.
-                    // Currently we manually extract "kind" and "task" fields without validation.
-                    let envelope: serde_json::Value = match serde_json::from_str(&raw) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!("Failed to parse task envelope: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    let kind = envelope
-                        .get("kind")
-                        .and_then(|k| k.as_str())
-                        .unwrap_or("Task");
-                    let content = envelope
-                        .get("task")
-                        .cloned()
-                        .unwrap_or(serde_json::Value::Null);
-
-                    // Output task info with response file path and agent name
-                    // Agent sees both Task and Heartbeat - must respond to both
-                    let output = serde_json::json!({
-                        "kind": kind,
-                        "agent_name": name,
-                        "response_file": response_file.display().to_string(),
-                        "content": content
-                    });
-
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&output).unwrap_or_default()
-                    );
-                    return ExitCode::SUCCESS;
-                }
-
-                // No task yet, wait and try again
-                thread::sleep(Duration::from_millis(100));
-            }
-        }
-        // Register is an alias for GetTask
-        Command::Register { pool, name } => {
+        Command::GetTask { pool, name } | Command::Register { pool, name } => {
             let root = resolve_pool(&pool);
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
@@ -412,39 +374,12 @@ fn main() -> ExitCode {
             let task_file = agent_dir.join(TASK_FILE);
             let response_file = agent_dir.join(RESPONSE_FILE);
 
-            loop {
-                if task_file.exists() {
-                    let raw = match fs::read_to_string(&task_file) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Failed to read task: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    let envelope: serde_json::Value = match serde_json::from_str(&raw) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!("Failed to parse task envelope: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    let kind = envelope.get("kind").and_then(|k| k.as_str()).unwrap_or("Task");
-                    let content = envelope.get("task").cloned().unwrap_or(serde_json::Value::Null);
-
-                    let output = serde_json::json!({
-                        "kind": kind,
-                        "agent_name": name,
-                        "response_file": response_file.display().to_string(),
-                        "content": content
-                    });
-
-                    println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
-                    return ExitCode::SUCCESS;
+            match wait_for_task(&task_file, &response_file, &name) {
+                Ok(output) => println!("{output}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
                 }
-
-                thread::sleep(Duration::from_millis(100));
             }
         }
         Command::NextTask { pool, name, data, file } => {
@@ -459,7 +394,7 @@ fn main() -> ExitCode {
             let task_file = agent_dir.join(TASK_FILE);
             let response_file = agent_dir.join(RESPONSE_FILE);
 
-            // Write response to previous task
+            // Get response content from --data or --file
             let response_content = match (data, file) {
                 (Some(d), None) => d,
                 (None, Some(path)) => match fs::read_to_string(&path) {
@@ -476,52 +411,24 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Write response
+            // Write response to current task
             if let Err(e) = fs::write(&response_file, &response_content) {
                 eprintln!("Failed to write response: {e}");
                 return ExitCode::FAILURE;
             }
 
-            // Wait for task file to be removed (daemon picked up response) then reappear (new task)
-            // First, wait for current task to be cleaned up
+            // Wait for daemon to consume the response (task file removed)
             while task_file.exists() {
                 thread::sleep(Duration::from_millis(100));
             }
 
-            // Now wait for next task
-            loop {
-                if task_file.exists() {
-                    let raw = match fs::read_to_string(&task_file) {
-                        Ok(c) => c,
-                        Err(e) => {
-                            eprintln!("Failed to read task: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    let envelope: serde_json::Value = match serde_json::from_str(&raw) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            eprintln!("Failed to parse task envelope: {e}");
-                            return ExitCode::FAILURE;
-                        }
-                    };
-
-                    let kind = envelope.get("kind").and_then(|k| k.as_str()).unwrap_or("Task");
-                    let content = envelope.get("task").cloned().unwrap_or(serde_json::Value::Null);
-
-                    let output = serde_json::json!({
-                        "kind": kind,
-                        "agent_name": name,
-                        "response_file": response_file.display().to_string(),
-                        "content": content
-                    });
-
-                    println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
-                    return ExitCode::SUCCESS;
+            // Wait for next task
+            match wait_for_task(&task_file, &response_file, &name) {
+                Ok(output) => println!("{output}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    return ExitCode::FAILURE;
                 }
-
-                thread::sleep(Duration::from_millis(100));
             }
         }
     }

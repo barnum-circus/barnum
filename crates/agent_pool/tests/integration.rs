@@ -42,11 +42,16 @@ impl Drop for DaemonHandle {
     }
 }
 
-/// Helper to submit a task.
+/// Helper to submit a task (wraps content in Payload format).
 fn submit_task(pending_dir: &Path, task_id: &str, content: &str) -> std::path::PathBuf {
     let submission_dir = pending_dir.join(task_id);
     fs::create_dir_all(&submission_dir).expect("Failed to create submission dir");
-    fs::write(submission_dir.join(TASK_FILE), content).expect("Failed to write task");
+    // Wrap in Payload envelope - daemon expects {"kind": "Inline", "content": "..."}
+    let payload = serde_json::json!({
+        "kind": "Inline",
+        "content": content
+    });
+    fs::write(submission_dir.join(TASK_FILE), payload.to_string()).expect("Failed to write task");
     submission_dir
 }
 
