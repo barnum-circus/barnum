@@ -1,390 +1,306 @@
-# Daemon Event Loop Refactor
+# Daemon Event Loop Refactor: Sync Polling → Async Select
 
-## Dependencies
+## Goal
 
-**Must complete before**: TRANSPORT_ABSTRACTION.md Phase 2 (async)
-- Converting traits from sync to async requires tokio runtime
+Replace the current poll-based event loop with a `tokio::select!`-based async loop. This eliminates CPU-wasting polling and periodic scans.
 
-**Can happen in parallel with**: TRANSPORT_ABSTRACTION.md Phase 1 (sync)
-- Sync traits don't need tokio
-- Both refactors are independent until async conversion
+## Current Architecture
 
-## Scope: agent_pool Only
+### Event Loop Location
+`crates/agent_pool/src/daemon/wiring.rs:440-556` - `io_loop()`
 
-This refactor applies specifically to the **agent_pool daemon**, not GSD.
-
-**Why agent_pool needs `select!`:**
-- Long-running daemon with multiple independent event sources
-- Must respond to task submissions, agent responses, and timers concurrently
-- Cannot predict which source will fire next
-
-**Why GSD runner doesn't need this:**
-```rust
-// GSD runner - simple single-channel model
-pub fn next(&mut self) -> Option<TaskOutcome> {
-    self.submit_pending();              // Spawn worker threads
-    let result = self.rx.recv().ok()?;  // Block on single results channel
-    // ...
-}
-```
-- GSD spawns worker threads that call `agent_pool::submit()` or `agent_pool::submit_file()`
-- Collects results via a single channel
-- Blocking `recv()` is sufficient
-
----
-
-## Current Architecture (Problems)
+### Current Flow (Polling)
 
 ```rust
+// wiring.rs:455-456
+let poll_timeout = Duration::from_millis(100);
+let scan_interval = Duration::from_millis(500);
+
 loop {
-    // Non-blocking socket accept
-    if let Some(task) = accept_task(listener)? { ... }
+    // wiring.rs:467-490 - Non-blocking socket accept
+    if let Some((raw, stream)) = accept_socket_task(listener)? { ... }
 
-    // Block with timeout waiting for fs events
+    // wiring.rs:493-529 - Block with 100ms timeout for FS events
     match fs_events.recv_timeout(poll_timeout) { ... }
 
-    // Periodic scans every 500ms (!)
-    if last_scan.elapsed() >= scan_interval {
-        state.scan_agents()?;
-        state.scan_outputs()?;
-        state.scan_pending()?;
-        state.check_health_check_timeouts()?;
-    }
+    // wiring.rs:532-547 - Drain effects (non-blocking)
+    while let Ok(effect) = effects_rx.try_recv() { ... }
 
-    state.dispatch_pending()?;
+    // wiring.rs:550-554 - Periodic scans every 500ms
+    if last_scan.elapsed() >= scan_interval {
+        scan_agents(...)?;
+        scan_pending(...)?;
+    }
 }
 ```
 
-**Problems:**
-1. Periodic polling wastes CPU
-2. Scans are a crutch for not trusting FS events
-3. Not proper event-driven architecture
+### Problems
+
+1. **CPU waste**: Polling at 100ms intervals even when idle
+2. **Periodic scans**: `scan_agents` and `scan_pending` run every 500ms as a safety net for missed FS events
+3. **Three separate event sources**: Socket, FS events, and effects channel are checked sequentially, not concurrently
+
+### Current Code Structure
+
+| File | Purpose |
+|------|---------|
+| `wiring.rs:440` | `io_loop()` - main event loop |
+| `wiring.rs:380` | `run_event_loop_with_shutdown()` - core event loop (processes events → effects) |
+| `wiring.rs:320` | `run_daemon()` - sets up watcher, spawns event loop thread |
+| `io.rs:380-430` | `execute_effect()` - handles effects (writes files, starts timers) |
+| `core.rs:350` | `step()` - pure state machine |
+
+The core/io split is already clean. The refactor is purely in the I/O layer.
 
 ---
 
 ## Target Architecture
 
-Use **tokio** with `select!` to wait on multiple async event sources. No polling, no scans.
-
-### Clients
-
-The **client** is GSD's `TaskRunner`. When GSD runs a workflow:
-
-1. `TaskRunner` spawns threads to submit tasks
-2. Each thread calls `agent_pool::submit()` (socket) or `agent_pool::submit_file()` (file)
-3. The daemon receives the submission, dispatches to an agent
-4. Agent completes, daemon sends response back to client
-5. Client thread returns result to `TaskRunner`
-
-### Event Sources
-
-| Source | Trigger | Handler |
-|--------|---------|---------|
-| Socket accept | Client calls `submit()` | Read task, enqueue |
-| FS: `pending/<uuid>/task.json` | Client calls `submit_file()` | Read task, enqueue |
-| FS: `agents/<name>/response.json` | Agent completes work | Complete task, respond to client |
-| FS: `agents/<name>/` created | Agent registers | Add to available pool |
-| FS: `agents/<name>/` removed | Agent deregisters | Remove from pool |
-| Timer tick | Periodic interval | Check health check timeouts |
-
-### Architecture Diagram
-
-```
-                    GSD TaskRunner
-                          |
-            +-------------+-------------+
-            |                           |
-      submit() [socket]          submit_file() [fs]
-            |                           |
-            v                           v
-    ┌───────────────┐           ┌───────────────┐
-    │ UnixListener  │           │  pending/     │
-    │   .accept()   │           │  task.json    │
-    └───────┬───────┘           └───────┬───────┘
-            │                           │
-            │      ┌─────────────┐      │
-            └─────>│             │<─────┘
-                   │   tokio     │
-                   │  select!    │<──── agents/<name>/response.json
-                   │             │<──── agents/<name>/ (created/removed)
-                   │             │<──── health check timer
-                   └──────┬──────┘
-                          │
-                          v
-                   ┌─────────────┐
-                   │ PoolState   │
-                   │             │
-                   │ - enqueue   │
-                   │ - dispatch  │
-                   │ - complete  │
-                   └─────────────┘
-```
-
-### Main Event Loop
+Use `tokio::select!` to wait on multiple async sources simultaneously. No polling.
 
 ```rust
-use tokio::net::UnixListener;
-use tokio::sync::mpsc;
-use notify::Event;
+loop {
+    tokio::select! {
+        // Graceful shutdown
+        _ = shutdown.cancelled() => break,
 
-async fn event_loop(
-    listener: UnixListener,
-    mut fs_rx: mpsc::Receiver<Event>,
-    health_check_interval: Option<Duration>,
-    state: &mut PoolState,
-    shutdown: CancellationToken,
-) -> io::Result<()> {
-    // Only create health check timer if configured
-    let mut health_check = health_check_interval.map(tokio::time::interval);
+        // Socket-based task submission
+        result = listener.accept() => { ... }
 
-    loop {
-        // Dispatch any pending tasks before waiting
-        state.dispatch_pending()?;
+        // Filesystem events (agent responses, registrations, file submissions)
+        Some(event) = fs_rx.recv() => { ... }
 
-        tokio::select! {
-            // Graceful shutdown
-            _ = shutdown.cancelled() => {
-                return drain_and_shutdown(fs_rx, state).await;
-            }
+        // Effects from core (task assignments, completions)
+        Some(effect) = effects_rx.recv() => { ... }
 
-            // Socket-based task submission
-            result = listener.accept() => {
-                let (stream, _) = result?;
-                if let Some(task) = read_task(stream).await? {
-                    state.enqueue(task);
-                }
-            }
-
-            // All FS events (submissions, responses, registration)
-            Some(event) = fs_rx.recv() => {
-                handle_fs_event(&event, state).await?;
-            }
-
-            // Heartbeat timeout checking (only if configured)
-            _ = async {
-                match &mut health_check {
-                    Some(interval) => interval.tick().await,
-                    None => std::future::pending().await,
-                }
-            } => {
-                state.check_health_check_timeouts()?;
-            }
-        }
+        // Periodic heartbeat checks (only timer remaining)
+        _ = heartbeat_interval.tick() => { ... }
     }
-}
-```
-
-### FS Event Handler
-
-One handler for all filesystem events:
-
-```rust
-async fn handle_fs_event(event: &Event, state: &mut PoolState) -> io::Result<()> {
-    for path in &event.paths {
-        match categorize_path(path, state) {
-            Some(PathKind::PendingTask { submission_id }) => {
-                // File-based submission: pending/<uuid>/task.json created
-                if matches!(event.kind, EventKind::Create(_)) {
-                    state.accept_file_submission(&submission_id)?;
-                }
-            }
-            Some(PathKind::AgentResponse { agent_id }) => {
-                // Agent completed: agents/<name>/response.json created
-                if matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
-                    state.complete_task(&agent_id)?;
-                }
-            }
-            Some(PathKind::AgentDir { agent_id }) => {
-                // Agent registration change
-                if path.is_dir() {
-                    state.register(&agent_id);
-                } else {
-                    state.unregister(&agent_id);
-                }
-            }
-            None => {
-                // Ignore unrecognized paths
-            }
-        }
-    }
-    Ok(())
-}
-
-enum PathKind {
-    PendingTask { submission_id: String },
-    AgentResponse { agent_id: String },
-    AgentDir { agent_id: String },
-}
-
-fn categorize_path(path: &Path, state: &PoolState) -> Option<PathKind> {
-    // Check if path is under pending/
-    if let Ok(relative) = path.strip_prefix(&state.pending_dir) {
-        let components: Vec<_> = relative.components().collect();
-        if components.len() == 2 {
-            let submission_id = components[0].as_os_str().to_str()?;
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == "task.json" {
-                return Some(PathKind::PendingTask {
-                    submission_id: submission_id.to_string(),
-                });
-            }
-        }
-        return None;
-    }
-
-    // Check if path is under agents/
-    if let Ok(relative) = path.strip_prefix(&state.agents_dir) {
-        let components: Vec<_> = relative.components().collect();
-        if components.is_empty() {
-            return None;
-        }
-        let agent_id = components[0].as_os_str().to_str()?.to_string();
-
-        if components.len() == 1 {
-            // agents/<name>/ directory itself
-            return Some(PathKind::AgentDir { agent_id });
-        } else if components.len() == 2 {
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == "response.json" {
-                return Some(PathKind::AgentResponse { agent_id });
-            }
-        }
-    }
-
-    None
-}
-```
-
-### Bridging notify to tokio
-
-The `notify` crate uses std channels. Bridge to tokio:
-
-```rust
-fn create_watcher(
-    agents_dir: &Path,
-    pending_dir: &Path,
-) -> io::Result<(RecommendedWatcher, mpsc::Receiver<Event>)> {
-    let (sync_tx, sync_rx) = std::sync::mpsc::channel();
-    let (async_tx, async_rx) = mpsc::channel(100);
-
-    let watcher = notify::recommended_watcher(move |event: Result<Event, _>| {
-        if let Ok(event) = event {
-            let _ = sync_tx.send(event);
-        }
-    })?;
-
-    // Bridge thread: forwards from std channel to tokio channel
-    tokio::spawn(async move {
-        loop {
-            match tokio::task::spawn_blocking({
-                let sync_rx = sync_rx.clone(); // Won't compile - need different approach
-                move || sync_rx.recv()
-            }).await {
-                Ok(Ok(event)) => {
-                    if async_tx.send(event).await.is_err() {
-                        break;
-                    }
-                }
-                _ => break,
-            }
-        }
-    });
-
-    // Actually, simpler approach - just use blocking recv in a dedicated thread:
-    std::thread::spawn(move || {
-        while let Ok(event) = sync_rx.recv() {
-            if async_tx.blocking_send(event).is_err() {
-                break;
-            }
-        }
-    });
-
-    watcher.watch(agents_dir, RecursiveMode::Recursive)?;
-    watcher.watch(pending_dir, RecursiveMode::Recursive)?;
-
-    Ok((watcher, async_rx))
-}
-```
-
-Note: This bridge thread is internal to the watcher setup, similar to how notify itself spawns internal threads. It's not visible to the main event loop.
-
-### Removing Periodic Scans
-
-With proper FS event handling, we remove all scans:
-
-| Removed | Replaced by |
-|---------|-------------|
-| `scan_agents()` | FS event: `agents/<name>/` created/removed |
-| `scan_outputs()` | FS event: `agents/<name>/response.json` created |
-| `scan_pending()` | FS event: `pending/<uuid>/task.json` created |
-
-The only periodic operation is health check checking, handled by the timer in `select!`.
-
-### Shutdown Handling
-
-```rust
-async fn drain_and_shutdown(
-    mut fs_rx: mpsc::Receiver<Event>,
-    state: &mut PoolState,
-) -> io::Result<()> {
-    info!(in_flight = state.in_flight_count(), "draining in-flight tasks");
-
-    while state.in_flight_count() > 0 {
-        match tokio::time::timeout(Duration::from_secs(30), fs_rx.recv()).await {
-            Ok(Some(event)) => {
-                handle_fs_event(&event, state).await?;
-            }
-            Ok(None) => {
-                warn!("fs channel closed during shutdown");
-                break;
-            }
-            Err(_) => {
-                warn!(
-                    in_flight = state.in_flight_count(),
-                    "shutdown drain timeout"
-                );
-                break;
-            }
-        }
-    }
-
-    info!("shutdown complete");
-    Ok(())
 }
 ```
 
 ---
 
-## Dependencies
+## Migration Tasks
 
-Add to `Cargo.toml`:
+### Task 1: Add tokio dependencies
+
+**File:** `crates/agent_pool/Cargo.toml`
 
 ```toml
-[dependencies]
+# Add:
 tokio = { version = "1", features = ["net", "sync", "time", "rt-multi-thread", "macros"] }
 tokio-util = "0.7"  # For CancellationToken
 ```
 
-Remove or keep `interprocess` depending on whether we still need cross-platform named pipes.
+### Task 2: Create async channel bridge for notify
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs`
+
+The `notify` crate uses `std::sync::mpsc`. We need to bridge to `tokio::sync::mpsc`.
+
+**Current code (wiring.rs:270-290):**
+```rust
+let (fs_tx, fs_events) = mpsc::channel();  // std::sync::mpsc
+let mut watcher = notify::recommended_watcher(move |event| {
+    if let Ok(event) = event {
+        let _ = fs_tx.send(event);
+    }
+})?;
+```
+
+**New code:**
+```rust
+let (fs_tx, mut fs_rx) = tokio::sync::mpsc::channel(256);
+
+// Bridge thread: forwards std channel to tokio channel
+let (notify_tx, notify_rx) = std::sync::mpsc::channel();
+std::thread::spawn(move || {
+    while let Ok(event) = notify_rx.recv() {
+        if fs_tx.blocking_send(event).is_err() {
+            break;
+        }
+    }
+});
+
+let mut watcher = notify::recommended_watcher(move |event| {
+    if let Ok(event) = event {
+        let _ = notify_tx.send(event);
+    }
+})?;
+```
+
+### Task 3: Convert io_loop to async
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs:440-556`
+
+**Current signature:**
+```rust
+fn io_loop(
+    listener: &Listener,
+    fs_events: &mpsc::Receiver<notify::Event>,
+    events_tx: &mpsc::Sender<Event>,
+    effects_rx: &mpsc::Receiver<Effect>,
+    // ... other params
+) -> io::Result<()>
+```
+
+**New signature:**
+```rust
+async fn io_loop(
+    listener: tokio::net::UnixListener,
+    mut fs_rx: tokio::sync::mpsc::Receiver<notify::Event>,
+    events_tx: tokio::sync::mpsc::Sender<Event>,
+    mut effects_rx: tokio::sync::mpsc::Receiver<Effect>,
+    shutdown: tokio_util::sync::CancellationToken,
+    // ... other params
+) -> io::Result<()>
+```
+
+**New loop body:**
+```rust
+loop {
+    tokio::select! {
+        biased;  // Check shutdown first
+
+        _ = shutdown.cancelled() => {
+            info!("shutdown requested");
+            return Ok(());
+        }
+
+        result = listener.accept() => {
+            let (stream, _) = result?;
+            handle_socket_submission(stream, &events_tx, /* ... */).await?;
+        }
+
+        Some(event) = fs_rx.recv() => {
+            handle_fs_event(&event, &events_tx, /* ... */);
+        }
+
+        Some(effect) = effects_rx.recv() => {
+            execute_effect(effect, /* ... */)?;
+        }
+    }
+}
+```
+
+### Task 4: Convert event loop thread to tokio task
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs:344-346`
+
+**Current code:**
+```rust
+let event_loop_handle = thread::spawn(move || {
+    run_event_loop_with_shutdown(events_rx, effects_tx, event_loop_signals)
+});
+```
+
+**Options:**
+1. Run core event loop in `tokio::task::spawn_blocking` (keeps it sync)
+2. Convert core event loop to async (more work, less benefit since it's pure computation)
+
+Recommend option 1 - core is pure computation, doesn't benefit from async.
+
+### Task 5: Update run_daemon entry point
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs:250`
+
+**Current:**
+```rust
+pub fn run_daemon(root: &Path, config: DaemonConfig) -> io::Result<Infallible> {
+    // ... sync setup ...
+    io_loop(...)?;
+}
+```
+
+**New:**
+```rust
+pub fn run_daemon(root: &Path, config: DaemonConfig) -> io::Result<Infallible> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async {
+        // ... async setup ...
+        io_loop(...).await
+    })
+}
+```
+
+### Task 6: Remove periodic scans
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs:550-554`
+
+**Remove:**
+```rust
+// Periodic scans for reliability
+if last_scan.elapsed() >= scan_interval {
+    scan_agents(...)?;
+    scan_pending(...)?;
+    last_scan = Instant::now();
+}
+```
+
+Keep `scan_agents` and `scan_pending` functions for:
+- Initial startup scan (existing at wiring.rs:349)
+- Manual recovery if needed
+
+### Task 7: Update DaemonHandle for async shutdown
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs:77-120`
+
+Currently uses `DaemonSignals` with `AtomicBool`. Replace with `CancellationToken`:
+
+```rust
+pub struct DaemonHandle {
+    shutdown: CancellationToken,
+    handle: Option<thread::JoinHandle<...>>,
+}
+
+impl DaemonHandle {
+    pub fn shutdown(self) -> io::Result<()> {
+        self.shutdown.cancel();
+        // ...
+    }
+}
+```
+
+### Task 8: Update tests
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs` (tests module at bottom)
+
+Tests that spawn the daemon need `#[tokio::test]` attribute:
+
+```rust
+#[tokio::test]
+async fn event_loop_processes_events_and_emits_effects() {
+    // ...
+}
+```
 
 ---
 
-## Migration Steps
+## What Stays the Same
 
-1. Add tokio dependencies
-2. Create `async fn event_loop()` with `tokio::select!`
-3. Update `create_watcher()` to bridge notify → tokio channel
-4. Convert `read_task()` to async
-5. Update `run()` entry point to use `#[tokio::main]` or `Runtime::block_on()`
-6. Remove `scan_agents()`, `scan_outputs()`, `scan_pending()` from periodic calls
-7. Update tests to use tokio test runtime
+- **Core state machine** (`core.rs`) - pure, no async needed
+- **Effect execution** (`io.rs:execute_effect`) - sync file I/O is fine
+- **Path categorization** (`path_category.rs`) - pure functions
+- **Public API** (`lib.rs` exports) - `run()`, `spawn()`, `submit()` signatures unchanged
 
 ---
 
 ## Open Questions
 
-1. **Keep `interprocess` crate?** It provides cross-platform socket abstraction. With tokio, we could use `tokio::net::UnixListener` directly on Unix. Windows would need separate handling.
+1. **Keep interprocess crate?** Currently using `interprocess::local_socket` for cross-platform sockets. With tokio, we could use `tokio::net::UnixListener` directly. Windows would need separate handling.
 
-2. **Debouncing?** Should we debounce FS events like Isograph does with `notify_debouncer_full`? Probably not necessary - we process events immediately, and duplicate events are harmless (idempotent handlers).
+2. **Async file I/O?** Currently using sync `std::fs`. Could use `tokio::fs` but probably overkill - file ops are fast and we're not I/O bound.
 
-3. **Error handling in select arms?** Currently using `?` which will exit the loop. May want more granular error handling per event type.
+3. **Remove scans entirely?** Or keep as a low-frequency fallback (every 30s instead of 500ms)?
+
+---
+
+## Estimated Scope
+
+- ~300 lines of code changes in `wiring.rs`
+- ~50 lines in `io.rs` for async channel types
+- ~20 lines in `Cargo.toml`
+- Test updates
+
+The core/io split is already clean, so this is primarily a wiring change.
