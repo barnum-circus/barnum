@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use interprocess::local_socket::{
     GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, prelude::*,
@@ -214,16 +214,18 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let agents_dir = root.join(AGENTS_DIR);
     fs::create_dir_all(&agents_dir)?;
 
-    let pending_dir = root.join(PENDING_DIR);
-    fs::create_dir_all(&pending_dir)?;
-
     let socket_path = root.join(SOCKET_NAME);
     if socket_path.exists() {
         fs::remove_file(&socket_path)?;
     }
 
     let listener = create_socket_listener(&socket_path)?;
-    let (watcher, fs_events) = create_fs_watcher(&agents_dir)?;
+    let (watcher, fs_events) = create_fs_watcher(&root)?;
+
+    // Create pending_dir AFTER watcher is running.
+    // Clients use pending_dir existence as the "ready" signal.
+    let pending_dir = root.join(PENDING_DIR);
+    fs::create_dir_all(&pending_dir)?;
 
     let signals = DaemonSignals::new();
     let signals_clone = signals.clone();
@@ -283,9 +285,6 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let agents_dir = root.join(AGENTS_DIR);
     fs::create_dir_all(&agents_dir)?;
 
-    let pending_dir = root.join(PENDING_DIR);
-    fs::create_dir_all(&pending_dir)?;
-
     let socket_path = root.join(SOCKET_NAME);
     if socket_path.exists() {
         fs::remove_file(&socket_path)?;
@@ -294,8 +293,13 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let _cleanup = SocketCleanup(socket_path.clone());
 
     let listener = create_socket_listener(&socket_path)?;
-    let (watcher, fs_events) = create_fs_watcher(&agents_dir)?;
+    let (watcher, fs_events) = create_fs_watcher(&root)?;
     let _watcher = watcher;
+
+    // Create pending_dir AFTER watcher is running.
+    // Clients use pending_dir existence as the "ready" signal.
+    let pending_dir = root.join(PENDING_DIR);
+    fs::create_dir_all(&pending_dir)?;
 
     info!(socket = %socket_path.display(), "daemon listening");
 
@@ -453,8 +457,6 @@ fn io_loop(
     signals: &DaemonSignals,
 ) -> io::Result<()> {
     let poll_timeout = Duration::from_millis(100);
-    let scan_interval = Duration::from_millis(500);
-    let mut last_scan = Instant::now();
 
     debug!("io_loop starting, agents_dir={:?}, pending_dir={:?}", agents_dir, pending_dir);
 
@@ -546,12 +548,6 @@ fn io_loop(
             )?;
         }
 
-        // Periodic scans for reliability
-        if last_scan.elapsed() >= scan_interval {
-            scan_agents(agents_dir, events_tx, agent_map, kicked_paths, task_id_allocator, io_config)?;
-            scan_pending(pending_dir, events_tx, external_task_map, task_id_allocator, io_config)?;
-            last_scan = Instant::now();
-        }
     }
 }
 
@@ -803,36 +799,6 @@ fn is_kicked_agent(agent_path: &Path) -> bool {
     false
 }
 
-/// Scan the pending directory for new tasks.
-fn scan_pending(
-    pending_dir: &Path,
-    events_tx: &mpsc::Sender<Event>,
-    external_task_map: &mut ExternalTaskMap,
-    task_id_allocator: &mut TaskIdAllocator,
-    io_config: &IoConfig,
-) -> io::Result<()> {
-    if !pending_dir.exists() {
-        return Ok(());
-    }
-
-    for entry in fs::read_dir(pending_dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-
-        let submission_dir = entry.path();
-        let task_path = submission_dir.join(TASK_FILE);
-
-        // Only process if task.json exists
-        if task_path.exists() {
-            register_pending_task(&submission_dir, events_tx, external_task_map, task_id_allocator, io_config);
-        }
-    }
-
-    Ok(())
-}
-
 // =============================================================================
 // Socket Handling
 // =============================================================================
@@ -926,7 +892,7 @@ fn create_socket_listener(socket_path: &Path) -> io::Result<Listener> {
 }
 
 fn create_fs_watcher(
-    agents_dir: &Path,
+    root: &Path,
 ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>)> {
     let (tx, rx) = mpsc::channel();
 
@@ -942,10 +908,9 @@ fn create_fs_watcher(
     )
     .map_err(io::Error::other)?;
 
-    // Only watch agents_dir - pending tasks are handled via periodic scan_pending
-    // (This matches v1 behavior and is more reliable on macOS)
+    // Watch root recursively to catch both agents/ and pending/ events
     watcher
-        .watch(agents_dir, RecursiveMode::Recursive)
+        .watch(root, RecursiveMode::Recursive)
         .map_err(io::Error::other)?;
 
     Ok((watcher, rx))
@@ -1016,29 +981,6 @@ mod tests {
         for event in events {
             assert!(matches!(event, Event::AgentRegistered { heartbeat_task_id: Some(_), .. }));
         }
-    }
-
-    #[test]
-    fn scan_pending_registers_tasks() {
-        let tmp = TempDir::new().unwrap();
-        let pending_dir = tmp.path().join("pending");
-        fs::create_dir_all(&pending_dir).unwrap();
-
-        // Create a pending task
-        let task_dir = pending_dir.join("task-1");
-        fs::create_dir_all(&task_dir).unwrap();
-        fs::write(task_dir.join(TASK_FILE), r#"{"kind": "Inline", "content": "test task"}"#).unwrap();
-
-        let (events_tx, events_rx) = mpsc::channel();
-        let mut external_task_map = ExternalTaskMap::new();
-        let mut task_id_allocator = TaskIdAllocator::new();
-        let io_config = IoConfig::default();
-
-        scan_pending(&pending_dir, &events_tx, &mut external_task_map, &mut task_id_allocator, &io_config).unwrap();
-
-        // Should have received one TaskSubmitted event
-        let event = events_rx.try_recv().unwrap();
-        assert!(matches!(event, Event::TaskSubmitted { task_id } if task_id == ext(0)));
     }
 
     // =========================================================================
