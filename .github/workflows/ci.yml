@@ -60,13 +60,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: debug-binaries
-          path: artifacts
+          path: bin
+      - name: Debug artifact structure
+        run: find bin -type f
       - name: Make binaries executable
-        run: |
-          mkdir -p bin
-          cp artifacts/target/debug/agent_pool bin/
-          cp artifacts/target/debug/gsd bin/
-          chmod +x bin/agent_pool bin/gsd
+        run: chmod +x bin/agent_pool bin/gsd || chmod +x bin/target/debug/agent_pool bin/target/debug/gsd && cp bin/target/debug/* bin/
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq bc
       - name: Check .dot files are up-to-date
