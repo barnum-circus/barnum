@@ -1,5 +1,15 @@
 # To-Dos and Future Directions
 
+## Document: Inaccessible Filesystem Edge Case
+
+When implementing file reference payload support, add an internal comment or doc explaining:
+
+Currently we assume submitter, daemon, and agents share the same filesystem. File reference works because everyone can read the path. In a future where the daemon can't access the submitter's filesystem (e.g., different machines without shared storage), the CLI would need to detect this and automatically read the file, sending content inline instead of the path.
+
+This edge case is documented in TRANSPORT_ABSTRACTION.md under "Edge Case: Inaccessible Filesystems" but should also be noted in the code when file reference is implemented.
+
+---
+
 ## Flaky Test: sequential_tasks_same_agent
 
 The test `crates/agent_pool/tests/single_agent_queue.rs::sequential_tasks_same_agent` is flaky. It bypasses the daemon and manually writes to task.json/response.json, which creates race conditions between the test's file operations and the TestAgent's polling loop.
