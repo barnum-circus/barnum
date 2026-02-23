@@ -1,5 +1,11 @@
 # Rust Coding Patterns
 
+## Design philosophy
+
+**Make impossible states unrepresentable.** If you find yourself reaching for a `HashSet` to track "which IDs are special" or a boolean to distinguish cases, stop. That's a sign the types are wrong. Use newtypes or enums so the compiler enforces the distinction.
+
+**Step back during refactors.** If mid-refactor you discover a shortcut is needed (parallel tracking structures, runtime checks for things that could be static), pause and reconsider the design. It's faster to get the types right now than to do another pass later. The correct primitives make the code fall out naturally.
+
 ## Anti-patterns
 
 - `unwrap()` when `if let` or `?` would work
