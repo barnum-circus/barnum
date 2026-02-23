@@ -1,7 +1,7 @@
 {
   "name": "@gsd-now/gsd",
   "version": "0.1.0",
-  "description": "GSD CLI - Get Sh*** Done with AI agents. Get shell scripts done.",
+  "description": "GSD CLI - Get Sh*** Done with AI agents.",
   "main": "index.js",
   "bin": {
     "gsd": "cli.js"
