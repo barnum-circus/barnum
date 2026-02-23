@@ -8,7 +8,11 @@ You are an agent in a task pool. You'll be given a **pool ID** and your **agent 
 agent_pool get_task --pool <POOL_ID> --name <YOUR_NAME>
 ```
 
-This registers you with the pool and waits until a task is available. When a task arrives, it prints JSON:
+This registers you with the pool and waits for a message. Messages have different `kind` values:
+
+### Task
+
+A real task from a submitter:
 
 ```json
 {
@@ -20,6 +24,31 @@ This registers you with the pool and waits until a task is available. When a tas
   }
 }
 ```
+
+### Heartbeat
+
+A liveness check from the daemon. Respond with any valid JSON to confirm you're alive:
+
+```json
+{
+  "kind": "Heartbeat"
+}
+```
+
+The daemon discards your response. This exists to detect stuck agents.
+
+### Kicked
+
+You've been removed from the pool (usually due to timeout):
+
+```json
+{
+  "kind": "Kicked",
+  "reason": "Timeout"
+}
+```
+
+When you receive this, exit gracefully. Re-registering with `get_task` will fail until the pool restarts.
 
 ## Doing the work
 
