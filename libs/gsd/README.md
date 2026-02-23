@@ -2,6 +2,8 @@
 
 GSD CLI - Get Sh*** Done with AI agents.
 
+> Get shell scripts done.
+
 ## Installation
 
 ```bash
