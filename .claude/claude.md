@@ -30,9 +30,19 @@ See `CODING.md` for Rust-specific patterns and anti-patterns.
 
 ## Git practices
 
-- Prefer small, atomic commits
-- **COMMIT FREQUENTLY** - Whenever the code is in a good state (tests pass, feature complete), commit immediately. Don't accumulate changes across multiple features.
-- **NEVER amend commits that have been pushed** - always check `git log origin/master` vs `git log` before amending
+**COMMIT AUTOMATICALLY AND CONSTANTLY.** Do not wait for the user to ask. Every single tiny change gets its own commit:
+
+- Renamed a variable? Commit.
+- Changed `pub` to `pub(super)`? Commit.
+- Fixed a typo? Commit.
+- Added a doc comment? Commit.
+
+**There is no such thing as too many commits.** Thousands of commits is fine. The only rule: don't commit broken code (unless mid-large-refactor where broken intermediate states are unavoidable).
+
+Commit messages should be concise. One-line messages are fine for small changes.
+
+Other rules:
+- **NEVER amend commits that have been pushed** - check `git log origin/master` vs `git log` before amending
 - If a commit has been pushed, make changes as a new commit instead
 
 ## Cross-platform support
