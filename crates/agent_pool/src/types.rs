@@ -83,11 +83,15 @@ macro_rules! define_string_id {
 }
 
 define_string_id! {
-    /// An agent identifier within a pool.
+    /// An agent's name within a pool.
     ///
     /// Agents register with a unique name (e.g., "claude-1", "worker-a").
     /// This newtype prevents confusion with other string parameters like pool IDs.
-    pub struct AgentId;
+    ///
+    /// Note: This is distinct from the internal `AgentId` in `daemon::core`, which
+    /// is a numeric ID assigned by the daemon. This type represents the user-facing
+    /// name that agents choose when they register.
+    pub struct AgentName;
 }
 
 define_string_id! {
@@ -106,10 +110,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agent_id_equality() {
-        let id = AgentId::new("claude-1");
-        assert_eq!(id, "claude-1");
-        assert_eq!(id.as_str(), "claude-1");
+    fn agent_name_equality() {
+        let name = AgentName::new("claude-1");
+        assert_eq!(name, "claude-1");
+        assert_eq!(name.as_str(), "claude-1");
     }
 
     #[test]
@@ -120,22 +124,22 @@ mod tests {
     }
 
     #[test]
-    fn ids_are_distinct_types() {
-        let agent = AgentId::new("test");
+    fn types_are_distinct() {
+        let name = AgentName::new("test");
         let pool = PoolId::new("test");
 
         // These are different types even with same value
-        // This line wouldn't compile: assert_eq!(agent, pool);
-        assert_eq!(agent.as_str(), pool.as_str());
+        // This line wouldn't compile: assert_eq!(name, pool);
+        assert_eq!(name.as_str(), pool.as_str());
     }
 
     #[test]
-    fn agent_id_serializes_transparently() {
-        let id = AgentId::new("worker");
-        let json = serde_json::to_string(&id).unwrap();
+    fn agent_name_serializes_transparently() {
+        let name = AgentName::new("worker");
+        let json = serde_json::to_string(&name).unwrap();
         assert_eq!(json, "\"worker\"");
 
-        let parsed: AgentId = serde_json::from_str("\"worker\"").unwrap();
-        assert_eq!(parsed, id);
+        let parsed: AgentName = serde_json::from_str("\"worker\"").unwrap();
+        assert_eq!(parsed, name);
     }
 }
