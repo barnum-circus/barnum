@@ -229,111 +229,94 @@ This is similar to the "remote socket" case discussed below. For now, we assume 
 2. Add `--notify socket|file` CLI flag
 3. Default to socket, fall back to file in sandboxed environments
 
-### Phase 3: Daemon Changes
+### Phase 3: Daemon Architecture
 
-The daemon needs to handle incoming messages uniformly, regardless of source (submitter or agent) or notification mechanism (socket or fs events).
+The daemon should be split into two layers:
 
-**Current daemon behavior:**
+**Inner layer (DaemonCore):** Pure pool management logic.
+- Queue management, task dispatch, concurrency limits, health checks
+- Receives plain data (strings), knows nothing about sockets, files, JSON, fs events
+- Sends responses via channels - doesn't know how they'll be delivered
+
+**Outer layer (Transport):** All I/O and serialization.
+- Listens on sockets, watches filesystem
+- Reads file references, parses JSON
+- Calls into DaemonCore with plain data
+- Receives responses via channels, sends them back over socket or file
+
 ```
-Socket listener ──► accept ──► read submission ──► enqueue task
-                                                        │
-FS watch pending/ ──► read task.json ──► enqueue task ──┤
-                                                        ▼
-                                                   Task Queue
-                                                        │
-                                                        ▼
-                                              Dispatch to agent
-                                              (write task.json)
-                                                        │
-FS watch agents/ ──► response.json appeared ──► complete task
+┌─────────────────────────────────────────────────────────────────┐
+│                        Outer Layer (Transport)                   │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
+│  │ Socket       │    │ FS Watcher   │    │ File Reader  │       │
+│  │ Listener     │    │ (pending/,   │    │ (resolve     │       │
+│  │              │    │  agents/)    │    │  file refs)  │       │
+│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘       │
+│         │                   │                   │                │
+│         └───────────────────┴───────────────────┘                │
+│                             │                                    │
+│                     parse, deserialize                           │
+│                             │                                    │
+│                             ▼                                    │
+│         ┌───────────────────────────────────────┐                │
+│         │  on_submission(content, respond_to)   │                │
+│         │  on_agent_register(name, respond_to)  │                │
+│         │  on_agent_response(name, data, resp)  │                │
+│         └───────────────────┬───────────────────┘                │
+└─────────────────────────────┼────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Inner Layer (DaemonCore)                     │
+│                                                                  │
+│  - Task queue                                                    │
+│  - Agent pool (who's idle, who's busy)                          │
+│  - Dispatch logic (assign task to idle agent)                   │
+│  - Health check scheduling                                       │
+│  - Concurrency limits                                            │
+│                                                                  │
+│  Sends responses via oneshot channels - doesn't know             │
+│  whether response goes to socket or file                         │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Problems with current design:**
-1. Two code paths for receiving submissions (socket vs fs events)
-2. Agents only support fs events (task.json/response.json)
-3. Daemon pushes tasks; agents poll
-
-**New model - daemon receives messages uniformly:**
+**Interface between layers:**
 
 ```rust
-/// Every incoming message (submission or agent response) becomes this.
-struct IncomingMessage {
-    /// What kind of message?
-    kind: MessageKind,
-    /// The content (read file if FileReference)
-    content: String,
-    /// How to send the response back
-    respond_to: ResponseTarget,
-}
+/// Inner layer - pure pool logic, no I/O knowledge
+impl DaemonCore {
+    /// Submitter sent a task. Response sent via channel when complete.
+    fn on_submission(&mut self, content: String, respond_to: oneshot::Sender<String>);
 
-enum MessageKind {
-    /// New task submission from a submitter
-    Submission,
-    /// Agent registering (first contact)
-    AgentRegister { agent_name: String },
-    /// Agent responding to previous task, wants next task
-    AgentNextTask { agent_name: String },
-}
+    /// Agent registered. First task (health check) sent via channel.
+    fn on_agent_register(&mut self, name: String, respond_to: oneshot::Sender<String>);
 
-enum ResponseTarget {
-    /// Send response over this socket connection
-    Socket(UnixStream),
-    /// Write response to this file path
-    File(PathBuf),
+    /// Agent responded to previous task. Next task sent via channel.
+    fn on_agent_response(&mut self, name: String, response: String, respond_to: oneshot::Sender<String>);
 }
 ```
 
-**Daemon event loop (conceptual):**
+The `respond_to` channel is created by the outer layer. When the core has a response ready, it sends through the channel. The outer layer receives it and writes to socket or file - the core never knows which.
 
-```rust
-loop {
-    // All sources produce the same IncomingMessage type
-    let msg = select! {
-        // Socket: could be submission OR agent register/next_task
-        stream = socket.accept() => parse_socket_message(stream),
+**What the outer layer does:**
+1. Accept socket connection → read message → parse JSON → call `on_*` with plain data
+2. See fs event in pending/ → read file → resolve file reference if needed → call `on_submission`
+3. See fs event in agents/ → read response file → call `on_agent_response`
+4. Receive from channel → serialize → write to socket or file
 
-        // FS: could be submission (pending/) OR agent response (agents/)
-        event = fs_watcher.next() => parse_fs_message(event),
-    };
+**What the inner layer does:**
+1. Manage task queue
+2. Track agent states (idle/busy)
+3. Dispatch tasks to agents
+4. Schedule health checks
+5. Send responses/tasks via channels
 
-    match msg.kind {
-        MessageKind::Submission => {
-            let task = Task::new(msg.content, msg.respond_to);
-            queue.push(task);
-        }
-        MessageKind::AgentRegister { agent_name } => {
-            // Agent wants to join pool, send them first task (health check)
-            agents.register(agent_name, msg.respond_to);
-            dispatch_health_check(&agent_name);
-        }
-        MessageKind::AgentNextTask { agent_name } => {
-            // Agent completed previous task, give them next one
-            complete_current_task(&agent_name, msg.content);
-            // respond_to is stored; daemon sends next task when available
-        }
-    }
-}
-```
-
-**Key insight:** The daemon doesn't need separate traits for submissions vs agents. It just receives messages and sends responses. The `respond_to` field tracks how to reply.
-
-**Concrete changes needed:**
-
-1. **Parse incoming messages uniformly**: Whether from socket or fs events, produce `IncomingMessage`
-
-2. **Track response targets**: Store `ResponseTarget` so daemon knows how to send responses/tasks back
-
-3. **Support agent socket connections**: Currently only submitters use sockets. Agents need to connect too:
-   - Agent sends: `{"kind": "register", "name": "agent-1"}`
-   - Agent sends: `{"kind": "next_task", "name": "agent-1", "response": "..."}`
-   - Daemon responds with next task on same connection
-
-4. **Handle file reference payloads**: When `payload.file` is set, read the file to get content
-
-**What stays the same:**
-- Task queue logic
-- Agent selection/dispatch logic
-- Health check logic
+**Benefits:**
+- Core logic is testable without any I/O
+- Transport concerns completely separated
+- Easy to add new transports without touching core
+- Core doesn't branch on socket vs file anywhere
 
 ---
 
