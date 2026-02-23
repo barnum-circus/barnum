@@ -445,6 +445,44 @@ This is a low-priority refactor - apply opportunistically when touching related 
 
 ---
 
+## Multi-Pool Support in GSD
+
+GSD should support orchestrating agents across multiple pools. Use case: integrating command pools (for running shell commands outside sandbox) with agent pools (for AI agents).
+
+Example workflow:
+```json
+{
+  "pools": {
+    "agents": "/tmp/agent-pool",
+    "commands": "/tmp/cmd-pool"
+  },
+  "steps": [
+    {
+      "name": "Analyze",
+      "pool": "agents",
+      "instructions": "Analyze the codebase"
+    },
+    {
+      "name": "RunTests",
+      "pool": "commands",
+      "instructions": "cargo test --workspace"
+    }
+  ]
+}
+```
+
+Each step specifies which pool to dispatch to. This enables:
+- AI agents for creative/analytical work
+- Command pools for deterministic shell operations
+- Mixed workflows that combine both
+
+Implementation considerations:
+- Multiple pool connections in the runner
+- Pool-specific configuration (timeouts, retries)
+- Cross-pool dependencies and data passing
+
+---
+
 ## Full Socket-Based Protocol
 
 Remove filesystem-based IPC entirely:

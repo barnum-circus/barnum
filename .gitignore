@@ -1,5 +1,6 @@
 /target
 .claude/settings.local.json
+.claude/claude.local.md
 .vscode/
 
 # Test data directories
