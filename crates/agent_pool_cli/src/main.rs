@@ -36,6 +36,16 @@ enum LogLevel {
     Trace,
 }
 
+/// Notification mechanism for communicating with the daemon.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum NotifyMethod {
+    /// Socket-based RPC (faster, but blocked in sandboxed environments)
+    #[default]
+    Socket,
+    /// File-based events (works in sandboxed environments)
+    File,
+}
+
 #[derive(Parser)]
 #[command(name = "agent_pool")]
 #[command(about = "Agent pool for managing workers with file-based task dispatch")]
@@ -78,12 +88,15 @@ enum Command {
         /// Pool ID or path
         #[arg(long)]
         pool: String,
-        /// Task content as inline string (sent directly to daemon)
-        #[arg(long, conflicts_with = "file")]
+        /// Task content as inline string
+        #[arg(long)]
         data: Option<String>,
-        /// Path to file containing task JSON (uses file protocol, works in sandboxes)
-        #[arg(long, conflicts_with = "data")]
+        /// Path to file containing task JSON (daemon reads the file)
+        #[arg(long)]
         file: Option<PathBuf>,
+        /// Notification mechanism: socket (default, faster) or file (works in sandboxes)
+        #[arg(long, default_value = "socket")]
+        notify: NotifyMethod,
     },
     /// List all pools
     List,
@@ -196,27 +209,32 @@ fn main() -> ExitCode {
             }
             eprintln!("Server stopped");
         }
-        Command::SubmitTask { pool, data, file } => {
+        Command::SubmitTask { pool, data, file, notify } => {
             let root = resolve_pool(&pool);
 
-            // --data uses socket protocol, --file uses file protocol
-            let result = match (data, file) {
-                (Some(task_data), None) => submit(&root, &task_data),
+            // Get content from --data or --file
+            let content = match (data, file) {
+                (Some(d), None) => d,
                 (None, Some(path)) => {
-                    let task_data = match fs::read_to_string(&path) {
-                        Ok(content) => content,
+                    match fs::read_to_string(&path) {
+                        Ok(c) => c,
                         Err(e) => {
                             eprintln!("Failed to read file {}: {e}", path.display());
                             return ExitCode::FAILURE;
                         }
-                    };
-                    submit_file(&root, &task_data)
+                    }
                 }
+                (Some(d), Some(_)) => d, // --data takes precedence
                 (None, None) => {
-                    eprintln!("Either --input or --file must be provided");
+                    eprintln!("Either --data or --file must be provided");
                     return ExitCode::FAILURE;
                 }
-                (Some(_), Some(_)) => unreachable!("clap prevents this"),
+            };
+
+            // Send via chosen notification method
+            let result = match notify {
+                NotifyMethod::Socket => submit(&root, &content),
+                NotifyMethod::File => submit_file(&root, &content),
             };
 
             match result {
