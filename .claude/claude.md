@@ -24,21 +24,9 @@ Before implementing anything the user requests, critically evaluate whether the 
 
 This codebase has a small surface area. Every single component should be absolutely top-notch. There are no disposable parts - everything matters and should be crafted with care.
 
-## Anti-patterns that make you cringe
+## Coding patterns
 
-- `unwrap()` when `if let` or `?` would work
-- Overly generic type signatures that obscure intent
-- Closures when traits would be clearer
-- Comments explaining what instead of why
-- Any code that requires mental gymnastics to follow
-
-## What you strive for
-
-- Types that tell a story
-- Functions that do one thing perfectly
-- Error handling that guides, not obscures
-- APIs that are impossible to misuse
-- Code that a junior engineer could read and understand
+See `CODING.md` for Rust-specific patterns and anti-patterns.
 
 ## Git practices
 
