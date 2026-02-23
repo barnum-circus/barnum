@@ -124,6 +124,7 @@ impl AgentState {
     /// `None` if agent is already busy.
     ///
     /// Works for both real tasks and heartbeat tasks - core doesn't distinguish.
+    #[allow(clippy::missing_const_for_fn)]
     fn try_become_busy(&mut self, task_id: TaskId) -> Option<Epoch> {
         if !self.is_idle() {
             return None;
@@ -135,6 +136,7 @@ impl AgentState {
 
     /// Try to transition from busy to idle. Returns `Some((new_epoch, task_id))` on success,
     /// `None` if agent is already idle.
+    #[allow(clippy::missing_const_for_fn)]
     fn try_become_idle(&mut self) -> Option<(Epoch, TaskId)> {
         let AgentStatus::Busy { task_id } = self.status else {
             return None;
@@ -391,6 +393,7 @@ fn handle_task_withdrawn(mut state: PoolState, task_id: TaskId) -> (PoolState, V
     (state, vec![])
 }
 
+#[allow(clippy::expect_used)] // Invariant: we just inserted the agent
 fn handle_agent_registered(
     mut state: PoolState,
     agent_id: AgentId,
@@ -464,6 +467,7 @@ fn handle_agent_responded(mut state: PoolState, agent_id: AgentId) -> (PoolState
     (state, effects)
 }
 
+#[allow(clippy::panic)] // Invariant violation: epoch matches but agent idle is impossible
 fn handle_agent_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec<Effect>) {
     let agent_id = epoch.agent_id;
 
@@ -491,6 +495,7 @@ fn handle_agent_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec
     }
 }
 
+#[allow(clippy::expect_used)] // Invariant: epoch match implies idle state
 fn handle_assign_task_to_agent_if_epoch_matches(
     mut state: PoolState,
     epoch: Epoch,

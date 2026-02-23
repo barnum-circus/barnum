@@ -98,7 +98,7 @@ impl Transport {
         match self {
             Transport::Directory(path) => {
                 let target = path.join(filename);
-                let temp = path.join(format!(".{}.tmp", filename));
+                let temp = path.join(format!(".{filename}.tmp"));
                 fs::write(&temp, content)?;
                 fs::rename(&temp, &target)
             }
@@ -123,7 +123,7 @@ impl Transport {
 // Transport ID Trait
 // =============================================================================
 
-/// Trait for IDs that can be used with TransportMap.
+/// Trait for IDs that can be used with `TransportMap`.
 pub(super) trait TransportId:
     Copy + Eq + std::hash::Hash + std::fmt::Debug + From<u32>
 {
@@ -152,6 +152,7 @@ impl TaskIdAllocator {
     }
 
     /// Allocate an external task ID.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn allocate_external(&mut self) -> ExternalTaskId {
         let id = ExternalTaskId(self.next_external_id);
         self.next_external_id += 1;
@@ -159,6 +160,7 @@ impl TaskIdAllocator {
     }
 
     /// Allocate a heartbeat ID (as TaskId for sending to core).
+    #[allow(clippy::missing_const_for_fn)]
     pub fn allocate_heartbeat(&mut self) -> TaskId {
         let id = HeartbeatId(self.next_heartbeat_id);
         self.next_heartbeat_id += 1;
