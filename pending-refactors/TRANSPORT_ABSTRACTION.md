@@ -223,6 +223,22 @@ Implementations for socket and file-based notification are separate; daemon logi
 
 ---
 
+## Future: Auto-Discovery of Notification Mechanism
+
+Currently, users must explicitly pass `--notify file` in sandboxed environments. Auto-discovery could detect when sockets are blocked and fall back automatically.
+
+**Challenge:** Submit calls are stateless. Each `submit_task` invocation is independent, so there's no natural place to cache "sockets work" or "sockets are blocked."
+
+**Options (all deferred):**
+1. **Try socket, fall back to file** - latency cost on every call in sandboxed environments (try connect, fail, then use file)
+2. **Cache in environment variable** - CLI sets `AGENT_POOL_NOTIFY=file` after first socket failure; subsequent calls read this
+3. **Cache in pool directory** - write `.notify-method` file after first successful/failed attempt
+4. **Don't auto-discover** - user explicitly passes `--notify file` (current approach)
+
+For initial implementation, option 4 (explicit flag) is simplest. Auto-discovery can be added later if the UX burden of `--notify file` proves annoying.
+
+---
+
 ## Future: Remote Pools
 
 A third notification mechanism could be added for remote daemons:
