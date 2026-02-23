@@ -195,7 +195,7 @@ Each subtask should be small enough that someone could implement it without aski
 - Complications or edge cases
 - How to test the change
 
-See `pending-refactors/TRANSPORT_ABSTRACTION.md` for a good example.
+For examples, search git history for `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `pending-refactors/`.
 
 ### Extract independent work
 
