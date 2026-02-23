@@ -21,7 +21,7 @@ use tracing::{debug, info, trace, warn};
 
 use std::collections::HashSet;
 
-use crate::constants::{AGENTS_DIR, LOCK_FILE, PENDING_DIR, RESPONSE_FILE, SOCKET_NAME, TASK_FILE};
+use crate::constants::{AGENTS_DIR, LOCK_FILE, PENDING_DIR, SOCKET_NAME, TASK_FILE};
 use crate::lock::acquire_lock;
 
 use super::core::{AgentId, Effect, Event, TaskId};
@@ -29,77 +29,7 @@ use super::io::{
     AgentMap, ExternalTaskData, ExternalTaskMap, IoConfig,
     TaskIdAllocator, execute_effect,
 };
-
-// =============================================================================
-// Path Categorization
-// =============================================================================
-
-/// Category of a filesystem path.
-#[derive(Debug)]
-enum PathCategory {
-    /// Agent directory: `agents/<name>/`
-    AgentDir {
-        /// The agent's directory name.
-        name: String,
-    },
-    /// Agent response file: `agents/<name>/response.json`
-    AgentResponse {
-        /// The agent's directory name.
-        name: String,
-    },
-    /// Pending submission directory: `pending/<uuid>/`
-    PendingDir {
-        /// The submission's UUID.
-        uuid: String,
-    },
-    /// Pending submission task file: `pending/<uuid>/task.json`
-    PendingTask {
-        /// The submission's UUID.
-        uuid: String,
-    },
-}
-
-/// Categorize a filesystem path relative to the pool root.
-#[must_use]
-fn categorize_path(path: &Path, agents_dir: &Path, pending_dir: &Path) -> Option<PathCategory> {
-    // Check if it's under agents/
-    if let Ok(relative) = path.strip_prefix(agents_dir) {
-        let components: Vec<_> = relative.components().collect();
-        if components.is_empty() {
-            return None;
-        }
-        let name = components[0].as_os_str().to_str()?.to_string();
-
-        if components.len() == 1 {
-            // agents/<name>/ directory itself
-            return Some(PathCategory::AgentDir { name });
-        } else if components.len() == 2 {
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == RESPONSE_FILE {
-                return Some(PathCategory::AgentResponse { name });
-            }
-        }
-        return None;
-    }
-
-    // Check if it's under pending/
-    if let Ok(relative) = path.strip_prefix(pending_dir) {
-        let components: Vec<_> = relative.components().collect();
-        if components.len() == 1 {
-            // pending/<uuid>/ directory itself
-            let uuid = components[0].as_os_str().to_str()?.to_string();
-            return Some(PathCategory::PendingDir { uuid });
-        } else if components.len() == 2 {
-            let uuid = components[0].as_os_str().to_str()?.to_string();
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == TASK_FILE {
-                return Some(PathCategory::PendingTask { uuid });
-            }
-        }
-    }
-
-    None
-}
+use super::path_category::{self, PathCategory};
 
 // =============================================================================
 // Configuration
@@ -587,7 +517,7 @@ fn handle_fs_event(
     trace!(kind = ?event.kind, paths = ?event.paths, "fs event");
 
     for path in &event.paths {
-        let Some(category) = categorize_path(path, agents_dir, pending_dir) else {
+        let Some(category) = path_category::categorize(path, agents_dir, pending_dir) else {
             trace!(?path, "path did not match any category");
             continue;
         };
@@ -884,59 +814,6 @@ mod tests {
     /// Helper to create external task IDs in tests.
     fn ext(id: u32) -> TaskId {
         TaskId::External(ExternalTaskId(id))
-    }
-
-    // =========================================================================
-    // Path categorization tests
-    // =========================================================================
-
-    #[test]
-    fn categorize_path_agents() {
-        let agents_dir = PathBuf::from("/pool/agents");
-        let pending_dir = PathBuf::from("/pool/pending");
-
-        // Agent directory
-        let path = PathBuf::from("/pool/agents/claude-1");
-        let cat = categorize_path(&path, &agents_dir, &pending_dir).unwrap();
-        assert!(matches!(cat, PathCategory::AgentDir { name } if name == "claude-1"));
-
-        // Agent response
-        let path = PathBuf::from("/pool/agents/claude-1/response.json");
-        let cat = categorize_path(&path, &agents_dir, &pending_dir).unwrap();
-        assert!(matches!(cat, PathCategory::AgentResponse { name } if name == "claude-1"));
-
-        // Agent task file (not categorized)
-        let path = PathBuf::from("/pool/agents/claude-1/task.json");
-        assert!(categorize_path(&path, &agents_dir, &pending_dir).is_none());
-    }
-
-    #[test]
-    fn categorize_path_pending() {
-        let agents_dir = PathBuf::from("/pool/agents");
-        let pending_dir = PathBuf::from("/pool/pending");
-
-        // Pending directory
-        let path = PathBuf::from("/pool/pending/abc123");
-        let cat = categorize_path(&path, &agents_dir, &pending_dir).unwrap();
-        assert!(matches!(cat, PathCategory::PendingDir { uuid } if uuid == "abc123"));
-
-        // Pending task
-        let path = PathBuf::from("/pool/pending/abc123/task.json");
-        let cat = categorize_path(&path, &agents_dir, &pending_dir).unwrap();
-        assert!(matches!(cat, PathCategory::PendingTask { uuid } if uuid == "abc123"));
-
-        // Pending response (not categorized - we write responses, not read them)
-        let path = PathBuf::from("/pool/pending/abc123/response.json");
-        assert!(categorize_path(&path, &agents_dir, &pending_dir).is_none());
-    }
-
-    #[test]
-    fn categorize_path_unrelated() {
-        let agents_dir = PathBuf::from("/pool/agents");
-        let pending_dir = PathBuf::from("/pool/pending");
-
-        let path = PathBuf::from("/other/path");
-        assert!(categorize_path(&path, &agents_dir, &pending_dir).is_none());
     }
 
     #[test]
