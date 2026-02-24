@@ -1,0 +1,68 @@
+{
+  "$schema": "../schemas/config.schema.json",
+  "options": {
+    "max_retries": 2
+  },
+  "steps": [
+    {
+      "name": "Analyze",
+      "action": {
+        "kind": "Pool",
+        "pool": "p1",
+        "instructions": "Analyze the file and find ONE improvement to make. Return an Implement task with clear instructions on what to change."
+      },
+      "value_schema": {
+        "kind": "Inline",
+        "value": {
+          "type": "object",
+          "required": ["file_url"],
+          "properties": {
+            "file_url": { "type": "string" }
+          }
+        }
+      },
+      "next": ["Implement"]
+    },
+    {
+      "name": "Implement",
+      "action": {
+        "kind": "Pool",
+        "pool": "p1",
+        "instructions": "Implement the requested changes according to the instructions. If review_comments are provided, address those issues."
+      },
+      "value_schema": {
+        "kind": "Inline",
+        "value": {
+          "type": "object",
+          "required": ["file_url", "implementation_instructions"],
+          "properties": {
+            "file_url": { "type": "string" },
+            "implementation_instructions": { "type": "string" },
+            "review_comments": { "type": "string" }
+          }
+        }
+      },
+      "next": ["Review"]
+    },
+    {
+      "name": "Review",
+      "action": {
+        "kind": "Pool",
+        "pool": "p1",
+        "instructions": "Review the implementation for correctness and best practices.\n\n- If correct and follows best practices, return [] to complete.\n- If improvements needed, return an Implement task with review_comments explaining what to fix."
+      },
+      "value_schema": {
+        "kind": "Inline",
+        "value": {
+          "type": "object",
+          "required": ["file_url", "implementation_instructions"],
+          "properties": {
+            "file_url": { "type": "string" },
+            "implementation_instructions": { "type": "string" }
+          }
+        }
+      },
+      "next": ["Implement"]
+    }
+  ]
+}

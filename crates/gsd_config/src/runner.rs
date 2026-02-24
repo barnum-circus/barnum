@@ -621,7 +621,18 @@ pub fn run(
     runner_config: RunnerConfig<'_>,
 ) -> io::Result<()> {
     let mut runner = TaskRunner::new(config, schemas, runner_config)?;
-    while runner.next().is_some() {}
+    let mut dropped_count = 0u32;
+    while let Some(outcome) = runner.next() {
+        if matches!(outcome.result, TaskResult::Dropped { .. }) {
+            dropped_count += 1;
+        }
+    }
+    if dropped_count > 0 {
+        error!(dropped_count, "task queue completed with dropped tasks");
+        return Err(io::Error::other(format!(
+            "{dropped_count} task(s) were dropped (retries exhausted)"
+        )));
+    }
     info!("task queue complete");
     Ok(())
 }
