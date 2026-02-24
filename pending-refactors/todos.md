@@ -1,5 +1,32 @@
 # To-Dos and Future Directions
 
+## Shutdown and Cleanup Behavior
+
+**Status: NEEDS DESIGN**
+
+Currently when the daemon stops (via SIGTERM/Ctrl+C or `agent_pool stop`), the pool directory remains with stale state. Users must manually run `agent_pool cleanup` or use `--clear` on restart.
+
+**Desired behavior:**
+- Ctrl+C (SIGINT) should clean up the pool directory before exiting
+- `agent_pool stop` should kill the process AND remove the directory
+- Think comprehensively about what "shutdown" means for:
+  - CLI daemon (killed via signal)
+  - Embedded daemon (`DaemonHandle::shutdown()`)
+  - Tests (need clean state between runs)
+
+**Questions to answer:**
+- Should cleanup be default or opt-in?
+- What about debugging? Users might want to inspect state after crash
+- How to handle signal handlers safely (can't do complex ops in signal handlers)?
+- Should `DaemonHandle::shutdown()` also clean up, or is that test harness's job?
+
+**Related:**
+- `stop()` in `client/stop.rs` - sends SIGTERM to PID from lock file
+- `cleanup_stopped()` in `pool.rs` - removes directories for non-running pools
+- Test harnesses use `setup_test_dir()` which already cleans up
+
+---
+
 ## Socket-Based Task Submissions
 
 **Status: NOT IMPLEMENTED** - The daemon creates a socket and listens on it, but socket-based task submissions are stubbed out with a warning. Only file-based submissions (`pending/` directory) work.
