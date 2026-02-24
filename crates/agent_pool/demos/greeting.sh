@@ -10,13 +10,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
 ROOT=$(mktemp -d)
 
-# Build the binary first
-echo "Building agent_pool..."
-cargo build -p agent_pool --quiet
-echo "Build complete."
-echo ""
-
-AGENT_POOL="${AGENT_POOL:-$WORKSPACE_ROOT/target/debug/agent_pool}"
+# Use pre-built binary if AGENT_POOL is set, otherwise build
+if [ -z "$AGENT_POOL" ]; then
+    echo "Building agent_pool..."
+    cargo build -p agent_pool --quiet
+    echo "Build complete."
+    echo ""
+    AGENT_POOL="$WORKSPACE_ROOT/target/debug/agent_pool"
+fi
 
 echo "=== Demo: Greeting Agent ==="
 echo "Working directory: $ROOT"
@@ -48,12 +49,12 @@ sleep 0.3
 # Submit greeting requests
 echo ""
 echo "Requesting casual greeting..."
-result=$($AGENT_POOL submit_task --pool "$ROOT" --data "casual")
+result=$($AGENT_POOL submit_task --pool "$ROOT" --data '{"kind":"Task","task":{"instructions":"Return a greeting","data":"casual"}}')
 echo "Response: $result"
 echo ""
 
 echo "Requesting formal greeting..."
-result=$($AGENT_POOL submit_task --pool "$ROOT" --data "formal")
+result=$($AGENT_POOL submit_task --pool "$ROOT" --data '{"kind":"Task","task":{"instructions":"Return a greeting","data":"formal"}}')
 echo "Response: $result"
 echo ""
 

@@ -14,14 +14,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
 ROOT=$(mktemp -d)
 
-# Build the binary first (quiet mode to avoid interleaving with demo output)
-echo "Building agent_pool..."
-cargo build -p agent_pool --quiet
-echo "Build complete."
-echo ""
-
-# Use the built binary directly instead of cargo run to avoid recompilation output
-AGENT_POOL="${AGENT_POOL:-$WORKSPACE_ROOT/target/debug/agent_pool}"
+# Use pre-built binary if AGENT_POOL is set, otherwise build
+if [ -z "$AGENT_POOL" ]; then
+    echo "Building agent_pool..."
+    cargo build -p agent_pool --quiet
+    echo "Build complete."
+    echo ""
+    AGENT_POOL="$WORKSPACE_ROOT/target/debug/agent_pool"
+fi
 
 echo "=== Demo: Single Agent Queue ==="
 echo "Working directory: $ROOT"
@@ -61,7 +61,8 @@ echo ""
 submit_task() {
     local task="$1"
     local start=$(date +%s.%N)
-    result=$($AGENT_POOL submit_task --pool "$ROOT" --data "$task")
+    local json="{\"kind\":\"Task\",\"task\":{\"instructions\":\"Echo this back\",\"data\":\"$task\"}}"
+    result=$($AGENT_POOL submit_task --pool "$ROOT" --data "$json")
     local end=$(date +%s.%N)
     local elapsed=$(echo "$end - $start" | bc)
     echo "[${elapsed}s] $result"
