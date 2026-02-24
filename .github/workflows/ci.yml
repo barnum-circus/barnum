@@ -173,9 +173,6 @@ jobs:
           path: target/x86_64-pc-windows-msvc/release/gsd.exe
 
   publish:
-    # Non-blocking: publish failure shouldn't fail the overall CI
-    # Tests and demos are the important quality gates
-    continue-on-error: true
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     needs: [fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
