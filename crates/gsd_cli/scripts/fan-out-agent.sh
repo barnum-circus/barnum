@@ -36,6 +36,7 @@ while true; do
 
         sleep "$SLEEP_TIME"
 
+        # Write to temp file and atomically rename to avoid race conditions
         case "$kind" in
             Distribute)
                 # Fan out to N Worker tasks
@@ -48,17 +49,18 @@ while true; do
                 done
                 response="$response]"
                 echo "[$AGENT_ID] -> $NUM_WORKERS Worker tasks" >&2
-                echo "$response" > "$AGENT_DIR/response.json"
+                echo "$response" > "$AGENT_DIR/response.json.tmp"
                 ;;
             Worker)
                 echo "[$AGENT_ID] -> [] (done)" >&2
-                echo '[]' > "$AGENT_DIR/response.json"
+                echo '[]' > "$AGENT_DIR/response.json.tmp"
                 ;;
             *)
                 echo "[$AGENT_ID] Unknown kind: $kind, returning []" >&2
-                echo '[]' > "$AGENT_DIR/response.json"
+                echo '[]' > "$AGENT_DIR/response.json.tmp"
                 ;;
         esac
+        mv "$AGENT_DIR/response.json.tmp" "$AGENT_DIR/response.json"
     fi
     sleep 0.05
 done

@@ -70,13 +70,15 @@ while true; do
         sleep "$SLEEP_TIME"
 
         next=$(get_next_step "$kind")
+        # Write to temp file and atomically rename to avoid race conditions
         if [ -z "$next" ]; then
             echo "[$AGENT_ID] -> [] (done)" >&2
-            echo '[]' > "$AGENT_DIR/response.json"
+            echo '[]' > "$AGENT_DIR/response.json.tmp"
         else
             echo "[$AGENT_ID] -> $next" >&2
-            echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/response.json"
+            echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/response.json.tmp"
         fi
+        mv "$AGENT_DIR/response.json.tmp" "$AGENT_DIR/response.json"
     fi
     sleep 0.05
 done
