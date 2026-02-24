@@ -140,11 +140,11 @@ fn invalid_response_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent returns invalid Output schema (missing "result")
-    let agent = GsdTestAgent::start(&root, "bad-agent", Duration::from_millis(10), |_| {
+    let agent = GsdTestAgent::start(&root, "bad-agent", Duration::from_millis(50), |_| {
         r#"[{"kind": "Output", "value": {}}]"#.to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    thread::sleep(Duration::from_millis(300));
 
     // Config allows 2 retries
     let config: Config = serde_json::from_str(
