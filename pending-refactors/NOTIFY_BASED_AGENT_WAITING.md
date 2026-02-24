@@ -435,11 +435,11 @@ rg "Duration::from_secs" --type rust
 1. ✅ **Task 1: Move Transport** - Mechanical refactor, no behavior change
 2. ✅ **Task 2: Create agent module** - New code using Transport, can be tested in isolation
 3. ✅ **Task 3: Update CLI** - Use Transport and agent module, existing tests verify it works
-4. ✅ **Task 4: Update test agents** - Use notify-based waiting (via `wait_for_task_with_timeout`)
+4. ✅ **Task 4: Update test agents** - Reverted to polling (see note below)
 5. ✅ **Task 5: Audit sleeps** - Completed; remaining sleeps are legitimate (timeouts, test delays)
 
 ## Notes
 
 - The socket mechanism for task submission is separate and unrelated to agent waiting
-- Test agents now use `wait_for_task_with_timeout` directly instead of spawning CLI subprocesses (simpler implementation)
-- The `running` flag is checked periodically via timeout on the receive
+- **Test agents use polling, not notify**: When multiple FSEvents watchers run in parallel (e.g., 9 integration tests), macOS FSEvents can have high latency (60+ seconds). Test agents use simple 10ms polling to avoid this contention. The CLI uses notify for production where single-watcher performance matters.
+- The `wait_for_task_with_timeout` function remains available for production use where a single watcher is sufficient
