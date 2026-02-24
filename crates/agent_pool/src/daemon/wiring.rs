@@ -76,7 +76,7 @@ impl From<DaemonConfig> for IoConfig {
 /// Unified event type for all I/O sources.
 ///
 /// Instead of multiple channels plus a wake channel, all event sources send to a single
-/// channel. The main loop blocks on `recv()`. Shutdown is signaled by closing the channel.
+/// channel. The main loop blocks on `recv()`. Shutdown is signaled by `Shutdown` variant.
 enum IoEvent {
     /// Filesystem event from notify watcher.
     Fs(notify::Event),
@@ -84,6 +84,8 @@ enum IoEvent {
     Socket(String, Stream),
     /// Effect from the core event loop.
     Effect(Effect),
+    /// Shutdown signal - exit the I/O loop.
+    Shutdown,
 }
 
 // =============================================================================
@@ -100,8 +102,8 @@ pub struct DaemonHandle {
 impl DaemonHandle {
     /// Request graceful shutdown and wait for the daemon to stop.
     ///
-    /// Dropping the sender closes the channel, which causes the daemon's
-    /// event loop to exit. Then we join the thread.
+    /// Sends a shutdown signal through the channel, which causes the daemon's
+    /// I/O loop to exit. Then we join the thread.
     ///
     /// # Errors
     ///
@@ -111,8 +113,9 @@ impl DaemonHandle {
             _shutdown_tx: shutdown_tx,
             thread,
         } = self;
-        // Dropping shutdown_tx closes the channel, signaling shutdown
-        drop(shutdown_tx);
+        // Send explicit shutdown signal (can't rely on channel closing because
+        // timer threads hold sender clones that keep the channel alive)
+        let _ = shutdown_tx.send(IoEvent::Shutdown);
 
         if let Some(handle) = thread {
             handle
@@ -360,8 +363,14 @@ fn run_event_loop(
 
     let mut state = PoolState::new();
 
-    // Block on recv - channel closing signals shutdown
+    // Block on recv - Shutdown event signals exit
     while let Ok(event) = events_rx.recv() {
+        // Check for shutdown before processing
+        if matches!(event, Event::Shutdown) {
+            debug!("event loop: received shutdown signal");
+            break;
+        }
+
         trace!(?event, "received event");
         let (new_state, effects) = step(state, event);
         state = new_state;
@@ -407,7 +416,7 @@ fn io_loop(
         agents_dir, pending_dir
     );
 
-    // Block on recv - channel closing signals shutdown
+    // Block on recv - Shutdown event signals exit
     while let Ok(io_event) = io_rx.recv() {
         match io_event {
             IoEvent::Fs(event) => {
@@ -462,10 +471,17 @@ fn io_loop(
                     io_config,
                 )?;
             }
+            IoEvent::Shutdown => {
+                info!("shutdown signal received");
+                // Signal event loop to exit (can't rely on channel closing because
+                // timer threads hold events_tx clones)
+                let _ = events_tx.send(Event::Shutdown);
+                break;
+            }
         }
     }
 
-    info!("I/O channel closed, shutting down");
+    info!("I/O loop exiting");
     Ok(())
 }
 
