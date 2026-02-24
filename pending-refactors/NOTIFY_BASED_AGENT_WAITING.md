@@ -19,9 +19,9 @@ Agents communicate with the daemon through files in `<pool>/agents/<agent_name>/
 | absent | absent | Idle - waiting for task |
 | present | absent | Task pending - agent should process |
 | present | present | Agent done - daemon should cleanup |
-| absent | present | **Invalid** - should never occur |
+| absent | present | Cleanup in progress - transitionary, do nothing |
 
-The daemon's cleanup order (task first, then response) prevents the invalid state.
+The daemon deletes task.json first, then response.json. This means `(absent, present)` is a valid transitionary state that agents will briefly observe during cleanup. Agents should simply wait - they only act when `task.exists() && !response.exists()`.
 
 ### Current Implementation: CLI
 
@@ -160,11 +160,12 @@ The file system is shared state we can't fully control, but we can:
    }
    ```
 
-2. **Panic on invalid states:**
+2. **Handle transitionary states gracefully:**
    ```rust
-   // If we ever see response.json without task.json, that's a bug
+   // (absent, present) is a valid transitionary state during cleanup
+   // Just wait - don't act, don't error
    if response_file.exists() && !task_file.exists() {
-       panic!("Invalid agent state: response exists without task");
+       return Ok(None);  // Keep waiting
    }
    ```
 
@@ -391,15 +392,11 @@ impl AgentTransport {
     }
 
     fn try_read_task(&self) -> io::Result<Option<Task>> {
-        // Invalid state check
-        if self.response_file.exists() && !self.task_file.exists() {
-            // This should never happen - daemon deletes task first
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid state: response.json exists without task.json"
-            ));
-        }
-
+        // Only return a task when: task exists AND response does not
+        // Other states:
+        // - (absent, absent): Idle, waiting for task
+        // - (present, present): Agent done, daemon cleaning up
+        // - (absent, present): Cleanup in progress (transitionary)
         if self.task_file.exists() && !self.response_file.exists() {
             let raw = fs::read_to_string(&self.task_file)?;
             let task = parse_task(&raw)?;
