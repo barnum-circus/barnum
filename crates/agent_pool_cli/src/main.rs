@@ -5,13 +5,15 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, DaemonConfig, PENDING_DIR, Payload, RESPONSE_FILE, SOCKET_NAME, TASK_FILE,
-    cleanup_stopped, generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool,
-    run_with_config, stop, submit, submit_file,
+    AGENTS_DIR, AgentEvent, DaemonConfig, PENDING_DIR, Payload, RESPONSE_FILE, SOCKET_NAME,
+    TASK_FILE, Transport, cleanup_stopped, create_watcher, generate_id, id_to_path,
+    is_daemon_running, list_pools, resolve_pool, run_with_config, stop, submit, submit_file,
+    wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc;
 use std::time::Duration;
 use std::{fs, thread};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -193,49 +195,46 @@ fn init_tracing(level: LogLevel) {
 }
 
 /// Wait for a task file to appear and return the formatted output JSON.
-fn wait_for_task(
-    task_file: &std::path::Path,
-    response_file: &std::path::Path,
+///
+/// Uses notify-based file watching instead of polling.
+fn wait_and_read_task(
+    transport: &Transport,
+    events_rx: &mpsc::Receiver<AgentEvent>,
     name: &str,
 ) -> Result<String, String> {
-    loop {
-        // Ensure agent directory exists (may have been deleted by daemon restart)
-        if let Some(agent_dir) = task_file.parent()
-            && !agent_dir.exists()
-        {
-            let _ = fs::create_dir_all(agent_dir);
-        }
+    // Wait for task using notify (no polling!)
+    wait_for_task(transport, events_rx).map_err(|e| format!("Wait error: {e}"))?;
 
-        // Wait for task.json to exist AND response.json to NOT exist
-        // (response.json existing means we already processed this task)
-        if task_file.exists() && !response_file.exists() {
-            let raw =
-                fs::read_to_string(task_file).map_err(|e| format!("Failed to read task: {e}"))?;
+    // Read task using Transport
+    let raw = transport
+        .read(TASK_FILE)
+        .map_err(|e| format!("Failed to read task: {e}"))?;
 
-            let envelope: serde_json::Value = serde_json::from_str(&raw)
-                .map_err(|e| format!("Failed to parse task envelope: {e}"))?;
+    let envelope: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("Failed to parse task envelope: {e}"))?;
 
-            let kind = envelope
-                .get("kind")
-                .and_then(|k| k.as_str())
-                .unwrap_or("Task");
-            let content = envelope
-                .get("task")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+    let kind = envelope
+        .get("kind")
+        .and_then(|k| k.as_str())
+        .unwrap_or("Task");
+    let content = envelope
+        .get("task")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
 
-            let output = serde_json::json!({
-                "kind": kind,
-                "agent_name": name,
-                "response_file": response_file.display().to_string(),
-                "content": content
-            });
+    let response_file = transport
+        .path()
+        .map(|p| p.join(RESPONSE_FILE))
+        .ok_or("Socket transport not supported")?;
 
-            return Ok(serde_json::to_string_pretty(&output).unwrap_or_default());
-        }
+    let output = serde_json::json!({
+        "kind": kind,
+        "agent_name": name,
+        "response_file": response_file.display().to_string(),
+        "content": content
+    });
 
-        thread::sleep(Duration::from_millis(100));
-    }
+    Ok(serde_json::to_string_pretty(&output).unwrap_or_default())
 }
 
 #[allow(clippy::too_many_lines)]
@@ -479,10 +478,22 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            let task_file = agent_dir.join(TASK_FILE);
-            let response_file = agent_dir.join(RESPONSE_FILE);
+            // Set up transport and notify watcher
+            let transport = Transport::Directory(agent_dir);
+            let (watcher, events_rx) = match create_watcher(&transport) {
+                Ok(Some(w)) => w,
+                Ok(None) => {
+                    eprintln!("Socket transport not yet supported for agents");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => {
+                    eprintln!("Failed to create watcher: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let _watcher = watcher; // Keep watcher alive
 
-            match wait_for_task(&task_file, &response_file, &name) {
+            match wait_and_read_task(&transport, &events_rx, &name) {
                 Ok(output) => println!("{output}"),
                 Err(e) => {
                     eprintln!("{e}");
@@ -504,9 +515,6 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            let task_file = agent_dir.join(TASK_FILE);
-            let response_file = agent_dir.join(RESPONSE_FILE);
-
             // Get response content from --data or --file
             let response_content = match (data, file) {
                 (Some(d), _) => d,
@@ -523,19 +531,30 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Write response to current task
-            if let Err(e) = fs::write(&response_file, &response_content) {
+            // Set up transport and notify watcher
+            let transport = Transport::Directory(agent_dir);
+            let (watcher, events_rx) = match create_watcher(&transport) {
+                Ok(Some(w)) => w,
+                Ok(None) => {
+                    eprintln!("Socket transport not yet supported for agents");
+                    return ExitCode::FAILURE;
+                }
+                Err(e) => {
+                    eprintln!("Failed to create watcher: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            let _watcher = watcher; // Keep watcher alive
+
+            // Write response using Transport (atomic write)
+            if let Err(e) = transport.write(RESPONSE_FILE, &response_content) {
                 eprintln!("Failed to write response: {e}");
                 return ExitCode::FAILURE;
             }
 
-            // Wait for daemon to consume the response (task file removed)
-            while task_file.exists() {
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            // Wait for next task
-            match wait_for_task(&task_file, &response_file, &name) {
+            // Wait for next task (wait_for_task handles cleanup transition automatically:
+            // it blocks until task.json exists AND response.json doesn't)
+            match wait_and_read_task(&transport, &events_rx, &name) {
                 Ok(output) => println!("{output}"),
                 Err(e) => {
                     eprintln!("{e}");
