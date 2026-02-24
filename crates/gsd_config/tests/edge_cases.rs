@@ -277,12 +277,12 @@ fn command_action_executes() {
             "steps": [
                 {
                     "name": "Echo",
-                    "action": {"kind": "Command", "script": "cat | jq -c '[{kind: \"Done\", value: .value}]'"},
+                    "action": {"kind": "Command", "script": "jq -c '[{kind: \"Done\", value: .value}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "script": "echo '[]'"},
+                    "action": {"kind": "Command", "script": "jq -c '[]'"},
                     "next": []
                 }
             ]

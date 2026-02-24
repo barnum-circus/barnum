@@ -39,6 +39,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
       - name: Build binaries
         run: cargo build -p agent_pool_cli -p gsd_cli
       - name: Run tests
