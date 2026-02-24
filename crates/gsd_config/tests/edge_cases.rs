@@ -239,7 +239,6 @@ fn large_fan_out() {
 
     let config: Config = serde_json::from_str(
         r#"{
-            "options": {"max_retries": 3},
             "steps": [
                 {"name": "Distribute", "action": {"kind": "Pool", "instructions": ""}, "next": ["Worker"]},
                 {"name": "Worker", "action": {"kind": "Pool", "instructions": ""}, "next": []}
