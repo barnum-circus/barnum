@@ -71,7 +71,9 @@ fn invalid_transition_causes_retry() {
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
 
-    gsd_config::run(&config, &schemas, runner_config).expect("run failed");
+    // Run should return error because task is dropped after retries exhausted
+    let result = gsd_config::run(&config, &schemas, runner_config);
+    assert!(result.is_err(), "run should fail when tasks are dropped");
 
     let processed = agent.stop();
     // Original + 1 retry = 2 attempts
@@ -107,7 +109,9 @@ fn unknown_step_causes_retry() {
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
 
-    gsd_config::run(&config, &schemas, runner_config).expect("run failed");
+    // Run should return error because task is dropped after retries exhausted
+    let result = gsd_config::run(&config, &schemas, runner_config);
+    assert!(result.is_err(), "run should fail when tasks are dropped");
 
     let processed = agent.stop();
     // Original + 1 retry = 2 attempts
