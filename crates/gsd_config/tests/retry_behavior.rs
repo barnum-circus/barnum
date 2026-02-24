@@ -14,7 +14,6 @@ use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "retry_behavior";
@@ -36,7 +35,7 @@ fn retry_on_invalid_response_false_drops_task() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "invalid-agent",
         Duration::from_millis(10),
@@ -47,7 +46,8 @@ fn retry_on_invalid_response_false_drops_task() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -109,7 +109,7 @@ fn retry_on_invalid_response_true_retries() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "invalid-agent",
         Duration::from_millis(10),
@@ -119,7 +119,8 @@ fn retry_on_invalid_response_true_retries() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -181,7 +182,7 @@ fn malformed_json_triggers_retry() {
     let count_clone = call_count.clone();
 
     // Agent that returns invalid JSON
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "malformed-agent",
         Duration::from_millis(10),
@@ -191,7 +192,8 @@ fn malformed_json_triggers_retry() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -248,7 +250,7 @@ fn per_step_options_override_global() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "override-agent",
         Duration::from_millis(10),
@@ -258,7 +260,8 @@ fn per_step_options_override_global() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Global: retry=true, max_retries=5
     // Step: retry=false (override)
@@ -325,7 +328,7 @@ fn recovery_on_nth_attempt() {
     let count_clone = call_count.clone();
 
     // Agent that fails twice, then succeeds
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "recovery-agent",
         Duration::from_millis(10),
@@ -341,7 +344,8 @@ fn recovery_on_nth_attempt() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -395,7 +399,7 @@ fn max_retries_zero_no_retries() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
 
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "no-retry-agent",
         Duration::from_millis(10),
@@ -405,7 +409,8 @@ fn max_retries_zero_no_retries() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{

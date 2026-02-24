@@ -11,6 +11,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -116,12 +117,18 @@ fn extract_task_envelope(raw: &str) -> TaskEnvelope {
 pub struct GsdTestAgent {
     running: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
+    /// Receiver that signals when the agent has processed its first message (heartbeat).
+    /// This allows tests to wait for the agent to be fully ready without arbitrary sleeps.
+    ready_rx: Option<mpsc::Receiver<()>>,
 }
 
 impl GsdTestAgent {
     /// Start a GSD test agent with a custom processing function.
     ///
     /// The processor receives the full payload JSON and returns the response JSON.
+    ///
+    /// After starting, call `wait_ready()` to block until the agent has processed
+    /// its first message (heartbeat) and is ready to receive real tasks.
     pub fn start<F>(root: &Path, agent_id: &str, processing_delay: Duration, processor: F) -> Self
     where
         F: Fn(&str) -> String + Send + 'static,
@@ -132,10 +139,14 @@ impl GsdTestAgent {
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
 
+        // Channel to signal when the agent has processed its first message (heartbeat)
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
             let task_file = agent_dir.join(TASK_FILE);
             let response_file = agent_dir.join(RESPONSE_FILE);
+            let mut first_message_processed = false;
 
             while running_clone.load(Ordering::SeqCst) {
                 // Check for task file
@@ -152,6 +163,11 @@ impl GsdTestAgent {
                     match envelope.kind.as_str() {
                         "Heartbeat" => {
                             let _ = fs::write(&response_file, "{}");
+                            // Signal ready after processing first heartbeat
+                            if !first_message_processed {
+                                first_message_processed = true;
+                                let _ = ready_tx.send(());
+                            }
                             thread::sleep(Duration::from_millis(10));
                             continue;
                         }
@@ -160,6 +176,12 @@ impl GsdTestAgent {
                             break;
                         }
                         _ => {}
+                    }
+
+                    // Signal ready if we got a non-heartbeat message first (shouldn't happen normally)
+                    if !first_message_processed {
+                        first_message_processed = true;
+                        let _ = ready_tx.send(());
                     }
 
                     thread::sleep(processing_delay);
@@ -183,6 +205,7 @@ impl GsdTestAgent {
         Self {
             running,
             handle: Some(handle),
+            ready_rx: Some(ready_rx),
         }
     }
 
@@ -236,6 +259,21 @@ impl GsdTestAgent {
             // Default: terminate
             "[]".to_string()
         })
+    }
+
+    /// Wait for the agent to be ready (has processed its first message).
+    ///
+    /// This blocks until the agent has received and processed the initial heartbeat
+    /// from the daemon, indicating it's fully registered and ready to receive tasks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the agent thread exits before signaling readiness.
+    pub fn wait_ready(&mut self) {
+        if let Some(rx) = self.ready_rx.take() {
+            rx.recv().expect("Agent exited before signaling readiness");
+        }
+        // If ready_rx is None, we've already waited - that's fine
     }
 
     /// Stop the agent and return the list of payloads it processed.
