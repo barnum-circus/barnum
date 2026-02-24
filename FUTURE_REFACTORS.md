@@ -32,7 +32,7 @@ The command agent should have its own configurable timeout for executing command
 
 ## GSD Configuration
 
-### Default Step
+### Default Step Feature
 
 Add the ability to mark one step as the "default" entry point, so users don't need to specify `--initial` with the full task structure.
 
@@ -46,14 +46,54 @@ gsd run config.json --pool p1 --initial '[{"kind": "Analyze", "value": {"file_ur
 gsd run config.json --pool p1 --file /path/to/file
 ```
 
-The config would specify which step is the default and how CLI args map to the value schema.
+#### Current Architecture
 
-**Possible syntax:**
+**Relevant files:**
+- `crates/gsd_cli/src/main.rs:26-44` - CLI args definition
+- `crates/gsd_cli/src/main.rs:86-88` - `parse_initial_tasks()` call
+- `crates/gsd_cli/src/main.rs:177-195` - `parse_initial_tasks()` implementation
+- `crates/gsd_config/src/config.rs:10-24` - `Config` struct
+- `crates/gsd_config/src/types.rs` - `Task` struct
+
+**Current flow:**
+1. CLI receives `--initial` as JSON string or file path
+2. `parse_initial_tasks()` deserializes to `Vec<Task>`
+3. Each `Task` has `{kind: StepName, value: serde_json::Value}`
+4. Runner executes these tasks
+
+#### Design Options
+
+**Option A: Config-level default step**
 ```json
 {
   "default_step": "Analyze",
-  "cli_mapping": {
-    "file": "file_url"
-  }
+  "steps": [...]
 }
 ```
+
+**Option B: Step-level marker**
+```json
+{
+  "steps": [
+    {"name": "Analyze", "default": true, ...}
+  ]
+}
+```
+
+**Option C: First step is default**
+- No config change needed
+- First step in `steps` array is the entry point
+
+#### Open Questions
+
+1. **Which approach?** Config-level `default_step`, step-level `default: true`, or implicit first-step?
+
+2. **CLI mapping** - How should CLI args map to the value schema?
+   - Option A: Named flags matching schema properties (`--file_url /path`)
+   - Option B: Positional args in schema order
+   - Option C: Single `--value` flag with simpler JSON (`--value '{"file_url": "/path"}'`)
+   - Option D: Generate CLI flags from schema at runtime
+
+3. **Multiple initial tasks?** - Current `--initial` supports an array. Should we keep that capability alongside the simplified form?
+
+4. **Validation** - Should we validate that the default step exists during config validation?
