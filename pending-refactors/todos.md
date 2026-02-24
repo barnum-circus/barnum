@@ -483,6 +483,64 @@ Implementation considerations:
 
 ---
 
+## JSON Schema Output Command
+
+Add a `gsd schema` command that outputs the JSON schema for the GSD configuration file. This enables:
+
+- IDE autocomplete via JSON schema support
+- Validation in external tools
+- Documentation generation
+- AI assistants to understand the config format
+
+```bash
+gsd schema > gsd-config.schema.json
+```
+
+The schema should be derived from the Rust types in `gsd_config::Config` and friends, possibly using `schemars` crate.
+
+---
+
+## Initial Step with CLI Data
+
+Add support for an `initial` step in the config that receives its data from the command line. This simplifies the common case where a workflow has a single entry point.
+
+**Config format:**
+```json
+{
+  "steps": [
+    {
+      "name": "Start",
+      "initial": true,
+      "next": ["Process"]
+    }
+  ]
+}
+```
+
+**CLI usage:**
+```bash
+# Data provided on command line goes to the initial step
+gsd run config.json --pool /tmp/pool --data '{"user_id": 123}'
+```
+
+Rules:
+- At most one step can have `initial: true`
+- If `initial` is set, `--initial-steps` is no longer required
+- `--data` provides the `value` for the initial step
+- If both `initial` step and `--initial-steps` are provided, error (or `--initial-steps` wins?)
+
+This replaces the verbose:
+```bash
+gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {"user_id": 123}}]'
+```
+
+With:
+```bash
+gsd run config.json --pool /tmp/pool --data '{"user_id": 123}'
+```
+
+---
+
 ## Full Socket-Based Protocol
 
 Remove filesystem-based IPC entirely:
