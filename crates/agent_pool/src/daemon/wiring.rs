@@ -225,20 +225,26 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let listener = create_socket_listener(&socket_path)?;
     let (watcher, fs_events) = create_fs_watcher(&root, wake_tx.clone())?;
 
-    // Create pending_dir AFTER watcher is running.
-    // Clients use pending_dir existence as the "ready" signal.
     let pending_dir = root.join(PENDING_DIR);
-    fs::create_dir_all(&pending_dir)?;
-
     let signals = DaemonSignals::new();
     let signals_clone = signals.clone();
+
+    // Use a oneshot channel to signal when daemon is ready
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
 
     let thread = thread::spawn(move || {
         let _lock = lock;
         let _cleanup = SocketCleanup(socket_path.clone());
         let _watcher = watcher;
 
+        // Create pending_dir AFTER watcher is running.
+        // Clients use pending_dir existence as the "ready" signal.
+        fs::create_dir_all(&pending_dir).expect("failed to create pending dir");
+
         info!(socket = %socket_path.display(), "daemon listening");
+
+        // Signal that we're ready
+        let _ = ready_tx.send(());
 
         run_daemon(
             listener,
@@ -252,7 +258,8 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         )
     });
 
-    thread::sleep(Duration::from_millis(50));
+    // Wait for daemon to signal readiness (blocking, no polling)
+    let _ = ready_rx.recv();
 
     Ok(DaemonHandle {
         signals,
