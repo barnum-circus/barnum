@@ -261,7 +261,7 @@ pub struct AgentPoolHandle {
 impl AgentPoolHandle {
     /// Start the agent pool daemon.
     ///
-    /// The daemon signals readiness internally before spawn() returns.
+    /// The daemon signals readiness internally before `spawn()` returns.
     pub fn start(root: &Path) -> Self {
         let handle = agent_pool::spawn(root).expect("Failed to start daemon");
         Self {

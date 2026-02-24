@@ -229,8 +229,8 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let signals = DaemonSignals::new();
     let signals_clone = signals.clone();
 
-    // Use a oneshot channel to signal when daemon is ready
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+    // Use a oneshot channel to signal readiness or early error
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<io::Result<()>>(0);
 
     let thread = thread::spawn(move || {
         let _lock = lock;
@@ -239,12 +239,15 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
 
         // Create pending_dir AFTER watcher is running.
         // Clients use pending_dir existence as the "ready" signal.
-        fs::create_dir_all(&pending_dir).expect("failed to create pending dir");
+        if let Err(e) = fs::create_dir_all(&pending_dir) {
+            let _ = ready_tx.send(Err(e));
+            return Err(io::Error::other("failed to create pending dir"));
+        }
 
         info!(socket = %socket_path.display(), "daemon listening");
 
         // Signal that we're ready
-        let _ = ready_tx.send(());
+        let _ = ready_tx.send(Ok(()));
 
         run_daemon(
             listener,
@@ -259,7 +262,10 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     });
 
     // Wait for daemon to signal readiness (blocking, no polling)
-    let _ = ready_rx.recv();
+    // Propagate any early error
+    ready_rx
+        .recv()
+        .map_err(|_| io::Error::other("daemon thread died during startup"))??;
 
     Ok(DaemonHandle {
         signals,
