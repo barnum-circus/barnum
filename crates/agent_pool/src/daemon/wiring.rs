@@ -8,7 +8,7 @@ use std::convert::Infallible;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
@@ -74,103 +74,46 @@ impl From<DaemonConfig> for IoConfig {
 // Daemon State
 // =============================================================================
 
-/// Daemon run state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
-enum DaemonState {
-    /// Running normally, dispatching tasks.
-    Playing = 0,
-    /// Paused, not dispatching new tasks.
-    Paused = 1,
-    /// Shutdown requested.
-    Shutdown = 2,
-}
-
-impl DaemonState {
-    #[allow(clippy::missing_const_for_fn)]
-    fn from_u32(value: u32) -> Self {
-        match value {
-            0 => Self::Playing,
-            1 => Self::Paused,
-            _ => Self::Shutdown, // 2 or invalid state treated as shutdown
-        }
-    }
-}
-
 // =============================================================================
 // Public API
 // =============================================================================
 
-/// Shared control signals for the daemon.
+/// Shared shutdown signal for the daemon.
 #[derive(Clone)]
-struct DaemonSignals {
-    state: Arc<AtomicU32>,
+struct ShutdownSignal {
+    triggered: Arc<AtomicBool>,
 }
 
-impl DaemonSignals {
+impl ShutdownSignal {
     fn new() -> Self {
         Self {
-            state: Arc::new(AtomicU32::new(DaemonState::Playing as u32)),
+            triggered: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn get_state(&self) -> DaemonState {
-        DaemonState::from_u32(self.state.load(Ordering::SeqCst))
+    fn trigger(&self) {
+        self.triggered.store(true, Ordering::SeqCst);
     }
 
-    fn trigger_shutdown(&self) {
-        self.state
-            .store(DaemonState::Shutdown as u32, Ordering::SeqCst);
-    }
-
-    fn is_shutdown_triggered(&self) -> bool {
-        self.get_state() == DaemonState::Shutdown
-    }
-
-    fn set_paused(&self, paused: bool) {
-        let new_state = if paused {
-            DaemonState::Paused
-        } else {
-            DaemonState::Playing
-        };
-        self.state.store(new_state as u32, Ordering::SeqCst);
-    }
-
-    fn is_paused(&self) -> bool {
-        self.get_state() == DaemonState::Paused
+    fn is_triggered(&self) -> bool {
+        self.triggered.load(Ordering::SeqCst)
     }
 }
 
-/// Handle to a running daemon, allowing control and graceful shutdown.
+/// Handle to a running daemon, allowing graceful shutdown.
 pub struct DaemonHandle {
-    signals: DaemonSignals,
+    shutdown: ShutdownSignal,
     thread: Option<thread::JoinHandle<io::Result<()>>>,
 }
 
 impl DaemonHandle {
-    /// Pause task dispatching.
-    pub fn pause(&self) {
-        self.signals.set_paused(true);
-    }
-
-    /// Resume task dispatching after a pause.
-    pub fn resume(&self) {
-        self.signals.set_paused(false);
-    }
-
-    /// Check if the daemon is currently paused.
-    #[must_use]
-    pub fn is_paused(&self) -> bool {
-        self.signals.is_paused()
-    }
-
     /// Request graceful shutdown and wait for the daemon to stop.
     ///
     /// # Errors
     ///
     /// Returns an error if the daemon thread panicked or encountered an I/O error.
     pub fn shutdown(mut self) -> io::Result<()> {
-        self.signals.trigger_shutdown();
+        self.shutdown.trigger();
         self.join()
     }
 
@@ -226,8 +169,8 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let (watcher, fs_events) = create_fs_watcher(&root, wake_tx.clone())?;
 
     let pending_dir = root.join(PENDING_DIR);
-    let signals = DaemonSignals::new();
-    let signals_clone = signals.clone();
+    let shutdown = ShutdownSignal::new();
+    let shutdown_clone = shutdown.clone();
 
     // Use a oneshot channel to signal readiness or early error
     let (ready_tx, ready_rx) = mpsc::sync_channel::<io::Result<()>>(0);
@@ -257,7 +200,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
             &agents_dir,
             &pending_dir,
             &config.into(),
-            &signals_clone,
+            &shutdown_clone,
         )
     });
 
@@ -268,7 +211,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         .map_err(|_| io::Error::other("daemon thread died during startup"))??;
 
     Ok(DaemonHandle {
-        signals,
+        shutdown,
         thread: Some(thread),
     })
 }
@@ -324,7 +267,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 
     info!(socket = %socket_path.display(), "daemon listening");
 
-    let signals = DaemonSignals::new();
+    let shutdown = ShutdownSignal::new();
     let io_config = config.into();
     match run_daemon(
         listener,
@@ -334,7 +277,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
         &agents_dir,
         &pending_dir,
         &io_config,
-        &signals,
+        &shutdown,
     ) {
         Ok(()) => unreachable!("event loop returned without shutdown signal"),
         Err(e) => Err(e),
@@ -355,7 +298,7 @@ fn run_daemon(
     agents_dir: &Path,
     pending_dir: &Path,
     io_config: &IoConfig,
-    signals: &DaemonSignals,
+    shutdown: &ShutdownSignal,
 ) -> io::Result<()> {
     // Create channels between event loop and I/O
     let (events_tx, events_rx) = mpsc::channel::<Event>();
@@ -375,12 +318,12 @@ fn run_daemon(
     // Track kicked agent paths to reject re-registration attempts
     let mut kicked_paths: HashSet<PathBuf> = HashSet::new();
 
-    // Clone signals for the event loop thread
-    let event_loop_signals = signals.clone();
+    // Clone shutdown signal for the event loop thread
+    let event_loop_shutdown = shutdown.clone();
 
     // Spawn event loop in a separate thread
     let event_loop_handle = thread::spawn(move || {
-        run_event_loop_with_shutdown(events_rx, effects_tx, wake_tx, event_loop_signals)
+        run_event_loop_with_shutdown(events_rx, effects_tx, wake_tx, event_loop_shutdown)
     });
 
     // Do initial scan of existing agents (kicked_paths is empty at startup)
@@ -408,7 +351,7 @@ fn run_daemon(
         agents_dir,
         pending_dir,
         io_config,
-        signals,
+        shutdown,
     );
 
     // Wait for event loop to finish (it will exit when it sees shutdown signal)
@@ -434,7 +377,7 @@ fn run_event_loop_with_shutdown(
     events_rx: mpsc::Receiver<Event>,
     effects_tx: mpsc::Sender<Effect>,
     wake_tx: mpsc::Sender<()>,
-    signals: DaemonSignals,
+    shutdown: ShutdownSignal,
 ) -> super::core::PoolState {
     use super::core::{PoolState, step};
 
@@ -442,7 +385,7 @@ fn run_event_loop_with_shutdown(
 
     loop {
         // Check shutdown signal
-        if signals.is_shutdown_triggered() {
+        if shutdown.is_triggered() {
             debug!("event loop: shutdown signal received");
             break;
         }
@@ -498,7 +441,7 @@ fn io_loop(
     agents_dir: &Path,
     pending_dir: &Path,
     io_config: &IoConfig,
-    signals: &DaemonSignals,
+    shutdown: &ShutdownSignal,
 ) -> io::Result<()> {
     debug!(
         "io_loop starting, agents_dir={:?}, pending_dir={:?}",
@@ -511,7 +454,7 @@ fn io_loop(
             Ok(()) => {} // Woken by an event source
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 // Check shutdown on timeout
-                if signals.is_shutdown_triggered() {
+                if shutdown.is_triggered() {
                     info!("shutdown requested");
                     return Ok(());
                 }
@@ -525,34 +468,32 @@ fn io_loop(
         }
 
         // Check shutdown after being woken
-        if signals.is_shutdown_triggered() {
+        if shutdown.is_triggered() {
             info!("shutdown requested");
             return Ok(());
         }
 
         // Drain socket submissions (non-blocking)
-        if !signals.is_paused() {
-            while let Ok((raw, stream)) = socket_rx.try_recv() {
-                let content = match resolve_payload(&raw) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(error = %e, "failed to resolve socket payload");
-                        continue;
-                    }
-                };
+        while let Ok((raw, stream)) = socket_rx.try_recv() {
+            let content = match resolve_payload(&raw) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!(error = %e, "failed to resolve socket payload");
+                    continue;
+                }
+            };
 
-                let external_id = external_task_map.register_socket(
-                    stream,
-                    ExternalTaskData {
-                        content,
-                        timeout: io_config.default_task_timeout,
-                    },
-                );
-                info!(external_task_id = external_id.0, "socket task submitted");
-                let _ = events_tx.send(Event::TaskSubmitted {
-                    task_id: TaskId::External(external_id),
-                });
-            }
+            let external_id = external_task_map.register_socket(
+                stream,
+                ExternalTaskData {
+                    content,
+                    timeout: io_config.default_task_timeout,
+                },
+            );
+            info!(external_task_id = external_id.0, "socket task submitted");
+            let _ = events_tx.send(Event::TaskSubmitted {
+                task_id: TaskId::External(external_id),
+            });
         }
 
         // Drain filesystem events (non-blocking)
