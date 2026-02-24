@@ -1379,10 +1379,7 @@ mod tests {
         );
 
         // Should only get one event
-        assert_eq!(
-            std::iter::from_fn(|| events_rx.try_recv().ok()).count(),
-            1
-        );
+        assert_eq!(std::iter::from_fn(|| events_rx.try_recv().ok()).count(), 1);
     }
 
     #[test]
