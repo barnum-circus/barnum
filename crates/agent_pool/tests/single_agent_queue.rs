@@ -27,10 +27,10 @@ fn single_agent_queues_multiple_tasks() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = TestAgent::echo(&root, "only-agent", Duration::from_millis(50));
+    let mut agent = TestAgent::echo(&root, "only-agent", Duration::from_millis(50));
 
-    // Give agent time to register
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Submit 4 tasks rapidly (they should queue since there's only one agent)
     let handles: Vec<_> = ["Task-A", "Task-B", "Task-C", "Task-D"]
@@ -66,14 +66,22 @@ fn single_agent_queues_multiple_tasks() {
 fn sequential_tasks_same_agent() {
     let root = setup_test_dir(&format!("{TEST_DIR}_sequential"));
 
-    let agent = TestAgent::echo(&root, "seq-agent", Duration::from_millis(10));
+    let mut agent = TestAgent::echo(&root, "seq-agent", Duration::from_millis(10));
 
     let agent_dir = root.join(AGENTS_DIR).join("seq-agent");
     let task_file = agent_dir.join(TASK_FILE);
     let response_file = agent_dir.join(RESPONSE_FILE);
 
-    // Process three tasks sequentially via file protocol
-    for i in 1..=3 {
+    // Process first task and wait for agent to be ready (signals on first message)
+    fs::write(&task_file, "Task-1").expect("Failed to write task");
+    agent.wait_ready();
+    let output = fs::read_to_string(&response_file).expect("Failed to read output");
+    assert_eq!(output, "Task-1 [processed]");
+    let _ = fs::remove_file(&task_file);
+    let _ = fs::remove_file(&response_file);
+
+    // Process remaining tasks (agent is already running and responsive)
+    for i in 2..=3 {
         let task = format!("Task-{i}");
 
         fs::write(&task_file, &task).expect("Failed to write task");

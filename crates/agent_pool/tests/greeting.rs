@@ -9,7 +9,6 @@ mod common;
 
 use agent_pool::{Payload, Response};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "greeting";
@@ -25,10 +24,10 @@ fn greeting_casual_and_formal() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10));
+    let mut agent = TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10));
 
-    // Give agent time to register
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let casual = agent_pool::submit(&root, &Payload::inline("casual")).expect("Submit failed");
     let Response::Processed { stdout, .. } = casual else {

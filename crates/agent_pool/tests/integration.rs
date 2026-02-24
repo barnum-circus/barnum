@@ -14,6 +14,13 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+/// Wait for all agents to be ready (have processed their initial heartbeats).
+fn wait_all_ready(agents: &mut [&mut TestAgent]) {
+    for agent in agents {
+        agent.wait_ready();
+    }
+}
+
 const TEST_DIR: &str = "integration";
 
 /// Wrapper around the daemon handle for testing.
@@ -85,10 +92,10 @@ fn file_based_submit() {
     }
 
     let _pool = DaemonHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
-    // Give agent time to register
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
     let submission_dir = submit_task(&pending_dir, "test-1", r#"{"message": "Hello!"}"#);
@@ -118,9 +125,10 @@ fn single_agent_multiple_tasks() {
     }
 
     let _pool = DaemonHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
 
@@ -164,10 +172,11 @@ fn multiple_agents_parallel() {
     let _pool = DaemonHandle::start(&root);
 
     // Start two agents with slight processing delay
-    let agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50));
-    let agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50));
+    let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50));
+    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for both agents to be ready (have processed initial heartbeats)
+    wait_all_ready(&mut [&mut agent1, &mut agent2]);
 
     let pending_dir = root.join(PENDING_DIR);
 
@@ -208,9 +217,10 @@ fn agent_deregistration() {
     }
 
     let _pool = DaemonHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
     let submission_dir = submit_task(&pending_dir, "task-before", r#"{"test": "before"}"#);
@@ -226,12 +236,14 @@ fn agent_deregistration() {
     let agent_dir = root.join(AGENTS_DIR).join("agent-1");
     let _ = fs::remove_dir_all(&agent_dir);
 
+    // Wait for FSWatcher to detect agent removal (this sleep is necessary)
     thread::sleep(Duration::from_millis(100));
 
     // Start a new agent
-    let agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5));
+    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for new agent to be ready
+    agent2.wait_ready();
 
     let submission_dir2 = submit_task(&pending_dir, "task-after", r#"{"test": "after"}"#);
     let response = wait_for_response(&submission_dir2, 2000);
@@ -265,10 +277,13 @@ fn tasks_queued_before_agents() {
         );
     }
 
-    thread::sleep(Duration::from_millis(100));
+    // Tasks have settled in pending queue
 
     // NOW register an agent
-    let agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5));
+
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Wait for all responses
     for i in 0..3 {
@@ -298,9 +313,10 @@ fn rapid_task_burst() {
     }
 
     let _pool = DaemonHandle::start(&root);
-    let agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2));
+    let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
 
@@ -341,9 +357,10 @@ fn identical_task_content() {
     }
 
     let _pool = DaemonHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
 
@@ -384,9 +401,10 @@ fn agent_joins_mid_processing() {
     let _pool = DaemonHandle::start(&root);
 
     // Start one slow agent
-    let agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100));
+    let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100));
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent1.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
 
@@ -401,7 +419,10 @@ fn agent_joins_mid_processing() {
 
     // Wait a bit, then add a second fast agent
     thread::sleep(Duration::from_millis(150));
-    let agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5));
+    let mut agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5));
+
+    // Wait for second agent to be ready (has processed initial heartbeat)
+    agent2.wait_ready();
 
     // Wait for all responses
     for i in 0..6 {
@@ -432,11 +453,12 @@ fn response_isolation() {
 
     let _pool = DaemonHandle::start(&root);
 
-    let agent = TestAgent::start(&root, "echo-agent", Duration::from_millis(5), |task, _| {
+    let mut agent = TestAgent::start(&root, "echo-agent", Duration::from_millis(5), |task, _| {
         format!("processed: {}", task.trim())
     });
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let pending_dir = root.join(PENDING_DIR);
 

@@ -10,7 +10,6 @@ mod common;
 use agent_pool::{AGENTS_DIR, Payload, RESPONSE_FILE, Response, TASK_FILE, submit_file};
 use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "single_basic";
@@ -26,10 +25,10 @@ fn single_agent_single_task() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10));
 
-    // Give agent time to register
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let response =
         agent_pool::submit(&root, &Payload::inline("Hello, World!")).expect("Submit failed");
@@ -55,8 +54,9 @@ fn file_protocol_basic() {
     let task_file = agent_dir.join(TASK_FILE);
     fs::write(&task_file, "Test task").expect("Failed to write task");
 
-    let agent = TestAgent::echo(&root, "test-agent", Duration::from_millis(10));
-    thread::sleep(Duration::from_millis(100));
+    let mut agent = TestAgent::echo(&root, "test-agent", Duration::from_millis(10));
+    // Wait for agent to process the task (signals ready on first message)
+    agent.wait_ready();
 
     let response_file = agent_dir.join(RESPONSE_FILE);
     let output = fs::read_to_string(&response_file).expect("Failed to read output");
@@ -81,10 +81,10 @@ fn file_based_submit() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10));
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10));
 
-    // Give agent time to register
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Submit using file-based protocol
     let response =

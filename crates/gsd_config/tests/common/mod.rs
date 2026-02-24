@@ -178,12 +178,6 @@ impl GsdTestAgent {
                         _ => {}
                     }
 
-                    // Signal ready if we got a non-heartbeat message first (shouldn't happen normally)
-                    if !first_message_processed {
-                        first_message_processed = true;
-                        let _ = ready_tx.send(());
-                    }
-
                     thread::sleep(processing_delay);
 
                     let response = processor(&envelope.content);
@@ -194,6 +188,12 @@ impl GsdTestAgent {
 
                     // Write response (daemon handles cleanup of both files)
                     let _ = fs::write(&response_file, &response);
+
+                    // Signal ready AFTER writing response for non-heartbeat messages
+                    if !first_message_processed {
+                        first_message_processed = true;
+                        let _ = ready_tx.send(());
+                    }
                 }
 
                 thread::sleep(Duration::from_millis(10));

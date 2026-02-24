@@ -14,6 +14,13 @@ use std::fs;
 use std::thread;
 use std::time::Duration;
 
+/// Wait for all agents to be ready (have processed their initial heartbeats).
+fn wait_all_ready(agents: &mut [&mut TestAgent]) {
+    for agent in agents {
+        agent.wait_ready();
+    }
+}
+
 const TEST_DIR: &str = "many_agents";
 
 #[test]
@@ -29,11 +36,12 @@ fn multiple_agents_parallel_tasks() {
     let _pool = AgentPoolHandle::start(&root);
 
     // 3 agents with varying response times
-    let agent1 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(10));
-    let agent2 = TestAgent::echo(&root, "medium-agent", Duration::from_millis(30));
-    let agent3 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(50));
+    let mut agent1 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(10));
+    let mut agent2 = TestAgent::echo(&root, "medium-agent", Duration::from_millis(30));
+    let mut agent3 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(50));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for all agents to be ready (have processed initial heartbeats)
+    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
 
     // Submit 6 tasks rapidly - they'll be distributed across agents
     let handles: Vec<_> = (1..=6)
@@ -72,11 +80,9 @@ fn multiple_agents_parallel_tasks() {
 fn multiple_agents_direct_dispatch() {
     let root = setup_test_dir(&format!("{TEST_DIR}_direct"));
 
-    let agent1 = TestAgent::echo(&root, "agent-a", Duration::from_millis(10));
-    let agent2 = TestAgent::echo(&root, "agent-b", Duration::from_millis(10));
-    let agent3 = TestAgent::echo(&root, "agent-c", Duration::from_millis(10));
-
-    thread::sleep(Duration::from_millis(50));
+    let mut agent1 = TestAgent::echo(&root, "agent-a", Duration::from_millis(10));
+    let mut agent2 = TestAgent::echo(&root, "agent-b", Duration::from_millis(10));
+    let mut agent3 = TestAgent::echo(&root, "agent-c", Duration::from_millis(10));
 
     // Write tasks directly to each agent via file protocol
     fs::write(
@@ -95,7 +101,8 @@ fn multiple_agents_direct_dispatch() {
     )
     .expect("Failed to write task C");
 
-    thread::sleep(Duration::from_millis(100));
+    // Wait for all agents to process their tasks (signals ready on first message)
+    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
 
     assert_eq!(agent1.stop(), vec!["Task A"]);
     assert_eq!(agent2.stop(), vec!["Task B"]);
