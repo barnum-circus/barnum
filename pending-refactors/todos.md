@@ -588,3 +588,21 @@ Remove filesystem-based IPC entirely:
 - Simpler, faster, easier to reason about
 
 The CLI commands (`register`, `get_task`, `complete_task`) already abstract away the filesystem, so this would be a transparent change for agents using the CLI.
+
+---
+
+## Parallelize Pre-Commit Hook Checks
+
+The pre-commit hook in `.githooks/pre-commit` runs checks sequentially:
+1. `cargo fmt`
+2. `cargo check`
+3. `cargo clippy`
+4. `cargo test`
+5. `cargo udeps`
+
+These could potentially run in parallel, especially when code is already compiled. Ideas:
+- Run fmt first (modifies files), then run check/clippy/test/udeps in parallel
+- Use `&` and `wait` in bash, or a tool like `parallel`
+- If any fails, collect all errors before reporting
+
+This would speed up the commit workflow, especially on incremental changes where compilation is cached.
