@@ -149,9 +149,41 @@ Test Agent (subprocess-based)
 
 ## Concrete Tasks
 
-### Task 1: Create Agent Event Loop Module
+### Task 1: Move Transport to Shared Module
 
-**Goal:** Create `notify`-based waiting functions for agents.
+**Goal:** Make `Transport` accessible to both daemon and agent code.
+
+**File:** `crates/agent_pool/src/daemon/io.rs` → `crates/agent_pool/src/transport.rs`
+
+The daemon's `Transport` enum already has `read()` and `write()` methods. Agents will use the same enum:
+
+```rust
+// Agent code uses Transport the same way as daemon code
+let transport = Transport::Directory(agent_dir);
+let task = transport.read(TASK_FILE)?;
+// ... process task ...
+transport.write(RESPONSE_FILE, &response)?;
+```
+
+For socket support later, the methods will just do socket I/O (ignoring the filename parameter):
+- `transport.read(_)` on Socket → reads next message from socket
+- `transport.write(_, content)` on Socket → sends message to socket
+
+**Steps:**
+
+1.1. Create new file `crates/agent_pool/src/transport.rs` with the `Transport` enum and its impl (moved from `daemon/io.rs`).
+
+1.2. Update `crates/agent_pool/src/lib.rs`:
+```rust
+mod transport;
+pub use transport::Transport;
+```
+
+1.3. Update `crates/agent_pool/src/daemon/io.rs` to use `crate::Transport` instead of local definition.
+
+### Task 2: Create Agent Event Loop Module
+
+**Goal:** Create `notify`-based waiting functions for agents using `Transport`.
 
 **File:** `crates/agent_pool/src/agent.rs` (new file)
 
@@ -163,7 +195,7 @@ use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
-use crate::{RESPONSE_FILE, TASK_FILE};
+use crate::{Transport, RESPONSE_FILE, TASK_FILE};
 
 /// Events the agent cares about.
 pub enum AgentEvent {
@@ -173,10 +205,18 @@ pub enum AgentEvent {
     WatchError(notify::Error),
 }
 
-/// Create a watcher for an agent directory.
-pub fn create_agent_watcher(
-    agent_dir: &Path,
-) -> io::Result<(RecommendedWatcher, mpsc::Receiver<AgentEvent>)> {
+/// Create a watcher for a directory-based transport.
+///
+/// Returns the watcher (keep alive) and a receiver for events.
+/// For socket-based transports, this would be a no-op (sockets are already event-driven).
+pub fn create_watcher(
+    transport: &Transport,
+) -> io::Result<Option<(RecommendedWatcher, mpsc::Receiver<AgentEvent>)>> {
+    let Some(dir) = transport.path() else {
+        // Socket transport - no filesystem watcher needed
+        return Ok(None);
+    };
+
     let (tx, rx) = mpsc::channel();
 
     let mut watcher = RecommendedWatcher::new(
@@ -189,36 +229,42 @@ pub fn create_agent_watcher(
     .map_err(io::Error::other)?;
 
     watcher
-        .watch(agent_dir, RecursiveMode::NonRecursive)
+        .watch(dir, RecursiveMode::NonRecursive)
         .map_err(io::Error::other)?;
 
-    Ok((watcher, rx))
+    Ok(Some((watcher, rx)))
 }
 
-/// Check if a task is ready to be processed.
-pub fn is_task_ready(agent_dir: &Path) -> bool {
-    let task_file = agent_dir.join(TASK_FILE);
-    let response_file = agent_dir.join(RESPONSE_FILE);
+/// Check if a task is ready to be processed (file-based only).
+pub fn is_task_ready(transport: &Transport) -> bool {
+    let Some(dir) = transport.path() else {
+        // Socket transport - task readiness is handled by blocking read
+        return false;
+    };
+    let task_file = dir.join(TASK_FILE);
+    let response_file = dir.join(RESPONSE_FILE);
     task_file.exists() && !response_file.exists()
 }
 
-/// Wait for a task to be ready (blocks until ready).
+/// Wait for a task to be ready (file-based transports).
 ///
 /// The condition `task.exists() && !response.exists()` handles all cases:
 /// - After writing response: keeps waiting until daemon cleans up and assigns new task
 /// - Fresh start: waits for first task assignment
+///
+/// For socket-based transports, just call `transport.read()` which blocks.
 pub fn wait_for_task(
-    agent_dir: &Path,
+    transport: &Transport,
     events_rx: &mpsc::Receiver<AgentEvent>,
 ) -> io::Result<()> {
-    if is_task_ready(agent_dir) {
+    if is_task_ready(transport) {
         return Ok(());
     }
 
     loop {
         match events_rx.recv() {
             Ok(AgentEvent::FileChanged) => {
-                if is_task_ready(agent_dir) {
+                if is_task_ready(transport) {
                     return Ok(());
                 }
             }
@@ -236,9 +282,9 @@ pub fn wait_for_task(
 }
 ```
 
-### Task 2: Update CLI to Use Agent Event Loop
+### Task 3: Update CLI to Use Transport and Agent Event Loop
 
-**Goal:** Replace polling in CLI with event-driven waiting.
+**Goal:** Replace polling in CLI with Transport-based event-driven waiting.
 
 **File:** `crates/agent_pool_cli/src/main.rs`
 
@@ -256,25 +302,43 @@ fn wait_for_task(...) -> Result<String, String> {
 
 **After:**
 ```rust
-use agent_pool::{create_agent_watcher, wait_for_task, is_task_ready};
+use agent_pool::{Transport, create_watcher, wait_for_task, TASK_FILE, RESPONSE_FILE};
 
-fn wait_for_task_event_driven(agent_dir: &Path, name: &str) -> Result<String, String> {
-    let (watcher, events_rx) = create_agent_watcher(agent_dir)
-        .map_err(|e| e.to_string())?;
-    let _watcher = watcher; // Keep alive
+fn run_agent(pool_root: &Path, name: &str) -> Result<String, String> {
+    let agent_dir = pool_root.join(AGENTS_DIR).join(name);
+    fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
 
-    wait_for_task(agent_dir, &events_rx).map_err(|e| e.to_string())?;
+    let transport = Transport::Directory(agent_dir);
 
-    // Read and return task (same as before)
-    let task_file = agent_dir.join(TASK_FILE);
-    let response_file = agent_dir.join(RESPONSE_FILE);
+    // Set up watcher (returns None for socket transport)
+    let watcher_and_rx = create_watcher(&transport).map_err(|e| e.to_string())?;
+    let (_watcher, events_rx) = watcher_and_rx
+        .ok_or("socket transport not yet supported")?;
+
+    // Wait for task using notify (no polling!)
+    wait_for_task(&transport, &events_rx).map_err(|e| e.to_string())?;
+
+    // Read task using Transport
+    let raw = transport.read(TASK_FILE).map_err(|e| e.to_string())?;
+
     // ... parse envelope, build output JSON ...
+}
+
+fn handle_next_task(transport: &Transport, events_rx: &Receiver<AgentEvent>, response: &str) -> Result<String, String> {
+    // Write response using Transport
+    transport.write(RESPONSE_FILE, response).map_err(|e| e.to_string())?;
+
+    // Wait for next task (handles cleanup transition automatically)
+    wait_for_task(transport, events_rx).map_err(|e| e.to_string())?;
+
+    // Read next task
+    transport.read(TASK_FILE).map_err(|e| e.to_string())
 }
 ```
 
 The `next_task` command just writes the response and calls `wait_for_task` - no explicit cleanup wait needed. The `task.exists() && !response.exists()` condition handles the transition automatically.
 
-### Task 3: Update Test Agents to Call CLI Binary
+### Task 4: Update Test Agents to Call CLI Binary
 
 **Goal:** Test agents should spawn `agent_pool get_task` and `agent_pool next_task` as subprocesses instead of reimplementing file-based polling in Rust.
 
@@ -344,7 +408,7 @@ impl GsdTestAgent {
 - No more `running` flag complexity - subprocess shutdown is clean
 - Any bugs in `get_task` / `next_task` are caught by tests
 
-### Task 4: Audit All Sleeps and Timeouts
+### Task 5: Audit All Sleeps and Timeouts
 
 **Goal:** Search for all `thread::sleep`, `recv_timeout`, `Duration::from_millis`, etc. and validate each usage is intentional.
 
@@ -368,10 +432,11 @@ rg "Duration::from_secs" --type rust
 
 ## Implementation Order
 
-1. **Task 1: Create agent module** - New code, can be tested in isolation
-2. **Task 2: Update CLI** - Use new code, existing tests verify it works
-3. **Task 3: Update test agents** - Make tests use CLI subprocess
-4. **Task 4: Audit sleeps** - Final cleanup pass
+1. **Task 1: Move Transport** - Mechanical refactor, no behavior change
+2. **Task 2: Create agent module** - New code using Transport, can be tested in isolation
+3. **Task 3: Update CLI** - Use Transport and agent module, existing tests verify it works
+4. **Task 4: Update test agents** - Make tests use CLI subprocess
+5. **Task 5: Audit sleeps** - Final cleanup pass
 
 ## Notes
 
