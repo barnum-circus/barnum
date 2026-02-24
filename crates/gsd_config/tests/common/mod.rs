@@ -160,7 +160,10 @@ impl GsdTestAgent {
 
             while running_clone.load(Ordering::SeqCst) {
                 // Wait for task using notify with timeout so we can check running flag
-                match wait_for_task_with_timeout(&transport, &events_rx, Duration::from_millis(100))
+                // Use short timeout (10ms) to check running flag frequently
+                // FSEvents on macOS can have high latency, so we rely on the
+                // is_task_ready() check at the start of wait_for_task_with_timeout
+                match wait_for_task_with_timeout(&transport, &events_rx, Duration::from_millis(10))
                 {
                     Ok(true) => {
                         // Task ready, continue to process
