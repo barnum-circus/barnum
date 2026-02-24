@@ -11,7 +11,6 @@ use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "branching_transitions";
@@ -57,14 +56,15 @@ fn branch_to_path_a() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::with_transitions(
+    let mut agent = GsdTestAgent::with_transitions(
         &root,
         "path-a-agent",
         Duration::from_millis(10),
         vec![("Decide", "PathA"), ("PathA", "Done"), ("Done", "")],
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -101,14 +101,15 @@ fn branch_to_path_b() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::with_transitions(
+    let mut agent = GsdTestAgent::with_transitions(
         &root,
         "path-b-agent",
         Duration::from_millis(10),
         vec![("Decide", "PathB"), ("PathB", "Done"), ("Done", "")],
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -150,7 +151,7 @@ fn fan_out_multiple_tasks() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = call_count.clone();
 
-    let agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "fan-out-agent",
         Duration::from_millis(10),
@@ -171,7 +172,8 @@ fn fan_out_multiple_tasks() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");

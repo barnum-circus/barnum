@@ -8,7 +8,6 @@ mod common;
 use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "simple_termination";
@@ -39,9 +38,10 @@ fn single_step_terminates() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::terminator(&root, "test-agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "test-agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = simple_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");

@@ -9,7 +9,6 @@ mod common;
 use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "linear_transitions";
@@ -50,14 +49,15 @@ fn three_step_linear_machine() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::with_transitions(
+    let mut agent = GsdTestAgent::with_transitions(
         &root,
         "linear-agent",
         Duration::from_millis(10),
         vec![("Start", "Middle"), ("Middle", "End"), ("End", "")],
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = linear_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -96,9 +96,10 @@ fn instructions_included_in_payload() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::terminator(&root, "checker-agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "checker-agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = linear_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");

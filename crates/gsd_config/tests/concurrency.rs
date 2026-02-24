@@ -19,6 +19,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Wait for all agents to be ready (have processed their initial heartbeats).
+fn wait_all_ready(agents: &mut [&mut GsdTestAgent]) {
+    for agent in agents {
+        agent.wait_ready();
+    }
+}
+
 const TEST_DIR: &str = "concurrency";
 
 fn worker_config() -> Config {
@@ -54,11 +61,12 @@ fn tasks_execute_in_parallel() {
 
     // Start 3 agents with 100ms processing delay
     let processing_delay = Duration::from_millis(100);
-    let _agent1 = GsdTestAgent::terminator(&root, "agent-1", processing_delay);
-    let _agent2 = GsdTestAgent::terminator(&root, "agent-2", processing_delay);
-    let _agent3 = GsdTestAgent::terminator(&root, "agent-3", processing_delay);
+    let mut agent1 = GsdTestAgent::terminator(&root, "agent-1", processing_delay);
+    let mut agent2 = GsdTestAgent::terminator(&root, "agent-2", processing_delay);
+    let mut agent3 = GsdTestAgent::terminator(&root, "agent-3", processing_delay);
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for all agents to be ready (have processed initial heartbeats)
+    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -115,20 +123,21 @@ fn work_distributed_across_agents() {
     // Use longer delay to ensure multiple agents get work
     let delay = Duration::from_millis(50);
 
-    let _agent1 = GsdTestAgent::start(&root, "agent-1", delay, move |_| {
+    let mut agent1 = GsdTestAgent::start(&root, "agent-1", delay, move |_| {
         count1.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
-    let _agent2 = GsdTestAgent::start(&root, "agent-2", delay, move |_| {
+    let mut agent2 = GsdTestAgent::start(&root, "agent-2", delay, move |_| {
         count2.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
-    let _agent3 = GsdTestAgent::start(&root, "agent-3", delay, move |_| {
+    let mut agent3 = GsdTestAgent::start(&root, "agent-3", delay, move |_| {
         count3.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for all agents to be ready (have processed initial heartbeats)
+    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -187,7 +196,7 @@ fn max_concurrency_limits_parallel_tasks() {
     let delay = Duration::from_millis(50);
 
     // Single agent that tracks concurrency
-    let _agent = GsdTestAgent::start(&root, "tracker", delay, move |_| {
+    let mut agent = GsdTestAgent::start(&root, "tracker", delay, move |_| {
         let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Update max if higher
@@ -207,7 +216,8 @@ fn max_concurrency_limits_parallel_tasks() {
         "[]".to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Config with max_concurrency = 2
     let config: Config = serde_json::from_str(
@@ -263,9 +273,10 @@ fn task_runner_yields_results_incrementally() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -289,6 +300,7 @@ fn task_runner_yields_results_incrementally() {
 
     assert_eq!(outcomes.len(), 3, "Should yield 3 outcomes");
 
+    drop(agent);
     cleanup_test_dir(&format!("{TEST_DIR}_iterator"));
 }
 
@@ -304,9 +316,10 @@ fn task_runner_is_empty_status() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -325,6 +338,7 @@ fn task_runner_is_empty_status() {
 
     assert!(runner.is_empty(), "Runner should be empty after completion");
 
+    drop(agent);
     cleanup_test_dir(&format!("{TEST_DIR}_is_empty"));
 }
 
@@ -344,7 +358,7 @@ fn nested_fan_out() {
     let processed_kinds = Arc::new(std::sync::Mutex::new(Vec::new()));
     let kinds_clone = processed_kinds.clone();
 
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "nested-agent",
         Duration::from_millis(10),
@@ -369,7 +383,8 @@ fn nested_fan_out() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{

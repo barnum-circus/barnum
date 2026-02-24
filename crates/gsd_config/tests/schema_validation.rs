@@ -8,7 +8,6 @@ mod common;
 use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "schema_validation";
@@ -61,7 +60,7 @@ fn valid_schema_passes() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent returns valid Output schema for Input, empty for Output
-    let agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "schema-agent",
         Duration::from_millis(10),
@@ -75,7 +74,8 @@ fn valid_schema_passes() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = config_with_schema();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -105,9 +105,10 @@ fn invalid_initial_task_skipped() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::terminator(&root, "skip-agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "skip-agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = config_with_schema();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -140,11 +141,12 @@ fn invalid_response_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent returns invalid Output schema (missing "result")
-    let agent = GsdTestAgent::start(&root, "bad-agent", Duration::from_millis(50), |_| {
+    let mut agent = GsdTestAgent::start(&root, "bad-agent", Duration::from_millis(50), |_| {
         r#"[{"kind": "Output", "value": {}}]"#.to_string()
     });
 
-    thread::sleep(Duration::from_millis(300));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Config allows 2 retries
     let config: Config = serde_json::from_str(

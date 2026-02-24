@@ -11,7 +11,6 @@ use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "invalid_transitions";
@@ -57,11 +56,12 @@ fn invalid_transition_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent tries to skip from Start directly to End (invalid)
-    let agent = GsdTestAgent::start(&root, "bad-transition", Duration::from_millis(10), |_| {
+    let mut agent = GsdTestAgent::start(&root, "bad-transition", Duration::from_millis(10), |_| {
         r#"[{"kind": "End", "value": {}}]"#.to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -95,11 +95,12 @@ fn unknown_step_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent returns a step that doesn't exist
-    let agent = GsdTestAgent::start(&root, "unknown-step", Duration::from_millis(10), |_| {
+    let mut agent = GsdTestAgent::start(&root, "unknown-step", Duration::from_millis(10), |_| {
         r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -136,7 +137,7 @@ fn recovery_after_invalid_then_valid() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = call_count.clone();
 
-    let agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "recovering-agent",
         Duration::from_millis(10),
@@ -161,7 +162,8 @@ fn recovery_after_invalid_then_valid() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");

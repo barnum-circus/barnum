@@ -11,7 +11,6 @@ use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task, TaskRunner};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
 use std::time::Duration;
 
 const TEST_DIR: &str = "edge_cases";
@@ -29,7 +28,7 @@ fn empty_initial_tasks_completes() {
 
     let _pool = AgentPoolHandle::start(&root);
 
-    thread::sleep(Duration::from_millis(100));
+    // No sleep needed - pool is ready after start() returns, and no tasks means no agent needed
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -66,7 +65,7 @@ fn empty_runner_is_empty() {
 
     let _pool = AgentPoolHandle::start(&root);
 
-    thread::sleep(Duration::from_millis(100));
+    // No sleep needed - pool is ready after start() returns, and no tasks means no agent needed
 
     let config: Config =
         serde_json::from_str(r#"{"steps": [{"name": "X", "next": []}]}"#).expect("parse config");
@@ -102,9 +101,10 @@ fn unknown_initial_step_skipped() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -147,12 +147,13 @@ fn invalid_value_schema_skipped() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
 
-    let _agent = GsdTestAgent::start(&root, "agent", Duration::from_millis(10), move |_| {
+    let mut agent = GsdTestAgent::start(&root, "agent", Duration::from_millis(10), move |_| {
         count_clone.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     // Config with schema requiring "name" field
     let config: Config = serde_json::from_str(
@@ -211,7 +212,7 @@ fn large_fan_out() {
     let task_count = Arc::new(AtomicUsize::new(0));
     let count_clone = task_count.clone();
 
-    let _agent = GsdTestAgent::start(
+    let mut agent = GsdTestAgent::start(
         &root,
         "fanout-agent",
         Duration::from_millis(5),
@@ -233,7 +234,8 @@ fn large_fan_out() {
         },
     );
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -315,9 +317,10 @@ fn rapid_task_completion() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent with minimal delay (zero can cause races)
-    let _agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::from_millis(1));
+    let mut agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::from_millis(1));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -358,9 +361,10 @@ fn pending_count_accurate() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(50));
+    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(50));
 
-    thread::sleep(Duration::from_millis(200));
+    // Wait for agent to be ready (has processed initial heartbeat)
+    agent.wait_ready();
 
     let config: Config =
         serde_json::from_str(r#"{"steps": [{"name": "Work", "next": []}]}"#).expect("parse config");
