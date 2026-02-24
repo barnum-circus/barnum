@@ -49,10 +49,10 @@ process_task() {
 while true; do
     # Process if task.json exists and response.json doesn't
     if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
-        # Read envelope and extract kind/content
+        # Read envelope and extract kind/task data
         envelope=$(cat "$AGENT_DIR/task.json")
         kind=$(echo "$envelope" | jq -r '.kind // "Task"')
-        task=$(echo "$envelope" | jq -r '.content // .')
+        task=$(echo "$envelope" | jq -r '.task.data // .task // .')
 
         # Handle kicked - exit gracefully
         if [ "$kind" = "Kicked" ]; then

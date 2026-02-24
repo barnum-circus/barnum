@@ -71,8 +71,13 @@ pub fn submit_file_with_timeout(
     let root = root.as_ref();
     let pending_dir = root.join(PENDING_DIR);
 
-    // Ensure pending directory exists
-    fs::create_dir_all(&pending_dir)?;
+    // Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
+    if !pending_dir.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "daemon not ready (pending directory doesn't exist)",
+        ));
+    }
 
     // Generate unique submission ID
     let submission_id = Uuid::new_v4().to_string();

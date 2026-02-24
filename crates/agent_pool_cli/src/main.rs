@@ -465,6 +465,13 @@ fn main() -> ExitCode {
         }
         Command::GetTask { pool, name } | Command::Register { pool, name } => {
             let root = resolve_pool(&pool);
+
+            // Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
+            if !root.join(PENDING_DIR).exists() {
+                eprintln!("Daemon not ready (pending directory doesn't exist)");
+                return ExitCode::FAILURE;
+            }
+
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
             if let Err(e) = fs::create_dir_all(&agent_dir) {
