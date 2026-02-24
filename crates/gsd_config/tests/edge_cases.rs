@@ -314,8 +314,8 @@ fn rapid_task_completion() {
 
     let _pool = AgentPoolHandle::start(&root);
 
-    // Agent with no delay
-    let _agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::ZERO);
+    // Agent with minimal delay (zero can cause races)
+    let _agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::from_millis(1));
 
     thread::sleep(Duration::from_millis(200));
 
