@@ -4,9 +4,7 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{
-    AGENTS_DIR, RESPONSE_FILE, TASK_FILE, Transport, create_watcher, wait_for_task_with_timeout,
-};
+use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -135,8 +133,6 @@ impl TestAgent {
     ///
     /// After starting, call `wait_ready()` to block until the agent has processed
     /// its first message (heartbeat) and is ready to receive real tasks.
-    ///
-    /// Uses notify-based waiting instead of polling for better performance.
     pub fn start<F>(root: &Path, agent_id: &str, processing_delay: Duration, processor: F) -> Self
     where
         F: Fn(&str, &str) -> String + Send + 'static,
@@ -151,75 +147,63 @@ impl TestAgent {
         // Channel to signal when the agent has processed its first message (heartbeat)
         let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
 
-        // Set up notify-based waiting
-        let transport = Transport::Directory(agent_dir);
-        let (watcher, events_rx) = create_watcher(&transport)
-            .expect("Failed to create watcher")
-            .expect("Expected directory transport");
-
         let handle = thread::spawn(move || {
-            // Keep watcher alive for the duration of the thread
-            let _watcher = watcher;
             let mut processed_tasks = Vec::new();
+            let task_file = agent_dir.join(TASK_FILE);
+            let response_file = agent_dir.join(RESPONSE_FILE);
             let mut first_message_processed = false;
 
             while running_clone.load(Ordering::SeqCst) {
-                // Wait for task using notify with timeout so we can check running flag
-                // Use short timeout (10ms) to check running flag frequently
-                // FSEvents on macOS can have high latency, so we rely on the
-                // is_task_ready() check at the start of wait_for_task_with_timeout
-                match wait_for_task_with_timeout(&transport, &events_rx, Duration::from_millis(10))
-                {
-                    Ok(true) => {
-                        // Task ready, continue to process
-                    }
-                    Ok(false) => {
-                        // Timeout, check running flag and try again
+                // Check for task file
+                if task_file.exists() && !response_file.exists() {
+                    let Ok(raw) = fs::read_to_string(&task_file) else {
+                        thread::sleep(Duration::from_millis(10));
+                        continue;
+                    };
+
+                    // Skip empty reads (file might still be written)
+                    if raw.is_empty() {
+                        thread::sleep(Duration::from_millis(10));
                         continue;
                     }
-                    Err(_) => {
-                        // Watcher error or channel closed
-                        break;
+
+                    // Extract kind/content from envelope
+                    let envelope = extract_task_envelope(&raw);
+
+                    // Handle daemon control messages
+                    match envelope.kind.as_str() {
+                        "Heartbeat" => {
+                            let _ = fs::write(&response_file, "{}");
+                            // Signal ready after processing first heartbeat
+                            if !first_message_processed {
+                                first_message_processed = true;
+                                let _ = ready_tx.send(());
+                            }
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        "Kicked" => {
+                            break;
+                        }
+                        _ => {}
+                    }
+
+                    thread::sleep(processing_delay);
+
+                    let response = processor(&envelope.content, &agent_id_owned);
+                    processed_tasks.push(envelope.content.trim().to_string());
+
+                    // Write response (daemon handles cleanup of both files)
+                    let _ = fs::write(&response_file, &response);
+
+                    // Signal ready AFTER writing response for non-heartbeat messages
+                    if !first_message_processed {
+                        first_message_processed = true;
+                        let _ = ready_tx.send(());
                     }
                 }
 
-                // Read task
-                let Ok(raw) = transport.read(TASK_FILE) else {
-                    continue;
-                };
-
-                // Extract kind/content from envelope
-                let envelope = extract_task_envelope(&raw);
-
-                // Handle daemon control messages
-                match envelope.kind.as_str() {
-                    "Heartbeat" => {
-                        let _ = transport.write(RESPONSE_FILE, "{}");
-                        // Signal ready after processing first heartbeat
-                        if !first_message_processed {
-                            first_message_processed = true;
-                            let _ = ready_tx.send(());
-                        }
-                    }
-                    "Kicked" => {
-                        break;
-                    }
-                    _ => {
-                        thread::sleep(processing_delay);
-
-                        let response = processor(&envelope.content, &agent_id_owned);
-                        processed_tasks.push(envelope.content.trim().to_string());
-
-                        // Write response (daemon handles cleanup of both files)
-                        let _ = transport.write(RESPONSE_FILE, &response);
-
-                        // Signal ready AFTER writing response for non-heartbeat messages
-                        if !first_message_processed {
-                            first_message_processed = true;
-                            let _ = ready_tx.send(());
-                        }
-                    }
-                }
+                thread::sleep(Duration::from_millis(10));
             }
 
             processed_tasks
