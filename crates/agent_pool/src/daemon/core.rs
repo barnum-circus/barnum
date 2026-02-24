@@ -476,7 +476,6 @@ fn handle_agent_responded(mut state: PoolState, agent_id: AgentId) -> (PoolState
     (state, effects)
 }
 
-#[allow(clippy::panic)] // Invariant violation: epoch matches but agent idle is impossible
 fn handle_agent_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec<Effect>) {
     let agent_id = epoch.agent_id;
 
@@ -498,8 +497,11 @@ fn handle_agent_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec
                 Effect::AgentRemoved { agent_id },
             ],
         ),
+        // Invariant: epoch matches but agent idle is impossible.
+        // Timeout timers are created when agent becomes Busy, and epoch increments
+        // on every state transition. If epoch matches, agent must still be Busy.
         AgentStatus::Idle => {
-            panic!("AgentTimedOut with matching epoch but idle - daemon bug");
+            unreachable!("AgentTimedOut with matching epoch but idle - daemon bug");
         }
     }
 }
