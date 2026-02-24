@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace sleep-based polling with `notify`-based file watching for agents waiting for tasks. Test agents should use the same code path as real agents (via CLI or library).
+Replace sleep-based polling with `notify`-based file watching for agents waiting for tasks. Test agents should call the CLI binary (`get_task`, `next_task`) rather than implementing their own file-based polling in Rust.
 
 ## Current Architecture
 
@@ -23,37 +23,39 @@ Agents communicate with the daemon through files in `<pool>/agents/<agent_name>/
 
 The daemon deletes task.json first, then response.json. This means `(absent, present)` is a valid transitionary state that agents will briefly observe during cleanup. Agents should simply wait - they only act when `task.exists() && !response.exists()`.
 
+### Socket vs File Communication
+
+**Sockets are NOT currently used for agent task retrieval.** The socket mechanism is only used for:
+- Task submission (`submit_task` command via `submit()`)
+
+Agent-side operations are entirely file-based:
+- `get_task` / `register` - polls for `task.json` (file-based)
+- `next_task` - writes `response.json`, waits for cleanup, polls for next task (file-based)
+
+This is intentional: file-based communication works in sandboxed environments where sockets are blocked.
+
 ### Existing Daemon Abstractions
 
-**Transport (io.rs:60-120):**
+**Event loop (wiring.rs) - IoEvent enum:**
 ```rust
-pub(super) enum Transport {
-    Directory(PathBuf),
-    Socket(Stream),
+enum IoEvent {
+    Fs(notify::Event),      // File system changes
+    Socket(String, Stream), // Socket connections (for task submission)
+    Effect(Effect),         // Internal effects from state machine
 }
 
-impl Transport {
-    pub fn read(&self, filename: &str) -> io::Result<String>;
-    pub fn write(&self, filename: &str, content: &str) -> io::Result<()>;
-    pub fn path(&self) -> Option<&Path>;
-}
-```
-
-**Event loop (wiring.rs) - SEPARATE from Transport:**
-```rust
-// Notify watcher sends events to channel
-let (watcher, fs_events) = create_fs_watcher(&root, wake_tx.clone())?;
-
-// Event loop blocks on channel, processes events
+// Single unified channel, blocking recv
 loop {
     match io_rx.recv() {
         Ok(IoEvent::Fs(event)) => handle_fs_event(...),
-        // ...
+        Ok(IoEvent::Socket(raw, stream)) => handle_socket(...),
+        Ok(IoEvent::Effect(effect)) => execute_effect(...),
+        Err(_) => break, // Channel closed = shutdown
     }
 }
 ```
 
-Key insight: **Transport is just read/write. The event loop is separate.** The daemon doesn't have `Transport.wait_for()` - it has an independent event loop that watches files and calls `Transport.read()` when appropriate.
+Key insight: **The daemon uses a notify watcher + unified event channel pattern.** It doesn't poll. The agent side should use the same pattern.
 
 ### Current Polling Implementations (Problem)
 
@@ -69,8 +71,11 @@ fn wait_for_task(...) -> Result<String, String> {
 }
 ```
 
-**Test agents (`crates/agent_pool/tests/common/mod.rs`):**
+**Test agents (`crates/gsd_config/tests/common/mod.rs`):**
 ```rust
+// "running" is an Arc<AtomicBool> used for graceful shutdown.
+// When stop() is called, it sets running to false.
+// The loop checks this flag on each iteration.
 while running_clone.load(Ordering::SeqCst) {
     if task_file.exists() && !response_file.exists() {
         // Process task...
@@ -79,133 +84,74 @@ while running_clone.load(Ordering::SeqCst) {
 }
 ```
 
+The `running` flag exists because test agents need to be stoppable. When the test calls `agent.stop()`, it sets the flag to `false`, and the agent thread exits its loop gracefully.
+
 ## Target Architecture
 
-### Key Insight: Reuse Transport + Separate Event Loop
+### Key Insight: Event-Driven, Same Code Path
 
-The daemon pattern is:
-1. `Transport` - just read/write operations
-2. `notify` watcher - watches files, sends events to channel
-3. Event loop - blocks on channel, calls Transport.read() when files change
-
-The agent side should use the **same pattern**:
-1. Reuse `Transport` as-is (move to shared module)
-2. Create agent-side notify watcher
-3. Agent event loop - blocks on channel, calls Transport.read() when task.json appears
+1. The CLI's `get_task` and `next_task` commands should use `notify` instead of polling
+2. Test agents should spawn the CLI binary as a subprocess (same code path!)
+3. The test agent's "running flag" becomes irrelevant when using subprocesses - just kill the subprocess
 
 ### Architecture Diagram
 
 ```
-DAEMON SIDE                          AGENT SIDE
-============                         ===========
+CLI Binary (agent_pool get_task)
+================================
 
-┌─────────────────┐                  ┌─────────────────┐
-│  notify watcher │                  │  notify watcher │
-│  (watches pool) │                  │  (watches agent │
-└────────┬────────┘                  │   directory)    │
-         │                           └────────┬────────┘
-         │ fs events                          │ fs events
-         ▼                                    ▼
-┌─────────────────┐                  ┌─────────────────┐
-│   Event Loop    │                  │   Event Loop    │
-│  (io_loop in    │                  │  (agent_loop)   │
-│   wiring.rs)    │                  │                 │
-└────────┬────────┘                  └────────┬────────┘
-         │                                    │
-         │ reads/writes                       │ reads/writes
-         ▼                                    ▼
-┌─────────────────┐                  ┌─────────────────┐
-│    Transport    │◄────────────────►│    Transport    │
-│  (read/write)   │   SHARED CODE    │  (read/write)   │
-└─────────────────┘                  └─────────────────┘
+┌─────────────────┐
+│  notify watcher │
+│  (watches agent │
+│   directory)    │
+└────────┬────────┘
+         │ fs events
+         ▼
+┌─────────────────┐
+│  Event Loop     │
+│  (blocks on     │
+│   recv())       │
+└────────┬────────┘
+         │
+         │ task ready?
+         ▼
+┌─────────────────┐
+│  Read & Output  │
+│  task.json      │
+└─────────────────┘
+
+
+Test Agent (subprocess-based)
+=============================
+
+┌─────────────────┐
+│  Test starts    │
+│  subprocess:    │
+│  agent_pool     │
+│  get_task       │
+└────────┬────────┘
+         │
+         │ stdout
+         ▼
+┌─────────────────┐
+│  Test parses    │
+│  JSON output    │
+└────────┬────────┘
+         │
+         │ process & respond
+         ▼
+┌─────────────────┐
+│  Test calls:    │
+│  agent_pool     │
+│  next_task      │
+└─────────────────┘
 ```
 
 ## Concrete Tasks
 
-### Task 1: Move Transport to Shared Module
+### Task 1: Create Agent Event Loop Module
 
-**Goal:** Make `Transport` accessible to both daemon and agent code.
-
-**File:** `crates/agent_pool/src/daemon/io.rs` → `crates/agent_pool/src/transport.rs`
-
-**Steps:**
-
-1.1. Create new file `crates/agent_pool/src/transport.rs`:
-```rust
-//! Transport abstraction for file-based and socket-based communication.
-
-use interprocess::local_socket::Stream;
-use std::fs::{self, File};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
-
-/// Transport for agent/daemon communication.
-pub enum Transport {
-    /// File-based transport using a directory.
-    Directory(PathBuf),
-    /// Socket-based transport (for inline responses).
-    Socket(Stream),
-}
-
-impl Transport {
-    /// Read content from a file in this transport.
-    pub fn read(&self, filename: &str) -> io::Result<String> {
-        match self {
-            Self::Directory(dir) => fs::read_to_string(dir.join(filename)),
-            Self::Socket(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "cannot read from socket transport",
-            )),
-        }
-    }
-
-    /// Write content to a file atomically (temp file + rename).
-    pub fn write(&self, filename: &str, content: &str) -> io::Result<()> {
-        match self {
-            Self::Directory(dir) => {
-                let target = dir.join(filename);
-                let temp_name = format!(".{}.{}.tmp", filename, Uuid::new_v4());
-                let temp_path = dir.join(&temp_name);
-
-                let mut file = File::create(&temp_path)?;
-                file.write_all(content.as_bytes())?;
-                file.sync_all()?;
-                drop(file);
-
-                fs::rename(&temp_path, &target)?;
-                Ok(())
-            }
-            Self::Socket(stream) => {
-                use std::io::Write;
-                let mut stream = stream;
-                write!(stream, "{}\n{}", content.len(), content)?;
-                stream.flush()
-            }
-        }
-    }
-
-    /// Get the directory path (only for Directory transport).
-    pub fn path(&self) -> Option<&Path> {
-        match self {
-            Self::Directory(dir) => Some(dir),
-            Self::Socket(_) => None,
-        }
-    }
-}
-```
-
-1.2. Update `crates/agent_pool/src/lib.rs`:
-```rust
-mod transport;
-pub use transport::Transport;
-```
-
-1.3. Update `crates/agent_pool/src/daemon/io.rs` to use `crate::Transport` instead of local definition.
-
-### Task 2: Create Agent Event Loop
-
-**Goal:** Create a notify-based event loop for agents that doesn't poll.
+**Goal:** Create `notify`-based waiting functions for agents.
 
 **File:** `crates/agent_pool/src/agent.rs` (new file)
 
@@ -213,13 +159,11 @@ pub use transport::Transport;
 //! Agent-side event loop for waiting on tasks.
 
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
-use crate::transport::Transport;
-use crate::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
+use crate::{RESPONSE_FILE, TASK_FILE};
 
 /// Events the agent cares about.
 pub enum AgentEvent {
@@ -230,53 +174,43 @@ pub enum AgentEvent {
 }
 
 /// Create a watcher for an agent directory.
-///
-/// Returns the watcher (keep alive) and a receiver for events.
 pub fn create_agent_watcher(
     agent_dir: &Path,
 ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<AgentEvent>)> {
     let (tx, rx) = mpsc::channel();
 
-    let event_tx = tx.clone();
-    let watcher = RecommendedWatcher::new(
+    let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| match res {
-            Ok(_) => {
-                let _ = event_tx.send(AgentEvent::FileChanged);
-            }
-            Err(e) => {
-                let _ = event_tx.send(AgentEvent::WatchError(e));
-            }
+            Ok(_) => { let _ = tx.send(AgentEvent::FileChanged); }
+            Err(e) => { let _ = tx.send(AgentEvent::WatchError(e)); }
         },
         Config::default(),
     )
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    .map_err(io::Error::other)?;
+
+    watcher
+        .watch(agent_dir, RecursiveMode::NonRecursive)
+        .map_err(io::Error::other)?;
 
     Ok((watcher, rx))
 }
 
 /// Check if a task is ready to be processed.
-///
-/// Returns true when: task.json exists AND response.json does not.
 pub fn is_task_ready(agent_dir: &Path) -> bool {
     let task_file = agent_dir.join(TASK_FILE);
     let response_file = agent_dir.join(RESPONSE_FILE);
     task_file.exists() && !response_file.exists()
 }
 
-/// Wait for a task to be ready.
-///
-/// Blocks until task.json exists and response.json does not.
-/// Uses notify for event-driven waiting (no polling).
+/// Wait for a task to be ready (blocks until ready).
 pub fn wait_for_task(
     agent_dir: &Path,
     events_rx: &mpsc::Receiver<AgentEvent>,
 ) -> io::Result<()> {
-    // Check initial state
     if is_task_ready(agent_dir) {
         return Ok(());
     }
 
-    // Wait for file events
     loop {
         match events_rx.recv() {
             Ok(AgentEvent::FileChanged) => {
@@ -285,7 +219,7 @@ pub fn wait_for_task(
                 }
             }
             Ok(AgentEvent::WatchError(e)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e));
+                return Err(io::Error::other(e));
             }
             Err(_) => {
                 return Err(io::Error::new(
@@ -298,20 +232,16 @@ pub fn wait_for_task(
 }
 
 /// Wait for task.json to be deleted (daemon acknowledged response).
-///
-/// Blocks until task.json does not exist.
 pub fn wait_for_cleanup(
     agent_dir: &Path,
     events_rx: &mpsc::Receiver<AgentEvent>,
 ) -> io::Result<()> {
     let task_file = agent_dir.join(TASK_FILE);
 
-    // Check initial state
     if !task_file.exists() {
         return Ok(());
     }
 
-    // Wait for file events
     loop {
         match events_rx.recv() {
             Ok(AgentEvent::FileChanged) => {
@@ -320,7 +250,7 @@ pub fn wait_for_cleanup(
                 }
             }
             Ok(AgentEvent::WatchError(e)) => {
-                return Err(io::Error::new(io::ErrorKind::Other, e));
+                return Err(io::Error::other(e));
             }
             Err(_) => {
                 return Err(io::Error::new(
@@ -333,22 +263,17 @@ pub fn wait_for_cleanup(
 }
 ```
 
-### Task 3: Update CLI to Use Agent Event Loop
+### Task 2: Update CLI to Use Agent Event Loop
 
-**Goal:** Replace polling in CLI with the new event-driven waiting.
+**Goal:** Replace polling in CLI with event-driven waiting.
 
 **File:** `crates/agent_pool_cli/src/main.rs`
 
-**Before (lines 195-239):**
+**Before:**
 ```rust
-fn wait_for_task(
-    task_file: &std::path::Path,
-    response_file: &std::path::Path,
-    name: &str,
-) -> Result<String, String> {
+fn wait_for_task(...) -> Result<String, String> {
     loop {
         if task_file.exists() && !response_file.exists() {
-            // Read and return task
             return Ok(...);
         }
         thread::sleep(Duration::from_millis(100));  // POLLING!
@@ -358,48 +283,39 @@ fn wait_for_task(
 
 **After:**
 ```rust
-use agent_pool::{create_agent_watcher, wait_for_task, wait_for_cleanup, Transport};
-use notify::RecursiveMode;
+use agent_pool::{create_agent_watcher, wait_for_task, wait_for_cleanup, is_task_ready};
 
-fn run_agent_loop(pool_root: &Path, agent_name: &str) -> Result<(), String> {
-    let agent_dir = pool_root.join(AGENTS_DIR).join(agent_name);
-    fs::create_dir_all(&agent_dir).map_err(|e| e.to_string())?;
-
-    // Set up transport and watcher
-    let transport = Transport::Directory(agent_dir.clone());
-    let (mut watcher, events_rx) = create_agent_watcher(&agent_dir)
+fn wait_for_task_event_driven(agent_dir: &Path, name: &str) -> Result<String, String> {
+    let (watcher, events_rx) = create_agent_watcher(agent_dir)
         .map_err(|e| e.to_string())?;
-    watcher
-        .watch(&agent_dir, RecursiveMode::NonRecursive)
-        .map_err(|e| e.to_string())?;
+    let _watcher = watcher; // Keep alive
 
-    loop {
-        // Wait for task (no polling!)
-        wait_for_task(&agent_dir, &events_rx).map_err(|e| e.to_string())?;
+    wait_for_task(agent_dir, &events_rx).map_err(|e| e.to_string())?;
 
-        // Read task
-        let raw = transport.read(TASK_FILE).map_err(|e| e.to_string())?;
-
-        // Parse and handle task...
-        let response = process_task(&raw)?;
-
-        // Write response
-        transport.write(RESPONSE_FILE, &response).map_err(|e| e.to_string())?;
-
-        // Wait for daemon to clean up
-        wait_for_cleanup(&agent_dir, &events_rx).map_err(|e| e.to_string())?;
-    }
+    // Read and return task (same as before)
+    let task_file = agent_dir.join(TASK_FILE);
+    let response_file = agent_dir.join(RESPONSE_FILE);
+    // ... parse envelope, build output JSON ...
 }
 ```
 
-### Task 4: Update Test Agents to Use Same Code
+Also update `next_task` command to use `wait_for_cleanup` followed by `wait_for_task`.
 
-**Goal:** Test agents use the same event loop as CLI agents.
+### Task 3: Update Test Agents to Call CLI Binary
 
-**File:** `crates/agent_pool/tests/common/mod.rs`
+**Goal:** Test agents should spawn `agent_pool get_task` and `agent_pool next_task` as subprocesses instead of reimplementing file-based polling in Rust.
+
+**File:** `crates/gsd_config/tests/common/mod.rs`
 
 **Before:**
 ```rust
+pub struct GsdTestAgent {
+    running: Arc<AtomicBool>,  // For graceful shutdown
+    handle: Option<thread::JoinHandle<Vec<String>>>,
+    ready_rx: Option<mpsc::Receiver<()>>,
+}
+
+// Thread that polls filesystem directly
 while running_clone.load(Ordering::SeqCst) {
     if task_file.exists() && !response_file.exists() {
         // Process task...
@@ -410,40 +326,82 @@ while running_clone.load(Ordering::SeqCst) {
 
 **After:**
 ```rust
-use agent_pool::{create_agent_watcher, wait_for_task, Transport, TASK_FILE, RESPONSE_FILE};
+use std::process::{Child, Command, Stdio};
 
-let transport = Transport::Directory(agent_dir.clone());
-let (mut watcher, events_rx) = create_agent_watcher(&agent_dir)?;
-watcher.watch(&agent_dir, RecursiveMode::NonRecursive)?;
+pub struct GsdTestAgent {
+    child: Option<Child>,  // Subprocess running agent_pool get_task
+    // No more running flag - just kill the subprocess
+}
 
-while running_clone.load(Ordering::SeqCst) {
-    // Use recv_timeout so we can check the running flag
-    match events_rx.recv_timeout(Duration::from_millis(100)) {
-        Ok(AgentEvent::FileChanged) => {
-            if is_task_ready(&agent_dir) {
-                let raw = transport.read(TASK_FILE)?;
-                // Process task...
-                let response = processor(&raw);
-                transport.write(RESPONSE_FILE, &response)?;
-            }
+impl GsdTestAgent {
+    pub fn start<F>(root: &Path, agent_id: &str, processor: F) -> Self
+    where
+        F: Fn(&str) -> String + Send + 'static,
+    {
+        // Spawn subprocess: agent_pool get_task --pool <root> --name <agent_id>
+        let mut child = Command::new("agent_pool")
+            .args(["get_task", "--pool", &root.display().to_string(), "--name", agent_id])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("Failed to spawn agent_pool");
+
+        // Spawn thread to read stdout and process tasks
+        let stdout = child.stdout.take().unwrap();
+        thread::spawn(move || {
+            // Read JSON output from get_task
+            // Process and call next_task with response
+            // Repeat until subprocess exits or is killed
+        });
+
+        Self { child: Some(child) }
+    }
+
+    pub fn stop(mut self) -> Vec<String> {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();  // Graceful shutdown = just kill the subprocess
+            let _ = child.wait();
         }
-        Ok(AgentEvent::WatchError(_)) => break,
-        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        vec![]  // Or collect processed tasks some other way
     }
 }
 ```
 
-Note: Test agents still need `recv_timeout` to check the `running` flag, but the key point is they're not **polling the filesystem** - they're waiting on the event channel.
+**Benefits:**
+- Test agents use the exact same code path as real agents
+- No more `running` flag complexity - subprocess shutdown is clean
+- Any bugs in `get_task` / `next_task` are caught by tests
+
+### Task 4: Audit All Sleeps and Timeouts
+
+**Goal:** Search for all `thread::sleep`, `recv_timeout`, `Duration::from_millis`, etc. and validate each usage is intentional.
+
+**Search patterns:**
+```bash
+rg "thread::sleep" --type rust
+rg "recv_timeout" --type rust
+rg "Duration::from_millis" --type rust
+rg "Duration::from_secs" --type rust
+```
+
+**Expected legitimate uses:**
+- Daemon config timeouts (idle agent timeout, task timeout)
+- Socket accept thread polling (10ms) - acceptable since it's I/O bound, not CPU
+- Test delays for simulating slow agents
+
+**Should be removed/replaced:**
+- CLI `wait_for_task` polling (→ notify)
+- Test agent filesystem polling (→ subprocess calling CLI)
+- Any other filesystem polling
 
 ## Implementation Order
 
-1. **Task 1: Move Transport** - Mechanical refactor, no behavior change
-2. **Task 2: Create agent module** - New code, can be tested in isolation
-3. **Task 3: Update CLI** - Use new code, tests verify it works
-4. **Task 4: Update test agents** - Final step, makes tests use same path as CLI
+1. **Task 1: Create agent module** - New code, can be tested in isolation
+2. **Task 2: Update CLI** - Use new code, existing tests verify it works
+3. **Task 3: Update test agents** - Make tests use CLI subprocess
+4. **Task 4: Audit sleeps** - Final cleanup pass
 
-## Open Questions
+## Notes
 
-1. Should we also move the daemon's `create_fs_watcher` to a shared location, or is the agent version sufficient?
-2. The test agent uses `recv_timeout` to check the running flag - is there a cleaner pattern?
+- The socket mechanism for task submission is separate and unrelated to agent waiting
+- Test agents calling the CLI binary ensures they exercise the same code path as real agents
+- The `running` flag pattern becomes unnecessary when test agents are subprocesses - just kill the process to stop
