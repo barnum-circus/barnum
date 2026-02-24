@@ -82,7 +82,7 @@ jobs:
           targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-apple-darwin -p agent_pool -p gsd_cli
+        run: cargo build --release --target x86_64-apple-darwin -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
           name: agent_pool-macos-x64
@@ -101,7 +101,7 @@ jobs:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target aarch64-apple-darwin -p agent_pool -p gsd_cli
+        run: cargo build --release --target aarch64-apple-darwin -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
           name: agent_pool-macos-arm64
@@ -122,7 +122,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-unknown-linux-musl -p agent_pool -p gsd_cli
+        run: cargo build --release --target x86_64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
           name: agent_pool-linux-x64
@@ -143,7 +143,7 @@ jobs:
         run: cargo install cross --git https://github.com/cross-rs/cross
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cross build --release --target aarch64-unknown-linux-musl -p agent_pool -p gsd_cli
+        run: cross build --release --target aarch64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
           name: agent_pool-linux-arm64
@@ -162,7 +162,7 @@ jobs:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release --target x86_64-pc-windows-msvc -p agent_pool -p gsd_cli
+        run: cargo build --release --target x86_64-pc-windows-msvc -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
           name: agent_pool-win-x64
