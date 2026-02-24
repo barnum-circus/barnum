@@ -380,6 +380,15 @@ fn run_daemon(
         io_config,
     )?;
 
+    // Scan for existing pending tasks (may have been left from a previous run)
+    scan_pending(
+        pending_dir,
+        &events_tx,
+        &mut external_task_map,
+        &mut task_id_allocator,
+        io_config,
+    )?;
+
     // Run the I/O loop
     let result = io_loop(
         &wake_rx,
@@ -839,6 +848,37 @@ fn scan_agents(
                 heartbeat_task_id,
             });
         }
+    }
+
+    Ok(())
+}
+
+/// Scan the pending directory and register any existing tasks.
+fn scan_pending(
+    pending_dir: &Path,
+    events_tx: &mpsc::Sender<Event>,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
+    io_config: &IoConfig,
+) -> io::Result<()> {
+    if !pending_dir.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(pending_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+
+        let submission_dir = entry.path();
+        register_pending_task(
+            &submission_dir,
+            events_tx,
+            external_task_map,
+            task_id_allocator,
+            io_config,
+        );
     }
 
     Ok(())
