@@ -85,53 +85,53 @@ fn sync_with_watcher(
     agents_dir: &Path,
     io_rx: &mpsc::Receiver<IoEvent>,
 ) -> io::Result<()> {
-    const POLL_INTERVAL: Duration = Duration::from_millis(10);
-    const ROUND_DURATION: Duration = Duration::from_millis(100);
-    const MAX_ATTEMPTS: u32 = 50;
+    const POLL_TIMEOUT: Duration = Duration::from_millis(100);
+    const MAX_DURATION: Duration = Duration::from_secs(5);
 
     let pending_canary = pending_dir.join("canary");
     let agents_canary = agents_dir.join("canary");
 
     let mut seen_pending = false;
     let mut seen_agents = false;
+    let mut write_count = 0u32;
 
-    for attempt in 0..MAX_ATTEMPTS {
-        // Rewrite canaries we haven't seen yet
-        if !seen_pending {
-            fs::write(&pending_canary, format!("sync-{attempt}"))?;
-        }
-        if !seen_agents {
-            fs::write(&agents_canary, format!("sync-{attempt}"))?;
-        }
+    // Initial write
+    fs::write(&pending_canary, format!("sync-{write_count}"))?;
+    fs::write(&agents_canary, format!("sync-{write_count}"))?;
+    write_count += 1;
 
-        let round_start = std::time::Instant::now();
-        while round_start.elapsed() < ROUND_DURATION {
-            match io_rx.recv_timeout(POLL_INTERVAL) {
-                Ok(IoEvent::Fs(event)) => {
-                    for path in &event.paths {
-                        if path == &pending_canary {
-                            seen_pending = true;
-                        }
-                        if path == &agents_canary {
-                            seen_agents = true;
-                        }
-                    }
-                    if seen_pending && seen_agents {
-                        let _ = fs::remove_file(&pending_canary);
-                        let _ = fs::remove_file(&agents_canary);
-                        return Ok(());
-                    }
+    let start = Instant::now();
+    while start.elapsed() < MAX_DURATION {
+        match io_rx.recv_timeout(POLL_TIMEOUT) {
+            Ok(IoEvent::Fs(event)) => {
+                for path in &event.paths {
+                    if path == &pending_canary { seen_pending = true; }
+                    if path == &agents_canary { seen_agents = true; }
                 }
-                Ok(_) => panic!("unexpected non-FS event during startup sync"),
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if seen_pending && seen_agents {
                     let _ = fs::remove_file(&pending_canary);
                     let _ = fs::remove_file(&agents_canary);
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "channel disconnected",
-                    ));
+                    return Ok(());
                 }
+            }
+            Ok(_) => panic!("unexpected non-FS event during startup sync"),
+            Err(RecvTimeoutError::Timeout) => {
+                // Rewrite only the ones we haven't seen
+                if !seen_pending {
+                    fs::write(&pending_canary, format!("sync-{write_count}"))?;
+                }
+                if !seen_agents {
+                    fs::write(&agents_canary, format!("sync-{write_count}"))?;
+                }
+                write_count += 1;
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = fs::remove_file(&pending_canary);
+                let _ = fs::remove_file(&agents_canary);
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "channel disconnected",
+                ));
             }
         }
     }
@@ -141,6 +141,8 @@ fn sync_with_watcher(
     Err(io::Error::new(io::ErrorKind::TimedOut, "watcher sync timed out"))
 }
 ```
+
+Note: The duplicated `remove_file` calls could be cleaned up with a guard/defer pattern during implementation.
 
 ### 1.2: Update call sites
 
