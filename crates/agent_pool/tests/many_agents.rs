@@ -10,8 +10,10 @@ mod common;
 
 use agent_pool::Response;
 use common::{
-    AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir, submit_via_cli,
+    AgentPoolHandle, SubmitMode, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir,
+    submit_with_mode,
 };
+use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
@@ -24,13 +26,18 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
 
 const TEST_DIR: &str = "many_agents";
 
-#[test]
-fn multiple_agents_parallel_tasks() {
-    let root = setup_test_dir(TEST_DIR);
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn multiple_agents_parallel_tasks(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&test_dir);
         return;
     }
 
@@ -50,7 +57,7 @@ fn multiple_agents_parallel_tasks() {
             let root = root.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"Task-{i}"}}}}"#);
-            thread::spawn(move || submit_via_cli(&root, &task, "socket").expect("Submit failed"))
+            thread::spawn(move || submit_with_mode(&root, &task, mode).expect("Submit failed"))
         })
         .collect();
 
@@ -66,15 +73,9 @@ fn multiple_agents_parallel_tasks() {
         assert!(stdout.contains("[processed]"));
     }
 
-    // Just verify total processed count
     let _ = agent1.stop();
     let _ = agent2.stop();
     let _ = agent3.stop();
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&test_dir);
 }
-
-// Note: multiple_agents_direct_dispatch test removed - it was testing internal
-// implementation details (direct file writes) that are no longer relevant with
-// CLI-based agents. The proper way to test multi-agent dispatch is through the
-// daemon using submit().
