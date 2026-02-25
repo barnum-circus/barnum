@@ -24,7 +24,7 @@ use crate::client::Payload;
 use crate::constants::{
     AGENTS_DIR, LOCK_FILE, PENDING_DIR, REQUEST_SUFFIX, SOCKET_NAME, STATUS_FILE, TASK_FILE,
 };
-use crate::lock::acquire_lock;
+use crate::lock::{LockGuard, acquire_lock};
 
 use super::core::{AgentId, Effect, Event, TaskId};
 use super::io::{
@@ -149,16 +149,15 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     // so FSEvent paths match our stored paths.
     let root = fs::canonicalize(root.as_ref())?;
 
-    let lock_path = root.join(LOCK_FILE);
-    let lock = acquire_lock(&lock_path)?;
-
     // TODO: Add clean option to clear stale agent/pending directories on restart.
     // See run_with_config for details.
 
+    let lock_path = root.join(LOCK_FILE);
+    let socket_path = root.join(SOCKET_NAME);
     let agents_dir = root.join(AGENTS_DIR);
     let pending_dir = root.join(PENDING_DIR);
 
-    let socket_path = root.join(SOCKET_NAME);
+    // Clean up stale socket if it exists
     if socket_path.exists() {
         fs::remove_file(&socket_path)?;
     }
@@ -166,7 +165,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     // Create unified event channel - all sources send here, main loop receives
     let (io_tx, io_rx) = mpsc::channel();
 
-    let listener = create_socket_listener(&socket_path)?;
+    // Start watcher FIRST - before creating anything - so we can verify all FS events
     let fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
 
     // Use a oneshot channel to signal readiness or early error
@@ -176,18 +175,20 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let daemon_io_tx = io_tx.clone();
 
     let thread = thread::spawn(move || {
-        let _lock = lock;
-        let _cleanup = SocketCleanup(socket_path.clone());
         let _watcher = fs_watcher;
 
-        // Sync with the FS watcher to ensure it's delivering events for both directories.
-        // On Linux with inotify, there's a race where the watcher may not be fully
-        // ready to catch events in newly-created subdirectories. We write canary
-        // files and wait until we see FS events for both.
-        if let Err(e) = sync_with_watcher(&pending_dir, &agents_dir, &io_rx) {
-            let _ = ready_tx.send(Err(e));
-            return Err(io::Error::other("watcher sync failed"));
-        }
+        // Create everything and verify all FS events are seen
+        let (lock, listener) =
+            match sync_and_setup(&lock_path, &socket_path, &pending_dir, &agents_dir, &io_rx) {
+                Ok(result) => result,
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                    return Err(io::Error::other("sync_and_setup failed"));
+                }
+            };
+
+        let _lock = lock;
+        let _cleanup = SocketCleanup(socket_path.clone());
 
         // Write status file to signal daemon is ready
         if let Err(e) = fs::write(root.join(STATUS_FILE), "ready") {
@@ -242,34 +243,31 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     // so FSEvent paths match our stored paths.
     let root = fs::canonicalize(root.as_ref())?;
 
-    let lock_path = root.join(LOCK_FILE);
-    let _lock = acquire_lock(&lock_path)?;
-
     // TODO: Add --clean flag to clear stale agent/pending directories on restart.
     // Currently, leftover directories from previous runs are picked up by the scan
     // and treated as live agents, which causes tasks to be assigned to non-existent agents.
 
+    let lock_path = root.join(LOCK_FILE);
+    let socket_path = root.join(SOCKET_NAME);
     let agents_dir = root.join(AGENTS_DIR);
     let pending_dir = root.join(PENDING_DIR);
 
-    let socket_path = root.join(SOCKET_NAME);
+    // Clean up stale socket if it exists
     if socket_path.exists() {
         fs::remove_file(&socket_path)?;
     }
 
-    let _cleanup = SocketCleanup(socket_path.clone());
-
     // Create unified event channel
     let (io_tx, io_rx) = mpsc::channel();
 
-    let listener = create_socket_listener(&socket_path)?;
+    // Start watcher FIRST - before creating anything - so we can verify all FS events
     let _fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
 
-    // Sync with the FS watcher (creates directories and verifies all events are seen) to ensure it's delivering events for both directories.
-    // On Linux with inotify, there's a race where the watcher may not be fully
-    // ready to catch events in newly-created subdirectories. We write canary
-    // files and wait until we see FS events for both.
-    sync_with_watcher(&pending_dir, &agents_dir, &io_rx)?;
+    // Now create everything and verify we see all the events
+    let (_lock, listener) =
+        sync_and_setup(&lock_path, &socket_path, &pending_dir, &agents_dir, &io_rx)?;
+
+    let _cleanup = SocketCleanup(socket_path.clone());
 
     // Write status file to signal daemon is ready
     fs::write(root.join(STATUS_FILE), "ready")?;
@@ -861,27 +859,33 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
     Ok(watcher)
 }
 
-/// Synchronize with the filesystem watcher by verifying all expected events are seen.
+/// Set up the daemon and verify the watcher sees events for key directories.
 ///
-/// This function ensures the watcher is fully operational by:
-/// 1. Creating both directories (pending, agents)
-/// 2. Writing a canary file to each directory
-/// 3. Waiting until we see ALL expected events:
-///    - `Create(Folder)` for `pending_dir`
-///    - `Create(Folder)` for `agents_dir`
-///    - File write event for pending canary
-///    - File write event for agents canary
-/// 4. Cleaning up canary files when done
+/// This function:
+/// 1. Creates the lock file and acquires the lock
+/// 2. Creates the socket and starts listening
+/// 3. Creates both directories (pending, agents)
+/// 4. Writes canary files to verify watcher sees events in subdirectories
+/// 5. Waits until we see events for the directories and canary files
+/// 6. Cleans up canary files
 ///
-/// Panics if we see an unexpected event (indicates a bug in our tracking).
+/// We specifically verify events for `pending_dir`, `agents_dir`, and canary files
+/// because these are where agents and submissions will interact. Other events
+/// (lock file, socket, etc.) are allowlisted but not required.
 ///
-/// This must be called from the thread that owns `io_rx`.
-#[allow(clippy::panic)] // Intentional: unexpected events during startup indicate a bug
-fn sync_with_watcher(
+/// Returns the lock guard and socket listener on success.
+///
+/// # Panics
+///
+/// Panics if an unexpected non-FS event is received.
+#[allow(clippy::panic)] // Intentional: non-FS events during startup indicate a bug
+fn sync_and_setup(
+    lock_path: &Path,
+    socket_path: &Path,
     pending_dir: &Path,
     agents_dir: &Path,
     io_rx: &mpsc::Receiver<IoEvent>,
-) -> io::Result<()> {
+) -> io::Result<(LockGuard, Listener)> {
     use std::collections::HashSet;
 
     const POLL_TIMEOUT: Duration = Duration::from_millis(100);
@@ -890,22 +894,33 @@ fn sync_with_watcher(
     let pending_canary = pending_dir.join("canary");
     let agents_canary = agents_dir.join("canary");
 
-    // Track all paths we expect to see events for
-    let mut expected: HashSet<PathBuf> = HashSet::new();
-    expected.insert(pending_dir.to_path_buf());
-    expected.insert(agents_dir.to_path_buf());
-    expected.insert(pending_canary.clone());
-    expected.insert(agents_canary.clone());
+    // Paths we MUST see events for (verifies watcher is working for key directories)
+    // Only canary files - seeing these proves the watcher sees events IN those directories
+    let mut required: HashSet<PathBuf> = HashSet::new();
+    required.insert(pending_canary.clone());
+    required.insert(agents_canary.clone());
 
-    // Track which expected paths we've seen
+    // Paths we allow events for but don't require
+    let mut allowed: HashSet<PathBuf> = HashSet::new();
+    allowed.insert(lock_path.to_path_buf());
+    allowed.insert(socket_path.to_path_buf());
+    allowed.insert(pending_dir.to_path_buf());
+    allowed.insert(agents_dir.to_path_buf());
+
+    // Track which required paths we've seen
     let mut seen: HashSet<PathBuf> = HashSet::new();
 
     debug!(
-        "waiting for watcher sync, expecting {} events",
-        expected.len()
+        "waiting for watcher sync, requiring {} events: {:?}",
+        required.len(),
+        required
     );
 
-    // Create directories and write canaries - watcher should see all of these
+    // Create lock and socket first (before watcher matters)
+    let lock = acquire_lock(lock_path)?;
+    let listener = create_socket_listener(socket_path)?;
+
+    // Create directories and canaries - watcher MUST see these
     fs::create_dir_all(pending_dir)?;
     fs::create_dir_all(agents_dir)?;
     fs::write(&pending_canary, "sync")?;
@@ -916,28 +931,38 @@ fn sync_with_watcher(
         match io_rx.recv_timeout(POLL_TIMEOUT) {
             Ok(IoEvent::Fs(event)) => {
                 for path in &event.paths {
-                    if expected.contains(path) {
+                    if required.contains(path) {
                         seen.insert(path.clone());
                         debug!(
                             "sync: seen {}/{} - {} ({:?})",
                             seen.len(),
-                            expected.len(),
+                            required.len(),
                             path.display(),
                             event.kind
                         );
+                    } else if allowed.contains(path) {
+                        // Allowlisted but not required - just log
+                        debug!("sync: allowed {} ({:?})", path.display(), event.kind);
                     } else {
                         panic!(
-                            "unexpected FS event during startup sync: {:?} for path {}",
+                            "unexpected FS event during startup sync: {:?} for path {}\n\
+                             Required: {:?}\n\
+                             Allowed: {:?}",
                             event.kind,
-                            path.display()
+                            path.display(),
+                            required,
+                            allowed
                         );
                     }
                 }
-                if seen.len() == expected.len() {
-                    debug!("watcher sync complete - all {} events seen", expected.len());
+                if seen.len() == required.len() {
+                    debug!(
+                        "watcher sync complete - all {} required events seen",
+                        required.len()
+                    );
                     let _ = fs::remove_file(&pending_canary);
                     let _ = fs::remove_file(&agents_canary);
-                    return Ok(());
+                    return Ok((lock, listener));
                 }
             }
             Ok(_) => panic!("unexpected non-FS event during startup sync"),
@@ -962,7 +987,7 @@ fn sync_with_watcher(
     }
 
     // Log what we're missing for debugging
-    let missing: Vec<_> = expected.difference(&seen).collect();
+    let missing: Vec<_> = required.difference(&seen).collect();
     warn!("watcher sync timed out, missing events for: {:?}", missing);
 
     let _ = fs::remove_file(&pending_canary);
