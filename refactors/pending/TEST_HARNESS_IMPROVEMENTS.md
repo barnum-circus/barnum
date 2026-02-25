@@ -418,51 +418,15 @@ pub fn submit_with_mode(root: &Path, payload_json: &str, mode: SubmitMode) -> io
 tempfile = "3"
 ```
 
-#### 2.3: Add `test_all_modes!` macro
+#### 2.3: Use `rstest` for parameterized tests
 
-**File:** `crates/agent_pool/tests/common/mod.rs`
-
-```rust
-/// Generate test functions for all 4 submit modes.
-///
-/// Usage:
-/// ```
-/// fn my_test_impl(mode: SubmitMode) { ... }
-/// test_all_modes!(my_test_impl);
-/// // Generates: my_test_impl_data_socket, my_test_impl_data_file, etc.
-/// ```
-#[macro_export]
-macro_rules! test_all_modes {
-    ($test_fn:ident) => {
-        paste::paste! {
-            #[test]
-            fn [<$test_fn _data_socket>]() {
-                $test_fn(common::SubmitMode::DataSocket);
-            }
-
-            #[test]
-            fn [<$test_fn _data_file>]() {
-                $test_fn(common::SubmitMode::DataFile);
-            }
-
-            #[test]
-            fn [<$test_fn _file_socket>]() {
-                $test_fn(common::SubmitMode::FileSocket);
-            }
-
-            #[test]
-            fn [<$test_fn _file_file>]() {
-                $test_fn(common::SubmitMode::FileFile);
-            }
-        }
-    };
-}
-```
+The `rstest` crate is Rust's equivalent of Jest's `describe.each` - it generates separate test functions for each parameter combination.
 
 **Dependencies to add to `Cargo.toml`:**
 ```toml
 [dev-dependencies]
-paste = "1"
+tempfile = "3"
+rstest = "0.18"
 ```
 
 #### 2.4: Convert `greeting.rs` to multi-mode
@@ -478,16 +442,24 @@ fn greeting_casual_and_formal() {
     let mut agent = TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10));
     agent.wait_ready();
 
-    let casual = submit_via_cli(&root, r#"{"kind":"Task",...}"#, "socket").expect("Submit failed");
+    let casual = agent_pool::submit(&root, &Payload::inline(...)).expect("Submit failed");
     // ... assertions ...
 
     cleanup_test_dir(TEST_DIR);
 }
 ```
 
-**After (4 tests via macro):**
+**After (4 tests via rstest):**
 ```rust
-fn greeting_casual_and_formal_impl(mode: SubmitMode) {
+use rstest::rstest;
+use common::SubmitMode;
+
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn greeting_casual_and_formal(#[case] mode: SubmitMode) {
     // Use mode in test dir name to avoid conflicts when tests run in parallel
     let test_dir = format!("{TEST_DIR}_{mode:?}");
     let root = setup_test_dir(&test_dir);
@@ -519,28 +491,27 @@ fn greeting_casual_and_formal_impl(mode: SubmitMode) {
     let _ = agent.stop();
     cleanup_test_dir(&test_dir);
 }
-
-test_all_modes!(greeting_casual_and_formal_impl);
 ```
 
-This generates 4 test functions:
-- `greeting_casual_and_formal_impl_data_socket`
-- `greeting_casual_and_formal_impl_data_file`
-- `greeting_casual_and_formal_impl_file_socket`
-- `greeting_casual_and_formal_impl_file_file`
+This generates 4 test functions automatically:
+- `greeting_casual_and_formal::case_1` (DataSocket)
+- `greeting_casual_and_formal::case_2` (DataFile)
+- `greeting_casual_and_formal::case_3` (FileSocket)
+- `greeting_casual_and_formal::case_4` (FileFile)
 
 #### 2.5: Convert other test files
 
 Apply the same pattern to:
-- `single_basic.rs` - `single_agent_single_task_impl`, `file_based_submit_impl`
-- `single_agent_queue.rs` - `single_agent_queues_multiple_tasks_impl`
-- `many_agents.rs` - `multiple_agents_parallel_tasks_impl`
+- `single_basic.rs` - `single_agent_single_task`, `file_based_submit`
+- `single_agent_queue.rs` - `single_agent_queues_multiple_tasks`
+- `many_agents.rs` - `multiple_agents_parallel_tasks`
 
 **Key changes for each:**
-1. Rename test function to `*_impl(mode: SubmitMode)`
-2. Include `mode:?` in test directory name
-3. Replace `submit_via_cli(&root, json, "socket")` with `submit_with_mode(&root, json, mode)`
-4. Add `test_all_modes!(fn_name_impl);` at the end
+1. Add `use rstest::rstest;` and `use common::SubmitMode;`
+2. Add `#[rstest]` and `#[case(...)]` attributes
+3. Add `mode: SubmitMode` parameter
+4. Include `mode:?` in test directory name
+5. Replace `agent_pool::submit(...)` with `submit_with_mode(&root, json, mode)`
 
 ---
 
