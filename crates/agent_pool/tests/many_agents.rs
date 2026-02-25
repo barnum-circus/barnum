@@ -8,8 +8,10 @@
 
 mod common;
 
-use agent_pool::{Payload, Response};
-use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use agent_pool::Response;
+use common::{
+    AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir, submit_via_cli,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -48,9 +50,7 @@ fn multiple_agents_parallel_tasks() {
             let root = root.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"Task-{i}"}}}}"#);
-            thread::spawn(move || {
-                agent_pool::submit(&root, &Payload::inline(task)).expect("Submit failed")
-            })
+            thread::spawn(move || submit_via_cli(&root, &task, "socket").expect("Submit failed"))
         })
         .collect();
 
