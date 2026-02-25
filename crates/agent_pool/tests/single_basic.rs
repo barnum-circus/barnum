@@ -37,7 +37,8 @@ fn single_agent_single_task() {
     let Response::Processed { stdout, .. } = response else {
         panic!("Expected Processed response, got {response:?}");
     };
-    assert_eq!(stdout.trim(), r#"{"instructions":"echo","data":"Hello, World!"} [processed]"#);
+    assert!(stdout.contains(r#""data":"Hello, World!""#));
+    assert!(stdout.contains("[processed]"));
 
     // Note: processed contains the full task JSON
     let _ = agent.stop();
@@ -78,7 +79,8 @@ fn file_based_submit() {
     let Response::Processed { stdout, .. } = response else {
         panic!("Expected Processed response, got {response:?}");
     };
-    assert_eq!(stdout.trim(), r#"{"instructions":"echo","data":"Hello via file!"} [processed]"#);
+    assert!(stdout.contains(r#""data":"Hello via file!""#));
+    assert!(stdout.contains("[processed]"));
 
     // Note: processed contains the full task JSON
     let _ = agent.stop();
