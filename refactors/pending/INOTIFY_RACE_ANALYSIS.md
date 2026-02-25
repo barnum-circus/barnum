@@ -2,219 +2,618 @@
 
 ## The Problem
 
-Tests pass on macOS but fail (hang) on Linux. The root cause is a race condition inherent to `inotify` that doesn't exist in `FSEvents`.
+Tests pass on macOS but fail (hang) on Linux due to a race condition in `inotify`.
 
-### FSEvents vs Inotify
+**The race:** When a new directory is created, there's a window between receiving the CREATE event and inotify adding a watch for that directory. Files written during this window are missed.
 
-**macOS FSEvents:**
-- Directory-level monitoring
-- Watches entire tree automatically
-- No race when subdirectories are created
+**Affected:** Submissions (submitter creates directory, immediately writes request file).
 
-**Linux inotify:**
-- Per-directory watches
-- Must manually add watches for new subdirectories
-- **Race condition**: When a new directory is created, there's a window between:
-  1. Receiving the CREATE event for the directory
-  2. Adding a watch for that directory
-- Files written during this window are missed
-
-## Where The Race Occurs
-
-### Pending Task Submission (the actual problem)
-
-```
-Submitter process:          Daemon process:
-─────────────────          ──────────────────
-create_dir() returns
-write(task.json)  ←─────── Race: if this happens before
-                           inotify_add_watch() completes,
-                           we miss it
-
-                           inotify_add_watch() completes
-                           callback called
-                           IoEvent::Fs(PendingDir) queued
-```
-
-The submitter doesn't wait for anything. It writes `task.json` immediately after `create_dir()` returns. This can happen before the watch is set up.
-
-### Agents (not affected, but flattening for consistency)
-
-Agents are immune because `response.json` can only be written after reading `task.json`, which the daemon only writes after processing `AgentDir`, which happens after the watch is set up. The causal chain guarantees ordering.
-
-However, we'll flatten agents too for consistency and to simplify the protocol.
+**Not affected:** Agents (agent creates directory, waits for daemon to write task, then writes outcome—causal chain guarantees watch is active).
 
 ---
 
 ## Implementation Plan
 
-Four phases, each independently deployable:
+Five phases:
 
 1. **Canary sync** - Ensure watchers are active at startup
-2. **Flatten pending** - Fix the race condition (priority: unblocks CI)
+2. **Flatten submissions** - Fix the race condition (priority: unblocks CI)
 3. **Flatten agents** - Consistency, reuse logic from phase 2
-4. **Anonymous worker model** - Simplify agent protocol to a task queue
+4. **Rename things** - Clean up naming
+5. **Anonymous worker model** - Simplify agent protocol
+
+### Naming Convention (Final State)
+
+**Submissions (in `submissions/`):**
+- `<id>.request.json` - submitter writes
+- `<id>.response.json` - daemon writes
+
+**Agents (in `agents/`):**
+- `<id>.task.json` - daemon writes
+- `<id>.outcome.json` - agent writes
 
 ---
 
-## Phase 1: Canary Sync for Both Directories at Startup
+## Phase 1: Canary Sync for Both Directories
 
-**Goal:** Ensure both `pending/` and `agents/` directories are being watched before accepting any connections or processing events.
+**Goal:** Ensure both `pending/` and `agents/` are watched before proceeding. Panic on non-FS events.
+
+### 1.1: Update `sync_with_watcher` to panic on non-FS events
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs` (lines 967-969)
+
+**Before:**
+```rust
+Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {
+    // Non-FS event or timeout, keep polling
+}
+```
+
+**After:**
+```rust
+Ok(IoEvent::Socket(..) | IoEvent::Effect(..) | IoEvent::Shutdown) => {
+    panic!("unexpected non-FS event during startup sync");
+}
+Err(mpsc::RecvTimeoutError::Timeout) => {
+    // Keep polling
+}
+```
+
+### 1.2: Sync both directories at startup
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs` (around line 194)
+
+**Before:**
+```rust
+let canary_path = pending_dir.join(".watcher-ready");
+if let Err(e) = sync_with_watcher(&canary_path, &io_rx) {
+    let _ = ready_tx.send(Err(e));
+    return Err(io::Error::other("watcher sync failed"));
+}
+```
+
+**After:**
+```rust
+// Sync pending directory
+let pending_canary = pending_dir.join("canary");
+if let Err(e) = sync_with_watcher(&pending_canary, &io_rx) {
+    let _ = ready_tx.send(Err(e));
+    return Err(io::Error::other("pending watcher sync failed"));
+}
+
+// Sync agents directory
+let agents_canary = agents_dir.join("canary");
+if let Err(e) = sync_with_watcher(&agents_canary, &io_rx) {
+    let _ = ready_tx.send(Err(e));
+    return Err(io::Error::other("agents watcher sync failed"));
+}
+```
+
+**Also update:** The `run_with_config` path (around line 279) with the same changes.
+
+---
+
+## Phase 2: Flatten Submissions Directory
+
+**Goal:** Eliminate race by using flat files. No directory creation = no new watches needed.
+
+### 2.1: Add constants for flat file suffixes
+
+**File:** `crates/agent_pool/src/constants.rs`
+
+**Before:**
+```rust
+pub const TASK_FILE: &str = "task.json";
+pub const RESPONSE_FILE: &str = "response.json";
+```
+
+**After:**
+```rust
+pub const TASK_FILE: &str = "task.json";
+pub const RESPONSE_FILE: &str = "response.json";
+
+// Flat file suffixes for submissions
+pub const REQUEST_SUFFIX: &str = ".request.json";
+pub const RESPONSE_SUFFIX: &str = ".response.json";
+```
+
+### 2.2: Update submit_file.rs
+
+**File:** `crates/agent_pool/src/client/submit_file.rs`
+
+**Before:**
+```rust
+// Generate unique submission ID
+let submission_id = Uuid::new_v4().to_string();
+let submission_dir = pending_dir.join(&submission_id);
+
+// Create submission directory
+fs::create_dir(&submission_dir)?;
+
+let task_path = submission_dir.join(PENDING_TASK_FILE);
+let response_path = submission_dir.join(PENDING_RESPONSE_FILE);
+
+// Write task file with serialized payload
+let content = serde_json::to_string(payload)
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+fs::write(&task_path, content)?;
+```
+
+**After:**
+```rust
+use crate::constants::{REQUEST_SUFFIX, RESPONSE_SUFFIX};
+
+// Generate unique submission ID
+let submission_id = Uuid::new_v4().to_string();
+
+// Flat files directly in pending directory
+let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
+
+// Write request file with serialized payload (no directory creation!)
+let content = serde_json::to_string(payload)
+    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+fs::write(&request_path, content)?;
+```
+
+**Cleanup (before):**
+```rust
+let _ = fs::remove_dir_all(&submission_dir);
+```
+
+**Cleanup (after):**
+```rust
+let _ = fs::remove_file(&request_path);
+let _ = fs::remove_file(&response_path);
+```
+
+**Update `cleanup_submission`:**
+
+**Before:**
+```rust
+pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Result<()> {
+    let submission_dir = root.as_ref().join(PENDING_DIR).join(submission_id);
+    if submission_dir.exists() {
+        fs::remove_dir_all(&submission_dir)?;
+    }
+    Ok(())
+}
+```
+
+**After:**
+```rust
+pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Result<()> {
+    let pending_dir = root.as_ref().join(PENDING_DIR);
+    let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+    let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
+    let _ = fs::remove_file(&request_path);
+    let _ = fs::remove_file(&response_path);
+    Ok(())
+}
+```
+
+### 2.3: Update PathCategory
+
+**File:** `crates/agent_pool/src/daemon/path_category.rs`
+
+**Before:**
+```rust
+pub(super) enum PathCategory {
+    AgentDir { name: String },
+    AgentResponse { name: String },
+    PendingDir { uuid: String },
+    PendingTask { uuid: String },
+}
+```
+
+**After:**
+```rust
+pub(super) enum PathCategory {
+    AgentDir { name: String },
+    AgentResponse { name: String },
+    /// Submission request file: `pending/<id>.request.json`
+    SubmissionRequest { id: String },
+    /// Submission response file: `pending/<id>.response.json` (daemon writes, ignored)
+    SubmissionResponse { id: String },
+}
+```
+
+**Update `categorize_under_pending`:**
+
+**Before:**
+```rust
+fn categorize_under_pending(path: &Path, pending_dir: &Path) -> Option<PathCategory> {
+    let relative = path.strip_prefix(pending_dir).ok()?;
+    let components: Vec<_> = relative.components().collect();
+
+    if components.is_empty() {
+        return None;
+    }
+
+    let uuid = components[0].as_os_str().to_str()?.to_string();
+
+    match components.len() {
+        1 => Some(PathCategory::PendingDir { uuid }),
+        2 => {
+            let filename = components[1].as_os_str().to_str()?;
+            if filename == TASK_FILE {
+                Some(PathCategory::PendingTask { uuid })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+```
+
+**After:**
+```rust
+use crate::constants::{REQUEST_SUFFIX, RESPONSE_SUFFIX};
+
+fn categorize_under_pending(path: &Path, pending_dir: &Path) -> Option<PathCategory> {
+    let relative = path.strip_prefix(pending_dir).ok()?;
+    let components: Vec<_> = relative.components().collect();
+
+    // Must be exactly one component (flat file)
+    if components.len() != 1 {
+        return None;
+    }
+
+    let filename = components[0].as_os_str().to_str()?;
+
+    if let Some(id) = filename.strip_suffix(REQUEST_SUFFIX) {
+        return Some(PathCategory::SubmissionRequest { id: id.to_string() });
+    }
+
+    if let Some(id) = filename.strip_suffix(RESPONSE_SUFFIX) {
+        return Some(PathCategory::SubmissionResponse { id: id.to_string() });
+    }
+
+    None
+}
+```
+
+### 2.4: Update wiring.rs event handling
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs` (handle_fs_event, around line 557)
+
+**Before:**
+```rust
+PathCategory::PendingDir { uuid } => {
+    debug!(uuid = %uuid, "PendingDir: ignoring directory event");
+}
+PathCategory::PendingTask { uuid } => {
+    let submission_dir = pending_dir.join(&uuid);
+    if path.exists() {
+        register_pending_task(
+            &submission_dir,
+            events_tx,
+            external_task_map,
+            task_id_allocator,
+            io_config,
+        );
+    }
+}
+```
+
+**After:**
+```rust
+PathCategory::SubmissionRequest { id } => {
+    if path.exists() {
+        register_submission(
+            &id,
+            pending_dir,
+            events_tx,
+            external_task_map,
+            task_id_allocator,
+            io_config,
+        );
+    }
+}
+PathCategory::SubmissionResponse { id } => {
+    // Daemon writes these, ignore our own writes
+    trace!(id = %id, "SubmissionResponse: ignoring (daemon wrote this)");
+}
+```
+
+### 2.5: Update register_pending_task → register_submission
 
 **File:** `crates/agent_pool/src/daemon/wiring.rs`
 
-**Changes:**
-
-1. After creating both directories, write a canary file to each
-2. Spin until we've observed FS events for both canary files
-3. Panic if we see non-FS events (shouldn't happen at startup)
-4. Only then proceed with startup
-
+**Before:**
 ```rust
-// Create both directories
-fs::create_dir_all(&pending_dir)?;
-fs::create_dir_all(&agents_dir)?;
+fn register_pending_task(
+    submission_dir: &Path,
+    events_tx: &mpsc::Sender<Event>,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
+    io_config: &IoConfig,
+) {
+    let task_path = submission_dir.join(TASK_FILE);
+    let response_path = submission_dir.join(crate::constants::RESPONSE_FILE);
 
-// Sync both directories with canary files
-let pending_canary = pending_dir.join(".canary");
-let agents_canary = agents_dir.join(".canary");
+    // Already registered?
+    if let Some(existing_id) = external_task_map.get_id_by_path(submission_dir) {
+        // ...
+    }
 
-sync_directories_with_watcher(&[&pending_canary, &agents_canary], &io_rx)?;
+    // Already completed? (response.json exists)
+    if response_path.exists() {
+        // ...
+    }
+
+    // Read and resolve payload
+    let raw = match fs::read_to_string(&task_path) {
+        // ...
+    };
+
+    // Register the task
+    let external_id = task_id_allocator.allocate_external();
+    if external_task_map.register(
+        external_id,
+        submission_dir.to_path_buf(),  // stores directory path
+        ExternalTaskData { ... },
+    ) {
+        // ...
+    }
+}
 ```
 
----
+**After:**
+```rust
+fn register_submission(
+    id: &str,
+    pending_dir: &Path,
+    events_tx: &mpsc::Sender<Event>,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
+    io_config: &IoConfig,
+) {
+    let request_path = pending_dir.join(format!("{id}{REQUEST_SUFFIX}"));
+    let response_path = pending_dir.join(format!("{id}{RESPONSE_SUFFIX}"));
 
-## Phase 2: Flatten Pending Directory
+    // Already registered?
+    if let Some(existing_id) = external_task_map.get_id_by_path(&request_path) {
+        // ...
+    }
 
-**Goal:** Eliminate the race condition for task submission by using flat files.
+    // Already completed?
+    if response_path.exists() {
+        // ...
+    }
 
-**Priority:** This fixes CI. Push after completing this phase.
+    // Read and resolve payload
+    let raw = match fs::read_to_string(&request_path) {
+        // ...
+    };
 
-**Current structure:**
+    // Register the submission
+    let external_id = task_id_allocator.allocate_external();
+    if external_task_map.register(
+        external_id,
+        request_path,  // stores request file path
+        ExternalTaskData { ... },
+    ) {
+        // ...
+    }
+}
 ```
-pending/
-├── <uuid>/
-│   ├── task.json
-│   └── response.json
+
+### 2.6: Update ExternalTaskMap.finish()
+
+**File:** `crates/agent_pool/src/daemon/io.rs`
+
+**Before:**
+```rust
+Transport::Directory(path) => {
+    debug!(
+        external_task_id = id.0,
+        path = %path.display(),
+        "finish: writing response.json"
+    );
+    fs::write(path.join(RESPONSE_FILE), response)?;
+}
 ```
 
-**New structure:**
+**After:**
+```rust
+Transport::Directory(path) => {
+    // path is the request file; derive response path
+    let response_path = path.with_file_name(
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(REQUEST_SUFFIX))
+            .map(|id| format!("{id}{RESPONSE_SUFFIX}"))
+            .expect("request path should have REQUEST_SUFFIX")
+    );
+    debug!(
+        external_task_id = id.0,
+        path = %response_path.display(),
+        "finish: writing response"
+    );
+    fs::write(response_path, response)?;
+}
 ```
-pending/
-├── <id>.task.json
-└── <id>.response.json
-```
 
-**Files to modify:**
+### 2.7: Update tests
 
-1. **`constants.rs`** - Add suffixes:
-   ```rust
-   pub const TASK_SUFFIX: &str = ".task.json";
-   pub const RESPONSE_SUFFIX: &str = ".response.json";
-   ```
-
-2. **`client/submit_file.rs`** - Change submission to write flat files:
-   - No `create_dir()` call
-   - Write `<id>.task.json` directly to `pending/`
-   - Poll for `<id>.response.json`
-   - Cleanup: delete both files
-
-3. **`daemon/path_category.rs`** - Update categorization:
-   - Remove `PendingDir` variant
-   - `PendingTask` matches `<id>.task.json`
-   - Add `PendingResponse` (ignored, daemon writes these)
-
-4. **`daemon/wiring.rs`** - Update event handling:
-   - Remove `PendingDir` handler
-   - Update `register_pending_task` to work with flat files
-
-5. **`daemon/io.rs`** - Update `ExternalTaskMap`:
-   - Store task file path instead of directory path
-   - `finish()` derives response path from task path
+Update all tests in `path_category.rs` and `wiring.rs` that reference the old directory structure.
 
 ---
 
 ## Phase 3: Flatten Agents Directory
 
-**Goal:** Consistency with pending directory. Reuse logic from Phase 2.
+Similar pattern to Phase 2, but for agents.
 
-**Current structure:**
-```
-agents/
-├── <name>/
-│   ├── task.json
-│   └── response.json
-```
+### 3.1: Add constants
 
-**New structure:**
-```
-agents/
-├── <id>.task.json
-└── <id>.response.json
+**File:** `crates/agent_pool/src/constants.rs`
+
+**Add:**
+```rust
+// Flat file suffixes for agents
+pub const TASK_SUFFIX: &str = ".task.json";
+pub const OUTCOME_SUFFIX: &str = ".outcome.json";
 ```
 
-Note: Use daemon-assigned IDs, not agent-provided names. Names become debug-only metadata.
+### 3.2: Update PathCategory
 
-**Files to modify:**
+**Before:**
+```rust
+AgentDir { name: String },
+AgentResponse { name: String },
+```
 
-1. **`daemon/path_category.rs`** - Update categorization:
-   - Remove `AgentDir` variant
-   - `AgentTask` matches `<id>.task.json`
-   - `AgentResponse` matches `<id>.response.json`
+**After:**
+```rust
+/// Agent task file: `agents/<id>.task.json` (daemon writes, ignored)
+AgentTask { id: String },
+/// Agent outcome file: `agents/<id>.outcome.json`
+AgentOutcome { id: String },
+```
 
-2. **`daemon/wiring.rs`** - Update event handling:
-   - Remove `handle_agent_dir`
-   - Registration happens differently (see Phase 4)
+### 3.3: Update categorize_under_agents
 
-3. **`daemon/io.rs`** - Update `AgentMap`:
-   - Store file paths instead of directory paths
+**Before:**
+```rust
+fn categorize_under_agents(path: &Path, agents_dir: &Path) -> Option<PathCategory> {
+    let relative = path.strip_prefix(agents_dir).ok()?;
+    let components: Vec<_> = relative.components().collect();
 
-4. **Agent-side changes** - Agents write to assigned paths instead of self-named directories
+    if components.is_empty() {
+        return None;
+    }
 
-5. **Update `AGENT_PROTOCOL.md`** and `SUBMISSION_PROTOCOL.md`
+    let name = components[0].as_os_str().to_str()?.to_string();
+
+    match components.len() {
+        1 => Some(PathCategory::AgentDir { name }),
+        2 => {
+            let filename = components[1].as_os_str().to_str()?;
+            if filename == RESPONSE_FILE {
+                Some(PathCategory::AgentResponse { name })
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+```
+
+**After:**
+```rust
+fn categorize_under_agents(path: &Path, agents_dir: &Path) -> Option<PathCategory> {
+    let relative = path.strip_prefix(agents_dir).ok()?;
+    let components: Vec<_> = relative.components().collect();
+
+    // Must be exactly one component (flat file)
+    if components.len() != 1 {
+        return None;
+    }
+
+    let filename = components[0].as_os_str().to_str()?;
+
+    if let Some(id) = filename.strip_suffix(TASK_SUFFIX) {
+        return Some(PathCategory::AgentTask { id: id.to_string() });
+    }
+
+    if let Some(id) = filename.strip_suffix(OUTCOME_SUFFIX) {
+        return Some(PathCategory::AgentOutcome { id: id.to_string() });
+    }
+
+    None
+}
+```
+
+### 3.4: Update agent handling in wiring.rs
+
+Remove `handle_agent_dir` and `handle_agent_response`. Replace with:
+
+```rust
+PathCategory::AgentTask { id } => {
+    // Daemon writes these, ignore our own writes
+    trace!(id = %id, "AgentTask: ignoring (daemon wrote this)");
+}
+PathCategory::AgentOutcome { id } => {
+    if path.exists() {
+        handle_agent_outcome(&id, agents_dir, events_tx, agent_map, pending_responses);
+    }
+}
+```
+
+### 3.5: Update agent protocol
+
+Agents will receive task file path and response file path from the daemon, rather than creating their own directories.
 
 ---
 
-## Phase 4: Anonymous Worker Model
+## Phase 4: Rename Things
 
-**Goal:** Simplify agent protocol to a task queue. Workers are anonymous; only tasks have identity.
+### 4.1: Rename pending/ → submissions/
 
-**Current model (problems):**
-- Agents have names/directories that persist across tasks
-- State machine tracking (idle, working, etc.)
-- Complexity around registration, kicked state, etc.
-- Agent names carry semantic meaning (uniqueness assumptions)
+**File:** `crates/agent_pool/src/constants.rs`
 
-**New model:**
-- Workers are anonymous
-- Worker calls `get_task`, blocks until assigned a task
-- Daemon returns task content + response file path
-- Worker completes task, writes response to assigned path
-- Worker calls `get_task` again (back of the queue)
-- Daemon only tracks tasks, not workers
+**Before:**
+```rust
+pub const PENDING_DIR: &str = "pending";
+```
 
-**Heartbeats:** Still useful. If a worker is waiting in the queue too long without getting a task, send a heartbeat to verify it's alive. This is about queue starvation, not task completion (task timeouts handle that).
+**After:**
+```rust
+pub const SUBMISSIONS_DIR: &str = "submissions";
+```
 
-**Names:** Keep for debugging/logging only. No semantic meaning. No uniqueness requirement. A multi-threaded agent can register multiple times with the same name.
+### 4.2: Rename variables and types throughout
 
-**Key insight:** The daemon doesn't care *who* is doing the work, just *whether* the work gets done. Task timeouts handle stuck workers—if a task times out, it fails (or gets reassigned).
+- `pending_dir` → `submissions_dir`
+- `ExternalTaskMap` → `SubmissionMap` (optional)
+- `ExternalTaskId` → `SubmissionId` (optional)
+- Update all log messages
 
-**Changes:**
+### 4.3: Update documentation
+
+- `SUBMISSION_PROTOCOL.md`
+- `AGENT_PROTOCOL.md`
+
+---
+
+## Phase 5: Anonymous Worker Model
+
+### Goal
+
+Simplify agent protocol to a task queue. Workers are anonymous; only tasks have identity.
+
+### Current Model (Problems)
+
+- Agents have persistent identities (names/directories)
+- Complex state machine (idle, working, kicked)
+- Names carry semantic meaning
+
+### New Model
+
+- Workers call `get_task`, block until assigned
+- Daemon returns task content + outcome file path
+- Worker completes task, writes to assigned path
+- Worker calls `get_task` again (back of queue)
+- Heartbeats for queue starvation detection
+- Names are debug-only, no uniqueness requirement
+
+### Changes
 
 1. Remove agent identity tracking from core state machine
-2. Simplify `AgentMap` to just track pending responses by task ID
-3. `get_task` / `register` returns task + response path
-4. `next_task` becomes just another `get_task` call
-5. Remove kicked state tracking
-6. Clean up CLI commands (`register`, `next_task` → maybe just `work`?)
+2. Simplify `AgentMap` to track pending outcomes by task ID
+3. `get_task` returns task + outcome path
+4. Remove kicked state tracking
+5. Consolidate CLI commands
 
 ---
 
 ## Task Order
 
-1. Phase 1 (canary sync) - Small, independent
-2. Phase 2 (flatten pending) - **Push after this to fix CI**
-3. Phase 3 (flatten agents) - Reuses Phase 2 patterns
-4. Phase 4 (anonymous workers) - Larger refactor, can be separate PR
-
-Phases 1-3 should be done together before pushing. Phase 4 can be a follow-up.
+1. **Phase 1** (canary sync) - Small, independent
+2. **Phase 2** (flatten submissions) - **Push after this to fix CI**
+3. **Phase 3** (flatten agents) - Reuses Phase 2 patterns
+4. **Phase 4** (rename things) - Cleanup
+5. **Phase 5** (anonymous workers) - Larger refactor, separate PR
