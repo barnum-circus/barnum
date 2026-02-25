@@ -43,7 +43,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$GSD run "$SCRIPT_DIR/../../gsd_config/configs/command-demo.json" \
+$GSD run "$SCRIPT_DIR/configs/command-demo.json" \
     --pool "$ROOT" \
     --initial '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 
@@ -53,4 +53,4 @@ echo ""
 echo "The workflow processed 3 items through local jq commands:"
 echo "  Split -> Process x3 -> Collect x3"
 echo ""
-echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/command-demo.dot"
+echo "View workflow graph: $SCRIPT_DIR/configs/command-demo.dot"

@@ -18,7 +18,7 @@ if [ -z "$GSD" ]; then
     GSD="$WORKSPACE_ROOT/target/debug/gsd"
 fi
 
-CONFIGS_DIR="$WORKSPACE_ROOT/crates/gsd_config/configs"
+CONFIGS_DIR="$WORKSPACE_ROOT/crates/gsd_cli/demos/configs"
 CHECK_MODE=false
 
 if [ "$1" = "--check" ]; then

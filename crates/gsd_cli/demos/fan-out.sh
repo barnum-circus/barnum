@@ -53,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with fan-out config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/fan-out.json" \
+    $GSD run "$SCRIPT_DIR/configs/fan-out.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Distribute", "value": {}}]' \
         $WAKE_ARG
@@ -61,7 +61,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/fan-out.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/fan-out.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -114,7 +114,7 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/fan-out.json" \
+    $GSD run "$SCRIPT_DIR/configs/fan-out.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Distribute", "value": {}}]'
 
@@ -125,5 +125,5 @@ else
     echo "=== Success! ==="
     echo "Processed $NUM_WORKERS tasks with $NUM_AGENTS agents in ${ELAPSED}s"
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/fan-out.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/fan-out.dot"
 fi

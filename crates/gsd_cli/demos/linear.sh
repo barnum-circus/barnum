@@ -48,7 +48,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with linear config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
+    $GSD run "$SCRIPT_DIR/configs/linear.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
@@ -56,7 +56,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/linear.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/linear.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -90,12 +90,12 @@ else
     # Run GSD
     echo ""
     echo "Running GSD with linear config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/linear.json" \
+    $GSD run "$SCRIPT_DIR/configs/linear.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/linear.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/linear.dot"
 fi

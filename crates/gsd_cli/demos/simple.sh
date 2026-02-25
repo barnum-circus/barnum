@@ -45,7 +45,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/simple.json" \
+    $GSD run "$SCRIPT_DIR/configs/simple.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
@@ -53,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/simple.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/simple.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -87,12 +87,12 @@ else
     # Run GSD
     echo ""
     echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/simple.json" \
+    $GSD run "$SCRIPT_DIR/configs/simple.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/simple.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/simple.dot"
 fi

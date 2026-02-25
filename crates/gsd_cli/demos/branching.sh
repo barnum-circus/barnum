@@ -49,7 +49,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with branching config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/branching.json" \
+    $GSD run "$SCRIPT_DIR/configs/branching.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Decide", "value": {}}]' \
         $WAKE_ARG
@@ -57,7 +57,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/branching.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/branching.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -91,12 +91,12 @@ else
     # Run GSD
     echo ""
     echo "Running GSD with branching config..."
-    $GSD run "$SCRIPT_DIR/../../gsd_config/configs/branching.json" \
+    $GSD run "$SCRIPT_DIR/configs/branching.json" \
         --pool "$ROOT" \
         --initial '[{"kind": "Decide", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/../../gsd_config/configs/branching.dot"
+    echo "View workflow graph: $SCRIPT_DIR/configs/branching.dot"
 fi

@@ -22,20 +22,20 @@ echo "=== Demo: GSD Docs and Validate ==="
 echo ""
 
 echo "--- Validating simple.json ---"
-$GSD validate "$SCRIPT_DIR/../../gsd_config/configs/simple.json"
+$GSD validate "$SCRIPT_DIR/configs/simple.json"
 echo ""
 
 echo "--- Validating linear.json ---"
-$GSD validate "$SCRIPT_DIR/../../gsd_config/configs/linear.json"
+$GSD validate "$SCRIPT_DIR/configs/linear.json"
 echo ""
 
 echo "--- Validating branching.json ---"
-$GSD validate "$SCRIPT_DIR/../../gsd_config/configs/branching.json"
+$GSD validate "$SCRIPT_DIR/configs/branching.json"
 echo ""
 
 echo "--- Generating docs for linear.json ---"
 echo ""
-$GSD docs "$SCRIPT_DIR/../../gsd_config/configs/linear.json"
+$GSD docs "$SCRIPT_DIR/configs/linear.json"
 
 echo ""
 echo "=== Success! ==="
