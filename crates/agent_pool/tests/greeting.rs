@@ -7,8 +7,10 @@
 
 mod common;
 
-use agent_pool::{Payload, Response};
-use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use agent_pool::Response;
+use common::{
+    AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir, submit_via_cli,
+};
 use std::time::Duration;
 
 const TEST_DIR: &str = "greeting";
@@ -29,9 +31,10 @@ fn greeting_casual_and_formal() {
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let casual = agent_pool::submit(
+    let casual = submit_via_cli(
         &root,
-        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"greet","data":"casual"}}"#),
+        r#"{"kind":"Task","task":{"instructions":"greet","data":"casual"}}"#,
+        "socket",
     )
     .expect("Submit failed");
     let Response::Processed { stdout, .. } = casual else {
@@ -39,9 +42,10 @@ fn greeting_casual_and_formal() {
     };
     assert_eq!(stdout.trim(), "Hi friendly-bot, how are ya?");
 
-    let formal = agent_pool::submit(
+    let formal = submit_via_cli(
         &root,
-        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"greet","data":"formal"}}"#),
+        r#"{"kind":"Task","task":{"instructions":"greet","data":"formal"}}"#,
+        "socket",
     )
     .expect("Submit failed");
     let Response::Processed { stdout, .. } = formal else {
