@@ -449,7 +449,31 @@ fn submit_raw(root: &Path, payload_json: &str, data_source: DataSource) -> io::R
     let submission_dir = root.join(PENDING_DIR).join(&task_id);
     fs::create_dir_all(&submission_dir)?;
 
-    // Build the payload envelope based on data source
+    // Set up watcher BEFORE writing task.json to avoid race condition
+    let response_file = submission_dir.join(RESPONSE_FILE);
+    let (tx, rx) = mpsc::sync_channel::<()>(1); // buffered to avoid blocking sender
+    let watch_target = response_file.clone();
+
+    let mut watcher = RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                for path in &event.paths {
+                    if path == &watch_target {
+                        let _ = tx.send(());
+                        return;
+                    }
+                }
+            }
+        },
+        notify::Config::default(),
+    )
+    .map_err(|e| io::Error::other(format!("Failed to create watcher: {e}")))?;
+
+    watcher
+        .watch(&submission_dir, RecursiveMode::NonRecursive)
+        .map_err(|e| io::Error::other(format!("Failed to watch: {e}")))?;
+
+    // Build and write the payload (daemon will see task.json and process it)
     let payload_str = match data_source {
         DataSource::Inline => {
             let payload = serde_json::json!({
@@ -472,31 +496,7 @@ fn submit_raw(root: &Path, payload_json: &str, data_source: DataSource) -> io::R
 
     fs::write(submission_dir.join(TASK_FILE), payload_str)?;
 
-    // Wait for response using notify (no polling)
-    let response_file = submission_dir.join(RESPONSE_FILE);
-    let (tx, rx) = mpsc::sync_channel::<()>(0);
-    let watch_target = response_file.clone();
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                for path in &event.paths {
-                    if path == &watch_target {
-                        let _ = tx.send(());
-                        return;
-                    }
-                }
-            }
-        },
-        notify::Config::default(),
-    )
-    .map_err(|e| io::Error::other(format!("Failed to create watcher: {e}")))?;
-
-    watcher
-        .watch(&submission_dir, RecursiveMode::NonRecursive)
-        .map_err(|e| io::Error::other(format!("Failed to watch: {e}")))?;
-
-    // Check if response already exists (race condition)
+    // Check if response already exists (shouldn't happen, but be safe)
     if response_file.exists() {
         let content = fs::read_to_string(&response_file)?;
         return serde_json::from_str(&content).map_err(io::Error::other);
