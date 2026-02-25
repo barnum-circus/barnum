@@ -104,6 +104,18 @@ Consider detecting Linux and using different strategies:
 - Different watcher configuration
 - Or just accept that file protocol is less reliable on Linux
 
+### Task 7: Improve agent watcher
+
+Current state (workaround committed):
+- Agent watches entire directory with `RecursiveMode::NonRecursive`
+- Filters for `Close(Write)` events only to avoid reading empty files
+- Gets events for both `task.json` and `response.json`
+
+Better approach:
+- Watch specific file (`task.json`) instead of whole directory
+- Or flatten agent structure like submissions: `agents/<name>.task.json`, `agents/<name>.response.json`
+- Consider if agents even need subdirectories or if flat files would work
+
 ## Quick Wins (Immediate Actions)
 
 1. **Verify temp files are gone**: Run tests on Linux and check logs for `.tmp` files
