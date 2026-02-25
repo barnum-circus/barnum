@@ -462,9 +462,9 @@ fn response_isolation() {
     let stdout_b = extract_stdout(&response_b.expect("response B")).expect("stdout B");
     let stdout_c = extract_stdout(&response_c.expect("response C")).expect("stdout C");
 
-    assert!(stdout_a.contains(r#""id": "A""#));
-    assert!(stdout_b.contains(r#""id": "B""#));
-    assert!(stdout_c.contains(r#""id": "C""#));
+    assert!(stdout_a.contains(r#""id":"A""#));
+    assert!(stdout_b.contains(r#""id":"B""#));
+    assert!(stdout_c.contains(r#""id":"C""#));
 
     agent.stop();
     cleanup_test_dir(&format!("{TEST_DIR}_isolation"));
