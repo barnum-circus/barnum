@@ -180,21 +180,21 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         let _cleanup = SocketCleanup(socket_path.clone());
         let _watcher = fs_watcher;
 
-        // Sync with the FS watcher to ensure it's delivering events.
-        // On Linux with inotify, there's a race where the watcher may not be fully
-        // ready to catch events in newly-created subdirectories. We write a canary
-        // file and wait until we see the FS event for it before proceeding.
-        let canary_path = agents_dir.join(".watcher-ready");
-        if let Err(e) = sync_with_watcher(&canary_path, &io_rx) {
-            let _ = ready_tx.send(Err(e));
-            return Err(io::Error::other("watcher sync failed"));
-        }
-
-        // Create pending_dir AFTER watcher sync completes.
-        // Clients use pending_dir existence as the "ready" signal.
+        // Create pending_dir before watcher sync so we can test that it's being watched.
         if let Err(e) = fs::create_dir_all(&pending_dir) {
             let _ = ready_tx.send(Err(e));
             return Err(io::Error::other("failed to create pending dir"));
+        }
+
+        // Sync with the FS watcher to ensure it's delivering events.
+        // On Linux with inotify, there's a race where the watcher may not be fully
+        // ready to catch events in newly-created subdirectories. We write a canary
+        // file inside pending/ and wait until we see the FS event - this proves
+        // that pending/ is being watched (where tasks are submitted).
+        let canary_path = pending_dir.join(".watcher-ready");
+        if let Err(e) = sync_with_watcher(&canary_path, &io_rx) {
+            let _ = ready_tx.send(Err(e));
+            return Err(io::Error::other("watcher sync failed"));
         }
 
         info!(socket = %socket_path.display(), "daemon listening");
@@ -267,16 +267,17 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let listener = create_socket_listener(&socket_path)?;
     let _fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
 
-    // Sync with the FS watcher to ensure it's delivering events.
-    // On Linux with inotify, there's a race where the watcher may not be fully
-    // ready to catch events in newly-created subdirectories.
-    let canary_path = agents_dir.join(".watcher-ready");
-    sync_with_watcher(&canary_path, &io_rx)?;
-
-    // Create pending_dir AFTER watcher sync completes.
-    // Clients use pending_dir existence as the "ready" signal.
+    // Create pending_dir before watcher sync so we can test that it's being watched.
     let pending_dir = root.join(PENDING_DIR);
     fs::create_dir_all(&pending_dir)?;
+
+    // Sync with the FS watcher to ensure it's delivering events.
+    // On Linux with inotify, there's a race where the watcher may not be fully
+    // ready to catch events in newly-created subdirectories. We write a canary
+    // file inside pending/ and wait until we see the FS event - this proves
+    // that pending/ is being watched (where tasks are submitted).
+    let canary_path = pending_dir.join(".watcher-ready");
+    sync_with_watcher(&canary_path, &io_rx)?;
 
     info!(socket = %socket_path.display(), "daemon listening");
 
