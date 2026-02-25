@@ -6,9 +6,8 @@
 
 mod common;
 
-use agent_pool::DaemonConfig;
 use agent_pool::{AGENTS_DIR, PENDING_DIR, RESPONSE_FILE, TASK_FILE};
-use common::{TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
 use std::fs;
 use std::path::Path;
 use std::thread;
@@ -22,32 +21,6 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
 }
 
 const TEST_DIR: &str = "integration";
-
-/// Wrapper around the daemon handle for testing.
-struct DaemonHandle {
-    handle: Option<agent_pool::DaemonHandle>,
-}
-
-impl DaemonHandle {
-    fn start(root: &Path) -> Self {
-        Self::start_with_config(root, DaemonConfig::default())
-    }
-
-    fn start_with_config(root: &Path, config: DaemonConfig) -> Self {
-        let handle = agent_pool::spawn_with_config(root, config).expect("Failed to start daemon");
-        Self {
-            handle: Some(handle),
-        }
-    }
-}
-
-impl Drop for DaemonHandle {
-    fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.shutdown();
-        }
-    }
-}
 
 /// Helper to submit a task (wraps content in Payload format).
 fn submit_task(pending_dir: &Path, task_id: &str, content: &str) -> std::path::PathBuf {
@@ -91,7 +64,7 @@ fn file_based_submit() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
     // Wait for agent to be ready (has processed initial heartbeat)
@@ -124,7 +97,7 @@ fn single_agent_multiple_tasks() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
     // Wait for agent to be ready (has processed initial heartbeat)
@@ -169,7 +142,7 @@ fn multiple_agents_parallel() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
 
     // Start two agents with slight processing delay
     let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50));
@@ -216,7 +189,7 @@ fn agent_deregistration() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
     // Wait for agent to be ready (has processed initial heartbeat)
@@ -265,7 +238,7 @@ fn tasks_queued_before_agents() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let pending_dir = root.join(PENDING_DIR);
 
     // Submit tasks BEFORE any agents register
@@ -312,7 +285,7 @@ fn rapid_task_burst() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2));
 
     // Wait for agent to be ready (has processed initial heartbeat)
@@ -356,7 +329,7 @@ fn identical_task_content() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
 
     // Wait for agent to be ready (has processed initial heartbeat)
@@ -398,7 +371,7 @@ fn agent_joins_mid_processing() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
 
     // Start one slow agent
     let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100));
@@ -451,7 +424,7 @@ fn response_isolation() {
         return;
     }
 
-    let _pool = DaemonHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root);
 
     let mut agent = TestAgent::start(&root, "echo-agent", Duration::from_millis(5), |task, _| {
         format!("processed: {}", task.trim())

@@ -4,11 +4,13 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
+use agent_pool::{AGENTS_DIR, PENDING_DIR, RESPONSE_FILE, TASK_FILE};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -269,35 +271,164 @@ impl TestAgent {
 // Agent Pool Handle
 // =============================================================================
 
-/// Wrapper around the daemon handle for testing.
+/// Find the agent_pool binary.
+///
+/// Checks in order:
+/// 1. AGENT_POOL_BIN environment variable
+/// 2. target/debug/agent_pool relative to workspace root
+fn find_agent_pool_binary() -> PathBuf {
+    if let Ok(bin) = std::env::var("AGENT_POOL_BIN") {
+        return PathBuf::from(bin);
+    }
+
+    // Find workspace root by looking for Cargo.toml with [workspace]
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Could not find workspace root");
+
+    workspace_root.join("target/debug/agent_pool")
+}
+
+/// Configuration for the daemon when starting via CLI.
+#[derive(Debug, Clone, Default)]
+pub struct DaemonConfig {
+    /// How long an idle agent can wait before being deregistered.
+    pub idle_agent_timeout: Duration,
+    /// Default timeout for tasks.
+    pub default_task_timeout: Duration,
+    /// Whether to send an immediate heartbeat when an agent connects.
+    pub immediate_heartbeat_enabled: bool,
+    /// Whether to send periodic heartbeats after idle timeout.
+    pub periodic_heartbeat_enabled: bool,
+}
+
+impl DaemonConfig {
+    /// Create a new config with default values matching the CLI defaults.
+    pub fn new() -> Self {
+        Self {
+            idle_agent_timeout: Duration::from_secs(60),
+            default_task_timeout: Duration::from_secs(300),
+            immediate_heartbeat_enabled: true,
+            periodic_heartbeat_enabled: true,
+        }
+    }
+}
+
+impl From<agent_pool::DaemonConfig> for DaemonConfig {
+    fn from(config: agent_pool::DaemonConfig) -> Self {
+        Self {
+            idle_agent_timeout: config.idle_agent_timeout,
+            default_task_timeout: config.default_task_timeout,
+            immediate_heartbeat_enabled: config.immediate_heartbeat_enabled,
+            periodic_heartbeat_enabled: config.periodic_heartbeat_enabled,
+        }
+    }
+}
+
+/// Wrapper that starts the daemon via CLI subprocess.
 ///
 /// Automatically shuts down the daemon when dropped.
 pub struct AgentPoolHandle {
-    handle: Option<agent_pool::DaemonHandle>,
+    root: PathBuf,
+    process: Option<Child>,
 }
 
 impl AgentPoolHandle {
-    /// Start the agent pool daemon with graceful shutdown support.
+    /// Start the agent pool daemon with default configuration.
     pub fn start(root: &Path) -> Self {
-        let handle = agent_pool::spawn(root).expect("Failed to start daemon");
-        Self {
-            handle: Some(handle),
-        }
+        Self::start_with_config(root, DaemonConfig::new())
     }
 
     /// Start the agent pool daemon with custom configuration.
-    pub fn start_with_config(root: &Path, config: agent_pool::DaemonConfig) -> Self {
-        let handle = agent_pool::spawn_with_config(root, config).expect("Failed to start daemon");
+    pub fn start_with_config(root: &Path, config: DaemonConfig) -> Self {
+        let bin = find_agent_pool_binary();
+        assert!(
+            bin.exists(),
+            "agent_pool binary not found at {}. Run `cargo build -p agent_pool_cli` first.",
+            bin.display()
+        );
+
+        // Create the root directory if it doesn't exist (watcher needs it)
+        fs::create_dir_all(root).expect("Failed to create pool directory");
+
+        let pending_dir = root.join(PENDING_DIR);
+
+        // Set up notify watcher BEFORE spawning daemon, so we don't miss the event.
+        // Uses a channel to signal when pending/ is created - no polling.
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+        let watch_pending = pending_dir.clone();
+
+        let mut watcher = RecommendedWatcher::new(
+            move |res: Result<notify::Event, notify::Error>| {
+                if let Ok(event) = res {
+                    for path in &event.paths {
+                        if path == &watch_pending || path.starts_with(&watch_pending) {
+                            let _ = ready_tx.send(());
+                            return;
+                        }
+                    }
+                }
+            },
+            notify::Config::default(),
+        )
+        .expect("Failed to create watcher");
+
+        watcher
+            .watch(root, RecursiveMode::Recursive)
+            .expect("Failed to watch pool directory");
+
+        // Build and spawn daemon process
+        let mut cmd = Command::new(&bin);
+        cmd.arg("start")
+            .arg("--pool")
+            .arg(root)
+            .arg("--idle-agent-timeout-secs")
+            .arg(config.idle_agent_timeout.as_secs().to_string())
+            .arg("--task-timeout-secs")
+            .arg(config.default_task_timeout.as_secs().to_string());
+
+        if !config.immediate_heartbeat_enabled && !config.periodic_heartbeat_enabled {
+            cmd.arg("--no-heartbeat");
+        } else if !config.immediate_heartbeat_enabled {
+            cmd.arg("--no-immediate-heartbeat");
+        } else if !config.periodic_heartbeat_enabled {
+            cmd.arg("--no-periodic-heartbeat");
+        }
+
+        let process = cmd.spawn().expect("Failed to spawn agent_pool process");
+
+        // Block on channel until watcher signals pending/ was created
+        let timeout = Duration::from_secs(5);
+        ready_rx
+            .recv_timeout(timeout)
+            .expect("Daemon did not create pending directory in time");
+
+        // Watcher dropped here - no longer needed
+        drop(watcher);
+
         Self {
-            handle: Some(handle),
+            root: root.to_path_buf(),
+            process: Some(process),
         }
     }
 }
 
 impl Drop for AgentPoolHandle {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.shutdown();
+        // Try graceful shutdown via CLI
+        let bin = find_agent_pool_binary();
+        let _ = Command::new(&bin)
+            .arg("stop")
+            .arg("--pool")
+            .arg(&self.root)
+            .output();
+
+        // Kill the process if still running
+        if let Some(mut process) = self.process.take() {
+            let _ = process.kill();
+            let _ = process.wait();
         }
     }
 }
