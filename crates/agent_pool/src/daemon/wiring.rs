@@ -950,53 +950,54 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
 /// On Linux with inotify, there's a race where newly-created directories may not
 /// be watched immediately. This function ensures the watcher is "warmed up" by:
 /// 1. Writing a canary file
-/// 2. Waiting until we receive an FS event for it
-/// 3. Deleting the canary
+/// 2. Polling quickly (10ms) for an FS event
+/// 3. If no event after 100ms, re-write with new content to trigger a new event
+/// 4. Repeat up to `MAX_ATTEMPTS` times
+/// 5. Delete the canary
 ///
 /// This must be called from the thread that owns `io_rx`.
 fn sync_with_watcher(canary_path: &Path, io_rx: &mpsc::Receiver<IoEvent>) -> io::Result<()> {
-    // Write the canary file
-    fs::write(canary_path, "sync")?;
+    const POLL_INTERVAL: Duration = Duration::from_millis(10);
+    const ROUND_DURATION: Duration = Duration::from_millis(100);
+    const MAX_ATTEMPTS: u32 = 50; // 50 * 100ms = 5s total
+
     debug!(canary = %canary_path.display(), "waiting for watcher sync");
 
-    // Wait for an FS event that mentions the canary path
-    let timeout = Duration::from_secs(5);
-    let start = std::time::Instant::now();
+    for attempt in 0..MAX_ATTEMPTS {
+        // Write canary with unique content to trigger a new FS event each round
+        fs::write(canary_path, format!("sync-{attempt}"))?;
 
-    loop {
-        match io_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(IoEvent::Fs(event)) => {
-                if event.paths.iter().any(|p| p == canary_path) {
-                    debug!("watcher sync complete");
-                    // Clean up canary
-                    let _ = fs::remove_file(canary_path);
-                    return Ok(());
+        let round_start = std::time::Instant::now();
+        while round_start.elapsed() < ROUND_DURATION {
+            match io_rx.recv_timeout(POLL_INTERVAL) {
+                Ok(IoEvent::Fs(event)) => {
+                    if event.paths.iter().any(|p| p == canary_path) {
+                        debug!(attempt, "watcher sync complete");
+                        let _ = fs::remove_file(canary_path);
+                        return Ok(());
+                    }
+                    // Not our canary, keep polling
                 }
-                // Not our canary, keep waiting
-            }
-            Ok(_) => {
-                // Non-FS event (socket, effect, shutdown) - shouldn't happen at startup
-                // but ignore and keep waiting
-            }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if start.elapsed() > timeout {
+                Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // Non-FS event or timeout, keep polling
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
                     let _ = fs::remove_file(canary_path);
                     return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "watcher sync timed out - no FS event received",
+                        io::ErrorKind::BrokenPipe,
+                        "watcher channel disconnected",
                     ));
                 }
-                // Keep waiting
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = fs::remove_file(canary_path);
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "watcher channel disconnected",
-                ));
             }
         }
+        // Round finished without seeing canary event, write new content and retry
     }
+
+    let _ = fs::remove_file(canary_path);
+    Err(io::Error::new(
+        io::ErrorKind::TimedOut,
+        format!("watcher sync timed out after {MAX_ATTEMPTS} attempts"),
+    ))
 }
 
 struct SocketCleanup(PathBuf);
