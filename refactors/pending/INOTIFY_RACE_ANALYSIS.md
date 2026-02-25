@@ -14,11 +14,12 @@ Tests pass on macOS but fail (hang) on Linux due to a race condition in `inotify
 
 ## Implementation Plan
 
-Three phases:
+Four phases:
 
 1. **Canary sync** - Ensure watchers are active at startup
 2. **Flatten submissions** - Fix the race condition (priority: unblocks CI)
 3. **Rename things** - Clean up naming (`pending/` → `submissions/`)
+4. **Status file** - Proper readiness signaling for submitters (nice-to-have)
 
 Future work (separate doc): Flatten agents + anonymous worker model. See `ANONYMOUS_WORKERS.md`.
 
@@ -546,10 +547,82 @@ pub const SUBMISSIONS_DIR: &str = "submissions";
 
 ---
 
+## Phase 4: Status File for Readiness
+
+**Goal:** Proper synchronization so submitters know the daemon is truly ready.
+
+### 4.1: Daemon writes status file after canary sync
+
+**File:** `crates/agent_pool/src/daemon/wiring.rs`
+
+After canary sync completes successfully:
+
+```rust
+// Write status file at pool root
+fs::write(root.join("status"), "ready")?;
+```
+
+### 4.2: Submitter waits for status file
+
+**File:** `crates/agent_pool/src/client/submit_file.rs`
+
+**Before:**
+```rust
+// Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
+if !pending_dir.exists() {
+    return Err(io::Error::new(
+        io::ErrorKind::NotConnected,
+        "daemon not ready (pending directory doesn't exist)",
+    ));
+}
+```
+
+**After:**
+```rust
+// Wait for daemon to be ready
+let status_path = root.join("status");
+let start = Instant::now();
+while !status_path.exists() {
+    if start.elapsed() > timeout {
+        return Err(io::Error::new(
+            io::ErrorKind::NotConnected,
+            "daemon not ready (timed out waiting for status file)",
+        ));
+    }
+    thread::sleep(POLL_INTERVAL);
+}
+
+let status = fs::read_to_string(&status_path)?;
+if status.trim() != "ready" {
+    return Err(io::Error::new(
+        io::ErrorKind::NotConnected,
+        format!("daemon not ready (status: {})", status.trim()),
+    ));
+}
+```
+
+### 4.3: Add constant
+
+**File:** `crates/agent_pool/src/constants.rs`
+
+```rust
+pub const STATUS_FILE: &str = "status";
+```
+
+### Future status values
+
+For now, just "ready". Later could add:
+- "paused" - not accepting new submissions
+- "shutting_down" - draining existing work
+- etc.
+
+---
+
 ## Task Order
 
 1. **Phase 1** (canary sync) - Small, independent
 2. **Phase 2** (flatten submissions) - **Push after this to fix CI**
 3. **Phase 3** (rename things) - Cleanup
+4. **Phase 4** (status file) - Nice-to-have, doesn't break tests
 
 Future: See `ANONYMOUS_WORKERS.md` for flattening agents + anonymous worker model.
