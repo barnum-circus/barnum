@@ -620,11 +620,36 @@ For now, just "ready". Later could add:
 
 ---
 
+---
+
+## Phase 5: Clean Shutdown
+
+**Goal:** Clear pool directory on shutdown/stop. State is in-memory; no partial recovery is possible.
+
+### 5.1: On daemon shutdown
+
+Delete the entire pool directory contents (or the directory itself):
+- `submissions/` (or `pending/`)
+- `agents/`
+- `status`
+- Any orphaned canary files
+
+### 5.2: On `agent_pool stop`
+
+Kill the daemon PID and delete the pool directory. Order doesn't matter.
+
+### 5.3: On startup
+
+If pool directory exists with stale files from a crashed daemon, clean them up before proceeding.
+
+---
+
 ## Task Order
 
 1. **Phase 1** (canary sync) - Small, independent
 2. **Phase 2** (flatten submissions) - **Push after this to fix CI**
 3. **Phase 3** (rename things) - Cleanup
 4. **Phase 4** (status file) - Nice-to-have, doesn't break tests
+5. **Phase 5** (clean shutdown) - Can be done before or after other phases
 
 Future: See `ANONYMOUS_WORKERS.md` for flattening agents + anonymous worker model.
