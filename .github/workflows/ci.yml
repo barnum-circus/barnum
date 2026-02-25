@@ -347,26 +347,18 @@ jobs:
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: npm publish --access public --tag main --provenance
         working-directory: libs/agent_pool
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish gsd to npm (main tag)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: npm publish --access public --tag main --provenance
         working-directory: libs/gsd
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish agent_pool to npm (latest tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish --access public --tag latest --provenance
         working-directory: libs/agent_pool
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish gsd to npm (latest tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish --access public --tag latest --provenance
         working-directory: libs/gsd
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
