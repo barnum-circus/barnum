@@ -34,8 +34,8 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(10), &test_dir);
 
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();

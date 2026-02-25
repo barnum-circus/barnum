@@ -93,6 +93,13 @@ pub struct TestAgent {
     handle: Option<thread::JoinHandle<Vec<String>>>,
     /// Receiver that signals when the agent has processed its first message (heartbeat).
     ready_rx: Option<mpsc::Receiver<()>>,
+    /// Test name for logging purposes
+    #[allow(dead_code)]
+    test_name: String,
+    /// Pool root for deregistration on stop
+    root: PathBuf,
+    /// Agent name for deregistration on stop
+    agent_id: String,
 }
 
 impl TestAgent {
@@ -103,7 +110,13 @@ impl TestAgent {
     ///
     /// After starting, call `wait_ready()` to block until the agent has processed
     /// its first message (heartbeat) and is ready to receive real tasks.
-    pub fn start<F>(root: &Path, agent_id: &str, processing_delay: Duration, processor: F) -> Self
+    pub fn start<F>(
+        root: &Path,
+        agent_id: &str,
+        processing_delay: Duration,
+        processor: F,
+        test_name: &str,
+    ) -> Self
     where
         F: Fn(&str, &str) -> String + Send + 'static,
     {
@@ -114,6 +127,7 @@ impl TestAgent {
         let agent_id_owned = agent_id.to_string();
         let root_owned = root.to_path_buf();
         let bin = find_agent_pool_binary();
+        let test_name_owned = test_name.to_string();
 
         // Channel to signal when the agent has processed its first message (heartbeat)
         let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
@@ -150,7 +164,9 @@ impl TestAgent {
                 let mut child = match cmd.spawn() {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("[agent {agent_id_owned}] Failed to spawn CLI: {e}");
+                        eprintln!(
+                            "[{test_name_owned}] [agent {agent_id_owned}] Failed to spawn CLI: {e}"
+                        );
                         break;
                     }
                 };
@@ -160,11 +176,14 @@ impl TestAgent {
 
                 // Forward stderr in background thread so it shows with --nocapture
                 let stderr_agent_id = agent_id_owned.clone();
+                let stderr_test_name = test_name_owned.clone();
                 if let Some(stderr) = child.stderr.take() {
                     thread::spawn(move || {
                         let reader = BufReader::new(stderr);
                         for line in reader.lines().map_while(Result::ok) {
-                            eprintln!("[agent {stderr_agent_id} stderr] {line}");
+                            eprintln!(
+                                "[{stderr_test_name}] [agent {stderr_agent_id} stderr] {line}"
+                            );
                         }
                     });
                 }
@@ -173,7 +192,9 @@ impl TestAgent {
                 let output = match child.wait_with_output() {
                     Ok(o) => o,
                     Err(e) => {
-                        eprintln!("[agent {agent_id_owned}] CLI process error: {e}");
+                        eprintln!(
+                            "[{test_name_owned}] [agent {agent_id_owned}] CLI process error: {e}"
+                        );
                         break;
                     }
                 };
@@ -189,7 +210,7 @@ impl TestAgent {
                 // Check for non-zero exit (killed or error)
                 if !output.status.success() {
                     eprintln!(
-                        "[agent {agent_id_owned}] CLI exited with status: {}",
+                        "[{test_name_owned}] [agent {agent_id_owned}] CLI exited with status: {}",
                         output.status
                     );
                     break;
@@ -197,12 +218,14 @@ impl TestAgent {
 
                 // Parse task JSON from stdout
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                eprintln!("[agent {agent_id_owned} stdout] {stdout}");
+                eprintln!("[{test_name_owned}] [agent {agent_id_owned} stdout] {stdout}");
 
                 let task_json: serde_json::Value = match serde_json::from_str(&stdout) {
                     Ok(v) => v,
                     Err(e) => {
-                        eprintln!("[agent {agent_id_owned}] Failed to parse task JSON: {e}");
+                        eprintln!(
+                            "[{test_name_owned}] [agent {agent_id_owned}] Failed to parse task JSON: {e}"
+                        );
                         break;
                     }
                 };
@@ -227,7 +250,9 @@ impl TestAgent {
                         continue;
                     }
                     "Kicked" => {
-                        eprintln!("[agent {agent_id_owned}] Received Kicked, exiting");
+                        eprintln!(
+                            "[{test_name_owned}] [agent {agent_id_owned}] Received Kicked, exiting"
+                        );
                         break;
                     }
                     _ => {}
@@ -254,37 +279,55 @@ impl TestAgent {
             current_pid,
             handle: Some(handle),
             ready_rx: Some(ready_rx),
+            test_name: test_name.to_string(),
+            root: root.to_path_buf(),
+            agent_id: agent_id.to_string(),
         }
     }
 
     /// Start a simple echo agent that appends " [processed]" to inputs.
-    pub fn echo(root: &Path, agent_id: &str, processing_delay: Duration) -> Self {
-        Self::start(root, agent_id, processing_delay, |task, _| {
-            format!("{} [processed]", task.trim())
-        })
+    pub fn echo(root: &Path, agent_id: &str, processing_delay: Duration, test_name: &str) -> Self {
+        Self::start(
+            root,
+            agent_id,
+            processing_delay,
+            |task, _| format!("{} [processed]", task.trim()),
+            test_name,
+        )
     }
 
     /// Start a greeting agent that responds to "casual" and "formal" styles.
     ///
     /// Expects task content in format: `{"instructions":"...","data":"casual"|"formal"}`
-    pub fn greeting(root: &Path, agent_id: &str, processing_delay: Duration) -> Self {
-        Self::start(root, agent_id, processing_delay, |task, agent_id| {
-            // Task content is JSON object with "data" field containing the style
-            let task_json: serde_json::Value = match serde_json::from_str(task) {
-                Ok(v) => v,
-                Err(e) => return format!("Error: failed to parse task JSON: {e}"),
-            };
+    pub fn greeting(
+        root: &Path,
+        agent_id: &str,
+        processing_delay: Duration,
+        test_name: &str,
+    ) -> Self {
+        Self::start(
+            root,
+            agent_id,
+            processing_delay,
+            |task, agent_id| {
+                // Task content is JSON object with "data" field containing the style
+                let task_json: serde_json::Value = match serde_json::from_str(task) {
+                    Ok(v) => v,
+                    Err(e) => return format!("Error: failed to parse task JSON: {e}"),
+                };
 
-            let style = task_json.get("data").and_then(|d| d.as_str()).unwrap_or("");
+                let style = task_json.get("data").and_then(|d| d.as_str()).unwrap_or("");
 
-            match style {
-                "casual" => format!("Hi {agent_id}, how are ya?"),
-                "formal" => format!(
-                    "Salutations {agent_id}, how are you doing on this most splendiferous and utterly magnificent day?"
-                ),
-                _ => format!("Error: unknown style '{style}' (use 'casual' or 'formal')"),
-            }
-        })
+                match style {
+                    "casual" => format!("Hi {agent_id}, how are ya?"),
+                    "formal" => format!(
+                        "Salutations {agent_id}, how are you doing on this most splendiferous and utterly magnificent day?"
+                    ),
+                    _ => format!("Error: unknown style '{style}' (use 'casual' or 'formal')"),
+                }
+            },
+            test_name,
+        )
     }
 
     /// Wait for the agent to be ready (has processed its first message).
@@ -313,11 +356,24 @@ impl TestAgent {
             let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
         }
 
-        self.handle
+        let result = self
+            .handle
             .take()
             .expect("Agent already stopped")
             .join()
-            .expect("Agent thread panicked")
+            .expect("Agent thread panicked");
+
+        // Deregister from the daemon so it knows we're gone
+        let bin = find_agent_pool_binary();
+        let _ = Command::new(&bin)
+            .arg("deregister_agent")
+            .arg("--pool")
+            .arg(&self.root)
+            .arg("--name")
+            .arg(&self.agent_id)
+            .output();
+
+        result
     }
 }
 
@@ -444,66 +500,51 @@ pub fn submit_with_mode(
 }
 
 /// Submit a task using raw file protocol (direct write to pending/).
+///
+/// Uses same polling approach as `submit_file.rs` - the production file transport.
 fn submit_raw(root: &Path, payload_json: &str, data_source: DataSource) -> io::Result<Response> {
     let task_id = uuid::Uuid::new_v4().to_string();
     let submission_dir = root.join(PENDING_DIR).join(&task_id);
     fs::create_dir_all(&submission_dir)?;
 
-    // Set up watcher BEFORE writing task.json to avoid race condition
-    let response_file = submission_dir.join(RESPONSE_FILE);
-    let (tx, rx) = mpsc::sync_channel::<()>(1); // buffered to avoid blocking sender
-
-    // Check for response file on ANY event in the directory (more robust than path matching)
-    let response_file_check = response_file.clone();
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if res.is_ok() && response_file_check.exists() {
-                let _ = tx.send(());
-            }
-        },
-        notify::Config::default(),
-    )
-    .map_err(|e| io::Error::other(format!("Failed to create watcher: {e}")))?;
-
-    watcher
-        .watch(&submission_dir, RecursiveMode::NonRecursive)
-        .map_err(|e| io::Error::other(format!("Failed to watch: {e}")))?;
-
-    // Build and write the payload (daemon will see task.json and process it)
+    // Build and write the payload
     let payload_str = match data_source {
-        DataSource::Inline => {
-            let payload = serde_json::json!({
-                "kind": "Inline",
-                "content": payload_json
-            });
-            payload.to_string()
-        }
+        DataSource::Inline => serde_json::json!({
+            "kind": "Inline",
+            "content": payload_json
+        })
+        .to_string(),
         DataSource::FileReference => {
-            // Write content to a temp file, use FileReference
             let content_file = submission_dir.join("content.json");
             fs::write(&content_file, payload_json)?;
-            let payload = serde_json::json!({
+            serde_json::json!({
                 "kind": "FileReference",
                 "path": content_file
-            });
-            payload.to_string()
+            })
+            .to_string()
         }
     };
 
     fs::write(submission_dir.join(TASK_FILE), payload_str)?;
 
-    // Check if response already exists (shouldn't happen, but be safe)
-    if response_file.exists() {
-        let content = fs::read_to_string(&response_file)?;
-        return serde_json::from_str(&content).map_err(io::Error::other);
+    // Poll for response (same as submit_file.rs)
+    let response_file = submission_dir.join(RESPONSE_FILE);
+    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(30);
+    let poll_interval = Duration::from_millis(100);
+
+    loop {
+        if response_file.exists() {
+            let content = fs::read_to_string(&response_file)?;
+            return serde_json::from_str(&content).map_err(io::Error::other);
+        }
+
+        if start.elapsed() > timeout {
+            return Err(io::Error::other("Timeout waiting for response"));
+        }
+
+        thread::sleep(poll_interval);
     }
-
-    // Wait for response with timeout
-    rx.recv_timeout(Duration::from_secs(30))
-        .map_err(|_| io::Error::other("Timeout waiting for response"))?;
-
-    let content = fs::read_to_string(&response_file)?;
-    serde_json::from_str(&content).map_err(io::Error::other)
 }
 
 /// Configuration for the daemon when starting via CLI.
@@ -597,12 +638,12 @@ pub struct AgentPoolHandle {
 
 impl AgentPoolHandle {
     /// Start the agent pool daemon with default configuration.
-    pub fn start(root: &Path) -> Self {
-        Self::start_with_config(root, DaemonConfig::new())
+    pub fn start(root: &Path, test_name: &str) -> Self {
+        Self::start_with_config(root, DaemonConfig::new(), test_name)
     }
 
     /// Start the agent pool daemon with custom configuration.
-    pub fn start_with_config(root: &Path, config: DaemonConfig) -> Self {
+    pub fn start_with_config(root: &Path, config: DaemonConfig, test_name: &str) -> Self {
         let bin = find_agent_pool_binary();
         assert!(
             bin.exists(),
@@ -643,12 +684,14 @@ impl AgentPoolHandle {
 
         // Spawn threads to forward daemon output via eprintln!() so it respects --nocapture
         let mut output_threads = Vec::new();
+        let test_name_stdout = test_name.to_string();
+        let test_name_stderr = test_name.to_string();
 
         if let Some(stdout) = process.stdout.take() {
             output_threads.push(thread::spawn(move || {
                 let reader = BufReader::new(stdout);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("[daemon stdout] {line}");
+                    eprintln!("[{test_name_stdout}] [daemon stdout] {line}");
                 }
             }));
         }
@@ -657,7 +700,7 @@ impl AgentPoolHandle {
             output_threads.push(thread::spawn(move || {
                 let reader = BufReader::new(stderr);
                 for line in reader.lines().map_while(Result::ok) {
-                    eprintln!("[daemon stderr] {line}");
+                    eprintln!("[{test_name_stderr}] [daemon stderr] {line}");
                 }
             }));
         }

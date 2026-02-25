@@ -46,12 +46,12 @@ fn multiple_agents_parallel_tasks(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
 
     // 3 agents with varying response times
-    let mut agent1 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(10));
-    let mut agent2 = TestAgent::echo(&root, "medium-agent", Duration::from_millis(30));
-    let mut agent3 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(50));
+    let mut agent1 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(10), &test_dir);
+    let mut agent2 = TestAgent::echo(&root, "medium-agent", Duration::from_millis(30), &test_dir);
+    let mut agent3 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(50), &test_dir);
 
     // Wait for all agents to be ready (have processed initial heartbeats)
     wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);

@@ -179,11 +179,25 @@ pub fn init_test_tracing() {
 }
 ```
 
-### Task 4: Proper Teardown
+### Task 4: Replace Polling with Notify in File Transport
+
+**File:** `crates/agent_pool/src/client/submit_file.rs`
+
+The file-based submission currently polls every 100ms waiting for `response.json`. This is inefficient and adds latency.
+
+Replace with proper file watching using `notify`:
+1. Set up watcher on `pending/<uuid>/` directory
+2. Write `task.json`
+3. Block until `response.json` is created
+4. Clean up
+
+This will make file-based submission as responsive as socket-based.
+
+### Task 5: Proper Teardown
 
 Ensure tests clean up properly even on panic. Use `scopeguard` or similar.
 
-### Task 5: Missing Test Scenarios
+### Task 6: Missing Test Scenarios
 
 | Scenario | Priority | Notes |
 |----------|----------|-------|
@@ -198,10 +212,11 @@ Ensure tests clean up properly even on panic. Use `scopeguard` or similar.
 ## Implementation Order
 
 1. **Task 1: Raw File Agent** - Complete the mode matrix
-2. **Task 4: Proper Teardown** - Reliability
-3. **Task 5: Missing Scenarios** - Coverage
-4. **Task 3: Test Output** - Debugging
-5. **Task 2: CLI Improvements** - UX
+2. **Task 4: Replace Polling with Notify** - Performance
+3. **Task 5: Proper Teardown** - Reliability
+4. **Task 6: Missing Scenarios** - Coverage
+5. **Task 3: Test Output** - Debugging
+6. **Task 2: CLI Improvements** - UX
 
 ---
 

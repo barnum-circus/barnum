@@ -39,8 +39,8 @@ fn single_agent_queues_multiple_tasks(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "only-agent", Duration::from_millis(50));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "only-agent", Duration::from_millis(50), &test_dir);
 
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();

@@ -38,8 +38,9 @@ fn greeting_casual_and_formal(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent =
+        TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10), &test_dir);
 
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();

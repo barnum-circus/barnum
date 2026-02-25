@@ -42,8 +42,8 @@ fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMe
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
     agent.wait_ready();
 
     let response = submit_with_mode(
@@ -83,8 +83,8 @@ fn single_agent_multiple_tasks(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
     agent.wait_ready();
 
     // Submit 3 tasks sequentially
@@ -126,10 +126,10 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
 
-    let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50));
-    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50));
+    let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50), &test_dir);
+    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50), &test_dir);
     wait_all_ready(&mut [&mut agent1, &mut agent2]);
 
     // Submit 4 tasks in parallel
@@ -178,8 +178,8 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
     agent.wait_ready();
 
     let response = submit_with_mode(
@@ -199,7 +199,7 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     thread::sleep(Duration::from_millis(100));
 
     // Start a new agent
-    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5));
+    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5), &test_dir);
     agent2.wait_ready();
 
     let response2 = submit_with_mode(
@@ -237,7 +237,7 @@ fn tasks_queued_before_agents(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
 
     // Submit tasks BEFORE any agents register (they'll block until an agent picks them up)
     let handles: Vec<_> = (0..3)
@@ -253,7 +253,7 @@ fn tasks_queued_before_agents(
 
     // Small delay, then register an agent
     thread::sleep(Duration::from_millis(50));
-    let mut agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5));
+    let mut agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5), &test_dir);
     agent.wait_ready();
 
     // Wait for all tasks to complete
@@ -289,8 +289,8 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2), &test_dir);
     agent.wait_ready();
 
     // Submit 10 tasks as fast as possible in parallel
@@ -333,8 +333,8 @@ fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
     agent.wait_ready();
 
     // Submit 5 tasks with IDENTICAL content
@@ -375,10 +375,10 @@ fn agent_joins_mid_processing(
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
 
     // Start one slow agent
-    let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100));
+    let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100), &test_dir);
     agent1.wait_ready();
 
     // Submit 6 tasks in parallel
@@ -395,7 +395,7 @@ fn agent_joins_mid_processing(
 
     // Wait a bit, then add a second fast agent
     thread::sleep(Duration::from_millis(150));
-    let mut agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5));
+    let mut agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5), &test_dir);
     agent2.wait_ready();
 
     // Wait for all tasks to complete
@@ -431,11 +431,15 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root);
+    let _pool = AgentPoolHandle::start(&root, &test_dir);
 
-    let mut agent = TestAgent::start(&root, "echo-agent", Duration::from_millis(5), |task, _| {
-        format!("processed: {}", task.trim())
-    });
+    let mut agent = TestAgent::start(
+        &root,
+        "echo-agent",
+        Duration::from_millis(5),
+        |task, _| format!("processed: {}", task.trim()),
+        &test_dir,
+    );
     agent.wait_ready();
 
     // Submit tasks with distinct IDs in parallel
