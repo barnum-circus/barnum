@@ -442,10 +442,25 @@ fn main() -> ExitCode {
             let root = resolve_pool(&pool);
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
-            // Remove the agent directory if it exists
-            if agent_dir.exists()
-                && let Err(e) = fs::remove_dir_all(&agent_dir)
-            {
+            if !agent_dir.exists() {
+                eprintln!("Agent '{name}' not found");
+                return ExitCode::SUCCESS;
+            }
+
+            // Write a Kicked message so any waiting CLI exits cleanly
+            let kicked = serde_json::json!({
+                "kind": "Kicked",
+                "reason": "Deregistered"
+            });
+            if let Err(e) = fs::write(agent_dir.join(TASK_FILE), kicked.to_string()) {
+                eprintln!("Warning: failed to write Kicked message: {e}");
+            }
+
+            // Give the CLI a moment to see the Kicked message
+            thread::sleep(Duration::from_millis(50));
+
+            // Remove the agent directory
+            if let Err(e) = fs::remove_dir_all(&agent_dir) {
                 eprintln!("Failed to remove agent directory: {e}");
                 return ExitCode::FAILURE;
             }
