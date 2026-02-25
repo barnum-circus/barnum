@@ -23,3 +23,6 @@ pub const REQUEST_SUFFIX: &str = ".request.json";
 
 /// Suffix for submission response files (flat structure).
 pub const RESPONSE_SUFFIX: &str = ".response.json";
+
+/// Status file written when daemon is ready.
+pub const STATUS_FILE: &str = "status";

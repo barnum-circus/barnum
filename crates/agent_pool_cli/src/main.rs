@@ -6,7 +6,7 @@
 
 use agent_pool::{
     AGENTS_DIR, AgentEvent, DaemonConfig, PENDING_DIR, Payload, RESPONSE_FILE, SOCKET_NAME,
-    TASK_FILE, Transport, cleanup_stopped, create_watcher, generate_id, id_to_path,
+    STATUS_FILE, TASK_FILE, Transport, cleanup_stopped, create_watcher, generate_id, id_to_path,
     is_daemon_running, list_pools, resolve_pool, run_with_config, stop, submit, submit_file,
     wait_for_task,
 };
@@ -470,9 +470,10 @@ fn main() -> ExitCode {
         Command::Register { pool, name } => {
             let root = resolve_pool(&pool);
 
-            // Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
-            if !root.join(PENDING_DIR).exists() {
-                eprintln!("Daemon not ready (pending directory doesn't exist)");
+            // Wait for daemon to be ready (status file signals readiness after sync)
+            let status_file = root.join(STATUS_FILE);
+            if !wait_for_status_file(&status_file) {
+                eprintln!("Daemon not ready (status file not found within timeout)");
                 return ExitCode::FAILURE;
             }
 
@@ -578,4 +579,20 @@ fn has_pool_state(root: &std::path::Path) -> bool {
     root.join(AGENTS_DIR).exists()
         || root.join(PENDING_DIR).exists()
         || root.join(SOCKET_NAME).exists()
+}
+
+/// Wait for the status file to appear (daemon ready signal).
+/// Returns true if found within timeout, false otherwise.
+fn wait_for_status_file(status_file: &std::path::Path) -> bool {
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+    let start = std::time::Instant::now();
+    while start.elapsed() < TIMEOUT {
+        if status_file.exists() {
+            return true;
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    false
 }

@@ -16,7 +16,7 @@
 //! - If submitter is killed, files may be orphaned (daemon could clean up stale files)
 
 use super::payload::Payload;
-use crate::constants::{PENDING_DIR, REQUEST_SUFFIX, RESPONSE_SUFFIX};
+use crate::constants::{PENDING_DIR, REQUEST_SUFFIX, RESPONSE_SUFFIX, STATUS_FILE};
 use crate::response::Response;
 use std::fs;
 use std::io;
@@ -28,8 +28,26 @@ use uuid::Uuid;
 /// Default timeout for file-based submission (5 minutes).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Timeout for waiting for daemon to be ready.
+const DAEMON_READY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Poll interval when waiting for response.
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+/// Wait for the daemon to be ready by polling for the status file.
+fn wait_for_daemon_ready(status_file: &Path, timeout: Duration) -> io::Result<()> {
+    let start = Instant::now();
+    while !status_file.exists() {
+        if start.elapsed() > timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "daemon not ready (status file not found within timeout)",
+            ));
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    Ok(())
+}
 
 /// Submit a task using file-based protocol and wait for the result.
 ///
@@ -61,14 +79,10 @@ pub fn submit_file_with_timeout(
 ) -> io::Result<Response> {
     let root = root.as_ref();
     let pending_dir = root.join(PENDING_DIR);
+    let status_file = root.join(STATUS_FILE);
 
-    // Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
-    if !pending_dir.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotConnected,
-            "daemon not ready (pending directory doesn't exist)",
-        ));
-    }
+    // Wait for daemon to be ready (status file exists)
+    wait_for_daemon_ready(&status_file, DAEMON_READY_TIMEOUT)?;
 
     // Generate unique submission ID
     let submission_id = Uuid::new_v4().to_string();

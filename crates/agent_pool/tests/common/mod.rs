@@ -8,7 +8,7 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::print_stderr)]
 
-use agent_pool::{PENDING_DIR, Response};
+use agent_pool::{Response, STATUS_FILE};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
 use std::io::{self, BufRead, BufReader};
@@ -552,22 +552,22 @@ impl From<agent_pool::DaemonConfig> for DaemonConfig {
     }
 }
 
-/// Wait for a directory to be created using notify (no polling).
+/// Wait for a file to be created using notify (no polling).
 ///
 /// Sets up a watcher, runs the provided action, then blocks until the
-/// target directory exists. Uses a channel for synchronization.
-fn wait_for_directory_creation<F, T>(watch_root: &Path, target_dir: &Path, action: F) -> T
+/// target file exists. Uses a channel for synchronization.
+fn wait_for_file_creation<F, T>(watch_root: &Path, target_file: &Path, action: F) -> T
 where
     F: FnOnce() -> T,
 {
     let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
-    let watch_target = target_dir.to_path_buf();
+    let watch_target = target_file.to_path_buf();
 
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 for path in &event.paths {
-                    if path == &watch_target || path.starts_with(&watch_target) {
+                    if path == &watch_target {
                         let _ = ready_tx.send(());
                         return;
                     }
@@ -589,7 +589,7 @@ where
     let timeout = Duration::from_secs(5);
     ready_rx
         .recv_timeout(timeout)
-        .expect("Directory was not created in time");
+        .expect("Status file was not created in time");
 
     drop(watcher);
     result
@@ -623,7 +623,7 @@ impl AgentPoolHandle {
         // Create the root directory if it doesn't exist (watcher needs it)
         fs::create_dir_all(root).expect("Failed to create pool directory");
 
-        let pending_dir = root.join(PENDING_DIR);
+        let status_file = root.join(STATUS_FILE);
 
         // Build command
         let mut cmd = Command::new(&bin);
@@ -648,8 +648,8 @@ impl AgentPoolHandle {
         // Pipe stdout/stderr so we can forward them via eprintln!() (which IS captured by tests)
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-        // Spawn daemon and wait for pending/ directory to be created
-        let mut process = wait_for_directory_creation(root, &pending_dir, || {
+        // Spawn daemon and wait for status file to be written (signals daemon is ready)
+        let mut process = wait_for_file_creation(root, &status_file, || {
             cmd.spawn().expect("Failed to spawn agent_pool process")
         });
 

@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::client::Payload;
 use crate::constants::{
-    AGENTS_DIR, LOCK_FILE, PENDING_DIR, REQUEST_SUFFIX, SOCKET_NAME, TASK_FILE,
+    AGENTS_DIR, LOCK_FILE, PENDING_DIR, REQUEST_SUFFIX, SOCKET_NAME, STATUS_FILE, TASK_FILE,
 };
 use crate::lock::acquire_lock;
 
@@ -197,6 +197,12 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
             return Err(io::Error::other("watcher sync failed"));
         }
 
+        // Write status file to signal daemon is ready
+        if let Err(e) = fs::write(root.join(STATUS_FILE), "ready") {
+            let _ = ready_tx.send(Err(e));
+            return Err(io::Error::other("failed to write status file"));
+        }
+
         info!(socket = %socket_path.display(), "daemon listening");
 
         // Signal that we're ready
@@ -276,6 +282,9 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     // ready to catch events in newly-created subdirectories. We write canary
     // files and wait until we see FS events for both.
     sync_with_watcher(&pending_dir, &agents_dir, &io_rx)?;
+
+    // Write status file to signal daemon is ready
+    fs::write(root.join(STATUS_FILE), "ready")?;
 
     info!(socket = %socket_path.display(), "daemon listening");
 
@@ -906,9 +915,14 @@ fn sync_with_watcher(
                 for path in &event.paths {
                     if path == &pending_canary {
                         seen_pending = true;
-                    }
-                    if path == &agents_canary {
+                    } else if path == &agents_canary {
                         seen_agents = true;
+                    } else {
+                        panic!(
+                            "unexpected FS event during startup sync: {:?} for path {}",
+                            event.kind,
+                            path.display()
+                        );
                     }
                 }
                 if seen_pending && seen_agents {
