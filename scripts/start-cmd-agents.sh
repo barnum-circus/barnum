@@ -29,7 +29,7 @@ trap cleanup SIGINT SIGTERM
 
 # Start all agents in background
 for i in $(seq 1 "$NUM_AGENTS"); do
-    ./crates/agent_pool/scripts/command-agent.sh --pool cmd 2>&1 | tee -a /tmp/agent.log &
+    ./crates/agent_pool/scripts/command-agent.sh --pool cmd --log /tmp/agent.log &
     CHILD_PIDS+=($!)
 done
 
