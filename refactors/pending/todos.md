@@ -675,3 +675,42 @@ Possible approaches:
 3. **Daemon tracks agent state**: Daemon knows if agent is idle vs busy. Deregistration only succeeds on idle agents; busy agents get queued for deregistration after current task.
 
 This needs careful design before implementing.
+
+---
+
+## Track Completed Submissions to Prevent Re-Registration
+
+**Status: NEEDS IMPLEMENTATION**
+
+There's a bug where completed submission directories can be re-registered by the file watcher, causing agents to process duplicate tasks. The current guards are:
+
+1. `path_to_id` check - if path is already registered, skip
+2. `response.json` exists check - if response exists, skip
+
+But after `finish()` completes a task, it removes the path from `path_to_id`. If a delayed FS event fires after this, the first check passes. The second check SHOULD catch it (response.json was written), but somehow duplicates still occur.
+
+**Proposed fix:** Track completed submission paths in a separate set that's never cleared:
+
+```rust
+// In io_loop state
+completed_submissions: HashSet<PathBuf>,
+
+// In finish()
+if let Transport::Directory(ref path) = transport {
+    completed_submissions.insert(path.clone());
+}
+
+// In register_pending_task
+if completed_submissions.contains(submission_dir) {
+    return;  // Already completed, never re-register
+}
+```
+
+This is simpler and more robust than relying on filesystem state. A completed submission is completed forever - no need to check file existence.
+
+**Alternative:** Instead of a HashSet, track completed UUIDs in a `HashSet<String>` keyed by the UUID portion of the path. This would be more memory-efficient for long-running daemons.
+
+**Questions:**
+- Should this set ever be pruned? (Probably not for typical daemon lifetimes)
+- Is there a memory concern for extremely long-running daemons with millions of submissions?
+- Should we also track "in-flight" submissions to distinguish "currently being processed" from "completed"?
