@@ -7,8 +7,10 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-# Build if needed (silent unless error)
+# Build if needed
+echo -n "Building... "
 cargo build -p agent_pool_cli --quiet
+echo "done"
 
 NUM_AGENTS="${1:-5}"
 
