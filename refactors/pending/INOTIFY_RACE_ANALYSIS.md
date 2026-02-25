@@ -449,15 +449,17 @@ fn register_submission(
     let request_path = pending_dir.join(format!("{id}{REQUEST_SUFFIX}"));
     let response_path = pending_dir.join(format!("{id}{RESPONSE_SUFFIX}"));
 
-    // Already registered?
-    if let Some(existing_id) = external_task_map.get_id_by_path(&request_path) {
-        // ...
+    // Duplicate FS event - skip silently
+    if external_task_map.get_id_by_path(&request_path).is_some() {
+        trace!(id = %id, "SubmissionRequest: duplicate event, skipping");
+        return;
     }
 
-    // Already completed?
-    if response_path.exists() {
-        // ...
-    }
+    // Already completed? This shouldn't happen
+    assert!(
+        !response_path.exists(),
+        "SubmissionRequest for already-completed submission: {id}"
+    );
 
     // Read and resolve payload
     let raw = match fs::read_to_string(&request_path) {
@@ -466,13 +468,12 @@ fn register_submission(
 
     // Register the submission
     let external_id = task_id_allocator.allocate_external();
-    if external_task_map.register(
+    external_task_map.register(
         external_id,
         request_path,  // stores request file path
         ExternalTaskData { ... },
-    ) {
-        // ...
-    }
+    );
+    // ...
 }
 ```
 
