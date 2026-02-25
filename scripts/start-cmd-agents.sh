@@ -17,10 +17,12 @@ CHILD_PIDS=()
 cleanup() {
     echo ""
     echo "Stopping all agents..."
+    # Kill tracked PIDs
     for pid in "${CHILD_PIDS[@]}"; do
-        kill "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
-    wait 2>/dev/null
+    # Also kill any remaining command-agent.sh processes we spawned
+    pkill -9 -f "command-agent.sh --pool cmd" 2>/dev/null || true
     echo "Done."
     exit 0
 }
