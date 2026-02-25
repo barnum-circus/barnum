@@ -8,19 +8,19 @@ Tests pass on macOS but fail (hang) on Linux due to a race condition in `inotify
 
 **Affected:** Submissions (submitter creates directory, immediately writes request file).
 
-**Not affected:** Agents (agent creates directory, waits for daemon to write task, then writes outcome—causal chain guarantees watch is active).
+**Not affected:** Agents (agent creates directory, waits for daemon to write task, then writes response—causal chain guarantees watch is active).
 
 ---
 
 ## Implementation Plan
 
-Five phases:
+Three phases:
 
 1. **Canary sync** - Ensure watchers are active at startup
 2. **Flatten submissions** - Fix the race condition (priority: unblocks CI)
-3. **Flatten agents** - Consistency, reuse logic from phase 2
-4. **Rename things** - Clean up naming
-5. **Anonymous worker model** - Simplify agent protocol
+3. **Rename things** - Clean up naming (`pending/` → `submissions/`)
+
+Future work (separate doc): Flatten agents + anonymous worker model. See `ANONYMOUS_WORKERS.md`.
 
 ### Naming Convention (Final State)
 
@@ -28,9 +28,9 @@ Five phases:
 - `<id>.request.json` - submitter writes
 - `<id>.response.json` - daemon writes
 
-**Agents (in `agents/`):**
-- `<id>.task.json` - daemon writes
-- `<id>.outcome.json` - agent writes
+**Agents (in `agents/`, unchanged for now):**
+- `<name>/task.json` - daemon writes
+- `<name>/response.json` - agent writes
 
 ---
 
@@ -442,116 +442,9 @@ Update all tests in `path_category.rs` and `wiring.rs` that reference the old di
 
 ---
 
-## Phase 3: Flatten Agents Directory
+## Phase 3: Rename Things
 
-Similar pattern to Phase 2, but for agents.
-
-### 3.1: Add constants
-
-**File:** `crates/agent_pool/src/constants.rs`
-
-**Add:**
-```rust
-// Flat file suffixes for agents
-pub const TASK_SUFFIX: &str = ".task.json";
-pub const OUTCOME_SUFFIX: &str = ".outcome.json";
-```
-
-### 3.2: Update PathCategory
-
-**Before:**
-```rust
-AgentDir { name: String },
-AgentResponse { name: String },
-```
-
-**After:**
-```rust
-/// Agent task file: `agents/<id>.task.json` (daemon writes, ignored)
-AgentTask { id: String },
-/// Agent outcome file: `agents/<id>.outcome.json`
-AgentOutcome { id: String },
-```
-
-### 3.3: Update categorize_under_agents
-
-**Before:**
-```rust
-fn categorize_under_agents(path: &Path, agents_dir: &Path) -> Option<PathCategory> {
-    let relative = path.strip_prefix(agents_dir).ok()?;
-    let components: Vec<_> = relative.components().collect();
-
-    if components.is_empty() {
-        return None;
-    }
-
-    let name = components[0].as_os_str().to_str()?.to_string();
-
-    match components.len() {
-        1 => Some(PathCategory::AgentDir { name }),
-        2 => {
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == RESPONSE_FILE {
-                Some(PathCategory::AgentResponse { name })
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-```
-
-**After:**
-```rust
-fn categorize_under_agents(path: &Path, agents_dir: &Path) -> Option<PathCategory> {
-    let relative = path.strip_prefix(agents_dir).ok()?;
-    let components: Vec<_> = relative.components().collect();
-
-    // Must be exactly one component (flat file)
-    if components.len() != 1 {
-        return None;
-    }
-
-    let filename = components[0].as_os_str().to_str()?;
-
-    if let Some(id) = filename.strip_suffix(TASK_SUFFIX) {
-        return Some(PathCategory::AgentTask { id: id.to_string() });
-    }
-
-    if let Some(id) = filename.strip_suffix(OUTCOME_SUFFIX) {
-        return Some(PathCategory::AgentOutcome { id: id.to_string() });
-    }
-
-    None
-}
-```
-
-### 3.4: Update agent handling in wiring.rs
-
-Remove `handle_agent_dir` and `handle_agent_response`. Replace with:
-
-```rust
-PathCategory::AgentTask { id } => {
-    // Daemon writes these, ignore our own writes
-    trace!(id = %id, "AgentTask: ignoring (daemon wrote this)");
-}
-PathCategory::AgentOutcome { id } => {
-    if path.exists() {
-        handle_agent_outcome(&id, agents_dir, events_tx, agent_map, pending_responses);
-    }
-}
-```
-
-### 3.5: Update agent protocol
-
-Agents will receive task file path and response file path from the daemon, rather than creating their own directories.
-
----
-
-## Phase 4: Rename Things
-
-### 4.1: Rename pending/ → submissions/
+### 3.1: Rename pending/ → submissions/
 
 **File:** `crates/agent_pool/src/constants.rs`
 
@@ -565,48 +458,15 @@ pub const PENDING_DIR: &str = "pending";
 pub const SUBMISSIONS_DIR: &str = "submissions";
 ```
 
-### 4.2: Rename variables and types throughout
+### 3.2: Rename variables throughout
 
 - `pending_dir` → `submissions_dir`
-- `ExternalTaskMap` → `SubmissionMap` (optional)
-- `ExternalTaskId` → `SubmissionId` (optional)
-- Update all log messages
+- Update all references in `wiring.rs`, `submit_file.rs`, etc.
+- Update log messages
 
-### 4.3: Update documentation
+### 3.3: Update documentation
 
 - `SUBMISSION_PROTOCOL.md`
-- `AGENT_PROTOCOL.md`
-
----
-
-## Phase 5: Anonymous Worker Model
-
-### Goal
-
-Simplify agent protocol to a task queue. Workers are anonymous; only tasks have identity.
-
-### Current Model (Problems)
-
-- Agents have persistent identities (names/directories)
-- Complex state machine (idle, working, kicked)
-- Names carry semantic meaning
-
-### New Model
-
-- Workers call `get_task`, block until assigned
-- Daemon returns task content + outcome file path
-- Worker completes task, writes to assigned path
-- Worker calls `get_task` again (back of queue)
-- Heartbeats for queue starvation detection
-- Names are debug-only, no uniqueness requirement
-
-### Changes
-
-1. Remove agent identity tracking from core state machine
-2. Simplify `AgentMap` to track pending outcomes by task ID
-3. `get_task` returns task + outcome path
-4. Remove kicked state tracking
-5. Consolidate CLI commands
 
 ---
 
@@ -614,6 +474,6 @@ Simplify agent protocol to a task queue. Workers are anonymous; only tasks have 
 
 1. **Phase 1** (canary sync) - Small, independent
 2. **Phase 2** (flatten submissions) - **Push after this to fix CI**
-3. **Phase 3** (flatten agents) - Reuses Phase 2 patterns
-4. **Phase 4** (rename things) - Cleanup
-5. **Phase 5** (anonymous workers) - Larger refactor, separate PR
+3. **Phase 3** (rename things) - Cleanup
+
+Future: See `ANONYMOUS_WORKERS.md` for flattening agents + anonymous worker model.
