@@ -10,7 +10,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::io::{BufRead, BufReader};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -376,6 +377,8 @@ where
 pub struct AgentPoolHandle {
     root: PathBuf,
     process: Option<Child>,
+    /// Handles for threads forwarding stdout/stderr (so they get captured by tests)
+    _output_threads: Vec<thread::JoinHandle<()>>,
 }
 
 impl AgentPoolHandle {
@@ -416,14 +419,43 @@ impl AgentPoolHandle {
             cmd.arg("--no-periodic-heartbeat");
         }
 
+        // Pipe stdout/stderr so we can forward them via eprintln!() (which IS captured by tests)
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
         // Spawn daemon and wait for pending/ directory to be created
-        let process = wait_for_directory_creation(root, &pending_dir, || {
+        let mut process = wait_for_directory_creation(root, &pending_dir, || {
             cmd.spawn().expect("Failed to spawn agent_pool process")
         });
+
+        // Spawn threads to forward daemon output via eprintln!() so it respects --nocapture
+        let mut output_threads = Vec::new();
+
+        if let Some(stdout) = process.stdout.take() {
+            output_threads.push(thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        eprintln!("[daemon stdout] {line}");
+                    }
+                }
+            }));
+        }
+
+        if let Some(stderr) = process.stderr.take() {
+            output_threads.push(thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        eprintln!("[daemon stderr] {line}");
+                    }
+                }
+            }));
+        }
 
         Self {
             root: root.to_path_buf(),
             process: Some(process),
+            _output_threads: output_threads,
         }
     }
 }
