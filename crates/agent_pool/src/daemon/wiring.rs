@@ -538,8 +538,24 @@ fn handle_fs_event(
                 );
             }
             PathCategory::PendingDir { uuid } => {
-                // Ignore directory events - we only care about task.json
-                debug!(uuid = %uuid, "ignoring PendingDir event (waiting for task.json)");
+                // On Linux with inotify, there's a race: when a new directory is created,
+                // inotify needs to add a watch to it before it can see file creations inside.
+                // If task.json is written before the watch is added, we miss the event.
+                // Fix: when we see a directory, check if task.json already exists.
+                let submission_dir = pending_dir.join(&uuid);
+                let task_path = submission_dir.join(crate::constants::TASK_FILE);
+                if task_path.exists() {
+                    debug!(uuid = %uuid, "PendingDir: task.json already exists, registering");
+                    register_pending_task(
+                        &submission_dir,
+                        events_tx,
+                        external_task_map,
+                        task_id_allocator,
+                        io_config,
+                    );
+                } else {
+                    debug!(uuid = %uuid, "PendingDir: waiting for task.json");
+                }
             }
             PathCategory::PendingTask { uuid } => {
                 let submission_dir = pending_dir.join(&uuid);
