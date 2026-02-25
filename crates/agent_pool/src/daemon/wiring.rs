@@ -528,7 +528,8 @@ fn handle_fs_event(
     trace!(kind = ?event.kind, paths = ?event.paths, "fs event");
 
     for path in &event.paths {
-        let Some(category) = path_category::categorize(path, agents_dir, pending_dir) else {
+        let Some(category) = path_category::categorize(path, event.kind, agents_dir, pending_dir)
+        else {
             trace!(?path, "path did not match any category");
             continue;
         };
@@ -574,10 +575,6 @@ fn handle_fs_event(
                     seen_submissions,
                     io_config,
                 );
-            }
-            PathCategory::SubmissionResponse { id } => {
-                // Daemon writes these, ignore our own writes
-                trace!(id = %id, "SubmissionResponse: ignoring (daemon wrote this)");
             }
         }
     }
@@ -904,18 +901,8 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
-                // Filter events to avoid race conditions:
-                // - Close(Write): file content is fully written (for reading files)
-                // - Create(Folder): directory created (for agent registration)
-                use notify::event::{AccessKind, AccessMode, CreateKind};
-                let dominated = matches!(
-                    event.kind,
-                    notify::EventKind::Access(AccessKind::Close(AccessMode::Write))
-                        | notify::EventKind::Create(CreateKind::Folder)
-                );
-                if dominated {
-                    let _ = io_tx.send(IoEvent::Fs(event));
-                }
+                // Send all events - categorize() filters for meaningful ones
+                let _ = io_tx.send(IoEvent::Fs(event));
             }
         },
         config,
