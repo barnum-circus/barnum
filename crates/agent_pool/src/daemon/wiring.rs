@@ -894,18 +894,21 @@ fn sync_and_setup(
     let pending_canary = pending_dir.join("canary");
     let agents_canary = agents_dir.join("canary");
 
-    // Paths we MUST see events for (verifies watcher is working for key directories)
-    // Only canary files - seeing these proves the watcher sees events IN those directories
-    let mut required: HashSet<PathBuf> = HashSet::new();
-    required.insert(pending_canary.clone());
-    required.insert(agents_canary.clone());
-
-    // Paths we allow events for but don't require
+    // All paths we expect to see events for (complete allowlist)
+    // Any event for a path NOT in this set causes a panic
     let mut allowed: HashSet<PathBuf> = HashSet::new();
     allowed.insert(lock_path.to_path_buf());
     allowed.insert(socket_path.to_path_buf());
     allowed.insert(pending_dir.to_path_buf());
     allowed.insert(agents_dir.to_path_buf());
+    allowed.insert(pending_canary.clone());
+    allowed.insert(agents_canary.clone());
+
+    // Paths we MUST see events for (verifies watcher is working for key directories)
+    // Only canary files - seeing these proves the watcher sees events IN those directories
+    let mut required: HashSet<PathBuf> = HashSet::new();
+    required.insert(pending_canary.clone());
+    required.insert(agents_canary.clone());
 
     // Track which required paths we've seen
     let mut seen: HashSet<PathBuf> = HashSet::new();
@@ -931,28 +934,26 @@ fn sync_and_setup(
         match io_rx.recv_timeout(POLL_TIMEOUT) {
             Ok(IoEvent::Fs(event)) => {
                 for path in &event.paths {
+                    assert!(
+                        allowed.contains(path),
+                        "unexpected FS event during startup sync: {:?} for path {}\n\
+                         Allowed paths: {:?}",
+                        event.kind,
+                        path.display(),
+                        allowed
+                    );
+
                     if required.contains(path) {
                         seen.insert(path.clone());
                         debug!(
-                            "sync: seen {}/{} - {} ({:?})",
+                            "sync: required {}/{} - {} ({:?})",
                             seen.len(),
                             required.len(),
                             path.display(),
                             event.kind
                         );
-                    } else if allowed.contains(path) {
-                        // Allowlisted but not required - just log
-                        debug!("sync: allowed {} ({:?})", path.display(), event.kind);
                     } else {
-                        panic!(
-                            "unexpected FS event during startup sync: {:?} for path {}\n\
-                             Required: {:?}\n\
-                             Allowed: {:?}",
-                            event.kind,
-                            path.display(),
-                            required,
-                            allowed
-                        );
+                        debug!("sync: allowed {} ({:?})", path.display(), event.kind);
                     }
                 }
                 if seen.len() == required.len() {
