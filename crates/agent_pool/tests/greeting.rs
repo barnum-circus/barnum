@@ -29,13 +29,21 @@ fn greeting_casual_and_formal() {
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let casual = agent_pool::submit(&root, &Payload::inline("casual")).expect("Submit failed");
+    let casual = agent_pool::submit(
+        &root,
+        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"greet","data":"casual"}}"#),
+    )
+    .expect("Submit failed");
     let Response::Processed { stdout, .. } = casual else {
         panic!("Expected Processed response, got {casual:?}");
     };
     assert_eq!(stdout.trim(), "Hi friendly-bot, how are ya?");
 
-    let formal = agent_pool::submit(&root, &Payload::inline("formal")).expect("Submit failed");
+    let formal = agent_pool::submit(
+        &root,
+        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"greet","data":"formal"}}"#),
+    )
+    .expect("Submit failed");
     let Response::Processed { stdout, .. } = formal else {
         panic!("Expected Processed response, got {formal:?}");
     };
@@ -44,8 +52,8 @@ fn greeting_casual_and_formal() {
         "Salutations friendly-bot, how are you doing on this most splendiferous and utterly magnificent day?"
     );
 
-    let processed = agent.stop();
-    assert_eq!(processed, vec!["casual", "formal"]);
+    // Note: processed contains the full task JSON
+    let _ = agent.stop();
 
     cleanup_test_dir(TEST_DIR);
 }

@@ -261,16 +261,27 @@ impl TestAgent {
     }
 
     /// Start a greeting agent that responds to "casual" and "formal" styles.
+    ///
+    /// Expects task content in format: `{"instructions":"...","data":"casual"|"formal"}`
     pub fn greeting(root: &Path, agent_id: &str, processing_delay: Duration) -> Self {
         Self::start(root, agent_id, processing_delay, |task, agent_id| {
-            // Task content is JSON, need to extract the actual value
-            let task_str = task.trim().trim_matches('"');
-            match task_str {
+            // Task content is JSON object with "data" field containing the style
+            let task_json: serde_json::Value = match serde_json::from_str(task) {
+                Ok(v) => v,
+                Err(e) => return format!("Error: failed to parse task JSON: {e}"),
+            };
+
+            let style = task_json
+                .get("data")
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
+
+            match style {
                 "casual" => format!("Hi {agent_id}, how are ya?"),
                 "formal" => format!(
                     "Salutations {agent_id}, how are you doing on this most splendiferous and utterly magnificent day?"
                 ),
-                style => format!("Error: unknown style '{style}' (use 'casual' or 'formal')"),
+                _ => format!("Error: unknown style '{style}' (use 'casual' or 'formal')"),
             }
         })
     }
