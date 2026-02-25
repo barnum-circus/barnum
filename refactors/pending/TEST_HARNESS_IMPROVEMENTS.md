@@ -4,6 +4,109 @@
 
 This document describes improvements needed to get the agent_pool tests into a robust, comprehensive state.
 
+---
+
+## Completed Work
+
+The following improvements have already been made:
+
+### 1. CLI-Based TestAgent (DONE)
+
+**Files changed:** `crates/agent_pool/tests/common/mod.rs`
+
+The `TestAgent` was completely rewritten to use CLI commands instead of direct file manipulation:
+
+**Before:**
+- TestAgent polled files directly from the filesystem
+- Output was not captured by test framework
+- Used spin loops with `thread::sleep` for synchronization
+
+**After:**
+- Uses `agent_pool get_task` for first task (registers agent)
+- Uses `agent_pool next_task --data <response>` for subsequent tasks
+- Spawns CLI subprocess via `Command::spawn()`
+- Pipes stdout/stderr through `eprintln!()` so output respects `--nocapture`
+- Uses `mpsc::sync_channel` for readiness signaling (no polling)
+- Properly handles `Heartbeat` and `Kicked` control messages
+- Tracks subprocess PID via `AtomicU32` for clean shutdown
+
+### 2. Proper Task JSON Format (DONE)
+
+**Files changed:** All test files
+
+Updated all tests to use the proper JSON envelope format for tasks:
+
+```rust
+// Old (wrong)
+Payload::inline("casual")
+
+// New (correct)
+Payload::inline(r#"{"kind":"Task","task":{"instructions":"greet","data":"casual"}}"#)
+```
+
+Also updated `integration.rs` `submit_task` helper to wrap data in the proper envelope:
+```rust
+let task_envelope = serde_json::json!({
+    "kind": "Task",
+    "task": { "instructions": "test task", "data": data_value }
+});
+let payload = serde_json::json!({
+    "kind": "Inline",
+    "content": task_envelope.to_string()
+});
+```
+
+### 3. Daemon Output Capture (DONE)
+
+**Files changed:** `crates/agent_pool/tests/common/mod.rs`
+
+`AgentPoolHandle` now pipes daemon stdout/stderr through `eprintln!()`:
+
+```rust
+if let Some(stdout) = process.stdout.take() {
+    output_threads.push(thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines().map_while(Result::ok) {
+            eprintln!("[daemon stdout] {line}");
+        }
+    }));
+}
+```
+
+This ensures daemon output is captured by the test framework and visible with `--nocapture`.
+
+### 4. Removed Incompatible Tests (DONE)
+
+Removed tests that relied on internal file-based protocol details that no longer apply with CLI-based agents:
+
+- `file_protocol_basic` in `single_basic.rs`
+- `multiple_agents_direct_dispatch` in `many_agents.rs`
+- `sequential_tasks_same_agent` in `single_agent_queue.rs`
+
+### 5. JSON Assertion Fixes (DONE)
+
+Fixed assertions that assumed specific JSON formatting:
+
+- Changed exact string equality to `contains()` checks (field ordering varies)
+- Removed space expectations after colons (`"id":"A"` not `"id": "A"`)
+
+### 6. CI Timeouts (DONE)
+
+**Files changed:** `.github/workflows/ci.yml`
+
+Added 5-minute timeout to all CI jobs to prevent hanging builds.
+
+### 7. Clippy/Fmt Fixes (DONE)
+
+**Files changed:** `crates/agent_pool/tests/common/mod.rs`
+
+- Fixed import ordering
+- Used `map_while(Result::ok)` instead of `flatten()` for line iteration
+- Added backticks to doc comments for code references
+- Added allow attributes for test-specific clippy lints
+
+---
+
 ## Current State
 
 The tests now use CLI-based `TestAgent` that interacts with the daemon via `get_task` and `next_task` CLI commands. This is good because:
