@@ -21,7 +21,9 @@ use tracing::{debug, info, trace, warn};
 use std::collections::HashSet;
 
 use crate::client::Payload;
-use crate::constants::{AGENTS_DIR, LOCK_FILE, PENDING_DIR, SOCKET_NAME, TASK_FILE};
+use crate::constants::{
+    AGENTS_DIR, LOCK_FILE, PENDING_DIR, REQUEST_SUFFIX, RESPONSE_SUFFIX, SOCKET_NAME, TASK_FILE,
+};
 use crate::lock::acquire_lock;
 
 use super::core::{AgentId, Effect, Event, TaskId};
@@ -550,22 +552,25 @@ fn handle_fs_event(
                     io_config,
                 );
             }
-            PathCategory::PendingDir { uuid } => {
-                // Directory creation events are ignored - we wait for task.json.
-                // The watcher sync at startup ensures inotify is ready.
-                debug!(uuid = %uuid, "PendingDir: ignoring directory event");
+            PathCategory::SubmissionRequest { id } => {
+                // Request file must exist (flat structure: no directory creation race)
+                assert!(
+                    path.exists(),
+                    "SubmissionRequest event for non-existent path: {}",
+                    path.display()
+                );
+                register_submission(
+                    &id,
+                    pending_dir,
+                    events_tx,
+                    external_task_map,
+                    task_id_allocator,
+                    io_config,
+                );
             }
-            PathCategory::PendingTask { uuid } => {
-                let submission_dir = pending_dir.join(&uuid);
-                if path.exists() {
-                    register_pending_task(
-                        &submission_dir,
-                        events_tx,
-                        external_task_map,
-                        task_id_allocator,
-                        io_config,
-                    );
-                }
+            PathCategory::SubmissionResponse { id } => {
+                // Daemon writes these, ignore our own writes
+                trace!(id = %id, "SubmissionResponse: ignoring (daemon wrote this)");
             }
         }
     }
@@ -646,48 +651,35 @@ fn handle_agent_response(
     }
 }
 
-/// Register a pending task from the filesystem.
-fn register_pending_task(
-    submission_dir: &Path,
+/// Register a submission from a request file.
+fn register_submission(
+    id: &str,
+    pending_dir: &Path,
     events_tx: &mpsc::Sender<Event>,
     external_task_map: &mut ExternalTaskMap,
     task_id_allocator: &mut TaskIdAllocator,
     io_config: &IoConfig,
 ) {
-    let task_path = submission_dir.join(TASK_FILE);
-    let response_path = submission_dir.join(crate::constants::RESPONSE_FILE);
+    let request_path = pending_dir.join(format!("{id}{REQUEST_SUFFIX}"));
+    let response_path = pending_dir.join(format!("{id}{RESPONSE_SUFFIX}"));
 
-    // Already registered?
-    if let Some(existing_id) = external_task_map.get_id_by_path(submission_dir) {
-        debug!(
-            path = %submission_dir.display(),
-            existing_id = existing_id.0,
-            "skipping: already registered"
-        );
+    // Duplicate FS event - skip silently
+    if external_task_map.get_id_by_path(&request_path).is_some() {
+        trace!(id = %id, "SubmissionRequest: duplicate event, skipping");
         return;
     }
 
-    // Already completed? (response.json exists)
-    if response_path.exists() {
-        debug!(
-            path = %submission_dir.display(),
-            "skipping: response.json exists (already completed)"
-        );
-        return;
-    }
+    // Already completed? This shouldn't happen
+    assert!(
+        !response_path.exists(),
+        "SubmissionRequest for already-completed submission: {id}"
+    );
 
     // Read and resolve payload
-    let raw = match fs::read_to_string(&task_path) {
+    let raw = match fs::read_to_string(&request_path) {
         Ok(c) => c,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            debug!(
-                path = %task_path.display(),
-                "skipping: task.json not found"
-            );
-            return;
-        }
         Err(e) => {
-            warn!(path = %task_path.display(), error = %e, "failed to read pending task");
+            warn!(path = %request_path.display(), error = %e, "failed to read submission request");
             return;
         }
     };
@@ -695,16 +687,16 @@ fn register_pending_task(
     let content = match resolve_payload(&raw) {
         Ok(c) => c,
         Err(e) => {
-            warn!(path = %task_path.display(), error = %e, "failed to resolve payload");
+            warn!(path = %request_path.display(), error = %e, "failed to resolve payload");
             return;
         }
     };
 
-    // Register the task
+    // Register the submission
     let external_id = task_id_allocator.allocate_external();
     if external_task_map.register(
         external_id,
-        submission_dir.to_path_buf(),
+        request_path,
         ExternalTaskData {
             content,
             timeout: io_config.default_task_timeout,
@@ -1448,16 +1440,16 @@ mod tests {
     }
 
     // =========================================================================
-    // register_pending_task tests
+    // register_submission tests
     // =========================================================================
 
     #[test]
-    fn register_pending_task_registers_new_task() {
+    fn register_submission_registers_new_task() {
         let tmp = TempDir::new().unwrap();
-        let submission_dir = tmp.path().join("task-1");
-        fs::create_dir(&submission_dir).unwrap();
+        let pending_dir = tmp.path();
+        let id = "task-1";
         fs::write(
-            submission_dir.join(TASK_FILE),
+            pending_dir.join(format!("{id}.request.json")),
             r#"{"kind": "Inline", "content": "test task"}"#,
         )
         .unwrap();
@@ -1467,8 +1459,9 @@ mod tests {
         let mut task_id_allocator = TaskIdAllocator::new();
         let io_config = IoConfig::default();
 
-        register_pending_task(
-            &submission_dir,
+        register_submission(
+            id,
+            pending_dir,
             &events_tx,
             &mut external_task_map,
             &mut task_id_allocator,
@@ -1477,16 +1470,17 @@ mod tests {
 
         let event = events_rx.try_recv().unwrap();
         assert!(matches!(event, Event::TaskSubmitted { task_id } if task_id == ext(0)));
-        assert!(external_task_map.get_id_by_path(&submission_dir).is_some());
+        let request_path = pending_dir.join(format!("{id}.request.json"));
+        assert!(external_task_map.get_id_by_path(&request_path).is_some());
     }
 
     #[test]
-    fn register_pending_task_ignores_already_registered() {
+    fn register_submission_ignores_already_registered() {
         let tmp = TempDir::new().unwrap();
-        let submission_dir = tmp.path().join("task-1");
-        fs::create_dir(&submission_dir).unwrap();
+        let pending_dir = tmp.path();
+        let id = "task-1";
         fs::write(
-            submission_dir.join(TASK_FILE),
+            pending_dir.join(format!("{id}.request.json")),
             r#"{"kind": "Inline", "content": "test task"}"#,
         )
         .unwrap();
@@ -1497,8 +1491,9 @@ mod tests {
         let io_config = IoConfig::default();
 
         // Register once
-        register_pending_task(
-            &submission_dir,
+        register_submission(
+            id,
+            pending_dir,
             &events_tx,
             &mut external_task_map,
             &mut task_id_allocator,
@@ -1507,68 +1502,14 @@ mod tests {
         let _ = events_rx.try_recv().unwrap();
 
         // Second call should not emit event
-        register_pending_task(
-            &submission_dir,
+        register_submission(
+            id,
+            pending_dir,
             &events_tx,
             &mut external_task_map,
             &mut task_id_allocator,
             &io_config,
         );
-        assert!(events_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn register_pending_task_ignores_completed_task() {
-        let tmp = TempDir::new().unwrap();
-        let submission_dir = tmp.path().join("task-1");
-        fs::create_dir(&submission_dir).unwrap();
-        fs::write(
-            submission_dir.join(TASK_FILE),
-            r#"{"kind": "Inline", "content": "test task"}"#,
-        )
-        .unwrap();
-        fs::write(
-            submission_dir.join(crate::constants::RESPONSE_FILE),
-            r#"{"done": true}"#,
-        )
-        .unwrap();
-
-        let (events_tx, events_rx) = mpsc::channel();
-        let mut external_task_map = ExternalTaskMap::new();
-        let mut task_id_allocator = TaskIdAllocator::new();
-        let io_config = IoConfig::default();
-
-        register_pending_task(
-            &submission_dir,
-            &events_tx,
-            &mut external_task_map,
-            &mut task_id_allocator,
-            &io_config,
-        );
-
-        assert!(events_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn register_pending_task_ignores_missing_task_file() {
-        let tmp = TempDir::new().unwrap();
-        let submission_dir = tmp.path().join("task-1");
-        fs::create_dir(&submission_dir).unwrap();
-        // Don't create task.json
-
-        let (events_tx, events_rx) = mpsc::channel();
-        let mut external_task_map = ExternalTaskMap::new();
-        let mut task_id_allocator = TaskIdAllocator::new();
-        let io_config = IoConfig::default();
-
-        register_pending_task(
-            &submission_dir,
-            &events_tx,
-            &mut external_task_map,
-            &mut task_id_allocator,
-            &io_config,
-        );
-
         assert!(events_rx.try_recv().is_err());
     }
 

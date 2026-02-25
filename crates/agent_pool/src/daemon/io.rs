@@ -20,7 +20,7 @@ use interprocess::local_socket::Stream;
 use tracing::{debug, info, trace, warn};
 
 use crate::Transport;
-use crate::constants::{RESPONSE_FILE, TASK_FILE};
+use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE, RESPONSE_SUFFIX, TASK_FILE};
 
 use super::core::{AgentId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
 
@@ -272,13 +272,23 @@ impl ExternalTaskMap {
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "task not found"))?;
 
         match &mut transport {
+            #[allow(clippy::expect_used)]
+            // Internal invariant: request path must have REQUEST_SUFFIX
             Transport::Directory(path) => {
+                // path is the request file; derive response path
+                let response_path = path.with_file_name(
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .and_then(|n| n.strip_suffix(REQUEST_SUFFIX))
+                        .map(|id| format!("{id}{RESPONSE_SUFFIX}"))
+                        .expect("request path should have REQUEST_SUFFIX"),
+                );
                 debug!(
                     external_task_id = id.0,
-                    path = %path.display(),
-                    "finish: writing response.json"
+                    path = %response_path.display(),
+                    "finish: writing response"
                 );
-                fs::write(path.join(RESPONSE_FILE), response)?;
+                fs::write(response_path, response)?;
             }
             Transport::Socket(stream) => {
                 debug!(external_task_id = id.0, "finish: sending socket response");
@@ -507,13 +517,12 @@ mod tests {
     #[test]
     fn external_task_map_register_and_finish() {
         let tmp = TempDir::new().unwrap();
-        let path = tmp.path().join("submission-1");
-        fs::create_dir_all(&path).unwrap();
+        let request_path = tmp.path().join("submission-1.request.json");
 
         let mut map = ExternalTaskMap::new();
         let id = map
             .register_directory(
-                path.clone(),
+                request_path,
                 ExternalTaskData {
                     content: "test content".to_string(),
                     timeout: Duration::from_secs(60),
@@ -530,8 +539,9 @@ mod tests {
         // Task should be removed
         assert!(map.get_data(id).is_none());
 
-        // Response should be written
-        let response = fs::read_to_string(path.join(RESPONSE_FILE)).unwrap();
+        // Response should be written to the derived response path
+        let response_path = tmp.path().join("submission-1.response.json");
+        let response = fs::read_to_string(response_path).unwrap();
         assert_eq!(response, r#"{"result": "ok"}"#);
     }
 }

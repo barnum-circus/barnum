@@ -1,11 +1,11 @@
 //! Path categorization for filesystem events.
 //!
 //! Categorizes filesystem paths to determine what kind of entity they represent
-//! (agent directory, response file, pending submission, etc.).
+//! (agent directory, response file, submission request, etc.).
 
 use std::path::Path;
 
-use crate::constants::{RESPONSE_FILE, TASK_FILE};
+use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE, RESPONSE_SUFFIX};
 
 /// Category of a filesystem path.
 #[derive(Debug, PartialEq, Eq)]
@@ -20,15 +20,15 @@ pub(super) enum PathCategory {
         /// The agent's directory name.
         name: String,
     },
-    /// Pending submission directory: `pending/<uuid>/`
-    PendingDir {
-        /// The submission's UUID.
-        uuid: String,
+    /// Submission request file: `pending/<id>.request.json`
+    SubmissionRequest {
+        /// The submission's ID.
+        id: String,
     },
-    /// Pending submission task file: `pending/<uuid>/task.json`
-    PendingTask {
-        /// The submission's UUID.
-        uuid: String,
+    /// Submission response file: `pending/<id>.response.json` (daemon writes, ignored)
+    SubmissionResponse {
+        /// The submission's ID.
+        id: String,
     },
 }
 
@@ -73,24 +73,22 @@ fn categorize_under_pending(path: &Path, pending_dir: &Path) -> Option<PathCateg
     let relative = path.strip_prefix(pending_dir).ok()?;
     let components: Vec<_> = relative.components().collect();
 
-    if components.is_empty() {
+    // Must be exactly one component (flat file)
+    if components.len() != 1 {
         return None;
     }
 
-    let uuid = components[0].as_os_str().to_str()?.to_string();
+    let filename = components[0].as_os_str().to_str()?;
 
-    match components.len() {
-        1 => Some(PathCategory::PendingDir { uuid }),
-        2 => {
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == TASK_FILE {
-                Some(PathCategory::PendingTask { uuid })
-            } else {
-                None
-            }
-        }
-        _ => None,
+    if let Some(id) = filename.strip_suffix(REQUEST_SUFFIX) {
+        return Some(PathCategory::SubmissionRequest { id: id.to_string() });
     }
+
+    if let Some(id) = filename.strip_suffix(RESPONSE_SUFFIX) {
+        return Some(PathCategory::SubmissionResponse { id: id.to_string() });
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -178,62 +176,63 @@ mod tests {
     }
 
     // =========================================================================
-    // Pending directory
+    // Submission request
     // =========================================================================
 
     #[test]
-    fn pending_directory() {
-        let path = PathBuf::from("/pool/pending/abc123");
+    fn submission_request_file() {
+        let path = PathBuf::from("/pool/pending/abc123.request.json");
         assert_eq!(
             categorize(&path, &agents(), &pending()),
-            Some(PathCategory::PendingDir {
-                uuid: "abc123".to_string()
+            Some(PathCategory::SubmissionRequest {
+                id: "abc123".to_string()
             })
         );
     }
 
     #[test]
-    fn pending_directory_uuid_format() {
-        let path = PathBuf::from("/pool/pending/550e8400-e29b-41d4-a716-446655440000");
+    fn submission_request_uuid_format() {
+        let path = PathBuf::from("/pool/pending/550e8400-e29b-41d4-a716-446655440000.request.json");
         assert_eq!(
             categorize(&path, &agents(), &pending()),
-            Some(PathCategory::PendingDir {
-                uuid: "550e8400-e29b-41d4-a716-446655440000".to_string()
+            Some(PathCategory::SubmissionRequest {
+                id: "550e8400-e29b-41d4-a716-446655440000".to_string()
             })
         );
     }
 
     // =========================================================================
-    // Pending task
+    // Submission response
     // =========================================================================
 
     #[test]
-    fn pending_task_file() {
+    fn submission_response_file() {
+        let path = PathBuf::from("/pool/pending/abc123.response.json");
+        assert_eq!(
+            categorize(&path, &agents(), &pending()),
+            Some(PathCategory::SubmissionResponse {
+                id: "abc123".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn submission_other_file_not_categorized() {
+        let path = PathBuf::from("/pool/pending/abc123.metadata.json");
+        assert_eq!(categorize(&path, &agents(), &pending()), None);
+    }
+
+    #[test]
+    fn submission_nested_file_not_categorized() {
+        // Subdirectories under pending are not categorized
         let path = PathBuf::from("/pool/pending/abc123/task.json");
-        assert_eq!(
-            categorize(&path, &agents(), &pending()),
-            Some(PathCategory::PendingTask {
-                uuid: "abc123".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn pending_response_file_not_categorized() {
-        // We write responses, we don't read them
-        let path = PathBuf::from("/pool/pending/abc123/response.json");
         assert_eq!(categorize(&path, &agents(), &pending()), None);
     }
 
     #[test]
-    fn pending_other_file_not_categorized() {
-        let path = PathBuf::from("/pool/pending/abc123/metadata.json");
-        assert_eq!(categorize(&path, &agents(), &pending()), None);
-    }
-
-    #[test]
-    fn pending_nested_file_not_categorized() {
-        let path = PathBuf::from("/pool/pending/abc123/subdir/task.json");
+    fn submission_directory_not_categorized() {
+        // Plain directories under pending are not categorized (flat structure)
+        let path = PathBuf::from("/pool/pending/abc123");
         assert_eq!(categorize(&path, &agents(), &pending()), None);
     }
 

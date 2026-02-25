@@ -5,18 +5,18 @@
 //!
 //! # Protocol
 //!
-//! 1. Submitter creates `<pool>/pending/<uuid>/task.json` with the payload
-//! 2. Daemon detects the new task and dispatches it to an agent
-//! 3. When the agent completes, daemon writes `<pool>/pending/<uuid>/response.json`
-//! 4. Submitter reads the response and cleans up the directory
+//! 1. Submitter writes `<pool>/pending/<id>.request.json` with the payload
+//! 2. Daemon detects the new request and dispatches it to an agent
+//! 3. When the agent completes, daemon writes `<pool>/pending/<id>.response.json`
+//! 4. Submitter reads the response and cleans up both files
 //!
 //! # Cleanup
 //!
-//! - Submitter deletes the `<uuid>` directory after reading the response
-//! - If submitter is killed, it tries to delete the directory on signal
-//! - Daemon may clean up stale pending directories after a timeout
+//! - Submitter deletes both files after reading the response
+//! - If submitter is killed, files may be orphaned (daemon could clean up stale files)
 
 use super::payload::Payload;
+use crate::constants::{PENDING_DIR, REQUEST_SUFFIX, RESPONSE_SUFFIX};
 use crate::response::Response;
 use std::fs;
 use std::io;
@@ -24,15 +24,6 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-
-/// Directory for pending file-based submissions.
-pub const PENDING_DIR: &str = "pending";
-
-/// Task file name within a pending submission.
-pub const PENDING_TASK_FILE: &str = "task.json";
-
-/// Response file name within a pending submission.
-pub const PENDING_RESPONSE_FILE: &str = "response.json";
 
 /// Default timeout for file-based submission (5 minutes).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -47,15 +38,15 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///
 /// # Protocol
 ///
-/// 1. Creates `<root>/pending/<uuid>/task.json` with the payload
-/// 2. Polls for `<root>/pending/<uuid>/response.json`
-/// 3. Returns the response and cleans up
+/// 1. Writes `<root>/pending/<id>.request.json` with the payload
+/// 2. Polls for `<root>/pending/<id>.response.json`
+/// 3. Returns the response and cleans up both files
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - The pending directory cannot be created
-/// - The task file cannot be written
+/// - The pending directory doesn't exist (daemon not ready)
+/// - The request file cannot be written
 /// - The response times out
 /// - The response contains invalid JSON
 pub fn submit_file(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response> {
@@ -81,28 +72,26 @@ pub fn submit_file_with_timeout(
 
     // Generate unique submission ID
     let submission_id = Uuid::new_v4().to_string();
-    let submission_dir = pending_dir.join(&submission_id);
 
-    // Create submission directory
-    fs::create_dir(&submission_dir)?;
+    // Flat files directly in pending directory (no subdirectory creation!)
+    let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+    let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
 
-    let task_path = submission_dir.join(PENDING_TASK_FILE);
-    let response_path = submission_dir.join(PENDING_RESPONSE_FILE);
-
-    // Write task file with serialized payload
+    // Write request file with serialized payload
     let content = serde_json::to_string(payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    fs::write(&task_path, content)?;
+    fs::write(&request_path, content)?;
 
-    // Poll for response (task file removal just means daemon picked it up)
+    // Poll for response
     let start = Instant::now();
     loop {
         if response_path.exists() {
             // Read and parse response
             let response_content = fs::read_to_string(&response_path)?;
 
-            // Clean up submission directory
-            let _ = fs::remove_dir_all(&submission_dir);
+            // Clean up both files
+            let _ = fs::remove_file(&request_path);
+            let _ = fs::remove_file(&response_path);
 
             let response: Response = serde_json::from_str(&response_content)
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -113,7 +102,8 @@ pub fn submit_file_with_timeout(
         // Check timeout
         if start.elapsed() > timeout {
             // Clean up on timeout
-            let _ = fs::remove_dir_all(&submission_dir);
+            let _ = fs::remove_file(&request_path);
+            let _ = fs::remove_file(&response_path);
 
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -125,24 +115,25 @@ pub fn submit_file_with_timeout(
     }
 }
 
-/// Clean up a pending submission directory.
+/// Clean up a pending submission's files.
 ///
 /// Call this if you need to abandon a submission (e.g., on interrupt).
 ///
 /// # Errors
 ///
-/// Returns an error if the directory cannot be removed.
+/// Returns an error if file removal fails (though errors are typically ignored).
 pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Result<()> {
-    let submission_dir = root.as_ref().join(PENDING_DIR).join(submission_id);
-    if submission_dir.exists() {
-        fs::remove_dir_all(&submission_dir)?;
-    }
+    let pending_dir = root.as_ref().join(PENDING_DIR);
+    let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+    let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
+    let _ = fs::remove_file(&request_path);
+    let _ = fs::remove_file(&response_path);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::constants::PENDING_DIR;
 
     #[test]
     fn pending_dir_constant() {
