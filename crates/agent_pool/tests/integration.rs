@@ -199,8 +199,10 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);
 
-    // Wait for daemon to notice agent is gone
-    thread::sleep(Duration::from_millis(100));
+    // Wait for daemon to notice agent is gone.
+    // On Linux with inotify, the Remove(Folder) event may take time to be
+    // delivered and processed, especially under parallel test load.
+    thread::sleep(Duration::from_millis(500));
 
     // Start a new agent
     let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5), &test_dir);
