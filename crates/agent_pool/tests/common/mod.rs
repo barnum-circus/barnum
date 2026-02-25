@@ -83,7 +83,7 @@ pub fn is_ipc_available(_test_dir: &Path) -> bool {
 
 /// A test agent that uses the CLI to receive tasks from the daemon.
 ///
-/// The agent runs in a background thread, calling `get_task` and `next_task`
+/// The agent runs in a background thread, calling `register` and `next_task`
 /// CLI commands to interact with the daemon. This ensures tests exercise
 /// the same code paths as real agents.
 pub struct TestAgent {
@@ -128,7 +128,7 @@ impl TestAgent {
                     break;
                 }
 
-                // Build command: get_task for first call, next_task with response for subsequent
+                // Build command: register for first call, next_task with response for subsequent
                 let mut cmd = Command::new(&bin);
                 if let Some(response) = last_response.take() {
                     cmd.arg("next_task")
@@ -139,7 +139,7 @@ impl TestAgent {
                         .arg("--data")
                         .arg(&response);
                 } else {
-                    cmd.arg("get_task")
+                    cmd.arg("register")
                         .arg("--pool")
                         .arg(&root_owned)
                         .arg("--name")

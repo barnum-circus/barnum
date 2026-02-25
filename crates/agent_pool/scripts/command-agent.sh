@@ -76,12 +76,12 @@ while true; do
     # Inner loop: process tasks
     while true; do
         set +e
-        TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$NAME" 2>&1)
+        TASK_JSON=$("$AGENT_POOL" register --pool "$POOL" --name "$NAME" 2>&1)
         GET_TASK_EXIT=$?
         set -e
 
         if [ $GET_TASK_EXIT -ne 0 ]; then
-            echo "[$NAME] get_task failed (exit=$GET_TASK_EXIT), reconnecting in ${RECONNECT_DELAY}s..." >&2
+            echo "[$NAME] register failed (exit=$GET_TASK_EXIT), reconnecting in ${RECONNECT_DELAY}s..." >&2
             sleep "$RECONNECT_DELAY"
             break  # Break inner loop to reconnect
         fi

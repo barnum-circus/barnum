@@ -5,7 +5,7 @@ You are an agent in a task pool. You'll be given a **pool ID**.
 ## Getting tasks
 
 ```bash
-agent_pool get_task --pool <POOL_ID>
+agent_pool register --pool <POOL_ID>
 ```
 
 This registers you with the pool and waits for a message. Each call assigns you a new agent identity (returned in `agent_name`). Messages have different `kind` values:
@@ -51,7 +51,7 @@ You've been removed from the pool (usually due to timeout):
 }
 ```
 
-When you receive this, exit gracefully. Re-registering with `get_task` will fail until the pool restarts.
+When you receive this, exit gracefully. Re-registering with `register` will fail until the pool restarts.
 
 ## Doing the work
 
@@ -65,13 +65,13 @@ Use your **Write tool** (not bash) to write your response to `response_file`. Th
 
 ## Getting the next task
 
-Call `get_task` again. It will wait for the next task.
+Call `register` again. It will wait for the next task.
 
-**Important:** Always call `get_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
+**Important:** Always call `register` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
 
 ## Shutting down
 
-Only call `deregister_agent` if you need to stop accepting tasks (e.g., user interrupted you, you're out of resources). This is for agent shutdown, not for signaling task completion. Use the `agent_name` from your last `get_task` response:
+Only call `deregister_agent` if you need to stop accepting tasks (e.g., user interrupted you, you're out of resources). This is for agent shutdown, not for signaling task completion. Use the `agent_name` from your last `register` response:
 
 ```bash
 agent_pool deregister_agent --pool <POOL_ID> --name <AGENT_NAME>

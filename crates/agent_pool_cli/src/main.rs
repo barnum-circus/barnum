@@ -140,20 +140,7 @@ enum Command {
         #[arg(long)]
         name: String,
     },
-    // TODO: Consider renaming `get_task` to `register` since that's what it does (registers
-    // the agent and waits for first task). The `register` command below is just an alias.
-    // If we rename, we should deprecate `get_task` for a release or two.
-    /// Wait for and return the next task (for agents)
-    #[command(name = "get_task")]
-    GetTask {
-        /// Pool ID or path
-        #[arg(long)]
-        pool: String,
-        /// Agent name (must be unique within the pool)
-        #[arg(long)]
-        name: String,
-    },
-    /// Register as an agent and wait for first task (alias for `get_task`)
+    /// Register as an agent and wait for first task
     #[command(name = "register")]
     Register {
         /// Pool ID or path
@@ -465,7 +452,7 @@ fn main() -> ExitCode {
 
             eprintln!("Deregistered agent '{name}'");
         }
-        Command::GetTask { pool, name } | Command::Register { pool, name } => {
+        Command::Register { pool, name } => {
             let root = resolve_pool(&pool);
 
             // Daemon creates pending_dir after watcher starts - if it doesn't exist, daemon isn't ready
