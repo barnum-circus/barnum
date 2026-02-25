@@ -8,10 +8,10 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::print_stderr)]
 
-use agent_pool::PENDING_DIR;
+use agent_pool::{PENDING_DIR, Response};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -343,6 +343,31 @@ fn find_agent_pool_binary() -> PathBuf {
         .expect("Could not find workspace root");
 
     workspace_root.join("target/debug/agent_pool")
+}
+
+/// Submit a task via the CLI.
+///
+/// Executes: `agent_pool submit_task --pool <root> --data <payload_json> --notify <method>`
+pub fn submit_via_cli(root: &Path, payload_json: &str, notify: &str) -> io::Result<Response> {
+    let bin = find_agent_pool_binary();
+
+    let output = Command::new(&bin)
+        .arg("submit_task")
+        .arg("--pool")
+        .arg(root)
+        .arg("--data")
+        .arg(payload_json)
+        .arg("--notify")
+        .arg(notify)
+        .output()?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::other(format!("CLI failed: {stderr}")));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(&stdout).map_err(io::Error::other)
 }
 
 /// Configuration for the daemon when starting via CLI.
