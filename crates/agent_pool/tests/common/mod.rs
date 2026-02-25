@@ -663,6 +663,8 @@ impl AgentPoolHandle {
         cmd.arg("start")
             .arg("--pool")
             .arg(root)
+            .arg("--log-level")
+            .arg("trace")
             .arg("--idle-agent-timeout-secs")
             .arg(config.idle_agent_timeout.as_secs().to_string())
             .arg("--task-timeout-secs")

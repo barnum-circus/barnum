@@ -538,17 +538,8 @@ fn handle_fs_event(
                 );
             }
             PathCategory::PendingDir { uuid } => {
-                let submission_dir = pending_dir.join(&uuid);
-                let task_path = submission_dir.join(TASK_FILE);
-                if task_path.exists() {
-                    register_pending_task(
-                        &submission_dir,
-                        events_tx,
-                        external_task_map,
-                        task_id_allocator,
-                        io_config,
-                    );
-                }
+                // Ignore directory events - we only care about task.json
+                debug!(uuid = %uuid, "ignoring PendingDir event (waiting for task.json)");
             }
             PathCategory::PendingTask { uuid } => {
                 let submission_dir = pending_dir.join(&uuid);
