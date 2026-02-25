@@ -347,23 +347,9 @@ impl TestAgent {
 
     /// Stop the agent and return the list of tasks it processed.
     pub fn stop(mut self) -> Vec<String> {
-        self.running.store(false, Ordering::SeqCst);
-
-        // Kill any running CLI subprocess
-        let pid = self.current_pid.load(Ordering::SeqCst);
-        if pid != 0 {
-            // Use shell kill command to send SIGKILL
-            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
-        }
-
-        let result = self
-            .handle
-            .take()
-            .expect("Agent already stopped")
-            .join()
-            .expect("Agent thread panicked");
-
-        // Deregister from the daemon so it knows we're gone
+        // Deregister FIRST so daemon won't dispatch more tasks to this agent.
+        // This prevents a race where the agent receives a task between deciding
+        // to stop and actually killing the process.
         let bin = find_agent_pool_binary();
         let _ = Command::new(&bin)
             .arg("deregister_agent")
@@ -373,7 +359,20 @@ impl TestAgent {
             .arg(&self.agent_id)
             .output();
 
-        result
+        self.running.store(false, Ordering::SeqCst);
+
+        // Kill any running CLI subprocess
+        let pid = self.current_pid.load(Ordering::SeqCst);
+        if pid != 0 {
+            // Use shell kill command to send SIGKILL
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+        }
+
+        self.handle
+            .take()
+            .expect("Agent already stopped")
+            .join()
+            .expect("Agent thread panicked")
     }
 }
 
