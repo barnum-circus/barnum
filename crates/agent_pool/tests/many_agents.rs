@@ -46,9 +46,8 @@ fn multiple_agents_parallel_tasks() {
     let handles: Vec<_> = (1..=6)
         .map(|i| {
             let root = root.clone();
-            let task = format!(
-                r#"{{"kind":"Task","task":{{"instructions":"echo","data":"Task-{i}"}}}}"#
-            );
+            let task =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"Task-{i}"}}}}"#);
             thread::spawn(move || {
                 agent_pool::submit(&root, &Payload::inline(task)).expect("Submit failed")
             })

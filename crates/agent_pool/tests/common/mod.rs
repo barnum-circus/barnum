@@ -3,14 +3,17 @@
 // Test utilities can be more relaxed
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::missing_const_for_fn)]
 
 use agent_pool::PENDING_DIR;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
+use std::io::{BufRead, BufReader};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -159,7 +162,7 @@ impl TestAgent {
                 if let Some(stderr) = child.stderr.take() {
                     thread::spawn(move || {
                         let reader = BufReader::new(stderr);
-                        for line in reader.lines().flatten() {
+                        for line in reader.lines().map_while(Result::ok) {
                             eprintln!("[agent {stderr_agent_id} stderr] {line}");
                         }
                     });
@@ -271,10 +274,7 @@ impl TestAgent {
                 Err(e) => return format!("Error: failed to parse task JSON: {e}"),
             };
 
-            let style = task_json
-                .get("data")
-                .and_then(|d| d.as_str())
-                .unwrap_or("");
+            let style = task_json.get("data").and_then(|d| d.as_str()).unwrap_or("");
 
             match style {
                 "casual" => format!("Hi {agent_id}, how are ya?"),
@@ -309,10 +309,7 @@ impl TestAgent {
         let pid = self.current_pid.load(Ordering::SeqCst);
         if pid != 0 {
             // Use shell kill command to send SIGKILL
-            let _ = Command::new("kill")
-                .arg("-9")
-                .arg(pid.to_string())
-                .output();
+            let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
         }
 
         self.handle
@@ -327,11 +324,11 @@ impl TestAgent {
 // Agent Pool Handle
 // =============================================================================
 
-/// Find the agent_pool binary.
+/// Find the `agent_pool` binary.
 ///
 /// Checks in order:
-/// 1. AGENT_POOL_BIN environment variable
-/// 2. target/debug/agent_pool relative to workspace root
+/// 1. `AGENT_POOL_BIN` environment variable
+/// 2. `target/debug/agent_pool` relative to workspace root
 fn find_agent_pool_binary() -> PathBuf {
     if let Ok(bin) = std::env::var("AGENT_POOL_BIN") {
         return PathBuf::from(bin);
@@ -488,10 +485,8 @@ impl AgentPoolHandle {
         if let Some(stdout) = process.stdout.take() {
             output_threads.push(thread::spawn(move || {
                 let reader = BufReader::new(stdout);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        eprintln!("[daemon stdout] {line}");
-                    }
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[daemon stdout] {line}");
                 }
             }));
         }
@@ -499,10 +494,8 @@ impl AgentPoolHandle {
         if let Some(stderr) = process.stderr.take() {
             output_threads.push(thread::spawn(move || {
                 let reader = BufReader::new(stderr);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        eprintln!("[daemon stderr] {line}");
-                    }
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[daemon stderr] {line}");
                 }
             }));
         }

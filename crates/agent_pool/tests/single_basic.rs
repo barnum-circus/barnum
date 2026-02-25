@@ -31,7 +31,9 @@ fn single_agent_single_task() {
 
     let response = agent_pool::submit(
         &root,
-        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello, World!"}}"#),
+        &Payload::inline(
+            r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello, World!"}}"#,
+        ),
     )
     .expect("Submit failed");
     let Response::Processed { stdout, .. } = response else {
@@ -73,7 +75,9 @@ fn file_based_submit() {
     // Submit using file-based protocol
     let response = submit_file(
         &root,
-        &Payload::inline(r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello via file!"}}"#),
+        &Payload::inline(
+            r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello via file!"}}"#,
+        ),
     )
     .expect("File submit failed");
     let Response::Processed { stdout, .. } = response else {

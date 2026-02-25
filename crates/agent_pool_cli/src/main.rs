@@ -140,6 +140,9 @@ enum Command {
         #[arg(long)]
         name: String,
     },
+    // TODO: Consider renaming `get_task` to `register` since that's what it does (registers
+    // the agent and waits for first task). The `register` command below is just an alias.
+    // If we rename, we should deprecate `get_task` for a release or two.
     /// Wait for and return the next task (for agents)
     #[command(name = "get_task")]
     GetTask {

@@ -36,9 +36,8 @@ fn single_agent_queues_multiple_tasks() {
         .iter()
         .map(|task| {
             let root = root.clone();
-            let task_json = format!(
-                r#"{{"kind":"Task","task":{{"instructions":"echo","data":"{task}"}}}}"#
-            );
+            let task_json =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"{task}"}}}}"#);
             thread::spawn(move || {
                 agent_pool::submit(&root, &Payload::inline(task_json)).expect("Submit failed")
             })
