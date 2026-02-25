@@ -211,6 +211,16 @@ Create a markdown file in `refactors/pending/` describing:
 
 This document captures the *shape* of the refactor without getting into implementation details.
 
+### STOP: Wait for approval
+
+**After writing the architecture document, STOP and wait for explicit user approval before implementing ANYTHING.** Do not:
+- Start implementing tasks
+- Make "small independent changes"
+- Commit code changes
+- Push anything
+
+The document exists for the user to review. They may have feedback, want changes to the approach, or decide not to proceed at all. **Only begin implementation after the user explicitly says to proceed.**
+
 ### Phase 2: Practical task list
 
 Convert the architecture document into concrete, **independently deployable tasks**. Each task should be:
@@ -261,12 +271,12 @@ Each subtask should be small enough that someone could implement it without aski
 
 For examples, see `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `refactors/past/`.
 
-### Extract independent work
+### Extract independent work (after approval)
 
-**Critical**: Throughout planning, actively identify changes that are independent of the main refactor. These should be:
+**Critical**: After receiving approval, actively identify changes that are independent of the main refactor. These should be:
 
 1. **Extracted** into their own small changes
-2. **Implemented immediately** while planning continues
+2. **Implemented first** before the main refactor
 3. **Marked as done** in the plan
 
 Examples of independent work:
