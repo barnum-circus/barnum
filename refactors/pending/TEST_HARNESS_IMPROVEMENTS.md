@@ -118,7 +118,28 @@ However, there are several areas that need improvement.
 
 ---
 
-## Task 1: Multi-Mode Test Execution
+## Task 1: Use CLI for All Task Submission
+
+**Goal:** Replace library function calls with CLI commands to test the full stack.
+
+### Problem
+
+Tests currently use library functions directly:
+- `agent_pool::submit(&root, &payload)`
+- `agent_pool::submit_file(&root, &payload)`
+
+This bypasses the CLI parsing layer. We should use the `agent_pool submit_task` CLI command instead to test the same code path real users exercise.
+
+### Files to update
+
+- `greeting.rs` - 2 calls to `agent_pool::submit`
+- `single_basic.rs` - `agent_pool::submit` + `submit_file`
+- `single_agent_queue.rs` - `agent_pool::submit`
+- `many_agents.rs` - `agent_pool::submit`
+
+---
+
+## Task 2: Multi-Mode Test Execution
 
 **Goal:** Run every test in multiple submission modes to ensure all code paths are exercised.
 
@@ -145,7 +166,7 @@ Currently, tests only exercise one combination. We should test all four:
 
 Create a test matrix that runs each test case in all four modes.
 
-#### 1.1: Add `SubmitMode` enum
+#### 2.1: Add `SubmitMode` enum
 
 **File:** `crates/agent_pool/tests/common/mod.rs`
 
@@ -174,7 +195,7 @@ impl SubmitMode {
 }
 ```
 
-#### 1.2: Add mode-aware submit function
+#### 2.2: Add mode-aware submit function
 
 **File:** `crates/agent_pool/tests/common/mod.rs`
 
@@ -196,7 +217,7 @@ pub fn submit_with_mode(root: &Path, payload: &Payload, mode: SubmitMode) -> Res
 }
 ```
 
-#### 1.3: Macro for test matrix
+#### 2.3: Macro for test matrix
 
 Create a macro that generates test functions for each mode:
 
@@ -229,7 +250,7 @@ macro_rules! test_all_modes {
 }
 ```
 
-#### 1.4: Convert existing tests
+#### 2.4: Convert existing tests
 
 Convert each test to take a `SubmitMode` parameter and use the macro:
 
@@ -254,7 +275,7 @@ test_all_modes!(single_agent_single_task_impl);
 
 ---
 
-## Task 2: CLI Command Naming
+## Task 3: CLI Command Naming
 
 **Goal:** Clean up confusing `get_task` vs `register` CLI commands.
 
@@ -281,7 +302,7 @@ The name "register" is more accurate than "get_task".
 
 ---
 
-## Task 3: Test Output Improvements
+## Task 4: Test Output Improvements
 
 **Goal:** Make test output clearer and more useful.
 
@@ -308,14 +329,14 @@ info!(elapsed = ?start.elapsed(), "test completed");
 
 ---
 
-## Task 4: Test Reliability
+## Task 5: Test Reliability
 
 **Goal:** Eliminate flaky tests and race conditions.
 
 ### 4.1: Deterministic agent selection
 
 Currently agent selection uses a HashSet which iterates non-deterministically. Consider using:
-- IndexMap for deterministic iteration
+- BTreeMap for deterministic iteration (preferred over IndexMap)
 - Or explicit ordering in tests
 
 ### 4.2: Wait for daemon ready
@@ -336,7 +357,7 @@ Ensure all tests clean up properly:
 
 ---
 
-## Task 5: Test Coverage
+## Task 6: Test Coverage
 
 **Goal:** Ensure all important scenarios are tested.
 
@@ -362,11 +383,12 @@ Ensure all tests clean up properly:
 
 ## Implementation Order
 
-1. **Task 1: Multi-Mode Testing** (highest priority - ensures all paths tested)
-2. **Task 4: Test Reliability** (second - reduces flakiness)
-3. **Task 5: Test Coverage** (third - expands coverage)
-4. **Task 2: CLI Naming** (fourth - improves UX)
-5. **Task 3: Output Improvements** (fifth - improves debugging)
+1. **Task 1: Use CLI for All Submission** (highest priority - test full stack)
+2. **Task 2: Multi-Mode Testing** (second - ensures all paths tested)
+3. **Task 5: Test Reliability** (third - reduces flakiness)
+4. **Task 6: Test Coverage** (fourth - expands coverage)
+5. **Task 3: CLI Naming** (fifth - improves UX)
+6. **Task 4: Output Improvements** (sixth - improves debugging)
 
 ---
 
