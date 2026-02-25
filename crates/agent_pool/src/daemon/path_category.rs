@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use notify::event::{AccessKind, AccessMode, CreateKind, EventKind};
+use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, RemoveKind};
 
 use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE};
 
@@ -44,6 +44,11 @@ const fn is_write_complete(kind: EventKind) -> bool {
 /// Check if event kind indicates a folder was created.
 const fn is_folder_created(kind: EventKind) -> bool {
     matches!(kind, EventKind::Create(CreateKind::Folder))
+}
+
+/// Check if event kind indicates a folder was removed.
+const fn is_folder_removed(kind: EventKind) -> bool {
+    matches!(kind, EventKind::Remove(RemoveKind::Folder))
 }
 
 /// Categorize a filesystem event (path + event kind).
@@ -81,8 +86,10 @@ fn categorize_under_agents(
     let name = components[0].as_os_str().to_str()?.to_string();
 
     match components.len() {
-        // Agent directory - only meaningful on folder creation
-        1 if is_folder_created(event_kind) => Some(PathCategory::AgentDir { name }),
+        // Agent directory - meaningful on folder creation or removal
+        1 if is_folder_created(event_kind) || is_folder_removed(event_kind) => {
+            Some(PathCategory::AgentDir { name })
+        }
         // Agent response - only meaningful when write is complete
         2 if is_write_complete(event_kind) => {
             let filename = components[1].as_os_str().to_str()?;
@@ -128,7 +135,7 @@ fn categorize_under_pending(
 mod tests {
     use std::path::PathBuf;
 
-    use notify::event::{AccessKind, AccessMode, CreateKind};
+    use notify::event::{AccessKind, AccessMode, CreateKind, RemoveKind};
 
     use super::*;
 
@@ -152,6 +159,10 @@ mod tests {
         EventKind::Create(CreateKind::File)
     }
 
+    fn folder_removed() -> EventKind {
+        EventKind::Remove(RemoveKind::Folder)
+    }
+
     // =========================================================================
     // Agent directory
     // =========================================================================
@@ -161,6 +172,17 @@ mod tests {
         let path = PathBuf::from("/pool/agents/claude-1");
         assert_eq!(
             categorize(&path, folder_created(), &agents(), &pending()),
+            Some(PathCategory::AgentDir {
+                name: "claude-1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn agent_directory_on_folder_remove() {
+        let path = PathBuf::from("/pool/agents/claude-1");
+        assert_eq!(
+            categorize(&path, folder_removed(), &agents(), &pending()),
             Some(PathCategory::AgentDir {
                 name: "claude-1".to_string()
             })
