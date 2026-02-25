@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start 5 command agents for the cmd pool.
+# Start command agents for the cmd pool.
 #
 # Usage: ./scripts/start-cmd-agents.sh [num-agents]
 
@@ -11,10 +11,29 @@ NUM_AGENTS="${1:-5}"
 
 > /tmp/agent.log
 
-# Start N-1 agents in background, last one in foreground
-for i in $(seq 1 $((NUM_AGENTS - 1))); do
+# Track child PIDs so we can kill them on Ctrl+C
+CHILD_PIDS=()
+
+cleanup() {
+    echo ""
+    echo "Stopping all agents..."
+    for pid in "${CHILD_PIDS[@]}"; do
+        kill "$pid" 2>/dev/null || true
+    done
+    wait 2>/dev/null
+    echo "Done."
+    exit 0
+}
+
+trap cleanup SIGINT SIGTERM
+
+# Start all agents in background
+for i in $(seq 1 "$NUM_AGENTS"); do
     ./crates/agent_pool/scripts/command-agent.sh --pool cmd 2>&1 | tee -a /tmp/agent.log &
+    CHILD_PIDS+=($!)
 done
 
-# Last agent runs in foreground (keeps script alive)
-./crates/agent_pool/scripts/command-agent.sh --pool cmd 2>&1 | tee -a /tmp/agent.log
+echo "Started $NUM_AGENTS agents. Press Ctrl+C to stop all."
+
+# Wait for all children
+wait
