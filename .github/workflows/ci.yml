@@ -37,7 +37,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     needs: [build-linux-x64]
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +53,8 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Run tests
-        run: cargo test --workspace -- --nocapture
+        # Run single-threaded to avoid inotify race conditions
+        run: cargo test --workspace -- --nocapture --test-threads=1
 
   demos:
     runs-on: ubuntu-latest
