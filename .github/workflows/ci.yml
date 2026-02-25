@@ -90,11 +90,22 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Cache binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-apple-darwin/release/agent_pool
+            target/x86_64-apple-darwin/release/gsd
+          key: macos-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
       - name: Build
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cargo build --release --target x86_64-apple-darwin -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
@@ -110,11 +121,22 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Cache binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-apple-darwin/release/agent_pool
+            target/aarch64-apple-darwin/release/gsd
+          key: macos-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
       - name: Build
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cargo build --release --target aarch64-apple-darwin -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
@@ -130,13 +152,25 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Cache binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-unknown-linux-musl/release/agent_pool
+            target/x86_64-unknown-linux-musl/release/gsd
+          key: linux-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-unknown-linux-musl
       - name: Install musl-tools
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
       - name: Build
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cargo build --release --target x86_64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
@@ -152,13 +186,25 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Cache binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/aarch64-unknown-linux-musl/release/agent_pool
+            target/aarch64-unknown-linux-musl/release/gsd
+          key: linux-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: aarch64-unknown-linux-musl
       - name: Install cross
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cargo install cross --git https://github.com/cross-rs/cross
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
       - name: Build
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cross build --release --target aarch64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
@@ -174,11 +220,22 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - name: Cache binaries
+        id: cache-binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            target/x86_64-pc-windows-msvc/release/agent_pool.exe
+            target/x86_64-pc-windows-msvc/release/gsd.exe
+          key: windows-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
       - name: Build
+        if: steps.cache-binaries.outputs.cache-hit != 'true'
         run: cargo build --release --target x86_64-pc-windows-msvc -p agent_pool_cli -p gsd_cli
       - uses: actions/upload-artifact@v4
         with:
