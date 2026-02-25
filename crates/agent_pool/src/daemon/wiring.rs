@@ -904,13 +904,16 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
-                // Only process Close(Write) events - this ensures file content is fully written.
-                // Other events (Create, Modify) may fire before content is available.
-                use notify::event::{AccessKind, AccessMode};
-                if matches!(
+                // Filter events to avoid race conditions:
+                // - Close(Write): file content is fully written (for reading files)
+                // - Create(Folder): directory created (for agent registration)
+                use notify::event::{AccessKind, AccessMode, CreateKind};
+                let dominated = matches!(
                     event.kind,
                     notify::EventKind::Access(AccessKind::Close(AccessMode::Write))
-                ) {
+                        | notify::EventKind::Create(CreateKind::Folder)
+                );
+                if dominated {
                     let _ = io_tx.send(IoEvent::Fs(event));
                 }
             }
