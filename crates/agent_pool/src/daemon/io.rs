@@ -265,20 +265,24 @@ impl ExternalTaskMap {
     /// Used for both success and failure - the response content determines the outcome.
     /// For directory transports, writes to response.json.
     /// For socket transports, sends length-prefixed response over the socket.
+    ///
+    /// **Ordering**: For directory transports, we write `response.json` before removing
+    /// from `path_to_id`. This ensures the file watcher can't re-register the task.
     pub fn finish(&mut self, id: ExternalTaskId, response: &str) -> io::Result<ExternalTaskData> {
+        // Write response.json before removing from path_to_id
+        if let Some(Transport::Directory(path)) = self.get_transport(id) {
+            fs::write(path.join(RESPONSE_FILE), response)?;
+        }
+
         let (mut transport, data) = self
             .remove(id)
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "task not found"))?;
 
-        match &mut transport {
-            Transport::Directory(path) => {
-                fs::write(path.join(RESPONSE_FILE), response)?;
-            }
-            Transport::Socket(stream) => {
-                writeln!(stream, "{}", response.len())?;
-                stream.write_all(response.as_bytes())?;
-                stream.flush()?;
-            }
+        // For socket transports, send the response after removal (no race condition concern)
+        if let Transport::Socket(ref mut stream) = transport {
+            writeln!(stream, "{}", response.len())?;
+            stream.write_all(response.as_bytes())?;
+            stream.flush()?;
         }
 
         Ok(data)
