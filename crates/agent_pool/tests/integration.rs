@@ -1,15 +1,18 @@
 //! Integration tests for the agent pool daemon.
 //!
-//! These tests verify the daemon works end-to-end using file-based task submission.
+//! These tests verify the daemon works end-to-end using CLI-based task submission.
 
 #![expect(clippy::expect_used)]
+#![expect(clippy::panic)]
 
 mod common;
 
-use agent_pool::{AGENTS_DIR, PENDING_DIR, RESPONSE_FILE, TASK_FILE};
-use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
-use std::fs;
-use std::path::Path;
+use agent_pool::Response;
+use common::{
+    AgentPoolHandle, SubmitMode, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir,
+    submit_with_mode,
+};
+use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
@@ -22,167 +25,118 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
 
 const TEST_DIR: &str = "integration";
 
-/// Helper to submit a task (wraps content in proper task and Payload format).
-///
-/// The `data` parameter is the actual payload data (any JSON value).
-/// This helper wraps it in the proper task envelope:
-/// `{"kind": "Task", "task": {"instructions": "...", "data": <data>}}`
-fn submit_task(pending_dir: &Path, task_id: &str, data: &str) -> std::path::PathBuf {
-    let submission_dir = pending_dir.join(task_id);
-    fs::create_dir_all(&submission_dir).expect("Failed to create submission dir");
-
-    // Parse the data as JSON, or use it as a string
-    let data_value: serde_json::Value =
-        serde_json::from_str(data).unwrap_or_else(|_| serde_json::Value::String(data.to_string()));
-
-    // Create the task envelope (what the agent receives)
-    let task_envelope = serde_json::json!({
-        "kind": "Task",
-        "task": {
-            "instructions": "test task",
-            "data": data_value
-        }
-    });
-
-    // Wrap in Payload envelope - daemon expects {"kind": "Inline", "content": "..."}
-    let payload = serde_json::json!({
-        "kind": "Inline",
-        "content": task_envelope.to_string()
-    });
-    fs::write(submission_dir.join(TASK_FILE), payload.to_string()).expect("Failed to write task");
-    submission_dir
-}
-
-/// Helper to wait for a response file with timeout.
-fn wait_for_response(submission_dir: &Path, timeout_ms: u64) -> Option<String> {
-    let response_file = submission_dir.join(RESPONSE_FILE);
-    let attempts = timeout_ms / 10;
-    for _ in 0..attempts {
-        if response_file.exists() {
-            return fs::read_to_string(&response_file).ok();
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    None
-}
-
-/// Extract stdout from a response JSON.
-fn extract_stdout(response: &str) -> Option<String> {
-    let json: serde_json::Value = serde_json::from_str(response).ok()?;
-    json.get("stdout")?.as_str().map(String::from)
-}
-
-/// Test file-based submission.
-#[test]
-fn file_based_submit() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_file_submit"));
+/// Test basic submission flow.
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn basic_submit(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_basic_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_file_submit"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
-    let submission_dir = submit_task(&pending_dir, "test-1", r#"{"message": "Hello!"}"#);
+    let response = submit_with_mode(
+        &root,
+        r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"Hello!"}}}"#,
+        mode,
+    )
+    .expect("Submit failed");
 
-    // Wait for response
-    let response = wait_for_response(&submission_dir, 2000);
-    assert!(response.is_some(), "Response file should exist");
-    let response_str = response.expect("response");
-    assert!(
-        response_str.contains("[processed]"),
-        "Response should contain processed marker"
-    );
+    let Response::Processed { stdout, .. } = response else {
+        panic!("Expected Processed response");
+    };
+    assert!(stdout.contains("[processed]"));
 
-    // Note: processed content is now structured JSON
     let _ = agent.stop();
-
-    cleanup_test_dir(&format!("{TEST_DIR}_file_submit"));
+    cleanup_test_dir(&test_dir);
 }
 
 /// Test multiple tasks dispatched to a single agent.
-#[test]
-fn single_agent_multiple_tasks() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_single_multi"));
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn single_agent_multiple_tasks(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_single_multi_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_single_multi"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
-
-    // Submit multiple tasks
+    // Submit 3 tasks sequentially
     for i in 0..3 {
-        submit_task(
-            &pending_dir,
-            &format!("task-{i}"),
-            &format!(r#"{{"n": {i}}}"#),
-        );
-        thread::sleep(Duration::from_millis(20));
+        let response = submit_with_mode(
+            &root,
+            &format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#),
+            mode,
+        )
+        .expect("Submit failed");
+
+        let Response::Processed { stdout, .. } = response else {
+            panic!("Expected Processed response for task {i}");
+        };
+        assert!(stdout.contains("[processed]"));
     }
 
-    // Wait for all responses
-    for i in 0..3 {
-        let submission_dir = pending_dir.join(format!("task-{i}"));
-        let response = wait_for_response(&submission_dir, 2000);
-        assert!(response.is_some(), "Task {i} should complete");
-    }
+    let processed = agent.stop();
+    assert_eq!(processed.len(), 3, "Agent should process all 3 tasks");
 
-    // Note: processed content is now structured JSON
-    let _ = agent.stop();
-
-    cleanup_test_dir(&format!("{TEST_DIR}_single_multi"));
+    cleanup_test_dir(&test_dir);
 }
 
 /// Test multiple agents handling tasks in parallel.
-#[test]
-fn multiple_agents_parallel() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_multi_parallel"));
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn multiple_agents_parallel(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_multi_parallel_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_multi_parallel"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
 
-    // Start two agents with slight processing delay
     let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50));
     let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50));
-
-    // Wait for both agents to be ready (have processed initial heartbeats)
     wait_all_ready(&mut [&mut agent1, &mut agent2]);
 
-    let pending_dir = root.join(PENDING_DIR);
+    // Submit 4 tasks in parallel
+    let handles: Vec<_> = (0..4)
+        .map(|i| {
+            let root = root.clone();
+            let task =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
+            thread::spawn(move || submit_with_mode(&root, &task, mode).expect("Submit failed"))
+        })
+        .collect();
 
-    // Submit 4 tasks
-    for i in 0..4 {
-        submit_task(
-            &pending_dir,
-            &format!("task-{i}"),
-            &format!(r#"{{"n": {i}}}"#),
-        );
-        thread::sleep(Duration::from_millis(20));
-    }
-
-    // Wait for all responses
-    for i in 0..4 {
-        let submission_dir = pending_dir.join(format!("task-{i}"));
-        let response = wait_for_response(&submission_dir, 2000);
-        assert!(response.is_some(), "Task {i} should complete");
+    for handle in handles {
+        let response = handle.join().expect("Thread panicked");
+        let Response::Processed { stdout, .. } = response else {
+            panic!("Expected Processed response");
+        };
+        assert!(stdout.contains("[processed]"));
     }
 
     let processed1 = agent1.stop();
@@ -191,198 +145,197 @@ fn multiple_agents_parallel() {
 
     assert_eq!(total, 4, "Both agents combined should process all 4 tasks");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_multi_parallel"));
+    cleanup_test_dir(&test_dir);
 }
 
 /// Test agent deregistration.
-#[test]
-fn agent_deregistration() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_deregister"));
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn agent_deregistration(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_deregister_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_deregister"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
-    let submission_dir = submit_task(&pending_dir, "task-before", r#"{"test": "before"}"#);
-
-    let response = wait_for_response(&submission_dir, 2000);
-    assert!(response.is_some(), "First task should complete");
+    let response = submit_with_mode(
+        &root,
+        r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"before"}}}"#,
+        mode,
+    )
+    .expect("Submit failed");
+    assert!(matches!(response, Response::Processed { .. }));
 
     // Stop the agent
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);
 
-    // Remove agent directory
-    let agent_dir = root.join(AGENTS_DIR).join("agent-1");
-    let _ = fs::remove_dir_all(&agent_dir);
-
-    // Wait for FSWatcher to detect agent removal (this sleep is necessary)
+    // Wait for daemon to notice agent is gone
     thread::sleep(Duration::from_millis(100));
 
     // Start a new agent
     let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5));
-
-    // Wait for new agent to be ready
     agent2.wait_ready();
 
-    let submission_dir2 = submit_task(&pending_dir, "task-after", r#"{"test": "after"}"#);
-    let response = wait_for_response(&submission_dir2, 2000);
-    assert!(response.is_some(), "New agent should process the task");
+    let response2 = submit_with_mode(
+        &root,
+        r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"after"}}}"#,
+        mode,
+    )
+    .expect("Submit failed");
+    assert!(matches!(response2, Response::Processed { .. }));
 
     let processed2 = agent2.stop();
     assert_eq!(processed2.len(), 1);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_deregister"));
+    cleanup_test_dir(&test_dir);
 }
 
-/// Test tasks queued before any agents register.
-#[test]
-fn tasks_queued_before_agents() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_queue_before"));
+/// Test tasks submitted before any agents register (queued).
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn tasks_queued_before_agents(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_queue_before_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_queue_before"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let pending_dir = root.join(PENDING_DIR);
 
-    // Submit tasks BEFORE any agents register
-    for i in 0..3 {
-        submit_task(
-            &pending_dir,
-            &format!("queued-{i}"),
-            &format!(r#"{{"n": {i}}}"#),
-        );
-    }
+    // Submit tasks BEFORE any agents register (they'll block until an agent picks them up)
+    let handles: Vec<_> = (0..3)
+        .map(|i| {
+            let root = root.clone();
+            let task =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
+            thread::spawn(move || submit_with_mode(&root, &task, mode).expect("Submit failed"))
+        })
+        .collect();
 
-    // Tasks have settled in pending queue
-
-    // NOW register an agent
+    // Small delay, then register an agent
+    thread::sleep(Duration::from_millis(50));
     let mut agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    // Wait for all responses
-    for i in 0..3 {
-        let submission_dir = pending_dir.join(format!("queued-{i}"));
-        let response = wait_for_response(&submission_dir, 2000);
-        assert!(response.is_some(), "Task {i} should complete");
+    // Wait for all tasks to complete
+    for handle in handles {
+        let response = handle.join().expect("Thread panicked");
+        assert!(matches!(response, Response::Processed { .. }));
     }
 
     let processed = agent.stop();
     assert_eq!(
         processed.len(),
         3,
-        "Agent should have processed all 3 queued tasks"
+        "Agent should process all 3 queued tasks"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_queue_before"));
+    cleanup_test_dir(&test_dir);
 }
 
-/// Test rapid burst of task submissions (stress test for `FSWatcher` deduplication).
-#[test]
-fn rapid_task_burst() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_rapid_burst"));
+/// Test rapid burst of task submissions.
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn rapid_task_burst(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_rapid_burst_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_rapid_burst"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
+    // Submit 10 tasks as fast as possible in parallel
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            let root = root.clone();
+            let task =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
+            thread::spawn(move || submit_with_mode(&root, &task, mode).expect("Submit failed"))
+        })
+        .collect();
 
-    // Submit 10 tasks as fast as possible
-    for i in 0..10 {
-        submit_task(
-            &pending_dir,
-            &format!("burst-{i}"),
-            &format!(r#"{{"n": {i}}}"#),
-        );
-    }
-
-    // Wait for all responses
-    for i in 0..10 {
-        let submission_dir = pending_dir.join(format!("burst-{i}"));
-        let response = wait_for_response(&submission_dir, 3000);
-        assert!(response.is_some(), "Burst task {i} should complete");
+    for handle in handles {
+        let response = handle.join().expect("Thread panicked");
+        assert!(matches!(response, Response::Processed { .. }));
     }
 
     let processed = agent.stop();
-    assert_eq!(
-        processed.len(),
-        10,
-        "Agent should have processed all 10 tasks"
-    );
+    assert_eq!(processed.len(), 10, "Agent should process all 10 tasks");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_rapid_burst"));
+    cleanup_test_dir(&test_dir);
 }
 
 /// Test that tasks with identical content are handled correctly.
-#[test]
-fn identical_task_content() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_identical"));
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn identical_task_content(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_identical_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_identical"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
     let _pool = AgentPoolHandle::start(&root);
     let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
-
     // Submit 5 tasks with IDENTICAL content
-    let identical_content = r#"{"message": "same"}"#;
-    for i in 0..5 {
-        submit_task(&pending_dir, &format!("identical-{i}"), identical_content);
-        thread::sleep(Duration::from_millis(30));
-    }
-
-    // Wait for all responses
-    for i in 0..5 {
-        let submission_dir = pending_dir.join(format!("identical-{i}"));
-        let response = wait_for_response(&submission_dir, 2000);
-        assert!(response.is_some(), "Task {i} should complete");
+    let task = r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"same"}}}"#;
+    for _ in 0..5 {
+        let response = submit_with_mode(&root, task, mode).expect("Submit failed");
+        assert!(matches!(response, Response::Processed { .. }));
     }
 
     let processed = agent.stop();
     assert_eq!(
         processed.len(),
         5,
-        "Agent should have processed all 5 identical tasks"
+        "Agent should process all 5 identical tasks"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_identical"));
+    cleanup_test_dir(&test_dir);
 }
 
 /// Test agent joining while tasks are being processed.
-#[test]
-fn agent_joins_mid_processing() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_mid_join"));
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn agent_joins_mid_processing(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_mid_join_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_mid_join"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
@@ -390,33 +343,27 @@ fn agent_joins_mid_processing() {
 
     // Start one slow agent
     let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent1.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
-
-    // Submit 6 tasks
-    for i in 0..6 {
-        submit_task(
-            &pending_dir,
-            &format!("task-{i}"),
-            &format!(r#"{{"n": {i}}}"#),
-        );
-    }
+    // Submit 6 tasks in parallel
+    let handles: Vec<_> = (0..6)
+        .map(|i| {
+            let root = root.clone();
+            let task =
+                format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
+            thread::spawn(move || submit_with_mode(&root, &task, mode).expect("Submit failed"))
+        })
+        .collect();
 
     // Wait a bit, then add a second fast agent
     thread::sleep(Duration::from_millis(150));
     let mut agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5));
-
-    // Wait for second agent to be ready (has processed initial heartbeat)
     agent2.wait_ready();
 
-    // Wait for all responses
-    for i in 0..6 {
-        let submission_dir = pending_dir.join(format!("task-{i}"));
-        let response = wait_for_response(&submission_dir, 3000);
-        assert!(response.is_some(), "Task {i} should complete");
+    // Wait for all tasks to complete
+    for handle in handles {
+        let response = handle.join().expect("Thread panicked");
+        assert!(matches!(response, Response::Processed { .. }));
     }
 
     let processed1 = agent1.stop();
@@ -426,16 +373,21 @@ fn agent_joins_mid_processing() {
     assert_eq!(total, 6, "Both agents combined should process all 6 tasks");
     assert!(!processed2.is_empty(), "Second agent should have helped");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_mid_join"));
+    cleanup_test_dir(&test_dir);
 }
 
-/// Test that responses are written to the correct submission directories.
-#[test]
-fn response_isolation() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_isolation"));
+/// Test that responses are written to the correct submitters.
+#[rstest]
+#[case(SubmitMode::DataSocket)]
+#[case(SubmitMode::DataFile)]
+#[case(SubmitMode::FileSocket)]
+#[case(SubmitMode::FileFile)]
+fn response_isolation(#[case] mode: SubmitMode) {
+    let test_dir = format!("{TEST_DIR}_isolation_{mode:?}");
+    let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
-        cleanup_test_dir(&format!("{TEST_DIR}_isolation"));
+        cleanup_test_dir(&test_dir);
         return;
     }
 
@@ -444,28 +396,35 @@ fn response_isolation() {
     let mut agent = TestAgent::start(&root, "echo-agent", Duration::from_millis(5), |task, _| {
         format!("processed: {}", task.trim())
     });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let pending_dir = root.join(PENDING_DIR);
+    // Submit tasks with distinct IDs in parallel
+    let handles: Vec<_> = ["A", "B", "C"]
+        .iter()
+        .map(|id| {
+            let root = root.clone();
+            let task = format!(
+                r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"id":"{id}"}}}}}}"#
+            );
+            let expected_id = id.to_string();
+            thread::spawn(move || {
+                let response = submit_with_mode(&root, &task, mode).expect("Submit failed");
+                (expected_id, response)
+            })
+        })
+        .collect();
 
-    submit_task(&pending_dir, "task-a", r#"{"id": "A"}"#);
-    submit_task(&pending_dir, "task-b", r#"{"id": "B"}"#);
-    submit_task(&pending_dir, "task-c", r#"{"id": "C"}"#);
-
-    let response_a = wait_for_response(&pending_dir.join("task-a"), 2000);
-    let response_b = wait_for_response(&pending_dir.join("task-b"), 2000);
-    let response_c = wait_for_response(&pending_dir.join("task-c"), 2000);
-
-    let stdout_a = extract_stdout(&response_a.expect("response A")).expect("stdout A");
-    let stdout_b = extract_stdout(&response_b.expect("response B")).expect("stdout B");
-    let stdout_c = extract_stdout(&response_c.expect("response C")).expect("stdout C");
-
-    assert!(stdout_a.contains(r#""id":"A""#));
-    assert!(stdout_b.contains(r#""id":"B""#));
-    assert!(stdout_c.contains(r#""id":"C""#));
+    for handle in handles {
+        let (expected_id, response) = handle.join().expect("Thread panicked");
+        let Response::Processed { stdout, .. } = response else {
+            panic!("Expected Processed response");
+        };
+        assert!(
+            stdout.contains(&format!(r#""id":"{expected_id}""#)),
+            "Response should contain the correct ID. Expected {expected_id}, got: {stdout}"
+        );
+    }
 
     agent.stop();
-    cleanup_test_dir(&format!("{TEST_DIR}_isolation"));
+    cleanup_test_dir(&test_dir);
 }
