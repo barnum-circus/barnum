@@ -333,13 +333,9 @@ info!(elapsed = ?start.elapsed(), "test completed");
 
 **Goal:** Eliminate flaky tests and race conditions.
 
-### 4.1: Deterministic agent selection
+Note: Tests should pass regardless of which agent is assigned a task. We don't need deterministic agent selection.
 
-Currently agent selection uses a HashSet which iterates non-deterministically. Consider using:
-- BTreeMap for deterministic iteration (preferred over IndexMap)
-- Or explicit ordering in tests
-
-### 4.2: Wait for daemon ready
+### 5.1: Wait for daemon ready
 
 Ensure tests wait for daemon to be fully initialized before submitting tasks:
 
@@ -348,7 +344,7 @@ Ensure tests wait for daemon to be fully initialized before submitting tasks:
 // Better: also verify socket is listening
 ```
 
-### 4.3: Proper teardown
+### 5.2: Proper teardown
 
 Ensure all tests clean up properly:
 - Stop all agents

@@ -6,6 +6,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::needless_pass_by_value)]
 #![allow(clippy::missing_const_for_fn)]
+#![allow(clippy::print_stderr)]
 
 use agent_pool::PENDING_DIR;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
