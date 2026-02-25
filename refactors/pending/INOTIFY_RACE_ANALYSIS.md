@@ -481,6 +481,8 @@ fn register_submission(
 
 **File:** `crates/agent_pool/src/daemon/io.rs`
 
+**Note:** `Transport::Directory(path)` now stores a file path (the request file), not a directory. This is awkward naming. Ideally we'd store just the ID and derive paths, or rename to `Transport::File`. However, since `TransportMap` is shared with agents (which still use directories), changing this now adds complexity. Revisit when implementing the anonymous worker model (see `ANONYMOUS_WORKERS.md`).
+
 **Before:**
 ```rust
 Transport::Directory(path) => {
