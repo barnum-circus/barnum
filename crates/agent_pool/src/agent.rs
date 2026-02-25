@@ -60,18 +60,32 @@ pub fn create_watcher(
 
 /// Check if a task is ready to be processed (file-based only).
 ///
-/// Returns `true` when `task.json` exists and `response.json` does not.
+/// Returns `true` when `task.json` exists with non-empty content and
+/// `response.json` does not exist.
+///
+/// The non-empty check is critical for inotify on Linux: `fs::write` can
+/// trigger a CREATE event before the content is fully written, so we must
+/// verify the file has actual content before reading it.
+///
 /// For socket-based transports, always returns `false` (task readiness is
 /// determined by blocking on the socket).
 #[must_use]
 pub fn is_task_ready(transport: &Transport) -> bool {
+    use std::fs;
+
     let Some(dir) = transport.path() else {
         // Socket transport - task readiness is handled by blocking read
         return false;
     };
     let task_file = dir.join(TASK_FILE);
     let response_file = dir.join(RESPONSE_FILE);
-    task_file.exists() && !response_file.exists()
+
+    // Check task.json exists AND has content (inotify race condition fix)
+    let task_has_content = fs::metadata(&task_file)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false);
+
+    task_has_content && !response_file.exists()
 }
 
 /// Wait for a task to be ready (file-based transports).
