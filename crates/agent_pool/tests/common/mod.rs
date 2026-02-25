@@ -585,11 +585,35 @@ where
     // Run the action (e.g., spawn the daemon)
     let result = action();
 
-    // Block until watcher signals target was created
+    // Check if file already exists (might have been created before watcher was ready)
+    if target_file.exists() {
+        drop(watcher);
+        return result;
+    }
+
+    // Wait for watcher event, but also poll in case we missed it
     let timeout = Duration::from_secs(5);
-    ready_rx
-        .recv_timeout(timeout)
-        .expect("Status file was not created in time");
+    let poll_interval = Duration::from_millis(100);
+    let start = std::time::Instant::now();
+
+    loop {
+        match ready_rx.recv_timeout(poll_interval) {
+            Ok(()) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Check if file appeared (in case we missed the event)
+                if target_file.exists() {
+                    break;
+                }
+                assert!(
+                    start.elapsed() <= timeout,
+                    "Status file was not created in time"
+                );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("Watcher channel disconnected");
+            }
+        }
+    }
 
     drop(watcher);
     result

@@ -7,6 +7,9 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# Build if needed (silent unless error)
+cargo build -p agent_pool_cli --quiet
+
 NUM_AGENTS="${1:-5}"
 
 > /tmp/agent.log
