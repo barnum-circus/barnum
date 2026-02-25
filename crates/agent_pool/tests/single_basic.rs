@@ -7,8 +7,10 @@
 
 mod common;
 
-use agent_pool::{Payload, Response, submit_file};
-use common::{AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use agent_pool::Response;
+use common::{
+    AgentPoolHandle, TestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir, submit_via_cli,
+};
 use std::time::Duration;
 
 const TEST_DIR: &str = "single_basic";
@@ -29,11 +31,10 @@ fn single_agent_single_task() {
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
-    let response = agent_pool::submit(
+    let response = submit_via_cli(
         &root,
-        &Payload::inline(
-            r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello, World!"}}"#,
-        ),
+        r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello, World!"}}"#,
+        "socket",
     )
     .expect("Submit failed");
     let Response::Processed { stdout, .. } = response else {
@@ -73,11 +74,10 @@ fn file_based_submit() {
     agent.wait_ready();
 
     // Submit using file-based protocol
-    let response = submit_file(
+    let response = submit_via_cli(
         &root,
-        &Payload::inline(
-            r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello via file!"}}"#,
-        ),
+        r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello via file!"}}"#,
+        "file",
     )
     .expect("File submit failed");
     let Response::Processed { stdout, .. } = response else {
