@@ -107,6 +107,13 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
         }
     }
 
+    // Drain any pending events (status might have arrived during canary verification)
+    while let Ok(event) = rx.try_recv() {
+        if matches!(event, Event::Status) {
+            return Ok(());
+        }
+    }
+
     if status_file.exists() {
         return Ok(());
     }
