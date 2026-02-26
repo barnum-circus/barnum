@@ -65,13 +65,8 @@ impl Transport {
                 // Using /tmp explicitly (not temp_dir()) ensures we're on the same
                 // filesystem as /tmp/gsd/... where pools live, enabling atomic renames.
                 let target = path.join(filename);
-                let temp = PathBuf::from("/tmp").join(format!(
-                    "gsd-atomic-{}-{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_nanos())
-                ));
+                let temp = PathBuf::from("/tmp")
+                    .join(format!("gsd-transport-{}.tmp", uuid::Uuid::new_v4()));
                 fs::write(&temp, content)?;
                 fs::rename(&temp, &target)
             }

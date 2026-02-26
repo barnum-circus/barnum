@@ -84,13 +84,8 @@ pub fn submit_file_with_timeout(
     // Write request file with serialized payload (atomic: write temp in /tmp, rename)
     let content = serde_json::to_string(payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let temp_path = PathBuf::from("/tmp").join(format!(
-        "gsd-atomic-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    // Use submission_id for uniqueness (already a UUID)
+    let temp_path = PathBuf::from("/tmp").join(format!("gsd-req-{submission_id}.tmp"));
     fs::write(&temp_path, &content)?;
     fs::rename(&temp_path, &request_path)?;
 

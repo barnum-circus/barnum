@@ -290,13 +290,8 @@ impl ExternalTaskMap {
                 );
                 // Write atomically: write to temp file in /tmp, then rename.
                 // Using /tmp explicitly ensures we're on the same filesystem.
-                let temp_path = PathBuf::from("/tmp").join(format!(
-                    "gsd-atomic-{}-{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_or(0, |d| d.as_nanos())
-                ));
+                let temp_path =
+                    PathBuf::from("/tmp").join(format!("gsd-resp-{}.tmp", uuid::Uuid::new_v4()));
                 fs::write(&temp_path, response)?;
                 fs::rename(&temp_path, &response_path)?;
             }
