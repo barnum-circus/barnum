@@ -73,7 +73,7 @@ RECONNECT_DELAY=2
 if [[ "$POOL" == */* ]]; then
     POOL_DIR="$POOL"
 else
-    POOL_DIR="${TMPDIR:-/tmp}/gsd/$POOL"
+    POOL_DIR="${TMPDIR:-/tmp}/agent_pool/$POOL"
 fi
 
 # Track the daemon PID we're connected to (to detect daemon restarts)

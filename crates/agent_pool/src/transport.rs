@@ -61,6 +61,8 @@ impl Transport {
     pub fn write(&self, filename: &str, content: &str) -> io::Result<()> {
         match self {
             Transport::Directory(path) => {
+                // Ensure directory exists (daemon creates agent directories on first write)
+                fs::create_dir_all(path)?;
                 // Write atomically: write to temp file in same directory, then rename.
                 // Temp file must be on the same filesystem as target for rename to work.
                 let target = path.join(filename);
