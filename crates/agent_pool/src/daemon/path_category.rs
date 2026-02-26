@@ -39,7 +39,7 @@ pub(super) enum PathCategory {
 /// - **Linux inotify**: Only `Close(Write)` is accepted. This guarantees the file
 ///   handle is closed and all data is flushed. `Create(File)` is NOT accepted
 ///   because it fires before content is written.
-/// - **macOS `FSEvents`**: `Create(File)` and `Modify(Data)` are accepted. FSEvents
+/// - **macOS `FSEvents`**: `Create(File)` and `Modify(Data)` are accepted. `FSEvents`
 ///   is a higher-level API that batches events, so by the time we receive them,
 ///   the file operation is complete.
 ///

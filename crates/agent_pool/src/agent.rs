@@ -15,7 +15,7 @@ use crate::{RESPONSE_FILE, TASK_FILE, Transport};
 ///
 /// Platform-specific:
 /// - Linux inotify: `Close(Write)` guarantees the file handle is closed
-/// - macOS FSEvents: `Create(File)` or `Modify(Data)` - by the time we receive
+/// - macOS `FSEvents`: `Create(File)` or `Modify(Data)` - by the time we receive
 ///   these, the operation is complete
 ///
 /// Also handles atomic rename writes (write temp file, then rename).
