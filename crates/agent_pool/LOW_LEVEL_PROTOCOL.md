@@ -91,11 +91,9 @@ Used internally between daemon and agents.
 
 ### Registration
 
-1. Agent creates directory: `agents/<agent-name>/` (or daemon creates it on first write)
+1. Agent creates directory: `agents/<agent-name>/`
 2. Daemon detects directory creation via filesystem watcher
 3. Daemon writes task (or heartbeat) to `agents/<agent-name>/task.json`
-
-Note: The daemon creates the agent directory if it doesn't exist when writing the first task. This allows agents to be registered without explicitly creating their directory.
 
 ### Task Format (daemon → agent)
 
