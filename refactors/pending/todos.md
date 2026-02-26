@@ -730,3 +730,13 @@ This is simpler and more robust than relying on filesystem state. A completed su
 - Should this set ever be pruned? (Probably not for typical daemon lifetimes)
 - Is there a memory concern for extremely long-running daemons with millions of submissions?
 - Should we also track "in-flight" submissions to distinguish "currently being processed" from "completed"?
+
+---
+
+## wait_for_pool_ready Spins for Directory
+
+**Status: LOW PRIORITY**
+
+In `crates/agent_pool/src/client/mod.rs`, `wait_for_pool_ready` spins with `thread::sleep(10ms)` waiting for the pool directory to exist. This is because the daemon subprocess needs time to create the directory after being spawned.
+
+Should use a watcher on the parent directory (`/tmp/gsd/`) instead of spinning. Low priority because the spin is short-lived (directory is created quickly) and only happens during pool startup.

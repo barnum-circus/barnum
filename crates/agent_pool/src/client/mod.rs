@@ -10,6 +10,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::constants::STATUS_FILE;
@@ -33,6 +34,7 @@ const CANARY_FILE: &str = "client_canary";
 /// # Errors
 ///
 /// Returns an error if the timeout is exceeded before the pool becomes ready.
+#[allow(clippy::too_many_lines)]
 pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
     enum Event {
         Canary,
@@ -40,13 +42,22 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
     }
 
     let root = root.as_ref();
+    let start = Instant::now();
 
-    if !root.exists() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("pool directory does not exist: {}", root.display()),
-        ));
+    // Wait for directory to exist (daemon subprocess needs time to create it)
+    // TODO: Use a watcher instead of spinning
+    while !root.exists() {
+        if start.elapsed() > timeout {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("pool directory does not exist: {}", root.display()),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
     }
+
+    // Canonicalize to match FSEvents paths (e.g., /var -> /private/var on macOS)
+    let root = fs::canonicalize(root)?;
 
     let status_file = root.join(STATUS_FILE);
     let canary_path = root.join(CANARY_FILE);
@@ -71,7 +82,7 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
     .map_err(io::Error::other)?;
 
     watcher
-        .watch(root, RecursiveMode::NonRecursive)
+        .watch(&root, RecursiveMode::NonRecursive)
         .map_err(io::Error::other)?;
 
     // Verify watcher is live via canary file
