@@ -149,6 +149,9 @@ enum Command {
         /// Agent name (must be unique within the pool)
         #[arg(long)]
         name: String,
+        /// Log level
+        #[arg(short, long, default_value = "off")]
+        log_level: LogLevel,
     },
     /// Submit response to current task and wait for next task
     #[command(name = "next_task")]
@@ -165,6 +168,9 @@ enum Command {
         /// Path to file containing response
         #[arg(long, conflicts_with = "data")]
         file: Option<PathBuf>,
+        /// Log level
+        #[arg(short, long, default_value = "off")]
+        log_level: LogLevel,
     },
 }
 
@@ -467,7 +473,13 @@ fn main() -> ExitCode {
 
             eprintln!("Deregistered agent '{name}'");
         }
-        Command::Register { pool, name } => {
+        Command::Register {
+            pool,
+            name,
+            log_level,
+        } => {
+            init_tracing(log_level);
+
             let root = resolve_pool(&pool);
 
             // Wait for daemon to be ready (status file signals readiness after sync)
@@ -514,7 +526,9 @@ fn main() -> ExitCode {
             name,
             data,
             file,
+            log_level,
         } => {
+            init_tracing(log_level);
             let root = resolve_pool(&pool);
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 

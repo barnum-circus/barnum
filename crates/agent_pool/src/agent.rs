@@ -4,6 +4,7 @@
 //! polling the filesystem with `thread::sleep`, agents use these functions to
 //! block on file events.
 
+use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::io;
 use std::sync::mpsc;
@@ -51,17 +52,23 @@ pub fn create_watcher(
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| match res {
             Ok(event) => {
-                // Only signal on Close(Write) - this means the write is complete.
-                // Other events (Create, Modify) may fire before content is written.
-                use notify::event::{AccessKind, AccessMode};
-                if matches!(
+                tracing::trace!(?event, "watcher event");
+                // Signal on events that indicate file content is available:
+                // - Close(Write) on Linux inotify
+                // - Create(File) or Modify(Data) on macOS FSEvents
+                let dominated_event = matches!(
                     event.kind,
                     notify::EventKind::Access(AccessKind::Close(AccessMode::Write))
-                ) {
+                        | notify::EventKind::Create(CreateKind::File)
+                        | notify::EventKind::Modify(ModifyKind::Data(_))
+                );
+                if dominated_event {
+                    tracing::debug!(?event.kind, "watcher sending FileChanged");
                     let _ = tx.send(AgentEvent::FileChanged);
                 }
             }
             Err(e) => {
+                tracing::warn!(?e, "watcher error");
                 let _ = tx.send(AgentEvent::WatchError(e));
             }
         },

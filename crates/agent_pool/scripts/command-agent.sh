@@ -76,7 +76,7 @@ while true; do
     # Inner loop: process tasks
     while true; do
         set +e
-        TASK_JSON=$("$AGENT_POOL" register --pool "$POOL" --name "$NAME" 2>&1)
+        TASK_JSON=$("$AGENT_POOL" register --pool "$POOL" --name "$NAME" --log-level trace)
         GET_TASK_EXIT=$?
         set -e
 

@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, RemoveKind};
+use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind};
 
 use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE};
 
@@ -35,12 +35,19 @@ pub(super) enum PathCategory {
 
 /// Check if event kind indicates a file write is complete.
 ///
-/// Only `Close(Write)` is supported. Atomic rename patterns are explicitly NOT
-/// supported - the protocol requires direct writes.
+/// Accepts events from both Linux inotify and macOS `FSEvents`:
+/// - `Close(Write)` - Linux inotify (file handle closed after write)
+/// - `Create(File)` - macOS `FSEvents` (file created)
+/// - `Modify(Data)` - macOS `FSEvents` (file content changed)
+///
+/// Atomic rename patterns are explicitly NOT supported - the protocol requires
+/// direct writes.
 const fn is_write_complete(kind: EventKind) -> bool {
     matches!(
         kind,
         EventKind::Access(AccessKind::Close(AccessMode::Write))
+            | EventKind::Create(CreateKind::File)
+            | EventKind::Modify(ModifyKind::Data(_))
     )
 }
 
@@ -138,7 +145,7 @@ fn categorize_under_pending(
 mod tests {
     use std::path::PathBuf;
 
-    use notify::event::{AccessKind, AccessMode, CreateKind, RemoveKind};
+    use notify::event::{AccessKind, AccessMode, CreateKind, DataChange, ModifyKind, RemoveKind};
 
     use super::*;
 
@@ -164,6 +171,10 @@ mod tests {
 
     fn folder_removed() -> EventKind {
         EventKind::Remove(RemoveKind::Folder)
+    }
+
+    fn data_modified() -> EventKind {
+        EventKind::Modify(ModifyKind::Data(DataChange::Content))
     }
 
     // =========================================================================
@@ -245,11 +256,35 @@ mod tests {
     }
 
     #[test]
-    fn agent_response_ignored_on_other_events() {
+    fn agent_response_on_file_created() {
+        // macOS FSEvents sends Create(File) instead of Close(Write)
         let path = PathBuf::from("/pool/agents/claude-1/response.json");
-        // File created event should not trigger AgentResponse
         assert_eq!(
             categorize(&path, file_created(), &agents(), &pending()),
+            Some(PathCategory::AgentResponse {
+                name: "claude-1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn agent_response_on_data_modified() {
+        // macOS FSEvents sends Modify(Data) for content changes
+        let path = PathBuf::from("/pool/agents/claude-1/response.json");
+        assert_eq!(
+            categorize(&path, data_modified(), &agents(), &pending()),
+            Some(PathCategory::AgentResponse {
+                name: "claude-1".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn agent_response_ignored_on_folder_events() {
+        let path = PathBuf::from("/pool/agents/claude-1/response.json");
+        // Folder events should not trigger AgentResponse
+        assert_eq!(
+            categorize(&path, folder_created(), &agents(), &pending()),
             None
         );
     }
@@ -297,11 +332,35 @@ mod tests {
     }
 
     #[test]
-    fn submission_request_ignored_on_other_events() {
+    fn submission_request_on_file_created() {
+        // macOS FSEvents sends Create(File) instead of Close(Write)
         let path = PathBuf::from("/pool/pending/abc123.request.json");
-        // File created event should not trigger SubmissionRequest
         assert_eq!(
             categorize(&path, file_created(), &agents(), &pending()),
+            Some(PathCategory::SubmissionRequest {
+                id: "abc123".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn submission_request_on_data_modified() {
+        // macOS FSEvents sends Modify(Data) for content changes
+        let path = PathBuf::from("/pool/pending/abc123.request.json");
+        assert_eq!(
+            categorize(&path, data_modified(), &agents(), &pending()),
+            Some(PathCategory::SubmissionRequest {
+                id: "abc123".to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn submission_request_ignored_on_folder_events() {
+        let path = PathBuf::from("/pool/pending/abc123.request.json");
+        // Folder events should not trigger SubmissionRequest
+        assert_eq!(
+            categorize(&path, folder_created(), &agents(), &pending()),
             None
         );
     }

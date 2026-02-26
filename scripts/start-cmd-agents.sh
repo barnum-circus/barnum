@@ -14,6 +14,9 @@ echo "done"
 
 NUM_AGENTS="${1:-5}"
 
+# Kill any existing agents for cmd pool
+pkill -f "command-agent.sh --pool cmd" 2>/dev/null || true
+
 > /tmp/agent.log
 
 cleanup() {
