@@ -479,13 +479,8 @@ fn main() -> ExitCode {
 
             let agent_dir = root.join(AGENTS_DIR).join(&name);
 
-            if let Err(e) = fs::create_dir_all(&agent_dir) {
-                eprintln!("Failed to create agent directory: {e}");
-                return ExitCode::FAILURE;
-            }
-
-            // Set up transport and notify watcher
-            let transport = Transport::Directory(agent_dir);
+            // Set up watcher FIRST - before creating anything
+            let transport = Transport::Directory(agent_dir.clone());
             let (watcher, events_rx) = match create_watcher(&transport) {
                 Ok(Some(w)) => w,
                 Ok(None) => {
@@ -498,6 +493,27 @@ fn main() -> ExitCode {
                 }
             };
             let _watcher = watcher; // Keep watcher alive
+
+            // Now create directory and canary - watcher will see these
+            if let Err(e) = fs::create_dir_all(&agent_dir) {
+                eprintln!("Failed to create agent directory: {e}");
+                return ExitCode::FAILURE;
+            }
+
+            let canary_path = agent_dir.join("canary");
+            if let Err(e) = fs::write(&canary_path, "sync") {
+                eprintln!("Failed to write canary: {e}");
+                return ExitCode::FAILURE;
+            }
+
+            // Wait for canary event to confirm watcher is synced
+            if let Err(e) = sync_watcher_with_canary(&canary_path, &events_rx) {
+                eprintln!("Watcher sync failed: {e}");
+                return ExitCode::FAILURE;
+            }
+
+            // Clean up canary
+            let _ = fs::remove_file(&canary_path);
 
             match wait_and_read_task(&transport, &events_rx, &name) {
                 Ok(output) => println!("{output}"),
@@ -595,4 +611,44 @@ fn wait_for_status_file(status_file: &std::path::Path) -> bool {
         thread::sleep(POLL_INTERVAL);
     }
     false
+}
+
+/// Sync watcher by waiting for canary event, rewriting on timeout.
+///
+/// This ensures the watcher is fully synced before we start waiting for real events.
+/// If we miss the initial canary write, we rewrite it to trigger a new event.
+fn sync_watcher_with_canary(
+    canary_path: &std::path::Path,
+    events_rx: &mpsc::Receiver<AgentEvent>,
+) -> Result<(), String> {
+    const TIMEOUT: Duration = Duration::from_secs(5);
+    const RETRY_INTERVAL: Duration = Duration::from_millis(100);
+
+    let start = std::time::Instant::now();
+    let mut retry_count = 0;
+
+    loop {
+        match events_rx.recv_timeout(RETRY_INTERVAL) {
+            Ok(AgentEvent::FileChanged) => {
+                // Got an event - canary was seen, watcher is synced
+                return Ok(());
+            }
+            Ok(AgentEvent::WatchError(e)) => {
+                return Err(format!("watcher error: {e}"));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if start.elapsed() > TIMEOUT {
+                    return Err("watcher sync timed out".to_string());
+                }
+                // Rewrite canary to trigger new event (in case we missed it)
+                retry_count += 1;
+                if let Err(e) = fs::write(canary_path, format!("sync-retry-{retry_count}")) {
+                    return Err(format!("failed to rewrite canary: {e}"));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err("watcher channel disconnected".to_string());
+            }
+        }
+    }
 }

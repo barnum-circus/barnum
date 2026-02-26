@@ -9,9 +9,7 @@
 
 use std::path::Path;
 
-use notify::event::{
-    AccessKind, AccessMode, CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode,
-};
+use notify::event::{AccessKind, AccessMode, CreateKind, EventKind, RemoveKind};
 
 use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE};
 
@@ -35,19 +33,14 @@ pub(super) enum PathCategory {
     },
 }
 
-/// Check if event kind indicates a file write is complete (or file was moved into place).
+/// Check if event kind indicates a file write is complete.
 ///
-/// Handles two cases:
-/// 1. `Close(Write)` - direct write completed (inotify `IN_CLOSE_WRITE`)
-/// 2. `Name(To)` - atomic rename completed (inotify `IN_MOVED_TO`)
-///
-/// The atomic rename pattern (`write to tmp, mv to target`) is common for safe writes,
-/// and is used by gsd-agent.sh and similar scripts.
+/// Only `Close(Write)` is supported. Atomic rename patterns are explicitly NOT
+/// supported - the protocol requires direct writes.
 const fn is_write_complete(kind: EventKind) -> bool {
     matches!(
         kind,
         EventKind::Access(AccessKind::Close(AccessMode::Write))
-            | EventKind::Modify(ModifyKind::Name(RenameMode::To))
     )
 }
 
@@ -173,10 +166,6 @@ mod tests {
         EventKind::Remove(RemoveKind::Folder)
     }
 
-    fn rename_to() -> EventKind {
-        EventKind::Modify(ModifyKind::Name(RenameMode::To))
-    }
-
     // =========================================================================
     // Agent directory
     // =========================================================================
@@ -256,19 +245,6 @@ mod tests {
     }
 
     #[test]
-    fn agent_response_on_atomic_rename() {
-        // Atomic write pattern: write to tmp file, then mv to response.json
-        // This generates a Modify(Name(To)) event on Linux inotify
-        let path = PathBuf::from("/pool/agents/claude-1/response.json");
-        assert_eq!(
-            categorize(&path, rename_to(), &agents(), &pending()),
-            Some(PathCategory::AgentResponse {
-                name: "claude-1".to_string()
-            })
-        );
-    }
-
-    #[test]
     fn agent_response_ignored_on_other_events() {
         let path = PathBuf::from("/pool/agents/claude-1/response.json");
         // File created event should not trigger AgentResponse
@@ -314,18 +290,6 @@ mod tests {
         let path = PathBuf::from("/pool/pending/abc123.request.json");
         assert_eq!(
             categorize(&path, write_complete(), &agents(), &pending()),
-            Some(PathCategory::SubmissionRequest {
-                id: "abc123".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn submission_request_on_atomic_rename() {
-        // Atomic write pattern also works for submission requests
-        let path = PathBuf::from("/pool/pending/abc123.request.json");
-        assert_eq!(
-            categorize(&path, rename_to(), &agents(), &pending()),
             Some(PathCategory::SubmissionRequest {
                 id: "abc123".to_string()
             })

@@ -552,22 +552,29 @@ impl From<agent_pool::DaemonConfig> for DaemonConfig {
     }
 }
 
-/// Wait for a file to be created using notify (no polling).
+/// Wait for a file to be created using notify.
 ///
 /// Sets up a watcher, runs the provided action, then blocks until the
-/// target file exists. Uses a channel for synchronization.
+/// target file is seen via a watcher event. Uses a channel for synchronization.
+///
+/// If the file already exists before the action runs, returns immediately.
+/// If we miss the initial creation event, retries by touching a canary file
+/// in the same directory to verify the watcher is working.
 fn wait_for_file_creation<F, T>(watch_root: &Path, target_file: &Path, action: F) -> T
 where
     F: FnOnce() -> T,
 {
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+    let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
     let watch_target = target_file.to_path_buf();
+    let canary_path = target_file.with_extension("canary");
 
+    let canary_for_watcher = canary_path.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
             if let Ok(event) = res {
                 for path in &event.paths {
-                    if path == &watch_target {
+                    // Accept either the target file or the canary
+                    if path == &watch_target || path == &canary_for_watcher {
                         let _ = ready_tx.send(());
                         return;
                     }
@@ -587,26 +594,33 @@ where
 
     // Check if file already exists (might have been created before watcher was ready)
     if target_file.exists() {
+        let _ = fs::remove_file(&canary_path);
         drop(watcher);
         return result;
     }
 
-    // Wait for watcher event, but also poll in case we missed it
+    // Wait for watcher event with canary retry on timeout
     let timeout = Duration::from_secs(5);
-    let poll_interval = Duration::from_millis(100);
+    let retry_interval = Duration::from_millis(100);
     let start = std::time::Instant::now();
+    let mut retry_count = 0;
 
     loop {
-        match ready_rx.recv_timeout(poll_interval) {
-            Ok(()) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Check if file appeared (in case we missed the event)
+        match ready_rx.recv_timeout(retry_interval) {
+            Ok(()) => {
+                // Got an event - check if it's the target file
                 if target_file.exists() {
                     break;
                 }
+                // It was a canary event but target still doesn't exist - keep waiting
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Timeout - write canary to verify watcher is working
+                retry_count += 1;
+                let _ = fs::write(&canary_path, format!("retry-{retry_count}"));
                 assert!(
                     start.elapsed() <= timeout,
-                    "Status file was not created in time"
+                    "Status file was not created in time (watcher appears to be working via canary)"
                 );
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -615,6 +629,7 @@ where
         }
     }
 
+    let _ = fs::remove_file(&canary_path);
     drop(watcher);
     result
 }
