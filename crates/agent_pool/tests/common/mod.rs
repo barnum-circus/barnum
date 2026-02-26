@@ -23,8 +23,21 @@ use uuid::Uuid;
 /// Generate a unique pool name for a test.
 /// Format: `<test_name>_<uuid>` - ensures no conflicts between test runs.
 pub fn generate_pool(test_name: &str) -> String {
-    let uuid = &Uuid::new_v4().to_string()[..8];
+    let uuid = &Uuid::new_v4().to_string()[..4];
     format!("{test_name}_{uuid}")
+}
+
+/// Short abbreviation for `DataSource` + `NotifyMethod` to keep pool names short.
+/// Unix socket paths have a 104-byte limit on macOS.
+pub fn mode_abbrev(data_source: DataSource, notify_method: NotifyMethod) -> &'static str {
+    match (data_source, notify_method) {
+        (DataSource::Inline, NotifyMethod::Socket) => "IS",
+        (DataSource::Inline, NotifyMethod::File) => "IF",
+        (DataSource::Inline, NotifyMethod::Raw) => "IR",
+        (DataSource::FileReference, NotifyMethod::Socket) => "FS",
+        (DataSource::FileReference, NotifyMethod::File) => "FF",
+        (DataSource::FileReference, NotifyMethod::Raw) => "FR",
+    }
 }
 
 /// Get the path for a pool name.

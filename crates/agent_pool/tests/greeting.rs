@@ -10,7 +10,7 @@ mod common;
 use agent_pool::Response;
 use common::{
     AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
-    is_ipc_available, pool_path, submit_with_mode,
+    is_ipc_available, mode_abbrev, pool_path, submit_with_mode,
 };
 use rstest::rstest;
 use std::time::Duration;
@@ -29,7 +29,10 @@ fn greeting_casual_and_formal(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let pool = generate_pool(&format!("{TEST_NAME}_{data_source:?}_{notify_method:?}"));
+    let pool = generate_pool(&format!(
+        "{TEST_NAME}_{}",
+        mode_abbrev(data_source, notify_method)
+    ));
 
     if !is_ipc_available(&pool_path(&pool)) {
         eprintln!("SKIP: IPC not available");

@@ -10,7 +10,7 @@ mod common;
 use agent_pool::Response;
 use common::{
     AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
-    is_ipc_available, pool_path, submit_with_mode,
+    is_ipc_available, mode_abbrev, pool_path, submit_with_mode,
 };
 use rstest::rstest;
 use std::thread;
@@ -33,7 +33,10 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let pool = generate_pool(&format!("basic_submit_{data_source:?}_{notify_method:?}"));
+    let pool = generate_pool(&format!(
+        "basic_{}",
+        mode_abbrev(data_source, notify_method)
+    ));
 
     if !is_ipc_available(&pool_path(&pool)) {
         cleanup_pool(&pool);
@@ -75,7 +78,8 @@ fn single_agent_multiple_tasks(
     #[case] notify_method: NotifyMethod,
 ) {
     let pool = generate_pool(&format!(
-        "single_agent_multiple_tasks_{data_source:?}_{notify_method:?}"
+        "single_multi_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -120,7 +124,8 @@ fn single_agent_multiple_tasks(
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
-        "multiple_agents_parallel_{data_source:?}_{notify_method:?}"
+        "multi_para_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -174,7 +179,8 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
-        "agent_deregistration_{data_source:?}_{notify_method:?}"
+        "dereg_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -237,7 +243,8 @@ fn tasks_queued_before_agents(
     #[case] notify_method: NotifyMethod,
 ) {
     let pool = generate_pool(&format!(
-        "tasks_queued_before_agents_{data_source:?}_{notify_method:?}"
+        "queued_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -291,7 +298,8 @@ fn tasks_queued_before_agents(
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
-        "rapid_task_burst_{data_source:?}_{notify_method:?}"
+        "burst_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -337,7 +345,8 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
-        "identical_task_content_{data_source:?}_{notify_method:?}"
+        "ident_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -381,7 +390,8 @@ fn agent_joins_mid_processing(
     #[case] notify_method: NotifyMethod,
 ) {
     let pool = generate_pool(&format!(
-        "agent_joins_mid_processing_{data_source:?}_{notify_method:?}"
+        "join_mid_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
@@ -439,7 +449,8 @@ fn agent_joins_mid_processing(
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
-        "response_isolation_{data_source:?}_{notify_method:?}"
+        "resp_iso_{}",
+        mode_abbrev(data_source, notify_method)
     ));
 
     if !is_ipc_available(&pool_path(&pool)) {
