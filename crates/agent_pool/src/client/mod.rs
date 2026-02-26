@@ -35,6 +35,15 @@ const CANARY_FILE: &str = "client_canary";
 /// Returns an error if the timeout is exceeded before the pool becomes ready.
 pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
     let root = root.as_ref();
+
+    // Bail if directory doesn't exist - don't create it
+    if !root.exists() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("pool directory does not exist: {}", root.display()),
+        ));
+    }
+
     let status_file = root.join(STATUS_FILE);
 
     // Fast path: already ready
