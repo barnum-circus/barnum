@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         with:
           components: rustfmt
       - name: Check formatting
@@ -28,7 +28,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -41,7 +41,7 @@ jobs:
     needs: [build-linux-x64]
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
       - uses: Swatinem/rust-cache@v2
       - name: Download agent_pool binary
         uses: actions/download-artifact@v4
@@ -99,7 +99,7 @@ jobs:
             target/x86_64-apple-darwin/release/agent_pool
             target/x86_64-apple-darwin/release/gsd
           key: macos-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-apple-darwin
@@ -130,7 +130,7 @@ jobs:
             target/aarch64-apple-darwin/release/agent_pool
             target/aarch64-apple-darwin/release/gsd
           key: macos-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: aarch64-apple-darwin
@@ -161,7 +161,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/agent_pool
             target/x86_64-unknown-linux-musl/release/gsd
           key: linux-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-unknown-linux-musl
@@ -195,7 +195,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/agent_pool
             target/aarch64-unknown-linux-musl/release/gsd
           key: linux-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: aarch64-unknown-linux-musl
@@ -229,7 +229,7 @@ jobs:
             target/x86_64-pc-windows-msvc/release/agent_pool.exe
             target/x86_64-pc-windows-msvc/release/gsd.exe
           key: windows-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.83.0
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
           targets: x86_64-pc-windows-msvc
