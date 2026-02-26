@@ -970,13 +970,14 @@ fn sync_and_setup(
                             && path.file_name().is_some_and(|n| n == "canary");
 
                         if !allowed.contains(path) && !is_agent_canary {
-                            // Check if this is a stale event from a previous run
-                            // by comparing the file's mtime to our start time
+                            // Check if this is a stale event from a previous run.
+                            // An event is stale if:
+                            // 1. The file doesn't exist (already cleaned up)
+                            // 2. The file's mtime is before our start time
                             let is_stale = path
                                 .metadata()
                                 .and_then(|m| m.modified())
-                                .map(|mtime| mtime < start_time)
-                                .unwrap_or(false);
+                                .map_or(true, |mtime| mtime < start_time);
 
                             if is_stale {
                                 warn!(
