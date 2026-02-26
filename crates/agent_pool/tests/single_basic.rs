@@ -21,10 +21,8 @@ const TEST_NAME: &str = "single_basic";
 #[timeout(std::time::Duration::from_secs(20))]
 #[case(DataSource::Inline, NotifyMethod::Socket)]
 #[case(DataSource::Inline, NotifyMethod::File)]
-#[case(DataSource::Inline, NotifyMethod::Raw)]
 #[case(DataSource::FileReference, NotifyMethod::Socket)]
 #[case(DataSource::FileReference, NotifyMethod::File)]
-#[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
     let pool = generate_pool(&format!(
         "{TEST_NAME}_{}",

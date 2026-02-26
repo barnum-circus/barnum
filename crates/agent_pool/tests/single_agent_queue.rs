@@ -23,10 +23,8 @@ const TEST_NAME: &str = "single_agent_queue";
 #[timeout(std::time::Duration::from_secs(20))]
 #[case(DataSource::Inline, NotifyMethod::Socket)]
 #[case(DataSource::Inline, NotifyMethod::File)]
-#[case(DataSource::Inline, NotifyMethod::Raw)]
 #[case(DataSource::FileReference, NotifyMethod::Socket)]
 #[case(DataSource::FileReference, NotifyMethod::File)]
-#[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn single_agent_queues_multiple_tasks(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,

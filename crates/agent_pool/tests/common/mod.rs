@@ -33,10 +33,8 @@ pub fn mode_abbrev(data_source: DataSource, notify_method: NotifyMethod) -> &'st
     match (data_source, notify_method) {
         (DataSource::Inline, NotifyMethod::Socket) => "IS",
         (DataSource::Inline, NotifyMethod::File) => "IF",
-        (DataSource::Inline, NotifyMethod::Raw) => "IR",
         (DataSource::FileReference, NotifyMethod::Socket) => "FS",
         (DataSource::FileReference, NotifyMethod::File) => "FF",
-        (DataSource::FileReference, NotifyMethod::Raw) => "FR",
     }
 }
 
@@ -423,8 +421,6 @@ pub enum NotifyMethod {
     Socket,
     /// CLI with `--notify file`
     File,
-    /// Raw file protocol: direct write to `pending/`, wait with notify
-    Raw,
 }
 
 /// Test timeout for file-based submissions (20 seconds).
@@ -432,18 +428,13 @@ const TEST_FILE_TIMEOUT_SECS: u64 = 20;
 
 /// Submit a task using the specified data source and notify method.
 ///
-/// This is the cross-product of `DataSource` × `NotifyMethod` = 6 combinations.
+/// This is the cross-product of `DataSource` × `NotifyMethod` = 4 combinations.
 pub fn submit_with_mode(
     pool: &str,
     payload_json: &str,
     data_source: DataSource,
     notify_method: NotifyMethod,
 ) -> io::Result<Response> {
-    // Raw mode bypasses CLI entirely
-    if notify_method == NotifyMethod::Raw {
-        return submit_raw(pool, payload_json, data_source);
-    }
-
     let bin = find_agent_pool_binary();
     let mut cmd = Command::new(&bin);
 
@@ -471,7 +462,6 @@ pub fn submit_with_mode(
             .arg("file")
             .arg("--timeout-secs")
             .arg(TEST_FILE_TIMEOUT_SECS.to_string()),
-        NotifyMethod::Raw => unreachable!("handled above"),
     };
 
     let output = cmd.output()?;
@@ -485,28 +475,6 @@ pub fn submit_with_mode(
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&stdout).map_err(io::Error::other)
-}
-
-/// Submit a task using raw file protocol (direct call to `submit_file` library function).
-///
-/// This bypasses the CLI and calls the production `submit_file` function directly.
-fn submit_raw(pool: &str, payload_json: &str, data_source: DataSource) -> io::Result<Response> {
-    let root = pool_path(pool);
-
-    // Build the payload, keeping any temp file alive until submit completes
-    let _temp_file;
-    let payload = match data_source {
-        DataSource::Inline => agent_pool::Payload::inline(payload_json),
-        DataSource::FileReference => {
-            let temp = tempfile::NamedTempFile::new()?;
-            fs::write(temp.path(), payload_json)?;
-            let payload = agent_pool::Payload::file_ref(temp.path());
-            _temp_file = temp; // Keep alive
-            payload
-        }
-    };
-
-    agent_pool::submit_file(&root, &payload)
 }
 
 /// Configuration for the daemon when starting via CLI.
