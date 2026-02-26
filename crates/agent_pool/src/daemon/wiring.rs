@@ -913,6 +913,8 @@ fn sync_and_setup(
     allowed.insert(agents_canary.clone());
     // Client's canary file for wait_for_pool_ready watcher verification
     allowed.insert(root.join("client_canary"));
+    // Status file (may see stale FSEvents from previous run)
+    allowed.insert(root.join(STATUS_FILE));
 
     // Paths we MUST see events for (verifies watcher is working for key directories)
     // Only canary files - seeing these proves the watcher sees events IN those directories
