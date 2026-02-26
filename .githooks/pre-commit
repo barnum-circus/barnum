@@ -16,8 +16,8 @@ trap "rm -rf $TEMP_DIR" EXIT
 echo "Building CLI binary..."
 cargo build -p agent_pool_cli > "$TEMP_DIR/build.log" 2>&1 || { echo "cargo build failed:"; cat "$TEMP_DIR/build.log"; exit 1; }
 
-# Run check, clippy, and udeps in parallel (tests disabled until stable)
-echo "Running cargo check, clippy, and udeps in parallel..."
+# Run check, clippy, test, and udeps in parallel
+echo "Running cargo check, clippy, test, and udeps in parallel..."
 
 # Start background jobs
 cargo check --workspace --all-targets > "$TEMP_DIR/check.log" 2>&1 &
@@ -26,9 +26,8 @@ CHECK_PID=$!
 cargo clippy --workspace --all-targets -- -D warnings > "$TEMP_DIR/clippy.log" 2>&1 &
 CLIPPY_PID=$!
 
-# Tests disabled until they consistently pass
-# SKIP_IPC_TESTS=1 cargo test --workspace > "$TEMP_DIR/test.log" 2>&1 &
-# TEST_PID=$!
+SKIP_IPC_TESTS=1 cargo test --workspace -- --test-threads=1 > "$TEMP_DIR/test.log" 2>&1 &
+TEST_PID=$!
 
 # udeps is optional
 if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
@@ -43,7 +42,7 @@ FAILED=""
 
 wait $CHECK_PID || { echo "cargo check failed:"; cat "$TEMP_DIR/check.log"; FAILED="$FAILED check"; }
 wait $CLIPPY_PID || { echo "cargo clippy failed:"; cat "$TEMP_DIR/clippy.log"; FAILED="$FAILED clippy"; }
-# wait $TEST_PID || { echo "cargo test failed:"; cat "$TEMP_DIR/test.log"; FAILED="$FAILED test"; }
+wait $TEST_PID || { echo "cargo test failed:"; cat "$TEMP_DIR/test.log"; FAILED="$FAILED test"; }
 if [ -n "$UDEPS_PID" ]; then
     wait $UDEPS_PID || { echo "cargo udeps failed:"; cat "$TEMP_DIR/udeps.log"; FAILED="$FAILED udeps"; }
 fi
