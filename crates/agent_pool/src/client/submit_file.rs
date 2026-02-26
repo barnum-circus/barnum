@@ -55,6 +55,14 @@ pub fn submit_file(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Resp
 }
 
 /// Submit a task with a custom timeout.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The pool is not ready within the default ready timeout
+/// - The request file cannot be written
+/// - The response times out (using the provided timeout)
+/// - The response contains invalid JSON
 pub fn submit_file_with_timeout(
     root: impl AsRef<Path>,
     payload: &Payload,

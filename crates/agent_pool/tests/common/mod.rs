@@ -215,9 +215,10 @@ impl TestAgent {
                     break;
                 }
 
-                // Parse task JSON from stdout
+                // Parse task JSON from stdout (concatenate multi-line to single line for logging)
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                eprintln!("[{test_name_owned}] [agent {agent_id_owned} stdout] {stdout}");
+                let stdout_oneline = stdout.replace('\n', "\\n").replace('\r', "");
+                eprintln!("[{test_name_owned}] [agent {agent_id_owned} stdout] {stdout_oneline}");
 
                 let task_json: serde_json::Value = match serde_json::from_str(&stdout) {
                     Ok(v) => v,
@@ -442,6 +443,9 @@ pub enum NotifyMethod {
     Raw,
 }
 
+/// Test timeout for file-based submissions (20 seconds).
+const TEST_FILE_TIMEOUT_SECS: u64 = 20;
+
 /// Submit a task using the specified data source and notify method.
 ///
 /// This is the cross-product of `DataSource` × `NotifyMethod` = 6 combinations.
@@ -478,7 +482,11 @@ pub fn submit_with_mode(
     // Set up notify method
     match notify_method {
         NotifyMethod::Socket => cmd.arg("--notify").arg("socket"),
-        NotifyMethod::File => cmd.arg("--notify").arg("file"),
+        NotifyMethod::File => cmd
+            .arg("--notify")
+            .arg("file")
+            .arg("--timeout-secs")
+            .arg(TEST_FILE_TIMEOUT_SECS.to_string()),
         NotifyMethod::Raw => unreachable!("handled above"),
     };
 
@@ -559,6 +567,8 @@ pub struct AgentPoolHandle {
     process: Option<Child>,
     /// Handles for threads forwarding stdout/stderr (so they get captured by tests)
     _output_threads: Vec<thread::JoinHandle<()>>,
+    /// Test name for logging purposes
+    test_name: String,
 }
 
 impl AgentPoolHandle {
@@ -630,13 +640,15 @@ impl AgentPoolHandle {
             root: root.to_path_buf(),
             process: Some(process),
             _output_threads: output_threads,
+            test_name: test_name.to_string(),
         }
     }
 }
 
 impl Drop for AgentPoolHandle {
     fn drop(&mut self) {
-        eprintln!("[pool drop] Starting graceful shutdown...");
+        let test_name = &self.test_name;
+        eprintln!("[{test_name}] [pool drop] Starting graceful shutdown...");
         // Try graceful shutdown via CLI
         let bin = find_agent_pool_binary();
         let _ = Command::new(&bin)
@@ -645,12 +657,14 @@ impl Drop for AgentPoolHandle {
             .arg(&self.root)
             .output();
 
-        eprintln!("[pool drop] Graceful shutdown complete, killing process if needed...");
+        eprintln!(
+            "[{test_name}] [pool drop] Graceful shutdown complete, killing process if needed..."
+        );
         // Kill the process if still running
         if let Some(mut process) = self.process.take() {
             let _ = process.kill();
             let _ = process.wait();
         }
-        eprintln!("[pool drop] Pool drop complete");
+        eprintln!("[{test_name}] [pool drop] Pool drop complete");
     }
 }

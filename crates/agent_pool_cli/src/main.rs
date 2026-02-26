@@ -7,8 +7,8 @@
 use agent_pool::{
     AGENTS_DIR, AgentEvent, DaemonConfig, Payload, RESPONSE_FILE, STATUS_FILE, TASK_FILE,
     Transport, cleanup_stopped, create_watcher, generate_id, id_to_path, is_daemon_running,
-    list_pools, resolve_pool, run_with_config, stop, submit, submit_file, verify_watcher_sync,
-    wait_for_task,
+    list_pools, resolve_pool, run_with_config, stop, submit, submit_file, submit_file_with_timeout,
+    verify_watcher_sync, wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -112,6 +112,9 @@ enum Command {
         /// Notification mechanism: socket (default, faster) or file (works in sandboxes)
         #[arg(long, default_value = "socket")]
         notify: NotifyMethod,
+        /// Timeout in seconds (default: 300 for file notify, varies for socket)
+        #[arg(long)]
+        timeout_secs: Option<u64>,
     },
     /// List all pools
     List,
@@ -338,6 +341,7 @@ fn main() -> ExitCode {
             data,
             file,
             notify,
+            timeout_secs,
         } => {
             let root = resolve_pool(&pool);
 
@@ -352,9 +356,12 @@ fn main() -> ExitCode {
             };
 
             // Send via chosen notification method
-            let result = match notify {
-                NotifyMethod::Socket => submit(&root, &payload),
-                NotifyMethod::File => submit_file(&root, &payload),
+            let result = match (notify, timeout_secs) {
+                (NotifyMethod::Socket, _) => submit(&root, &payload),
+                (NotifyMethod::File, Some(secs)) => {
+                    submit_file_with_timeout(&root, &payload, Duration::from_secs(secs))
+                }
+                (NotifyMethod::File, None) => submit_file(&root, &payload),
             };
 
             match result {

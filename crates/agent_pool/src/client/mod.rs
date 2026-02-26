@@ -17,7 +17,7 @@ use crate::constants::STATUS_FILE;
 pub use payload::Payload;
 pub use stop::stop;
 pub use submit::submit;
-pub use submit_file::{cleanup_submission, submit_file};
+pub use submit_file::{cleanup_submission, submit_file, submit_file_with_timeout};
 
 /// Default timeout for waiting for the pool to become ready.
 pub const DEFAULT_POOL_READY_TIMEOUT: Duration = Duration::from_secs(10);
