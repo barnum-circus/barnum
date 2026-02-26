@@ -1,5 +1,21 @@
 # To-Dos and Future Directions
 
+## Agent Cleanup pkill Pattern is Too Broad
+
+**Status: NEEDS FIX**
+
+The `start-cmd-pool.sh` and `start-cmd-agents.sh` scripts use `pkill -9 -f "agent_pool register --pool cmd"` to kill stale CLI subprocesses. This pattern is too broad - it will kill ALL `agent_pool register` processes for the `cmd` pool, including legitimate ones from other scripts.
+
+**Options:**
+1. Track child PIDs explicitly and kill those
+2. Use process groups
+3. Store PIDs in a file and kill from there
+4. Accept the limitation (cmd pool is usually one set of agents)
+
+Low priority - the cmd pool is typically used by one set of agents at a time.
+
+---
+
 ## Shutdown and Cleanup Behavior
 
 **Status: NEEDS DESIGN**
