@@ -23,8 +23,6 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
     }
 }
 
-const TEST_DIR: &str = "integration";
-
 /// Test basic submission flow.
 #[rstest]
 #[timeout(std::time::Duration::from_secs(20))]
@@ -35,7 +33,7 @@ const TEST_DIR: &str = "integration";
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_basic_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("basic_submit_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -77,7 +75,7 @@ fn single_agent_multiple_tasks(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("{TEST_DIR}_single_multi_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("single_agent_multiple_tasks_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -121,7 +119,7 @@ fn single_agent_multiple_tasks(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_multi_parallel_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("multiple_agents_parallel_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -174,7 +172,7 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_deregister_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("agent_deregistration_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -236,7 +234,7 @@ fn tasks_queued_before_agents(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("{TEST_DIR}_queue_before_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("tasks_queued_before_agents_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -289,7 +287,7 @@ fn tasks_queued_before_agents(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_rapid_burst_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("rapid_task_burst_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -334,7 +332,7 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_identical_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("identical_task_content_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -377,7 +375,7 @@ fn agent_joins_mid_processing(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("{TEST_DIR}_mid_join_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("agent_joins_mid_processing_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
@@ -434,7 +432,7 @@ fn agent_joins_mid_processing(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("{TEST_DIR}_isolation_{data_source:?}_{notify_method:?}");
+    let test_dir = format!("response_isolation_{data_source:?}_{notify_method:?}");
     let root = setup_test_dir(&test_dir);
 
     if !is_ipc_available(&root) {
