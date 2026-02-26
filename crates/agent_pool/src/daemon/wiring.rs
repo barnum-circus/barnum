@@ -178,14 +178,20 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
         let _watcher = fs_watcher;
 
         // Create everything and verify all FS events are seen
-        let (lock, listener) =
-            match sync_and_setup(&lock_path, &socket_path, &pending_dir, &agents_dir, &io_rx) {
-                Ok(result) => result,
-                Err(e) => {
-                    let _ = ready_tx.send(Err(e));
-                    return Err(io::Error::other("sync_and_setup failed"));
-                }
-            };
+        let (lock, listener) = match sync_and_setup(
+            &root,
+            &lock_path,
+            &socket_path,
+            &pending_dir,
+            &agents_dir,
+            &io_rx,
+        ) {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = ready_tx.send(Err(e));
+                return Err(io::Error::other("sync_and_setup failed"));
+            }
+        };
 
         let _lock = lock;
         let _cleanup = SocketCleanup(socket_path.clone());
@@ -264,8 +270,14 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let _fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
 
     // Now create everything and verify we see all the events
-    let (_lock, listener) =
-        sync_and_setup(&lock_path, &socket_path, &pending_dir, &agents_dir, &io_rx)?;
+    let (_lock, listener) = sync_and_setup(
+        &root,
+        &lock_path,
+        &socket_path,
+        &pending_dir,
+        &agents_dir,
+        &io_rx,
+    )?;
 
     let _cleanup = SocketCleanup(socket_path.clone());
 
@@ -872,8 +884,9 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
 /// # Panics
 ///
 /// Panics if an unexpected non-FS event is received.
-#[allow(clippy::panic)] // Intentional: non-FS events during startup indicate a bug
+#[allow(clippy::panic, clippy::too_many_lines)]
 fn sync_and_setup(
+    root: &Path,
     lock_path: &Path,
     socket_path: &Path,
     pending_dir: &Path,
@@ -891,6 +904,7 @@ fn sync_and_setup(
     // All paths we expect to see events for (complete allowlist)
     // Any event for a path NOT in this set causes a panic
     let mut allowed: HashSet<PathBuf> = HashSet::new();
+    allowed.insert(root.to_path_buf());
     allowed.insert(lock_path.to_path_buf());
     allowed.insert(socket_path.to_path_buf());
     allowed.insert(pending_dir.to_path_buf());
