@@ -19,6 +19,7 @@ use std::{fs, thread};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 const AGENT_PROTOCOL: &str = include_str!("../../agent_pool/AGENT_PROTOCOL.md");
+const LOW_LEVEL_PROTOCOL: &str = include_str!("../../agent_pool/LOW_LEVEL_PROTOCOL.md");
 
 /// Log level for the agent pool.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -125,6 +126,9 @@ enum Command {
         /// Pool ID to include in the instructions
         #[arg(long)]
         pool: Option<String>,
+        /// Show low-level file/socket protocol (for debugging/internals)
+        #[arg(long)]
+        low_level: bool,
     },
     /// Deregister an agent from the pool
     #[command(name = "deregister_agent")]
@@ -407,8 +411,12 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
-        Command::Protocol { pool } => {
-            let mut output = AGENT_PROTOCOL.to_string();
+        Command::Protocol { pool, low_level } => {
+            let mut output = if low_level {
+                LOW_LEVEL_PROTOCOL.to_string()
+            } else {
+                AGENT_PROTOCOL.to_string()
+            };
 
             if let Some(id) = &pool {
                 let path = id_to_path(id);
