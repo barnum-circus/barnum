@@ -1,8 +1,18 @@
-# FS Watcher / File Protocol Cleanup (WIP)
+# FS Watcher / File Protocol Cleanup
 
-## Problem Summary
+## Status: MOSTLY COMPLETE
 
-Tests pass on macOS (FSEvents) but fail/hang on Linux (inotify). The issue stems from how inotify handles recursive watching of newly-created subdirectories.
+The primary issue (inotify race) was fixed by flattening the submissions directory structure. See `INOTIFY_RACE_ANALYSIS.md` for details.
+
+**Remaining work:**
+- Replace polling with notify in `submit_file.rs` (see `todos.md`)
+- Document Linux vs macOS differences (low priority)
+
+---
+
+## Problem Summary (FIXED)
+
+Tests passed on macOS (FSEvents) but failed/hung on Linux (inotify). The issue stemmed from how inotify handles recursive watching of newly-created subdirectories.
 
 ## Root Cause Analysis
 
@@ -12,6 +22,8 @@ Tests pass on macOS (FSEvents) but fail/hang on Linux (inotify). The issue stems
 3. If files are written to the subdirectory before the watch is added, events are missed
 
 **FSEvents doesn't have this problem** because it watches at the filesystem level, not per-directory.
+
+**FIXED:** By flattening submissions to `<id>.request.json` files, we eliminated the subdirectory creation entirely.
 
 ## Current Architecture Issues
 
@@ -50,81 +62,51 @@ The watcher sync with canary file proves the watcher is working AT STARTUP. It d
 
 **Suggested fix**: Could add periodic polling of `pending/` to catch missed events, or bring back PendingDir fallback with proper deduplication.
 
-## Proposed Cleanup Tasks
+## Cleanup Tasks
 
-### Task 1: Flatten pending directory structure (protocol change)
+### Task 1: Flatten pending directory structure - **DONE**
 
-Instead of:
+Now uses:
 ```
-pending/<uuid>/task.json
-pending/<uuid>/response.json
-```
-
-Use:
-```
-pending/<uuid>.task.json
+pending/<uuid>.request.json
 pending/<uuid>.response.json
 ```
 
-This eliminates the subdirectory creation race entirely.
+This eliminated the subdirectory creation race entirely.
 
-### Task 2: Audit all temp file usage
+### Task 2: Audit all temp file usage - **DONE**
 
-Search for any remaining temp file patterns:
-- `tempfile::`
-- `.tmp`
-- Rename patterns
+Atomic writes now use temp files in `/tmp` with UUID-based names, then rename to final location. This is intentional and correct - the rename generates a `Modify(Name)` event that watchers handle.
 
-Ensure we're writing directly to final locations.
+### Task 3: PendingDir fallback - **OBSOLETE**
 
-### Task 3: Add PendingDir fallback with deduplication
+No longer needed since we flattened the structure.
 
-When we see a `PendingDir` event:
-1. Check if `task.json` exists
-2. If yes, call `register_pending_task`
-3. The existing deduplication via `get_id_by_path` should prevent double registration
+### Task 4: Replace polling with notify in submit_file - **TODO**
 
-Need to verify deduplication is actually working.
+`submit_file.rs` still polls every 100ms for `response.json`. Should use file watcher instead. Tracked in `todos.md`.
 
-### Task 4: Consider polling fallback for file protocol
+### Task 5: Document Linux vs macOS differences - **LOW PRIORITY**
 
-For `submit_file`, add a fallback that polls `pending/<uuid>/response.json` if the FS watcher doesn't see it within N seconds.
+Could be useful but not blocking anything now that the race is fixed.
 
-### Task 5: Document Linux vs macOS differences
+### Task 6: inotify-specific handling - **NOT NEEDED**
 
-Add documentation about:
-- inotify vs FSEvents behavior differences
-- Why tests might pass locally but fail in CI
-- Recommended testing approach (run in Linux Docker container)
+The flat file structure works on both platforms. No special handling required.
 
-### Task 6: Add inotify-specific handling
+### Task 7: Improve agent watcher - **FUTURE**
 
-Consider detecting Linux and using different strategies:
-- More aggressive polling
-- Different watcher configuration
-- Or just accept that file protocol is less reliable on Linux
+Agent structure could be flattened like submissions. Low priority - agents work fine as-is since the directory exists before files are written (causal chain prevents race).
 
-### Task 7: Improve agent watcher
+## Quick Wins - **DONE**
 
-Current state (workaround committed):
-- Agent watches entire directory with `RecursiveMode::NonRecursive`
-- Filters for `Close(Write)` events only to avoid reading empty files
-- Gets events for both `task.json` and `response.json`
+1. ~~Verify temp files are gone~~ - Temp files are intentional for atomic writes
+2. ~~Add logging around task registration~~ - Debug logging added
+3. ~~Test deduplication~~ - Working correctly with flat structure
+4. ~~Increase test timeout logging~~ - Tests pass now
 
-Better approach:
-- Watch specific file (`task.json`) instead of whole directory
-- Or flatten agent structure like submissions: `agents/<name>.task.json`, `agents/<name>.response.json`
-- Consider if agents even need subdirectories or if flat files would work
+## Questions Answered
 
-## Quick Wins (Immediate Actions)
-
-1. **Verify temp files are gone**: Run tests on Linux and check logs for `.tmp` files
-2. **Add logging around task registration**: Make it clearer when/why tasks are registered
-3. **Test deduplication**: Add a test that explicitly tests double-registration prevention
-4. **Increase test timeout logging**: When tests time out, dump state of pending/ and agents/
-
-## Questions to Answer
-
-1. Is the flat file structure (`<uuid>.json` vs `<uuid>/task.json`) worth the protocol change?
-2. Should we deprecate `NotifyMethod::Raw` on Linux?
-3. Is polling acceptable as a fallback, or should we invest in fixing the FS watcher?
+1. **Is the flat file structure worth the protocol change?** - YES. It fixed the race condition.
+2. **Should we deprecate `NotifyMethod::Raw` on Linux?** - NO. Works fine now with flat structure.
+3. **Is polling acceptable as a fallback?** - For now, yes. Long-term, replace with notify (tracked in todos.md).

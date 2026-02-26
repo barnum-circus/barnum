@@ -1,5 +1,15 @@
 # Inotify Race Condition Analysis
 
+## Status: MOSTLY COMPLETE
+
+**Phase 1 (Canary sync):** DONE - Watcher sync at startup exists.
+**Phase 2 (Flatten submissions):** DONE - Uses `<id>.request.json` / `<id>.response.json` flat files.
+**Phase 3 (Rename pending → submissions):** NOT DONE - Low priority cleanup.
+**Phase 4 (Status file):** PARTIALLY DONE - Constant exists, implementation needs verification.
+**Phase 5 (Clean shutdown):** NOT DONE - See `todos.md`.
+
+---
+
 ## The Problem
 
 Tests pass on macOS but fail (hang) on Linux due to a race condition in `inotify`.
@@ -10,16 +20,18 @@ Tests pass on macOS but fail (hang) on Linux due to a race condition in `inotify
 
 **Not affected:** Agents (agent creates directory, waits for daemon to write task, then writes response—causal chain guarantees watch is active).
 
+**FIXED:** Phase 2 eliminates the directory creation entirely by using flat files.
+
 ---
 
 ## Implementation Plan
 
 Four phases:
 
-1. **Canary sync** - Ensure watchers are active at startup
-2. **Flatten submissions** - Fix the race condition (priority: unblocks CI)
-3. **Rename things** - Clean up naming (`pending/` → `submissions/`)
-4. **Status file** - Proper readiness signaling for submitters (nice-to-have)
+1. **Canary sync** - Ensure watchers are active at startup - **DONE**
+2. **Flatten submissions** - Fix the race condition - **DONE**
+3. **Rename things** - Clean up naming (`pending/` → `submissions/`) - NOT DONE
+4. **Status file** - Proper readiness signaling for submitters - PARTIALLY DONE
 
 Future work (separate doc): Flatten agents + anonymous worker model. See `ANONYMOUS_WORKERS.md`.
 

@@ -1,6 +1,6 @@
 # Anonymous Worker Model
 
-**Status:** Future work. Depends on completing the inotify race fix first.
+**Status:** Future work. The inotify race is now fixed (submissions flattened), so this can proceed when desired.
 
 ## Overview
 

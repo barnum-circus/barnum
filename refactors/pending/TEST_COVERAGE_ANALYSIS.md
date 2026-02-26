@@ -1,5 +1,7 @@
 # Test Coverage Analysis
 
+**Status:** Reference document. All 6 submission modes (DataSource × NotifyMethod) are tested. See "Missing Test Scenarios" section for gaps.
+
 ## Current Test Inventory
 
 ### greeting.rs

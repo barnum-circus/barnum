@@ -1,5 +1,9 @@
 # Synchronous Testing Harness
 
+**Status:** Future work. This is a design for in-memory testing to eliminate filesystem timing issues. Not implemented.
+
+**Note:** Current tests pass with `--test-threads=1`. This design would allow parallel tests by eliminating real I/O entirely.
+
 ## Problem
 
 Current tests use real filesystem operations and timing:

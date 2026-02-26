@@ -1,5 +1,21 @@
 # Test Harness Improvements
 
+## Status
+
+**Tests pass** with `--test-threads=1`. Multi-threaded test execution times out due to CLI spawn overhead (tracked in `todos.md`).
+
+**Completed:**
+- CLI-based TestAgent
+- CLI-based task submission
+- Multi-mode testing with rstest (6 submission modes)
+- Raw file submission mode
+- Two-enum refactor (DataSource × NotifyMethod)
+
+**Remaining:**
+- Task 1: Raw File Agent mode
+- Task 4: Replace polling with notify in file transport
+- Task 6: Missing test scenarios (timeouts, crashes, etc.)
+
 ## Overview
 
 This document describes improvements needed to get the agent_pool tests into a robust, comprehensive state.
