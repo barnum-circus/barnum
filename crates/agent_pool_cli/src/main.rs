@@ -171,6 +171,9 @@ enum Command {
         /// Log level
         #[arg(short, long, default_value = "off")]
         log_level: LogLevel,
+        /// Submit response and deregister (exit cleanly without waiting for next task)
+        #[arg(long)]
+        deregister: bool,
     },
 }
 
@@ -511,6 +514,7 @@ fn main() -> ExitCode {
             data,
             file,
             log_level,
+            deregister,
         } => {
             init_tracing(log_level);
             let root = resolve_pool(&pool);
@@ -552,7 +556,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            let transport = Transport::Directory(agent_dir);
+            let transport = Transport::Directory(agent_dir.clone());
 
             // Write response using Transport (atomic write)
             if let Err(e) = transport.write(RESPONSE_FILE, &response_content) {
@@ -560,13 +564,29 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            // Wait for next task (wait_for_task handles cleanup transition automatically:
-            // it blocks until task.json exists AND response.json doesn't)
-            match wait_and_read_task(&transport, &events_rx, &name) {
-                Ok(output) => println!("{output}"),
-                Err(e) => {
-                    eprintln!("{e}");
+            if deregister {
+                // Wait for daemon to acknowledge (response.json deleted)
+                let response_path = agent_dir.join(RESPONSE_FILE);
+                if !wait_for_response_acknowledged(&response_path, &events_rx) {
+                    eprintln!("Timeout waiting for daemon to acknowledge response");
                     return ExitCode::FAILURE;
+                }
+
+                // Remove agent directory to deregister
+                if let Err(e) = fs::remove_dir_all(&agent_dir) {
+                    eprintln!("Failed to deregister: {e}");
+                    return ExitCode::FAILURE;
+                }
+                eprintln!("Deregistered");
+            } else {
+                // Wait for next task (wait_for_task handles cleanup transition automatically:
+                // it blocks until task.json exists AND response.json doesn't)
+                match wait_and_read_task(&transport, &events_rx, &name) {
+                    Ok(output) => println!("{output}"),
+                    Err(e) => {
+                        eprintln!("{e}");
+                        return ExitCode::FAILURE;
+                    }
                 }
             }
         }
@@ -589,4 +609,43 @@ fn wait_for_status_file(status_file: &std::path::Path) -> bool {
         thread::sleep(POLL_INTERVAL);
     }
     false
+}
+
+/// Wait for the daemon to acknowledge the response (delete response.json).
+/// Returns true if acknowledged within timeout, false otherwise.
+fn wait_for_response_acknowledged(
+    response_path: &std::path::Path,
+    events_rx: &mpsc::Receiver<AgentEvent>,
+) -> bool {
+    const TIMEOUT: Duration = Duration::from_secs(30);
+
+    // Already gone?
+    if !response_path.exists() {
+        return true;
+    }
+
+    let start = std::time::Instant::now();
+    loop {
+        // Wait for file change event or timeout
+        match events_rx.recv_timeout(Duration::from_millis(500)) {
+            Ok(AgentEvent::FileChanged) => {
+                if !response_path.exists() {
+                    return true;
+                }
+            }
+            Ok(AgentEvent::WatchError(_)) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return false;
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Check timeout
+                if start.elapsed() > TIMEOUT {
+                    return false;
+                }
+                // Also check file in case we missed an event
+                if !response_path.exists() {
+                    return true;
+                }
+            }
+        }
+    }
 }

@@ -114,27 +114,16 @@ The name "File" is confusing because both use files - the distinction is notific
 | FileReference | Socket | `--file --notify socket` |
 | FileReference | File | `--file --notify file` |
 
-### Phase 2: Consolidate Agent Commands
+### ~~Phase 2: Consolidate Agent Commands~~ ✓ DONE
 
-**Impact:** Medium, simplifies agent lifecycle.
-
-Option A: Add `--data` to `deregister_agent`
+Implemented `--deregister` flag on `next_task`:
 ```bash
-# Current (two commands)
-agent_pool next_task --pool $POOL --name $NAME --data '{"result": "done"}'
-agent_pool deregister_agent --pool $POOL --name $NAME
-
-# New (one command)
-agent_pool deregister_agent --pool $POOL --name $NAME --data '{"result": "done"}'
+# Submit final response and deregister in one command
+agent_pool next_task --pool $POOL --name $NAME --data '{"result": "done"}' --deregister
 ```
 
-Option B: Add `--exit` flag to `next_task`
-```bash
-# Submit final response and exit in one command
-agent_pool next_task --pool $POOL --name $NAME --data '{"result": "done"}' --exit
-```
-
-Option B is cleaner - `deregister_agent` remains for external use (kick), `next_task --exit` for graceful self-exit.
+- `--deregister` waits for daemon to acknowledge the response before deregistering
+- `deregister_agent` remains for emergency abort (external kick or immediate shutdown)
 
 ### Phase 3: Rename File → Poll (Optional)
 
@@ -159,7 +148,7 @@ From `todos.md`:
 ## Implementation Order
 
 1. ~~**Remove Raw mode**~~ ✓ DONE - Completed: Removed `NotifyMethod::Raw` and `submit_raw()`
-2. **Add --exit to next_task** - Simplifies agent scripts
+2. ~~**Add --deregister to next_task**~~ ✓ DONE - Simplifies agent shutdown
 3. **(Optional) Rename File → Poll** - Only if we're doing breaking changes anyway
 
 ---

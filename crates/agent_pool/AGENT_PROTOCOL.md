@@ -65,14 +65,32 @@ Use your **Write tool** (not bash) to write your response to `response_file`. Th
 
 ## Getting the next task
 
-Call `register` again. It will wait for the next task.
+After writing your response, call `next_task` to submit it and wait for the next task:
 
-**Important:** Always call `register` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
+```bash
+agent_pool next_task --pool <POOL_ID> --name <AGENT_NAME> --data '<response>'
+```
+
+**Important:** Always call `next_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
 
 ## Shutting down
 
-Only call `deregister_agent` if you need to stop accepting tasks (e.g., user interrupted you, you're out of resources). This is for agent shutdown, not for signaling task completion. Use the `agent_name` from your last `register` response:
+### Graceful exit (after submitting final response)
+
+Use `--deregister` to submit your response and exit cleanly without waiting for the next task:
+
+```bash
+agent_pool next_task --pool <POOL_ID> --name <AGENT_NAME> --data '<response>' --deregister
+```
+
+This waits for the daemon to acknowledge your response before deregistering.
+
+### Abort (without submitting a response)
+
+If you need to stop immediately without submitting a response (e.g., user interrupted you, out of resources):
 
 ```bash
 agent_pool deregister_agent --pool <POOL_ID> --name <AGENT_NAME>
 ```
+
+This is for emergency shutdown only. Any in-progress task will fail.

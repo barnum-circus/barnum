@@ -38,11 +38,13 @@ watcher.watch(pending_dir)?;
 rx.recv_timeout(timeout)?;
 ```
 
-### 3. Add --exit to next_task
+### ~~3. Add --deregister to next_task~~ ✓ DONE
 
-**Impact:** Simplifies agent scripts (one command instead of two for graceful exit).
-**Effort:** ~30 minutes.
-**Risk:** None - additive change.
+~~**Impact:** Simplifies agent scripts (one command instead of two for graceful exit).~~
+~~**Effort:** ~30 minutes.~~
+~~**Risk:** None - additive change.~~
+
+Completed: Added `--deregister` flag to `next_task` command.
 
 ---
 
@@ -165,7 +167,7 @@ See `todos.md`. Allows mixing AI agents with command pools in same workflow.
 ### Immediate (This Week)
 1. ~~Remove Raw test mode~~ ✓ DONE
 2. Replace polling in submit_file.rs
-3. Add --exit to next_task
+3. ~~Add --deregister to next_task~~ ✓ DONE
 
 ### Short Term (Next 2 Weeks)
 4. Investigate multi-threaded test timeouts
