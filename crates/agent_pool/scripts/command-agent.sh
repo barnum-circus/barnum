@@ -76,6 +76,9 @@ else
     POOL_DIR="${TMPDIR:-/tmp}/gsd/$POOL"
 fi
 
+# Track the daemon PID we're connected to (to detect daemon restarts)
+DAEMON_PID=""
+
 # Outer loop: reconnect on eviction or failure
 while true; do
     # Check if pool is still running (status file exists when daemon is up)
@@ -84,7 +87,15 @@ while true; do
         exit 0
     fi
 
-    echo "[$NAME] Connecting to pool $POOL..." >&2
+    # Check daemon PID - if it changed, a new daemon started, we should exit
+    CURRENT_PID=$(cat "$POOL_DIR/lock" 2>/dev/null || echo "")
+    if [ -n "$DAEMON_PID" ] && [ "$CURRENT_PID" != "$DAEMON_PID" ]; then
+        echo "[$NAME] Daemon restarted (PID changed from $DAEMON_PID to $CURRENT_PID), exiting." >&2
+        exit 0
+    fi
+    DAEMON_PID="$CURRENT_PID"
+
+    echo "[$NAME] Connecting to pool $POOL (daemon PID: $DAEMON_PID)..." >&2
 
     # Inner loop: process tasks
     while true; do
