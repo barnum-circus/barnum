@@ -8,50 +8,48 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::print_stderr)]
 
-use agent_pool::{Response, wait_for_pool_ready};
+use agent_pool::{Response, id_to_path, wait_for_pool_ready};
 use std::fs;
 use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use uuid::Uuid;
 
-/// Get the path to the test data directory for a given test file.
-/// Each test file gets its own unique subdirectory to avoid conflicts.
-pub fn test_data_dir(test_file: &str) -> PathBuf {
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir)
-        .join(".test-data")
-        .join(test_file)
+/// Generate a unique pool name for a test.
+/// Format: `<test_name>_<uuid>` - ensures no conflicts between test runs.
+pub fn generate_pool(test_name: &str) -> String {
+    let uuid = &Uuid::new_v4().to_string()[..8];
+    format!("{test_name}_{uuid}")
 }
 
-/// Clean up and create a fresh test directory.
-pub fn setup_test_dir(test_file: &str) -> PathBuf {
-    let dir = test_data_dir(test_file);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("Failed to create test directory");
-    dir
+/// Get the path for a pool name.
+/// Pools live in `/tmp/gsd/<pool>/`.
+pub fn pool_path(pool: &str) -> PathBuf {
+    id_to_path(pool)
 }
 
-/// Clean up a test directory.
-pub fn cleanup_test_dir(test_file: &str) {
-    let dir = test_data_dir(test_file);
+/// Clean up a pool by name.
+pub fn cleanup_pool(pool: &str) {
+    let dir = pool_path(pool);
     let _ = fs::remove_dir_all(&dir);
 }
 
 /// Check if Unix socket IPC is available.
 #[cfg(unix)]
-pub fn is_ipc_available(test_dir: &Path) -> bool {
+pub fn is_ipc_available() -> bool {
     use std::os::unix::net::{UnixListener, UnixStream};
 
     if std::env::var("SKIP_IPC_TESTS").is_ok() {
         return false;
     }
 
-    let socket_path = test_dir.join("ipc_test.sock");
+    // Use /tmp for IPC test - it always exists
+    let socket_path = std::env::temp_dir().join(format!("ipc_test_{}.sock", std::process::id()));
     let _ = fs::remove_file(&socket_path);
 
     let Ok(listener) = UnixListener::bind(&socket_path) else {
@@ -72,7 +70,7 @@ pub fn is_ipc_available(test_dir: &Path) -> bool {
 
 /// Check if Unix socket IPC is available (non-Unix stub).
 #[cfg(not(unix))]
-pub fn is_ipc_available(_test_dir: &Path) -> bool {
+pub fn is_ipc_available() -> bool {
     false
 }
 
@@ -95,8 +93,8 @@ pub struct TestAgent {
     /// Test name for logging purposes
     #[allow(dead_code)]
     test_name: String,
-    /// Pool root for deregistration on stop
-    root: PathBuf,
+    /// Pool name for deregistration on stop
+    pool: String,
     /// Agent name for deregistration on stop
     agent_id: String,
 }
@@ -110,7 +108,7 @@ impl TestAgent {
     /// After starting, call `wait_ready()` to block until the agent has processed
     /// its first message (heartbeat) and is ready to receive real tasks.
     pub fn start<F>(
-        root: &Path,
+        pool: &str,
         agent_id: &str,
         processing_delay: Duration,
         processor: F,
@@ -124,7 +122,7 @@ impl TestAgent {
         let current_pid = Arc::new(AtomicU32::new(0));
         let current_pid_clone = current_pid.clone();
         let agent_id_owned = agent_id.to_string();
-        let root_owned = root.to_path_buf();
+        let pool_owned = pool.to_string();
         let bin = find_agent_pool_binary();
         let test_name_owned = test_name.to_string();
 
@@ -146,7 +144,7 @@ impl TestAgent {
                 if let Some(response) = last_response.take() {
                     cmd.arg("next_task")
                         .arg("--pool")
-                        .arg(&root_owned)
+                        .arg(&pool_owned)
                         .arg("--name")
                         .arg(&agent_id_owned)
                         .arg("--data")
@@ -154,7 +152,7 @@ impl TestAgent {
                 } else {
                     cmd.arg("register")
                         .arg("--pool")
-                        .arg(&root_owned)
+                        .arg(&pool_owned)
                         .arg("--name")
                         .arg(&agent_id_owned);
                 }
@@ -280,15 +278,15 @@ impl TestAgent {
             handle: Some(handle),
             ready_rx: Some(ready_rx),
             test_name: test_name.to_string(),
-            root: root.to_path_buf(),
+            pool: pool.to_string(),
             agent_id: agent_id.to_string(),
         }
     }
 
     /// Start a simple echo agent that appends " [processed]" to inputs.
-    pub fn echo(root: &Path, agent_id: &str, processing_delay: Duration, test_name: &str) -> Self {
+    pub fn echo(pool: &str, agent_id: &str, processing_delay: Duration, test_name: &str) -> Self {
         Self::start(
-            root,
+            pool,
             agent_id,
             processing_delay,
             |task, _| format!("{} [processed]", task.trim()),
@@ -300,13 +298,13 @@ impl TestAgent {
     ///
     /// Expects task content in format: `{"instructions":"...","data":"casual"|"formal"}`
     pub fn greeting(
-        root: &Path,
+        pool: &str,
         agent_id: &str,
         processing_delay: Duration,
         test_name: &str,
     ) -> Self {
         Self::start(
-            root,
+            pool,
             agent_id,
             processing_delay,
             |task, agent_id| {
@@ -353,7 +351,7 @@ impl TestAgent {
         let _ = Command::new(&bin)
             .arg("deregister_agent")
             .arg("--pool")
-            .arg(&self.root)
+            .arg(&self.pool)
             .arg("--name")
             .arg(&self.agent_id)
             .output();
@@ -400,14 +398,14 @@ fn find_agent_pool_binary() -> PathBuf {
 
 /// Submit a task via the CLI.
 ///
-/// Executes: `agent_pool submit_task --pool <root> --data <payload_json> --notify <method>`
-pub fn submit_via_cli(root: &Path, payload_json: &str, notify: &str) -> io::Result<Response> {
+/// Executes: `agent_pool submit_task --pool <pool> --data <payload_json> --notify <method>`
+pub fn submit_via_cli(pool: &str, payload_json: &str, notify: &str) -> io::Result<Response> {
     let bin = find_agent_pool_binary();
 
     let output = Command::new(&bin)
         .arg("submit_task")
         .arg("--pool")
-        .arg(root)
+        .arg(pool)
         .arg("--data")
         .arg(payload_json)
         .arg("--notify")
@@ -450,20 +448,20 @@ const TEST_FILE_TIMEOUT_SECS: u64 = 20;
 ///
 /// This is the cross-product of `DataSource` × `NotifyMethod` = 6 combinations.
 pub fn submit_with_mode(
-    root: &Path,
+    pool: &str,
     payload_json: &str,
     data_source: DataSource,
     notify_method: NotifyMethod,
 ) -> io::Result<Response> {
     // Raw mode bypasses CLI entirely
     if notify_method == NotifyMethod::Raw {
-        return submit_raw(root, payload_json, data_source);
+        return submit_raw(pool, payload_json, data_source);
     }
 
     let bin = find_agent_pool_binary();
     let mut cmd = Command::new(&bin);
 
-    cmd.arg("submit_task").arg("--pool").arg(root);
+    cmd.arg("submit_task").arg("--pool").arg(pool);
 
     // Set up data source
     let _temp_file;
@@ -506,7 +504,9 @@ pub fn submit_with_mode(
 /// Submit a task using raw file protocol (direct call to `submit_file` library function).
 ///
 /// This bypasses the CLI and calls the production `submit_file` function directly.
-fn submit_raw(root: &Path, payload_json: &str, data_source: DataSource) -> io::Result<Response> {
+fn submit_raw(pool: &str, payload_json: &str, data_source: DataSource) -> io::Result<Response> {
+    let root = pool_path(pool);
+
     // Build the payload, keeping any temp file alive until submit completes
     let _temp_file;
     let payload = match data_source {
@@ -520,7 +520,7 @@ fn submit_raw(root: &Path, payload_json: &str, data_source: DataSource) -> io::R
         }
     };
 
-    agent_pool::submit_file(root, &payload)
+    agent_pool::submit_file(&root, &payload)
 }
 
 /// Configuration for the daemon when starting via CLI.
@@ -563,7 +563,7 @@ impl From<agent_pool::DaemonConfig> for DaemonConfig {
 ///
 /// Automatically shuts down the daemon when dropped.
 pub struct AgentPoolHandle {
-    root: PathBuf,
+    pool: String,
     process: Option<Child>,
     /// Handles for threads forwarding stdout/stderr (so they get captured by tests)
     _output_threads: Vec<thread::JoinHandle<()>>,
@@ -573,12 +573,13 @@ pub struct AgentPoolHandle {
 
 impl AgentPoolHandle {
     /// Start the agent pool daemon with default configuration.
-    pub fn start(root: &Path, test_name: &str) -> Self {
-        Self::start_with_config(root, DaemonConfig::new(), test_name)
+    pub fn start(pool: &str, test_name: &str) -> Self {
+        Self::start_with_config(pool, DaemonConfig::new(), test_name)
     }
 
     /// Start the agent pool daemon with custom configuration.
-    pub fn start_with_config(root: &Path, config: DaemonConfig, test_name: &str) -> Self {
+    pub fn start_with_config(pool: &str, config: DaemonConfig, test_name: &str) -> Self {
+        let root = pool_path(pool);
         let bin = find_agent_pool_binary();
         assert!(
             bin.exists(),
@@ -590,7 +591,7 @@ impl AgentPoolHandle {
         let mut cmd = Command::new(&bin);
         cmd.arg("start")
             .arg("--pool")
-            .arg(root)
+            .arg(pool)
             .arg("--log-level")
             .arg("trace")
             .arg("--idle-agent-timeout-secs")
@@ -633,11 +634,11 @@ impl AgentPoolHandle {
             }));
         }
 
-        wait_for_pool_ready(root, Duration::from_secs(10))
+        wait_for_pool_ready(&root, Duration::from_secs(10))
             .expect("Agent pool did not become ready in time");
 
         Self {
-            root: root.to_path_buf(),
+            pool: pool.to_string(),
             process: Some(process),
             _output_threads: output_threads,
             test_name: test_name.to_string(),
@@ -654,7 +655,7 @@ impl Drop for AgentPoolHandle {
         let _ = Command::new(&bin)
             .arg("stop")
             .arg("--pool")
-            .arg(&self.root)
+            .arg(&self.pool)
             .output();
 
         eprintln!(

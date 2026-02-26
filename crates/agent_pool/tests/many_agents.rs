@@ -10,8 +10,8 @@ mod common;
 
 use agent_pool::Response;
 use common::{
-    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_test_dir, is_ipc_available,
-    setup_test_dir, submit_with_mode,
+    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
+    is_ipc_available, submit_with_mode,
 };
 use rstest::rstest;
 use std::thread;
@@ -24,7 +24,7 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
     }
 }
 
-const TEST_DIR: &str = "many_agents";
+const TEST_NAME: &str = "many_agents";
 
 #[rstest]
 #[timeout(std::time::Duration::from_secs(20))]
@@ -38,21 +38,20 @@ fn multiple_agents_parallel_tasks(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("{TEST_DIR}_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!("{TEST_NAME}_{data_source:?}_{notify_method:?}"));
 
-    if !is_ipc_available(&root) {
+    if !is_ipc_available() {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_dir);
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
 
     // 3 agents with varying response times
-    let mut agent1 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(10), &test_dir);
-    let mut agent2 = TestAgent::echo(&root, "medium-agent", Duration::from_millis(30), &test_dir);
-    let mut agent3 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(50), &test_dir);
+    let mut agent1 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(10), &pool);
+    let mut agent2 = TestAgent::echo(&pool, "medium-agent", Duration::from_millis(30), &pool);
+    let mut agent3 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(50), &pool);
 
     // Wait for all agents to be ready (have processed initial heartbeats)
     wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
@@ -60,11 +59,11 @@ fn multiple_agents_parallel_tasks(
     // Submit 6 tasks rapidly - they'll be distributed across agents
     let handles: Vec<_> = (1..=6)
         .map(|i| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"Task-{i}"}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task, data_source, notify_method).expect("Submit failed")
+                submit_with_mode(&pool, &task, data_source, notify_method).expect("Submit failed")
             })
         })
         .collect();
@@ -85,5 +84,5 @@ fn multiple_agents_parallel_tasks(
     let _ = agent2.stop();
     let _ = agent3.stop();
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }

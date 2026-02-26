@@ -9,8 +9,8 @@ mod common;
 
 use agent_pool::Response;
 use common::{
-    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_test_dir, is_ipc_available,
-    setup_test_dir, submit_with_mode,
+    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
+    is_ipc_available, submit_with_mode,
 };
 use rstest::rstest;
 use std::thread;
@@ -33,20 +33,19 @@ fn wait_all_ready(agents: &mut [&mut TestAgent]) {
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("basic_submit_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!("basic_submit_{data_source:?}_{notify_method:?}"));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
     agent.wait_ready();
 
     let response = submit_with_mode(
-        &root,
+        &pool,
         r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"Hello!"}}}"#,
         data_source,
         notify_method,
@@ -59,7 +58,7 @@ fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMe
     assert!(stdout.contains("[processed]"));
 
     let _ = agent.stop();
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test multiple tasks dispatched to a single agent.
@@ -75,22 +74,23 @@ fn single_agent_multiple_tasks(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("single_agent_multiple_tasks_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "single_agent_multiple_tasks_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
     agent.wait_ready();
 
     // Submit 3 tasks sequentially
     for i in 0..3 {
         let response = submit_with_mode(
-            &root,
+            &pool,
             &format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#),
             data_source,
             notify_method,
@@ -106,7 +106,7 @@ fn single_agent_multiple_tasks(
     let processed = agent.stop();
     assert_eq!(processed.len(), 3, "Agent should process all 3 tasks");
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test multiple agents handling tasks in parallel.
@@ -119,28 +119,29 @@ fn single_agent_multiple_tasks(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("multiple_agents_parallel_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "multiple_agents_parallel_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
 
-    let mut agent1 = TestAgent::echo(&root, "agent-1", Duration::from_millis(50), &test_dir);
-    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(50), &test_dir);
+    let mut agent1 = TestAgent::echo(&pool, "agent-1", Duration::from_millis(50), &pool);
+    let mut agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(50), &pool);
     wait_all_ready(&mut [&mut agent1, &mut agent2]);
 
     // Submit 4 tasks in parallel
     let handles: Vec<_> = (0..4)
         .map(|i| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task, data_source, notify_method).expect("Submit failed")
+                submit_with_mode(&pool, &task, data_source, notify_method).expect("Submit failed")
             })
         })
         .collect();
@@ -159,7 +160,7 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
 
     assert_eq!(total, 4, "Both agents combined should process all 4 tasks");
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test agent deregistration.
@@ -172,20 +173,21 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("agent_deregistration_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "agent_deregistration_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
     agent.wait_ready();
 
     let response = submit_with_mode(
-        &root,
+        &pool,
         r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"before"}}}"#,
         data_source,
         notify_method,
@@ -203,11 +205,11 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     thread::sleep(Duration::from_millis(500));
 
     // Start a new agent
-    let mut agent2 = TestAgent::echo(&root, "agent-2", Duration::from_millis(5), &test_dir);
+    let mut agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(5), &pool);
     agent2.wait_ready();
 
     let response2 = submit_with_mode(
-        &root,
+        &pool,
         r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"after"}}}"#,
         data_source,
         notify_method,
@@ -218,7 +220,7 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     let processed2 = agent2.stop();
     assert_eq!(processed2.len(), 1);
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test tasks submitted before any agents register (queued).
@@ -234,31 +236,32 @@ fn tasks_queued_before_agents(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("tasks_queued_before_agents_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "tasks_queued_before_agents_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
 
     // Submit tasks BEFORE any agents register (they'll block until an agent picks them up)
     let handles: Vec<_> = (0..3)
         .map(|i| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task, data_source, notify_method).expect("Submit failed")
+                submit_with_mode(&pool, &task, data_source, notify_method).expect("Submit failed")
             })
         })
         .collect();
 
     // Small delay, then register an agent
     thread::sleep(Duration::from_millis(50));
-    let mut agent = TestAgent::echo(&root, "late-agent", Duration::from_millis(5), &test_dir);
+    let mut agent = TestAgent::echo(&pool, "late-agent", Duration::from_millis(5), &pool);
     agent.wait_ready();
 
     // Wait for all tasks to complete
@@ -274,7 +277,7 @@ fn tasks_queued_before_agents(
         "Agent should process all 3 queued tasks"
     );
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test rapid burst of task submissions.
@@ -287,26 +290,27 @@ fn tasks_queued_before_agents(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("rapid_task_burst_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "rapid_task_burst_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "burst-agent", Duration::from_millis(2), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "burst-agent", Duration::from_millis(2), &pool);
     agent.wait_ready();
 
     // Submit 10 tasks as fast as possible in parallel
     let handles: Vec<_> = (0..10)
         .map(|i| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task, data_source, notify_method).expect("Submit failed")
+                submit_with_mode(&pool, &task, data_source, notify_method).expect("Submit failed")
             })
         })
         .collect();
@@ -319,7 +323,7 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
     let processed = agent.stop();
     assert_eq!(processed.len(), 10, "Agent should process all 10 tasks");
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test that tasks with identical content are handled correctly.
@@ -332,23 +336,24 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("identical_task_content_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "identical_task_content_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "agent-1", Duration::from_millis(5), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
     agent.wait_ready();
 
     // Submit 5 tasks with IDENTICAL content
     let task = r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"same"}}}"#;
     for _ in 0..5 {
         let response =
-            submit_with_mode(&root, task, data_source, notify_method).expect("Submit failed");
+            submit_with_mode(&pool, task, data_source, notify_method).expect("Submit failed");
         assert!(matches!(response, Response::Processed { .. }));
     }
 
@@ -359,7 +364,7 @@ fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method
         "Agent should process all 5 identical tasks"
     );
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test agent joining while tasks are being processed.
@@ -375,35 +380,36 @@ fn agent_joins_mid_processing(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("agent_joins_mid_processing_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "agent_joins_mid_processing_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
 
     // Start one slow agent
-    let mut agent1 = TestAgent::echo(&root, "slow-agent", Duration::from_millis(100), &test_dir);
+    let mut agent1 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(100), &pool);
     agent1.wait_ready();
 
     // Submit 6 tasks in parallel
     let handles: Vec<_> = (0..6)
         .map(|i| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"n":{i}}}}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task, data_source, notify_method).expect("Submit failed")
+                submit_with_mode(&pool, &task, data_source, notify_method).expect("Submit failed")
             })
         })
         .collect();
 
     // Wait a bit, then add a second fast agent
     thread::sleep(Duration::from_millis(150));
-    let mut agent2 = TestAgent::echo(&root, "fast-agent", Duration::from_millis(5), &test_dir);
+    let mut agent2 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(5), &pool);
     agent2.wait_ready();
 
     // Wait for all tasks to complete
@@ -419,7 +425,7 @@ fn agent_joins_mid_processing(
     assert_eq!(total, 6, "Both agents combined should process all 6 tasks");
     assert!(!processed2.is_empty(), "Second agent should have helped");
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }
 
 /// Test that responses are written to the correct submitters.
@@ -432,22 +438,23 @@ fn agent_joins_mid_processing(
 #[case(DataSource::FileReference, NotifyMethod::File)]
 #[case(DataSource::FileReference, NotifyMethod::Raw)]
 fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let test_dir = format!("response_isolation_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!(
+        "response_isolation_{data_source:?}_{notify_method:?}"
+    ));
 
-    if !is_ipc_available(&root) {
-        cleanup_test_dir(&test_dir);
+    if !is_ipc_available() {
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
 
     let mut agent = TestAgent::start(
-        &root,
+        &pool,
         "echo-agent",
         Duration::from_millis(5),
         |task, _| format!("processed: {}", task.trim()),
-        &test_dir,
+        &pool,
     );
     agent.wait_ready();
 
@@ -455,13 +462,13 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
     let handles: Vec<_> = ["A", "B", "C"]
         .iter()
         .map(|id| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task = format!(
                 r#"{{"kind":"Task","task":{{"instructions":"echo","data":{{"id":"{id}"}}}}}}"#
             );
             let expected_id = id.to_string();
             thread::spawn(move || {
-                let response = submit_with_mode(&root, &task, data_source, notify_method)
+                let response = submit_with_mode(&pool, &task, data_source, notify_method)
                     .expect("Submit failed");
                 (expected_id, response)
             })
@@ -480,5 +487,5 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
     }
 
     agent.stop();
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }

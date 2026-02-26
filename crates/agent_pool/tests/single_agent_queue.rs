@@ -10,14 +10,14 @@ mod common;
 
 use agent_pool::Response;
 use common::{
-    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_test_dir, is_ipc_available,
-    setup_test_dir, submit_with_mode,
+    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
+    is_ipc_available, submit_with_mode,
 };
 use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
-const TEST_DIR: &str = "single_agent_queue";
+const TEST_NAME: &str = "single_agent_queue";
 
 #[rstest]
 #[timeout(std::time::Duration::from_secs(20))]
@@ -31,17 +31,16 @@ fn single_agent_queues_multiple_tasks(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    let test_dir = format!("{TEST_DIR}_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!("{TEST_NAME}_{data_source:?}_{notify_method:?}"));
 
-    if !is_ipc_available(&root) {
+    if !is_ipc_available() {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_dir);
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent = TestAgent::echo(&root, "only-agent", Duration::from_millis(50), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::echo(&pool, "only-agent", Duration::from_millis(50), &pool);
 
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
@@ -50,11 +49,11 @@ fn single_agent_queues_multiple_tasks(
     let handles: Vec<_> = ["Task-A", "Task-B", "Task-C", "Task-D"]
         .iter()
         .map(|task| {
-            let root = root.clone();
+            let pool = pool.clone();
             let task_json =
                 format!(r#"{{"kind":"Task","task":{{"instructions":"echo","data":"{task}"}}}}"#);
             thread::spawn(move || {
-                submit_with_mode(&root, &task_json, data_source, notify_method)
+                submit_with_mode(&pool, &task_json, data_source, notify_method)
                     .expect("Submit failed")
             })
         })
@@ -74,5 +73,5 @@ fn single_agent_queues_multiple_tasks(
 
     let _ = agent.stop();
 
-    cleanup_test_dir(&test_dir);
+    cleanup_pool(&pool);
 }

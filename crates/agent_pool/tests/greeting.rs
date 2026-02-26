@@ -9,13 +9,13 @@ mod common;
 
 use agent_pool::Response;
 use common::{
-    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_test_dir, is_ipc_available,
-    setup_test_dir, submit_with_mode,
+    AgentPoolHandle, DataSource, NotifyMethod, TestAgent, cleanup_pool, generate_pool,
+    is_ipc_available, submit_with_mode,
 };
 use rstest::rstest;
 use std::time::Duration;
 
-const TEST_DIR: &str = "greeting";
+const TEST_NAME: &str = "greeting";
 
 #[rstest]
 #[timeout(std::time::Duration::from_secs(20))]
@@ -29,25 +29,22 @@ fn greeting_casual_and_formal(
     #[case] data_source: DataSource,
     #[case] notify_method: NotifyMethod,
 ) {
-    // Use mode in test dir name to avoid conflicts when tests run in parallel
-    let test_dir = format!("{TEST_DIR}_{data_source:?}_{notify_method:?}");
-    let root = setup_test_dir(&test_dir);
+    let pool = generate_pool(&format!("{TEST_NAME}_{data_source:?}_{notify_method:?}"));
 
-    if !is_ipc_available(&root) {
+    if !is_ipc_available() {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_dir);
+        cleanup_pool(&pool);
         return;
     }
 
-    let _pool = AgentPoolHandle::start(&root, &test_dir);
-    let mut agent =
-        TestAgent::greeting(&root, "friendly-bot", Duration::from_millis(10), &test_dir);
+    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
+    let mut agent = TestAgent::greeting(&pool, "friendly-bot", Duration::from_millis(10), &pool);
 
     // Wait for agent to be ready (has processed initial heartbeat)
     agent.wait_ready();
 
     let casual = submit_with_mode(
-        &root,
+        &pool,
         r#"{"kind":"Task","task":{"instructions":"greet","data":"casual"}}"#,
         data_source,
         notify_method,
@@ -59,7 +56,7 @@ fn greeting_casual_and_formal(
     assert_eq!(stdout.trim(), "Hi friendly-bot, how are ya?");
 
     let formal = submit_with_mode(
-        &root,
+        &pool,
         r#"{"kind":"Task","task":{"instructions":"greet","data":"formal"}}"#,
         data_source,
         notify_method,
@@ -74,12 +71,12 @@ fn greeting_casual_and_formal(
     );
 
     // Note: processed contains the full task JSON
-    eprintln!("[{test_dir}] TEST: assertions passed, stopping agent...");
+    eprintln!("[{pool}] TEST: assertions passed, stopping agent...");
     let _ = agent.stop();
-    eprintln!("[{test_dir}] TEST: agent stopped, cleaning up...");
+    eprintln!("[{pool}] TEST: agent stopped, cleaning up...");
 
-    cleanup_test_dir(&test_dir);
-    eprintln!("[{test_dir}] TEST: cleanup complete, dropping pool...");
+    cleanup_pool(&pool);
+    eprintln!("[{pool}] TEST: cleanup complete, dropping pool...");
 
-    // _pool drops here - calls stop on the daemon
+    // _pool_handle drops here - calls stop on the daemon
 }
