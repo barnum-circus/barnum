@@ -78,9 +78,9 @@ fi
 
 # Outer loop: reconnect on eviction or failure
 while true; do
-    # Check if pool still exists before reconnecting
-    if [ ! -d "$POOL_DIR" ]; then
-        echo "[$NAME] Pool directory $POOL_DIR no longer exists, exiting." >&2
+    # Check if pool is still running (status file exists when daemon is up)
+    if [ ! -f "$POOL_DIR/status" ]; then
+        echo "[$NAME] Pool not running (no status file at $POOL_DIR/status), exiting." >&2
         exit 0
     fi
 

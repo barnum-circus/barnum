@@ -7,6 +7,9 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# Kill any stale agents from previous runs
+pkill -f "command-agent.sh --pool cmd" 2>/dev/null || true
+
 # Build if needed
 echo -n "Building... "
 cargo build -p agent_pool_cli --quiet
