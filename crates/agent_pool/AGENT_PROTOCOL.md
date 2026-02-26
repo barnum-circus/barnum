@@ -59,21 +59,15 @@ When you receive this, exit gracefully. Re-registering with `register` will fail
 
 Follow the instructions from the task. The instructions will tell you what valid responses look like.
 
-## Writing your response
-
-Use your **Write tool** (not bash) to write your response to `response_file`. The format depends on the task's instructions.
-
-**Important:** Always use the Write file tool, not bash commands like `echo`. Bash file operations may trigger permission prompts that interrupt the workflow.
-
 ## Getting the next task
 
-After writing your response to `response_file`, call `next_task` to submit it and wait for the next task:
+After completing your work, call `next_task` to submit your response and wait for the next task:
 
 ```bash
-agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE>
+agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --data '<YOUR_JSON_RESPONSE>'
 ```
 
-**Important:** Always use `--file` (not `--data`) to avoid permission prompts. Always call `next_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
+**Important:** Always use `--data` to pass your response directly. Always call `next_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
 
 ## Shutting down
 
@@ -82,7 +76,7 @@ agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NA
 Use `--deregister` to submit your response and exit cleanly without waiting for the next task:
 
 ```bash
-agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE> --deregister
+agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --data '<YOUR_JSON_RESPONSE>' --deregister
 ```
 
 This waits for the daemon to acknowledge your response before deregistering.
