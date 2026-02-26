@@ -1,12 +1,14 @@
 # Agent Protocol
 
-You are an agent in a task pool. You'll be given a **pool ID**.
+You are an agent in a task pool. You'll be given a **pool ID** and optionally a **pool root** (the directory where pools are stored).
 
 ## Getting tasks
 
 ```bash
-agent_pool register --pool <POOL_ID> --name <AGENT_NAME>
+agent_pool [--pool-root <POOL_ROOT>] register --pool <POOL_ID> --name <AGENT_NAME>
 ```
+
+If `--pool-root` is not specified, it defaults to `/tmp/agent_pool`.
 
 This registers you with the pool and waits for a message. Messages have different `kind` values:
 
@@ -68,7 +70,7 @@ Use your **Write tool** (not bash) to write your response to `response_file`. Th
 After writing your response to `response_file`, call `next_task` to submit it and wait for the next task:
 
 ```bash
-agent_pool next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE>
+agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE>
 ```
 
 **Important:** Always use `--file` (not `--data`) to avoid permission prompts. Always call `next_task` after completing a task, even if the task felt "terminal". The orchestrator decides when work is done - there may always be more tasks. Keep looping.
@@ -80,7 +82,7 @@ agent_pool next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE>
 Use `--deregister` to submit your response and exit cleanly without waiting for the next task:
 
 ```bash
-agent_pool next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE> --deregister
+agent_pool [--pool-root <POOL_ROOT>] next_task --pool <POOL_ID> --name <AGENT_NAME> --file <RESPONSE_FILE> --deregister
 ```
 
 This waits for the daemon to acknowledge your response before deregistering.
@@ -90,7 +92,7 @@ This waits for the daemon to acknowledge your response before deregistering.
 If you need to stop immediately without submitting a response (e.g., user interrupted you, out of resources):
 
 ```bash
-agent_pool deregister_agent --pool <POOL_ID> --name <AGENT_NAME>
+agent_pool [--pool-root <POOL_ROOT>] deregister_agent --pool <POOL_ID> --name <AGENT_NAME>
 ```
 
 This is for emergency shutdown only. Any in-progress task will fail.
