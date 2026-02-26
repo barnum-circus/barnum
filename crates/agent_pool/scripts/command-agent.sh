@@ -69,8 +69,21 @@ trap cleanup SIGINT SIGTERM
 
 RECONNECT_DELAY=2
 
+# Resolve pool path (handles both paths and pool IDs)
+if [[ "$POOL" == */* ]]; then
+    POOL_DIR="$POOL"
+else
+    POOL_DIR="${TMPDIR:-/tmp}/gsd/$POOL"
+fi
+
 # Outer loop: reconnect on eviction or failure
 while true; do
+    # Check if pool still exists before reconnecting
+    if [ ! -d "$POOL_DIR" ]; then
+        echo "[$NAME] Pool directory $POOL_DIR no longer exists, exiting." >&2
+        exit 0
+    fi
+
     echo "[$NAME] Connecting to pool $POOL..." >&2
 
     # Inner loop: process tasks
