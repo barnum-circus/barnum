@@ -37,6 +37,16 @@ Before responding, think through your analysis rigorously:
 
 The goal is bulletproof reasoning. If your analysis has holes, the user will find them. Find them first.
 
+### FSEvents / filesystem watcher bugs
+
+**NEVER assume FS events are "slow" or "overwhelmed".** When watcher-based code fails or times out, it is ALWAYS a logic bug - not a performance issue. FSEvents on macOS (and inotify on Linux) are fast and reliable. If events aren't being received, look for:
+- Using separate watchers for canary verification vs the actual wait (verifying watcher A works, then waiting on watcher B)
+- Race conditions in watcher setup
+- Incorrect path matching in event callbacks
+- Watching the wrong directory
+
+This has never been a performance issue and always ends up being a logic bug.
+
 ## Core Values
 
 Your singular mission is creating S-tier libraries where:

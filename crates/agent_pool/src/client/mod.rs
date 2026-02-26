@@ -34,9 +34,13 @@ const CANARY_FILE: &str = "client_canary";
 ///
 /// Returns an error if the timeout is exceeded before the pool becomes ready.
 pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
+    enum Event {
+        Canary,
+        Status,
+    }
+
     let root = root.as_ref();
 
-    // Bail if directory doesn't exist - don't create it
     if !root.exists() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -45,21 +49,21 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
     }
 
     let status_file = root.join(STATUS_FILE);
+    let canary_path = root.join(CANARY_FILE);
 
-    // Fast path: already ready
-    if status_file.exists() {
-        return Ok(());
-    }
-
-    // Set up watcher
     let (tx, rx) = mpsc::channel();
-    let status_path = status_file.clone();
+    let status_check = status_file.clone();
+    let canary_check = canary_path.clone();
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res
-                && event.paths.iter().any(|p| p == &status_path)
-            {
-                let _ = tx.send(());
+            if let Ok(event) = res {
+                for path in &event.paths {
+                    if path == &canary_check {
+                        let _ = tx.send(Event::Canary);
+                    } else if path == &status_check {
+                        let _ = tx.send(Event::Status);
+                    }
+                }
             }
         },
         Config::default(),
@@ -70,34 +74,18 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
         .watch(root, RecursiveMode::NonRecursive)
         .map_err(io::Error::other)?;
 
-    // Verify watcher is working via canary
-    let canary_path = root.join(CANARY_FILE);
-    let (canary_tx, canary_rx) = mpsc::channel();
-    let canary_check = canary_path.clone();
-    let mut canary_watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res
-                && event.paths.iter().any(|p| p == &canary_check)
-            {
-                let _ = canary_tx.send(());
-            }
-        },
-        Config::default(),
-    )
-    .map_err(io::Error::other)?;
-
-    canary_watcher
-        .watch(root, RecursiveMode::NonRecursive)
-        .map_err(io::Error::other)?;
-
-    // Write canary and wait for event
+    // Verify watcher is live via canary file
     fs::write(&canary_path, "sync")?;
     let start = Instant::now();
     loop {
-        match canary_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(()) => {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Event::Canary) => {
                 let _ = fs::remove_file(&canary_path);
                 break;
+            }
+            Ok(Event::Status) => {
+                let _ = fs::remove_file(&canary_path);
+                return Ok(());
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if start.elapsed() > timeout {
@@ -107,47 +95,46 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
                         "watcher sync timed out",
                     ));
                 }
-                // Retry with new content
                 fs::write(&canary_path, start.elapsed().as_millis().to_string())?;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 let _ = fs::remove_file(&canary_path);
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
-                    "canary watcher disconnected",
+                    "watcher disconnected",
                 ));
             }
         }
     }
-    drop(canary_watcher);
 
-    // Check again - status file might exist now
     if status_file.exists() {
         return Ok(());
     }
 
-    // Wait for status file event
-    let remaining = timeout.saturating_sub(start.elapsed());
-    match rx.recv_timeout(remaining) {
-        Ok(()) => Ok(()),
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            // Final check - might have missed the event
-            if status_file.exists() {
-                Ok(())
-            } else {
-                Err(io::Error::new(
+    // Wait for status file
+    loop {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        match rx.recv_timeout(remaining) {
+            Ok(Event::Status) => return Ok(()),
+            Ok(Event::Canary) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if status_file.exists() {
+                    return Ok(());
+                }
+                return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     format!(
-                        "agent pool did not become ready within {:?} (status file: {})",
-                        timeout,
+                        "pool not ready within {timeout:?} (status file: {})",
                         status_file.display()
                     ),
-                ))
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "watcher disconnected",
+                ));
             }
         }
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
-            io::ErrorKind::BrokenPipe,
-            "watcher channel disconnected",
-        )),
     }
 }

@@ -12,6 +12,10 @@ git add -u  # Re-stage any files that were reformatted
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
 
+# Build CLI binary first (tests spawn it as subprocess)
+echo "Building CLI binary..."
+cargo build -p agent_pool_cli > "$TEMP_DIR/build.log" 2>&1 || { echo "cargo build failed:"; cat "$TEMP_DIR/build.log"; exit 1; }
+
 # Run check, clippy, test, and udeps in parallel
 echo "Running cargo check, clippy, test, and udeps in parallel..."
 
