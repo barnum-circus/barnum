@@ -5,10 +5,10 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, AgentEvent, DaemonConfig, PENDING_DIR, Payload, RESPONSE_FILE, SOCKET_NAME,
-    STATUS_FILE, TASK_FILE, Transport, cleanup_stopped, create_watcher, generate_id, id_to_path,
-    is_daemon_running, list_pools, resolve_pool, run_with_config, stop, submit, submit_file,
-    verify_watcher_sync, wait_for_task,
+    AGENTS_DIR, AgentEvent, DaemonConfig, Payload, RESPONSE_FILE, STATUS_FILE, TASK_FILE,
+    Transport, cleanup_stopped, create_watcher, generate_id, id_to_path, is_daemon_running,
+    list_pools, resolve_pool, run_with_config, stop, submit, submit_file, verify_watcher_sync,
+    wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -86,17 +86,10 @@ enum Command {
         /// Disable periodic heartbeats after idle timeout.
         #[arg(long, conflicts_with_all = ["no_heartbeat", "no_immediate_heartbeat"])]
         no_periodic_heartbeat: bool,
-        /// Clear existing pool directory before starting.
-        /// Required if the directory exists but daemon is not running.
-        #[arg(long, conflicts_with = "force")]
-        clear: bool,
-        /// Stop existing daemon before starting. Requires --clear.
-        #[arg(long, requires = "clear", conflicts_with = "force")]
+        /// Stop existing daemon before starting (if running).
+        /// Without this flag, starting fails if a daemon is already running.
+        #[arg(long)]
         stop: bool,
-        /// Force start: stop daemon if running, clear directory if exists.
-        /// Unlike --stop --clear, this never fails due to missing state.
-        #[arg(long, conflicts_with_all = ["clear", "stop"])]
-        force: bool,
     },
     /// Stop a running agent pool server
     Stop {
@@ -247,9 +240,7 @@ fn main() -> ExitCode {
             no_heartbeat,
             no_immediate_heartbeat,
             no_periodic_heartbeat,
-            clear,
             stop: stop_flag,
-            force,
         } => {
             init_tracing(log_level);
 
@@ -270,14 +261,13 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Check startup conditions based on directory and daemon state
+            // Handle existing daemon/directory
             if root.exists() {
                 let daemon_running = is_daemon_running(&root);
-                let has_state = has_pool_state(&root);
 
                 if daemon_running {
-                    if stop_flag || force {
-                        // --stop --clear or --force: Stop daemon, then clear
+                    if stop_flag {
+                        // --stop: Stop daemon first
                         if let Err(e) = stop(&root) {
                             eprintln!("Failed to stop daemon: {e}");
                             return ExitCode::FAILURE;
@@ -294,40 +284,19 @@ fn main() -> ExitCode {
                             return ExitCode::FAILURE;
                         }
                         eprintln!("Stopped existing daemon");
-                    } else if clear {
-                        // --clear alone but daemon running
-                        eprintln!(
-                            "Daemon is running. Use --stop --clear or --force to stop and restart."
-                        );
-                        return ExitCode::FAILURE;
                     } else {
-                        // No flags, daemon running
-                        eprintln!(
-                            "Daemon is already running. Use --stop --clear or --force to restart."
-                        );
+                        // No --stop flag, daemon running
+                        eprintln!("Daemon is already running. Use --stop to stop and restart.");
                         return ExitCode::FAILURE;
                     }
-                } else if has_state && !clear && !force {
-                    // Directory exists with actual state, daemon not running, no --clear or --force
-                    eprintln!(
-                        "Pool directory exists with stale state. Use --clear or --force to wipe and restart."
-                    );
+                }
+
+                // Always wipe the directory (daemon is now stopped or wasn't running)
+                if let Err(e) = fs::remove_dir_all(&root) {
+                    eprintln!("Failed to clear pool directory: {e}");
                     return ExitCode::FAILURE;
                 }
-                // else: directory exists but is empty (no state) - that's fine
-
-                // Clear the directory if it has state
-                if has_state {
-                    if let Err(e) = fs::remove_dir_all(&root) {
-                        eprintln!("Failed to clear pool directory: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                    eprintln!("Cleared pool directory");
-                }
-            } else if stop_flag {
-                // --stop but no directory exists (--force doesn't fail here)
-                eprintln!("No pool directory exists. Nothing to stop.");
-                return ExitCode::FAILURE;
+                eprintln!("Cleared pool directory");
             }
 
             // Print pool info
@@ -589,14 +558,6 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
-}
-
-/// Check if a pool directory has any state (agents, pending tasks, socket).
-/// An empty directory doesn't count as having state.
-fn has_pool_state(root: &std::path::Path) -> bool {
-    root.join(AGENTS_DIR).exists()
-        || root.join(PENDING_DIR).exists()
-        || root.join(SOCKET_NAME).exists()
 }
 
 /// Wait for the status file to appear (daemon ready signal).

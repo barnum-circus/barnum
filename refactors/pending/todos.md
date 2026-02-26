@@ -4,7 +4,7 @@
 
 **Status: NEEDS DESIGN**
 
-Currently when the daemon stops (via SIGTERM/Ctrl+C or `agent_pool stop`), the pool directory remains with stale state. Users must manually run `agent_pool cleanup` or use `--clear` on restart.
+Currently when the daemon stops (via SIGTERM/Ctrl+C or `agent_pool stop`), the pool directory remains with stale state. Users must manually run `agent_pool cleanup` (the pool directory is automatically wiped on restart).
 
 **Desired behavior:**
 - Ctrl+C (SIGINT) should clean up the pool directory before exiting

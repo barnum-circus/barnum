@@ -872,6 +872,12 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
 ///
 /// Returns the lock guard and socket listener on success.
 ///
+/// # Stale Event Filtering
+///
+/// `FSEvents` on macOS may deliver buffered events from previous daemon runs.
+/// We filter these by checking the file's modification time against our start time.
+/// Events for files modified before we started are considered stale and skipped.
+///
 /// # Open Questions
 ///
 /// TODO: Should we wait until the socket is ready before considering the daemon ready?
@@ -894,15 +900,19 @@ fn sync_and_setup(
     io_rx: &mpsc::Receiver<IoEvent>,
 ) -> io::Result<(LockGuard, Listener)> {
     use std::collections::HashSet;
+    use std::time::SystemTime;
 
     const POLL_TIMEOUT: Duration = Duration::from_millis(100);
     const MAX_DURATION: Duration = Duration::from_secs(5);
+
+    // Record start time for filtering stale FSEvents from previous daemon runs
+    let start_time = SystemTime::now();
 
     let pending_canary = pending_dir.join("canary");
     let agents_canary = agents_dir.join("canary");
 
     // All paths we expect to see events for (complete allowlist)
-    // Any event for a path NOT in this set causes a panic
+    // Any event for a path NOT in this set causes a panic (unless stale)
     let mut allowed: HashSet<PathBuf> = HashSet::new();
     allowed.insert(root.to_path_buf());
     allowed.insert(lock_path.to_path_buf());
@@ -958,14 +968,33 @@ fn sync_and_setup(
                         // Allow static paths in allowlist, OR canary files in agent subdirs
                         let is_agent_canary = path.starts_with(agents_dir)
                             && path.file_name().is_some_and(|n| n == "canary");
-                        assert!(
-                            allowed.contains(path) || is_agent_canary,
-                            "unexpected FS event during startup sync: {:?} for path {}\n\
-                             Allowed paths: {:?}",
-                            event.kind,
-                            path.display(),
-                            allowed
-                        );
+
+                        if !allowed.contains(path) && !is_agent_canary {
+                            // Check if this is a stale event from a previous run
+                            // by comparing the file's mtime to our start time
+                            let is_stale = path
+                                .metadata()
+                                .and_then(|m| m.modified())
+                                .map(|mtime| mtime < start_time)
+                                .unwrap_or(false);
+
+                            if is_stale {
+                                warn!(
+                                    "ignoring stale FS event from previous run: {:?} for {}",
+                                    event.kind,
+                                    path.display()
+                                );
+                                continue;
+                            }
+
+                            panic!(
+                                "unexpected FS event during startup sync: {:?} for path {}\n\
+                                 Allowed paths: {:?}",
+                                event.kind,
+                                path.display(),
+                                allowed
+                            );
+                        }
                     }
 
                     if required.contains(path) {
