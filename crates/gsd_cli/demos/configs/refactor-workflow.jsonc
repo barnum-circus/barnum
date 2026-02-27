@@ -82,7 +82,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Commit the changes made to the file.\n\nInput: `{\"file\": \"...\"}`\n\nReturn `[]` to finish this file."
+        "instructions": "Commit just the changes to the file you have worked on.\n\nInput: `{\"file\": \"...\"}`\n\nUse `git add <file>` to stage only this file, then commit. Do not stage or commit other files.\n\nReturn `[]` to finish this file."
       },
       "next": []
     }
