@@ -5,6 +5,11 @@
   "steps": [
     {
       "name": "Start",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
         "instructions": "This is the starting step. Return an empty array to finish."

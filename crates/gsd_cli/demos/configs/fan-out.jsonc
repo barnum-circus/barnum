@@ -4,17 +4,33 @@
   "steps": [
     {
       "name": "Distribute",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks."
+        "instructions": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks.\n\nReturn:\n```json\n[\n  {\"kind\": \"Worker\", \"value\": {\"id\": 1}},\n  {\"kind\": \"Worker\", \"value\": {\"id\": 2}},\n  ...\n  {\"kind\": \"Worker\", \"value\": {\"id\": 10}}\n]\n```"
       },
       "next": ["Worker"]
     },
     {
       "name": "Worker",
+      "value_schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Worker ID"
+          }
+        },
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Process your assigned work item. Return [] when done."
+        "instructions": "Process your assigned work item.\n\nInput: `{\"id\": <number>}`\n\nReturn `[]` when done."
       },
       "next": []
     }

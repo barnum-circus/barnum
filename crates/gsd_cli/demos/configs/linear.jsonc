@@ -4,25 +4,40 @@
   "steps": [
     {
       "name": "Start",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "You are at the start. Transition to Middle."
+        "instructions": "You are at the start. Transition to Middle.\n\nReturn: `[{\"kind\": \"Middle\", \"value\": {}}]`"
       },
       "next": ["Middle"]
     },
     {
       "name": "Middle",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "You are in the middle. Transition to End."
+        "instructions": "You are in the middle. Transition to End.\n\nReturn: `[{\"kind\": \"End\", \"value\": {}}]`"
       },
       "next": ["End"]
     },
     {
       "name": "End",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "You have reached the end. Return an empty array."
+        "instructions": "You have reached the end. Return an empty array.\n\nReturn: `[]`"
       },
       "next": []
     }

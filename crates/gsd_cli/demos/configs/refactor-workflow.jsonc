@@ -1,47 +1,88 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "Analyze", "value": {}}]' refactor-workflow.jsonc
+// pnpm gsd run --pool <POOL> --initial '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' refactor-workflow.jsonc
 {
   "options": {
     "max_retries": 2
   },
   "steps": [
     {
-      "name": "Analyze",
+      "name": "ListFiles",
+      "value_schema": {
+        "type": "object",
+        "required": ["folder"],
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Path to folder to scan for files"
+          }
+        },
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze the codebase and identify refactors needed.\n\nReturn a list of refactors grouped by file:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename X to Y\", \"extract function Z\"]\n}}]\n```\n\nEach file gets its own task to ensure sequential processing per file."
+        "instructions": "List all source files in the given folder.\n\nInput: `{\"folder\": \"./src\"}`\n\nReturn an array of AnalyzeFile tasks, one per file:\n```json\n[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"src/main.rs\"}}, ...]\n```"
+      },
+      "next": ["AnalyzeFile"]
+    },
+    {
+      "name": "AnalyzeFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file to analyze"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": "Analyze the file and identify refactors needed.\n\nInput: `{\"file\": \"src/main.rs\"}`\n\nIf refactors are needed, return:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename X to Y\", \"extract function Z\"]\n}}]\n```\n\nIf no refactors needed, return `[]`."
       },
       "next": ["ProcessRefactorList"]
     },
     {
       "name": "ProcessRefactorList",
+      "value_schema": {
+        "type": "object",
+        "required": ["file", "refactors"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file being refactored"
+          },
+          "refactors": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of refactoring operations to apply"
+          }
+        },
+        "additionalProperties": false
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: {\"file\": \"...\", \"refactors\": [...]}\n\nAfter applying:\n- If more refactors remain, return [{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]\n- If no refactors remain, return [{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]\n\nThis ensures refactors for the same file are applied sequentially."
+        "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: `{\"file\": \"...\", \"refactors\": [...]}`\n\nAfter applying:\n- If more refactors remain, return `[{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]`\n- If no refactors remain, return `[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]`\n\nThis ensures refactors for the same file are applied sequentially."
       },
       "next": ["ProcessRefactorList", "CommitFile"]
     },
     {
       "name": "CommitFile",
-      "action": {
-        "kind": "Pool",
-        "instructions": "Commit the changes made to the file.\n\nInput: {\"file\": \"...\"}\n\nOptions:\n- Return [] to finish\n- Return [{\"kind\": \"Analyze\", \"value\": {}}] to re-analyze for more refactors\n- Return [{\"kind\": \"VerifyFile\", \"value\": {\"file\": \"...\"}}] to run verification"
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file to commit"
+          }
+        },
+        "additionalProperties": false
       },
-      "next": ["Analyze", "VerifyFile", "Done"]
-    },
-    {
-      "name": "VerifyFile",
       "action": {
         "kind": "Pool",
-        "instructions": "Run tests or verification for the refactored file.\n\nReturn [] when done, or emit more tasks if issues found."
-      },
-      "next": ["ProcessRefactorList", "Done"]
-    },
-    {
-      "name": "Done",
-      "action": {
-        "kind": "Pool",
-        "instructions": "All refactors complete."
+        "instructions": "Commit the changes made to the file.\n\nInput: `{\"file\": \"...\"}`\n\nReturn `[]` to finish this file."
       },
       "next": []
     }
