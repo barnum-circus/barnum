@@ -45,7 +45,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/configs/simple.json" \
+    $GSD run "$SCRIPT_DIR/configs/simple.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
@@ -87,7 +87,7 @@ else
     # Run GSD
     echo ""
     echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/configs/simple.json" \
+    $GSD run "$SCRIPT_DIR/configs/simple.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]'
 

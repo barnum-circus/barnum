@@ -43,7 +43,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$GSD run "$SCRIPT_DIR/configs/command-demo.json" \
+$GSD run "$SCRIPT_DIR/configs/command-demo.jsonc" \
     --pool "$ROOT" \
     --initial '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 
