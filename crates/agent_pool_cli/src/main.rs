@@ -225,18 +225,22 @@ fn wait_and_read_task(
         .get("task")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
+    let instructions = envelope.get("instructions").cloned();
 
     let response_file = transport
         .path()
         .map(|p| p.join(RESPONSE_FILE))
         .ok_or("Socket transport not supported")?;
 
-    let output = serde_json::json!({
+    let mut output = serde_json::json!({
         "kind": kind,
         "agent_name": name,
         "response_file": response_file.display().to_string(),
         "content": content
     });
+    if let Some(inst) = instructions {
+        output["instructions"] = inst;
+    }
 
     Ok(serde_json::to_string_pretty(&output).unwrap_or_default())
 }
