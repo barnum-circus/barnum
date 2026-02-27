@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use interprocess::local_socket::Stream;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::Transport;
 use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE, RESPONSE_SUFFIX, TASK_FILE};
@@ -387,15 +387,9 @@ pub(super) fn execute_effect(
                 .expect("TaskCompleted for unknown agent - core bug");
 
             match task_id {
-                TaskId::Heartbeat(heartbeat_id) => {
+                TaskId::Heartbeat(_) => {
                     let _ = fs::remove_file(agent_path.join(TASK_FILE));
                     let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
-
-                    debug!(
-                        agent_id = agent_id.0,
-                        heartbeat_id = heartbeat_id.0,
-                        "heartbeat completed"
-                    );
                 }
                 TaskId::External(external_id) => {
                     let agent_output = agent_map
@@ -410,19 +404,11 @@ pub(super) fn execute_effect(
                     let response_json = serde_json::to_string(&response)
                         .expect("Response serialization cannot fail");
                     external_task_map.finish(external_id, &response_json)?;
-
-                    info!(
-                        agent_id = agent_id.0,
-                        external_task_id = external_id.0,
-                        "task completed"
-                    );
                 }
             }
         }
         Effect::TaskFailed { task_id } => match task_id {
-            TaskId::Heartbeat(heartbeat_id) => {
-                debug!(heartbeat_id = heartbeat_id.0, "heartbeat timed out");
-            }
+            TaskId::Heartbeat(_) => {}
             TaskId::External(external_id) => {
                 let response = Response::not_processed(NotProcessedReason::Timeout);
                 let response_json =
@@ -448,8 +434,6 @@ pub(super) fn execute_effect(
             if let Some(agent_path) = transport.path() {
                 kicked_paths.insert(agent_path.to_path_buf());
             }
-
-            info!(agent_id = agent_id.0, "agent kicked");
         }
     }
     Ok(())

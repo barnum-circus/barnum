@@ -383,12 +383,12 @@ fn run_event_loop(
             break;
         }
 
-        trace!(?event, "received event");
+        info!(?event, "received event");
         let (new_state, effects) = step(state, event);
         state = new_state;
 
         for effect in effects {
-            trace!(?effect, "emitting effect");
+            info!(?effect, "emitting effect");
             // Send effect to unified I/O channel
             if io_tx.send(IoEvent::Effect(effect)).is_err() {
                 // I/O loop is gone, exit
@@ -462,13 +462,12 @@ fn io_loop(
                         timeout: io_config.default_task_timeout,
                     },
                 );
-                info!(external_task_id = external_id.0, "socket task submitted");
                 let _ = events_tx.send(Event::TaskSubmitted {
                     task_id: TaskId::External(external_id),
                 });
             }
             IoEvent::Effect(effect) => {
-                trace!(?effect, "executing effect");
+                info!(?effect, "executing effect");
                 // Clear pending response tracking when TaskCompleted cleans up the response file
                 if let Effect::TaskCompleted { agent_id, .. } = &effect {
                     pending_responses.remove(agent_id);
@@ -578,7 +577,6 @@ fn handle_agent_dir(
         // Directory deleted - clean up tracking
         kicked_paths.remove(agent_path);
         if let Some(agent_id) = agent_map.get_id_by_path(agent_path) {
-            info!(agent_id = agent_id.0, path = %agent_path.display(), "agent deregistered");
             // Remove from agent_map immediately to prevent races where core
             // assigns a task to an agent whose directory is already gone.
             agent_map.remove(agent_id);
@@ -590,7 +588,6 @@ fn handle_agent_dir(
     {
         // Only register if not kicked (in-memory or via task.json)
         if let Some(agent_id) = agent_map.register_directory(agent_path.to_path_buf(), ()) {
-            info!(agent_id = agent_id.0, path = %agent_path.display(), "agent registered");
             let heartbeat_task_id = if io_config.immediate_heartbeat_enabled {
                 Some(task_id_allocator.allocate_heartbeat())
             } else {
@@ -684,10 +681,6 @@ fn register_submission(
             timeout: io_config.default_task_timeout,
         },
     ) {
-        info!(
-            external_task_id = external_id.0,
-            "file-based task registered"
-        );
         let _ = events_tx.send(Event::TaskSubmitted {
             task_id: TaskId::External(external_id),
         });
@@ -1490,7 +1483,7 @@ mod tests {
 
     use super::super::core::{AgentId, Effect, PoolState, step};
     use std::thread;
-    use tracing::{debug, trace};
+    use tracing::{debug, info};
 
     /// Run the event loop until the events channel closes.
     fn run_event_loop(
@@ -1510,13 +1503,13 @@ mod tests {
         debug!("event loop starting");
 
         while let Ok(event) = events_rx.recv() {
-            trace!(?event, "received event");
+            info!(?event, "received event");
 
             let (new_state, effects) = step(state, event);
             state = new_state;
 
             for effect in effects {
-                trace!(?effect, "emitting effect");
+                info!(?effect, "emitting effect");
                 let _ = effects_tx.send(effect);
             }
         }

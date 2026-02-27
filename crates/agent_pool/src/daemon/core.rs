@@ -569,7 +569,6 @@ fn try_assign_task_to_idle_agent(state: &mut PoolState, task_id: TaskId) -> Opti
         .try_become_busy(task_id)
         .expect("just verified agent is idle");
 
-    tracing::info!(agent_id = agent_id.0, ?task_id, "task assigned to agent");
     Some(Effect::TaskAssigned { task_id, epoch })
 }
 
