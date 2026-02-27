@@ -39,7 +39,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze the file and identify refactors needed.\n\nInput: `{\"file\": \"src/main.rs\"}`\n\nIf refactors are needed, return:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename X to Y\", \"extract function Z\"]\n}}]\n```\n\nIf no refactors needed, return `[]`."
+        "instructions": "Analyze the file and identify refactors needed.\n\nInput: `{\"file\": \"src/main.rs\"}`\n\n**Refactor guidelines:**\n- No behavior changes. The code should do exactly the same thing before and after.\n- Focus on slight cleanups: renaming variables to be more informatively named, improving readability.\n- Never create new files. Only modify existing files.\n\nIf refactors are needed, return:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename 'x' to 'user_count'\", \"rename 'tmp' to 'cached_result'\"]\n}}]\n```\n\nIf no refactors needed, return `[]`."
       },
       "next": ["ProcessRefactorList"]
     },
@@ -63,7 +63,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: `{\"file\": \"...\", \"refactors\": [...]}`\n\nAfter applying:\n- If more refactors remain, return `[{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]`\n- If no refactors remain, return `[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]`\n\nThis ensures refactors for the same file are applied sequentially."
+        "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: `{\"file\": \"...\", \"refactors\": [...]}`\n\n**Rules:**\n- Never create new files. Only modify the existing file.\n- No behavior changes. The refactor should be purely cosmetic (renaming, readability).\n\nAfter applying:\n- If more refactors remain, return `[{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]`\n- If no refactors remain, return `[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]`\n\nThis ensures refactors for the same file are applied sequentially."
       },
       "next": ["ProcessRefactorList", "CommitFile"]
     },
