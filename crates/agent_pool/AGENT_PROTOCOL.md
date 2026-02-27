@@ -57,7 +57,11 @@ When you receive this, exit gracefully. Re-registering with `register` will fail
 
 ## Doing the work
 
-Follow the instructions from the task. The instructions will tell you what valid responses look like.
+Follow the instructions from the task **exactly**. The instructions specify:
+1. What work to do (if any)
+2. What format your response must be in
+
+**Your response format is dictated by the instructions.** For example, if instructions say "Return an empty array", respond with exactly `[]`. If instructions say "Return a JSON object with field X", respond with exactly that structure. The orchestrator parses your response, so incorrect formats will cause task failures.
 
 ## Getting the next task
 
