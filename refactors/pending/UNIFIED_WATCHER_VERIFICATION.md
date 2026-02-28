@@ -159,15 +159,13 @@ pub fn submit_file_with_timeout(
     // Create watcher, start canary verification (non-blocking)
     let mut watcher = VerifiedWatcher::new(&submissions_dir, canary_path)?;
 
-    // Wait for pool ready - verification happens implicitly
-    if !status_path.exists() {
-        watcher.wait_for(&status_path, Some(Duration::from_secs(10)))?;
-    }
+    // Wait for pool ready (returns immediately if exists)
+    watcher.wait_for(&status_path, Some(Duration::from_secs(10)))?;
 
-    // Pool is ready - write request immediately (don't wait for canary!)
+    // Write request
     atomic_write_str(&root, &request_path, &serde_json::to_string(payload)?)?;
 
-    // Wait for response - verification completes here if not already
+    // Wait for response
     watcher.wait_for(&response_path, timeout)?;
 
     read_and_cleanup_response(&request_path, &response_path)
@@ -176,7 +174,7 @@ pub fn submit_file_with_timeout(
 
 **Key points:**
 - Constructor is non-blocking - starts verification but doesn't wait
-- Write request as soon as pool is ready (status exists)
+- `wait_for()` checks existence first, returns immediately if file exists
 - Canary verification happens lazily during `wait_for()` calls
 
 ### 2. Wait for Pool Ready (`wait_for_pool_ready`)
@@ -195,23 +193,17 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
 pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Option<Duration>) -> io::Result<()> {
     let root = fs::canonicalize(root.as_ref())?;
     let status_path = root.join(STATUS_FILE);
-
-    // Fast path: pool already ready
-    if status_path.exists() {
-        return Ok(());
-    }
-
-    // Need to wait - create watcher with lazy verification
     let canary_path = root.join("client.canary");
+
     let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
     watcher.wait_for(&status_path, timeout)
 }
 ```
 
 **Key points:**
-- Much simpler: ~10 lines instead of ~120
-- Fast path if status already exists (no watcher needed)
-- Lazy verification during `wait_for()` if we need to wait
+- Much simpler: ~5 lines instead of ~120
+- `wait_for()` returns immediately if status exists
+- Lazy verification if we actually need to wait
 
 ### 3. Daemon Startup (`daemon/wiring.rs`)
 
@@ -272,14 +264,8 @@ pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> 
 ```rust
 pub fn wait_for_task(agent_dir: &Path, timeout: Option<Duration>) -> io::Result<String> {
     let task_path = agent_dir.join(TASK_FILE);
-
-    // Fast path: task already waiting
-    if task_path.exists() {
-        return fs::read_to_string(&task_path);
-    }
-
-    // Need to wait - create watcher with lazy verification
     let canary_path = agent_dir.join("agent.canary");
+
     let mut watcher = VerifiedWatcher::new(agent_dir, canary_path)?;
     watcher.wait_for(&task_path, timeout)?;
 
@@ -288,9 +274,9 @@ pub fn wait_for_task(agent_dir: &Path, timeout: Option<Duration>) -> io::Result<
 ```
 
 **Key points:**
-- Fast path if task already exists
-- Lazy verification during `wait_for()` - no explicit `ensure_verified()` needed
-- Same simple pattern as other client flows
+- `wait_for()` returns immediately if task exists
+- Lazy verification if we actually need to wait
+- Same simple pattern as all client flows
 
 ---
 
