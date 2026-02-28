@@ -783,6 +783,47 @@ Should use a watcher on the parent directory (`/tmp/gsd/`) instead of spinning. 
 
 ---
 
+## Return Step Cardinality Validation
+
+**Status: TODO**
+
+Add cardinality constraints for the `next` array that agents return. Currently agents can return any number of tasks for any next step. We should support constraints like:
+
+- **Exactly 0**: `[]` - terminal, no further tasks
+- **Exactly 1**: Must return exactly one task of this type
+- **0 or 1**: Optional single task
+- **1 or more**: At least one task required
+- **0 or more**: Any number (current default behavior)
+
+Example config syntax (TBD):
+```json
+{
+  "name": "Analyze",
+  "next": [
+    {"step": "ProcessFile", "cardinality": "1+"},
+    {"step": "Done", "cardinality": "0-1"}
+  ]
+}
+```
+
+Or simpler syntax:
+```json
+{
+  "name": "Analyze",
+  "next": {
+    "ProcessFile": "1+",
+    "Done": "0-1"
+  }
+}
+```
+
+Benefits:
+- Catch agent errors early (wrong number of tasks)
+- Self-documenting workflows
+- Enable optimization (daemon knows fan-out patterns in advance)
+
+---
+
 ## Runtime Workflow Graph (Execution History)
 
 **Status: TODO**
