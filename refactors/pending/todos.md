@@ -58,27 +58,23 @@ Low priority - the cmd pool is typically used by one set of agents at a time.
 
 ## Shutdown and Cleanup Behavior
 
-**Status: NEEDS DESIGN**
+**Status: PARTIALLY COMPLETE**
 
-Currently when the daemon stops (via SIGTERM/Ctrl+C or `agent_pool stop`), the pool directory remains with stale state. Users must manually run `agent_pool cleanup` (the pool directory is automatically wiped on restart).
+Cleanup is now automatic on startup and graceful shutdown:
 
-**Desired behavior:**
-- Ctrl+C (SIGINT) should clean up the pool directory before exiting
-- `agent_pool stop` should kill the process AND remove the directory
-- Think comprehensively about what "shutdown" means for:
-  - CLI daemon (killed via signal)
-  - Embedded daemon (`DaemonHandle::shutdown()`)
-  - Tests (need clean state between runs)
+**Implemented (Phase 5 from INOTIFY_RACE_ANALYSIS.md):**
+- `cleanup_pool_state()` runs on startup to clean stale state from crashed daemons
+- `PoolStateCleanup` guard cleans up on graceful shutdown or panic
+- Removes: status file, all files in submissions/, all directories in agents/, canary files
 
-**Questions to answer:**
-- Should cleanup be default or opt-in?
-- What about debugging? Users might want to inspect state after crash
-- How to handle signal handlers safely (can't do complex ops in signal handlers)?
-- Should `DaemonHandle::shutdown()` also clean up, or is that test harness's job?
+**Remaining questions:**
+- Signal handlers (SIGINT/SIGTERM) don't run Drop guards - cleanup happens on next startup instead
+- For debugging crashed daemons, users would need to disable cleanup (no flag for this yet)
+- The `stop()` command sends SIGTERM which doesn't trigger Drop - cleanup happens on next startup
 
 **Related:**
 - `stop()` in `client/stop.rs` - sends SIGTERM to PID from lock file
-- `cleanup_stopped()` in `pool.rs` - removes directories for non-running pools
+- `cleanup_stopped()` in `pool.rs` - removes directories for non-running pools (backup cleanup)
 - Test harnesses use `setup_test_dir()` which already cleans up
 
 ---

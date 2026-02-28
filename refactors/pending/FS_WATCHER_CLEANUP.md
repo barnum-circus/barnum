@@ -2,7 +2,7 @@
 
 ## Status: MOSTLY COMPLETE
 
-The primary issue (inotify race) was fixed by flattening the submissions directory structure. See `INOTIFY_RACE_ANALYSIS.md` for details.
+The primary issue (inotify race) was fixed by flattening the submissions directory structure. See `../past/INOTIFY_RACE_ANALYSIS.md` for details.
 
 **Remaining work:**
 - Replace polling with notify in `submit_file.rs` (see `todos.md`)
