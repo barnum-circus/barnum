@@ -883,3 +883,60 @@ Implementation:
 - Add `--pool-root` flag to `gsd run` command
 - Default to `/tmp/agent_pool/` if not specified
 - Combine with `--pool` to form full pool path
+
+---
+
+## Explicit Response Schema Field on Task
+
+**Status: TODO**
+
+Currently, the JSON schema for valid responses is embedded in the instructions markdown. The agent sees something like:
+
+```markdown
+## Valid Responses
+
+Value must match schema:
+
+```json
+{"type": "object", "properties": {...}}
+```
+```
+
+This is hard for agents to parse programmatically. The schema should be an explicit field on the task JSON:
+
+**Current task format:**
+```json
+{
+  "kind": "Task",
+  "task": {
+    "instructions": "...markdown with schema embedded...",
+    "data": {...}
+  }
+}
+```
+
+**Proposed:**
+```json
+{
+  "kind": "Task",
+  "task": {
+    "instructions": "...",
+    "data": {...},
+    "response_schema": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"properties": {"kind": {"const": "NextStep"}, "value": {...}}},
+          ...
+        ]
+      }
+    }
+  }
+}
+```
+
+Benefits:
+- Agents can validate their own responses before submitting
+- Easier for AI agents to understand the expected output format
+- Schema is machine-readable, not buried in markdown
+- The field can be optional (null or absent) for steps without schema constraints
