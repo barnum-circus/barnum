@@ -66,7 +66,7 @@ impl VerifiedWatcher {
     /// * `watch_dir` - Directory to watch (must exist)
     /// * `canary_path` - Path for canary file (will be created and deleted)
     /// * `short_circuit_on` - Optional file that implicitly verifies watcher if seen
-    /// * `verify_timeout` - How long to wait for verification
+    /// * `verify_timeout` - How long to wait for verification (None = wait forever)
     ///
     /// # Returns
     ///
@@ -76,11 +76,16 @@ impl VerifiedWatcher {
         watch_dir: &Path,
         canary_path: &Path,
         short_circuit_on: Option<&Path>,
-        verify_timeout: Duration,
+        verify_timeout: Option<Duration>,
     ) -> io::Result<(Self, bool)>;
 
     /// Wait for a specific file to appear.
-    pub fn wait_for(&self, target: &Path, timeout: Duration) -> io::Result<()>;
+    ///
+    /// # Arguments
+    ///
+    /// * `target` - File to wait for
+    /// * `timeout` - How long to wait (`None` = wait forever, used by GSD for indefinite waits)
+    pub fn wait_for(&self, target: &Path, timeout: Option<Duration>) -> io::Result<()>;
 
     /// Get the raw event receiver for custom event processing.
     pub fn into_receiver(self) -> mpsc::Receiver<PathBuf>;
@@ -99,7 +104,20 @@ This eliminates the `recv_timeout` loop once we've seen ANY event.
 
 ## Use Cases
 
+### Overview
+
+| Use Case | Flow | Caller | Description |
+|----------|------|--------|-------------|
+| `submit_file` | **Client → Daemon** | CLI/SDK submitting tasks | Wait for pool ready, then response |
+| `wait_for_pool_ready` | **Client → Daemon** | CLI/SDK checking daemon | Wait for status file (daemon alive) |
+| Daemon startup | **Daemon init** | Daemon process | Verify watchers before accepting work |
+| Agent task wait | **Agent → Daemon** | Agent processes | Wait for task assignment |
+
+---
+
 ### 1. File-Based Submission (`submit_file`)
+
+**Flow: Client → Daemon** (submitter waiting for task completion)
 
 **Current flow (two watchers):**
 ```rust
@@ -120,7 +138,7 @@ pub fn submit_file_with_timeout(...) -> io::Result<Response> {
 pub fn submit_file_with_timeout(
     root: impl AsRef<Path>,
     payload: &Payload,
-    timeout: Duration,
+    timeout: Option<Duration>,  // None = wait forever (GSD use case)
 ) -> io::Result<Response> {
     let root = fs::canonicalize(root.as_ref())?;
     let submissions_dir = root.join(SUBMISSIONS_DIR);
@@ -136,20 +154,20 @@ pub fn submit_file_with_timeout(
         &submissions_dir,
         &canary_path,
         Some(&status_path),  // Short-circuit if we see status file
-        Duration::from_secs(5),
+        Some(Duration::from_secs(5)),  // Verification timeout
     )?;
 
     // If status file wasn't seen during verification, wait for it
     if !status_seen {
-        watcher.wait_for(&status_path, Duration::from_secs(10))?;
+        watcher.wait_for(&status_path, Some(Duration::from_secs(10)))?;
     }
 
     // Now we know: watcher works AND pool is ready
     // Write request file
     atomic_write_str(&root, &request_path, &serde_json::to_string(payload)?)?;
 
-    // Wait for response
-    watcher.wait_for(&response_path, timeout)?;
+    // Wait for response (None = wait forever, like GSD does)
+    watcher.wait_for(&response_path, timeout)?;  // timeout is Option<Duration>
 
     // Read and cleanup
     read_and_cleanup_response(&request_path, &response_path)
@@ -163,6 +181,8 @@ pub fn submit_file_with_timeout(
 
 ### 2. Wait for Pool Ready (`wait_for_pool_ready`)
 
+**Flow: Client → Daemon** (verifying daemon is alive before submission)
+
 **Current implementation:**
 ```rust
 pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
@@ -172,7 +192,7 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
 
 **New implementation:**
 ```rust
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
+pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Option<Duration>) -> io::Result<()> {
     let root = fs::canonicalize(root.as_ref())?;
     let status_path = root.join(STATUS_FILE);
     let canary_path = root.join("client_canary");
@@ -182,7 +202,7 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
         &root,
         &canary_path,
         Some(&status_path),
-        timeout,
+        timeout,  // None = wait forever
     )?;
 
     if status_seen {
@@ -201,6 +221,8 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
 - Otherwise wait for it with verified watcher
 
 ### 3. Daemon Startup (`daemon/wiring.rs`)
+
+**Flow: Daemon init** (verifying filesystem watchers work before accepting connections)
 
 **Current implementation:**
 ```rust
@@ -294,6 +316,8 @@ fn verify_daemon_watchers(
 
 ### 4. Agent Waiting for Task (`agent.rs`)
 
+**Flow: Agent → Daemon** (registered agent waiting for work assignment)
+
 **Current implementation:**
 ```rust
 pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> {
@@ -303,7 +327,7 @@ pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> 
 
 **New implementation:**
 ```rust
-pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> {
+pub fn wait_for_task(agent_dir: &Path, timeout: Option<Duration>) -> io::Result<String> {
     let task_path = agent_dir.join(TASK_FILE);
     let canary_path = agent_dir.join("agent.canary");
 
@@ -312,7 +336,7 @@ pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> 
         agent_dir,
         &canary_path,
         Some(&task_path),
-        Duration::from_secs(5),
+        Some(Duration::from_secs(5)),  // Verification timeout
     )?;
 
     if task_seen {
@@ -320,7 +344,7 @@ pub fn wait_for_task(agent_dir: &Path, timeout: Duration) -> io::Result<String> 
         return fs::read_to_string(&task_path);
     }
 
-    // Watcher verified, wait for task
+    // Watcher verified, wait for task (None = wait forever for long-running agents)
     watcher.wait_for(&task_path, timeout)?;
     fs::read_to_string(&task_path)
 }
@@ -357,7 +381,7 @@ impl VerifiedWatcher {
     /// * `watch_dir` - Directory to watch
     /// * `canary_path` - Path for canary file (created and deleted during verification)
     /// * `short_circuit_on` - If this file is seen, return early (implicitly verifies watcher)
-    /// * `verify_timeout` - Timeout for canary verification
+    /// * `verify_timeout` - Timeout for canary verification (None = wait forever)
     ///
     /// # Returns
     ///
@@ -366,7 +390,7 @@ impl VerifiedWatcher {
         watch_dir: &Path,
         canary_path: &Path,
         short_circuit_on: Option<&Path>,
-        verify_timeout: Duration,
+        verify_timeout: Option<Duration>,
     ) -> io::Result<(Self, bool)> {
         let (tx, rx) = mpsc::channel();
         let watch_dir_for_closure = watch_dir.to_path_buf();
@@ -410,12 +434,14 @@ impl VerifiedWatcher {
                     // Other event - continue waiting
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if start.elapsed() > verify_timeout {
-                        let _ = fs::remove_file(canary_path);
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "watcher verification timed out",
-                        ));
+                    if let Some(timeout) = verify_timeout {
+                        if start.elapsed() > timeout {
+                            let _ = fs::remove_file(canary_path);
+                            return Err(io::Error::new(
+                                io::ErrorKind::TimedOut,
+                                "watcher verification timed out",
+                            ));
+                        }
                     }
                     // Rewrite canary to trigger event
                     fs::write(canary_path, start.elapsed().as_millis().to_string())?;
@@ -434,7 +460,9 @@ impl VerifiedWatcher {
     }
 
     /// Wait for a specific file to appear.
-    pub fn wait_for(&self, target: &Path, timeout: Duration) -> io::Result<()> {
+    ///
+    /// Pass `None` for timeout to wait forever (used by GSD for indefinite waits).
+    pub fn wait_for(&self, target: &Path, timeout: Option<Duration>) -> io::Result<()> {
         // Check if already exists
         if target.exists() {
             return Ok(());
@@ -443,19 +471,22 @@ impl VerifiedWatcher {
         let start = Instant::now();
 
         loop {
-            let remaining = timeout.saturating_sub(start.elapsed());
-            if remaining.is_zero() {
-                // Final check
-                if target.exists() {
-                    return Ok(());
+            // Check timeout if specified
+            if let Some(t) = timeout {
+                let remaining = t.saturating_sub(start.elapsed());
+                if remaining.is_zero() {
+                    // Final check
+                    if target.exists() {
+                        return Ok(());
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("timed out waiting for {}", target.display()),
+                    ));
                 }
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("timed out waiting for {}", target.display()),
-                ));
             }
 
-            match self.rx.recv_timeout(Duration::from_millis(100).min(remaining)) {
+            match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(path) if path == target => return Ok(()),
                 Ok(_) => {
                     // Different file - check target anyway
