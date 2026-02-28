@@ -121,9 +121,10 @@ When not yet verified, `wait_for()` and `ensure_verified()`:
 | Use Case | Flow | Method Used | Description |
 |----------|------|-------------|-------------|
 | `submit_file` | **Client → Daemon** | `new()` + `wait_for()` | Lazy verification during wait |
-| `wait_for_pool_ready` | **Client → Daemon** | `new()` + `wait_for()` | Lazy verification during wait |
 | Daemon startup | **Daemon init** | `new()` + `ensure_verified()` | Explicit verification before status |
 | Agent task wait | **Agent → Daemon** | `new()` + `wait_for()` | Lazy verification during wait |
+
+Note: `wait_for_pool_ready` is subsumed by the submission flow - it's just `wait_for(&status_path)`.
 
 ---
 
@@ -177,35 +178,7 @@ pub fn submit_file_with_timeout(
 - `wait_for()` checks existence first, returns immediately if file exists
 - Canary verification happens lazily during `wait_for()` calls
 
-### 2. Wait for Pool Ready (`wait_for_pool_ready`)
-
-**Flow: Client → Daemon** (verifying daemon is alive before submission)
-
-**Current implementation:**
-```rust
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
-    // ... 120 lines of watcher setup, canary verification, status file wait ...
-}
-```
-
-**New implementation:**
-```rust
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Option<Duration>) -> io::Result<()> {
-    let root = fs::canonicalize(root.as_ref())?;
-    let status_path = root.join(STATUS_FILE);
-    let canary_path = root.join("client.canary");
-
-    let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
-    watcher.wait_for(&status_path, timeout)
-}
-```
-
-**Key points:**
-- Much simpler: ~5 lines instead of ~120
-- `wait_for()` returns immediately if status exists
-- Lazy verification if we actually need to wait
-
-### 3. Daemon Startup (`daemon/wiring.rs`)
+### 2. Daemon Startup (`daemon/wiring.rs`)
 
 **Flow: Daemon init** (verifying filesystem watchers work before writing status)
 
@@ -249,7 +222,7 @@ fn setup_daemon(root: &Path) -> io::Result<VerifiedWatcher> {
 - Status file written AFTER verification (clients can trust watcher works)
 - Returns watcher for use in main daemon loop via `into_receiver()`
 
-### 4. Agent Waiting for Task (`agent.rs`)
+### 3. Agent Waiting for Task (`agent.rs`)
 
 **Flow: Agent → Daemon** (registered agent waiting for work assignment)
 
