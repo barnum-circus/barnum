@@ -25,33 +25,48 @@ Simplify agent protocol from "named agents with persistent identity" to "anonymo
 
 ## Flat File Structure
 
-With daemon-assigned IDs:
+Workers use three files per task:
 
 ```
 agents/
-├── <id>.task.json      # daemon writes
-└── <id>.outcome.json   # agent writes
+├── <id>.ready.json     # worker writes (signals readiness)
+├── <id>.task.json      # daemon writes (assigns task)
+└── <id>.response.json  # worker writes (task result)
 ```
 
-## Why This Requires Anonymous Workers
+## Worker Registration Protocol
 
-Flattening agents requires a new registration mechanism. Currently, agents register by creating a directory. Without directories, agents need another way to signal existence.
+1. **Worker generates UUID** and creates `<id>.ready.json`
+2. **Worker waits** for `<id>.task.json` to appear (blocking via watcher or polling)
+3. **Worker reads task** from `<id>.task.json`
+4. **Worker writes response** to `<id>.response.json`
+5. **Worker cleans up** all three files (or daemon cleans on completion)
+6. **Repeat** from step 1 with new UUID
 
-Options considered:
-1. Agent creates empty task file, daemon overwrites - hacky
-2. Agent creates registration file - added complexity
-3. Daemon assigns IDs - clean, but requires anonymous worker model
+This is similar to how submissions work (flat files, no directories) and eliminates the inotify race entirely.
 
-Option 3 is cleanest: daemon assigns an ID when agent calls `get_task`, tells agent where to write outcome.
+## Why Three Files?
+
+- **ready.json**: Signals to daemon "I'm available for work"
+- **task.json**: Daemon's response with task content
+- **response.json**: Worker's result
+
+Alternatives considered:
+1. Agent creates empty task file, daemon overwrites - hacky, can't distinguish "ready" from "processing"
+2. Daemon assigns IDs via socket - requires socket access, doesn't work in sandboxed environments
+3. Single registration directory per worker - reintroduces inotify race
+
+The three-file protocol is cleanest because each file has a single writer (no races) and clear semantics.
 
 ## Changes Required
 
-1. Remove agent identity tracking from core state machine
-2. `get_task` returns task content + outcome file path
-3. Simplify `AgentMap` to track pending outcomes by task ID
-4. Remove kicked state tracking
-5. Consolidate CLI commands (`register`, `next_task` → just `get_task`?)
-6. Update `AGENT_PROTOCOL.md`
+1. **Flatten agents directory** - Remove per-agent subdirectories
+2. **New path categorization** - Add `AgentReady`, `AgentResponse` for flat files
+3. **Simplify core state machine** - Remove agent identity tracking; track pending tasks by ID
+4. **Update CLI commands** - `get_task` generates UUID, writes ready file, waits for task
+5. **Consolidate commands** - Merge `register`/`next_task` into single `get_task` command
+6. **Remove kicked state** - Workers just stop calling `get_task`; daemon ignores stale ready files
+7. **Update `AGENT_PROTOCOL.md`** - Document new three-file protocol
 
 ## Heartbeats
 
