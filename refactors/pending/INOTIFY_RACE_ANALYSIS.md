@@ -5,7 +5,7 @@
 **Phase 1 (Canary sync):** DONE - Watcher sync at startup exists.
 **Phase 2 (Flatten submissions):** DONE - Uses `<id>.request.json` / `<id>.response.json` flat files.
 **Phase 3 (Rename pending → submissions):** NOT DONE - Low priority cleanup.
-**Phase 4 (Status file):** PARTIALLY DONE - Constant exists, implementation needs verification.
+**Phase 4 (Status file):** DONE - Daemon writes "ready" to status file; client uses `wait_for_pool_ready`.
 **Phase 5 (Clean shutdown):** NOT DONE - See `todos.md`.
 
 ---
@@ -31,7 +31,7 @@ Four phases:
 1. **Canary sync** - Ensure watchers are active at startup - **DONE**
 2. **Flatten submissions** - Fix the race condition - **DONE**
 3. **Rename things** - Clean up naming (`pending/` → `submissions/`) - NOT DONE
-4. **Status file** - Proper readiness signaling for submitters - PARTIALLY DONE
+4. **Status file** - Proper readiness signaling for submitters - **DONE**
 
 Future work (separate doc): Flatten agents + anonymous worker model. See `ANONYMOUS_WORKERS.md`.
 
