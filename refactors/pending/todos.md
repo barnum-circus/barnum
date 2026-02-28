@@ -940,3 +940,25 @@ Benefits:
 - Easier for AI agents to understand the expected output format
 - Schema is machine-readable, not buried in markdown
 - The field can be optional (null or absent) for steps without schema constraints
+
+---
+
+## GSD Task Monitoring via Log File
+
+**Status: TODO**
+
+Need a way to monitor active tasks while GSD is running. Currently there's no easy way to see what's happening.
+
+**Proposed changes:**
+
+1. **Always write a log file to the pool directory** - Remove the optional `--log` flag from GSD. Instead, always write to a well-known location like `<pool_root>/gsd.log` or `<pool_root>/gsd-<timestamp>.log`.
+
+2. **Log active tasks** - The log should show:
+   - Tasks submitted to agents
+   - Tasks completed
+   - Current in-flight tasks
+   - Queue depth
+
+3. **Easy monitoring** - Users can `tail -f <pool_root>/gsd.log` to watch progress in real-time.
+
+This makes debugging and monitoring much simpler - just tail the log file in the pool directory.
