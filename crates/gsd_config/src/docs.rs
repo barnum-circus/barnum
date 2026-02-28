@@ -4,9 +4,11 @@
 
 use crate::config::{Action, Config, Instructions, SchemaRef, Step};
 use std::fmt::Write;
+use std::fs;
+use std::path::Path;
 
 /// Write instructions to a doc string, handling both inline and linked variants.
-fn write_instructions(doc: &mut String, action: &Action) {
+fn write_instructions(doc: &mut String, action: &Action, base_path: &Path) {
     let Some(instructions) = action.instructions() else {
         return;
     };
@@ -16,8 +18,18 @@ fn write_instructions(doc: &mut String, action: &Action) {
             writeln!(doc).ok();
         }
         Instructions::Link { link } => {
-            writeln!(doc, "*See instructions in `{link}`*").ok();
-            writeln!(doc).ok();
+            // Resolve linked instructions by reading the file
+            let full_path = base_path.join(link);
+            match fs::read_to_string(&full_path) {
+                Ok(content) => {
+                    writeln!(doc, "{}", content.trim()).ok();
+                    writeln!(doc).ok();
+                }
+                Err(e) => {
+                    writeln!(doc, "*Error loading instructions from `{link}`: {e}*").ok();
+                    writeln!(doc).ok();
+                }
+            }
         }
         Instructions::Inline(_) => {}
     }
@@ -26,8 +38,9 @@ fn write_instructions(doc: &mut String, action: &Action) {
 /// Generate markdown documentation for a specific step.
 ///
 /// This creates instructions for an agent about what responses are valid.
+/// The `base_path` is used to resolve linked instruction files.
 #[must_use]
-pub fn generate_step_docs(step: &Step, config: &Config) -> String {
+pub fn generate_step_docs(step: &Step, config: &Config, base_path: &Path) -> String {
     let mut doc = String::new();
 
     // Header with step name
@@ -36,7 +49,7 @@ pub fn generate_step_docs(step: &Step, config: &Config) -> String {
     writeln!(doc).ok();
 
     // Step instructions
-    write_instructions(&mut doc, &step.action);
+    write_instructions(&mut doc, &step.action, base_path);
 
     // Valid responses section
     if step.next.is_empty() {
@@ -100,8 +113,9 @@ pub fn generate_step_docs(step: &Step, config: &Config) -> String {
 }
 
 /// Generate a complete markdown document describing all steps.
+/// The `base_path` is used to resolve linked instruction files.
 #[must_use]
-pub fn generate_full_docs(config: &Config) -> String {
+pub fn generate_full_docs(config: &Config, base_path: &Path) -> String {
     let mut doc = String::new();
 
     writeln!(doc, "# GSD Task Queue Documentation").ok();
@@ -146,7 +160,7 @@ pub fn generate_full_docs(config: &Config) -> String {
         writeln!(doc, "### {name}").ok();
         writeln!(doc).ok();
 
-        write_instructions(&mut doc, &step.action);
+        write_instructions(&mut doc, &step.action, base_path);
 
         if step.next.is_empty() {
             writeln!(doc, "**Terminal step** - no further transitions.").ok();
@@ -178,7 +192,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = generate_step_docs(&config.steps[0], &config);
+        let docs = generate_step_docs(&config.steps[0], &config, Path::new("."));
         assert!(docs.contains("Current Step: Start"));
         assert!(docs.contains("Begin here."));
         assert!(docs.contains("### End"));
@@ -195,7 +209,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = generate_step_docs(&config.steps[0], &config);
+        let docs = generate_step_docs(&config.steps[0], &config, Path::new("."));
         assert!(docs.contains("Terminal Step"));
         assert!(docs.contains("empty array"));
     }
@@ -213,7 +227,7 @@ mod tests {
         )
         .unwrap();
 
-        let docs = generate_full_docs(&config);
+        let docs = generate_full_docs(&config, Path::new("."));
         assert!(docs.contains("GSD Task Queue Documentation"));
         assert!(docs.contains("Timeout"));
         assert!(docs.contains("60"));

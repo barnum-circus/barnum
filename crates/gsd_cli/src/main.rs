@@ -98,6 +98,7 @@ fn main() -> io::Result<()> {
 
             let runner_config = RunnerConfig {
                 agent_pool_root: &pool_path,
+                config_base_path: &config_dir,
                 wake_script: wake.as_deref(),
                 initial_tasks,
             };
@@ -106,8 +107,8 @@ fn main() -> io::Result<()> {
         }
 
         Command::Docs { config } => {
-            let (cfg, _) = parse_config(&config)?;
-            let docs = generate_full_docs(&cfg);
+            let (cfg, config_dir) = parse_config(&config)?;
+            let docs = generate_full_docs(&cfg, &config_dir);
             print!("{docs}");
         }
 

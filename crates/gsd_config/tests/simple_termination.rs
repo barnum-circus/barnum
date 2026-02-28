@@ -47,6 +47,7 @@ fn single_step_terminates() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -72,6 +73,7 @@ fn empty_initial_tasks_does_nothing() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![],
     };

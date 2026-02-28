@@ -81,6 +81,7 @@ fn valid_schema_passes() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Input", serde_json::json!({"count": 5}))],
     };
@@ -114,6 +115,7 @@ fn invalid_initial_task_skipped() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         // Missing required "count" field
         initial_tasks: vec![Task::new("Input", serde_json::json!({}))],
@@ -177,6 +179,7 @@ fn invalid_response_causes_retry() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Input", serde_json::json!({}))],
     };

@@ -74,6 +74,7 @@ fn retry_on_invalid_response_false_drops_task() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -147,6 +148,7 @@ fn retry_on_invalid_response_true_retries() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -215,6 +217,7 @@ fn malformed_json_triggers_retry() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -293,6 +296,7 @@ fn per_step_options_override_global() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("NoRetryStep", serde_json::json!({}))],
     };
@@ -367,6 +371,7 @@ fn recovery_on_nth_attempt() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -432,6 +437,7 @@ fn max_retries_zero_no_retries() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };

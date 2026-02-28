@@ -61,6 +61,8 @@ pub enum PostHookInput {
 pub struct RunnerConfig<'a> {
     /// Path to the `agent_pool` root directory.
     pub agent_pool_root: &'a Path,
+    /// Base path for resolving linked instructions (typically the config file's directory).
+    pub config_base_path: &'a Path,
     /// Optional wake script to call before starting.
     pub wake_script: Option<&'a str>,
     /// Initial tasks to process (must not be empty).
@@ -119,6 +121,7 @@ pub struct TaskRunner<'a> {
     step_map: HashMap<&'a str, &'a Step>,
     queue: VecDeque<QueuedTask>,
     agent_pool_root: &'a Path,
+    config_base_path: &'a Path,
     max_concurrency: usize,
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
@@ -236,6 +239,7 @@ impl<'a> TaskRunner<'a> {
             step_map: config.step_map(),
             queue,
             agent_pool_root: runner_config.agent_pool_root,
+            config_base_path: runner_config.config_base_path,
             max_concurrency,
             in_flight: 0,
             tx,
@@ -309,7 +313,7 @@ impl<'a> TaskRunner<'a> {
 
             match &step.action {
                 Action::Pool { .. } => {
-                    let docs = generate_step_docs(step, self.config);
+                    let docs = generate_step_docs(step, self.config, self.config_base_path);
                     let timeout = effective.timeout;
                     let root = self.agent_pool_root.to_path_buf();
                     let tx = self.tx.clone();

@@ -67,6 +67,7 @@ fn invalid_transition_causes_retry() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -106,6 +107,7 @@ fn unknown_step_causes_retry() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -169,6 +171,7 @@ fn recovery_after_invalid_then_valid() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };

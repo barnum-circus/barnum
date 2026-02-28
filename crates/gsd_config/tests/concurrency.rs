@@ -79,6 +79,7 @@ fn tasks_execute_in_parallel() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
     };
@@ -148,6 +149,7 @@ fn work_distributed_across_agents() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
     };
@@ -244,6 +246,7 @@ fn max_concurrency_limits_parallel_tasks() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
     };
@@ -287,6 +290,7 @@ fn task_runner_yields_results_incrementally() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
     };
@@ -326,6 +330,7 @@ fn task_runner_is_empty_status() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Worker", serde_json::json!({}))],
     };
@@ -405,6 +410,7 @@ fn nested_fan_out() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Root", serde_json::json!({}))],
     };

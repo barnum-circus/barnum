@@ -63,6 +63,7 @@ fn three_step_linear_machine() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };
@@ -105,6 +106,7 @@ fn instructions_included_in_payload() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
     };

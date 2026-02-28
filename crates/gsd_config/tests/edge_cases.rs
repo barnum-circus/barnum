@@ -42,6 +42,7 @@ fn empty_initial_tasks_completes() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![], // Empty!
     };
@@ -73,6 +74,7 @@ fn empty_runner_is_empty() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![],
     };
@@ -118,6 +120,7 @@ fn unknown_initial_step_skipped() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![
             Task::new("Unknown", serde_json::json!({})), // Unknown step
@@ -177,6 +180,7 @@ fn invalid_value_schema_skipped() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![
             Task::new("Validated", serde_json::json!({})), // Missing required "name"
@@ -250,6 +254,7 @@ fn large_fan_out() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Distribute", serde_json::json!({}))],
     };
@@ -293,6 +298,7 @@ fn command_action_executes() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Echo", serde_json::json!({"message": "hello"}))],
     };
@@ -340,6 +346,7 @@ fn rapid_task_completion() {
 
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
     };
@@ -372,6 +379,7 @@ fn pending_count_accurate() {
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
+        config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![
             Task::new("Work", serde_json::json!({})),
