@@ -1,5 +1,8 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' refactor-workflow.jsonc
+// pnpm gsd run --pool <POOL> --initial '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' config.jsonc
+//
+// NOTE: This workflow is not included in run-all-demos.sh because it requires
+// a real codebase and Claude agents to function.
 {
   "options": {
     "max_retries": 2
@@ -20,7 +23,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "List all source files in the given folder.\n\nInput: `{\"folder\": \"./src\"}`\n\nReturn an array of AnalyzeFile tasks, one per file:\n```json\n[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"src/main.rs\"}}, ...]\n```"
+        "instructions": {"link": "list-files.md"}
       },
       "next": ["AnalyzeFile"]
     },
@@ -39,7 +42,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze the file and identify refactors needed.\n\nInput: `{\"file\": \"src/main.rs\"}`\n\n**Refactor guidelines:**\n- No behavior changes. The code should do exactly the same thing before and after.\n- Focus on slight cleanups: renaming variables to be more informatively named, improving readability.\n- Never create new files. Only modify existing files.\n\nIf refactors are needed, return:\n```json\n[{\"kind\": \"ProcessRefactorList\", \"value\": {\n  \"file\": \"src/main.rs\",\n  \"refactors\": [\"rename 'x' to 'user_count'\", \"rename 'tmp' to 'cached_result'\"]\n}}]\n```\n\nIf no refactors needed, return `[]`."
+        "instructions": {"link": "analyze-file.md"}
       },
       "next": ["ProcessRefactorList"]
     },
@@ -63,7 +66,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Apply the FIRST refactor from the list to the file.\n\nInput: `{\"file\": \"...\", \"refactors\": [...]}`\n\n**Rules:**\n- Never create new files. Only modify the existing file.\n- No behavior changes. The refactor should be purely cosmetic (renaming, readability).\n\nAfter applying:\n- If more refactors remain, return `[{\"kind\": \"ProcessRefactorList\", \"value\": {\"file\": \"...\", \"refactors\": [remaining...]}}]`\n- If no refactors remain, return `[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"...\"}}]`\n\nThis ensures refactors for the same file are applied sequentially."
+        "instructions": {"link": "process-refactor-list.md"}
       },
       "next": ["ProcessRefactorList", "CommitFile"]
     },
@@ -82,7 +85,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Commit just the changes to the file you have worked on.\n\nInput: `{\"file\": \"...\"}`\n\nUse `git add <file>` to stage only this file, then commit. Do not stage or commit other files.\n\nReturn `[]` to finish this file."
+        "instructions": {"link": "commit-file.md"}
       },
       "next": []
     }

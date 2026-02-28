@@ -36,7 +36,8 @@ echo "=== Running all demos ==="
 echo ""
 
 # Find all demo scripts (portable version)
-DEMOS=$(find "$PROJECT_ROOT/crates" -path "*/demos/*/demo.sh" -type f | sort)
+# Note: refactor-workflow is excluded because it requires a real codebase and Claude agents
+DEMOS=$(find "$PROJECT_ROOT/crates" -path "*/demos/*/demo.sh" -type f | grep -v refactor-workflow | sort)
 
 if [ -z "$DEMOS" ]; then
     echo -e "${YELLOW}No demos found${NC}"
