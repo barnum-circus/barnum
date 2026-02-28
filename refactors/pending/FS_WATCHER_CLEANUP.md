@@ -17,7 +17,7 @@ Tests passed on macOS (FSEvents) but failed/hung on Linux (inotify). The issue s
 ## Root Cause Analysis
 
 **inotify race condition**: When watching a directory recursively with inotify:
-1. A new subdirectory is created (e.g., `pending/<uuid>/`)
+1. A new subdirectory is created (e.g., `submissions/<uuid>/`)
 2. inotify needs to add a watch for the new subdirectory
 3. If files are written to the subdirectory before the watch is added, events are missed
 
@@ -25,60 +25,43 @@ Tests passed on macOS (FSEvents) but failed/hung on Linux (inotify). The issue s
 
 **FIXED:** By flattening submissions to `<id>.request.json` files, we eliminated the subdirectory creation entirely.
 
-## Current Architecture Issues
+## Original Architecture Issues (RESOLVED)
 
-### 1. Nested directories in `pending/`
+### 1. ~~Nested directories in `submissions/`~~ - FIXED
 
-Each submission creates `pending/<uuid>/task.json`. This means EVERY submission triggers the inotify race:
-- Client creates `pending/<uuid>/`
-- Client writes `pending/<uuid>/task.json`
-- If (2) happens before inotify watches `<uuid>/`, event is missed
+Previously each submission created `submissions/<uuid>/task.json`. Now uses flat files:
+```
+submissions/<uuid>.request.json
+submissions/<uuid>.response.json
+```
 
-**Suggested fix**: Flatten the structure to `pending/<uuid>.json` (single file, no subdirectory).
+### 2. ~~Three notification methods with different reliability~~ - FIXED
 
-**Trade-offs**:
-- Pro: Eliminates per-submission race
-- Con: Requires protocol change
-- Con: Response handling becomes trickier (currently uses `response.json` in same dir)
+`NotifyMethod::Raw` now works reliably with flat file structure.
 
-### 2. Three notification methods with different reliability
+### 3. ~~Temp file pattern~~ - FIXED
 
-Currently:
-- `Socket`: Client sends socket message → daemon notified directly → **reliable**
-- `File` (CLI): Uses socket for notification but file for response
-- `Raw`: Pure file-based, relies entirely on FS watcher → **unreliable on Linux**
+Atomic writes use temp files with rename, generating `Modify(Name)` events that watchers handle correctly.
 
-**Suggested fix**: Consider deprecating `Raw` or adding a polling fallback.
+### 4. ~~Watcher sync only proves startup readiness~~ - RESOLVED
 
-### 3. Temp file pattern in Transport::write() (FIXED)
-
-We removed the atomic write pattern (temp file + rename). However, FSEvents still shows `.task.json.tmp` events in local logs, suggesting there may be another code path or stale binaries.
-
-**Action**: Verify no temp files are being created anywhere.
-
-### 4. Watcher sync only proves startup readiness
-
-The watcher sync with canary file proves the watcher is working AT STARTUP. It doesn't help with per-submission races.
-
-**Suggested fix**: Could add periodic polling of `pending/` to catch missed events, or bring back PendingDir fallback with proper deduplication.
+With flat files, there's no per-submission race. The startup watcher sync is sufficient.
 
 ## Cleanup Tasks
 
-### Task 1: Flatten pending directory structure - **DONE**
+### Task 1: Flatten submissions directory structure - **DONE**
 
 Now uses:
 ```
-pending/<uuid>.request.json
-pending/<uuid>.response.json
+submissions/<uuid>.request.json
+submissions/<uuid>.response.json
 ```
-
-This eliminated the subdirectory creation race entirely.
 
 ### Task 2: Audit all temp file usage - **DONE**
 
-Atomic writes now use temp files in `/tmp` with UUID-based names, then rename to final location. This is intentional and correct - the rename generates a `Modify(Name)` event that watchers handle.
+Atomic writes use temp files in the same directory, then rename. This is intentional - the rename generates events that watchers handle.
 
-### Task 3: PendingDir fallback - **OBSOLETE**
+### Task 3: SubmissionsDir fallback - **OBSOLETE**
 
 No longer needed since we flattened the structure.
 
@@ -94,9 +77,11 @@ Could be useful but not blocking anything now that the race is fixed.
 
 The flat file structure works on both platforms. No special handling required.
 
-### Task 7: Improve agent watcher - **FUTURE**
+### Task 7: Flatten agent directory - **FUTURE**
 
-Agent structure could be flattened like submissions. Low priority - agents work fine as-is since the directory exists before files are written (causal chain prevents race).
+Agent structure could be flattened like submissions. See `ANONYMOUS_WORKERS.md` for the proposed three-file protocol (`<id>.ready.json`, `<id>.task.json`, `<id>.response.json`).
+
+Low priority - agents work fine as-is since the directory exists before files are written (causal chain prevents race).
 
 ## Quick Wins - **DONE**
 
