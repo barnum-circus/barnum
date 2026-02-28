@@ -1,5 +1,9 @@
 # API Simplification Analysis
 
+## Status: COMPLETE
+
+Phases 1 and 2 are done. Phase 3 (rename File → Poll) is optional and low priority.
+
 ## Current State
 
 ### CLI Commands (11 total)
