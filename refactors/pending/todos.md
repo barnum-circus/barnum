@@ -783,6 +783,30 @@ Should use a watcher on the parent directory (`/tmp/gsd/`) instead of spinning. 
 
 ---
 
+## Runtime Workflow Graph (Execution History)
+
+**Status: TODO**
+
+Generate a workflow graph based on an actual run, not just the static config. This would show:
+
+1. **Duplicate steps**: If a step ran multiple times (e.g., ProcessRefactorList for each file), show each instance
+2. **Parent-child relationships**: Arrows from the step that created a task to the step that processed it
+3. **Agent attribution**: Which agent(s) worked on each step, accounting for retries
+4. **Timing/ordering**: Visual indication of execution order
+
+Use cases:
+- Debug complex workflows to see what actually happened
+- Understand task fan-out patterns
+- Identify bottlenecks (which steps took longest, which agents were busiest)
+
+Implementation considerations:
+- GSD runner would need to track execution history (task spawns, completions, agent assignments)
+- New `gsd graph --from-history <history.json>` or similar command
+- History could be written to a file during execution (`--trace execution.json`)
+- Graph output could use DOT format with additional styling for duplicates/agents
+
+---
+
 ## Rename Pool Directory from gsd to agent_pool
 
 **Status: COMPLETE**
