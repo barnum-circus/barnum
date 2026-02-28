@@ -2,9 +2,9 @@
 # Demo: Fan-out with multiple agents
 #
 # Usage:
-#   ./fan-out.sh                              # Run with demo agent pool
-#   ./fan-out.sh /path/to/pool                # Run against existing pool
-#   ./fan-out.sh /path/to/pool /path/to/wake  # Run with wake script
+#   ./demo.sh                              # Run with demo agent pool
+#   ./demo.sh /path/to/pool                # Run against existing pool
+#   ./demo.sh /path/to/pool /path/to/wake  # Run with wake script
 #
 # This demonstrates parallel processing with fan-out:
 # 1. One "Distribute" task spawns 20 "Worker" tasks
@@ -16,7 +16,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
+WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Check if user provided an existing pool path and wake script
 EXISTING_POOL="$1"
@@ -53,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with fan-out config..."
-    $GSD run "$SCRIPT_DIR/configs/fan-out.jsonc" \
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Distribute", "value": {}}]' \
         $WAKE_ARG
@@ -61,7 +61,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/fan-out.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -101,7 +101,7 @@ else
     # Start multiple agents
     echo "Starting $NUM_AGENTS agents..."
     for i in $(seq 1 $NUM_AGENTS); do
-        "$SCRIPT_DIR/../scripts/fan-out-agent.sh" "$ROOT" "agent-$i" "$NUM_WORKERS" "$WORKER_SLEEP" &
+        "$SCRIPT_DIR/../../scripts/fan-out-agent.sh" "$ROOT" "agent-$i" "$NUM_WORKERS" "$WORKER_SLEEP" &
         AGENT_PIDS="$AGENT_PIDS $!"
     done
     sleep 0.3
@@ -114,7 +114,7 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $GSD run "$SCRIPT_DIR/configs/fan-out.jsonc" \
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Distribute", "value": {}}]'
 
@@ -125,5 +125,5 @@ else
     echo "=== Success! ==="
     echo "Processed $NUM_WORKERS tasks with $NUM_AGENTS agents in ${ELAPSED}s"
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/fan-out.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 fi

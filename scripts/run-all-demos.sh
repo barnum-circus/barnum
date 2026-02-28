@@ -36,7 +36,7 @@ echo "=== Running all demos ==="
 echo ""
 
 # Find all demo scripts (portable version)
-DEMOS=$(find "$PROJECT_ROOT/crates" -path "*/demos/*.sh" -type f | sort)
+DEMOS=$(find "$PROJECT_ROOT/crates" -path "*/demos/*/demo.sh" -type f | sort)
 
 if [ -z "$DEMOS" ]; then
     echo -e "${YELLOW}No demos found${NC}"

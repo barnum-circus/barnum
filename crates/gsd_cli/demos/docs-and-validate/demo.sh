@@ -8,7 +8,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
+WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Build the binary first
 echo "Building gsd..."
@@ -22,20 +22,20 @@ echo "=== Demo: GSD Docs and Validate ==="
 echo ""
 
 echo "--- Validating simple.jsonc ---"
-$GSD validate "$SCRIPT_DIR/configs/simple.jsonc"
+$GSD validate "$SCRIPT_DIR/../simple/config.jsonc"
 echo ""
 
 echo "--- Validating linear.jsonc ---"
-$GSD validate "$SCRIPT_DIR/configs/linear.jsonc"
+$GSD validate "$SCRIPT_DIR/../linear/config.jsonc"
 echo ""
 
 echo "--- Validating branching.jsonc ---"
-$GSD validate "$SCRIPT_DIR/configs/branching.jsonc"
+$GSD validate "$SCRIPT_DIR/../branching/config.jsonc"
 echo ""
 
 echo "--- Generating docs for linear.jsonc ---"
 echo ""
-$GSD docs "$SCRIPT_DIR/configs/linear.jsonc"
+$GSD docs "$SCRIPT_DIR/../linear/config.jsonc"
 
 echo ""
 echo "=== Success! ==="

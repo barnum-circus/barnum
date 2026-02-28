@@ -14,7 +14,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
+WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Build the binary
 echo "Building gsd_cli..."
@@ -43,7 +43,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$GSD run "$SCRIPT_DIR/configs/command-demo.jsonc" \
+$GSD run "$SCRIPT_DIR/config.jsonc" \
     --pool "$ROOT" \
     --initial '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 
@@ -53,4 +53,4 @@ echo ""
 echo "The workflow processed 3 items through local jq commands:"
 echo "  Split -> Process x3 -> Collect x3"
 echo ""
-echo "View workflow graph: $SCRIPT_DIR/configs/command-demo.dot"
+echo "View workflow graph: $SCRIPT_DIR/graph.dot"

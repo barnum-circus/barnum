@@ -2,9 +2,9 @@
 # Demo: Linear three-step GSD task queue
 #
 # Usage:
-#   ./linear.sh                              # Run with demo agent pool
-#   ./linear.sh /path/to/pool                # Run against existing pool
-#   ./linear.sh /path/to/pool /path/to/wake  # Run with wake script
+#   ./demo.sh                              # Run with demo agent pool
+#   ./demo.sh /path/to/pool                # Run against existing pool
+#   ./demo.sh /path/to/pool /path/to/wake  # Run with wake script
 #
 # This demonstrates a linear task queue:
 # Start -> Middle -> End
@@ -15,7 +15,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
+WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Check if user provided an existing pool path and wake script
 EXISTING_POOL="$1"
@@ -48,7 +48,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with linear config..."
-    $GSD run "$SCRIPT_DIR/configs/linear.jsonc" \
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
@@ -56,7 +56,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/linear.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
@@ -83,19 +83,19 @@ else
 
     # Start GSD-aware agent with transition map
     echo "Starting GSD agent with transitions: Start->Middle->End..."
-    "$SCRIPT_DIR/../scripts/gsd-agent.sh" "$ROOT" "linear-agent" "Start:Middle,Middle:End,End:" 0.1 &
+    "$SCRIPT_DIR/../../scripts/gsd-agent.sh" "$ROOT" "linear-agent" "Start:Middle,Middle:End,End:" 0.1 &
     AGENT_PID=$!
     sleep 0.3
 
     # Run GSD
     echo ""
     echo "Running GSD with linear config..."
-    $GSD run "$SCRIPT_DIR/configs/linear.jsonc" \
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         --initial '[{"kind": "Start", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/linear.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 fi

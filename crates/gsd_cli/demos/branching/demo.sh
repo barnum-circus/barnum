@@ -1,18 +1,22 @@
 #!/bin/bash
-# Demo: Simple single-step GSD task queue
+# Demo: Branching GSD task queue
 #
 # Usage:
-#   ./simple.sh                              # Run with demo agent pool
-#   ./simple.sh /path/to/pool                # Run against existing pool
-#   ./simple.sh /path/to/pool /path/to/wake  # Run with wake script
+#   ./demo.sh                              # Run with demo agent pool
+#   ./demo.sh /path/to/pool                # Run against existing pool
+#   ./demo.sh /path/to/pool /path/to/wake  # Run with wake script
+#
+# This demonstrates a branching task queue:
+# Decide -> PathA or PathB -> Done
 #
 # When using an existing pool, we skip starting the pool and demo agent.
+# The agent always chooses PathA in the demo mode.
 # The wake script is called before GSD starts to notify agents.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
+WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Check if user provided an existing pool path and wake script
 EXISTING_POOL="$1"
@@ -30,7 +34,7 @@ GSD="${GSD:-$WORKSPACE_ROOT/target/debug/gsd}"
 if [ -n "$EXISTING_POOL" ]; then
     # Use existing pool
     ROOT="$EXISTING_POOL"
-    echo "=== Demo: Simple Single-Step Task Queue (using existing pool) ==="
+    echo "=== Demo: Branching Task Queue (using existing pool) ==="
     echo "Pool directory: $ROOT"
     if [ -n "$WAKE_SCRIPT" ]; then
         echo "Wake script: $WAKE_SCRIPT"
@@ -44,20 +48,20 @@ if [ -n "$EXISTING_POOL" ]; then
     fi
 
     # Run GSD against existing pool
-    echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/configs/simple.jsonc" \
+    echo "Running GSD with branching config..."
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial '[{"kind": "Start", "value": {}}]' \
+        --initial '[{"kind": "Decide", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/simple.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 else
     # Create demo pool
     ROOT=$(mktemp -d)
-    echo "=== Demo: Simple Single-Step Task Queue ==="
+    echo "=== Demo: Branching Task Queue ==="
     echo "Working directory: $ROOT"
     echo ""
 
@@ -78,21 +82,21 @@ else
     POOL_PID=$!
     sleep 0.5
 
-    # Start GSD-aware agent (no transitions = always terminate)
-    echo "Starting GSD agent..."
-    "$SCRIPT_DIR/../scripts/gsd-agent.sh" "$ROOT" "gsd-agent-1" "" 0.1 &
+    # Start GSD-aware agent that chooses PathA
+    echo "Starting GSD agent (will choose PathA)..."
+    "$SCRIPT_DIR/../../scripts/gsd-agent.sh" "$ROOT" "branching-agent" "Decide:PathA,PathA:Done,Done:" 0.1 &
     AGENT_PID=$!
     sleep 0.3
 
     # Run GSD
     echo ""
-    echo "Running GSD with simple config..."
-    $GSD run "$SCRIPT_DIR/configs/simple.jsonc" \
+    echo "Running GSD with branching config..."
+    $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial '[{"kind": "Start", "value": {}}]'
+        --initial '[{"kind": "Decide", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="
     echo ""
-    echo "View workflow graph: $SCRIPT_DIR/configs/simple.dot"
+    echo "View workflow graph: $SCRIPT_DIR/graph.dot"
 fi
