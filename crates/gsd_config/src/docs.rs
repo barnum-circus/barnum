@@ -43,6 +43,10 @@ fn write_instructions(doc: &mut String, action: &Action, base_path: &Path) {
 pub fn generate_step_docs(step: &Step, config: &Config, base_path: &Path) -> String {
     let mut doc = String::new();
 
+    // Task isolation preamble
+    writeln!(doc, "**IMPORTANT: This task is completely isolated. You have no memory of previous tasks. Even if this task seems related to prior work, you must complete it from scratch using only the information provided here.**").ok();
+    writeln!(doc).ok();
+
     // Header with step name
     let name = &step.name;
     writeln!(doc, "# Current Step: {name}").ok();
