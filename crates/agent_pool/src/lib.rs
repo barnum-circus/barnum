@@ -56,7 +56,7 @@ pub use client::{
     wait_for_pool_ready,
 };
 pub use constants::{
-    AGENTS_DIR, LOCK_FILE, PENDING_DIR, RESPONSE_FILE, SCRATCH_DIR, SOCKET_NAME, STATUS_FILE,
+    AGENTS_DIR, LOCK_FILE, RESPONSE_FILE, SCRATCH_DIR, SOCKET_NAME, STATUS_FILE, SUBMISSIONS_DIR,
     TASK_FILE,
 };
 pub use daemon::{DaemonConfig, DaemonHandle, run, run_with_config, spawn, spawn_with_config};

@@ -5,9 +5,9 @@
 //!
 //! # Protocol
 //!
-//! 1. Submitter writes `<pool>/pending/<id>.request.json` with the payload
+//! 1. Submitter writes `<pool>/submissions/<id>.request.json` with the payload
 //! 2. Daemon detects the new request and dispatches it to an agent
-//! 3. When the agent completes, daemon writes `<pool>/pending/<id>.response.json`
+//! 3. When the agent completes, daemon writes `<pool>/submissions/<id>.response.json`
 //! 4. Submitter reads the response and cleans up both files
 //!
 //! # Cleanup
@@ -17,7 +17,7 @@
 
 use super::payload::Payload;
 use super::{DEFAULT_POOL_READY_TIMEOUT, wait_for_pool_ready};
-use crate::constants::{PENDING_DIR, REQUEST_SUFFIX, RESPONSE_SUFFIX};
+use crate::constants::{REQUEST_SUFFIX, RESPONSE_SUFFIX, SUBMISSIONS_DIR};
 use crate::response::Response;
 use std::fs;
 use std::io;
@@ -39,14 +39,14 @@ const POLL_INTERVAL: Duration = Duration::from_millis(100);
 ///
 /// # Protocol
 ///
-/// 1. Writes `<root>/pending/<id>.request.json` with the payload
-/// 2. Polls for `<root>/pending/<id>.response.json`
+/// 1. Writes `<root>/submissions/<id>.request.json` with the payload
+/// 2. Polls for `<root>/submissions/<id>.response.json`
 /// 3. Returns the response and cleans up both files
 ///
 /// # Errors
 ///
 /// Returns an error if:
-/// - The pending directory doesn't exist (daemon not ready)
+/// - The submissions directory doesn't exist (daemon not ready)
 /// - The request file cannot be written
 /// - The response times out
 /// - The response contains invalid JSON
@@ -69,7 +69,7 @@ pub fn submit_file_with_timeout(
     timeout: Duration,
 ) -> io::Result<Response> {
     let root = root.as_ref();
-    let pending_dir = root.join(PENDING_DIR);
+    let submissions_dir = root.join(SUBMISSIONS_DIR);
 
     // Wait for daemon to be ready
     wait_for_pool_ready(root, DEFAULT_POOL_READY_TIMEOUT)?;
@@ -77,15 +77,15 @@ pub fn submit_file_with_timeout(
     // Generate unique submission ID
     let submission_id = Uuid::new_v4().to_string();
 
-    // Flat files directly in pending directory (no subdirectory creation!)
-    let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
-    let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
+    // Flat files directly in submissions directory (no subdirectory creation!)
+    let request_path = submissions_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+    let response_path = submissions_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
 
     // Write request file with serialized payload (atomic: write temp in same dir, rename)
     let content = serde_json::to_string(payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     // Temp file in same directory to ensure same filesystem for rename
-    let temp_path = pending_dir.join(format!(".{submission_id}.tmp"));
+    let temp_path = submissions_dir.join(format!(".{submission_id}.tmp"));
     fs::write(&temp_path, &content)?;
     fs::rename(&temp_path, &request_path)?;
 
@@ -130,9 +130,9 @@ pub fn submit_file_with_timeout(
 ///
 /// Returns an error if file removal fails (though errors are typically ignored).
 pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Result<()> {
-    let pending_dir = root.as_ref().join(PENDING_DIR);
-    let request_path = pending_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
-    let response_path = pending_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
+    let submissions_dir = root.as_ref().join(SUBMISSIONS_DIR);
+    let request_path = submissions_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
+    let response_path = submissions_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
     let _ = fs::remove_file(&request_path);
     let _ = fs::remove_file(&response_path);
     Ok(())
@@ -140,10 +140,10 @@ pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Re
 
 #[cfg(test)]
 mod tests {
-    use crate::constants::PENDING_DIR;
+    use crate::constants::SUBMISSIONS_DIR;
 
     #[test]
-    fn pending_dir_constant() {
-        assert_eq!(PENDING_DIR, "pending");
+    fn submissions_dir_constant() {
+        assert_eq!(SUBMISSIONS_DIR, "submissions");
     }
 }

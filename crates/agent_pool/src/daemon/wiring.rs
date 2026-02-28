@@ -22,7 +22,7 @@ use std::collections::HashSet;
 
 use crate::client::Payload;
 use crate::constants::{
-    AGENTS_DIR, LOCK_FILE, PENDING_DIR, REQUEST_SUFFIX, SOCKET_NAME, STATUS_FILE, TASK_FILE,
+    AGENTS_DIR, LOCK_FILE, REQUEST_SUFFIX, SOCKET_NAME, STATUS_FILE, SUBMISSIONS_DIR, TASK_FILE,
 };
 use crate::lock::{LockGuard, acquire_lock};
 
@@ -155,7 +155,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
     let lock_path = root.join(LOCK_FILE);
     let socket_path = root.join(SOCKET_NAME);
     let agents_dir = root.join(AGENTS_DIR);
-    let pending_dir = root.join(PENDING_DIR);
+    let submissions_dir = root.join(SUBMISSIONS_DIR);
 
     // Clean up stale socket if it exists
     if socket_path.exists() {
@@ -182,7 +182,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
             &root,
             &lock_path,
             &socket_path,
-            &pending_dir,
+            &submissions_dir,
             &agents_dir,
             &io_rx,
         ) {
@@ -212,7 +212,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
             io_rx,
             daemon_io_tx,
             &agents_dir,
-            &pending_dir,
+            &submissions_dir,
             &config.into(),
         )
     });
@@ -256,7 +256,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let lock_path = root.join(LOCK_FILE);
     let socket_path = root.join(SOCKET_NAME);
     let agents_dir = root.join(AGENTS_DIR);
-    let pending_dir = root.join(PENDING_DIR);
+    let submissions_dir = root.join(SUBMISSIONS_DIR);
 
     // Clean up stale socket if it exists
     if socket_path.exists() {
@@ -274,7 +274,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
         &root,
         &lock_path,
         &socket_path,
-        &pending_dir,
+        &submissions_dir,
         &agents_dir,
         &io_rx,
     )?;
@@ -292,7 +292,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
         io_rx,
         io_tx,
         &agents_dir,
-        &pending_dir,
+        &submissions_dir,
         &io_config,
     ) {
         Ok(()) => unreachable!("event loop returned without shutdown signal"),
@@ -311,7 +311,7 @@ fn run_daemon(
     io_rx: mpsc::Receiver<IoEvent>,
     io_tx: mpsc::Sender<IoEvent>,
     agents_dir: &Path,
-    pending_dir: &Path,
+    submissions_dir: &Path,
     io_config: &IoConfig,
 ) -> io::Result<()> {
     // Create channel for core events (from I/O to event loop)
@@ -344,7 +344,7 @@ fn run_daemon(
         &mut pending_responses,
         &mut kicked_paths,
         agents_dir,
-        pending_dir,
+        submissions_dir,
         io_config,
     );
 
@@ -420,12 +420,12 @@ fn io_loop(
     pending_responses: &mut HashSet<AgentId>,
     kicked_paths: &mut HashSet<PathBuf>,
     agents_dir: &Path,
-    pending_dir: &Path,
+    submissions_dir: &Path,
     io_config: &IoConfig,
 ) -> io::Result<()> {
     debug!(
-        "io_loop starting, agents_dir={:?}, pending_dir={:?}",
-        agents_dir, pending_dir
+        "io_loop starting, agents_dir={:?}, submissions_dir={:?}",
+        agents_dir, submissions_dir
     );
 
     // Block on recv - Shutdown event signals exit
@@ -442,7 +442,7 @@ fn io_loop(
                     pending_responses,
                     kicked_paths,
                     agents_dir,
-                    pending_dir,
+                    submissions_dir,
                     io_config,
                 );
             }
@@ -511,11 +511,12 @@ fn handle_fs_event(
     pending_responses: &mut HashSet<AgentId>,
     kicked_paths: &mut HashSet<PathBuf>,
     agents_dir: &Path,
-    pending_dir: &Path,
+    submissions_dir: &Path,
     io_config: &IoConfig,
 ) {
     for path in &event.paths {
-        let Some(category) = path_category::categorize(path, event.kind, agents_dir, pending_dir)
+        let Some(category) =
+            path_category::categorize(path, event.kind, agents_dir, submissions_dir)
         else {
             continue;
         };
@@ -553,7 +554,7 @@ fn handle_fs_event(
                 }
                 register_submission(
                     &id,
-                    pending_dir,
+                    submissions_dir,
                     events_tx,
                     external_task_map,
                     task_id_allocator,
@@ -645,13 +646,13 @@ fn handle_agent_response(
 /// Register a submission from a request file.
 fn register_submission(
     id: &str,
-    pending_dir: &Path,
+    submissions_dir: &Path,
     events_tx: &mpsc::Sender<Event>,
     external_task_map: &mut ExternalTaskMap,
     task_id_allocator: &mut TaskIdAllocator,
     io_config: &IoConfig,
 ) {
-    let request_path = pending_dir.join(format!("{id}{REQUEST_SUFFIX}"));
+    let request_path = submissions_dir.join(format!("{id}{REQUEST_SUFFIX}"));
 
     // Read and resolve payload
     let raw = match fs::read_to_string(&request_path) {
@@ -858,7 +859,7 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
 /// 5. Waits until we see events for the directories and canary files
 /// 6. Cleans up canary files
 ///
-/// We specifically verify events for `pending_dir`, `agents_dir`, and canary files
+/// We specifically verify events for `submissions_dir`, `agents_dir`, and canary files
 /// because these are where agents and submissions will interact. Other events
 /// (lock file, socket, etc.) are allowlisted but not required.
 ///
@@ -887,7 +888,7 @@ fn sync_and_setup(
     root: &Path,
     lock_path: &Path,
     socket_path: &Path,
-    pending_dir: &Path,
+    submissions_dir: &Path,
     agents_dir: &Path,
     io_rx: &mpsc::Receiver<IoEvent>,
 ) -> io::Result<(LockGuard, Listener)> {
@@ -900,7 +901,7 @@ fn sync_and_setup(
     // Record start time for filtering stale FSEvents from previous daemon runs
     let start_time = SystemTime::now();
 
-    let pending_canary = pending_dir.join("canary");
+    let pending_canary = submissions_dir.join("canary");
     let agents_canary = agents_dir.join("canary");
 
     // All paths we expect to see events for (complete allowlist)
@@ -909,7 +910,7 @@ fn sync_and_setup(
     allowed.insert(root.to_path_buf());
     allowed.insert(lock_path.to_path_buf());
     allowed.insert(socket_path.to_path_buf());
-    allowed.insert(pending_dir.to_path_buf());
+    allowed.insert(submissions_dir.to_path_buf());
     allowed.insert(agents_dir.to_path_buf());
     allowed.insert(pending_canary.clone());
     allowed.insert(agents_canary.clone());
@@ -936,7 +937,7 @@ fn sync_and_setup(
     let listener = create_socket_listener(socket_path)?;
 
     // Create directories and canaries - watcher MUST see these
-    fs::create_dir_all(pending_dir)?;
+    fs::create_dir_all(submissions_dir)?;
     fs::create_dir_all(agents_dir)?;
     fs::write(&pending_canary, "sync")?;
     fs::write(&agents_canary, "sync")?;
@@ -1449,10 +1450,10 @@ mod tests {
     #[test]
     fn register_submission_registers_new_task() {
         let tmp = TempDir::new().unwrap();
-        let pending_dir = tmp.path();
+        let submissions_dir = tmp.path();
         let id = "task-1";
         fs::write(
-            pending_dir.join(format!("{id}.request.json")),
+            submissions_dir.join(format!("{id}.request.json")),
             r#"{"kind": "Inline", "content": "test task"}"#,
         )
         .unwrap();
@@ -1464,7 +1465,7 @@ mod tests {
 
         register_submission(
             id,
-            pending_dir,
+            submissions_dir,
             &events_tx,
             &mut external_task_map,
             &mut task_id_allocator,
@@ -1473,7 +1474,7 @@ mod tests {
 
         let event = events_rx.try_recv().unwrap();
         assert!(matches!(event, Event::TaskSubmitted { task_id } if task_id == ext(0)));
-        let request_path = pending_dir.join(format!("{id}.request.json"));
+        let request_path = submissions_dir.join(format!("{id}.request.json"));
         assert!(external_task_map.get_id_by_path(&request_path).is_some());
     }
 

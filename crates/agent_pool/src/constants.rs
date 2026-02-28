@@ -4,7 +4,7 @@
 pub const AGENTS_DIR: &str = "agents";
 
 /// Directory for file-based task submissions (sandboxed environments).
-pub const PENDING_DIR: &str = "pending";
+pub const SUBMISSIONS_DIR: &str = "submissions";
 
 /// Directory for temporary files (atomic writes). Not watched.
 pub const SCRATCH_DIR: &str = "scratch";
