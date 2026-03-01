@@ -159,6 +159,7 @@ enum IoEvent {
     /// Effect from the core event loop.
     Effect(Effect),
     /// Shutdown signal - exit the I/O loop.
+    #[allow(dead_code)]
     Shutdown,
 }
 
@@ -167,12 +168,14 @@ enum IoEvent {
 // =============================================================================
 
 /// Handle to a running daemon, allowing graceful shutdown.
+#[allow(dead_code)]
 pub struct DaemonHandle {
     /// Dropping this sender closes the channel, signaling shutdown.
     _shutdown_tx: mpsc::Sender<IoEvent>,
     thread: Option<thread::JoinHandle<io::Result<()>>>,
 }
 
+#[allow(dead_code)]
 impl DaemonHandle {
     /// Request graceful shutdown and wait for the daemon to stop.
     ///
@@ -206,6 +209,7 @@ impl DaemonHandle {
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or setup fails.
+#[allow(dead_code)]
 pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
     spawn_with_config(root, DaemonConfig::default())
 }
@@ -215,6 +219,7 @@ pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or setup fails.
+#[allow(dead_code)]
 pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<DaemonHandle> {
     fs::create_dir_all(root.as_ref())?;
     // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
@@ -308,6 +313,7 @@ pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Re
 /// # Errors
 ///
 /// Returns an error if the lock can't be acquired or an I/O error occurs.
+#[allow(dead_code)]
 pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
     run_with_config(root, DaemonConfig::default())
 }

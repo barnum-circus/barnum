@@ -42,26 +42,20 @@ mod lock;
 mod pool;
 mod response;
 mod transport;
-mod types;
 
 // Grouped modules
 mod daemon;
 mod submit;
 
-pub use constants::{
-    AGENTS_DIR, LOCK_FILE, RESPONSE_FILE, SOCKET_NAME, STATUS_FILE, SUBMISSIONS_DIR, TASK_FILE,
-};
-pub use daemon::{DaemonConfig, DaemonHandle, run, run_with_config, spawn, spawn_with_config};
+pub use constants::{AGENTS_DIR, RESPONSE_FILE, STATUS_FILE, TASK_FILE};
+pub use daemon::{DaemonConfig, DaemonHandle, run_with_config, spawn};
 pub use executor::{AgentEvent, create_watcher, verify_watcher_sync, wait_for_task};
-pub use fs::{VerifiedWatcher, atomic_write_str};
 pub use lock::is_daemon_running;
 pub use pool::{
-    PoolInfo, cleanup_stopped, default_pool_root, generate_id, id_to_path, list_pools, resolve_pool,
+    cleanup_stopped, default_pool_root, generate_id, id_to_path, list_pools, resolve_pool,
 };
-pub use response::{NotProcessedReason, Response, ResponseKind};
+pub use response::Response;
 pub use submit::{
-    Payload, cleanup_submission, stop, submit, submit_file, submit_file_with_timeout,
-    wait_for_pool_ready,
+    Payload, stop, submit, submit_file, submit_file_with_timeout, wait_for_pool_ready,
 };
 pub use transport::Transport;
-pub use types::{AgentName, PoolId};

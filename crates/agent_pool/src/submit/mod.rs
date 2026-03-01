@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::constants::STATUS_FILE;
 use crate::fs::VerifiedWatcher;
 
-pub use file::{cleanup_submission, submit_file, submit_file_with_timeout};
+pub use file::{submit_file, submit_file_with_timeout};
 pub use payload::Payload;
 pub use socket::submit;
 pub use stop::stop;

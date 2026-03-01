@@ -109,22 +109,6 @@ pub fn submit_file_with_timeout(
     Ok(response)
 }
 
-/// Clean up a pending submission's files.
-///
-/// Call this if you need to abandon a submission (e.g., on interrupt).
-///
-/// # Errors
-///
-/// Returns an error if file removal fails (though errors are typically ignored).
-pub fn cleanup_submission(root: impl AsRef<Path>, submission_id: &str) -> io::Result<()> {
-    let submissions_dir = root.as_ref().join(SUBMISSIONS_DIR);
-    let request_path = submissions_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
-    let response_path = submissions_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
-    let _ = fs::remove_file(&request_path);
-    let _ = fs::remove_file(&response_path);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::constants::SUBMISSIONS_DIR;

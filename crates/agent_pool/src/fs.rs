@@ -144,62 +144,6 @@ impl VerifiedWatcher {
         })
     }
 
-    /// Block until watcher is verified.
-    ///
-    /// Verification succeeds when ANY filesystem event is observed (canary or otherwise).
-    /// This relies on the assumption that filesystem watchers don't "partially work" -
-    /// once an event is delivered, the watcher is fully operational and will continue
-    /// delivering events for subsequent filesystem operations.
-    ///
-    /// Use when you need verification without waiting for a target file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if verification times out.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called when watcher is disconnected.
-    pub fn ensure_verified(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        let WatcherState::Connected { rx, canary } = &mut self.state else {
-            panic!("ensure_verified called on disconnected watcher");
-        };
-
-        // Already verified
-        if canary.is_none() {
-            return Ok(());
-        }
-
-        let start = Instant::now();
-        loop {
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(_) => {
-                    // Any filesystem event proves the watcher is working.
-                    // Drop the canary guard to clean up the file.
-                    *canary = None;
-                    return Ok(());
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Some(t) = timeout
-                        && start.elapsed() > t
-                    {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "watcher verification timed out",
-                        ));
-                    }
-                    if let Some(c) = canary {
-                        c.retry()?;
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.state = WatcherState::Disconnected;
-                    panic!("watcher disconnected unexpectedly");
-                }
-            }
-        }
-    }
-
     /// Wait for a specific file to appear.
     ///
     /// If not yet verified, handles canary verification alongside waiting.
@@ -263,28 +207,6 @@ impl VerifiedWatcher {
                     self.state = WatcherState::Disconnected;
                     panic!("watcher disconnected unexpectedly");
                 }
-            }
-        }
-    }
-
-    /// Consume the watcher and return the raw event receiver.
-    ///
-    /// Use this for daemon main loops that need to process arbitrary events.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called when watcher is disconnected or unverified.
-    #[must_use]
-    pub fn into_receiver(self) -> mpsc::Receiver<PathBuf> {
-        match self.state {
-            WatcherState::Connected { rx, canary: None } => rx,
-            WatcherState::Connected {
-                canary: Some(_), ..
-            } => {
-                panic!("into_receiver called on unverified watcher")
-            }
-            WatcherState::Disconnected => {
-                panic!("into_receiver called on disconnected watcher")
             }
         }
     }
