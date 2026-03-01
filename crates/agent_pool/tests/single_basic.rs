@@ -69,8 +69,6 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
 
     // === Sync point 4: Agent stopped ===
     let _ = agent.stop();
-    // Give daemon time to process deregistration
-    std::thread::sleep(Duration::from_millis(100));
     let agents = AgentsSnapshot::capture(&pool);
     agents.assert_agent_not_exists("agent-1");
 
