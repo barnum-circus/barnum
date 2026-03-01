@@ -865,8 +865,132 @@ Document the new three-file protocol.
 
 No migration needed - this is a breaking change to the protocol. All existing agents will need to update to the new protocol.
 
+## Typestate Pattern for Worker Lifecycle
+
+Use RAII guards that automatically clean up files when transitioning between states. Each state owns the files relevant to that state, and dropping the state deletes those files.
+
+### Worker States
+
+```rust
+/// Worker just registered - holds ready file.
+/// Dropping deletes the ready file.
+struct WorkerReady {
+    uuid: String,
+    ready_path: PathBuf,
+    data: WorkerData,
+}
+
+/// Worker has task assigned - ready file already cleaned.
+/// Dropping deletes the task file.
+struct WorkerAssigned {
+    uuid: String,
+    task_path: PathBuf,
+}
+
+/// Worker completed task - task file already cleaned.
+/// Dropping deletes the response file.
+struct WorkerComplete {
+    uuid: String,
+    response_path: PathBuf,
+    response_content: String,
+}
+```
+
+### State Transitions
+
+```rust
+impl WorkerReady {
+    /// Assign a task to this worker.
+    /// Consumes self (drops ready file), writes task file.
+    fn assign_task(self, task_content: &str) -> io::Result<WorkerAssigned> {
+        let task_path = self.ready_path.with_file_name(
+            format!("{}{TASK_SUFFIX}", self.uuid)
+        );
+        fs::write(&task_path, task_content)?;
+
+        // self drops here -> ready file deleted
+        Ok(WorkerAssigned {
+            uuid: self.uuid,
+            task_path,
+        })
+    }
+}
+
+impl WorkerAssigned {
+    /// Mark task as complete after reading response.
+    /// Consumes self (drops task file), reads response file.
+    fn complete(self, agents_dir: &Path) -> io::Result<WorkerComplete> {
+        let response_path = agents_dir.join(
+            format!("{}{WORKER_RESPONSE_SUFFIX}", self.uuid)
+        );
+        let response_content = fs::read_to_string(&response_path)?;
+
+        // self drops here -> task file deleted
+        Ok(WorkerComplete {
+            uuid: self.uuid,
+            response_path,
+            response_content,
+        })
+    }
+}
+
+impl WorkerComplete {
+    /// Finish processing and clean up.
+    /// Returns the response content, drops self (deletes response file).
+    fn finish(self) -> String {
+        // self drops here -> response file deleted
+        self.response_content
+    }
+}
+```
+
+### Drop Implementations
+
+```rust
+impl Drop for WorkerReady {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.ready_path);
+    }
+}
+
+impl Drop for WorkerAssigned {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.task_path);
+    }
+}
+
+impl Drop for WorkerComplete {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.response_path);
+    }
+}
+```
+
+### Benefits
+
+1. **Automatic cleanup** - Files are deleted when states transition, no manual cleanup needed
+2. **Compiler-enforced correctness** - Can't forget to clean up, can't access wrong state's data
+3. **Clear ownership** - Each state owns exactly the files it's responsible for
+4. **Panic safety** - Even if code panics, Drop runs and cleans up files
+
+### Worker State Enum for Storage
+
+The IO layer stores workers in a map. Use an enum to hold the current state:
+
+```rust
+enum WorkerState {
+    Ready(WorkerReady),
+    Assigned(WorkerAssigned),
+    // Complete is transient - processed immediately then dropped
+}
+
+type WorkerMap = HashMap<String, WorkerState>;  // Keyed by UUID
+```
+
+---
+
 ## Open Questions
 
 1. **Should ready.json contain metadata?** - Currently proposed to include optional `name` field for debugging. Could also include capabilities, version, etc.
 
-2. **Cleanup timing** - When exactly should the daemon clean up the three files? After reading response, or let them age out?
+2. ~~**Cleanup timing**~~ - Resolved by typestate pattern. Files are cleaned up automatically on state transitions.
