@@ -645,9 +645,121 @@ This keeps workers engaged (prevents Claude from getting "bored"). There's no di
 
 **File:** `crates/agent_pool/src/daemon/io.rs`
 
-The IO layer maps abstract IDs to concrete file paths and performs actual I/O. This is where the typestate pattern lives - core deals with IDs, IO deals with files.
+The IO layer maps abstract IDs to concrete file paths and performs actual I/O. It maintains a per-UUID state machine that handles duplicate/delayed FS events gracefully.
 
-#### Complete IO Layer Data Structures
+#### UUID State Machine (Monotonic Transitions)
+
+For each UUID, the IO layer tracks state and only transitions **upward**. This provides the guarantees that let core panic on violations.
+
+```rust
+// =============================================================================
+// UUID State Tracking
+// =============================================================================
+
+/// State of a UUID in the filesystem protocol.
+/// States are ordered - we only ever transition to higher states.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub(super) enum UuidState {
+    #[default]
+    Unknown = 0,    // Haven't seen this UUID yet
+    Ready = 1,      // ready.json exists (worker registered)
+    Assigned = 2,   // task.json written (by daemon)
+    Responded = 3,  // response.json exists (worker responded)
+    Removed = 4,    // Worker removed, files cleaned up
+}
+
+/// FS events we might receive for a UUID.
+/// Multiple events can map to the same state (e.g., Create + Modify + Close for one write).
+#[derive(Debug, Clone, Copy)]
+pub(super) enum FsEventKind {
+    ReadyCreated,
+    ReadyDeleted,
+    TaskCreated,
+    TaskDeleted,
+    ResponseCreated,
+    ResponseDeleted,
+}
+
+impl FsEventKind {
+    /// What state does this event indicate we should be in (at minimum)?
+    fn target_state(self) -> UuidState {
+        match self {
+            Self::ReadyCreated => UuidState::Ready,
+            Self::ReadyDeleted => UuidState::Assigned,  // We delete ready when assigning
+            Self::TaskCreated => UuidState::Assigned,
+            Self::TaskDeleted => UuidState::Responded,  // We delete task on completion
+            Self::ResponseCreated => UuidState::Responded,
+            Self::ResponseDeleted => UuidState::Removed,
+        }
+    }
+}
+
+/// Tracker for a single UUID's state.
+pub(super) struct UuidTracker {
+    pub state: UuidState,
+    pub worker_id: Option<WorkerId>,  // Assigned when we reach Ready state
+}
+
+impl Default for UuidTracker {
+    fn default() -> Self {
+        Self { state: UuidState::Unknown, worker_id: None }
+    }
+}
+```
+
+#### Handling FS Events (Monotonic Transitions)
+
+```rust
+impl IoState {
+    /// Handle a filesystem event for a UUID.
+    /// Only transitions to higher states. Duplicate/delayed events are ignored.
+    /// Returns Some(event) if we should notify core.
+    fn handle_fs_event(&mut self, uuid: &str, event_kind: FsEventKind) -> Option<Event> {
+        let target_state = event_kind.target_state();
+        let tracker = self.uuid_trackers.entry(uuid.to_string()).or_default();
+
+        // Only transition to HIGHER states
+        if target_state <= tracker.state {
+            // Duplicate or delayed event - ignore
+            return None;
+        }
+
+        let old_state = tracker.state;
+        tracker.state = target_state;
+
+        // Send event to core based on the transition
+        match (old_state, target_state) {
+            (UuidState::Unknown, UuidState::Ready) => {
+                // New worker! Assign ID and notify core
+                let worker_id = self.allocate_worker_id();
+                tracker.worker_id = Some(worker_id);
+                Some(Event::WorkerReady { worker_id })
+            }
+            (UuidState::Assigned, UuidState::Responded) => {
+                // Worker responded! Notify core
+                let worker_id = tracker.worker_id
+                    .expect("UUID in Assigned state must have worker_id");
+                Some(Event::WorkerResponded { worker_id })
+            }
+            _ => {
+                // Other transitions (e.g., Ready→Assigned) are initiated by us,
+                // not external FS events. Seeing them as FS events is fine, no-op.
+                None
+            }
+        }
+    }
+}
+```
+
+**Key properties:**
+1. **Monotonic**: State only increases, never decreases
+2. **Idempotent**: Duplicate events for same state are ignored
+3. **Tolerant**: Delayed events from lower states are ignored
+4. **Events to core only on transitions**: WorkerReady sent exactly once (Unknown→Ready), WorkerResponded sent exactly once (Assigned→Responded)
+
+This is what enables core to panic on violations - IO guarantees it will never send duplicate events or events for invalid states.
+
+#### File Ownership (RAII Guards)
 
 ```rust
 // =============================================================================
