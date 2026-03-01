@@ -834,15 +834,16 @@ impl WorkerReady {
         Ok(Self { uuid, ready_path, data })
     }
 
-    /// Assign a task. Consumes self (drops ready file), writes task file.
-    fn assign_task(self, agents_dir: &Path, content: &str) -> io::Result<WorkerAssigned> {
+    /// Assign a task. Deletes ready file, writes task file, returns new guard.
+    fn assign_task(mut self, agents_dir: &Path, content: &str) -> io::Result<WorkerAssigned> {
         let task_path = agents_dir.join(format!("{}{TASK_SUFFIX}", self.uuid));
         fs::write(&task_path, content)?;
-        // self drops here → ready file deleted
-        Ok(WorkerAssigned {
-            uuid: self.uuid,
-            task_path,
-        })
+
+        // Take uuid before dropping self (can't partially move from Drop type)
+        let uuid = std::mem::take(&mut self.uuid);
+        // self drops here → ready file deleted (with empty uuid, but that's fine)
+
+        Ok(WorkerAssigned { uuid, task_path })
     }
 }
 
