@@ -8,16 +8,8 @@
 //!
 //! # Usage
 //!
-//! For CLI tools that run forever:
 //! ```ignore
-//! agent_pool::run(&root)?;  // Never returns on success
-//! ```
-//!
-//! For programmatic control with graceful shutdown:
-//! ```ignore
-//! let handle = agent_pool::spawn(&root)?;
-//! // ... submit tasks ...
-//! handle.shutdown()?;  // Gracefully stops the daemon
+//! agent_pool::run_with_config(&root, config)?;  // Never returns on success
 //! ```
 //!
 //! # Architecture
@@ -48,7 +40,7 @@ mod daemon;
 mod submit;
 
 pub use constants::{AGENTS_DIR, RESPONSE_FILE, STATUS_FILE, TASK_FILE};
-pub use daemon::{DaemonConfig, DaemonHandle, run_with_config, spawn};
+pub use daemon::{DaemonConfig, run_with_config};
 pub use lock::is_daemon_running;
 pub use pool::{
     cleanup_stopped, default_pool_root, generate_id, id_to_path, list_pools, resolve_pool,

@@ -158,165 +158,11 @@ enum IoEvent {
     Socket(String, Stream),
     /// Effect from the core event loop.
     Effect(Effect),
-    /// Shutdown signal - exit the I/O loop.
-    #[allow(dead_code)]
-    Shutdown,
 }
 
 // =============================================================================
 // Public API
 // =============================================================================
-
-/// Handle to a running daemon, allowing graceful shutdown.
-#[allow(dead_code)]
-pub struct DaemonHandle {
-    /// Dropping this sender closes the channel, signaling shutdown.
-    _shutdown_tx: mpsc::Sender<IoEvent>,
-    thread: Option<thread::JoinHandle<io::Result<()>>>,
-}
-
-#[allow(dead_code)]
-impl DaemonHandle {
-    /// Request graceful shutdown and wait for the daemon to stop.
-    ///
-    /// Sends a shutdown signal through the channel, which causes the daemon's
-    /// I/O loop to exit. Then we join the thread.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the daemon thread panicked or encountered an I/O error.
-    pub fn shutdown(self) -> io::Result<()> {
-        let Self {
-            _shutdown_tx: shutdown_tx,
-            thread,
-        } = self;
-        // Send explicit shutdown signal (can't rely on channel closing because
-        // timer threads hold sender clones that keep the channel alive)
-        let _ = shutdown_tx.send(IoEvent::Shutdown);
-
-        if let Some(handle) = thread {
-            handle
-                .join()
-                .map_err(|_| io::Error::other("daemon thread panicked"))?
-        } else {
-            Ok(())
-        }
-    }
-}
-
-/// Spawn the daemon in a background thread with default configuration.
-///
-/// # Errors
-///
-/// Returns an error if the lock can't be acquired or setup fails.
-#[allow(dead_code)]
-pub fn spawn(root: impl AsRef<Path>) -> io::Result<DaemonHandle> {
-    spawn_with_config(root, DaemonConfig::default())
-}
-
-/// Spawn the daemon in a background thread with custom configuration.
-///
-/// # Errors
-///
-/// Returns an error if the lock can't be acquired or setup fails.
-#[allow(dead_code)]
-pub fn spawn_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<DaemonHandle> {
-    fs::create_dir_all(root.as_ref())?;
-    // Canonicalize to resolve symlinks (e.g., /var -> /private/var on macOS)
-    // so FSEvent paths match our stored paths.
-    let root = fs::canonicalize(root.as_ref())?;
-
-    // Clean up stale state from previous runs (crashed daemon, etc.)
-    cleanup_pool_state(&root);
-
-    let lock_path = root.join(LOCK_FILE);
-    let socket_path = root.join(SOCKET_NAME);
-    let agents_dir = root.join(AGENTS_DIR);
-    let submissions_dir = root.join(SUBMISSIONS_DIR);
-
-    // Clean up stale socket if it exists
-    if socket_path.exists() {
-        fs::remove_file(&socket_path)?;
-    }
-
-    // Create unified event channel - all sources send here, main loop receives
-    let (io_tx, io_rx) = mpsc::channel();
-
-    // Start watcher FIRST - before creating anything - so we can verify all FS events
-    let fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
-
-    // Use a oneshot channel to signal readiness or early error
-    let (ready_tx, ready_rx) = mpsc::sync_channel::<io::Result<()>>(0);
-
-    // Clone sender for the daemon thread
-    let daemon_io_tx = io_tx.clone();
-
-    let thread = thread::spawn(move || {
-        let _watcher = fs_watcher;
-        // Clean up pool state on thread exit (graceful shutdown or panic)
-        let _pool_cleanup = PoolStateCleanup(root.clone());
-
-        // Create everything and verify all FS events are seen
-        let (lock, listener) = match sync_and_setup(
-            &root,
-            &lock_path,
-            &socket_path,
-            &submissions_dir,
-            &agents_dir,
-            &io_rx,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                let _ = ready_tx.send(Err(e));
-                return Err(io::Error::other("sync_and_setup failed"));
-            }
-        };
-
-        let _lock = lock;
-        let _cleanup = SocketCleanup(socket_path.clone());
-
-        // Write status file to signal daemon is ready
-        if let Err(e) = fs::write(root.join(STATUS_FILE), "ready") {
-            let _ = ready_tx.send(Err(e));
-            return Err(io::Error::other("failed to write status file"));
-        }
-
-        info!(socket = %socket_path.display(), "daemon listening");
-
-        // Signal that we're ready
-        let _ = ready_tx.send(Ok(()));
-
-        run_daemon(
-            listener,
-            io_rx,
-            daemon_io_tx,
-            &agents_dir,
-            &submissions_dir,
-            &config.into(),
-        )
-    });
-
-    // Wait for daemon to signal readiness (blocking, no polling)
-    // Propagate any early error
-    ready_rx
-        .recv()
-        .map_err(|_| io::Error::other("daemon thread died during startup"))??;
-
-    Ok(DaemonHandle {
-        _shutdown_tx: io_tx,
-        thread: Some(thread),
-    })
-}
-
-/// Run the agent pool daemon (blocking, never returns on success).
-///
-/// # Errors
-///
-/// Returns an error if the lock can't be acquired or an I/O error occurs.
-#[allow(dead_code)]
-pub fn run(root: impl AsRef<Path>) -> io::Result<Infallible> {
-    run_with_config(root, DaemonConfig::default())
-}
 
 /// Run the agent pool daemon with custom configuration (blocking, never returns on success).
 ///
@@ -456,14 +302,8 @@ fn run_event_loop(
 
     let mut state = PoolState::new();
 
-    // Block on recv - Shutdown event signals exit
+    // Block on recv until channel is closed
     while let Ok(event) = events_rx.recv() {
-        // Check for shutdown before processing
-        if matches!(event, Event::Shutdown) {
-            debug!("event loop: received shutdown signal");
-            break;
-        }
-
         info!(?event, "received event");
         let (new_state, effects) = step(state, event);
         state = new_state;
@@ -509,7 +349,7 @@ fn io_loop(
         agents_dir, submissions_dir
     );
 
-    // Block on recv - Shutdown event signals exit
+    // Block on recv until channel is closed (process termination)
     while let Ok(io_event) = io_rx.recv() {
         match io_event {
             IoEvent::Fs(event) => {
@@ -563,17 +403,10 @@ fn io_loop(
                     io_config,
                 )?;
             }
-            IoEvent::Shutdown => {
-                info!("shutdown signal received");
-                // Signal event loop to exit (can't rely on channel closing because
-                // timer threads hold events_tx clones)
-                let _ = events_tx.send(Event::Shutdown);
-                break;
-            }
         }
     }
 
-    info!("I/O loop exiting");
+    // Channel closed - all senders dropped (shouldn't happen in normal operation)
     Ok(())
 }
 

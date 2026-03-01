@@ -10,4 +10,4 @@ mod io;
 mod path_category;
 mod wiring;
 
-pub use wiring::{DaemonConfig, DaemonHandle, run_with_config, spawn};
+pub use wiring::{DaemonConfig, run_with_config};

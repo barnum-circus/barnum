@@ -4,11 +4,13 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE};
+use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE, wait_for_pool_ready};
 use std::fs;
+use std::io::{BufRead, BufReader};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -297,27 +299,104 @@ impl GsdTestAgent {
 // Agent Pool Handle
 // =============================================================================
 
-/// Wrapper around the daemon handle for testing.
+/// Find the `agent_pool` binary.
+fn find_agent_pool_binary() -> PathBuf {
+    if let Ok(bin) = std::env::var("AGENT_POOL_BIN") {
+        return PathBuf::from(bin);
+    }
+
+    // Find workspace root by looking for Cargo.toml with [workspace]
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("Could not find workspace root");
+
+    workspace_root.join("target/debug/agent_pool")
+}
+
+/// Wrapper that starts the daemon via CLI subprocess.
+///
+/// Automatically shuts down the daemon when dropped.
 pub struct AgentPoolHandle {
-    handle: Option<agent_pool::DaemonHandle>,
+    root: PathBuf,
+    process: Option<Child>,
+    /// Handles for threads forwarding stdout/stderr (so they get captured by tests)
+    _output_threads: Vec<thread::JoinHandle<()>>,
 }
 
 impl AgentPoolHandle {
     /// Start the agent pool daemon.
-    ///
-    /// The daemon signals readiness internally before `spawn()` returns.
     pub fn start(root: &Path) -> Self {
-        let handle = agent_pool::spawn(root).expect("Failed to start daemon");
+        let bin = find_agent_pool_binary();
+        assert!(
+            bin.exists(),
+            "agent_pool binary not found at {}. Run `cargo build -p agent_pool_cli` first.",
+            bin.display()
+        );
+
+        // Build command - use --pool-root and pool name
+        let mut cmd = Command::new(&bin);
+        cmd.arg("start")
+            .arg("--pool-root")
+            .arg(root.parent().unwrap_or(root))
+            .arg("--pool")
+            .arg(root.file_name().unwrap_or_default())
+            .arg("--log-level")
+            .arg("trace");
+
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+
+        let mut process = cmd.spawn().expect("Failed to spawn agent_pool process");
+
+        // Set up output capture
+        let mut output_threads = Vec::new();
+
+        if let Some(stdout) = process.stdout.take() {
+            output_threads.push(thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[daemon stdout] {line}");
+                }
+            }));
+        }
+
+        if let Some(stderr) = process.stderr.take() {
+            output_threads.push(thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines().map_while(Result::ok) {
+                    eprintln!("[daemon stderr] {line}");
+                }
+            }));
+        }
+
+        wait_for_pool_ready(root, Duration::from_secs(10))
+            .expect("Agent pool did not become ready in time");
+
         Self {
-            handle: Some(handle),
+            root: root.to_path_buf(),
+            process: Some(process),
+            _output_threads: output_threads,
         }
     }
 }
 
 impl Drop for AgentPoolHandle {
     fn drop(&mut self) {
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.shutdown();
+        // Try graceful shutdown via CLI
+        let bin = find_agent_pool_binary();
+        let _ = Command::new(&bin)
+            .arg("stop")
+            .arg("--pool-root")
+            .arg(self.root.parent().unwrap_or(&self.root))
+            .arg("--pool")
+            .arg(self.root.file_name().unwrap_or_default())
+            .output();
+
+        // Kill the process if still running
+        if let Some(mut process) = self.process.take() {
+            let _ = process.kill();
+            let _ = process.wait();
         }
     }
 }

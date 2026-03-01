@@ -284,10 +284,6 @@ pub(super) enum Event {
         /// The task to assign (pre-allocated by I/O layer).
         task_id: TaskId,
     },
-
-    /// Shutdown signal from I/O layer.
-    /// Event loop should exit immediately.
-    Shutdown,
 }
 
 // =============================================================================
@@ -370,11 +366,6 @@ pub(super) fn step(state: PoolState, event: Event) -> (PoolState, Vec<Effect>) {
         Event::AgentTimedOut { epoch } => handle_agent_timed_out(state, epoch),
         Event::AssignTaskToAgentIfEpochMatches { epoch, task_id } => {
             handle_assign_task_to_agent_if_epoch_matches(state, epoch, task_id)
-        }
-        // Shutdown is handled by the event loop before calling step.
-        // If it reaches here, that's a bug.
-        Event::Shutdown => {
-            unreachable!("Event::Shutdown should be handled by event loop, not step()")
         }
     }
 }
