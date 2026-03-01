@@ -417,14 +417,6 @@ pub(super) struct WorkerState {
 }
 
 impl WorkerState {
-    /// Create a new worker in idle state.
-    fn new(worker_id: WorkerId) -> Self {
-        Self {
-            status: WorkerStatus::Idle,
-            epoch: Epoch { worker_id, sequence: 0 },
-        }
-    }
-
     /// Transition from idle to busy. Panics if already busy.
     ///
     /// # Panics
@@ -545,7 +537,7 @@ All timer-originated events need defensive handling for "worker not found" and "
 - **Defensive**: Timer event or withdrawal - legitimate races can cause stale/missing state
 
 ```rust
-fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
+fn handle_worker_registered(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
     // PANIC: IO guarantees WorkerReady sent exactly once per worker_id
     assert!(
         !state.workers.contains_key(&worker_id),
@@ -553,15 +545,22 @@ fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState,
         worker_id
     );
 
-    state.workers.insert(worker_id, WorkerState::new(worker_id));
-
-    // Try to assign a pending task immediately
+    // Insert worker directly in the correct state
     if let Some(task_id) = state.pending_tasks.pop_front() {
-        let worker = state.workers.get_mut(&worker_id).unwrap();
-        let epoch = worker.become_busy(task_id);  // panics if not idle (can't happen here)
+        // Task available - insert as Busy
+        let epoch = Epoch { worker_id, sequence: 1 };
+        state.workers.insert(worker_id, WorkerState {
+            status: WorkerStatus::Busy { task_id },
+            epoch,
+        });
         (state, vec![Effect::TaskAssigned { task_id, epoch }])
     } else {
-        let epoch = state.workers.get(&worker_id).unwrap().epoch;
+        // No task - insert as Idle
+        let epoch = Epoch { worker_id, sequence: 0 };
+        state.workers.insert(worker_id, WorkerState {
+            status: WorkerStatus::Idle,
+            epoch,
+        });
         (state, vec![Effect::WorkerWaiting { epoch }])
     }
 }
