@@ -699,6 +699,8 @@ Implementation notes:
 - `--abort` without `--data` signals the daemon to requeue the task (or mark it failed)
 - Need to decide: does abort requeue for another agent, or fail the task?
 
+**Note for anonymous workers:** With the anonymous worker model, the same worker that aborted might immediately get the task reassigned (since it creates a new UUID and re-registers). This is a bit weird but acceptable - the worker is essentially saying "I couldn't do this task in my current state, let me try fresh."
+
 ---
 
 ## Rethink Agent Deregistration
