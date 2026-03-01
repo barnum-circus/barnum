@@ -458,10 +458,24 @@ fn handle_fs_event(
             }
             // Anonymous workers protocol
             PathCategory::WorkerReady { id } => {
-                trace!(id = %id, "WorkerReady: anonymous workers not yet implemented");
+                handle_worker_ready_file(
+                    &id,
+                    path,
+                    events_tx,
+                    worker_map,
+                    id_allocator,
+                    kicked_paths,
+                );
             }
             PathCategory::WorkerResponse { id } => {
-                trace!(id = %id, "WorkerResponse: anonymous workers not yet implemented");
+                handle_worker_response_file(
+                    &id,
+                    path,
+                    events_tx,
+                    worker_map,
+                    pending_responses,
+                    kicked_paths,
+                );
             }
             // Submissions
             PathCategory::SubmissionRequest { id } => {
@@ -549,6 +563,90 @@ fn handle_agent_response(
                 "skipping duplicate WorkerResponded"
             );
         }
+    }
+}
+
+/// Handle a worker ready file (anonymous workers protocol).
+///
+/// Worker writes `<uuid>.ready.json` to signal availability.
+/// We register the worker and send WorkerReady event.
+fn handle_worker_ready_file(
+    uuid: &str,
+    ready_path: &Path,
+    events_tx: &mpsc::Sender<Event>,
+    worker_map: &mut WorkerMap,
+    id_allocator: &mut IdAllocator,
+    kicked_paths: &HashSet<PathBuf>,
+) {
+    // Skip if file doesn't exist (may have been cleaned up)
+    if !ready_path.exists() {
+        return;
+    }
+
+    // Skip if this UUID was kicked
+    if kicked_paths.contains(ready_path) {
+        trace!(uuid = %uuid, "WorkerReady: skipping kicked worker");
+        return;
+    }
+
+    // Skip if already registered (duplicate event)
+    if worker_map.get_id_by_path(ready_path).is_some() {
+        trace!(uuid = %uuid, "WorkerReady: already registered");
+        return;
+    }
+
+    // Register the worker
+    let worker_id = id_allocator.allocate_worker();
+    if worker_map.register(worker_id, ready_path.to_path_buf(), ()) {
+        debug!(uuid = %uuid, worker_id = worker_id.0, "WorkerReady: registered");
+        let _ = events_tx.send(Event::WorkerReady { worker_id });
+    }
+}
+
+/// Handle a worker response file (anonymous workers protocol).
+///
+/// Worker writes `<uuid>.response.json` to signal task completion.
+/// We send WorkerResponded event.
+fn handle_worker_response_file(
+    uuid: &str,
+    response_path: &Path,
+    events_tx: &mpsc::Sender<Event>,
+    worker_map: &WorkerMap,
+    pending_responses: &mut HashSet<WorkerId>,
+    kicked_paths: &HashSet<PathBuf>,
+) {
+    // Skip if file doesn't exist
+    if !response_path.exists() {
+        return;
+    }
+
+    // For anonymous workers, the ready file path is the key in worker_map.
+    // Derive ready path from response path: <uuid>.response.json -> <uuid>.ready.json
+    let Some(parent) = response_path.parent() else {
+        return;
+    };
+    let ready_path = parent.join(format!("{uuid}.ready.json"));
+
+    // Skip if kicked
+    if kicked_paths.contains(&ready_path) {
+        trace!(uuid = %uuid, "WorkerResponse: skipping kicked worker");
+        return;
+    }
+
+    // Find the worker
+    let Some(worker_id) = worker_map.get_id_by_path(&ready_path) else {
+        // Worker not found - might have registered before we started watching
+        // or response arrived before ready file was processed
+        trace!(uuid = %uuid, "WorkerResponse: worker not found");
+        return;
+    };
+
+    // Send response event (deduplicated)
+    if pending_responses.insert(worker_id) {
+        debug!(uuid = %uuid, worker_id = worker_id.0, "WorkerResponse: sending event");
+        let _ = events_tx.send(Event::WorkerResponded { worker_id });
+    } else {
+        trace!(uuid = %uuid, "WorkerResponse: duplicate event");
     }
 }
 
