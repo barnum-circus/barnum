@@ -11,12 +11,16 @@ use std::path::Path;
 
 use notify::event::{CreateKind, EventKind, RemoveKind};
 
-use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE};
+use crate::constants::{READY_SUFFIX, REQUEST_SUFFIX, RESPONSE_FILE, WORKER_RESPONSE_SUFFIX};
 use crate::fs::is_write_complete;
 
 /// Category of a filesystem path.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PathCategory {
+    // -------------------------------------------------------------------------
+    // Legacy agent protocol (per-agent directories)
+    // TODO: Remove these after anonymous workers migration is complete
+    // -------------------------------------------------------------------------
     /// Agent directory: `agents/<name>/`
     AgentDir {
         /// The agent's directory name.
@@ -27,6 +31,26 @@ pub(super) enum PathCategory {
         /// The agent's directory name.
         name: String,
     },
+
+    // -------------------------------------------------------------------------
+    // Anonymous worker protocol (flat files)
+    // -------------------------------------------------------------------------
+    /// Worker ready file: `agents/<uuid>.ready.json`
+    #[allow(dead_code)] // Not yet used until anonymous workers refactor
+    WorkerReady {
+        /// The worker's UUID.
+        id: String,
+    },
+    /// Worker response file: `agents/<uuid>.response.json`
+    #[allow(dead_code)] // Not yet used until anonymous workers refactor
+    WorkerResponse {
+        /// The worker's UUID.
+        id: String,
+    },
+
+    // -------------------------------------------------------------------------
+    // Submission protocol (unchanged)
+    // -------------------------------------------------------------------------
     /// Submission request file: `submissions/<id>.request.json`
     SubmissionRequest {
         /// The submission's ID.
@@ -76,15 +100,33 @@ fn categorize_under_agents(
         return None;
     }
 
-    let name = components[0].as_os_str().to_str()?.to_string();
-
     match components.len() {
-        // Agent directory - meaningful on folder creation or removal
-        1 if is_folder_created(event_kind) || is_folder_removed(event_kind) => {
-            Some(PathCategory::AgentDir { name })
+        // Single component: either a folder (legacy) or a flat file (anonymous workers)
+        1 => {
+            let name = components[0].as_os_str().to_str()?;
+
+            // Legacy: Agent directory - meaningful on folder creation or removal
+            if is_folder_created(event_kind) || is_folder_removed(event_kind) {
+                return Some(PathCategory::AgentDir {
+                    name: name.to_string(),
+                });
+            }
+
+            // Anonymous workers: flat files - only meaningful when write is complete
+            if is_write_complete(event_kind) {
+                if let Some(id) = name.strip_suffix(READY_SUFFIX) {
+                    return Some(PathCategory::WorkerReady { id: id.to_string() });
+                }
+                if let Some(id) = name.strip_suffix(WORKER_RESPONSE_SUFFIX) {
+                    return Some(PathCategory::WorkerResponse { id: id.to_string() });
+                }
+            }
+
+            None
         }
-        // Agent response - only meaningful when write is complete
+        // Two components: legacy agent response file `<name>/response.json`
         2 if is_write_complete(event_kind) => {
+            let name = components[0].as_os_str().to_str()?.to_string();
             let filename = components[1].as_os_str().to_str()?;
             if filename == RESPONSE_FILE {
                 Some(PathCategory::AgentResponse { name })
@@ -131,6 +173,8 @@ mod tests {
     use notify::event::{CreateKind, RemoveKind};
 
     use super::*;
+
+    const TEST_UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
 
     fn agents() -> PathBuf {
         PathBuf::from("/pool/agents")
@@ -278,6 +322,64 @@ mod tests {
     }
 
     // =========================================================================
+    // Anonymous worker: ready file
+    // =========================================================================
+
+    #[test]
+    fn worker_ready_on_file_written() {
+        let path = PathBuf::from(format!("/pool/agents/{TEST_UUID}.ready.json"));
+        assert_eq!(
+            categorize(&path, file_written(), &agents(), &submissions()),
+            Some(PathCategory::WorkerReady {
+                id: TEST_UUID.to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn worker_ready_folder_treated_as_agent_dir() {
+        // Edge case: if a folder named "abc123.ready.json" is created, it's
+        // treated as a legacy AgentDir (not WorkerReady). In practice this
+        // won't happen - workers create files, not folders.
+        let path = PathBuf::from("/pool/agents/abc123.ready.json");
+        assert_eq!(
+            categorize(&path, folder_created(), &agents(), &submissions()),
+            Some(PathCategory::AgentDir {
+                name: "abc123.ready.json".to_string()
+            })
+        );
+    }
+
+    // =========================================================================
+    // Anonymous worker: response file
+    // =========================================================================
+
+    #[test]
+    fn worker_response_on_file_written() {
+        let path = PathBuf::from(format!("/pool/agents/{TEST_UUID}.response.json"));
+        assert_eq!(
+            categorize(&path, file_written(), &agents(), &submissions()),
+            Some(PathCategory::WorkerResponse {
+                id: TEST_UUID.to_string()
+            })
+        );
+    }
+
+    #[test]
+    fn worker_response_folder_treated_as_agent_dir() {
+        // Edge case: if a folder named "abc123.response.json" is created, it's
+        // treated as a legacy AgentDir (not WorkerResponse). In practice this
+        // won't happen - workers create files, not folders.
+        let path = PathBuf::from("/pool/agents/abc123.response.json");
+        assert_eq!(
+            categorize(&path, folder_created(), &agents(), &submissions()),
+            Some(PathCategory::AgentDir {
+                name: "abc123.response.json".to_string()
+            })
+        );
+    }
+
+    // =========================================================================
     // Submission request
     // =========================================================================
 
@@ -304,12 +406,11 @@ mod tests {
 
     #[test]
     fn submission_request_uuid_format() {
-        let path =
-            PathBuf::from("/pool/submissions/550e8400-e29b-41d4-a716-446655440000.request.json");
+        let path = PathBuf::from(format!("/pool/submissions/{TEST_UUID}.request.json"));
         assert_eq!(
             categorize(&path, file_written(), &agents(), &submissions()),
             Some(PathCategory::SubmissionRequest {
-                id: "550e8400-e29b-41d4-a716-446655440000".to_string()
+                id: TEST_UUID.to_string()
             })
         );
     }

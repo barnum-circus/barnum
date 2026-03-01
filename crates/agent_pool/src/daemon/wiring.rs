@@ -478,6 +478,13 @@ fn handle_fs_event(
                     io_config,
                 );
             }
+            // Anonymous workers protocol - not yet implemented
+            PathCategory::WorkerReady { id } => {
+                trace!(id = %id, "WorkerReady: anonymous workers not yet implemented");
+            }
+            PathCategory::WorkerResponse { id } => {
+                trace!(id = %id, "WorkerResponse: anonymous workers not yet implemented");
+            }
         }
     }
 }
