@@ -385,6 +385,9 @@ enum TaskId {
 
 /// Either tasks are waiting for workers, or workers are waiting for tasks, or neither.
 /// Never both - any arrival triggers immediate matching.
+///
+/// Invariant: VecDeque is always non-empty in Tasks/Workers variants.
+/// When the last item is removed, transition to None.
 enum Waiting {
     None,
     Tasks(VecDeque<SubmissionId>),
