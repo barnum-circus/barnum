@@ -555,43 +555,56 @@ This keeps workers engaged. There's no "idle → removed" path - idle workers ge
 
 The IO layer maps UUIDs to IDs and handles file operations.
 
-#### UUID ↔ ID Mapping
+#### UUID Newtypes
+
+```rust
+/// Worker UUID - from ready.json filename. Not interchangeable with SubmissionUuid.
+#[derive(Clone, Default, Eq, PartialEq, Hash)]
+struct WorkerUuid(String);
+
+/// Submission UUID - from request.json filename. Not interchangeable with WorkerUuid.
+#[derive(Clone, Default, Eq, PartialEq, Hash)]
+struct SubmissionUuid(String);
+```
+
+#### UUID → ID Mapping
 
 ```rust
 struct IoState {
     // UUID → ID mappings (IO allocates IDs, core uses them)
-    worker_ids: IdMap<WorkerId>,      // worker UUID → WorkerId
-    submission_ids: IdMap<SubmissionId>, // submission UUID → SubmissionId
+    worker_uuids: HashMap<WorkerUuid, WorkerId>,
+    submission_uuids: HashMap<SubmissionUuid, SubmissionId>,
+    next_worker_id: u32,
+    next_submission_id: u32,
 
-    // File state
+    // File state (contains UUID for reverse lookup)
     workers: HashMap<WorkerId, IoWorkerState>,
 }
-
-struct IdMap<T> {
-    uuid_to_id: HashMap<String, T>,
-    id_to_uuid: HashMap<T, String>,
-    next_id: u32,
-}
 ```
+
+No reverse map needed - when handling Effects, we look up `workers[worker_id]` and the `IoWorkerState` contains the UUID.
 
 #### Handling FS Events
 
 ```rust
 impl IoState {
-    fn handle_ready_created(&mut self, uuid: &str) -> Option<Event> {
-        if self.worker_ids.uuid_to_id.contains_key(uuid) {
+    fn handle_ready_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
+        if self.worker_uuids.contains_key(&worker_uuid) {
             return None;  // Duplicate
         }
-        let id = self.worker_ids.allocate(uuid);
+        let worker_id = WorkerId(self.next_worker_id);
+        self.next_worker_id += 1;
+        self.worker_uuids.insert(worker_uuid.clone(), worker_id);
+
         let ready = WorkerReady::from_path(...)?;
-        self.workers.insert(id, IoWorkerState::Ready(ready));
-        Some(Event::WorkerReady { id })
+        self.workers.insert(worker_id, IoWorkerState::Ready(ready));
+        Some(Event::WorkerReady { worker_id })
     }
 
-    fn handle_response_created(&mut self, uuid: &str) -> Option<Event> {
-        let id = self.worker_ids.uuid_to_id.get(uuid)?;
-        match self.workers.get(id) {
-            Some(IoWorkerState::Assigned(_)) => Some(Event::WorkerResponded { id: *id }),
+    fn handle_response_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
+        let worker_id = self.worker_uuids.get(&worker_uuid)?;
+        match self.workers.get(worker_id) {
+            Some(IoWorkerState::Assigned(_)) => Some(Event::WorkerResponded { worker_id: *worker_id }),
             _ => None,
         }
     }
@@ -619,7 +632,7 @@ pub(super) struct WorkerData {
 /// Worker just registered - owns ready file.
 /// Drop deletes the ready file.
 pub(super) struct WorkerReady {
-    pub uuid: String,
+    pub worker_uuid: WorkerUuid,
     pub ready_path: PathBuf,
     pub data: WorkerData,
 }
@@ -627,43 +640,43 @@ pub(super) struct WorkerReady {
 /// Worker has task assigned - owns task file.
 /// Drop deletes the task file.
 pub(super) struct WorkerAssigned {
-    pub uuid: String,
+    pub worker_uuid: WorkerUuid,
     pub task_path: PathBuf,
 }
 
 impl WorkerReady {
     /// Create from a ready file path. Parses metadata from file.
     fn from_path(ready_path: PathBuf) -> io::Result<Self> {
-        let uuid = ready_path
+        let uuid_str = ready_path
             .file_name()
             .and_then(|n| n.to_str())
             .and_then(|n| n.strip_suffix(READY_SUFFIX))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid ready path"))?
-            .to_string();
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid ready path"))?;
+        let worker_uuid = WorkerUuid(uuid_str.to_string());
 
         let content = fs::read_to_string(&ready_path).unwrap_or_default();
         let data: WorkerData = serde_json::from_str(&content).unwrap_or_default();
 
-        Ok(Self { uuid, ready_path, data })
+        Ok(Self { worker_uuid, ready_path, data })
     }
 
     /// Assign a task. Deletes ready file, writes task file, returns new guard.
     fn assign_task(mut self, agents_dir: &Path, content: &str) -> io::Result<WorkerAssigned> {
-        let task_path = agents_dir.join(format!("{}{TASK_SUFFIX}", self.uuid));
+        let task_path = agents_dir.join(format!("{}{TASK_SUFFIX}", self.worker_uuid.0));
         fs::write(&task_path, content)?;
 
-        // Take uuid before dropping self (can't partially move from Drop type)
-        let uuid = std::mem::take(&mut self.uuid);
-        // self drops here → ready file deleted (with empty uuid, but that's fine)
+        // Take worker_uuid before dropping self (can't partially move from Drop type)
+        let worker_uuid = std::mem::take(&mut self.worker_uuid);
+        // self drops here → ready file deleted
 
-        Ok(WorkerAssigned { uuid, task_path })
+        Ok(WorkerAssigned { worker_uuid, task_path })
     }
 }
 
 impl WorkerAssigned {
     /// Get the response file path for this worker.
     fn response_path(&self, agents_dir: &Path) -> PathBuf {
-        agents_dir.join(format!("{}{WORKER_RESPONSE_SUFFIX}", self.uuid))
+        agents_dir.join(format!("{}{WORKER_RESPONSE_SUFFIX}", self.worker_uuid.0))
     }
 }
 
