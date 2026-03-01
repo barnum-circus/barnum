@@ -588,9 +588,10 @@ No reverse map needed - when handling Effects, we look up `workers[worker_id]` a
 
 ```rust
 impl IoState {
-    fn handle_ready_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
+    /// A worker wrote `<uuid>.ready.json` to signal availability.
+    fn on_ready_file_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
         if self.worker_uuids.contains_key(&worker_uuid) {
-            return None;  // Duplicate
+            return None;  // Duplicate event for same file
         }
         let worker_id = WorkerId(self.next_worker_id);
         self.next_worker_id += 1;
@@ -601,7 +602,8 @@ impl IoState {
         Some(Event::WorkerReady { worker_id })
     }
 
-    fn handle_response_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
+    /// A worker wrote `<uuid>.response.json` after completing a task.
+    fn on_response_file_created(&mut self, worker_uuid: WorkerUuid) -> Option<Event> {
         let worker_id = self.worker_uuids.get(&worker_uuid)?;
         match self.workers.get(worker_id) {
             Some(IoWorkerState::Assigned(_)) => Some(Event::WorkerResponded { worker_id: *worker_id }),
