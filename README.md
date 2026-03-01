@@ -22,13 +22,13 @@ A CLI tool for running a task queue defined in a configuration file, using long-
 
 ```bash
 # Run a state machine
-pnpm dlx @gsd-now/gsd@main run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
 
 # Validate a config file
-pnpm dlx @gsd-now/gsd@main validate config.json
+pnpm dlx @gsd-now/gsd validate config.json
 
 # Generate documentation
-pnpm dlx @gsd-now/gsd@main docs config.json
+pnpm dlx @gsd-now/gsd docs config.json
 ```
 
 See [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
