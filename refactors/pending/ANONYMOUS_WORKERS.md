@@ -354,18 +354,86 @@ Core is the pure state machine - it deals only with IDs and state transitions, n
 2. **Behavioral change**: After task completion, worker is **removed** (not returned to idle)
 3. **Remove `AgentDeregistered`**: Workers don't deregister, they just get removed on timeout or completion
 
-#### 3.1: Rename types
+#### 3.1: Complete Core Data Structures
 
 ```rust
-// Before
-pub(super) struct AgentId(pub(super) u32);
-pub(super) enum AgentStatus { Idle, Busy { task_id: TaskId } }
-pub(super) struct AgentState { status, epoch }
+// =============================================================================
+// ID Types (unchanged except rename)
+// =============================================================================
 
-// After
+/// External task ID - a real submission from a client.
+pub(super) struct ExternalTaskId(pub(super) u32);
+
+/// Heartbeat ID - a synthetic task to validate worker liveness.
+pub(super) struct HeartbeatId(pub(super) u32);
+
+/// Task identifier - either an external submission or a heartbeat.
+pub(super) enum TaskId {
+    External(ExternalTaskId),
+    Heartbeat(HeartbeatId),
+}
+
+/// Unique identifier for a registered worker.
 pub(super) struct WorkerId(pub(super) u32);
-pub(super) enum WorkerStatus { Idle, Busy { task_id: TaskId } }
-pub(super) struct WorkerState { status, epoch }
+
+/// Worker epoch - identifies a specific point in a worker's lifecycle.
+/// Used to validate timeout events (stale timeouts have wrong epoch).
+pub(super) struct Epoch {
+    pub(super) worker_id: WorkerId,
+    pub(super) sequence: u32,  // Increments on state transitions
+}
+
+// =============================================================================
+// Worker State
+// =============================================================================
+
+/// What a worker is currently doing.
+pub(super) enum WorkerStatus {
+    /// Waiting to receive a task.
+    Idle,
+    /// Currently processing a task.
+    Busy { task_id: TaskId },
+}
+
+/// Complete state for a single worker.
+pub(super) struct WorkerState {
+    pub(super) status: WorkerStatus,
+    pub(super) epoch: Epoch,
+}
+
+impl WorkerState {
+    /// Create a new worker in idle state.
+    fn new(worker_id: WorkerId) -> Self {
+        Self {
+            status: WorkerStatus::Idle,
+            epoch: Epoch { worker_id, sequence: 0 },
+        }
+    }
+
+    /// Transition from idle to busy. Returns new epoch, or None if already busy.
+    fn try_become_busy(&mut self, task_id: TaskId) -> Option<Epoch> {
+        if !matches!(self.status, WorkerStatus::Idle) {
+            return None;
+        }
+        self.epoch.sequence += 1;
+        self.status = WorkerStatus::Busy { task_id };
+        Some(self.epoch)
+    }
+
+    // NOTE: No try_become_idle() - workers are removed after completion, not returned to idle
+}
+
+// =============================================================================
+// Pool State
+// =============================================================================
+
+/// The complete state of the worker pool.
+pub(super) struct PoolState {
+    /// Tasks waiting to be assigned (FIFO queue)
+    pending_tasks: VecDeque<TaskId>,
+    /// Registered workers and their current state
+    workers: BTreeMap<WorkerId, WorkerState>,
+}
 ```
 
 #### 3.2: Update Events
@@ -458,8 +526,21 @@ fn handle_agent_responded(mut state: PoolState, agent_id: AgentId) -> (PoolState
 
 // After
 fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    let worker = state.workers.remove(&worker_id)?;
-    let WorkerStatus::Busy { task_id } = worker.status else { return (state, vec![]); };
+    // Worker not in map - stale event (removed by timeout, duplicate FS event, etc.)
+    // This is expected in race conditions, handle defensively.
+    let Some(worker) = state.workers.remove(&worker_id) else {
+        return (state, vec![]);
+    };
+
+    // Worker exists but not Busy - invariant violation.
+    // IO should only send WorkerResponded when worker is in Assigned state,
+    // which corresponds to Busy in core. If we get here, IO/core are out of sync.
+    let WorkerStatus::Busy { task_id } = worker.status else {
+        panic!(
+            "WorkerResponded for worker {:?} but status is {:?} - IO/core state mismatch",
+            worker_id, worker.status
+        );
+    };
 
     // Worker is REMOVED after completing task - no "return to idle"
     // TaskCompleted implies worker removal in the anonymous model
@@ -493,24 +574,72 @@ This keeps workers engaged (prevents Claude from getting "bored"). There's no di
 
 The IO layer maps abstract IDs to concrete file paths and performs actual I/O. This is where the typestate pattern lives - core deals with IDs, IO deals with files.
 
-#### Typestate Pattern for File Management
-
-Use RAII guards that automatically clean up files on state transitions:
+#### Complete IO Layer Data Structures
 
 ```rust
+// =============================================================================
+// Worker Metadata
+// =============================================================================
+
+/// Data parsed from ready.json. Debug-only, not used for dispatch.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(super) struct WorkerData {
+    /// Optional name for debugging/logging
+    pub name: Option<String>,
+}
+
+// =============================================================================
+// Typestate for File Management (RAII Guards)
+// =============================================================================
+
 /// Worker just registered - owns ready file.
 /// Drop deletes the ready file.
-struct WorkerReady {
-    uuid: String,
-    ready_path: PathBuf,
-    data: WorkerData,
+pub(super) struct WorkerReady {
+    pub uuid: String,
+    pub ready_path: PathBuf,
+    pub data: WorkerData,
 }
 
 /// Worker has task assigned - owns task file.
 /// Drop deletes the task file.
-struct WorkerAssigned {
-    uuid: String,
-    task_path: PathBuf,
+pub(super) struct WorkerAssigned {
+    pub uuid: String,
+    pub task_path: PathBuf,
+}
+
+impl WorkerReady {
+    /// Create from a ready file path. Parses metadata from file.
+    fn from_path(ready_path: PathBuf) -> io::Result<Self> {
+        let uuid = ready_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_suffix(READY_SUFFIX))
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid ready path"))?
+            .to_string();
+
+        let content = fs::read_to_string(&ready_path).unwrap_or_default();
+        let data: WorkerData = serde_json::from_str(&content).unwrap_or_default();
+
+        Ok(Self { uuid, ready_path, data })
+    }
+
+    /// Assign a task. Consumes self (drops ready file), writes task file.
+    fn assign_task(self, agents_dir: &Path, content: &str) -> io::Result<WorkerAssigned> {
+        let task_path = agents_dir.join(format!("{}{TASK_SUFFIX}", self.uuid));
+        fs::write(&task_path, content)?;
+        // self drops here → ready file deleted
+        Ok(WorkerAssigned {
+            uuid: self.uuid,
+            task_path,
+        })
+    }
+}
+
+impl WorkerAssigned {
+    /// Get the response file path for this worker.
+    fn response_path(&self, agents_dir: &Path) -> PathBuf {
+        agents_dir.join(format!("{}{WORKER_RESPONSE_SUFFIX}", self.uuid))
+    }
 }
 
 impl Drop for WorkerReady {
@@ -525,12 +654,82 @@ impl Drop for WorkerAssigned {
     }
 }
 
-/// Storage for workers - keyed by WorkerId from core
-enum WorkerState {
+// =============================================================================
+// Worker State Enum (for storage in map)
+// =============================================================================
+
+/// Current state of a worker in IO layer.
+pub(super) enum IoWorkerState {
     Ready(WorkerReady),
     Assigned(WorkerAssigned),
 }
+
+impl IoWorkerState {
+    fn uuid(&self) -> &str {
+        match self {
+            Self::Ready(r) => &r.uuid,
+            Self::Assigned(a) => &a.uuid,
+        }
+    }
+}
+
+// =============================================================================
+// Worker Map
+// =============================================================================
+
+/// Maps WorkerId (from core) to IoWorkerState (files on disk).
+pub(super) struct WorkerMap {
+    /// WorkerId → IoWorkerState
+    workers: HashMap<WorkerId, IoWorkerState>,
+    /// UUID → WorkerId (reverse lookup for FS events)
+    uuid_to_id: HashMap<String, WorkerId>,
+    /// Next WorkerId to allocate
+    next_id: u32,
+}
+
+impl WorkerMap {
+    pub fn new() -> Self {
+        Self {
+            workers: HashMap::new(),
+            uuid_to_id: HashMap::new(),
+            next_id: 0,
+        }
+    }
+
+    /// Register a new worker from a ready file. Returns the assigned WorkerId.
+    pub fn register(&mut self, ready: WorkerReady) -> WorkerId {
+        let id = WorkerId(self.next_id);
+        self.next_id += 1;
+        self.uuid_to_id.insert(ready.uuid.clone(), id);
+        self.workers.insert(id, IoWorkerState::Ready(ready));
+        id
+    }
+
+    /// Look up WorkerId by UUID (for FS events).
+    pub fn id_for_uuid(&self, uuid: &str) -> Option<WorkerId> {
+        self.uuid_to_id.get(uuid).copied()
+    }
+
+    /// Get worker state by ID.
+    pub fn get(&self, id: WorkerId) -> Option<&IoWorkerState> {
+        self.workers.get(&id)
+    }
+
+    /// Get mutable worker state by ID.
+    pub fn get_mut(&mut self, id: WorkerId) -> Option<&mut IoWorkerState> {
+        self.workers.get_mut(&id)
+    }
+
+    /// Remove worker, returning its state.
+    pub fn remove(&mut self, id: WorkerId) -> Option<IoWorkerState> {
+        let state = self.workers.remove(&id)?;
+        self.uuid_to_id.remove(state.uuid());
+        Some(state)
+    }
+}
 ```
+
+**Invariant:** IO's `IoWorkerState::Ready` corresponds to core's `WorkerStatus::Idle`. IO's `IoWorkerState::Assigned` corresponds to core's `WorkerStatus::Busy`. If these get out of sync, it's a bug.
 
 **Transitions:**
 - `WorkerReady::assign_task(self, content)` → consumes self (deletes ready file), writes task file, returns `WorkerAssigned`
