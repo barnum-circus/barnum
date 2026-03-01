@@ -373,7 +373,7 @@ Because of these guarantees, core can **panic on violations** rather than handli
 
 ```rust
 // =============================================================================
-// ID Types (unchanged except rename)
+// ID Types
 // =============================================================================
 
 /// External task ID - a real submission from a client.
@@ -391,63 +391,27 @@ pub(super) enum TaskId {
 /// Unique identifier for a registered worker.
 pub(super) struct WorkerId(pub(super) u32);
 
-/// Worker epoch - identifies a specific point in a worker's lifecycle.
-/// Used to validate timeout events (stale timeouts have wrong epoch).
-pub(super) struct Epoch {
-    pub(super) worker_id: WorkerId,
-    pub(super) sequence: u32,  // Increments on state transitions
-}
-
-// =============================================================================
-// Worker State
-// =============================================================================
-
-/// What a worker is currently doing.
-pub(super) enum WorkerStatus {
-    /// Waiting to receive a task.
-    Idle,
-    /// Currently processing a task.
-    Busy { task_id: TaskId },
-}
-
-/// Complete state for a single worker.
-pub(super) struct WorkerState {
-    pub(super) status: WorkerStatus,
-    pub(super) epoch: Epoch,
-}
-
-impl WorkerState {
-    /// Transition from idle to busy. Panics if already busy.
-    ///
-    /// # Panics
-    /// IO layer guarantees we only assign tasks to idle workers. If this
-    /// panics, IO and core are out of sync.
-    fn become_busy(&mut self, task_id: TaskId) -> Epoch {
-        assert!(
-            matches!(self.status, WorkerStatus::Idle),
-            "become_busy called on non-idle worker {:?} - IO/core state mismatch",
-            self.epoch.worker_id
-        );
-        self.epoch.sequence += 1;
-        self.status = WorkerStatus::Busy { task_id };
-        self.epoch
-    }
-
-    // NOTE: No become_idle() - workers are removed after completion, not returned to idle
-}
-
 // =============================================================================
 // Pool State
 // =============================================================================
 
 /// The complete state of the worker pool.
+///
+/// Workers are either waiting (no task) or busy (has task).
+/// Instead of a status enum, we track this implicitly:
+/// - `waiting_workers`: Workers without tasks (FIFO queue)
+/// - `busy_workers`: Workers with tasks (map to task ID)
 pub(super) struct PoolState {
     /// Tasks waiting to be assigned (FIFO queue)
     pending_tasks: VecDeque<TaskId>,
-    /// Registered workers and their current state
-    workers: BTreeMap<WorkerId, WorkerState>,
+    /// Workers waiting for tasks (FIFO queue)
+    waiting_workers: VecDeque<WorkerId>,
+    /// Workers currently processing tasks
+    busy_workers: BTreeMap<WorkerId, TaskId>,
 }
 ```
+
+No epochs. Worker state is implicit: in `waiting_workers` = idle, in `busy_workers` = busy.
 
 #### 3.2: Update Events
 
@@ -469,14 +433,15 @@ pub(super) enum Event {
     TaskWithdrawn { task_id: TaskId },
     WorkerReady { worker_id: WorkerId },
     WorkerResponded { worker_id: WorkerId },
-    WorkerTimedOut { epoch: Epoch },
-    AssignTaskToWorkerIfEpochMatches { epoch: Epoch, task_id: TaskId },
+    WorkerTimedOut { worker_id: WorkerId },
+    AssignHeartbeatIfIdle { worker_id: WorkerId },
 }
 ```
 
 **Changes:**
 - Remove `AgentDeregistered` - workers don't deregister
-- Remove `heartbeat_task_id` from `WorkerReady` - IO layer handles heartbeat creation
+- `WorkerTimedOut` takes `worker_id`, not epoch - check if worker is busy
+- `AssignTaskToAgentIfEpochMatches` → `AssignHeartbeatIfIdle` - check if worker is idle
 
 #### 3.3: Update Effects
 
@@ -492,8 +457,8 @@ pub(super) enum Effect {
 
 // After
 pub(super) enum Effect {
-    TaskAssigned { task_id: TaskId, epoch: Epoch },
-    WorkerWaiting { epoch: Epoch },
+    TaskAssigned { worker_id: WorkerId, task_id: TaskId },
+    WorkerWaiting { worker_id: WorkerId },
     TaskCompleted { worker_id: WorkerId, task_id: TaskId },  // implies worker removal
     TaskFailed { task_id: TaskId },
     WorkerRemoved { worker_id: WorkerId },  // only for timeouts/kicks
@@ -501,142 +466,76 @@ pub(super) enum Effect {
 ```
 
 **Changes:**
-- `AgentIdled` → `WorkerWaiting` (waiting for first task, not "returning to idle")
-- `TaskCompleted` now **implies worker removal** - it's a matching service, when match completes both are cleaned up
-- `WorkerRemoved` is only for **task timeout** (worker was Busy and didn't respond in time)
+- No epochs anywhere - just worker_id
+- `AgentIdled` → `WorkerWaiting` (waiting for first task)
+- `TaskCompleted` implies worker removal (matching service)
+- `WorkerRemoved` is only for task timeout
 
 Note: There's no "idle timeout → remove" path. When a worker is idle too long, it gets a heartbeat task (becomes Busy). If it fails to respond to the heartbeat, that's a task timeout.
 
-#### 3.4: Event Handlers (with panic reasoning)
+#### 3.4: Event Handlers
 
 **Event sources and race analysis:**
 
 | Source | Events | Can race with |
 |--------|--------|---------------|
 | FS (watcher) | WorkerReady, WorkerResponded | Timers only |
-| Timers | WorkerTimedOut, AssignTaskIfEpoch | Everything |
+| Timers | WorkerTimedOut, AssignHeartbeatIfIdle | Everything |
 | Submissions | TaskSubmitted, TaskWithdrawn | TaskWithdrawn (same submission) |
 
-**FS events don't race with each other.** The IO layer's UUID state machine sequences them:
-- WorkerReady only sent on Unknown→Ready transition
-- WorkerResponded only sent on Assigned→Responded transition
-- IO only reaches Assigned after *we* write task.json (via TaskAssigned effect)
-
-So there's a strict causal chain: WorkerReady → core sets Idle → TaskAssigned effect → IO writes task.json → worker responds → WorkerResponded → core was Busy. If we receive WorkerResponded, the worker *must* have been Busy.
-
-**Timers are independent and asynchronous.** They can fire at any point:
-- After worker already responded (WorkerResponded processed first, worker gone)
-- After worker got a real task (stale heartbeat assignment)
-
-All timer-originated events need defensive handling for "worker not found" and "epoch mismatch."
-
-**Submissions are independent.** Each gets a unique ExternalTaskId regardless of transport (socket vs file). TaskWithdrawn needs defensive handling because the submitter can give up at any point (task queued, assigned, or already completed).
-
-**Panic vs Defensive summary:**
-- **Panic**: FS event violates IO layer guarantees (e.g., WorkerResponded for non-Busy worker)
-- **Defensive**: Timer event or withdrawal - legitimate races can cause stale/missing state
+**FS events are sequenced** by the IO layer. **Timer events need defensive handling** (worker might be gone or in different state).
 
 ```rust
 fn handle_worker_registered(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
     // PANIC: IO guarantees WorkerReady sent exactly once per worker_id
     assert!(
-        !state.workers.contains_key(&worker_id),
-        "WorkerReady for existing worker {:?} - IO sent duplicate event",
+        !state.waiting_workers.contains(&worker_id) && !state.busy_workers.contains_key(&worker_id),
+        "WorkerReady for existing worker {:?}",
         worker_id
     );
 
-    // Insert worker directly in the correct state
+    // Try to match with pending task
     if let Some(task_id) = state.pending_tasks.pop_front() {
-        // Task available - insert as Busy
-        let epoch = Epoch { worker_id, sequence: 1 };
-        state.workers.insert(worker_id, WorkerState {
-            status: WorkerStatus::Busy { task_id },
-            epoch,
-        });
-        (state, vec![Effect::TaskAssigned { task_id, epoch }])
+        state.busy_workers.insert(worker_id, task_id);
+        (state, vec![Effect::TaskAssigned { worker_id, task_id }])
     } else {
-        // No task - insert as Idle
-        let epoch = Epoch { worker_id, sequence: 0 };
-        state.workers.insert(worker_id, WorkerState {
-            status: WorkerStatus::Idle,
-            epoch,
-        });
-        (state, vec![Effect::WorkerWaiting { epoch }])
+        state.waiting_workers.push_back(worker_id);
+        (state, vec![Effect::WorkerWaiting { worker_id }])
     }
 }
 
 fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    // DEFENSIVE: Race condition possible.
-    // Worker could have been removed by timeout between IO sending WorkerResponded
-    // and core processing it. Event ordering is not guaranteed.
-    let Some(worker) = state.workers.remove(&worker_id) else {
+    // DEFENSIVE: Worker might have been removed by timeout
+    let Some(task_id) = state.busy_workers.remove(&worker_id) else {
         return (state, vec![]);
     };
 
-    // Worker exists but not Busy - invariant violation.
-    // IO should only send WorkerResponded when worker is in Assigned state,
-    // which corresponds to Busy in core. If we get here, IO/core are out of sync.
-    let WorkerStatus::Busy { task_id } = worker.status else {
-        panic!(
-            "WorkerResponded for worker {:?} but status is {:?} - IO/core state mismatch",
-            worker_id, worker.status
-        );
-    };
-
-    // Worker is REMOVED after completing task - no "return to idle"
-    // TaskCompleted implies worker removal in the anonymous model
+    // Worker completed task - remove it (anonymous model, one-shot)
     (state, vec![Effect::TaskCompleted { worker_id, task_id }])
 }
 
-fn handle_assign_task_to_worker_if_epoch_matches(
+fn handle_assign_heartbeat_if_idle(
     mut state: PoolState,
-    epoch: Epoch,
-    task_id: TaskId,
+    worker_id: WorkerId,
 ) -> (PoolState, Vec<Effect>) {
-    let worker_id = epoch.worker_id;
-
-    // DEFENSIVE: Worker might have completed a task and been removed.
-    // Idle workers don't have timeouts - this timer is for heartbeat assignment.
-    // But worker could have gotten a real task, completed it, and been removed.
-    let Some(worker) = state.workers.get_mut(&worker_id) else {
-        return (state, vec![]);
+    // DEFENSIVE: Worker might have gotten a real task or been removed
+    // Find and remove from waiting queue
+    let pos = state.waiting_workers.iter().position(|w| *w == worker_id);
+    let Some(pos) = pos else {
+        return (state, vec![]);  // Not waiting anymore
     };
+    state.waiting_workers.remove(pos);
 
-    // DEFENSIVE: Stale timer - worker got a real task since timer started
-    if worker.epoch != epoch {
-        return (state, vec![]);
-    }
-
-    // PANIC: If epoch matches, worker MUST be idle. Epoch increments on every
-    // state transition. If epoch matches but worker is busy, something is very wrong.
-    let new_epoch = worker.become_busy(task_id);  // panics if not idle
-
-    (state, vec![Effect::TaskAssigned { task_id, epoch: new_epoch }])
+    // Assign heartbeat
+    let task_id = TaskId::Heartbeat(HeartbeatId(/* allocate */));
+    state.busy_workers.insert(worker_id, task_id);
+    (state, vec![Effect::TaskAssigned { worker_id, task_id }])
 }
 
-fn handle_worker_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec<Effect>) {
-    let worker_id = epoch.worker_id;
-
-    // DEFENSIVE: Worker might have responded and been removed (TaskCompleted).
-    // WorkerResponded could have been processed before this timeout event.
-    let Some(worker) = state.workers.remove(&worker_id) else {
+fn handle_worker_timed_out(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
+    // DEFENSIVE: Worker might have responded and been removed
+    let Some(task_id) = state.busy_workers.remove(&worker_id) else {
         return (state, vec![]);
-    };
-
-    // DEFENSIVE: Stale timeout - worker did work since timer started
-    if worker.epoch != epoch {
-        state.workers.insert(worker_id, worker);
-        return (state, vec![]);
-    }
-
-    // PANIC: If epoch matches, worker MUST be busy (processing task or heartbeat).
-    // Timeouts are only started when worker becomes busy. If epoch matches but
-    // worker is idle, the timeout/epoch logic has a bug.
-    let WorkerStatus::Busy { task_id } = worker.status else {
-        panic!(
-            "WorkerTimedOut with matching epoch but worker {:?} is idle - timeout logic bug",
-            worker_id
-        );
     };
 
     (state, vec![
@@ -646,23 +545,20 @@ fn handle_worker_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Ve
 }
 ```
 
-This simplifies the state machine - no more "idle after completion" state.
+No epochs. Status is implicit in which collection the worker is in.
 
-**Key simplification:** `TaskCompleted` now implies worker removal. It's a matching service - task and worker are paired, and when the match completes, both are removed. No need for separate `WorkerRemoved` effect on the happy path. (`WorkerRemoved` is only emitted on timeout/kick scenarios where there's no task completion.)
-
-**Methods to remove:**
-- `AgentState::try_become_idle()` - workers don't return to idle, they're removed
-- `try_assign_pending_to_agent()` - no longer called after completion (workers don't get reassigned)
+**Key simplification:** `TaskCompleted` implies worker removal. It's a matching service - task and worker are paired, and when the match completes, both are removed.
 
 #### Idle timeout explained
 
 When a worker registers but no task is available:
-1. Core emits `WorkerWaiting { epoch }` effect
-2. IO layer starts an **idle timeout** timer (configurable, e.g., 180 seconds)
-3. If timer fires and worker still hasn't been assigned a real task, IO sends a **heartbeat task** via `AssignTaskToWorkerIfEpochMatches`
-4. Worker becomes Busy with heartbeat, responds, then `TaskCompleted` (worker removed, re-registers with new UUID)
+1. Core emits `WorkerWaiting { worker_id }` effect
+2. IO layer starts an idle timeout timer for this worker_id
+3. If timer fires, IO sends `AssignHeartbeatIfIdle { worker_id }`
+4. Core checks if worker is still in `waiting_workers` - if so, assigns heartbeat
+5. Worker responds, gets removed, re-registers with new UUID
 
-This keeps workers engaged (prevents Claude from getting "bored"). There's no direct "idle → removed" path - idle workers get heartbeats to stay active.
+This keeps workers engaged. There's no "idle → removed" path - idle workers get heartbeats.
 
 ---
 
