@@ -439,6 +439,8 @@ All u32 IDs. IO layer handles UUID ↔ ID mapping.
 
 ```rust
 fn handle_worker_ready(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
+    // PANIC: IO layer guarantees WorkerReady is sent exactly once per worker.
+    // A duplicate would be a bug in IO's UUID→ID mapping.
     assert!(!state.busy_workers.contains_key(&worker));
 
     match &mut state.waiting {
@@ -451,6 +453,7 @@ fn handle_worker_ready(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
             vec![Effect::TaskAssigned { worker, task: TaskId::External(submission) }]
         }
         Waiting::Workers(workers) => {
+            // PANIC: Same worker appearing twice in waiting queue is a bug.
             assert!(!workers.contains(&worker));
             workers.push_back(worker);
             vec![Effect::WorkerWaiting { worker }]
@@ -463,6 +466,8 @@ fn handle_worker_ready(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
 }
 
 fn handle_task_submitted(state: &mut PoolState, submission: SubmissionId) -> Vec<Effect> {
+    // No defensive checks needed - submissions are independent of each other
+    // and IO allocates fresh IDs.
     match &mut state.waiting {
         Waiting::Workers(workers) => {
             let worker = workers.pop_front().expect("Workers variant with empty queue");
@@ -484,6 +489,10 @@ fn handle_task_submitted(state: &mut PoolState, submission: SubmissionId) -> Vec
 }
 
 fn handle_worker_responded(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
+    // DEFENSIVE: Worker might not be in busy_workers if:
+    // - Timeout fired first and already removed the worker
+    // IO guarantees we only get WorkerResponded for workers that were Assigned,
+    // but timers can race and remove the worker before we process the response.
     let Some(task) = state.busy_workers.remove(&worker) else {
         return vec![];
     };
@@ -491,11 +500,15 @@ fn handle_worker_responded(state: &mut PoolState, worker: WorkerId) -> Vec<Effec
 }
 
 fn handle_heartbeat_if_idle(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
+    // DEFENSIVE: Timer event - worker state may have changed since timer was scheduled.
+    // Worker might be:
+    // - Gone (timed out, or completed a task and re-registered with new ID)
+    // - Busy (got a real task before heartbeat timer fired)
     let Waiting::Workers(workers) = &mut state.waiting else {
-        return vec![];
+        return vec![]; // No idle workers at all
     };
     let Some(pos) = workers.iter().position(|w| *w == worker) else {
-        return vec![];
+        return vec![]; // This specific worker not idle (busy or gone)
     };
     workers.remove(pos);
     if workers.is_empty() {
@@ -506,6 +519,8 @@ fn handle_heartbeat_if_idle(state: &mut PoolState, worker: WorkerId) -> Vec<Effe
 }
 
 fn handle_worker_timeout(state: &mut PoolState, worker: WorkerId) -> Vec<Effect> {
+    // DEFENSIVE: Timer event - worker might have already responded.
+    // WorkerResponded could have been processed first, removing the worker.
     let Some(task) = state.busy_workers.remove(&worker) else {
         return vec![];
     };
