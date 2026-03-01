@@ -422,7 +422,9 @@ pub(super) enum Effect {
 **Changes:**
 - `AgentIdled` → `WorkerWaiting` (waiting for first task, not "returning to idle")
 - `TaskCompleted` now **implies worker removal** - it's a matching service, when match completes both are cleaned up
-- `WorkerRemoved` is only for unhappy paths (timeout while idle, timeout while busy)
+- `WorkerRemoved` is only for **task timeout** (worker was Busy and didn't respond in time)
+
+Note: There's no "idle timeout → remove" path. When a worker is idle too long, it gets a heartbeat task (becomes Busy). If it fails to respond to the heartbeat, that's a task timeout.
 
 #### 3.4: Behavioral change in handle_worker_responded
 
@@ -475,11 +477,11 @@ This simplifies the state machine - no more "idle after completion" state.
 
 When a worker registers but no task is available:
 1. Core emits `WorkerWaiting { epoch }` effect
-2. IO layer starts an **idle timeout** timer (configurable, e.g., 60 seconds)
-3. If timer fires and worker still hasn't been assigned a task, IO sends `WorkerTimedOut` event
-4. Core emits `WorkerRemoved` effect
+2. IO layer starts an **idle timeout** timer (configurable, e.g., 180 seconds)
+3. If timer fires and worker still hasn't been assigned a real task, IO sends a **heartbeat task** via `AssignTaskToWorkerIfEpochMatches`
+4. Worker becomes Busy with heartbeat, responds, then `TaskCompleted` (worker removed, re-registers with new UUID)
 
-This prevents workers from sitting idle forever, consuming daemon resources.
+This keeps workers engaged (prevents Claude from getting "bored"). There's no direct "idle → removed" path - idle workers get heartbeats to stay active.
 
 ---
 
