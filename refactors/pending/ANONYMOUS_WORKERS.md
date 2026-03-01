@@ -388,8 +388,8 @@ pub(super) enum TaskId {
     Heartbeat(HeartbeatId),
 }
 
-/// Unique identifier for a registered worker.
-pub(super) struct WorkerId(pub(super) u32);
+/// Worker identity is just the UUID string. No separate ID type needed.
+pub(super) type Uuid = String;
 
 // =============================================================================
 // Pool State
@@ -398,20 +398,14 @@ pub(super) struct WorkerId(pub(super) u32);
 /// The complete state of the worker pool.
 ///
 /// Workers are either waiting (no task) or busy (has task).
-/// Instead of a status enum, we track this implicitly:
-/// - `waiting_workers`: Workers without tasks (FIFO queue)
-/// - `busy_workers`: Workers with tasks (map to task ID)
 pub(super) struct PoolState {
-    /// Tasks waiting to be assigned (FIFO queue)
     pending_tasks: VecDeque<TaskId>,
-    /// Workers waiting for tasks (FIFO queue)
-    waiting_workers: VecDeque<WorkerId>,
-    /// Workers currently processing tasks
-    busy_workers: BTreeMap<WorkerId, TaskId>,
+    waiting_workers: VecDeque<Uuid>,
+    busy_workers: HashMap<Uuid, TaskId>,
 }
 ```
 
-No epochs. Worker state is implicit: in `waiting_workers` = idle, in `busy_workers` = busy.
+No epochs, no WorkerId. UUID is the identity. State is implicit in which collection the worker is in.
 
 #### 3.2: Update Events
 
@@ -431,10 +425,10 @@ pub(super) enum Event {
 pub(super) enum Event {
     TaskSubmitted { task_id: TaskId },
     TaskWithdrawn { task_id: TaskId },
-    WorkerReady { worker_id: WorkerId },
-    WorkerResponded { worker_id: WorkerId },
-    WorkerTimedOut { worker_id: WorkerId },
-    AssignHeartbeatIfIdle { worker_id: WorkerId },
+    WorkerReady { uuid: Uuid },
+    WorkerResponded { uuid: Uuid },
+    WorkerTimedOut { uuid: Uuid },
+    AssignHeartbeatIfIdle { uuid: Uuid },
 }
 ```
 
@@ -457,11 +451,11 @@ pub(super) enum Effect {
 
 // After
 pub(super) enum Effect {
-    TaskAssigned { worker_id: WorkerId, task_id: TaskId },
-    WorkerWaiting { worker_id: WorkerId },
-    TaskCompleted { worker_id: WorkerId, task_id: TaskId },  // implies worker removal
+    TaskAssigned { uuid: Uuid, task_id: TaskId },
+    WorkerWaiting { uuid: Uuid },
+    TaskCompleted { uuid: Uuid, task_id: TaskId },  // implies worker removal
     TaskFailed { task_id: TaskId },
-    WorkerRemoved { worker_id: WorkerId },  // only for timeouts/kicks
+    WorkerRemoved { uuid: Uuid },  // only for timeouts/kicks
 }
 ```
 
@@ -486,62 +480,44 @@ Note: There's no "idle timeout → remove" path. When a worker is idle too long,
 **FS events are sequenced** by the IO layer. **Timer events need defensive handling** (worker might be gone or in different state).
 
 ```rust
-fn handle_worker_registered(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    // PANIC: IO guarantees WorkerReady sent exactly once per worker_id
+fn handle_worker_registered(mut state: PoolState, uuid: Uuid) -> (PoolState, Vec<Effect>) {
     assert!(
-        !state.waiting_workers.contains(&worker_id) && !state.busy_workers.contains_key(&worker_id),
-        "WorkerReady for existing worker {:?}",
-        worker_id
+        !state.waiting_workers.contains(&uuid) && !state.busy_workers.contains_key(&uuid),
+        "WorkerReady for existing worker {uuid}"
     );
 
-    // Try to match with pending task
     if let Some(task_id) = state.pending_tasks.pop_front() {
-        state.busy_workers.insert(worker_id, task_id);
-        (state, vec![Effect::TaskAssigned { worker_id, task_id }])
+        state.busy_workers.insert(uuid.clone(), task_id);
+        (state, vec![Effect::TaskAssigned { uuid, task_id }])
     } else {
-        state.waiting_workers.push_back(worker_id);
-        (state, vec![Effect::WorkerWaiting { worker_id }])
+        state.waiting_workers.push_back(uuid.clone());
+        (state, vec![Effect::WorkerWaiting { uuid }])
     }
 }
 
-fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    // DEFENSIVE: Worker might have been removed by timeout
-    let Some(task_id) = state.busy_workers.remove(&worker_id) else {
-        return (state, vec![]);
+fn handle_worker_responded(mut state: PoolState, uuid: Uuid) -> (PoolState, Vec<Effect>) {
+    let Some(task_id) = state.busy_workers.remove(&uuid) else {
+        return (state, vec![]);  // Already removed by timeout
     };
-
-    // Worker completed task - remove it (anonymous model, one-shot)
-    (state, vec![Effect::TaskCompleted { worker_id, task_id }])
+    (state, vec![Effect::TaskCompleted { uuid, task_id }])
 }
 
-fn handle_assign_heartbeat_if_idle(
-    mut state: PoolState,
-    worker_id: WorkerId,
-) -> (PoolState, Vec<Effect>) {
-    // DEFENSIVE: Worker might have gotten a real task or been removed
-    // Find and remove from waiting queue
-    let pos = state.waiting_workers.iter().position(|w| *w == worker_id);
-    let Some(pos) = pos else {
+fn handle_assign_heartbeat_if_idle(mut state: PoolState, uuid: Uuid) -> (PoolState, Vec<Effect>) {
+    let Some(pos) = state.waiting_workers.iter().position(|w| w == &uuid) else {
         return (state, vec![]);  // Not waiting anymore
     };
     state.waiting_workers.remove(pos);
 
-    // Assign heartbeat
     let task_id = TaskId::Heartbeat(HeartbeatId(/* allocate */));
-    state.busy_workers.insert(worker_id, task_id);
-    (state, vec![Effect::TaskAssigned { worker_id, task_id }])
+    state.busy_workers.insert(uuid.clone(), task_id);
+    (state, vec![Effect::TaskAssigned { uuid, task_id }])
 }
 
-fn handle_worker_timed_out(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    // DEFENSIVE: Worker might have responded and been removed
-    let Some(task_id) = state.busy_workers.remove(&worker_id) else {
-        return (state, vec![]);
+fn handle_worker_timed_out(mut state: PoolState, uuid: Uuid) -> (PoolState, Vec<Effect>) {
+    let Some(task_id) = state.busy_workers.remove(&uuid) else {
+        return (state, vec![]);  // Already responded
     };
-
-    (state, vec![
-        Effect::TaskFailed { task_id },
-        Effect::WorkerRemoved { worker_id },
-    ])
+    (state, vec![Effect::TaskFailed { task_id }, Effect::WorkerRemoved { uuid }])
 }
 ```
 
@@ -552,10 +528,10 @@ No epochs. Status is implicit in which collection the worker is in.
 #### Idle timeout explained
 
 When a worker registers but no task is available:
-1. Core emits `WorkerWaiting { worker_id }` effect
-2. IO layer starts an idle timeout timer for this worker_id
-3. If timer fires, IO sends `AssignHeartbeatIfIdle { worker_id }`
-4. Core checks if worker is still in `waiting_workers` - if so, assigns heartbeat
+1. Core emits `WorkerWaiting { uuid }` effect
+2. IO layer starts an idle timeout timer for this UUID
+3. If timer fires, IO sends `AssignHeartbeatIfIdle { uuid }`
+4. Core checks if UUID is still in `waiting_workers` - if so, assigns heartbeat
 5. Worker responds, gets removed, re-registers with new UUID
 
 This keeps workers engaged. There's no "idle → removed" path - idle workers get heartbeats.
@@ -616,15 +592,9 @@ impl FsEventKind {
 }
 
 /// Tracker for a single UUID's state.
+#[derive(Default)]
 pub(super) struct UuidTracker {
     pub state: UuidState,
-    pub worker_id: Option<WorkerId>,  // Assigned when we reach Ready state
-}
-
-impl Default for UuidTracker {
-    fn default() -> Self {
-        Self { state: UuidState::Unknown, worker_id: None }
-    }
 }
 ```
 
@@ -634,39 +604,25 @@ impl Default for UuidTracker {
 impl IoState {
     /// Handle a filesystem event for a UUID.
     /// Only transitions to higher states. Duplicate/delayed events are ignored.
-    /// Returns Some(event) if we should notify core.
     fn handle_fs_event(&mut self, uuid: &str, event_kind: FsEventKind) -> Option<Event> {
         let target_state = event_kind.target_state();
         let tracker = self.uuid_trackers.entry(uuid.to_string()).or_default();
 
-        // Only transition to HIGHER states
         if target_state <= tracker.state {
-            // Duplicate or delayed event - ignore
-            return None;
+            return None;  // Duplicate or delayed event
         }
 
         let old_state = tracker.state;
         tracker.state = target_state;
 
-        // Send event to core based on the transition
         match (old_state, target_state) {
             (UuidState::Unknown, UuidState::Ready) => {
-                // New worker! Assign ID and notify core
-                let worker_id = self.allocate_worker_id();
-                tracker.worker_id = Some(worker_id);
-                Some(Event::WorkerReady { worker_id })
+                Some(Event::WorkerReady { uuid: uuid.to_string() })
             }
             (UuidState::Assigned, UuidState::Responded) => {
-                // Worker responded! Notify core
-                let worker_id = tracker.worker_id
-                    .expect("UUID in Assigned state must have worker_id");
-                Some(Event::WorkerResponded { worker_id })
+                Some(Event::WorkerResponded { uuid: uuid.to_string() })
             }
-            _ => {
-                // Other transitions (e.g., Ready→Assigned) are initiated by us,
-                // not external FS events. Seeing them as FS events is fine, no-op.
-                None
-            }
+            _ => None,  // Other transitions are initiated by us
         }
     }
 }
@@ -762,7 +718,7 @@ impl Drop for WorkerAssigned {
 }
 
 // =============================================================================
-// Worker State Enum (for storage in map)
+// Worker State (IO layer)
 // =============================================================================
 
 /// Current state of a worker in IO layer.
@@ -771,416 +727,64 @@ pub(super) enum IoWorkerState {
     Assigned(WorkerAssigned),
 }
 
-impl IoWorkerState {
-    fn uuid(&self) -> &str {
-        match self {
-            Self::Ready(r) => &r.uuid,
-            Self::Assigned(a) => &a.uuid,
-        }
-    }
-}
-
-// =============================================================================
-// Worker Map
-// =============================================================================
-
-/// Maps WorkerId (from core) to IoWorkerState (files on disk).
-pub(super) struct WorkerMap {
-    /// WorkerId → IoWorkerState
-    workers: HashMap<WorkerId, IoWorkerState>,
-    /// UUID → WorkerId (reverse lookup for FS events)
-    uuid_to_id: HashMap<String, WorkerId>,
-    /// Next WorkerId to allocate
-    next_id: u32,
-}
-
-impl WorkerMap {
-    pub fn new() -> Self {
-        Self {
-            workers: HashMap::new(),
-            uuid_to_id: HashMap::new(),
-            next_id: 0,
-        }
-    }
-
-    /// Register a new worker from a ready file. Returns the assigned WorkerId.
-    pub fn register(&mut self, ready: WorkerReady) -> WorkerId {
-        let id = WorkerId(self.next_id);
-        self.next_id += 1;
-        self.uuid_to_id.insert(ready.uuid.clone(), id);
-        self.workers.insert(id, IoWorkerState::Ready(ready));
-        id
-    }
-
-    /// Look up WorkerId by UUID (for FS events).
-    pub fn id_for_uuid(&self, uuid: &str) -> Option<WorkerId> {
-        self.uuid_to_id.get(uuid).copied()
-    }
-
-    /// Get worker state by ID.
-    pub fn get(&self, id: WorkerId) -> Option<&IoWorkerState> {
-        self.workers.get(&id)
-    }
-
-    /// Get mutable worker state by ID.
-    pub fn get_mut(&mut self, id: WorkerId) -> Option<&mut IoWorkerState> {
-        self.workers.get_mut(&id)
-    }
-
-    /// Remove worker, returning its state.
-    pub fn remove(&mut self, id: WorkerId) -> Option<IoWorkerState> {
-        let state = self.workers.remove(&id)?;
-        self.uuid_to_id.remove(state.uuid());
-        Some(state)
-    }
-}
+/// IO layer just maps UUID → IoWorkerState. No separate ID needed.
+pub(super) type WorkerMap = HashMap<Uuid, IoWorkerState>;
 ```
-
-**Invariant:** IO's `IoWorkerState::Ready` corresponds to core's `WorkerStatus::Idle`. IO's `IoWorkerState::Assigned` corresponds to core's `WorkerStatus::Busy`. If these get out of sync, it's a bug.
 
 **Transitions:**
 - `WorkerReady::assign_task(self, content)` → consumes self (deletes ready file), writes task file, returns `WorkerAssigned`
 - `WorkerAssigned` dropped on completion → deletes task file, we manually delete response file
 
-**Key changes:**
-
-1. **Type aliases** - Rename `AgentMap` → `WorkerMap`
-2. **Import rename** - `AgentId` → `WorkerId` (from core.rs)
-3. **Path registration** - Register flat files (`<uuid>.ready.json`) instead of directories
-4. **File operations** - Write to `<uuid>.task.json` instead of `<dir>/task.json`
-5. **Cleanup tracking** - Track removed UUIDs instead of directory paths
-
-#### 4.1: Update imports and type alias
+#### Effect handlers (IO layer)
 
 ```rust
-// Before
-use super::core::{AgentId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
+fn handle_task_assigned(uuid: &Uuid, task_id: TaskId, worker_map: &mut WorkerMap) {
+    let state = worker_map.remove(uuid).expect("TaskAssigned for unknown worker");
+    let IoWorkerState::Ready(ready) = state else {
+        panic!("TaskAssigned but worker not in Ready state");
+    };
 
-pub(super) type AgentMap = TransportMap<AgentId>;
-
-// After
-use super::core::{WorkerId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
-
-pub(super) type WorkerMap = TransportMap<WorkerId>;
-```
-
-#### 4.2: Update TransportId impl
-
-```rust
-// Before
-impl TransportId for AgentId {
-    type Data = ();
+    let task_content = /* get task content based on task_id */;
+    let assigned = ready.assign_task(&agents_dir, &task_content).expect("write task");
+    worker_map.insert(uuid.clone(), IoWorkerState::Assigned(assigned));
 }
 
-// After
-impl TransportId for WorkerId {
-    /// Worker metadata from ready.json (e.g., debug name)
-    type Data = WorkerData;
+fn handle_task_completed(uuid: &Uuid, worker_map: &mut WorkerMap) {
+    let state = worker_map.remove(uuid).expect("TaskCompleted for unknown worker");
+    // state drops → files cleaned up by RAII
 }
 
-/// Data stored per worker, parsed from ready.json.
-#[derive(Debug, Clone, Default)]
-pub(super) struct WorkerData {
-    /// Debug-only name from ready.json (optional)
-    pub name: Option<String>,
+fn handle_worker_removed(uuid: &Uuid, worker_map: &mut WorkerMap) {
+    // Write kicked message, then remove
+    let task_path = agents_dir.join(format!("{uuid}{TASK_SUFFIX}"));
+    let _ = fs::write(&task_path, r#"{"kind":"Kicked"}"#);
+    worker_map.remove(uuid);  // state drops → files cleaned up
 }
 ```
 
-#### 4.3: Change path registration pattern
-
-The current `AgentMap` registers **directories** (`agents/claude-1/`). The new `WorkerMap` registers **ready files** (`agents/<uuid>.ready.json`).
+#### Helper for paths
 
 ```rust
-// Before (in wiring.rs, register_agent)
-fn register_agent(
-    name: &str,
-    agents_dir: &Path,
-    agent_map: &mut AgentMap,
-    // ...
-) -> Option<AgentId> {
-    let agent_path = agents_dir.join(name);  // Directory path
-    agent_map.register_directory(agent_path, ())
+fn task_path(agents_dir: &Path, uuid: &str) -> PathBuf {
+    agents_dir.join(format!("{uuid}{TASK_SUFFIX}"))
 }
 
-// After (in wiring.rs, handle_worker_ready)
-fn handle_worker_ready(
-    uuid: &str,
-    agents_dir: &Path,
-    worker_map: &mut WorkerMap,
-    // ...
-) -> Option<WorkerId> {
-    let ready_path = agents_dir.join(format!("{uuid}.ready.json"));
-
-    // Parse metadata from ready.json
-    let metadata = fs::read_to_string(&ready_path).unwrap_or_default();
-    let data: WorkerData = serde_json::from_str(&metadata).unwrap_or_default();
-
-    worker_map.register_directory(ready_path, data)
-}
-```
-
-#### 4.4: Change file write pattern in execute_effect
-
-Currently, `execute_effect` writes to files **inside** the agent directory. With flat files, we write **sibling files** with the same UUID prefix.
-
-```rust
-// Before (Effect::TaskAssigned)
-Effect::TaskAssigned { task_id, epoch } => {
-    match task_id {
-        TaskId::External(external_id) => {
-            let task_data = external_task_map
-                .get_data(external_id)
-                .expect("TaskAssigned for unknown task - core bug");
-
-            // Write to agent's directory
-            agent_map
-                .write_to(epoch.agent_id, TASK_FILE, &task_data.content)
-                //       ^^^^^^^^^^^^^^^^  ^^^^^^^^^
-                //       agent directory   "task.json"
-                .expect("TaskAssigned for unknown agent - core bug");
-            // ...
-        }
-        // ...
-    }
+fn response_path(agents_dir: &Path, uuid: &str) -> PathBuf {
+    agents_dir.join(format!("{uuid}{WORKER_RESPONSE_SUFFIX}"))
 }
 
-// After (Effect::TaskAssigned)
-Effect::TaskAssigned { task_id, epoch } => {
-    match task_id {
-        TaskId::External(external_id) => {
-            let task_data = external_task_map
-                .get_data(external_id)
-                .expect("TaskAssigned for unknown task - core bug");
-
-            // Get UUID from ready file path, write task file as sibling
-            let ready_path = worker_map
-                .get_path(epoch.worker_id)
-                .expect("TaskAssigned for unknown worker - core bug");
-            let task_path = ready_path.with_file_name(
-                ready_path.file_stem()  // "<uuid>.ready" -> "<uuid>"
-                    .and_then(|s| s.to_str())
-                    .and_then(|s| s.strip_suffix(".ready"))
-                    .map(|uuid| format!("{uuid}.task.json"))
-                    .expect("ready path should have .ready.json suffix")
-            );
-            fs::write(&task_path, &task_data.content)?;
-            // ...
-        }
-        // ...
-    }
-}
-```
-
-#### 4.5: Add helper for UUID extraction
-
-To avoid repeating the UUID extraction logic, add a helper:
-
-```rust
-/// Extract UUID from a worker's ready file path.
-///
-/// Given `agents/<uuid>.ready.json`, returns `<uuid>`.
-fn extract_uuid(ready_path: &Path) -> Option<&str> {
-    ready_path
-        .file_name()
+fn ready_path(agents_dir: &Path, uuid: &str) -> PathBuf {
+    agents_dir.join(format!("{uuid}{READY_SUFFIX}"))
         .and_then(|n| n.to_str())
         .and_then(|n| n.strip_suffix(READY_SUFFIX))
 }
-
-/// Get the task file path for a worker.
-fn task_path_for_worker(ready_path: &Path) -> PathBuf {
-    let uuid = extract_uuid(ready_path).expect("ready path should have READY_SUFFIX");
-    ready_path.with_file_name(format!("{uuid}{TASK_SUFFIX}"))
-}
-
-/// Get the response file path for a worker.
-fn response_path_for_worker(ready_path: &Path) -> PathBuf {
-    let uuid = extract_uuid(ready_path).expect("ready path should have READY_SUFFIX");
-    ready_path.with_file_name(format!("{uuid}{WORKER_RESPONSE_SUFFIX}"))
-}
-```
-
-#### 4.6: Update Effect::TaskCompleted (with typestate guards)
-
-The typestate guards handle file cleanup automatically:
-
-```rust
-// Before - manual file cleanup
-Effect::TaskCompleted { agent_id, task_id } => {
-    let agent_path = agent_map.get_path(agent_id).expect("...");
-    // Manual cleanup
-    let _ = fs::remove_file(agent_path.join(TASK_FILE));
-    let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
-    // ...
-}
-
-// After - guards handle cleanup
-Effect::TaskCompleted { worker_id, task_id } => {
-    // Remove worker from map - this takes ownership of WorkerAssigned
-    let worker_state = worker_map.remove(worker_id).expect("...");
-    let WorkerState::Assigned(assigned) = worker_state else {
-        panic!("TaskCompleted but worker not in Assigned state");
-    };
-
-    let response_path = response_path_for_uuid(&assigned.uuid);
-
-    match task_id {
-        TaskId::Heartbeat(_) => {
-            // assigned drops here → task file deleted automatically
-            let _ = fs::remove_file(&response_path);
-        }
-        TaskId::External(external_id) => {
-            let output = fs::read_to_string(&response_path).expect("...");
-            // assigned drops here → task file deleted automatically
-            let _ = fs::remove_file(&response_path);
-            // Forward output to submitter...
-        }
-    }
-    // WorkerAssigned dropped → task file cleaned up by Drop impl
-}
-```
-
-Note: The response file is written by the worker (not the daemon), so we delete it manually. The ready file was deleted when transitioning Ready→Assigned. The task file is deleted by the Drop impl.
-
-#### 4.7: Update Effect::AgentRemoved → Effect::WorkerRemoved (with typestate guards)
-
-```rust
-// Before - manual cleanup
-Effect::AgentRemoved { agent_id } => {
-    let (transport, ()) = agent_map.remove(agent_id).expect("...");
-    let _ = transport.write(TASK_FILE, &kicked_msg.to_string());
-    kicked_paths.insert(agent_path.to_path_buf());
-}
-
-// After - guards handle cleanup
-Effect::WorkerRemoved { worker_id } => {
-    let worker_state = worker_map.remove(worker_id).expect("...");
-
-    let uuid = match &worker_state {
-        WorkerState::Ready(r) => r.uuid.clone(),
-        WorkerState::Assigned(a) => a.uuid.clone(),
-    };
-
-    // Write kicked message so worker knows it was removed
-    let task_path = task_path_for_uuid(&uuid);
-    let kicked_msg = serde_json::json!({ "kind": "Kicked", "reason": "Timeout" });
-    let _ = fs::write(&task_path, kicked_msg.to_string());
-
-    // Track UUID to reject stale events
-    removed_workers.insert(uuid);
-
-    // worker_state drops here:
-    // - If Ready: ready file deleted
-    // - If Assigned: task file deleted (but we just wrote to it - that's fine,
-    //   the kicked message is what matters, worker reads it then we clean up)
-}
-```
-
-Note: When a worker is removed while Assigned, the task file deletion happens after we write the Kicked message. The worker reads the Kicked message first, then file cleanup happens.
-
-#### 4.8: Update kicked_paths to removed_workers
-
-```rust
-// Before (in execute_effect signature)
-pub(super) fn execute_effect(
-    effect: Effect,
-    agent_map: &mut AgentMap,
-    external_task_map: &mut ExternalTaskMap,
-    task_id_allocator: &mut TaskIdAllocator,
-    kicked_paths: &mut HashSet<PathBuf>,  // Directory paths
-    // ...
-)
-
-// After
-pub(super) fn execute_effect(
-    effect: Effect,
-    worker_map: &mut WorkerMap,
-    external_task_map: &mut ExternalTaskMap,
-    task_id_allocator: &mut TaskIdAllocator,
-    removed_workers: &mut HashSet<String>,  // UUIDs
-    // ...
-)
-```
-
-#### 4.9: Update IoConfig field name
-
-```rust
-// Before
-pub(super) struct IoConfig {
-    pub idle_agent_timeout: Duration,
-    // ...
-}
-
-// After
-pub(super) struct IoConfig {
-    pub idle_worker_timeout: Duration,
-    // ...
-}
-```
-
-#### 4.10: Update tests
-
-```rust
-// Before
-#[test]
-fn agent_map_register_and_lookup() {
-    let mut map = AgentMap::new();
-    let path = PathBuf::from("/tmp/test/agents/agent-1");  // Directory
-
-    let id = map.register_directory(path.clone(), ()).unwrap();
-    assert_eq!(id, AgentId(0));
-    // ...
-}
-
-// After
-#[test]
-fn worker_map_register_and_lookup() {
-    let mut map = WorkerMap::new();
-    let path = PathBuf::from("/tmp/test/agents/abc123.ready.json");  // Flat file
-
-    let data = WorkerData { name: Some("test-worker".to_string()) };
-    let id = map.register_directory(path.clone(), data).unwrap();
-    assert_eq!(id, WorkerId(0));
-    // ...
-}
 ```
 
 ---
 
-### Task 5: Update Wiring
-
-**File:** `crates/agent_pool/src/daemon/wiring.rs`
-
-#### 5.1: Update event handlers
-
-```rust
-// Before
-match category {
-    PathCategory::AgentDir { name } => { ... }
-    PathCategory::AgentResponse { name } => { ... }
-    PathCategory::SubmissionRequest { id } => { ... }
-}
-
-// After
-match category {
-    PathCategory::WorkerReady { id } => {
-        handle_worker_ready(&id, agents_dir, ...);
-    }
-    PathCategory::WorkerResponse { id } => {
-        handle_worker_response(&id, agents_dir, ...);
-    }
-    PathCategory::SubmissionRequest { id } => {
-        register_submission(&id, ...);
-    }
-}
-```
-
----
-
-### Task 6: Simplify worker.rs
+### Task 5: Simplify worker.rs
 
 **File:** `crates/agent_pool/src/worker.rs`
-
-Replace the current ~324 lines with a simple wrapper around `VerifiedWatcher`:
 
 ```rust
 //! Task execution utilities for workers.
