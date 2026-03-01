@@ -409,13 +409,329 @@ pub(super) enum Effect {
 
 **File:** `crates/agent_pool/src/daemon/io.rs`
 
-#### 4.1: Rename AgentMap to WorkerMap
+This is the most complex task. The IO layer maps abstract IDs to concrete transports and performs actual I/O. With anonymous workers, the key changes are:
 
-Update type aliases and all usages.
+1. **Type aliases** - Rename `AgentMap` → `WorkerMap`
+2. **Import rename** - `AgentId` → `WorkerId` (from core.rs)
+3. **Path registration** - Register flat files (`<uuid>.ready.json`) instead of directories
+4. **File operations** - Write to `<uuid>.task.json` instead of `<dir>/task.json`
+5. **Cleanup tracking** - Track cleaned-up UUIDs instead of directory paths
 
-#### 4.2: Track workers by UUID
+#### 4.1: Update imports and type alias
 
-Workers are now identified by UUID string from the file path.
+```rust
+// Before
+use super::core::{AgentId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
+
+pub(super) type AgentMap = TransportMap<AgentId>;
+
+// After
+use super::core::{WorkerId, Effect, Epoch, Event, ExternalTaskId, HeartbeatId, TaskId};
+
+pub(super) type WorkerMap = TransportMap<WorkerId>;
+```
+
+#### 4.2: Update TransportId impl
+
+```rust
+// Before
+impl TransportId for AgentId {
+    type Data = ();
+}
+
+// After
+impl TransportId for WorkerId {
+    /// Worker metadata from ready.json (e.g., debug name)
+    type Data = WorkerData;
+}
+
+/// Data stored per worker, parsed from ready.json.
+#[derive(Debug, Clone, Default)]
+pub(super) struct WorkerData {
+    /// Debug-only name from ready.json (optional)
+    pub name: Option<String>,
+}
+```
+
+#### 4.3: Change path registration pattern
+
+The current `AgentMap` registers **directories** (`agents/claude-1/`). The new `WorkerMap` registers **ready files** (`agents/<uuid>.ready.json`).
+
+```rust
+// Before (in wiring.rs, register_agent)
+fn register_agent(
+    name: &str,
+    agents_dir: &Path,
+    agent_map: &mut AgentMap,
+    // ...
+) -> Option<AgentId> {
+    let agent_path = agents_dir.join(name);  // Directory path
+    agent_map.register_directory(agent_path, ())
+}
+
+// After (in wiring.rs, handle_worker_ready)
+fn handle_worker_ready(
+    uuid: &str,
+    agents_dir: &Path,
+    worker_map: &mut WorkerMap,
+    // ...
+) -> Option<WorkerId> {
+    let ready_path = agents_dir.join(format!("{uuid}.ready.json"));
+
+    // Parse metadata from ready.json
+    let metadata = fs::read_to_string(&ready_path).unwrap_or_default();
+    let data: WorkerData = serde_json::from_str(&metadata).unwrap_or_default();
+
+    worker_map.register_directory(ready_path, data)
+}
+```
+
+#### 4.4: Change file write pattern in execute_effect
+
+Currently, `execute_effect` writes to files **inside** the agent directory. With flat files, we write **sibling files** with the same UUID prefix.
+
+```rust
+// Before (Effect::TaskAssigned)
+Effect::TaskAssigned { task_id, epoch } => {
+    match task_id {
+        TaskId::External(external_id) => {
+            let task_data = external_task_map
+                .get_data(external_id)
+                .expect("TaskAssigned for unknown task - core bug");
+
+            // Write to agent's directory
+            agent_map
+                .write_to(epoch.agent_id, TASK_FILE, &task_data.content)
+                //       ^^^^^^^^^^^^^^^^  ^^^^^^^^^
+                //       agent directory   "task.json"
+                .expect("TaskAssigned for unknown agent - core bug");
+            // ...
+        }
+        // ...
+    }
+}
+
+// After (Effect::TaskAssigned)
+Effect::TaskAssigned { task_id, epoch } => {
+    match task_id {
+        TaskId::External(external_id) => {
+            let task_data = external_task_map
+                .get_data(external_id)
+                .expect("TaskAssigned for unknown task - core bug");
+
+            // Get UUID from ready file path, write task file as sibling
+            let ready_path = worker_map
+                .get_path(epoch.worker_id)
+                .expect("TaskAssigned for unknown worker - core bug");
+            let task_path = ready_path.with_file_name(
+                ready_path.file_stem()  // "<uuid>.ready" -> "<uuid>"
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.strip_suffix(".ready"))
+                    .map(|uuid| format!("{uuid}.task.json"))
+                    .expect("ready path should have .ready.json suffix")
+            );
+            fs::write(&task_path, &task_data.content)?;
+            // ...
+        }
+        // ...
+    }
+}
+```
+
+#### 4.5: Add helper for UUID extraction
+
+To avoid repeating the UUID extraction logic, add a helper:
+
+```rust
+/// Extract UUID from a worker's ready file path.
+///
+/// Given `agents/<uuid>.ready.json`, returns `<uuid>`.
+fn extract_uuid(ready_path: &Path) -> Option<&str> {
+    ready_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .and_then(|n| n.strip_suffix(READY_SUFFIX))
+}
+
+/// Get the task file path for a worker.
+fn task_path_for_worker(ready_path: &Path) -> PathBuf {
+    let uuid = extract_uuid(ready_path).expect("ready path should have READY_SUFFIX");
+    ready_path.with_file_name(format!("{uuid}{TASK_SUFFIX}"))
+}
+
+/// Get the response file path for a worker.
+fn response_path_for_worker(ready_path: &Path) -> PathBuf {
+    let uuid = extract_uuid(ready_path).expect("ready path should have READY_SUFFIX");
+    ready_path.with_file_name(format!("{uuid}{WORKER_RESPONSE_SUFFIX}"))
+}
+```
+
+#### 4.6: Update Effect::TaskCompleted
+
+```rust
+// Before
+Effect::TaskCompleted { agent_id, task_id } => {
+    let agent_path = agent_map
+        .get_path(agent_id)
+        .expect("TaskCompleted for unknown agent - core bug");
+
+    match task_id {
+        TaskId::Heartbeat(_) => {
+            let _ = fs::remove_file(agent_path.join(TASK_FILE));
+            let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
+        }
+        TaskId::External(external_id) => {
+            let agent_output = agent_map
+                .read_from(agent_id, RESPONSE_FILE)
+                .expect("TaskCompleted for unknown agent - core bug");
+
+            let _ = fs::remove_file(agent_path.join(TASK_FILE));
+            let _ = fs::remove_file(agent_path.join(RESPONSE_FILE));
+            // ...
+        }
+    }
+}
+
+// After
+Effect::TaskCompleted { worker_id, task_id } => {
+    let ready_path = worker_map
+        .get_path(worker_id)
+        .expect("TaskCompleted for unknown worker - core bug");
+    let task_path = task_path_for_worker(ready_path);
+    let response_path = response_path_for_worker(ready_path);
+
+    match task_id {
+        TaskId::Heartbeat(_) => {
+            // Clean up all three files for this worker
+            let _ = fs::remove_file(ready_path);
+            let _ = fs::remove_file(&task_path);
+            let _ = fs::remove_file(&response_path);
+        }
+        TaskId::External(external_id) => {
+            let agent_output = fs::read_to_string(&response_path)
+                .expect("TaskCompleted but response file missing - logic bug");
+
+            // Clean up all three files for this worker
+            let _ = fs::remove_file(ready_path);
+            let _ = fs::remove_file(&task_path);
+            let _ = fs::remove_file(&response_path);
+            // ...
+        }
+    }
+}
+```
+
+#### 4.7: Update Effect::AgentRemoved → Effect::CleanupWorker
+
+```rust
+// Before
+Effect::AgentRemoved { agent_id } => {
+    let (transport, ()) = agent_map
+        .remove(agent_id)
+        .expect("AgentRemoved for unknown agent - core bug");
+
+    // Write kicked message so agent knows it was removed
+    let kicked_msg = serde_json::json!({
+        "kind": "Kicked",
+        "reason": "Timeout"
+    });
+    let _ = transport.write(TASK_FILE, &kicked_msg.to_string());
+
+    // Track this path so we reject re-registration attempts
+    if let Some(agent_path) = transport.path() {
+        kicked_paths.insert(agent_path.to_path_buf());
+    }
+}
+
+// After
+Effect::CleanupWorker { worker_id } => {
+    let (transport, _data) = worker_map
+        .remove(worker_id)
+        .expect("CleanupWorker for unknown worker - core bug");
+
+    // Write kicked message to task file
+    if let Some(ready_path) = transport.path() {
+        let task_path = task_path_for_worker(ready_path);
+        let kicked_msg = serde_json::json!({
+            "kind": "Kicked",
+            "reason": "Timeout"
+        });
+        let _ = fs::write(&task_path, kicked_msg.to_string());
+
+        // Track this UUID so we reject stale events
+        if let Some(uuid) = extract_uuid(ready_path) {
+            cleaned_up_workers.insert(uuid.to_string());
+        }
+    }
+}
+```
+
+#### 4.8: Update kicked_paths to cleaned_up_workers
+
+```rust
+// Before (in execute_effect signature)
+pub(super) fn execute_effect(
+    effect: Effect,
+    agent_map: &mut AgentMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
+    kicked_paths: &mut HashSet<PathBuf>,  // Directory paths
+    // ...
+)
+
+// After
+pub(super) fn execute_effect(
+    effect: Effect,
+    worker_map: &mut WorkerMap,
+    external_task_map: &mut ExternalTaskMap,
+    task_id_allocator: &mut TaskIdAllocator,
+    cleaned_up_workers: &mut HashSet<String>,  // UUIDs
+    // ...
+)
+```
+
+#### 4.9: Update IoConfig field name
+
+```rust
+// Before
+pub(super) struct IoConfig {
+    pub idle_agent_timeout: Duration,
+    // ...
+}
+
+// After
+pub(super) struct IoConfig {
+    pub idle_worker_timeout: Duration,
+    // ...
+}
+```
+
+#### 4.10: Update tests
+
+```rust
+// Before
+#[test]
+fn agent_map_register_and_lookup() {
+    let mut map = AgentMap::new();
+    let path = PathBuf::from("/tmp/test/agents/agent-1");  // Directory
+
+    let id = map.register_directory(path.clone(), ()).unwrap();
+    assert_eq!(id, AgentId(0));
+    // ...
+}
+
+// After
+#[test]
+fn worker_map_register_and_lookup() {
+    let mut map = WorkerMap::new();
+    let path = PathBuf::from("/tmp/test/agents/abc123.ready.json");  // Flat file
+
+    let data = WorkerData { name: Some("test-worker".to_string()) };
+    let id = map.register_directory(path.clone(), data).unwrap();
+    assert_eq!(id, WorkerId(0));
+    // ...
+}
+```
 
 ---
 
