@@ -21,17 +21,10 @@ See [crates/gsd_cli/demos](crates/gsd_cli/demos) for example workflows.
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-# Run a state machine
-pnpm dlx @gsd-now/gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
-
-# Validate a config file
-pnpm dlx @gsd-now/gsd validate config.json
-
-# Generate documentation
-pnpm dlx @gsd-now/gsd docs config.json
+pnpm dlx @gsd-now/gsd run config.json --pool agents --initial '[{"kind": "Start", "value": {}}]'
 ```
 
-See [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
+See below for detailed instructions, or [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
 
 ### 2. Task Queue (`crates/task_queue`)
 
@@ -48,13 +41,13 @@ A daemon that manages a pool of long-running agents. Tasks are dispatched to ava
 
 ```bash
 # Start the daemon
-agent_pool start /path/to/root
+pnpm dlx @gsd-now/agent-pool start --pool agents
 
 # Submit a task (blocks until complete)
-agent_pool submit /path/to/root "task input"
+pnpm dlx @gsd-now/agent-pool submit_task --pool agents --data "task input"
 
 # Stop the daemon
-agent_pool stop /path/to/root
+pnpm dlx @gsd-now/agent-pool stop --pool agents
 ```
 
 ## Example Use Cases
