@@ -354,6 +354,21 @@ Core is the pure state machine - it deals only with IDs and state transitions, n
 2. **Behavioral change**: After task completion, worker is **removed** (not returned to idle)
 3. **Remove `AgentDeregistered`**: Workers don't deregister, they just get removed on timeout or completion
 
+#### IO Layer Guarantees (enables panics in core)
+
+The IO layer maintains a strict state machine per UUID:
+```
+ready.json created → task.json created → response.json created → cleanup
+```
+
+**Guarantees IO provides to core:**
+1. **UUIDs never reused** - each worker gets a fresh UUID
+2. **WorkerReady sent exactly once per worker_id** - never duplicates
+3. **WorkerResponded only sent for Assigned workers** - IO checks its own state before sending
+4. **State transitions are sequential** - Ready → Assigned, never backwards
+
+Because of these guarantees, core can **panic on violations** rather than handling them defensively. If core sees an invalid event, it's a bug in IO or core, not external input.
+
 #### 3.1: Complete Core Data Structures
 
 ```rust
@@ -410,17 +425,23 @@ impl WorkerState {
         }
     }
 
-    /// Transition from idle to busy. Returns new epoch, or None if already busy.
-    fn try_become_busy(&mut self, task_id: TaskId) -> Option<Epoch> {
-        if !matches!(self.status, WorkerStatus::Idle) {
-            return None;
-        }
+    /// Transition from idle to busy. Panics if already busy.
+    ///
+    /// # Panics
+    /// IO layer guarantees we only assign tasks to idle workers. If this
+    /// panics, IO and core are out of sync.
+    fn become_busy(&mut self, task_id: TaskId) -> Epoch {
+        assert!(
+            matches!(self.status, WorkerStatus::Idle),
+            "become_busy called on non-idle worker {:?} - IO/core state mismatch",
+            self.epoch.worker_id
+        );
         self.epoch.sequence += 1;
         self.status = WorkerStatus::Busy { task_id };
-        Some(self.epoch)
+        self.epoch
     }
 
-    // NOTE: No try_become_idle() - workers are removed after completion, not returned to idle
+    // NOTE: No become_idle() - workers are removed after completion, not returned to idle
 }
 
 // =============================================================================
@@ -494,40 +515,38 @@ pub(super) enum Effect {
 
 Note: There's no "idle timeout → remove" path. When a worker is idle too long, it gets a heartbeat task (becomes Busy). If it fails to respond to the heartbeat, that's a task timeout.
 
-#### 3.4: Behavioral change in handle_worker_responded
+#### 3.4: Event Handlers (with panic reasoning)
 
-This is the key semantic change.
-
-**Current behavior (named agents):**
-1. Agent transitions Busy → Idle
-2. If pending task exists, assign it immediately
-3. Otherwise, agent remains idle, waiting
-
-**New behavior (anonymous workers):**
-1. Worker completes task → **removed**
-2. If worker wants more work, it creates a new UUID and re-registers
+**Panic vs Defensive:**
+- **Panic**: Invariant violation - IO guarantees this can't happen
+- **Defensive**: Race condition - legitimate concurrent events can cause this
 
 ```rust
-// Before
-fn handle_agent_responded(mut state: PoolState, agent_id: AgentId) -> (PoolState, Vec<Effect>) {
-    let agent = state.agents.get_mut(&agent_id)?;
-    let (new_epoch, task_id) = agent.try_become_idle()?;
+fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
+    // PANIC: IO guarantees WorkerReady sent exactly once per worker_id
+    assert!(
+        !state.workers.contains_key(&worker_id),
+        "WorkerReady for existing worker {:?} - IO sent duplicate event",
+        worker_id
+    );
 
-    let mut effects = vec![Effect::TaskCompleted { agent_id, task_id }];
+    state.workers.insert(worker_id, WorkerState::new(worker_id));
 
-    // Try to assign another task to this agent
-    if let Some(effect) = try_assign_pending_to_agent(&mut state, agent_id) {
-        effects.push(effect);
+    // Try to assign a pending task immediately
+    if let Some(task_id) = state.pending_tasks.pop_front() {
+        let worker = state.workers.get_mut(&worker_id).unwrap();
+        let epoch = worker.become_busy(task_id);  // panics if not idle (can't happen here)
+        (state, vec![Effect::TaskAssigned { task_id, epoch }])
     } else {
-        effects.push(Effect::AgentIdled { epoch: new_epoch });
+        let epoch = state.workers.get(&worker_id).unwrap().epoch;
+        (state, vec![Effect::WorkerWaiting { epoch }])
     }
-    (state, effects)
 }
 
-// After
 fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolState, Vec<Effect>) {
-    // Worker not in map - stale event (removed by timeout, duplicate FS event, etc.)
-    // This is expected in race conditions, handle defensively.
+    // DEFENSIVE: Race condition possible.
+    // Worker could have been removed by timeout between IO sending WorkerResponded
+    // and core processing it. Event ordering is not guaranteed.
     let Some(worker) = state.workers.remove(&worker_id) else {
         return (state, vec![]);
     };
@@ -545,6 +564,60 @@ fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolSt
     // Worker is REMOVED after completing task - no "return to idle"
     // TaskCompleted implies worker removal in the anonymous model
     (state, vec![Effect::TaskCompleted { worker_id, task_id }])
+}
+
+fn handle_assign_task_to_worker_if_epoch_matches(
+    mut state: PoolState,
+    epoch: Epoch,
+    task_id: TaskId,
+) -> (PoolState, Vec<Effect>) {
+    let worker_id = epoch.worker_id;
+
+    // DEFENSIVE: Worker might have been removed by timeout
+    let Some(worker) = state.workers.get_mut(&worker_id) else {
+        return (state, vec![]);
+    };
+
+    // DEFENSIVE: Stale timer - worker did work since timer started
+    if worker.epoch != epoch {
+        return (state, vec![]);
+    }
+
+    // PANIC: If epoch matches, worker MUST be idle. Epoch increments on every
+    // state transition. If epoch matches but worker is busy, something is very wrong.
+    let new_epoch = worker.become_busy(task_id);  // panics if not idle
+
+    (state, vec![Effect::TaskAssigned { task_id, epoch: new_epoch }])
+}
+
+fn handle_worker_timed_out(mut state: PoolState, epoch: Epoch) -> (PoolState, Vec<Effect>) {
+    let worker_id = epoch.worker_id;
+
+    // DEFENSIVE: Worker might have been removed already
+    let Some(worker) = state.workers.remove(&worker_id) else {
+        return (state, vec![]);
+    };
+
+    // DEFENSIVE: Stale timeout - worker did work since timer started
+    if worker.epoch != epoch {
+        state.workers.insert(worker_id, worker);
+        return (state, vec![]);
+    }
+
+    // PANIC: If epoch matches, worker MUST be busy (processing task or heartbeat).
+    // Timeouts are only started when worker becomes busy. If epoch matches but
+    // worker is idle, the timeout/epoch logic has a bug.
+    let WorkerStatus::Busy { task_id } = worker.status else {
+        panic!(
+            "WorkerTimedOut with matching epoch but worker {:?} is idle - timeout logic bug",
+            worker_id
+        );
+    };
+
+    (state, vec![
+        Effect::TaskFailed { task_id },
+        Effect::WorkerRemoved { worker_id },
+    ])
 }
 ```
 
