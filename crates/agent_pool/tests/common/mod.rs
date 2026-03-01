@@ -9,6 +9,7 @@
 #![allow(clippy::print_stderr)]
 
 use agent_pool::{Response, default_pool_root, id_to_path, wait_for_pool_ready};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::PathBuf;
@@ -48,6 +49,147 @@ pub fn pool_path(pool: &str) -> PathBuf {
 pub fn cleanup_pool(pool: &str) {
     let dir = pool_path(pool);
     let _ = fs::remove_dir_all(&dir);
+}
+
+// =============================================================================
+// Filesystem State Assertions
+// =============================================================================
+
+/// Snapshot of the agents directory structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentsSnapshot {
+    /// Agent directories that exist (e.g., `agent-1`, `agent-2`)
+    pub agent_dirs: BTreeSet<String>,
+    /// Files within each agent directory
+    pub agent_files: std::collections::BTreeMap<String, BTreeSet<String>>,
+}
+
+impl AgentsSnapshot {
+    /// Take a snapshot of the agents directory.
+    pub fn capture(pool: &str) -> Self {
+        let agents_dir = pool_path(pool).join("agents");
+        let mut agent_dirs = BTreeSet::new();
+        let mut agent_files = std::collections::BTreeMap::new();
+
+        if let Ok(entries) = fs::read_dir(&agents_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let name = path
+                        .file_name()
+                        .expect("path has filename")
+                        .to_string_lossy()
+                        .to_string();
+                    agent_dirs.insert(name.clone());
+
+                    let mut files = BTreeSet::new();
+                    if let Ok(file_entries) = fs::read_dir(&path) {
+                        for file_entry in file_entries.flatten() {
+                            let file_name = file_entry.file_name().to_string_lossy().to_string();
+                            files.insert(file_name);
+                        }
+                    }
+                    agent_files.insert(name, files);
+                }
+            }
+        }
+
+        Self {
+            agent_dirs,
+            agent_files,
+        }
+    }
+
+    /// Assert that a specific agent directory exists.
+    pub fn assert_agent_exists(&self, agent_name: &str) {
+        assert!(
+            self.agent_dirs.contains(agent_name),
+            "Expected agent '{}' to exist. Actual agents: {:?}",
+            agent_name,
+            self.agent_dirs
+        );
+    }
+
+    /// Assert that a specific agent directory does NOT exist.
+    pub fn assert_agent_not_exists(&self, agent_name: &str) {
+        assert!(
+            !self.agent_dirs.contains(agent_name),
+            "Expected agent '{}' to NOT exist. Actual agents: {:?}",
+            agent_name,
+            self.agent_dirs
+        );
+    }
+
+    /// Assert the exact set of agents that should exist.
+    pub fn assert_agents(&self, expected: &[&str]) {
+        let expected_set: BTreeSet<String> = expected.iter().copied().map(String::from).collect();
+        assert_eq!(self.agent_dirs, expected_set, "Agent directories mismatch");
+    }
+
+    /// Assert that an agent has specific files.
+    pub fn assert_agent_files(&self, agent_name: &str, expected_files: &[&str]) {
+        let expected_set: BTreeSet<String> =
+            expected_files.iter().copied().map(String::from).collect();
+        let actual = self.agent_files.get(agent_name);
+        assert_eq!(
+            actual,
+            Some(&expected_set),
+            "Files in agent '{agent_name}' mismatch. Expected: {expected_set:?}, Actual: {actual:?}",
+        );
+    }
+
+    /// Assert no agent directories exist.
+    pub fn assert_no_agents(&self) {
+        assert!(
+            self.agent_dirs.is_empty(),
+            "Expected no agents, but found: {:?}",
+            self.agent_dirs
+        );
+    }
+}
+
+/// Snapshot of the submissions directory structure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmissionsSnapshot {
+    /// Request files (*.request.json)
+    pub request_files: BTreeSet<String>,
+    /// Response files (*.response.json)
+    pub response_files: BTreeSet<String>,
+}
+
+impl SubmissionsSnapshot {
+    /// Take a snapshot of the submissions directory.
+    pub fn capture(pool: &str) -> Self {
+        let submissions_dir = pool_path(pool).join("submissions");
+        let mut request_files = BTreeSet::new();
+        let mut response_files = BTreeSet::new();
+
+        if let Ok(entries) = fs::read_dir(&submissions_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.ends_with(".request.json") {
+                    request_files.insert(name);
+                } else if name.ends_with(".response.json") {
+                    response_files.insert(name);
+                }
+            }
+        }
+
+        Self {
+            request_files,
+            response_files,
+        }
+    }
+
+    /// Assert no pending submissions (no request files, no response files).
+    pub fn assert_empty(&self) {
+        assert!(
+            self.request_files.is_empty() && self.response_files.is_empty(),
+            "Expected no submissions, but found requests: {:?}, responses: {:?}",
+            self.request_files,
+            self.response_files
+        );
+    }
 }
 
 /// Check if Unix socket IPC is available.
