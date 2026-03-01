@@ -1,1 +1,7 @@
-{}
+{
+  "scripts": {
+    "build": "cargo build -p agent_pool_cli",
+    "test": "cargo build -p agent_pool_cli && cargo test -p agent_pool",
+    "test:all": "cargo build -p agent_pool_cli && cargo test --workspace"
+  }
+}
