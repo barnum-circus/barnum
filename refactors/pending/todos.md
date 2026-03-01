@@ -958,3 +958,32 @@ Need a way to monitor active tasks while GSD is running. Currently there's no ea
 3. **Easy monitoring** - Users can `tail -f <pool_root>/gsd.log` to watch progress in real-time.
 
 This makes debugging and monitoring much simpler - just tail the log file in the pool directory.
+
+---
+
+## Unify agent.rs with VerifiedWatcher
+
+**Status: TODO**
+
+The `agent.rs` module has its own watcher pattern (`create_watcher`, `verify_watcher_sync`, `wait_for_task`) that predates `VerifiedWatcher`. We should investigate whether to unify these.
+
+**Key difference from client flows:**
+
+The agent's task ready condition is more complex than just waiting for a file:
+```rust
+task.exists() && !response.exists()
+```
+
+This checks both that a task file appeared AND that the response file is gone (indicating the previous task was cleaned up).
+
+**Options to investigate:**
+
+1. **Pass a predicate function to VerifiedWatcher** - Add a `wait_for_predicate(f: impl Fn() -> bool)` method that checks the predicate on each event instead of checking for a specific file.
+
+2. **Use VerifiedWatcher internally but keep agent API** - The agent API is designed for watcher reuse across multiple task waits. Could use VerifiedWatcher for the canary verification part but keep the custom task-ready logic.
+
+3. **Simplify the task-ready check** - If we can guarantee that `task.json` only appears when the agent should process it (daemon always cleans up response before writing new task), we could simplify to just `wait_for(&task_path)`.
+
+**Current state:**
+
+The agent module already has proper canary verification and is event-driven (not polling). The main question is whether unification provides enough value to justify the API changes.
