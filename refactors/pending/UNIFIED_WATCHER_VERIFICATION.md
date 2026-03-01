@@ -276,12 +276,24 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+/// Internal state of the watcher.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatcherState {
+    /// Canary written, waiting for any event to confirm watcher works.
+    Unverified,
+    /// At least one event received; watcher is operational.
+    Verified,
+    /// Channel disconnected; watcher is broken.
+    Disconnected,
+}
+
 /// A file watcher with lazy canary verification.
 pub struct VerifiedWatcher {
     rx: mpsc::Receiver<PathBuf>,
     _watcher: RecommendedWatcher,
     canary_path: PathBuf,
-    verified: bool,
+    state: WatcherState,
+    canary_writes: u32,
 }
 
 impl VerifiedWatcher {
@@ -308,13 +320,14 @@ impl VerifiedWatcher {
             .map_err(io::Error::other)?;
 
         // Write canary to start verification (non-blocking)
-        fs::write(&canary_path, "sync")?;
+        fs::write(&canary_path, "0")?;
 
         Ok(Self {
             rx,
             _watcher: watcher,
             canary_path,
-            verified: false,
+            state: WatcherState::Unverified,
+            canary_writes: 0,
         })
     }
 
@@ -327,45 +340,35 @@ impl VerifiedWatcher {
     ///
     /// Use when you need verification without waiting for a target file.
     pub fn ensure_verified(&mut self, timeout: Option<Duration>) -> io::Result<()> {
-        if self.verified {
+        if self.state == WatcherState::Verified {
             return Ok(());
+        }
+        if self.state == WatcherState::Disconnected {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "watcher disconnected"));
         }
 
         let start = Instant::now();
         loop {
             match self.rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(path) if path == self.canary_path => {
-                    self.verified = true;
-                    let _ = fs::remove_file(&self.canary_path);
-                    return Ok(());
-                }
                 Ok(_) => {
                     // Any filesystem event proves the watcher is working.
-                    // Once we've received one event, we can trust that future
-                    // filesystem operations will also generate observable events.
-                    self.verified = true;
-                    let _ = fs::remove_file(&self.canary_path);
+                    self.mark_verified();
                     return Ok(());
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if let Some(t) = timeout {
                         if start.elapsed() > t {
-                            let _ = fs::remove_file(&self.canary_path);
                             return Err(io::Error::new(
                                 io::ErrorKind::TimedOut,
                                 "watcher verification timed out",
                             ));
                         }
                     }
-                    // Retry canary write
-                    fs::write(&self.canary_path, start.elapsed().as_millis().to_string())?;
+                    self.retry_canary()?;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = fs::remove_file(&self.canary_path);
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "watcher disconnected",
-                    ));
+                    self.mark_disconnected();
+                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "watcher disconnected"));
                 }
             }
         }
@@ -380,6 +383,10 @@ impl VerifiedWatcher {
             return Ok(());
         }
 
+        if self.state == WatcherState::Disconnected {
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "watcher disconnected"));
+        }
+
         let start = Instant::now();
         loop {
             // Check timeout
@@ -388,7 +395,6 @@ impl VerifiedWatcher {
                     if target.exists() {
                         return Ok(());
                     }
-                    let _ = fs::remove_file(&self.canary_path);
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!("timed out waiting for {}", target.display()),
@@ -399,9 +405,8 @@ impl VerifiedWatcher {
             match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(path) => {
                     // Any event proves watcher works
-                    if !self.verified {
-                        self.verified = true;
-                        let _ = fs::remove_file(&self.canary_path);
+                    if self.state == WatcherState::Unverified {
+                        self.mark_verified();
                     }
 
                     if path == target {
@@ -418,16 +423,13 @@ impl VerifiedWatcher {
                         return Ok(());
                     }
                     // Retry canary if not verified
-                    if !self.verified {
-                        fs::write(&self.canary_path, start.elapsed().as_millis().to_string())?;
+                    if self.state == WatcherState::Unverified {
+                        self.retry_canary()?;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    let _ = fs::remove_file(&self.canary_path);
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "watcher disconnected",
-                    ));
+                    self.mark_disconnected();
+                    return Err(io::Error::new(io::ErrorKind::BrokenPipe, "watcher disconnected"));
                 }
             }
         }
@@ -437,9 +439,35 @@ impl VerifiedWatcher {
     ///
     /// Should only be called after verification.
     pub fn into_receiver(self) -> mpsc::Receiver<PathBuf> {
-        // Clean up canary if still exists
-        let _ = fs::remove_file(&self.canary_path);
+        // Note: Drop will clean up canary file
         self.rx
+    }
+
+    // --- Private helpers ---
+
+    /// Mark watcher as verified and clean up canary.
+    fn mark_verified(&mut self) {
+        self.state = WatcherState::Verified;
+        let _ = fs::remove_file(&self.canary_path);
+    }
+
+    /// Mark watcher as disconnected and clean up canary.
+    fn mark_disconnected(&mut self) {
+        self.state = WatcherState::Disconnected;
+        let _ = fs::remove_file(&self.canary_path);
+    }
+
+    /// Rewrite canary with incrementing number to trigger another event.
+    fn retry_canary(&mut self) -> io::Result<()> {
+        self.canary_writes += 1;
+        fs::write(&self.canary_path, self.canary_writes.to_string())
+    }
+}
+
+impl Drop for VerifiedWatcher {
+    fn drop(&mut self) {
+        // Clean up canary file if it still exists
+        let _ = fs::remove_file(&self.canary_path);
     }
 }
 ```
