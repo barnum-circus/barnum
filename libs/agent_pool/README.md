@@ -29,4 +29,4 @@ npx @gsd-now/agent-pool start ./workspace
 
 ## Agent Protocol
 
-See [AGENT_PROTOCOL.md](https://github.com/rbalicki2/gsd/blob/main/crates/agent_pool/AGENT_PROTOCOL.md) for how agents communicate with the daemon.
+See [AGENT_PROTOCOL.md](https://github.com/rbalicki2/gsd/blob/main/crates/agent_pool/protocols/AGENT_PROTOCOL.md) for how agents communicate with the daemon.

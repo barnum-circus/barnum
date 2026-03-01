@@ -23,8 +23,8 @@ agent_pool stop --pool my-pool
 
 ## Protocol
 
-See `AGENT_PROTOCOL.md` for the agent communication protocol.
-See `SUBMISSION_PROTOCOL.md` for the task submission protocol.
+See `protocols/AGENT_PROTOCOL.md` for the agent communication protocol.
+See `protocols/SUBMISSION_PROTOCOL.md` for the task submission protocol.
 
 ## License
 

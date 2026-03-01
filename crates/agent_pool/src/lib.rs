@@ -4,7 +4,7 @@
 //! - **Submitters** via Unix socket or file-based submission
 //! - **Agents** via filesystem polling (`task.json`, `response.json`)
 //!
-//! See `AGENT_PROTOCOL.md` for details on the agent file protocol.
+//! See `protocols/AGENT_PROTOCOL.md` for details on the agent file protocol.
 //!
 //! # Usage
 //!

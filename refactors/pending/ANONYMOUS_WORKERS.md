@@ -865,7 +865,7 @@ Consolidate `register`, `get_task`, `next_task` into single workflow using new e
 
 ### Task 8: Update Protocol Documentation
 
-**File:** `crates/agent_pool/AGENT_PROTOCOL.md`
+**File:** `crates/agent_pool/protocols/AGENT_PROTOCOL.md`
 
 Document the new three-file protocol.
 

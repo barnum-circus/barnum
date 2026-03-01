@@ -123,8 +123,8 @@ These patterns are used throughout the daemon:
 ## Documentation
 
 **Keep protocol docs in sync with code.** When modifying message formats, commands, or behaviors:
-- `crates/agent_pool/AGENT_PROTOCOL.md` - what agents receive and how to respond
-- `crates/agent_pool/SUBMISSION_PROTOCOL.md` - how to submit tasks
+- `crates/agent_pool/protocols/AGENT_PROTOCOL.md` - what agents receive and how to respond
+- `crates/agent_pool/protocols/SUBMISSION_PROTOCOL.md` - how to submit tasks
 
 If you add a new message type (like `Kicked`), document it immediately.
 

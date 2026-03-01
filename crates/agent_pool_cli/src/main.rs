@@ -18,8 +18,8 @@ use std::time::Duration;
 use std::{fs, thread};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-const AGENT_PROTOCOL: &str = include_str!("../../agent_pool/AGENT_PROTOCOL.md");
-const LOW_LEVEL_PROTOCOL: &str = include_str!("../../agent_pool/LOW_LEVEL_PROTOCOL.md");
+const AGENT_PROTOCOL: &str = include_str!("../../agent_pool/protocols/AGENT_PROTOCOL.md");
+const LOW_LEVEL_PROTOCOL: &str = include_str!("../../agent_pool/protocols/LOW_LEVEL_PROTOCOL.md");
 
 /// Log level for the agent pool.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
