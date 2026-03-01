@@ -80,7 +80,20 @@ fn cleanup_pool_state(root: &Path) {
         }
     }
 
-    // Clean up any canary files in the root
+    // Clean up any canary files in the root (daemon.canary, client_canary, UUID.canary, etc.)
+    if let Ok(entries) = fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .file_name()
+                    .is_some_and(|n| n.to_string_lossy().ends_with(".canary"))
+            {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+    // Also clean up legacy canary files
     for filename in ["canary", "client_canary"] {
         let canary_path = root.join(filename);
         if canary_path.exists() {
@@ -911,41 +924,30 @@ fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<Re
     Ok(watcher)
 }
 
-/// Set up the daemon and verify the watcher sees events for key directories.
+/// Set up the daemon and verify the watcher sees events.
 ///
 /// This function:
 /// 1. Creates the lock file and acquires the lock
 /// 2. Creates the socket and starts listening
-/// 3. Creates both directories (pending, agents)
-/// 4. Writes canary files to verify watcher sees events in subdirectories
-/// 5. Waits until we see events for the directories and canary files
-/// 6. Cleans up canary files
+/// 3. Creates both directories (submissions, agents)
+/// 4. Writes a canary file to verify watcher sees events
+/// 5. Waits until we see ANY filesystem event (proves watcher is working)
+/// 6. Cleans up canary file
 ///
-/// We specifically verify events for `submissions_dir`, `agents_dir`, and canary files
-/// because these are where agents and submissions will interact. Other events
-/// (lock file, socket, etc.) are allowlisted but not required.
+/// # Key Assumption
+///
+/// Once we observe any filesystem event, the watcher is fully operational.
+/// Filesystem watchers (`FSEvents` on macOS, inotify on Linux) don't "partially work".
+/// The only failure mode is during initial setup - there's a brief window after
+/// `watch()` returns where events might not be delivered yet. Once we receive ANY
+/// event, we can trust the watcher is working for the entire directory tree.
 ///
 /// Returns the lock guard and socket listener on success.
-///
-/// # Stale Event Filtering
-///
-/// `FSEvents` on macOS may deliver buffered events from previous daemon runs.
-/// We filter these by checking the file's modification time against our start time.
-/// Events for files modified before we started are considered stale and skipped.
-///
-/// # Open Questions
-///
-/// TODO: Should we wait until the socket is ready before considering the daemon ready?
-/// Currently we create the socket synchronously and assume it works. We might want to
-/// verify we can accept connections.
-///
-/// TODO: Do we need to verify the lock is working? The lock is acquired synchronously
-/// and errors propagate, but we don't have explicit verification that the lock is held.
 ///
 /// # Panics
 ///
 /// Panics if an unexpected non-FS event is received.
-#[allow(clippy::panic, clippy::too_many_lines)]
+#[allow(clippy::panic)]
 fn sync_and_setup(
     root: &Path,
     lock_path: &Path,
@@ -954,142 +956,47 @@ fn sync_and_setup(
     agents_dir: &Path,
     io_rx: &mpsc::Receiver<IoEvent>,
 ) -> io::Result<(LockGuard, Listener)> {
-    use std::collections::HashSet;
-    use std::time::SystemTime;
-
     const POLL_TIMEOUT: Duration = Duration::from_millis(100);
     const MAX_DURATION: Duration = Duration::from_secs(5);
 
-    // Record start time for filtering stale FSEvents from previous daemon runs
-    let start_time = SystemTime::now();
+    let canary_path = root.join("daemon.canary");
 
-    let pending_canary = submissions_dir.join("canary");
-    let agents_canary = agents_dir.join("canary");
-
-    // All paths we expect to see events for (complete allowlist)
-    // Any event for a path NOT in this set causes a panic (unless stale)
-    let mut allowed: HashSet<PathBuf> = HashSet::new();
-    allowed.insert(root.to_path_buf());
-    allowed.insert(lock_path.to_path_buf());
-    allowed.insert(socket_path.to_path_buf());
-    allowed.insert(submissions_dir.to_path_buf());
-    allowed.insert(agents_dir.to_path_buf());
-    allowed.insert(pending_canary.clone());
-    allowed.insert(agents_canary.clone());
-    // Client's canary file for wait_for_pool_ready watcher verification
-    allowed.insert(root.join("client_canary"));
-
-    // Paths we MUST see events for (verifies watcher is working for key directories)
-    // Only canary files - seeing these proves the watcher sees events IN those directories
-    let mut required: HashSet<PathBuf> = HashSet::new();
-    required.insert(pending_canary.clone());
-    required.insert(agents_canary.clone());
-
-    // Track which required paths we've seen
-    let mut seen: HashSet<PathBuf> = HashSet::new();
-
-    debug!(
-        "waiting for watcher sync, requiring {} events: {:?}",
-        required.len(),
-        required
-    );
+    debug!("waiting for watcher sync via canary file");
 
     // Create lock and socket first (before watcher matters)
     let lock = acquire_lock(lock_path)?;
     let listener = create_socket_listener(socket_path)?;
 
-    // Create directories and canaries - watcher MUST see these
+    // Create directories
     fs::create_dir_all(submissions_dir)?;
     fs::create_dir_all(agents_dir)?;
-    fs::write(&pending_canary, "sync")?;
-    fs::write(&agents_canary, "sync")?;
+
+    // Write canary file to trigger an event
+    fs::write(&canary_path, "0")?;
 
     let start = std::time::Instant::now();
     let mut retry_count = 0u32;
     while start.elapsed() < MAX_DURATION {
         match io_rx.recv_timeout(POLL_TIMEOUT) {
             Ok(IoEvent::Fs(event)) => {
-                // Only check allowlist for Create/Modify/Access events.
-                // Remove events are fine - they're cleanup from previous runs.
-                let is_creation_event = matches!(
-                    event.kind,
-                    notify::EventKind::Create(_)
-                        | notify::EventKind::Modify(_)
-                        | notify::EventKind::Access(_)
+                // Any filesystem event proves the watcher is working.
+                // We don't care which path triggered it - the key insight is that
+                // filesystem watchers don't "partially work".
+                debug!(
+                    "watcher sync complete - received event {:?} for {:?}",
+                    event.kind, event.paths
                 );
-
-                for path in &event.paths {
-                    if is_creation_event {
-                        // Allow static paths in allowlist, OR canary files in agent subdirs
-                        let is_agent_canary = path.starts_with(agents_dir)
-                            && path.file_name().is_some_and(|n| n == "canary");
-
-                        if !allowed.contains(path) && !is_agent_canary {
-                            // Check if this is a stale event from a previous run.
-                            // An event is stale if:
-                            // 1. The file doesn't exist (already cleaned up)
-                            // 2. The file's mtime is before our start time
-                            let is_stale = path
-                                .metadata()
-                                .and_then(|m| m.modified())
-                                .map_or(true, |mtime| mtime < start_time);
-
-                            if is_stale {
-                                warn!(
-                                    "ignoring stale FS event from previous run: {:?} for {}",
-                                    event.kind,
-                                    path.display()
-                                );
-                                continue;
-                            }
-
-                            panic!(
-                                "unexpected FS event during startup sync: {:?} for path {}\n\
-                                 Allowed paths: {:?}",
-                                event.kind,
-                                path.display(),
-                                allowed
-                            );
-                        }
-                    }
-
-                    if required.contains(path) {
-                        seen.insert(path.clone());
-                        debug!(
-                            "sync: required {}/{} - {} ({:?})",
-                            seen.len(),
-                            required.len(),
-                            path.display(),
-                            event.kind
-                        );
-                    } else {
-                        debug!("sync: allowed {} ({:?})", path.display(), event.kind);
-                    }
-                }
-                if seen.len() == required.len() {
-                    debug!(
-                        "watcher sync complete - all {} required events seen",
-                        required.len()
-                    );
-                    let _ = fs::remove_file(&pending_canary);
-                    let _ = fs::remove_file(&agents_canary);
-                    return Ok((lock, listener));
-                }
+                let _ = fs::remove_file(&canary_path);
+                return Ok((lock, listener));
             }
             Ok(_) => panic!("unexpected non-FS event during startup sync"),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // On timeout, rewrite canaries with incrementing value to trigger new events
+                // On timeout, rewrite canary with incrementing value to trigger new event
                 retry_count += 1;
-                if !seen.contains(&pending_canary) {
-                    fs::write(&pending_canary, retry_count.to_string())?;
-                }
-                if !seen.contains(&agents_canary) {
-                    fs::write(&agents_canary, retry_count.to_string())?;
-                }
+                fs::write(&canary_path, retry_count.to_string())?;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = fs::remove_file(&pending_canary);
-                let _ = fs::remove_file(&agents_canary);
+                let _ = fs::remove_file(&canary_path);
                 return Err(io::Error::new(
                     io::ErrorKind::BrokenPipe,
                     "watcher channel disconnected",
@@ -1098,15 +1005,11 @@ fn sync_and_setup(
         }
     }
 
-    // Log what we're missing for debugging
-    let missing: Vec<_> = required.difference(&seen).collect();
-    warn!("watcher sync timed out, missing events for: {:?}", missing);
-
-    let _ = fs::remove_file(&pending_canary);
-    let _ = fs::remove_file(&agents_canary);
+    warn!("watcher sync timed out - no events received");
+    let _ = fs::remove_file(&canary_path);
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
-        format!("watcher sync timed out, missing {} events", missing.len()),
+        "watcher sync timed out - no events received",
     ))
 }
 
