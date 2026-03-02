@@ -1,17 +1,17 @@
 #!/bin/bash
 # GSD agent that fans out Distribute -> 10 Worker tasks -> done.
 #
-# Usage: ./fan-out-agent.sh <root> <agent-id> [num-workers] [sleep-seconds]
+# Usage: ./fan-out-agent.sh <pool> <agent-id> [num-workers] [sleep-seconds]
 
 set -e
 
-ROOT="$1"
+POOL="$1"
 AGENT_ID="$2"
 NUM_WORKERS="${3:-10}"
 SLEEP_TIME="${4:-0.2}"
 
-if [ -z "$ROOT" ] || [ -z "$AGENT_ID" ]; then
-    echo "Usage: $0 <root> <agent-id> [num-workers] [sleep-seconds]" >&2
+if [ -z "$POOL" ] || [ -z "$AGENT_ID" ]; then
+    echo "Usage: $0 <pool> <agent-id> [num-workers] [sleep-seconds]" >&2
     exit 1
 fi
 
@@ -28,19 +28,19 @@ echo "[$AGENT_ID] Started (fan-out agent, $NUM_WORKERS workers)" >&2
 
 cleanup() {
     echo "[$AGENT_ID] Shutting down" >&2
-    # Kill any child processes (e.g., blocked next_task)
+    # Kill any child processes (e.g., blocked get_task)
     pkill -P $$ 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGINT SIGTERM
 
-# First task via register
-TASK_JSON=$("$AGENT_POOL" register --pool "$ROOT" --name "$AGENT_ID" 2>/dev/null) || {
-    echo "[$AGENT_ID] Register failed, exiting" >&2
-    exit 1
-}
-
 while true; do
+    # Get next task
+    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$AGENT_ID" 2>/dev/null) || {
+        echo "[$AGENT_ID] get_task failed, exiting" >&2
+        exit 1
+    }
+
     # Extract response file path and message kind
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
     MSG_KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
@@ -54,7 +54,7 @@ while true; do
     # Handle heartbeat - respond immediately
     if [ "$MSG_KIND" = "Heartbeat" ]; then
         echo "[$AGENT_ID] Heartbeat" >&2
-        TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "{}" --name "$AGENT_ID" 2>/dev/null) || break
+        echo "{}" > "$RESPONSE_FILE"
         continue
     fi
 
@@ -87,8 +87,8 @@ while true; do
             ;;
     esac
 
-    # Submit response and get next task
-    TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "$response" --name "$AGENT_ID" 2>/dev/null) || break
+    # Write response to file
+    echo "$response" > "$RESPONSE_FILE"
 done
 
 echo "[$AGENT_ID] Agent exiting" >&2

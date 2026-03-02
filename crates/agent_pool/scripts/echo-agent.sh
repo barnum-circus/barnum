@@ -1,22 +1,22 @@
 #!/bin/bash
 # Simple demo agent that echoes tasks back with a processing marker.
 #
-# Usage: ./echo-agent.sh <root> <agent-id> [sleep-seconds]
+# Usage: ./echo-agent.sh <pool> <agent-id> [sleep-seconds]
 #
 # The agent:
-# 1. Registers with the pool via CLI
+# 1. Calls get_task to wait for a task
 # 2. Receives tasks from the daemon
 # 3. Echoes the task data back with "[processed by <agent-id>]"
-# 4. Loops for the next task
+# 4. Writes response to file, then loops for the next task
 
 set -e
 
-ROOT="$1"
+POOL="$1"
 AGENT_ID="$2"
 SLEEP_TIME="${3:-0.1}"
 
-if [ -z "$ROOT" ] || [ -z "$AGENT_ID" ]; then
-    echo "Usage: $0 <root> <agent-id> [sleep-seconds]" >&2
+if [ -z "$POOL" ] || [ -z "$AGENT_ID" ]; then
+    echo "Usage: $0 <pool> <agent-id> [sleep-seconds]" >&2
     exit 1
 fi
 
@@ -33,19 +33,19 @@ echo "[$AGENT_ID] Agent started" >&2
 
 cleanup() {
     echo "[$AGENT_ID] Agent shutting down" >&2
-    # Kill any child processes (e.g., blocked next_task)
+    # Kill any child processes (e.g., blocked get_task)
     pkill -P $$ 2>/dev/null || true
     exit 0
 }
 trap cleanup SIGINT SIGTERM
 
-# First task via register
-TASK_JSON=$("$AGENT_POOL" register --pool "$ROOT" --name "$AGENT_ID" 2>/dev/null) || {
-    echo "[$AGENT_ID] Register failed, exiting" >&2
-    exit 1
-}
-
 while true; do
+    # Get next task
+    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$AGENT_ID" 2>/dev/null) || {
+        echo "[$AGENT_ID] get_task failed, exiting" >&2
+        exit 1
+    }
+
     # Extract response file path, kind, and task data
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
     KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
@@ -60,7 +60,7 @@ while true; do
     # Handle heartbeat - respond immediately
     if [ "$KIND" = "Heartbeat" ]; then
         echo "[$AGENT_ID] Heartbeat" >&2
-        TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "{}" --name "$AGENT_ID" 2>/dev/null) || break
+        echo "{}" > "$RESPONSE_FILE"
         continue
     fi
 
@@ -73,8 +73,8 @@ while true; do
 
     echo "[$AGENT_ID] Done" >&2
 
-    # Submit response and get next task
-    TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "$RESPONSE" --name "$AGENT_ID" 2>/dev/null) || break
+    # Write response to file
+    echo "$RESPONSE" > "$RESPONSE_FILE"
 done
 
 echo "[$AGENT_ID] Agent exiting" >&2

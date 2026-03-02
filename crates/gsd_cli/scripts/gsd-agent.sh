@@ -1,7 +1,7 @@
 #!/bin/bash
 # GSD-aware demo agent that understands the GSD protocol.
 #
-# Usage: ./gsd-agent.sh <root> <agent-id> [transition-map] [sleep-seconds]
+# Usage: ./gsd-agent.sh <pool> <agent-id> [transition-map] [sleep-seconds]
 #
 # The agent receives JSON payloads like:
 #   {"task": {"kind": "Start", "value": {...}}, "instructions": "..."}
@@ -16,13 +16,13 @@
 
 set -e
 
-ROOT="$1"
+POOL="$1"
 AGENT_ID="$2"
 TRANSITION_MAP="${3:-}"
 SLEEP_TIME="${4:-0.1}"
 
-if [ -z "$ROOT" ] || [ -z "$AGENT_ID" ]; then
-    echo "Usage: $0 <root> <agent-id> [transition-map] [sleep-seconds]" >&2
+if [ -z "$POOL" ] || [ -z "$AGENT_ID" ]; then
+    echo "Usage: $0 <pool> <agent-id> [transition-map] [sleep-seconds]" >&2
     exit 1
 fi
 
@@ -42,7 +42,7 @@ fi
 
 cleanup() {
     echo "[$AGENT_ID] Shutting down" >&2
-    # Kill any child processes (e.g., blocked next_task)
+    # Kill any child processes (e.g., blocked get_task)
     pkill -P $$ 2>/dev/null || true
     exit 0
 }
@@ -66,13 +66,13 @@ get_next_step() {
     echo ""
 }
 
-# First task via register
-TASK_JSON=$("$AGENT_POOL" register --pool "$ROOT" --name "$AGENT_ID" 2>/dev/null) || {
-    echo "[$AGENT_ID] Register failed, exiting" >&2
-    exit 1
-}
-
 while true; do
+    # Get next task
+    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$AGENT_ID" 2>/dev/null) || {
+        echo "[$AGENT_ID] get_task failed, exiting" >&2
+        exit 1
+    }
+
     # Extract response file path and task kind
     RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
     MSG_KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
@@ -83,10 +83,10 @@ while true; do
         exit 0
     fi
 
-    # Handle heartbeat - respond immediately via next_task
+    # Handle heartbeat - respond immediately
     if [ "$MSG_KIND" = "Heartbeat" ]; then
         echo "[$AGENT_ID] Heartbeat" >&2
-        TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "{}" --name "$AGENT_ID" 2>/dev/null) || break
+        echo "{}" > "$RESPONSE_FILE"
         continue
     fi
 
@@ -106,8 +106,8 @@ while true; do
         RESPONSE="[{\"kind\": \"$next\", \"value\": {}}]"
     fi
 
-    # Submit response and get next task
-    TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "$RESPONSE" --name "$AGENT_ID" 2>/dev/null) || break
+    # Write response to file
+    echo "$RESPONSE" > "$RESPONSE_FILE"
 done
 
 echo "[$AGENT_ID] Agent exiting" >&2

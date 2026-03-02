@@ -16,7 +16,7 @@ NUM_AGENTS="${1:-5}"
 
 # Kill any existing agents for cmd pool (both shell scripts and CLI subprocesses)
 pkill -9 -f "command-agent.sh --pool cmd" 2>/dev/null || true
-pkill -9 -f "agent_pool register --pool cmd" 2>/dev/null || true
+pkill -9 -f "agent_pool get_task --pool cmd" 2>/dev/null || true
 
 > /tmp/agent.log
 
@@ -24,7 +24,7 @@ cleanup() {
     echo ""
     echo "Stopping all agents..."
     pkill -9 -f "command-agent.sh --pool cmd" 2>/dev/null || true
-    pkill -9 -f "agent_pool register --pool cmd" 2>/dev/null || true
+    pkill -9 -f "agent_pool get_task --pool cmd" 2>/dev/null || true
     echo "Done."
     exit 0
 }
