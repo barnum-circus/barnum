@@ -67,30 +67,18 @@ The `notify` crate uses FSEvents on macOS by default. KQueue might provide bette
 
 ## Remove Remaining Polling
 
-**Status: TODO**
+**Status: MOSTLY COMPLETE**
 
-Some places still use polling instead of proper synchronization:
+~~2. **File-based submission response wait**~~ ✓ DONE - `submit/file.rs` now uses `VerifiedWatcher`.
 
-1. **`wait_for_pool_ready`** in `crates/agent_pool/src/client/mod.rs` - spins with `thread::sleep(10ms)` waiting for pool directory to exist
-2. **File-based submission response wait** in `crates/agent_pool/src/client/submit_file.rs` - polls for `response.json` every 100ms
-
-Both should use filesystem watchers instead of polling.
+Remaining:
+1. **`wait_for_pool_ready`** in `crates/agent_pool/src/client/mod.rs` - spins with `thread::sleep(10ms)` waiting for pool directory to exist. Low priority since this is brief at startup.
 
 ---
 
-## Agent Cleanup pkill Pattern is Too Broad
+## ~~Agent Cleanup pkill Pattern is Too Broad~~ OBSOLETE
 
-**Status: NEEDS FIX**
-
-The `start-cmd-pool.sh` and `start-cmd-agents.sh` scripts use `pkill -9 -f "agent_pool register --pool cmd"` to kill stale CLI subprocesses. This pattern is too broad - it will kill ALL `agent_pool register` processes for the `cmd` pool, including legitimate ones from other scripts.
-
-**Options:**
-1. Track child PIDs explicitly and kill those
-2. Use process groups
-3. Store PIDs in a file and kill from there
-4. Accept the limitation (cmd pool is usually one set of agents)
-
-Low priority - the cmd pool is typically used by one set of agents at a time.
+**Status: OBSOLETE** - The `register` command no longer exists. Anonymous workers use `get_task` which doesn't leave long-running processes in the same way.
 
 ---
 
@@ -125,15 +113,15 @@ Cleanup is now automatic on startup and graceful shutdown:
 
 ## Socket-Based Agent Notifications
 
-**Status: NOT IMPLEMENTED** - Agent commands (`get_task`, `next_task`) are file-based only. No `--notify` flag exists on these commands.
+**Status: NOT IMPLEMENTED** - Agent command `get_task` is file-based only.
 
-**Potential benefit:** Instead of agents polling for `task.json`, the daemon could push tasks to agents via socket. This would be faster and more efficient.
+**Potential benefit:** Instead of file-based task dispatch, the daemon could push tasks to agents via socket. This would be faster and more efficient.
 
 **What needs to be done:**
-1. Add `--notify socket` flag to `get_task` and `next_task` commands
+1. Add `--notify socket` flag to `get_task` command
 2. Agent opens socket connection to daemon
-3. Daemon pushes tasks to connected agents instead of writing `task.json`
-4. Agent sends responses over socket instead of writing `response.json`
+3. Daemon pushes tasks to connected agents instead of writing task files
+4. Agent sends responses over socket instead of writing response files
 
 **Considerations:**
 - File-based should remain the default (works in sandboxed environments)
@@ -152,43 +140,15 @@ This edge case is documented in TRANSPORT_ABSTRACTION.md under "Edge Case: Inacc
 
 ---
 
-## Flaky Test: sequential_tasks_same_agent
+## ~~Flaky Test: sequential_tasks_same_agent~~ RESOLVED
 
-The test `crates/agent_pool/tests/single_agent_queue.rs::sequential_tasks_same_agent` is flaky. It bypasses the daemon and manually writes to task.json/response.json, which creates race conditions between the test's file operations and the TestAgent's polling loop.
-
-Options:
-1. **Use proper synchronization** - Have TestAgent signal when it's ready for the next task
-2. **Use the daemon** - Rewrite to use AgentPoolHandle instead of manual file protocol
-3. **Add retry logic** - Poll for the expected response instead of asserting after fixed sleep
-4. **Delete the test** - The same behavior is tested via the daemon in other tests
-
-The test is brittle by design (testing raw file protocol) so option 2 or 4 may be best.
+**Status: RESOLVED** - Test has been removed.
 
 ---
 
-## Agent --continue Flag
+## ~~Agent --continue Flag~~ OBSOLETE
 
-When an agent starts with a specific ID via `get_task --name <ID>`, we might want to distinguish between:
-
-1. **Fresh start**: This is a brand new agent with this ID
-2. **Resume**: This agent existed before and we want to continue where we left off
-
-Potential approach:
-- Add `--continue` flag to `get_task`
-- Without `--continue`: If agent directory exists, error (or delete it first)
-- With `--continue`: If agent directory exists, resume (check for pending task.json, etc.)
-
-Use cases:
-- Agent process restarts mid-task and wants to pick up where it left off
-- Graceful recovery from crashes
-- Session continuity for long-running agents
-
-Open questions:
-- What exactly constitutes "state" to continue? Just the directory existence, or pending task/response files?
-- Should the daemon track agent state beyond the directory?
-- How does this interact with keepalives? (Probably: if continuing, skip initial keepalive?)
-
-This needs more thought before implementation.
+**Status: OBSOLETE** - With anonymous workers, agents don't have persistent state. Each `get_task` call creates a new worker UUID. If an agent disconnects mid-task, the task times out and can be resubmitted.
 
 ---
 
@@ -520,30 +480,11 @@ The default step should probably require `value_schema` to either be absent or a
 
 **Status: COMPLETE** - see `refactors/past/HEALTH_CHECK_PLAN.md`.
 
-Task-based ping-pong health checks. Benefits:
-- Initial health check gets tool-use approvals out of the way
-- Periodic health checks to idle agents detect disconnected agents
+Task-based ping-pong health checks (Heartbeat messages). Benefits:
+- Periodic heartbeats to idle agents detect disconnected agents
 - Agents can recover from timeout by simply calling `get_task` again
 
-### Health Check Visibility
-
-The `get_task` CLI has `--auto-health-check` (default: **false**).
-
-**Why agents should see health checks (default):**
-- Health checks require the agent to actively respond
-- This prevents Claude from deciding "nothing's happening, I'll leave"
-- The ping-pong provides forward progress that keeps agents engaged
-
-```bash
-# Default: agent sees and must respond to heartbeats
-task=$(agent_pool get_task --pool $POOL --name $NAME)
-# task.kind can be "Task", "Heartbeat", or "Kicked"
-# Agent must write response for Task/Heartbeat, exit on Kicked
-
-# Opt-in for dumb scripts: CLI handles heartbeats automatically
-task=$(agent_pool get_task --pool $POOL --name $NAME --auto-heartbeat=true)
-# task.kind is always "Task"
-```
+Agents see heartbeats and must respond to them. The `get_task` response includes `kind` which can be `Task`, `Heartbeat`, or `Kicked`.
 
 ## Typestate Pattern for State Transitions
 
@@ -687,21 +628,9 @@ Add a 5-minute timeout to each step in CI workflows. This prevents hung builds f
 
 ---
 
-## Parallelize Pre-Commit Hook Checks
+## ~~Parallelize Pre-Commit Hook Checks~~ ✓ DONE
 
-The pre-commit hook in `.githooks/pre-commit` runs checks sequentially:
-1. `cargo fmt`
-2. `cargo check`
-3. `cargo clippy`
-4. `cargo test`
-5. `cargo udeps`
-
-These could potentially run in parallel, especially when code is already compiled. Ideas:
-- Run fmt first (modifies files), then run check/clippy/test/udeps in parallel
-- Use `&` and `wait` in bash, or a tool like `parallel`
-- If any fails, collect all errors before reporting
-
-This would speed up the commit workflow, especially on incremental changes where compilation is cached.
+**Status: COMPLETE** - Pre-commit hook runs fmt first, then check/clippy/test/udeps in parallel.
 
 ---
 
