@@ -492,21 +492,18 @@ impl TestAgent {
         }
 
         // Clean up anonymous worker files so daemon removes the worker
-        if let Ok(guard) = self.ready_file.lock() {
-            if let Some(ref ready_path) = *guard {
-                // Get UUID from ready file name (e.g., "abc123.ready.json" -> "abc123")
-                if let Some(uuid) = ready_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .and_then(|n| n.strip_suffix(".ready.json"))
-                {
-                    let agents_dir = ready_path.parent().expect("ready file has parent");
-                    // Remove all files for this UUID
-                    let _ = fs::remove_file(ready_path);
-                    let _ = fs::remove_file(agents_dir.join(format!("{uuid}.task.json")));
-                    let _ = fs::remove_file(agents_dir.join(format!("{uuid}.response.json")));
-                }
-            }
+        if let Ok(guard) = self.ready_file.lock()
+            && let Some(ref ready_path) = *guard
+            && let Some(uuid) = ready_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_suffix(".ready.json"))
+        {
+            let agents_dir = ready_path.parent().expect("ready file has parent");
+            // Remove all files for this UUID
+            let _ = fs::remove_file(ready_path);
+            let _ = fs::remove_file(agents_dir.join(format!("{uuid}.task.json")));
+            let _ = fs::remove_file(agents_dir.join(format!("{uuid}.response.json")));
         }
 
         self.handle
