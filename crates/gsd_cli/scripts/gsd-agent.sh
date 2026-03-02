@@ -26,15 +26,27 @@ if [ -z "$ROOT" ] || [ -z "$AGENT_ID" ]; then
     exit 1
 fi
 
-AGENT_DIR="$ROOT/agents/$AGENT_ID"
-mkdir -p "$AGENT_DIR"
+# Find agent_pool binary
+if [ -n "$AGENT_POOL" ]; then
+    : # Use env var
+elif [ -f "$(dirname "$0")/../../../target/debug/agent_pool" ]; then
+    AGENT_POOL="$(dirname "$0")/../../../target/debug/agent_pool"
+else
+    AGENT_POOL="agent_pool"
+fi
 
-echo "[$AGENT_ID] Started, watching $AGENT_DIR" >&2
+echo "[$AGENT_ID] Started" >&2
 if [ -n "$TRANSITION_MAP" ]; then
     echo "[$AGENT_ID] Transitions: $TRANSITION_MAP" >&2
 fi
 
-trap 'echo "[$AGENT_ID] Shutting down" >&2; exit 0' SIGINT SIGTERM
+cleanup() {
+    echo "[$AGENT_ID] Shutting down" >&2
+    # Kill any child processes (e.g., blocked next_task)
+    pkill -P $$ 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
 
 get_next_step() {
     local kind="$1"
@@ -54,31 +66,48 @@ get_next_step() {
     echo ""
 }
 
+# First task via register
+TASK_JSON=$("$AGENT_POOL" register --pool "$ROOT" --name "$AGENT_ID" 2>/dev/null) || {
+    echo "[$AGENT_ID] Register failed, exiting" >&2
+    exit 1
+}
+
 while true; do
-    # Process if task.json exists and response.json doesn't
-    if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
-        payload=$(cat "$AGENT_DIR/task.json")
+    # Extract response file path and task kind
+    RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
+    MSG_KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
 
-        if command -v jq &> /dev/null; then
-            kind=$(echo "$payload" | jq -r '.task.kind')
-        else
-            kind=$(echo "$payload" | grep -o '"kind"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-        fi
-
-        echo "[$AGENT_ID] Processing: $kind" >&2
-
-        sleep "$SLEEP_TIME"
-
-        next=$(get_next_step "$kind")
-        # Write to temp file and atomically rename to avoid race conditions
-        if [ -z "$next" ]; then
-            echo "[$AGENT_ID] -> [] (done)" >&2
-            echo '[]' > "$AGENT_DIR/response.json.tmp"
-        else
-            echo "[$AGENT_ID] -> $next" >&2
-            echo "[{\"kind\": \"$next\", \"value\": {}}]" > "$AGENT_DIR/response.json.tmp"
-        fi
-        mv "$AGENT_DIR/response.json.tmp" "$AGENT_DIR/response.json"
+    # Handle kicked - exit gracefully
+    if [ "$MSG_KIND" = "Kicked" ]; then
+        echo "[$AGENT_ID] Kicked by daemon, exiting" >&2
+        exit 0
     fi
-    sleep 0.05
+
+    # Handle heartbeat - respond immediately via next_task
+    if [ "$MSG_KIND" = "Heartbeat" ]; then
+        echo "[$AGENT_ID] Heartbeat" >&2
+        TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "{}" --name "$AGENT_ID" 2>/dev/null) || break
+        continue
+    fi
+
+    # Extract task kind from content
+    TASK_KIND=$(echo "$TASK_JSON" | jq -r '.content.kind // empty')
+    echo "[$AGENT_ID] Processing: $TASK_KIND" >&2
+
+    sleep "$SLEEP_TIME"
+
+    # Build response
+    next=$(get_next_step "$TASK_KIND")
+    if [ -z "$next" ]; then
+        echo "[$AGENT_ID] -> [] (done)" >&2
+        RESPONSE='[]'
+    else
+        echo "[$AGENT_ID] -> $next" >&2
+        RESPONSE="[{\"kind\": \"$next\", \"value\": {}}]"
+    fi
+
+    # Submit response and get next task
+    TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "$RESPONSE" --name "$AGENT_ID" 2>/dev/null) || break
 done
+
+echo "[$AGENT_ID] Agent exiting" >&2

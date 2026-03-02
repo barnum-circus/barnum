@@ -17,7 +17,7 @@ use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
-/// Wait for all agents to be ready (have processed their initial heartbeats).
+/// Wait for all agents to be ready (registered with the daemon).
 fn wait_all_ready(agents: &mut [&mut TestAgent]) {
     for agent in agents {
         agent.wait_ready();

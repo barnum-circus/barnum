@@ -30,10 +30,10 @@ echo ""
 cleanup() {
     echo ""
     echo "=== Cleaning up ==="
-    # Kill and wait for agents to fully terminate (suppresses shutdown message timing issues)
-    kill $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
-    wait $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
     $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
+    sleep 0.2
+    kill -9 $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
+    wait $AGENT1_PID $AGENT2_PID $AGENT3_PID 2>/dev/null || true
     rm -rf "$ROOT"
     echo "Done."
 }

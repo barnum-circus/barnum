@@ -164,7 +164,7 @@ pub struct TestAgent {
     /// PID of current CLI subprocess (for killing on stop)
     current_pid: Arc<AtomicU32>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
-    /// Receiver that signals when the agent has processed its first message (heartbeat).
+    /// Receiver that signals when the agent has registered (ready file written).
     ready_rx: Option<mpsc::Receiver<()>>,
     /// Test name for logging purposes
     #[allow(dead_code)]
@@ -173,6 +173,8 @@ pub struct TestAgent {
     pool: String,
     /// Agent name for deregistration on stop
     agent_id: String,
+    /// Ready file path (for cleanup on stop)
+    ready_file: Arc<std::sync::Mutex<Option<PathBuf>>>,
 }
 
 impl TestAgent {
@@ -181,8 +183,8 @@ impl TestAgent {
     /// The processor receives the task content (as JSON string) and agent ID,
     /// returning the response string.
     ///
-    /// After starting, call `wait_ready()` to block until the agent has processed
-    /// its first message (heartbeat) and is ready to receive real tasks.
+    /// After starting, call `wait_ready()` to block until the agent has registered
+    /// with the daemon and is ready to receive tasks.
     pub fn start<F>(
         pool: &str,
         agent_id: &str,
@@ -202,14 +204,18 @@ impl TestAgent {
         let bin = find_agent_pool_binary();
         let test_name_owned = test_name.to_string();
 
-        // Channel to signal when the agent has processed its first message (heartbeat)
+        // Channel to signal when the agent has registered (ready file written)
         let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+
+        // Shared storage for the ready file path (for cleanup on stop)
+        let ready_file = Arc::new(std::sync::Mutex::new(None::<PathBuf>));
+        let ready_file_clone = ready_file.clone();
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
-            let mut first_message_processed = false;
             let mut last_response: Option<String> = None;
             let mut response_file_path: Option<String> = None;
+            let mut first_iteration = true;
 
             loop {
                 if !running_clone.load(Ordering::SeqCst) {
@@ -249,6 +255,58 @@ impl TestAgent {
 
                 // Store PID for potential killing by stop()
                 current_pid_clone.store(child.id(), Ordering::SeqCst);
+
+                // Signal ready on first iteration after spawning register command.
+                // The register command writes the ready file before waiting for tasks.
+                // We need to wait for:
+                // 1. CLI to write the ready file
+                // 2. FSEvents to deliver the event
+                // 3. Daemon to process the event and register the worker
+                //
+                // We detect a NEW ready file by comparing sets before and after.
+                if first_iteration {
+                    first_iteration = false;
+                    let agents_dir = pool_path(&pool_owned).join("agents");
+
+                    // Get existing ready files
+                    let get_ready_files = || -> std::collections::HashSet<PathBuf> {
+                        fs::read_dir(&agents_dir)
+                            .map(|entries| {
+                                entries
+                                    .filter_map(Result::ok)
+                                    .filter(|e| {
+                                        e.path()
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .is_some_and(|n| n.ends_with(".ready.json"))
+                                    })
+                                    .map(|e| e.path())
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+
+                    let initial_files = get_ready_files();
+
+                    // Poll for a NEW ready file to appear
+                    let start = std::time::Instant::now();
+                    while start.elapsed() < Duration::from_secs(5) {
+                        let current_files = get_ready_files();
+                        let new_files: Vec<_> =
+                            current_files.difference(&initial_files).cloned().collect();
+                        if !new_files.is_empty() {
+                            // Store the ready file path for cleanup
+                            if let Ok(mut guard) = ready_file_clone.lock() {
+                                *guard = Some(new_files[0].clone());
+                            }
+                            // Give daemon a moment to process the FSEvent
+                            thread::sleep(Duration::from_millis(200));
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    let _ = ready_tx.send(());
+                }
 
                 // Forward stderr in background thread so it shows with --nocapture
                 let stderr_agent_id = agent_id_owned.clone();
@@ -324,12 +382,12 @@ impl TestAgent {
                 // Handle control messages
                 match kind {
                     "Heartbeat" => {
-                        last_response = Some("{}".to_string());
-                        if !first_message_processed {
-                            first_message_processed = true;
-                            let _ = ready_tx.send(());
-                        }
-                        continue;
+                        // TestAgent doesn't handle heartbeats by default.
+                        // Tests shouldn't depend on heartbeats unless specifically testing that.
+                        panic!(
+                            "[{test_name_owned}] [agent {agent_id_owned}] \
+                            Unexpected Heartbeat received! Tests should not depend on heartbeats."
+                        );
                     }
                     "Kicked" => {
                         eprintln!(
@@ -346,11 +404,6 @@ impl TestAgent {
                 let response = processor(&content_str, &agent_id_owned);
                 processed_tasks.push(content_str.trim().to_string());
                 last_response = Some(response);
-
-                if !first_message_processed {
-                    first_message_processed = true;
-                    let _ = ready_tx.send(());
-                }
             }
 
             processed_tasks
@@ -364,6 +417,7 @@ impl TestAgent {
             test_name: test_name.to_string(),
             pool: pool.to_string(),
             agent_id: agent_id.to_string(),
+            ready_file,
         }
     }
 
@@ -412,10 +466,10 @@ impl TestAgent {
         )
     }
 
-    /// Wait for the agent to be ready (has processed its first message).
+    /// Wait for the agent to be ready (registered with the daemon).
     ///
-    /// This blocks until the agent has received and processed the initial heartbeat
-    /// from the daemon, indicating it's fully registered and ready to receive tasks.
+    /// This blocks until the agent has written its ready file and the daemon
+    /// has processed the registration event.
     ///
     /// # Panics
     ///
@@ -429,23 +483,30 @@ impl TestAgent {
 
     /// Stop the agent and return the list of tasks it processed.
     pub fn stop(mut self) -> Vec<String> {
-        // Use deregister_agent CLI which writes a Kicked message, then removes the directory.
-        // This makes the CLI exit cleanly.
-        let bin = find_agent_pool_binary();
-        let _ = Command::new(&bin)
-            .arg("deregister_agent")
-            .arg("--pool")
-            .arg(&self.pool)
-            .arg("--name")
-            .arg(&self.agent_id)
-            .output();
-
         self.running.store(false, Ordering::SeqCst);
 
-        // Kill any running CLI subprocess (in case it didn't see the Kicked message)
+        // Kill any running CLI subprocess
         let pid = self.current_pid.load(Ordering::SeqCst);
         if pid != 0 {
             let _ = Command::new("kill").arg("-9").arg(pid.to_string()).output();
+        }
+
+        // Clean up anonymous worker files so daemon removes the worker
+        if let Ok(guard) = self.ready_file.lock() {
+            if let Some(ref ready_path) = *guard {
+                // Get UUID from ready file name (e.g., "abc123.ready.json" -> "abc123")
+                if let Some(uuid) = ready_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_suffix(".ready.json"))
+                {
+                    let agents_dir = ready_path.parent().expect("ready file has parent");
+                    // Remove all files for this UUID
+                    let _ = fs::remove_file(ready_path);
+                    let _ = fs::remove_file(agents_dir.join(format!("{uuid}.task.json")));
+                    let _ = fs::remove_file(agents_dir.join(format!("{uuid}.response.json")));
+                }
+            }
         }
 
         self.handle
@@ -590,12 +651,16 @@ pub struct DaemonConfig {
 }
 
 impl DaemonConfig {
-    /// Create a new config with default values matching the CLI defaults.
+    /// Create a new config with test-appropriate defaults.
+    ///
+    /// Heartbeats are disabled by default - tests should not depend on them
+    /// unless specifically testing heartbeat behavior.
     pub fn new() -> Self {
         Self {
             idle_timeout: Duration::from_secs(60),
-            default_task_timeout: Duration::from_secs(300),
-            heartbeat_enabled: true,
+            default_task_timeout: Duration::from_secs(30),
+            // Heartbeats disabled - tests should not rely on them
+            heartbeat_enabled: false,
         }
     }
 }

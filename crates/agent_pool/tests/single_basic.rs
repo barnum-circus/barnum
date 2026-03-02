@@ -42,7 +42,7 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
 
     let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(10), &pool);
 
-    // === Sync point 2: Agent ready (processed initial heartbeat) ===
+    // === Sync point 2: Agent ready (registered with daemon) ===
     agent.wait_ready();
 
     // === Sync point 3: Task submitted and processed ===

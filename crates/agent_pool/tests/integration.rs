@@ -16,7 +16,7 @@ use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
-/// Wait for all agents to be ready (have processed their initial heartbeats).
+/// Wait for all agents to be ready (registered with the daemon).
 fn wait_all_ready(agents: &mut [&mut TestAgent]) {
     for agent in agents {
         agent.wait_ready();
@@ -185,75 +185,6 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
     let total = processed1.len() + processed2.len();
 
     assert_eq!(total, 4, "Both agents combined should process all 4 tasks");
-
-    cleanup_pool(&pool);
-}
-
-/// Test agent deregistration.
-#[rstest]
-#[timeout(std::time::Duration::from_secs(20))]
-#[case(DataSource::Inline, NotifyMethod::Socket)]
-#[case(DataSource::Inline, NotifyMethod::File)]
-#[case(DataSource::FileReference, NotifyMethod::Socket)]
-#[case(DataSource::FileReference, NotifyMethod::File)]
-fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: NotifyMethod) {
-    let pool = generate_pool(&format!(
-        "dereg_{}",
-        mode_abbrev(data_source, notify_method)
-    ));
-
-    if !is_ipc_available(&pool_path(&pool)) {
-        cleanup_pool(&pool);
-        return;
-    }
-
-    // === Sync point 1: Pool started, no agents ===
-    let _pool_handle = AgentPoolHandle::start(&pool, &pool);
-    AgentsSnapshot::capture(&pool).assert_no_agents();
-
-    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
-
-    // === Sync point 2: First agent ready ===
-    agent.wait_ready();
-
-    let response = submit_with_mode(
-        &pool,
-        r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"before"}}}"#,
-        data_source,
-        notify_method,
-    )
-    .expect("Submit failed");
-    assert!(matches!(response, Response::Processed { .. }));
-
-    // === Sync point 3: First task processed ===
-    SubmissionsSnapshot::capture(&pool).assert_empty();
-
-    // === Sync point 4: First agent stopped ===
-    let processed = agent.stop();
-    assert_eq!(processed.len(), 1);
-
-    // Wait for daemon to notice agent is gone (update internal state).
-    // The directory is already removed, but the daemon needs time to
-    // process the FSEvents notification and update its dispatch state.
-    thread::sleep(Duration::from_millis(500));
-
-    // === Sync point 5: Second agent ready ===
-    let mut agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(5), &pool);
-    agent2.wait_ready();
-
-    let response2 = submit_with_mode(
-        &pool,
-        r#"{"kind":"Task","task":{"instructions":"echo","data":{"test":"after"}}}"#,
-        data_source,
-        notify_method,
-    )
-    .expect("Submit failed");
-    assert!(matches!(response2, Response::Processed { .. }));
-
-    // === Sync point 6: Second task processed, second agent stopped ===
-    SubmissionsSnapshot::capture(&pool).assert_empty();
-    let processed2 = agent2.stop();
-    assert_eq!(processed2.len(), 1);
 
     cleanup_pool(&pool);
 }

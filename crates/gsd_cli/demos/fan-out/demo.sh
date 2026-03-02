@@ -80,13 +80,14 @@ else
     cleanup() {
         echo ""
         echo "=== Cleaning up ==="
+        $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
+        sleep 0.2
         for pid in $AGENT_PIDS; do
-            kill $pid 2>/dev/null || true
+            kill -9 $pid 2>/dev/null || true
         done
         for pid in $AGENT_PIDS; do
             wait $pid 2>/dev/null || true
         done
-        $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
         rm -rf "$ROOT"
         echo "Done."
     }

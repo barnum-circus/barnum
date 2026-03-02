@@ -15,52 +15,80 @@ if [ -z "$ROOT" ] || [ -z "$AGENT_ID" ]; then
     exit 1
 fi
 
-AGENT_DIR="$ROOT/agents/$AGENT_ID"
-mkdir -p "$AGENT_DIR"
+# Find agent_pool binary
+if [ -n "$AGENT_POOL" ]; then
+    : # Use env var
+elif [ -f "$(dirname "$0")/../../../target/debug/agent_pool" ]; then
+    AGENT_POOL="$(dirname "$0")/../../../target/debug/agent_pool"
+else
+    AGENT_POOL="agent_pool"
+fi
 
 echo "[$AGENT_ID] Started (fan-out agent, $NUM_WORKERS workers)" >&2
 
-trap 'echo "[$AGENT_ID] Shutting down" >&2; exit 0' SIGINT SIGTERM
+cleanup() {
+    echo "[$AGENT_ID] Shutting down" >&2
+    # Kill any child processes (e.g., blocked next_task)
+    pkill -P $$ 2>/dev/null || true
+    exit 0
+}
+trap cleanup SIGINT SIGTERM
+
+# First task via register
+TASK_JSON=$("$AGENT_POOL" register --pool "$ROOT" --name "$AGENT_ID" 2>/dev/null) || {
+    echo "[$AGENT_ID] Register failed, exiting" >&2
+    exit 1
+}
 
 while true; do
-    if [ -f "$AGENT_DIR/task.json" ] && [ ! -f "$AGENT_DIR/response.json" ]; then
-        payload=$(cat "$AGENT_DIR/task.json")
+    # Extract response file path and message kind
+    RESPONSE_FILE=$(echo "$TASK_JSON" | jq -r '.response_file')
+    MSG_KIND=$(echo "$TASK_JSON" | jq -r '.kind // "Task"')
 
-        if command -v jq &> /dev/null; then
-            kind=$(echo "$payload" | jq -r '.task.kind')
-        else
-            kind=$(echo "$payload" | grep -o '"kind"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\([^"]*\)"$/\1/')
-        fi
-
-        echo "[$AGENT_ID] Processing: $kind" >&2
-
-        sleep "$SLEEP_TIME"
-
-        # Write to temp file and atomically rename to avoid race conditions
-        case "$kind" in
-            Distribute)
-                # Fan out to N Worker tasks
-                response="["
-                for i in $(seq 1 $NUM_WORKERS); do
-                    if [ $i -gt 1 ]; then
-                        response="$response,"
-                    fi
-                    response="$response{\"kind\": \"Worker\", \"value\": {\"id\": $i}}"
-                done
-                response="$response]"
-                echo "[$AGENT_ID] -> $NUM_WORKERS Worker tasks" >&2
-                echo "$response" > "$AGENT_DIR/response.json.tmp"
-                ;;
-            Worker)
-                echo "[$AGENT_ID] -> [] (done)" >&2
-                echo '[]' > "$AGENT_DIR/response.json.tmp"
-                ;;
-            *)
-                echo "[$AGENT_ID] Unknown kind: $kind, returning []" >&2
-                echo '[]' > "$AGENT_DIR/response.json.tmp"
-                ;;
-        esac
-        mv "$AGENT_DIR/response.json.tmp" "$AGENT_DIR/response.json"
+    # Handle kicked - exit gracefully
+    if [ "$MSG_KIND" = "Kicked" ]; then
+        echo "[$AGENT_ID] Kicked by daemon, exiting" >&2
+        exit 0
     fi
-    sleep 0.05
+
+    # Handle heartbeat - respond immediately
+    if [ "$MSG_KIND" = "Heartbeat" ]; then
+        echo "[$AGENT_ID] Heartbeat" >&2
+        TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "{}" --name "$AGENT_ID" 2>/dev/null) || break
+        continue
+    fi
+
+    # Extract task kind from content
+    TASK_KIND=$(echo "$TASK_JSON" | jq -r '.content.kind // empty')
+    echo "[$AGENT_ID] Processing: $TASK_KIND" >&2
+
+    sleep "$SLEEP_TIME"
+
+    case "$TASK_KIND" in
+        Distribute)
+            # Fan out to N Worker tasks
+            response="["
+            for i in $(seq 1 $NUM_WORKERS); do
+                if [ $i -gt 1 ]; then
+                    response="$response,"
+                fi
+                response="$response{\"kind\": \"Worker\", \"value\": {\"id\": $i}}"
+            done
+            response="$response]"
+            echo "[$AGENT_ID] -> $NUM_WORKERS Worker tasks" >&2
+            ;;
+        Worker)
+            echo "[$AGENT_ID] -> [] (done)" >&2
+            response='[]'
+            ;;
+        *)
+            echo "[$AGENT_ID] Unknown kind: $TASK_KIND, returning []" >&2
+            response='[]'
+            ;;
+    esac
+
+    # Submit response and get next task
+    TASK_JSON=$("$AGENT_POOL" next_task --pool "$ROOT" --response-file "$RESPONSE_FILE" --data "$response" --name "$AGENT_ID" 2>/dev/null) || break
 done
+
+echo "[$AGENT_ID] Agent exiting" >&2
