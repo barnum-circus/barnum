@@ -2,7 +2,7 @@
 
 ## Most Important
 
-1. **Command Steps** - Support for steps that execute a bash script locally rather than being dispatched to an agent pool. This enables deterministic operations to run without requiring an LLM agent. Examples include listing all files in a folder, finding invariant files, committing changes, running tests, or calling external APIs. These tasks are much better done via a deterministic bash script than by asking an LLM.
+1. **Command Steps** - Support for steps that execute a bash script locally rather than being dispatched to an agent pool. This enables deterministic operations to run without requiring an LLM agent. Examples include listing all files in a folder, finding invariant files, committing changes, running tests, running a linter or formatter, or calling external APIs. These tasks are much better done via a deterministic bash script than by asking an LLM.
 
 2. **Multi-Pool Task Routing** - Allow different steps to be routed to different agent pools. This enables heterogeneous workflows where some tasks require specialized agents (e.g., code review agents vs. implementation agents) or where command execution happens in a separate pool from AI reasoning.
 
