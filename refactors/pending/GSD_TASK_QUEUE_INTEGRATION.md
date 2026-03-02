@@ -236,98 +236,161 @@ impl QueueItem<GsdContext> for Task {
 }
 ```
 
-## Hooks: GSD-Specific, Not task_queue
+## Hooks
 
 | Hook | Where it runs | Responsibility |
 |------|---------------|----------------|
 | **pre** | In `start()`, before returning future | GSD only |
 | **post** | In `process()`, after getting result | GSD only |
-| **finally** | After all descendants complete | GSD only (see below) |
+| **finally** | After all descendants complete | **task_queue** (native support) |
 
-task_queue doesn't need to know about hooks. They're implementation details inside GSD's `QueueItem` impl.
+Pre and post hooks are GSD-specific implementation details inside `QueueItem` impl.
 
-## Finally Hooks: The Hard Part
+Finally is native to task_queue because it's a general concept: "run something after all spawned tasks complete."
 
-### Current Implementation
+## Finally: Native task_queue Support
 
-GSD tracks "origin" tasks. When a task with `finally` spawns children:
-1. Children get `origin_id = parent.id`
-2. `finally_tracking[parent.id].pending_count = num_children`
-3. As each descendant completes, decrement count
-4. When count hits 0, run the finally hook
+### The Concept
 
-This requires:
-- Per-task ID tracking
-- A `finally_tracking: HashMap<TaskId, FinallyState>` in the runner
-- Propagating `origin_id` through spawned tasks
+When a task spawns children, sometimes you want to run cleanup/aggregation after *all* descendants complete. This is `finally`.
 
-### Problem
+Example: A "Distribute" task fans out to 20 "Worker" tasks. After all workers finish, run an aggregation script.
 
-task_queue's `TaskRunner` doesn't have this concept. It just runs tasks and collects results.
+### Proposed trait extension
 
-### Options
-
-**Option A: Add finally support to task_queue**
-
-Add an optional `FinallyTracker` that task_queue maintains:
+Add a `finally()` method to `QueueItem`:
 
 ```rust
 pub trait QueueItem<Context>: Sized {
-    // ... existing methods ...
+    type InProgress;
+    type Response: DeserializeOwned;
+    type NextTasks;
 
-    /// Optional: called when all tasks spawned by this task have completed.
-    /// Default: no-op.
-    fn finally(in_progress: &Self::InProgress, ctx: &mut Context) -> Self::NextTasks {
-        Default::default()
+    fn start(self, ctx: &mut Context) -> (Self::InProgress, BoxFuture<'static, TaskOutput<Self::Response>>);
+
+    fn process(
+        in_progress: Self::InProgress,
+        result: TaskOutput<Self::Response>,
+        ctx: &mut Context,
+    ) -> Self::NextTasks;
+
+    /// Called after all tasks returned by `process()` (and their descendants) have completed.
+    ///
+    /// Default implementation returns no tasks. Override to implement cleanup/aggregation.
+    ///
+    /// The `in_progress` state is preserved from when `process()` ran, allowing access
+    /// to the original task's context.
+    fn finally(in_progress: &Self::InProgress, ctx: &mut Context) -> Self::NextTasks
+    where
+        Self::NextTasks: Default,
+    {
+        Self::NextTasks::default()
     }
 
-    /// Does this task have a finally handler?
-    fn has_finally(&self, ctx: &Context) -> bool {
+    /// Whether this task has a finally handler.
+    ///
+    /// If false, task_queue skips tracking descendants for this task.
+    /// Default: false (no finally).
+    fn has_finally(in_progress: &Self::InProgress, ctx: &Context) -> bool {
         false
     }
 }
 ```
 
-task_queue's `TaskRunner` would need to track parent-child relationships internally.
+### TaskRunner changes
 
-**Option B: GSD wraps task_queue's TaskRunner**
-
-GSD uses task_queue for execution but adds its own layer for finally tracking:
+task_queue's `TaskRunner` needs to track parent-child relationships:
 
 ```rust
-// gsd_config uses task_queue::TaskRunner internally but wraps it
+pub struct TaskRunner<T, InProgress, Ctx> {
+    queue: VecDeque<QueuedTask<T>>,
+    in_flight: Vec<InFlightTask<InProgress>>,
+    ctx: &mut Ctx,
+    max_concurrency: Option<usize>,
 
-struct GsdRunner {
-    inner: task_queue::TaskRunner<Task, TaskInProgress, GsdContext>,
-    finally_tracking: HashMap<TaskId, FinallyState>,
+    // NEW: Finally tracking
+    next_task_id: u64,
+    /// Tasks waiting for their descendants to complete before running finally.
+    finally_pending: HashMap<u64, FinallyState<InProgress>>,
+}
+
+struct QueuedTask<T> {
+    task: T,
+    id: u64,
+    /// If this task descended from a task with finally, tracks that origin.
+    origin_id: Option<u64>,
+}
+
+struct FinallyState<InProgress> {
+    /// Number of descendants still pending.
+    pending_count: usize,
+    /// The in_progress state from when process() ran.
+    in_progress: InProgress,
 }
 ```
 
-When `inner.next()` returns, GSD:
-1. Checks if the completed task has an origin
-2. Decrements the origin's pending count
-3. Runs finally hook if count == 0
+### Execution flow
 
-**Option C: Model finally as a separate task**
+1. Task completes, `process()` returns `next_tasks`
+2. If `has_finally()` returns true and `next_tasks` is non-empty:
+   - Store `in_progress` in `finally_pending[task_id]`
+   - Set `pending_count = next_tasks.len()`
+   - Spawned tasks get `origin_id = task_id`
+3. When any task completes:
+   - If it has an `origin_id`, decrement `finally_pending[origin_id].pending_count`
+   - If count reaches 0, call `finally(in_progress, ctx)` and queue returned tasks
+4. Tasks spawned by `finally()` do NOT inherit `origin_id` (prevents infinite tracking)
 
-Instead of hooks, `finally` becomes a "FinallyWait" task that blocks until all children complete:
+### GSD implementation
 
 ```rust
-// When Distribute spawns Worker tasks, it also spawns:
-Task::FinallyWait {
-    waiting_for: vec![worker1_id, worker2_id, ...],
-    then_run: "cleanup.sh",
+impl QueueItem<GsdContext> for Task {
+    // ... start() and process() as before ...
+
+    fn finally(ip: &Self::InProgress, ctx: &mut GsdContext) -> Vec<Task> {
+        let Some(finally_cmd) = &ip.step.finally_hook else {
+            return vec![];
+        };
+
+        // Run the finally command with original value on stdin
+        match run_finally_hook(finally_cmd, &ip.effective_value) {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                warn!(error = %e, "finally hook failed (ignored)");
+                vec![]
+            }
+        }
+    }
+
+    fn has_finally(ip: &Self::InProgress, _ctx: &GsdContext) -> bool {
+        ip.step.finally_hook.is_some()
+    }
 }
 ```
 
-This makes the state machine explicit but complicates the config format.
+### Typed task_queue usage
 
-### Recommendation
+For typed workflows, finally enables patterns like map-reduce:
 
-**Option B** - GSD wraps task_queue's runner. Reasons:
-1. Keeps task_queue simple (it doesn't need to understand finally semantics)
-2. GSD already has this logic; we just move it to a wrapper layer
-3. Finally is GSD-specific anyway (typed task_queue users can model it differently)
+```rust
+impl QueueItem<Ctx> for DistributeTask {
+    type NextTasks = Vec<Task>;
+
+    fn process(ip: Self::InProgress, result: TaskOutput<Value>, ctx: &mut Ctx) -> Vec<Task> {
+        // Fan out to workers
+        ip.items.iter().map(|item| Task::Worker(WorkerTask { item })).collect()
+    }
+
+    fn finally(ip: &Self::InProgress, ctx: &mut Ctx) -> Vec<Task> {
+        // All workers done - aggregate results
+        vec![Task::Aggregate(AggregateTask { source: ip.id })]
+    }
+
+    fn has_finally(_ip: &Self::InProgress, _ctx: &Ctx) -> bool {
+        true
+    }
+}
+```
 
 ## GsdContext
 
@@ -356,19 +419,17 @@ impl GsdContext {
 
 ### Task 1: Modify task_queue's QueueItem trait
 
-Change `start()` to return `BoxFuture` instead of `Command`:
-
-```rust
-fn start(self, ctx: &mut Context) -> (Self::InProgress, BoxFuture<'static, TaskOutput<Self::Response>>);
-```
-
-Add `TaskOutput` enum with `Success`, `Timeout`, `InvalidResponse`, `Error` variants.
-
-Add `run_command()` helper for backward compatibility.
+- Change `start()` to return `BoxFuture` instead of `Command`
+- Add `TaskOutput` enum with `Success`, `Timeout`, `InvalidResponse`, `Error` variants
+- Add `run_command()` helper for backward compatibility
+- Add `finally()` and `has_finally()` methods with default impls
 
 ### Task 2: Update task_queue's TaskRunner
 
-Modify execution loop to `.await` the future instead of spawning a `Command`.
+- Modify execution loop to `.await` the future instead of spawning a `Command`
+- Add `QueuedTask` wrapper with `id` and `origin_id`
+- Add `finally_pending: HashMap<u64, FinallyState<InProgress>>`
+- Track parent-child relationships and run `finally()` when descendants complete
 
 ### Task 3: Create GsdContext
 
@@ -378,16 +439,14 @@ Consolidate config, schemas, paths into single struct.
 
 - `start()`: run pre-hook, return future for either pool submission or local command
 - `process()`: validate response, run post-hook, return next tasks
+- `finally()`: run finally hook if configured
+- `has_finally()`: check if step has finally_hook
 
-### Task 5: Create GSD wrapper for finally tracking
+### Task 5: Replace gsd_config's TaskRunner
 
-Wrap task_queue's `TaskRunner` with origin/finally tracking logic.
+Delete the current `runner.rs` implementation, use task_queue's runner directly.
 
-### Task 6: Replace gsd_config's TaskRunner
-
-Delete the current `runner.rs` implementation, use task_queue's runner with the wrapper.
-
-### Task 7: Make gsd_config async
+### Task 6: Make gsd_config async
 
 Add tokio dependency, make `run()` async.
 

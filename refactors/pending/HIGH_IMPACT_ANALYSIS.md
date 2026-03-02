@@ -64,19 +64,13 @@ The issue is CLI spawn overhead. Potential solutions:
 
 Investigation needed to understand where time goes.
 
-### 5. Anonymous Worker Model
+### ~~5. Anonymous Worker Model~~ ✓ DONE
 
-**Impact:** Simpler agent protocol, eliminates directory-per-agent overhead.
-**Effort:** 4-8 hours.
-**Risk:** Medium - protocol change affects agent scripts.
+~~**Impact:** Simpler agent protocol, eliminates directory-per-agent overhead.~~
+~~**Effort:** 4-8 hours.~~
+~~**Risk:** Medium - protocol change affects agent scripts.~~
 
-See `ANONYMOUS_WORKERS.md`. Now unblocked since inotify race is fixed.
-
-Key simplification:
-- Agents don't need persistent identity
-- No more agent directories
-- Daemon assigns work via `get_task` response
-- Simpler state machine
+Completed: Agents now use `get_task` which returns task directly. No persistent identity, no agent directories. Removed `register`, `next_task`, `deregister_agent` commands.
 
 ### 6. Clean Shutdown
 
@@ -164,17 +158,17 @@ See `todos.md`. Allows mixing AI agents with command pools in same workflow.
 
 ## Recommended Order
 
-### Immediate (This Week)
+### Immediate
 1. ~~Remove Raw test mode~~ ✓ DONE
 2. Replace polling in submit_file.rs
 3. ~~Add --deregister to next_task~~ ✓ DONE
 
-### Short Term (Next 2 Weeks)
+### Short Term
 4. Investigate multi-threaded test timeouts
 5. Clean shutdown implementation
 
-### Medium Term (Next Month)
-6. Anonymous worker model
+### Medium Term
+6. ~~Anonymous worker model~~ ✓ DONE
 7. Sync testing harness
 
 ### Long Term / As Needed
