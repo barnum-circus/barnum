@@ -102,23 +102,10 @@ The workflow:
 
 A self-healing linter that finds and fixes violations:
 
-1. **Seed** - Find all `invariant.md` files in a codebase. Each describes (in English) invariants that must hold for that folder.
-
-2. **ValidateInvariant** - An agent checks if a folder satisfies its invariants. On violation, it emits `QuickFix` tasks.
-
-3. **QuickFix** - An agent applies a fix. When the last fix for a folder completes, re-queue `ValidateInvariant` for that folder.
-
-4. **Retry limit** - Each `ValidateInvariant` tracks attempt count in context. After 3 failures, emit a catastrophic error instead of retrying.
-
-```
-Context {
-    attempts: HashMap<PathBuf, u32>,      // folder -> attempt count
-    pending_fixes: HashMap<PathBuf, u32>, // folder -> remaining fixes
-    catastrophic_errors: Vec<PathBuf>,    // folders that couldn't be fixed
-}
-```
-
-Setting `max_attempts = 1` turns this into a pure linter (validate only, no fixes).
+1. **FindInvariants** - Find all `invariant.md` files in a codebase. Each describes (in English) invariants that must hold for that folder.
+2. **CreateValidateInvariantTasks** - Create a task for each file within a folder for a given invariant.
+3. **ValidateInvariantForFile** - An agent checks if a file satisfies its invariants. On violation, it emits `QuickFix` tasks.
+4. **QuickFix** - An agent applies a fix.
 
 ## Documentation
 
