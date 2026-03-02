@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE, wait_for_pool_ready};
+use agent_pool::{TaskAssignment, wait_for_pool_ready, wait_for_task, write_response};
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -74,14 +74,8 @@ pub fn is_ipc_available(_test_dir: &Path) -> bool {
 // File Writer Agent
 // =============================================================================
 
-/// Parsed task envelope.
-struct TaskEnvelope {
-    kind: String,
-    content: String,
-}
-
-/// Extract task kind and content from the envelope format.
-fn extract_task_envelope(raw: &str) -> TaskEnvelope {
+/// Extract task envelope kind and content.
+fn extract_task_envelope(raw: &str) -> (String, String) {
     if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(raw) {
         let kind = envelope
             .get("kind")
@@ -93,12 +87,9 @@ fn extract_task_envelope(raw: &str) -> TaskEnvelope {
             .get("content")
             .map_or_else(|| raw.to_string(), serde_json::Value::to_string);
 
-        return TaskEnvelope { kind, content };
+        return (kind, content);
     }
-    TaskEnvelope {
-        kind: "Task".to_string(),
-        content: raw.to_string(),
-    }
+    ("Task".to_string(), raw.to_string())
 }
 
 /// A test agent that writes a marker file and terminates.
@@ -114,100 +105,89 @@ pub struct FileWriterAgent {
 impl FileWriterAgent {
     /// Start a file writer agent.
     ///
-    /// For each task, it:
-    /// 1. Extracts the step name from `task.kind`
-    /// 2. Writes `{output_dir}/{step_name}.done` with the task data
-    /// 3. Returns the configured transition (or terminates)
+    /// Uses the proper anonymous worker protocol:
+    /// 1. Writes `<uuid>.ready.json` to signal availability
+    /// 2. Waits for `<uuid>.task.json` using verified file watcher (no polling)
+    /// 3. Processes task and writes marker file
+    /// 4. Writes `<uuid>.response.json` with transition
     pub fn start(
         pool_root: &Path,
         agent_id: &str,
         output_dir: &Path,
         transitions: Vec<(String, String)>,
     ) -> Self {
-        let agent_dir = pool_root.join(AGENTS_DIR).join(agent_id);
-        fs::create_dir_all(&agent_dir).expect("Failed to create agent directory");
         fs::create_dir_all(output_dir).expect("Failed to create output directory");
 
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
         let output_dir = output_dir.to_path_buf();
+        let pool_root = pool_root.to_path_buf();
+        let agent_id = agent_id.to_string();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
 
         let handle = thread::spawn(move || {
-            let task_file = agent_dir.join(TASK_FILE);
-            let response_file = agent_dir.join(RESPONSE_FILE);
-            let mut first_message_processed = false;
+            let mut first_task = true;
 
             while running_clone.load(Ordering::SeqCst) {
-                if task_file.exists() && !response_file.exists() {
-                    let Ok(raw) = fs::read_to_string(&task_file) else {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    };
+                // Wait for task using proper protocol (writes ready file, uses canary watcher)
+                let Ok(assignment) = wait_for_task(&pool_root, Some(&agent_id), None) else {
+                    break; // Watcher error or pool shutdown
+                };
 
-                    if raw.is_empty() {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    }
+                let TaskAssignment { uuid, content } = assignment;
+                let (kind, task_content) = extract_task_envelope(&content);
 
-                    let envelope = extract_task_envelope(&raw);
-
-                    match envelope.kind.as_str() {
-                        "Heartbeat" => {
-                            let _ = fs::write(&response_file, "{}");
-                            if !first_message_processed {
-                                first_message_processed = true;
-                                let _ = ready_tx.send(());
-                            }
-                            thread::sleep(Duration::from_millis(10));
-                            continue;
-                        }
-                        "Kicked" => break,
-                        _ => {}
-                    }
-
-                    // Parse the task to get the step name and write marker file
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&envelope.content)
-                        && let Some(step_name) = parsed
-                            .get("task")
-                            .and_then(|t| t.get("kind"))
-                            .and_then(|k| k.as_str())
-                    {
-                        // Write marker file
-                        let marker_file = output_dir.join(format!("{step_name}.done"));
-                        let _ = fs::write(&marker_file, &envelope.content);
-
-                        // Find transition
-                        let response = transitions
-                            .iter()
-                            .find(|(from, _)| from == step_name)
-                            .map_or_else(
-                                || "[]".to_string(),
-                                |(_, to)| {
-                                    if to.is_empty() {
-                                        "[]".to_string()
-                                    } else {
-                                        format!(r#"[{{"kind": "{to}", "value": {{}}}}]"#)
-                                    }
-                                },
-                            );
-
-                        let _ = fs::write(&response_file, &response);
-
-                        if !first_message_processed {
-                            first_message_processed = true;
+                // Handle control messages
+                match kind.as_str() {
+                    "Heartbeat" => {
+                        let _ = write_response(&pool_root, &uuid, "{}");
+                        if first_task {
+                            first_task = false;
                             let _ = ready_tx.send(());
                         }
-
-                        thread::sleep(Duration::from_millis(10));
                         continue;
                     }
-
-                    // Fallback: terminate
-                    let _ = fs::write(&response_file, "[]");
+                    "Kicked" => break,
+                    _ => {}
                 }
 
-                thread::sleep(Duration::from_millis(10));
+                // Parse task to get step name
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&task_content)
+                    && let Some(step_name) = parsed
+                        .get("task")
+                        .and_then(|t| t.get("kind"))
+                        .and_then(|k| k.as_str())
+                {
+                    // Write marker file
+                    let marker_file = output_dir.join(format!("{step_name}.done"));
+                    let _ = fs::write(&marker_file, &task_content);
+
+                    // Find transition
+                    let response = transitions
+                        .iter()
+                        .find(|(from, _)| from == step_name)
+                        .map_or_else(
+                            || "[]".to_string(),
+                            |(_, to)| {
+                                if to.is_empty() {
+                                    "[]".to_string()
+                                } else {
+                                    format!(r#"[{{"kind": "{to}", "value": {{}}}}]"#)
+                                }
+                            },
+                        );
+
+                    let _ = write_response(&pool_root, &uuid, &response);
+
+                    if first_task {
+                        first_task = false;
+                        let _ = ready_tx.send(());
+                    }
+                    continue;
+                }
+
+                // Fallback: terminate
+                let _ = write_response(&pool_root, &uuid, "[]");
             }
         });
 
@@ -218,7 +198,7 @@ impl FileWriterAgent {
         }
     }
 
-    /// Wait for the agent to be ready.
+    /// Wait for the agent to be ready (has processed first task or heartbeat).
     pub fn wait_ready(&mut self) {
         if let Some(rx) = self.ready_rx.take() {
             rx.recv().expect("Agent exited before signaling readiness");
