@@ -16,8 +16,8 @@ use uuid::Uuid;
 /// Check if event kind indicates a file write is complete.
 ///
 /// Platform-specific behavior:
-/// - **Linux inotify**: Only `Close(Write)` guarantees data is flushed
-/// - **macOS FSEvents**: `Create(File)` and `Modify(Data)` are accepted
+/// - **Linux `inotify`**: Only `Close(Write)` guarantees data is flushed
+/// - **macOS `FSEvents`**: `Create(File)` and `Modify(Data)` are accepted
 ///
 /// Also handles atomic rename writes (write temp file, then rename).
 #[cfg(target_os = "linux")]
@@ -134,7 +134,7 @@ enum WatcherState {
 /// # Key Assumption
 ///
 /// Once we observe any filesystem event, the watcher is fully operational.
-/// Filesystem watchers (`FSEvents` on macOS, inotify on Linux) don't "partially work".
+/// Filesystem watchers (`FSEvents` on macOS, `inotify` on Linux) don't "partially work".
 /// The only failure mode is during initial setup - there's a brief window after
 /// `watch()` returns where events might not be delivered yet. Once we receive ANY
 /// event, we can trust that:

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Simple demo agent that echoes tasks back with a processing marker.
 #
-# Usage: ./echo-agent.sh <pool> <agent-id> [sleep-seconds]
+# Usage: ./echo-agent.sh --pool-root <root> --pool <id> --name <agent-id> [--sleep <seconds>]
 #
 # The agent:
 # 1. Calls get_task to wait for a task
@@ -11,12 +11,24 @@
 
 set -e
 
-POOL="$1"
-AGENT_ID="$2"
-SLEEP_TIME="${3:-0.1}"
+# Parse arguments
+POOL_ROOT=""
+POOL_ID=""
+AGENT_ID=""
+SLEEP_TIME="0.1"
 
-if [ -z "$POOL" ] || [ -z "$AGENT_ID" ]; then
-    echo "Usage: $0 <pool> <agent-id> [sleep-seconds]" >&2
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --pool-root) POOL_ROOT="$2"; shift 2 ;;
+        --pool) POOL_ID="$2"; shift 2 ;;
+        --name) AGENT_ID="$2"; shift 2 ;;
+        --sleep) SLEEP_TIME="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [ -z "$POOL_ROOT" ] || [ -z "$POOL_ID" ] || [ -z "$AGENT_ID" ]; then
+    echo "Usage: $0 --pool-root <root> --pool <id> --name <agent-id> [--sleep <seconds>]" >&2
     exit 1
 fi
 
@@ -41,7 +53,7 @@ trap cleanup SIGINT SIGTERM
 
 while true; do
     # Get next task
-    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$AGENT_ID" 2>/dev/null) || {
+    TASK_JSON=$("$AGENT_POOL" --pool-root "$POOL_ROOT" get_task --pool "$POOL_ID" --name "$AGENT_ID" 2>/dev/null) || {
         echo "[$AGENT_ID] get_task failed, exiting" >&2
         exit 1
     }

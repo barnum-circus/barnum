@@ -221,14 +221,6 @@ fn main() -> ExitCode {
             no_initial_heartbeat,
             stop: stop_flag,
         } => {
-            // Validate pool ID if provided
-            if let Some(ref p) = pool
-                && let Err(e) = validate_pool_id(p)
-            {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
-
             init_tracing(log_level);
 
             // Resolve pool ID or generate new one
@@ -301,11 +293,6 @@ fn main() -> ExitCode {
             }
         }
         Command::Stop { pool } => {
-            if let Err(e) = validate_pool_id(&pool) {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
-
             let root = resolve_pool(&pool_root, &pool);
             if let Err(e) = stop(&root) {
                 eprintln!("Failed to stop: {e}");
@@ -320,11 +307,6 @@ fn main() -> ExitCode {
             notify,
             timeout_secs,
         } => {
-            if let Err(e) = validate_pool_id(&pool) {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
-
             let root = resolve_pool(&pool_root, &pool);
 
             // Build payload from --data (inline) or --file (file reference)
@@ -412,11 +394,6 @@ fn main() -> ExitCode {
             name,
             log_level,
         } => {
-            if let Err(e) = validate_pool_id(&pool) {
-                eprintln!("{e}");
-                return ExitCode::FAILURE;
-            }
-
             init_tracing(log_level);
 
             let root = resolve_pool(&pool_root, &pool);
@@ -443,17 +420,6 @@ fn main() -> ExitCode {
     }
 
     ExitCode::SUCCESS
-}
-
-/// Validate that a pool ID is not a path.
-/// Pool IDs should be simple identifiers, not paths.
-fn validate_pool_id(pool: &str) -> Result<(), String> {
-    if pool.contains('/') || pool.contains('\\') {
-        return Err(format!(
-            "Pool ID cannot contain path separators. Got: '{pool}'. Use --pool-root to specify the base directory."
-        ));
-    }
-    Ok(())
 }
 
 /// Wait for the status file to appear (daemon ready signal).
