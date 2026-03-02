@@ -1,7 +1,7 @@
 //! Path categorization for filesystem events.
 //!
 //! Categorizes filesystem paths to determine what kind of entity they represent
-//! (agent directory, response file, submission request, etc.).
+//! (worker ready file, response file, submission request, etc.).
 //!
 //! The categorization takes both path AND event kind into account, only returning
 //! a category when the event is meaningful for that path type. This avoids race
@@ -9,47 +9,30 @@
 
 use std::path::Path;
 
-use notify::event::{CreateKind, EventKind, RemoveKind};
+use notify::event::EventKind;
 
-use crate::constants::{READY_SUFFIX, REQUEST_SUFFIX, RESPONSE_FILE, WORKER_RESPONSE_SUFFIX};
+use crate::constants::{READY_SUFFIX, REQUEST_SUFFIX, WORKER_RESPONSE_SUFFIX};
 use crate::fs::is_write_complete;
 
 /// Category of a filesystem path.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum PathCategory {
     // -------------------------------------------------------------------------
-    // Legacy agent protocol (per-agent directories)
-    // TODO: Remove these after anonymous workers migration is complete
-    // -------------------------------------------------------------------------
-    /// Agent directory: `agents/<name>/`
-    AgentDir {
-        /// The agent's directory name.
-        name: String,
-    },
-    /// Agent response file: `agents/<name>/response.json`
-    AgentResponse {
-        /// The agent's directory name.
-        name: String,
-    },
-
-    // -------------------------------------------------------------------------
     // Anonymous worker protocol (flat files)
     // -------------------------------------------------------------------------
     /// Worker ready file: `agents/<uuid>.ready.json`
-    #[allow(dead_code)] // Not yet used until anonymous workers refactor
     WorkerReady {
         /// The worker's UUID.
         id: String,
     },
     /// Worker response file: `agents/<uuid>.response.json`
-    #[allow(dead_code)] // Not yet used until anonymous workers refactor
     WorkerResponse {
         /// The worker's UUID.
         id: String,
     },
 
     // -------------------------------------------------------------------------
-    // Submission protocol (unchanged)
+    // Submission protocol
     // -------------------------------------------------------------------------
     /// Submission request file: `submissions/<id>.request.json`
     SubmissionRequest {
@@ -58,21 +41,11 @@ pub(super) enum PathCategory {
     },
 }
 
-/// Check if event kind indicates a folder was created.
-const fn is_folder_created(kind: EventKind) -> bool {
-    matches!(kind, EventKind::Create(CreateKind::Folder))
-}
-
-/// Check if event kind indicates a folder was removed.
-const fn is_folder_removed(kind: EventKind) -> bool {
-    matches!(kind, EventKind::Remove(RemoveKind::Folder))
-}
-
 /// Categorize a filesystem event (path + event kind).
 ///
 /// Returns `Some(category)` only when the event is meaningful for that path type:
-/// - `AgentDir`: only on folder creation (agent registering)
-/// - `AgentResponse`: only on write complete (response ready to read)
+/// - `WorkerReady`: only on write complete (worker signaling availability)
+/// - `WorkerResponse`: only on write complete (response ready to read)
 /// - `SubmissionRequest`: only on write complete (request ready to read)
 ///
 /// This approach centralizes the "when is this ready?" logic, avoiding race
@@ -93,49 +66,30 @@ fn categorize_under_agents(
     event_kind: EventKind,
     agents_dir: &Path,
 ) -> Option<PathCategory> {
-    let relative = path.strip_prefix(agents_dir).ok()?;
-    let components: Vec<_> = relative.components().collect();
-
-    if components.is_empty() {
+    // Only process when write is complete
+    if !is_write_complete(event_kind) {
         return None;
     }
 
-    match components.len() {
-        // Single component: either a folder (legacy) or a flat file (anonymous workers)
-        1 => {
-            let name = components[0].as_os_str().to_str()?;
+    let relative = path.strip_prefix(agents_dir).ok()?;
+    let components: Vec<_> = relative.components().collect();
 
-            // Legacy: Agent directory - meaningful on folder creation or removal
-            if is_folder_created(event_kind) || is_folder_removed(event_kind) {
-                return Some(PathCategory::AgentDir {
-                    name: name.to_string(),
-                });
-            }
-
-            // Anonymous workers: flat files - only meaningful when write is complete
-            if is_write_complete(event_kind) {
-                if let Some(id) = name.strip_suffix(READY_SUFFIX) {
-                    return Some(PathCategory::WorkerReady { id: id.to_string() });
-                }
-                if let Some(id) = name.strip_suffix(WORKER_RESPONSE_SUFFIX) {
-                    return Some(PathCategory::WorkerResponse { id: id.to_string() });
-                }
-            }
-
-            None
-        }
-        // Two components: legacy agent response file `<name>/response.json`
-        2 if is_write_complete(event_kind) => {
-            let name = components[0].as_os_str().to_str()?.to_string();
-            let filename = components[1].as_os_str().to_str()?;
-            if filename == RESPONSE_FILE {
-                Some(PathCategory::AgentResponse { name })
-            } else {
-                None
-            }
-        }
-        _ => None,
+    // Must be exactly one component (flat file)
+    if components.len() != 1 {
+        return None;
     }
+
+    let filename = components[0].as_os_str().to_str()?;
+
+    // Anonymous workers: flat files
+    if let Some(id) = filename.strip_suffix(READY_SUFFIX) {
+        return Some(PathCategory::WorkerReady { id: id.to_string() });
+    }
+    if let Some(id) = filename.strip_suffix(WORKER_RESPONSE_SUFFIX) {
+        return Some(PathCategory::WorkerResponse { id: id.to_string() });
+    }
+
+    None
 }
 
 fn categorize_under_submissions(
@@ -170,7 +124,7 @@ fn categorize_under_submissions(
 mod tests {
     use std::path::PathBuf;
 
-    use notify::event::{CreateKind, RemoveKind};
+    use notify::event::CreateKind;
 
     use super::*;
 
@@ -182,10 +136,6 @@ mod tests {
 
     fn submissions() -> PathBuf {
         PathBuf::from("/pool/submissions")
-    }
-
-    fn folder_created() -> EventKind {
-        EventKind::Create(CreateKind::Folder)
     }
 
     /// The canonical "file written" event for the current platform.
@@ -207,122 +157,12 @@ mod tests {
         EventKind::Access(AccessKind::Close(AccessMode::Write))
     }
 
-    fn folder_removed() -> EventKind {
-        EventKind::Remove(RemoveKind::Folder)
+    fn folder_created() -> EventKind {
+        EventKind::Create(CreateKind::Folder)
     }
 
     // =========================================================================
-    // Agent directory
-    // =========================================================================
-
-    #[test]
-    fn agent_directory_on_folder_create() {
-        let path = PathBuf::from("/pool/agents/claude-1");
-        assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "claude-1".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn agent_directory_on_folder_remove() {
-        let path = PathBuf::from("/pool/agents/claude-1");
-        assert_eq!(
-            categorize(&path, folder_removed(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "claude-1".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn agent_directory_ignored_on_file_events() {
-        let path = PathBuf::from("/pool/agents/claude-1");
-        // File write events should not trigger AgentDir (only folder events)
-        assert_eq!(
-            categorize(&path, file_written(), &agents(), &submissions()),
-            None
-        );
-    }
-
-    #[test]
-    fn agent_directory_with_dots() {
-        let path = PathBuf::from("/pool/agents/agent.v2.0");
-        assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "agent.v2.0".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn agent_directory_with_underscores() {
-        let path = PathBuf::from("/pool/agents/my_agent_name");
-        assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "my_agent_name".to_string()
-            })
-        );
-    }
-
-    // =========================================================================
-    // Agent response
-    // =========================================================================
-
-    #[test]
-    fn agent_response_on_file_written() {
-        let path = PathBuf::from("/pool/agents/claude-1/response.json");
-        assert_eq!(
-            categorize(&path, file_written(), &agents(), &submissions()),
-            Some(PathCategory::AgentResponse {
-                name: "claude-1".to_string()
-            })
-        );
-    }
-
-    #[test]
-    fn agent_response_ignored_on_folder_events() {
-        let path = PathBuf::from("/pool/agents/claude-1/response.json");
-        // Folder events should not trigger AgentResponse
-        assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
-            None
-        );
-    }
-
-    #[test]
-    fn agent_task_file_not_categorized() {
-        let path = PathBuf::from("/pool/agents/claude-1/task.json");
-        assert_eq!(
-            categorize(&path, file_written(), &agents(), &submissions()),
-            None
-        );
-    }
-
-    #[test]
-    fn agent_other_file_not_categorized() {
-        let path = PathBuf::from("/pool/agents/claude-1/debug.log");
-        assert_eq!(
-            categorize(&path, file_written(), &agents(), &submissions()),
-            None
-        );
-    }
-
-    #[test]
-    fn agent_nested_file_not_categorized() {
-        let path = PathBuf::from("/pool/agents/claude-1/subdir/response.json");
-        assert_eq!(
-            categorize(&path, file_written(), &agents(), &submissions()),
-            None
-        );
-    }
-
-    // =========================================================================
-    // Anonymous worker: ready file
+    // Worker ready file
     // =========================================================================
 
     #[test]
@@ -337,21 +177,17 @@ mod tests {
     }
 
     #[test]
-    fn worker_ready_folder_treated_as_agent_dir() {
-        // Edge case: if a folder named "abc123.ready.json" is created, it's
-        // treated as a legacy AgentDir (not WorkerReady). In practice this
-        // won't happen - workers create files, not folders.
+    fn worker_ready_ignored_on_folder_events() {
+        // Folder events don't trigger WorkerReady
         let path = PathBuf::from("/pool/agents/abc123.ready.json");
         assert_eq!(
             categorize(&path, folder_created(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "abc123.ready.json".to_string()
-            })
+            None
         );
     }
 
     // =========================================================================
-    // Anonymous worker: response file
+    // Worker response file
     // =========================================================================
 
     #[test]
@@ -366,16 +202,35 @@ mod tests {
     }
 
     #[test]
-    fn worker_response_folder_treated_as_agent_dir() {
-        // Edge case: if a folder named "abc123.response.json" is created, it's
-        // treated as a legacy AgentDir (not WorkerResponse). In practice this
-        // won't happen - workers create files, not folders.
+    fn worker_response_ignored_on_folder_events() {
+        // Folder events don't trigger WorkerResponse
         let path = PathBuf::from("/pool/agents/abc123.response.json");
         assert_eq!(
             categorize(&path, folder_created(), &agents(), &submissions()),
-            Some(PathCategory::AgentDir {
-                name: "abc123.response.json".to_string()
-            })
+            None
+        );
+    }
+
+    // =========================================================================
+    // Files without known suffix are ignored
+    // =========================================================================
+
+    #[test]
+    fn unknown_file_in_agents_not_categorized() {
+        let path = PathBuf::from("/pool/agents/abc123.task.json");
+        assert_eq!(
+            categorize(&path, file_written(), &agents(), &submissions()),
+            None
+        );
+    }
+
+    #[test]
+    fn nested_files_under_agents_not_categorized() {
+        // Subdirectories under agents are not categorized (flat structure)
+        let path = PathBuf::from("/pool/agents/subdir/abc123.ready.json");
+        assert_eq!(
+            categorize(&path, file_written(), &agents(), &submissions()),
+            None
         );
     }
 
@@ -396,8 +251,8 @@ mod tests {
 
     #[test]
     fn submission_request_ignored_on_folder_events() {
-        let path = PathBuf::from("/pool/submissions/abc123.request.json");
         // Folder events should not trigger SubmissionRequest
+        let path = PathBuf::from("/pool/submissions/abc123.request.json");
         assert_eq!(
             categorize(&path, folder_created(), &agents(), &submissions()),
             None
@@ -448,16 +303,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn submission_directory_not_categorized() {
-        // Plain directories under submissions are not categorized (flat structure)
-        let path = PathBuf::from("/pool/submissions/abc123");
-        assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
-            None
-        );
-    }
-
     // =========================================================================
     // Unrelated paths
     // =========================================================================
@@ -475,7 +320,7 @@ mod tests {
     fn agents_dir_itself_not_categorized() {
         let path = PathBuf::from("/pool/agents");
         assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
+            categorize(&path, file_written(), &agents(), &submissions()),
             None
         );
     }
@@ -484,7 +329,7 @@ mod tests {
     fn submissions_dir_itself_not_categorized() {
         let path = PathBuf::from("/pool/submissions");
         assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
+            categorize(&path, file_written(), &agents(), &submissions()),
             None
         );
     }
@@ -503,31 +348,19 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn empty_agent_name_still_categorized() {
-        // Filesystem allows empty names in theory, we just pass through
-        let agents_dir = PathBuf::from("/pool/agents/");
-        let path = PathBuf::from("/pool/agents//");
-        // This won't match because empty component
-        assert_eq!(
-            categorize(&path, folder_created(), &agents_dir, &submissions()),
-            None
-        );
-    }
-
-    #[test]
     fn relative_path_does_not_match_absolute() {
-        let path = PathBuf::from("agents/claude-1");
+        let path = PathBuf::from("agents/abc123.ready.json");
         assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
+            categorize(&path, file_written(), &agents(), &submissions()),
             None
         );
     }
 
     #[test]
     fn different_root_does_not_match() {
-        let path = PathBuf::from("/other/pool/agents/claude-1");
+        let path = PathBuf::from("/other/pool/agents/abc123.ready.json");
         assert_eq!(
-            categorize(&path, folder_created(), &agents(), &submissions()),
+            categorize(&path, file_written(), &agents(), &submissions()),
             None
         );
     }

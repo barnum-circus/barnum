@@ -70,24 +70,15 @@ impl TransportId for WorkerId {
 // ID Allocators
 // =============================================================================
 
-/// Allocates worker and submission IDs.
+/// Allocates submission IDs.
 #[derive(Debug, Default)]
 pub(super) struct IdAllocator {
-    next_worker_id: u32,
     next_submission_id: u32,
 }
 
 impl IdAllocator {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Allocate a worker ID.
-    #[allow(clippy::missing_const_for_fn)] // const fn with &mut self not stable
-    pub fn allocate_worker(&mut self) -> WorkerId {
-        let id = WorkerId(self.next_worker_id);
-        self.next_worker_id += 1;
-        id
     }
 
     /// Allocate a submission ID.
