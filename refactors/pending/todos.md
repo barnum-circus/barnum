@@ -993,6 +993,31 @@ This makes debugging and monitoring much simpler - just tail the log file in the
 
 ---
 
+## GSD Should Use CLI Instead of Rust API
+
+**Status: TODO**
+
+GSD currently uses the Rust API directly to submit tasks (`agent_pool::submit()`). It should invoke the CLI instead for consistency and to test the CLI in production use.
+
+**Current (runner.rs:354):**
+```rust
+agent_pool::submit(&root, &agent_pool::Payload::inline(&payload));
+```
+
+**Proposed:**
+```rust
+Command::new("agent_pool")
+    .args(["submit_task", "--pool", pool_path, "--data", &payload])
+    .output()
+```
+
+Benefits:
+- Tests the CLI in real-world usage
+- Keeps GSD decoupled from agent_pool internals
+- CLI handles serialization/deserialization consistently
+
+---
+
 ## Unify agent.rs with VerifiedWatcher
 
 **Status: TODO**

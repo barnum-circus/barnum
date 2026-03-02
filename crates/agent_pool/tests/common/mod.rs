@@ -259,6 +259,7 @@ impl TestAgent {
             let mut processed_tasks = Vec::new();
             let mut first_message_processed = false;
             let mut last_response: Option<String> = None;
+            let mut response_file_path: Option<String> = None;
 
             loop {
                 if !running_clone.load(Ordering::SeqCst) {
@@ -268,19 +269,21 @@ impl TestAgent {
                 // Build command: register for first call, next_task with response for subsequent
                 let mut cmd = Command::new(&bin);
                 if let Some(response) = last_response.take() {
+                    let rf = response_file_path
+                        .take()
+                        .expect("response_file should be set");
                     cmd.arg("next_task")
                         .arg("--pool")
                         .arg(&pool_owned)
-                        .arg("--name")
-                        .arg(&agent_id_owned)
+                        .arg("--response-file")
+                        .arg(&rf)
                         .arg("--data")
                         .arg(&response);
                 } else {
-                    cmd.arg("register")
-                        .arg("--pool")
-                        .arg(&pool_owned)
-                        .arg("--name")
-                        .arg(&agent_id_owned);
+                    cmd.arg("register").arg("--pool").arg(&pool_owned);
+                }
+                if !agent_id_owned.is_empty() {
+                    cmd.arg("--name").arg(&agent_id_owned);
                 }
                 cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -362,6 +365,11 @@ impl TestAgent {
                     .get("content")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
+
+                // Store response_file for next iteration
+                if let Some(rf) = task_json.get("response_file").and_then(|v| v.as_str()) {
+                    response_file_path = Some(rf.to_string());
+                }
 
                 // Handle control messages
                 match kind {

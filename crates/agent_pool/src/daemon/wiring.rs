@@ -461,9 +461,9 @@ fn handle_fs_event(
                 handle_worker_ready_file(
                     &id,
                     path,
+                    agents_dir,
                     events_tx,
                     worker_map,
-                    id_allocator,
                     kicked_paths,
                 );
             }
@@ -573,9 +573,9 @@ fn handle_agent_response(
 fn handle_worker_ready_file(
     uuid: &str,
     ready_path: &Path,
+    agents_dir: &Path,
     events_tx: &mpsc::Sender<Event>,
     worker_map: &mut WorkerMap,
-    id_allocator: &mut IdAllocator,
     kicked_paths: &HashSet<PathBuf>,
 ) {
     // Skip if file doesn't exist (may have been cleaned up)
@@ -595,9 +595,13 @@ fn handle_worker_ready_file(
         return;
     }
 
-    // Register the worker
-    let worker_id = id_allocator.allocate_worker();
-    if worker_map.register(worker_id, ready_path.to_path_buf(), ()) {
+    // Register the worker with flat file transport
+    if let Some(worker_id) = worker_map.register_flat_file(
+        ready_path.to_path_buf(),
+        agents_dir.to_path_buf(),
+        uuid.to_string(),
+        (),
+    ) {
         debug!(uuid = %uuid, worker_id = worker_id.0, "WorkerReady: registered");
         let _ = events_tx.send(Event::WorkerReady { worker_id });
     }

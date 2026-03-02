@@ -187,6 +187,30 @@ impl<Id: TransportId> TransportMap<Id> {
         id
     }
 
+    /// Register a flat file transport with associated data.
+    ///
+    /// The `key_path` is used for deduplication (e.g., the ready file path).
+    /// The transport stores `dir` and `uuid` for constructing file paths.
+    ///
+    /// Returns `None` if the `key_path` is already registered (duplicate FS event).
+    pub fn register_flat_file(
+        &mut self,
+        key_path: PathBuf,
+        dir: PathBuf,
+        uuid: String,
+        data: Id::Data,
+    ) -> Option<Id> {
+        // Check for duplicate first
+        if self.path_to_id.contains_key(&key_path) {
+            return None;
+        }
+        let id = self.allocate_id();
+        self.path_to_id.insert(key_path, id);
+        self.entries
+            .insert(id, (Transport::FlatFile { dir, uuid }, data));
+        Some(id)
+    }
+
     /// Get the transport for an ID.
     #[must_use]
     pub fn get_transport(&self, id: Id) -> Option<&Transport> {
@@ -294,6 +318,12 @@ impl SubmissionMap {
                 writeln!(stream, "{}", response.len())?;
                 stream.write_all(response.as_bytes())?;
                 stream.flush()?;
+            }
+            Transport::FlatFile { .. } => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "FlatFile transport not supported for submissions",
+                ));
             }
         }
 

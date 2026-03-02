@@ -8,7 +8,7 @@ use agent_pool::{
     AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TASK_FILE, TaskAssignment, cleanup_stopped,
     default_pool_root, generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool,
     response_path, run_with_config, stop, submit, submit_file, submit_file_with_timeout,
-    wait_for_task, write_response,
+    wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -169,13 +169,13 @@ enum Command {
         /// Pool ID or path
         #[arg(long)]
         pool: String,
-        /// UUID from the previous task (from `get_task` output)
+        /// Path to response file (from `get_task` output's `response_file` field)
         #[arg(long)]
-        uuid: String,
+        response_file: PathBuf,
         /// Response content as inline string
         #[arg(long, conflicts_with = "file")]
         data: Option<String>,
-        /// Path to file containing response
+        /// Path to file containing response content
         #[arg(long, conflicts_with = "data")]
         file: Option<PathBuf>,
         /// Agent name (optional, for debugging)
@@ -505,7 +505,7 @@ fn main() -> ExitCode {
         }
         Command::NextTask {
             pool,
-            uuid,
+            response_file,
             data,
             file,
             name,
@@ -521,7 +521,7 @@ fn main() -> ExitCode {
                 (None, Some(path)) => match fs::read_to_string(&path) {
                     Ok(c) => c,
                     Err(e) => {
-                        eprintln!("Failed to read response file {}: {e}", path.display());
+                        eprintln!("Failed to read content file {}: {e}", path.display());
                         return ExitCode::FAILURE;
                     }
                 },
@@ -531,8 +531,8 @@ fn main() -> ExitCode {
                 }
             };
 
-            // Write response for the current task
-            if let Err(e) = write_response(&root, &uuid, &response_content) {
+            // Write response directly to the response file
+            if let Err(e) = fs::write(&response_file, &response_content) {
                 eprintln!("Failed to write response: {e}");
                 return ExitCode::FAILURE;
             }
