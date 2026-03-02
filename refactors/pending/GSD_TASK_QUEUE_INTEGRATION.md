@@ -258,7 +258,7 @@ Example: A "Distribute" task fans out to 20 "Worker" tasks. After all workers fi
 
 ### Proposed trait extension
 
-Add a `finally()` method to `QueueItem`:
+Add a `finally()` method to `QueueItem` that returns `Option<Self::NextTasks>`:
 
 ```rust
 pub trait QueueItem<Context>: Sized {
@@ -276,26 +276,20 @@ pub trait QueueItem<Context>: Sized {
 
     /// Called after all tasks returned by `process()` (and their descendants) have completed.
     ///
-    /// Default implementation returns no tasks. Override to implement cleanup/aggregation.
+    /// Returns `Some(tasks)` to run cleanup/aggregation, or `None` if no finally behavior.
+    /// Returning `None` means task_queue skips tracking descendants for this task.
     ///
     /// The `in_progress` state is preserved from when `process()` ran, allowing access
     /// to the original task's context.
-    fn finally(in_progress: &Self::InProgress, ctx: &mut Context) -> Self::NextTasks
-    where
-        Self::NextTasks: Default,
-    {
-        Self::NextTasks::default()
-    }
-
-    /// Whether this task has a finally handler.
     ///
-    /// If false, task_queue skips tracking descendants for this task.
-    /// Default: false (no finally).
-    fn has_finally(in_progress: &Self::InProgress, ctx: &Context) -> bool {
-        false
+    /// Default: `None` (no finally).
+    fn finally(in_progress: &Self::InProgress, ctx: &Context) -> Option<Self::NextTasks> {
+        None
     }
 }
 ```
+
+Note: `finally()` takes `&Context` (immutable) and `&Self::InProgress` (immutable). The call should be cheap - it just checks if there's a finally handler and returns tasks if so. No mutation needed.
 
 ### TaskRunner changes
 
@@ -332,14 +326,18 @@ struct FinallyState<InProgress> {
 ### Execution flow
 
 1. Task completes, `process()` returns `next_tasks`
-2. If `has_finally()` returns true and `next_tasks` is non-empty:
-   - Store `in_progress` in `finally_pending[task_id]`
-   - Set `pending_count = next_tasks.len()`
-   - Spawned tasks get `origin_id = task_id`
+2. Call `finally(&in_progress, &ctx)`:
+   - If returns `Some(_)` and `next_tasks` is non-empty:
+     - Store `in_progress` in `finally_pending[task_id]`
+     - Set `pending_count = next_tasks.len()`
+     - Spawned tasks get `origin_id = task_id`
+   - If returns `None`, no tracking needed
 3. When any task completes:
    - If it has an `origin_id`, decrement `finally_pending[origin_id].pending_count`
-   - If count reaches 0, call `finally(in_progress, ctx)` and queue returned tasks
+   - If count reaches 0, call `finally()` again and queue the returned `Some(tasks)`
 4. Tasks spawned by `finally()` do NOT inherit `origin_id` (prevents infinite tracking)
+
+The key insight: `finally()` is called twice - once after `process()` to check if tracking is needed, and again when all descendants complete to get the actual tasks. Both calls should be cheap (just checking config and building task list).
 
 ### GSD implementation
 
@@ -347,23 +345,17 @@ struct FinallyState<InProgress> {
 impl QueueItem<GsdContext> for Task {
     // ... start() and process() as before ...
 
-    fn finally(ip: &Self::InProgress, ctx: &mut GsdContext) -> Vec<Task> {
-        let Some(finally_cmd) = &ip.step.finally_hook else {
-            return vec![];
-        };
+    fn finally(ip: &Self::InProgress, ctx: &GsdContext) -> Option<Vec<Task>> {
+        let finally_cmd = ip.step.finally_hook.as_ref()?;
 
         // Run the finally command with original value on stdin
         match run_finally_hook(finally_cmd, &ip.effective_value) {
-            Ok(tasks) => tasks,
+            Ok(tasks) => Some(tasks),
             Err(e) => {
                 warn!(error = %e, "finally hook failed (ignored)");
-                vec![]
+                Some(vec![])  // Still return Some to indicate finally was attempted
             }
         }
-    }
-
-    fn has_finally(ip: &Self::InProgress, _ctx: &GsdContext) -> bool {
-        ip.step.finally_hook.is_some()
     }
 }
 ```
@@ -381,13 +373,9 @@ impl QueueItem<Ctx> for DistributeTask {
         ip.items.iter().map(|item| Task::Worker(WorkerTask { item })).collect()
     }
 
-    fn finally(ip: &Self::InProgress, ctx: &mut Ctx) -> Vec<Task> {
+    fn finally(ip: &Self::InProgress, ctx: &Ctx) -> Option<Vec<Task>> {
         // All workers done - aggregate results
-        vec![Task::Aggregate(AggregateTask { source: ip.id })]
-    }
-
-    fn has_finally(_ip: &Self::InProgress, _ctx: &Ctx) -> bool {
-        true
+        Some(vec![Task::Aggregate(AggregateTask { source: ip.id })])
     }
 }
 ```

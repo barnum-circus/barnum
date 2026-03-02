@@ -2,7 +2,7 @@
 
 ## Most Important
 
-1. **Command Steps** - Support for steps that execute a bash script locally rather than being dispatched to an agent pool. This enables deterministic operations to run without requiring an LLM agent. Examples include listing all files in a folder, finding invariant files, committing changes, running tests, running a linter or formatter, or calling external APIs. These tasks are much better done via a deterministic bash script than by asking an LLM.
+1. ~~**Command Steps**~~ ✓ COMPLETE - Steps can use `action.kind = "Command"` with a `script` field to execute bash locally instead of dispatching to an agent pool.
 
 2. **Multi-Pool Task Routing** - Allow different steps to be routed to different agent pools. This enables heterogeneous workflows where some tasks require specialized agents (e.g., code review agents vs. implementation agents) or where command execution happens in a separate pool from AI reasoning.
 
@@ -1003,26 +1003,9 @@ This makes debugging and monitoring much simpler - just tail the log file in the
 
 ## GSD Should Use CLI Instead of Rust API
 
-**Status: TODO**
+**Status: COMPLETE**
 
-GSD currently uses the Rust API directly to submit tasks (`agent_pool::submit()`). It should invoke the CLI instead for consistency and to test the CLI in production use.
-
-**Current (runner.rs:354):**
-```rust
-agent_pool::submit(&root, &agent_pool::Payload::inline(&payload));
-```
-
-**Proposed:**
-```rust
-Command::new("agent_pool")
-    .args(["submit_task", "--pool", pool_path, "--data", &payload])
-    .output()
-```
-
-Benefits:
-- Tests the CLI in real-world usage
-- Keeps GSD decoupled from agent_pool internals
-- CLI handles serialization/deserialization consistently
+GSD now invokes the CLI via `submit_via_cli()` which spawns `agent_pool submit_task`. See `crates/gsd_config/src/runner.rs`.
 
 ---
 
