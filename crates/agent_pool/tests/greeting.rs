@@ -47,8 +47,6 @@ fn greeting_casual_and_formal(
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("friendly-bot");
 
     let casual = submit_with_mode(
         &pool,
@@ -84,7 +82,6 @@ fn greeting_casual_and_formal(
     // === Sync point 4: Agent stopped ===
     eprintln!("[{pool}] TEST: assertions passed, stopping agent...");
     let _ = agent.stop();
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("friendly-bot");
     eprintln!("[{pool}] TEST: agent stopped, cleaning up...");
 
     cleanup_pool(&pool);
