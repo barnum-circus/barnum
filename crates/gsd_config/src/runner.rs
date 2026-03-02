@@ -985,8 +985,8 @@ fn submit_via_cli(pool: &Path, payload: &str) -> io::Result<Response> {
 
 /// Resolve the `agent_pool` binary path.
 fn resolve_agent_pool_binary() -> std::path::PathBuf {
-    // 1. Environment variable override
-    if let Ok(path) = std::env::var("AGENT_POOL_BINARY") {
+    // 1. Environment variable override (AGENT_POOL is the standard name)
+    if let Ok(path) = std::env::var("AGENT_POOL") {
         return std::path::PathBuf::from(path);
     }
 
