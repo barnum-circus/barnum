@@ -1,17 +1,30 @@
 #!/bin/bash
 # GSD agent that fans out Distribute -> 10 Worker tasks -> done.
 #
-# Usage: ./fan-out-agent.sh <pool> <agent-id> [num-workers] [sleep-seconds]
+# Usage: ./fan-out-agent.sh --pool-root <root> --pool <id> --name <agent-id> [--workers <num>] [--sleep <seconds>]
 
 set -e
 
-POOL="$1"
-AGENT_ID="$2"
-NUM_WORKERS="${3:-10}"
-SLEEP_TIME="${4:-0.2}"
+# Parse arguments
+POOL_ROOT=""
+POOL_ID=""
+AGENT_ID=""
+NUM_WORKERS="10"
+SLEEP_TIME="0.2"
 
-if [ -z "$POOL" ] || [ -z "$AGENT_ID" ]; then
-    echo "Usage: $0 <pool> <agent-id> [num-workers] [sleep-seconds]" >&2
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --pool-root) POOL_ROOT="$2"; shift 2 ;;
+        --pool) POOL_ID="$2"; shift 2 ;;
+        --name) AGENT_ID="$2"; shift 2 ;;
+        --workers) NUM_WORKERS="$2"; shift 2 ;;
+        --sleep) SLEEP_TIME="$2"; shift 2 ;;
+        *) echo "Unknown option: $1" >&2; exit 1 ;;
+    esac
+done
+
+if [ -z "$POOL_ROOT" ] || [ -z "$POOL_ID" ] || [ -z "$AGENT_ID" ]; then
+    echo "Usage: $0 --pool-root <root> --pool <id> --name <agent-id> [--workers <num>] [--sleep <seconds>]" >&2
     exit 1
 fi
 
@@ -36,7 +49,7 @@ trap cleanup SIGINT SIGTERM
 
 while true; do
     # Get next task
-    TASK_JSON=$("$AGENT_POOL" get_task --pool "$POOL" --name "$AGENT_ID" 2>/dev/null) || {
+    TASK_JSON=$("$AGENT_POOL" --pool-root "$POOL_ROOT" get_task --pool "$POOL_ID" --name "$AGENT_ID" 2>/dev/null) || {
         echo "[$AGENT_ID] get_task failed, exiting" >&2
         exit 1
     }

@@ -1,0 +1,293 @@
+//! GSD CLI integration tests.
+//!
+//! These tests verify the CLI runs correctly with various configurations.
+//! They use a file-writer agent that creates marker files to verify execution.
+
+#![expect(clippy::print_stderr)]
+#![expect(clippy::expect_used)]
+#![expect(clippy::unwrap_used)]
+
+mod common;
+
+use common::{
+    AgentPoolHandle, FileWriterAgent, GsdRunner, cleanup_test_dir, is_ipc_available, setup_test_dir,
+};
+use std::fs;
+
+const TEST_DIR: &str = "cli_integration";
+
+// =============================================================================
+// Basic Config Tests
+// =============================================================================
+
+#[test]
+fn single_step_terminates() {
+    let test_name = format!("{TEST_DIR}_single_step");
+    let root = setup_test_dir(&test_name);
+    let output_dir = root.join("output");
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(&test_name);
+        return;
+    }
+
+    let pool_root = root.join("pool");
+    fs::create_dir_all(&pool_root).expect("create pool dir");
+
+    let _pool = AgentPoolHandle::start(&pool_root);
+    let mut agent = FileWriterAgent::start(
+        &pool_root,
+        "test-agent",
+        &output_dir,
+        vec![("Start".to_string(), String::new())], // Terminate
+    );
+    agent.wait_ready();
+
+    let config = r#"{
+        "steps": [{
+            "name": "Start",
+            "action": {"kind": "Pool", "instructions": "Start step"},
+            "next": []
+        }]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd
+        .run(config, r#"[{"kind": "Start", "value": {}}]"#, &pool_root)
+        .expect("run gsd");
+
+    agent.stop();
+
+    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        output_dir.join("Start.done").exists(),
+        "Start step should have executed"
+    );
+
+    cleanup_test_dir(&test_name);
+}
+
+#[test]
+fn multi_stage_linear() {
+    let test_name = format!("{TEST_DIR}_multi_stage");
+    let root = setup_test_dir(&test_name);
+    let output_dir = root.join("output");
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(&test_name);
+        return;
+    }
+
+    let pool_root = root.join("pool");
+    fs::create_dir_all(&pool_root).expect("create pool dir");
+
+    let _pool = AgentPoolHandle::start(&pool_root);
+    let mut agent = FileWriterAgent::start(
+        &pool_root,
+        "test-agent",
+        &output_dir,
+        vec![
+            ("Start".to_string(), "Middle".to_string()),
+            ("Middle".to_string(), "End".to_string()),
+            ("End".to_string(), String::new()),
+        ],
+    );
+    agent.wait_ready();
+
+    let config = r#"{
+        "steps": [
+            {"name": "Start", "action": {"kind": "Pool", "instructions": "Start"}, "next": ["Middle"]},
+            {"name": "Middle", "action": {"kind": "Pool", "instructions": "Middle"}, "next": ["End"]},
+            {"name": "End", "action": {"kind": "Pool", "instructions": "End"}, "next": []}
+        ]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd
+        .run(config, r#"[{"kind": "Start", "value": {}}]"#, &pool_root)
+        .expect("run gsd");
+
+    agent.stop();
+
+    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        output_dir.join("Start.done").exists(),
+        "Start step should have executed"
+    );
+    assert!(
+        output_dir.join("Middle.done").exists(),
+        "Middle step should have executed"
+    );
+    assert!(
+        output_dir.join("End.done").exists(),
+        "End step should have executed"
+    );
+
+    cleanup_test_dir(&test_name);
+}
+
+// =============================================================================
+// Empty Initial Tasks
+// =============================================================================
+
+#[test]
+fn empty_initial_tasks_succeeds() {
+    let test_name = format!("{TEST_DIR}_empty_initial");
+    let root = setup_test_dir(&test_name);
+
+    // No IPC needed - empty tasks should complete immediately without pool
+    let config = r#"{
+        "steps": [{
+            "name": "Start",
+            "action": {"kind": "Pool", "instructions": "Start"},
+            "next": []
+        }]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd.run(config, "[]", &root).expect("run gsd");
+
+    assert!(
+        result.status.success(),
+        "GSD should succeed with empty tasks"
+    );
+
+    cleanup_test_dir(&test_name);
+}
+
+// =============================================================================
+// CLI Subcommands
+// =============================================================================
+
+#[test]
+fn validate_valid_config() {
+    let config = r#"{
+        "steps": [
+            {"name": "A", "action": {"kind": "Pool", "instructions": "A"}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Pool", "instructions": "B"}, "next": []}
+        ]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd.validate(config).expect("validate");
+
+    assert!(result.status.success(), "Valid config should pass");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("Config is valid"), "Should say valid");
+}
+
+#[test]
+fn validate_invalid_config_missing_step() {
+    let config = r#"{
+        "steps": [
+            {"name": "A", "action": {"kind": "Pool", "instructions": "A"}, "next": ["NonExistent"]}
+        ]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd.validate(config).expect("validate");
+
+    assert!(!result.status.success(), "Invalid config should fail");
+}
+
+#[test]
+fn docs_generates_markdown() {
+    let config = r#"{
+        "steps": [
+            {"name": "Start", "action": {"kind": "Pool", "instructions": "Do something"}, "next": []}
+        ]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd.docs(config).expect("docs");
+
+    assert!(result.status.success(), "Docs should succeed");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("Start"), "Should contain step name");
+}
+
+#[test]
+fn graph_generates_dot() {
+    let config = r#"{
+        "steps": [
+            {"name": "A", "action": {"kind": "Pool", "instructions": "A"}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Pool", "instructions": "B"}, "next": []}
+        ]
+    }"#;
+
+    let gsd = GsdRunner::new();
+    let result = gsd.graph(config).expect("graph");
+
+    assert!(result.status.success(), "Graph should succeed");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    assert!(stdout.contains("digraph"), "Should be DOT format");
+    assert!(stdout.contains("\"A\" -> \"B\""), "Should have edge");
+}
+
+// =============================================================================
+// Config From File
+// =============================================================================
+
+#[test]
+fn config_from_file() {
+    let test_name = format!("{TEST_DIR}_config_file");
+    let root = setup_test_dir(&test_name);
+    let output_dir = root.join("output");
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(&test_name);
+        return;
+    }
+
+    let pool_root = root.join("pool");
+    fs::create_dir_all(&pool_root).expect("create pool dir");
+
+    // Write config to file
+    let config_path = root.join("config.json");
+    fs::write(
+        &config_path,
+        r#"{
+            "steps": [{
+                "name": "FileStep",
+                "action": {"kind": "Pool", "instructions": "From file"},
+                "next": []
+            }]
+        }"#,
+    )
+    .expect("write config");
+
+    // Write initial tasks to file
+    let initial_path = root.join("initial.json");
+    fs::write(&initial_path, r#"[{"kind": "FileStep", "value": {}}]"#).expect("write initial");
+
+    let _pool = AgentPoolHandle::start(&pool_root);
+    let mut agent = FileWriterAgent::start(
+        &pool_root,
+        "test-agent",
+        &output_dir,
+        vec![("FileStep".to_string(), String::new())],
+    );
+    agent.wait_ready();
+
+    let gsd = GsdRunner::new();
+    let result = gsd
+        .run(
+            config_path.to_str().unwrap(),
+            initial_path.to_str().unwrap(),
+            &pool_root,
+        )
+        .expect("run gsd");
+
+    agent.stop();
+
+    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        output_dir.join("FileStep.done").exists(),
+        "FileStep should have executed"
+    );
+
+    cleanup_test_dir(&test_name);
+}

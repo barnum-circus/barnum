@@ -12,7 +12,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/../../.."
-ROOT=$(mktemp -d)
+POOL_ROOT=$(mktemp -d)
+POOL_ID="demo"
 
 # Use pre-built binary if AGENT_POOL is set, otherwise build
 if [ -z "$AGENT_POOL" ]; then
@@ -24,31 +25,31 @@ if [ -z "$AGENT_POOL" ]; then
 fi
 
 echo "=== Demo: Single Agent Queue ==="
-echo "Working directory: $ROOT"
+echo "Working directory: $POOL_ROOT"
 echo "Tasks will queue and process one at a time."
 echo ""
 
 cleanup() {
     echo ""
     echo "=== Cleaning up ==="
-    $AGENT_POOL stop --pool "$ROOT" 2>/dev/null || true
+    $AGENT_POOL --pool-root "$POOL_ROOT" stop --pool "$POOL_ID" 2>/dev/null || true
     sleep 0.2
     kill -9 $AGENT_PID 2>/dev/null || true
     wait $AGENT_PID 2>/dev/null || true
-    rm -rf "$ROOT"
+    rm -rf "$POOL_ROOT"
     echo "Done."
 }
 trap cleanup EXIT
 
 # Start agent pool in background
 echo "Starting agent pool..."
-$AGENT_POOL start --pool "$ROOT" &
+$AGENT_POOL --pool-root "$POOL_ROOT" start --pool "$POOL_ID" &
 POOL_PID=$!
 sleep 0.5
 
 # Start ONE agent with slow response time
 echo "Starting single agent (1 second per task)..."
-"$SCRIPT_DIR/../scripts/echo-agent.sh" "$ROOT" "only-agent" 1.0 &
+"$SCRIPT_DIR/../scripts/echo-agent.sh" --pool-root "$POOL_ROOT" --pool "$POOL_ID" --name "only-agent" --sleep 1.0 &
 AGENT_PID=$!
 sleep 0.3
 
@@ -62,7 +63,7 @@ submit_task() {
     local task="$1"
     local start=$(date +%s.%N)
     local json="{\"kind\":\"Task\",\"task\":{\"instructions\":\"Echo this back\",\"data\":\"$task\"}}"
-    result=$($AGENT_POOL submit_task --pool "$ROOT" --data "$json")
+    result=$($AGENT_POOL --pool-root "$POOL_ROOT" submit_task --pool "$POOL_ID" --data "$json")
     local end=$(date +%s.%N)
     local elapsed=$(echo "$end - $start" | bc)
     echo "[${elapsed}s] $result"
