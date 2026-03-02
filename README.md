@@ -39,9 +39,16 @@ Your name is c1. The pool name is agents.
 
 You can pass this to multiple Claudes; make sure they have distinct names for debugging purposes. See [AGENT_INSTRUCTIONS.md](crates/agent_pool/protocols/AGENT_INSTRUCTIONS.md) and [AGENT_PROTOCOL.md](crates/agent_pool/protocols/AGENT_PROTOCOL.md) for full details.
 
+If you don't have a config, download a demo:
+
 ```bash
-# In another terminal, run the GSD workflow
-pnpm dlx @gsd-now/gsd run config.json --pool agents --initial '[{"kind": "Start", "value": {}}]'
+curl -O https://raw.githubusercontent.com/rbalicki2/gsd/main/crates/gsd_cli/demos/linear/config.jsonc
+```
+
+Then run the GSD workflow:
+
+```bash
+pnpm dlx @gsd-now/gsd run config.jsonc --pool agents --initial '[{"kind": "Start", "value": {}}]'
 ```
 
 ## Components
@@ -51,7 +58,7 @@ pnpm dlx @gsd-now/gsd run config.json --pool agents --initial '[{"kind": "Start"
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-pnpm dlx @gsd-now/gsd run config.json --pool agents --initial '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd run config.jsonc --pool agents --initial '[{"kind": "Start", "value": {}}]'
 ```
 
 See below for detailed instructions, or [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
