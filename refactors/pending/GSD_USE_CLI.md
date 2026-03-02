@@ -257,22 +257,32 @@ fn submit_task_returns_not_processed_on_timeout() {
 1. Remove unused `agent_pool` public exports
 2. Update documentation
 
-## Open Questions
+## Resolved Questions
 
-1. **Binary path resolution** - How do we find `agent_pool` binary?
-   - Require in PATH?
-   - Config option?
-   - Relative to `gsd` binary?
+1. **Binary path resolution** - Resolution order:
+   1. `AGENT_POOL_BINARY` environment variable (explicit override)
+   2. `pnpm dlx agent_pool` (package manager approach, good enough for v1)
+   - Future versions will make this less awkward
 
-2. **Keep types dependency?** - Should `gsd_config` still depend on `agent_pool` for the `Response` type?
-   - Pro: Type sharing, no duplication
-   - Con: Still creates crate dependency
+2. **Keep types dependency?** - No, define `CliResponse` enum locally in `runner.rs`. Full decoupling.
 
-3. **Timeout handling** - GSD should use unlimited timeouts when calling the CLI.
-   - Tasks can be queued waiting for workers that are processing long-lived tasks
-   - The pool might be full, so we can't assume fast dispatch
-   - GSD handles its own per-step timeouts internally; CLI timeout should be unlimited (or omitted)
-   - Resolution: Don't pass `--timeout-secs` to CLI, or pass a very large value
+3. **Timeout handling** - GSD uses **unlimited timeout** when calling CLI.
+   - `agent_pool submit_task` already waits for pool internally, no external wait needed
+   - Don't pass `--timeout-secs` at all (or pass a very large value if required)
+   - GSD handles its own per-step timeouts separately
+
+4. **Pool readiness** - Don't wait externally. `submit_task` handles this internally.
+
+5. **Error handling** - If any `submit_task` call fails, unwind and propagate error.
+   - GSD is a thin wrapper: get results → process → call submit_task repeatedly
+
+---
+
+## README Updates Required
+
+Document that GSD uses `pnpm dlx agent_pool` under the hood. If pnpm is not available:
+- Set `AGENT_POOL_BINARY` environment variable to the path of the agent_pool binary
+- Note: future versions will make binary resolution less awkward
 
 ---
 
@@ -284,4 +294,4 @@ fn submit_task_returns_not_processed_on_timeout() {
 | **Risk** | Low - existing tests cover behavior |
 | **Blockers** | Need CLI integration tests first |
 | **LOC Changed** | ~70 lines in runner.rs |
-| **Breaking** | No external API changes |
+| **Breaking** | No external API changes | 
