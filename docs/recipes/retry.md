@@ -29,24 +29,32 @@ Override global settings for specific steps:
   "steps": [
     {
       "name": "QuickCheck",
+      "value_schema": { "type": "object" },
       "options": {
         "timeout": 10,
         "max_retries": 0
       },
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Quick validation. Return `[]`." },
       "next": []
     },
     {
       "name": "ExpensiveAnalysis",
+      "value_schema": { "type": "object" },
       "options": {
         "timeout": 300,
         "max_retries": 5
       },
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Deep analysis. Return `[]`." },
       "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "QuickCheck", "value": {}}]'
 ```
 
 ## Retry Triggers
@@ -68,12 +76,20 @@ For idempotent-sensitive operations:
   "steps": [
     {
       "name": "SendEmail",
+      "value_schema": {
+        "type": "object",
+        "required": ["to", "subject"],
+        "properties": {
+          "to": { "type": "string" },
+          "subject": { "type": "string" }
+        }
+      },
       "options": {
         "retry_on_timeout": false,
         "retry_on_invalid_response": false,
         "max_retries": 0
       },
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Send the email. Return `[]`." },
       "next": []
     }
   ]

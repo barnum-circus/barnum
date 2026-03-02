@@ -9,14 +9,28 @@ Branching allows agents to choose different paths based on their analysis.
   "steps": [
     {
       "name": "Review",
+      "value_schema": {
+        "type": "object",
+        "required": ["pr_number"],
+        "properties": {
+          "pr_number": { "type": "integer" }
+        }
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Review this PR. If it looks good, return `[{\"kind\": \"Approve\", \"value\": {...}}]`. If changes are needed, return `[{\"kind\": \"RequestChanges\", \"value\": {...}}]`."
+        "instructions": "Review this PR. If it looks good, return `[{\"kind\": \"Approve\", \"value\": {\"pr_number\": ...}}]`. If changes are needed, return `[{\"kind\": \"RequestChanges\", \"value\": {\"pr_number\": ..., \"comments\": [...]}}]`."
       },
       "next": ["Approve", "RequestChanges"]
     },
     {
       "name": "Approve",
+      "value_schema": {
+        "type": "object",
+        "required": ["pr_number"],
+        "properties": {
+          "pr_number": { "type": "integer" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Merge the PR. Return `[]`."
@@ -25,6 +39,14 @@ Branching allows agents to choose different paths based on their analysis.
     },
     {
       "name": "RequestChanges",
+      "value_schema": {
+        "type": "object",
+        "required": ["pr_number", "comments"],
+        "properties": {
+          "pr_number": { "type": "integer" },
+          "comments": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Comment on the PR with requested changes. Return `[]`."
@@ -33,6 +55,12 @@ Branching allows agents to choose different paths based on their analysis.
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Review", "value": {"pr_number": 123}}]'
 ```
 
 ## Flow

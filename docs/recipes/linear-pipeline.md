@@ -9,6 +9,14 @@ A linear pipeline processes data through a sequence of steps.
   "steps": [
     {
       "name": "Analyze",
+      "value_schema": {
+        "type": "object",
+        "required": ["file", "contents"],
+        "properties": {
+          "file": { "type": "string" },
+          "contents": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Analyze this code for potential issues. Return `[{\"kind\": \"Review\", \"value\": {\"issues\": [...]}}]`"
@@ -17,6 +25,13 @@ A linear pipeline processes data through a sequence of steps.
     },
     {
       "name": "Review",
+      "value_schema": {
+        "type": "object",
+        "required": ["issues"],
+        "properties": {
+          "issues": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Review these issues and suggest fixes. Return `[{\"kind\": \"Implement\", \"value\": {\"fixes\": [...]}}]`"
@@ -25,6 +40,13 @@ A linear pipeline processes data through a sequence of steps.
     },
     {
       "name": "Implement",
+      "value_schema": {
+        "type": "object",
+        "required": ["fixes"],
+        "properties": {
+          "fixes": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Implement these fixes. Return `[]` when done."
@@ -39,10 +61,8 @@ A linear pipeline processes data through a sequence of steps.
 
 To start the pipeline:
 
-```json
-[
-  {"kind": "Analyze", "value": {"file": "src/main.rs", "contents": "..."}}
-]
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Analyze", "value": {"file": "src/main.rs", "contents": "fn main() { ... }"}}]'
 ```
 
 ## Flow

@@ -9,6 +9,7 @@ Use shell commands instead of agents for deterministic or system-level operation
   "steps": [
     {
       "name": "ListFiles",
+      "value_schema": { "type": "object" },
       "action": {
         "kind": "Command",
         "script": "find . -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(. != \"\")) | map({kind: \"Analyze\", value: {file: .}})'"
@@ -17,11 +18,24 @@ Use shell commands instead of agents for deterministic or system-level operation
     },
     {
       "name": "Analyze",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Analyze this file. Return `[]`." },
       "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "ListFiles", "value": {}}]'
 ```
 
 ## Command Contract
@@ -66,24 +80,45 @@ Commands and agents work together naturally:
   "steps": [
     {
       "name": "Plan",
-      "action": { "kind": "Pool", "instructions": "Plan the implementation..." },
+      "value_schema": {
+        "type": "object",
+        "required": ["task"],
+        "properties": {
+          "task": { "type": "string" }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"...\"}}]`" },
       "next": ["Execute"]
     },
     {
       "name": "Execute",
+      "value_schema": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+          "command": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Command",
-        "script": "jq -r '.value.command' | sh && echo '[]'"
+        "script": "jq -r '.value.command' | sh && echo '[{\"kind\": \"Verify\", \"value\": {}}]'"
       },
       "next": ["Verify"]
     },
     {
       "name": "Verify",
-      "action": { "kind": "Pool", "instructions": "Verify the changes..." },
+      "value_schema": { "type": "object" },
+      "action": { "kind": "Pool", "instructions": "Verify the changes. Return `[]`." },
       "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Plan", "value": {"task": "Add logging"}}]'
 ```
 
 ## Key Points

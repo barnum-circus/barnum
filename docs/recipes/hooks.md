@@ -29,15 +29,28 @@ Pre hooks transform the input before it reaches the agent.
   "steps": [
     {
       "name": "Analyze",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" }
+        }
+      },
       "pre": "scripts/enrich-context.sh",
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze this code with the enriched context."
+        "instructions": "Analyze this code with the enriched context. Return `[]`."
       },
       "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
 ```
 
 **Pre hook contract:**
@@ -62,9 +75,16 @@ Post hooks run after the action completes and can modify the results.
   "steps": [
     {
       "name": "Deploy",
+      "value_schema": {
+        "type": "object",
+        "required": ["version"],
+        "properties": {
+          "version": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Deploy the application."
+        "instructions": "Deploy the application. Return `[]`."
       },
       "post": "scripts/process-result.sh",
       "next": []
@@ -176,13 +196,27 @@ The `finally` hook runs after ALL descendants of a task complete (not just direc
   "steps": [
     {
       "name": "AnalyzeAll",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "value_schema": {
+        "type": "object",
+        "required": ["files"],
+        "properties": {
+          "files": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Fan out to analyze each file. Return `[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"...\"}}, ...]`" },
       "next": ["AnalyzeFile"],
       "finally": "scripts/aggregate-results.sh"
     },
     {
       "name": "AnalyzeFile",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Analyze this file. Return `[]`." },
       "next": []
     }
   ]

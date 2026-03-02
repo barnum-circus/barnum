@@ -15,6 +15,13 @@ Use the filesystem to collect results, then aggregate:
   "steps": [
     {
       "name": "Split",
+      "value_schema": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "scripts/split-work.sh"
@@ -23,6 +30,14 @@ Use the filesystem to collect results, then aggregate:
     },
     {
       "name": "Process",
+      "value_schema": {
+        "type": "object",
+        "required": ["task_id", "data"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "data": { "type": "object" }
+        }
+      },
       "post": "scripts/save-result.sh",
       "action": {
         "kind": "Pool",
@@ -32,6 +47,12 @@ Use the filesystem to collect results, then aggregate:
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Split", "value": {"items": ["a", "b", "c"]}}]'
 ```
 
 **scripts/save-result.sh** (post hook):
@@ -60,13 +81,21 @@ Track completion count and trigger aggregation on last task:
   "steps": [
     {
       "name": "Process",
+      "value_schema": { "type": "object" },
       "post": "scripts/check-and-aggregate.sh",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Process this item. Return `[]`." },
       "next": ["Aggregate"]
     },
     {
       "name": "Aggregate",
-      "action": { "kind": "Pool", "instructions": "Aggregate all results..." },
+      "value_schema": {
+        "type": "object",
+        "required": ["results"],
+        "properties": {
+          "results": { "type": "array" }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Aggregate all results. Return `[]`." },
       "next": []
     }
   ]
@@ -106,9 +135,16 @@ Use an external system to track and aggregate:
   "steps": [
     {
       "name": "Process",
+      "value_schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" }
+        }
+      },
       "pre": "scripts/register-task.sh",
       "post": "scripts/report-completion.sh",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Process this item. Return `[]`." },
       "next": []
     }
   ]

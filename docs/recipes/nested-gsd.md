@@ -41,6 +41,13 @@ Outer workflow config (`outer.json`):
   "steps": [
     {
       "name": "Setup",
+      "value_schema": {
+        "type": "object",
+        "required": ["files"],
+        "properties": {
+          "files": { "type": "array", "items": { "type": "string" } }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "scripts/setup-workspace.sh"
@@ -49,6 +56,13 @@ Outer workflow config (`outer.json`):
     },
     {
       "name": "RunAnalysis",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace"],
+        "properties": {
+          "workspace": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "scripts/run-analysis-workflow.sh"
@@ -57,6 +71,14 @@ Outer workflow config (`outer.json`):
     },
     {
       "name": "Aggregate",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace", "results"],
+        "properties": {
+          "workspace": { "type": "string" },
+          "results": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Read all results from the workspace directory and synthesize a summary. The results are in JSON files at the path provided. Return `[{\"kind\": \"Cleanup\", \"value\": {\"summary\": \"...\"}}]`"
@@ -65,6 +87,13 @@ Outer workflow config (`outer.json`):
     },
     {
       "name": "Cleanup",
+      "value_schema": {
+        "type": "object",
+        "required": ["summary"],
+        "properties": {
+          "summary": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "rm -rf \"$WORKSPACE\" && echo '[]'"
@@ -73,6 +102,12 @@ Outer workflow config (`outer.json`):
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run outer.json --pool agents --initial '[{"kind": "Setup", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
 ```
 
 **scripts/setup-workspace.sh:**
@@ -137,6 +172,13 @@ echo "[{\"kind\": \"Aggregate\", \"value\": {\"workspace\": \"$WORKSPACE\", \"re
   "steps": [
     {
       "name": "Plan",
+      "value_schema": {
+        "type": "object",
+        "required": ["task"],
+        "properties": {
+          "task": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Analyze the task and generate a GSD config for the sub-workflow. Return `[{\"kind\": \"RunSubWorkflow\", \"value\": {\"config\": {...}, \"initial_tasks\": [...]}}]`"
@@ -145,6 +187,14 @@ echo "[{\"kind\": \"Aggregate\", \"value\": {\"workspace\": \"$WORKSPACE\", \"re
     },
     {
       "name": "RunSubWorkflow",
+      "value_schema": {
+        "type": "object",
+        "required": ["config", "initial_tasks"],
+        "properties": {
+          "config": { "type": "object" },
+          "initial_tasks": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "scripts/run-sub-gsd.sh"
@@ -153,9 +203,16 @@ echo "[{\"kind\": \"Aggregate\", \"value\": {\"workspace\": \"$WORKSPACE\", \"re
     },
     {
       "name": "Report",
+      "value_schema": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Summarize the sub-workflow results."
+        "instructions": "Summarize the sub-workflow results. Return `[]`."
       },
       "next": []
     }

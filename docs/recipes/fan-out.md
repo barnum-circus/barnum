@@ -9,6 +9,12 @@ Fan-out splits one task into multiple parallel tasks.
   "steps": [
     {
       "name": "ListFiles",
+      "value_schema": {
+        "type": "object",
+        "properties": {
+          "directory": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "find src -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map({kind: \"ProcessFile\", value: {path: .}})'"
@@ -17,6 +23,13 @@ Fan-out splits one task into multiple parallel tasks.
     },
     {
       "name": "ProcessFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Analyze this file. Return `[]` when done."
@@ -25,6 +38,12 @@ Fan-out splits one task into multiple parallel tasks.
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "ListFiles", "value": {}}]'
 ```
 
 ## Flow
@@ -46,6 +65,13 @@ Agents can also fan out by returning multiple tasks:
   "steps": [
     {
       "name": "Analyze",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Find all functions that need refactoring. Return one task per function: `[{\"kind\": \"Refactor\", \"value\": {\"function\": \"...\"}}, ...]`"
@@ -54,6 +80,13 @@ Agents can also fan out by returning multiple tasks:
     },
     {
       "name": "Refactor",
+      "value_schema": {
+        "type": "object",
+        "required": ["function"],
+        "properties": {
+          "function": { "type": "string" }
+        }
+      },
       "action": {
         "kind": "Pool",
         "instructions": "Refactor this function. Return `[]`."
@@ -62,6 +95,12 @@ Agents can also fan out by returning multiple tasks:
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
 ```
 
 ## Key Points

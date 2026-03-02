@@ -29,6 +29,13 @@ Analyze files, collect findings, then categorize and prioritize.
   "steps": [
     {
       "name": "Coordinate",
+      "value_schema": {
+        "type": "object",
+        "required": ["files"],
+        "properties": {
+          "files": { "type": "array", "items": { "type": "string" } }
+        }
+      },
       "action": {
         "kind": "Command",
         "script": "scripts/setup-and-split.sh"
@@ -38,31 +45,59 @@ Analyze files, collect findings, then categorize and prioritize.
     },
     {
       "name": "AnalyzeFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["file", "tmpdir"],
+        "properties": {
+          "file": { "type": "string" },
+          "tmpdir": { "type": "string" }
+        }
+      },
       "post": "scripts/save-findings.sh",
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze this file for refactoring opportunities. Return findings as JSON."
+        "instructions": "Analyze this file for refactoring opportunities. Return findings as JSON. Return `[]`."
       },
       "next": []
     },
     {
       "name": "Categorize",
+      "value_schema": {
+        "type": "object",
+        "required": ["findings"],
+        "properties": {
+          "findings": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Read all findings and categorize them by type (performance, readability, security, etc.)."
+        "instructions": "Read all findings and categorize them by type (performance, readability, security, etc.). Return `[{\"kind\": \"Prioritize\", \"value\": {\"categorized\": [...]}}]`"
       },
       "next": ["Prioritize"]
     },
     {
       "name": "Prioritize",
+      "value_schema": {
+        "type": "object",
+        "required": ["categorized"],
+        "properties": {
+          "categorized": { "type": "array" }
+        }
+      },
       "action": {
         "kind": "Pool",
-        "instructions": "Select the top 5 highest-impact refactoring opportunities."
+        "instructions": "Select the top 5 highest-impact refactoring opportunities. Return `[]`."
       },
       "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "Coordinate", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
 ```
 
 **scripts/setup-and-split.sh:**

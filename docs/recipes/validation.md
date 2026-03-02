@@ -29,11 +29,29 @@ Validate the value payload for each step:
           }
         }
       },
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Process this order and prepare for shipping. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"...\"}}]`" },
       "next": ["Ship"]
+    },
+    {
+      "name": "Ship",
+      "value_schema": {
+        "type": "object",
+        "required": ["order_id"],
+        "properties": {
+          "order_id": { "type": "string" }
+        }
+      },
+      "action": { "kind": "Pool", "instructions": "Ship the order. Return `[]`." },
+      "next": []
     }
   ]
 }
+```
+
+## Initial Tasks
+
+```bash
+gsd run config.json --pool agents --initial '[{"kind": "ProcessOrder", "value": {"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}}]'
 ```
 
 ## External Schema Files
@@ -46,8 +64,14 @@ Reference schemas from files:
     {
       "name": "ProcessOrder",
       "value_schema": "schemas/order.json",
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": "Process the order. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"...\"}}]`" },
       "next": ["Ship"]
+    },
+    {
+      "name": "Ship",
+      "value_schema": { "type": "object" },
+      "action": { "kind": "Pool", "instructions": "Ship it. Return `[]`." },
+      "next": []
     }
   ]
 }
