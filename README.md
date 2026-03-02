@@ -6,11 +6,11 @@ GSD is a set of tools for defining task queues as type-safe state machines whose
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions.
 
-GSD is an attempt to provide structure and enable LLMs to perform dramatically more complicated and ambitious tasks.
+GSD is an attempt to provide structure and protect context, and thus enable LLMs to perform dramatically more complicated and ambitious tasks.
 
-With GSD, you define a state machine via JSON config where individual tasks are performed by long-lived agents running in a worker pool. Transitions between states are validated. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and smaller. The CLI provides just the needed context for an individual task, meaning that if agents are given small atomic tasks, they can more reliably perform them correctly (this has been referred to as progressive disclosure).
+With GSD, you define a state machine via JSON config. Transitions between states are validated. Individual tasks are performed by long-lived agents running in a worker pool. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and smaller. The CLI provides just the needed context for an individual task, meaning that if agents are given small atomic tasks, they can more reliably perform them correctly (this has been referred to as progressive disclosure).
 
-For example, if an agent is asked to list all the files in a folder and analyze each file, you would naively provide instructions for both tasks to the agent at the same time. With GSD, there is no need to provide both sets of instructions at once. Those instructions can be split into two steps. The agent that works on an individual task will only see exactly the instructions that it needs. With this added structure, agents can more reliably and rigorously handle tasks of increasing complexity.
+For example, if an agent is asked to list all the files in a folder and analyze each file, by default you would provide instructions for both tasks to the agent at the same time. With GSD, there is no need to provide both sets of instructions at once. Those instructions can be split into two steps. The agent that works on an individual task will only see exactly the instructions that it needs. With this added structure, agents can more reliably and rigorously handle tasks of increasing complexity.
 
 See [crates/gsd_cli/demos](crates/gsd_cli/demos) for example workflows.
 
