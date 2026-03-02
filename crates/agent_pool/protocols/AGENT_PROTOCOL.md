@@ -2,10 +2,39 @@
 
 You are an agent in a task pool. You'll be given a **pool ID** and optionally a **pool root** (the directory where pools are stored).
 
+**Important:** You are a long-lived worker. After completing a task, you should immediately request the next one. Keep looping until you decide to shut down.
+
+## The agent loop
+
+```
+┌─────────────────────────────────────────┐
+│                                         │
+│   ┌──────────────┐                      │
+│   │  get_task    │◄─────────────────┐   │
+│   └──────┬───────┘                  │   │
+│          │                          │   │
+│          ▼                          │   │
+│   ┌──────────────┐                  │   │
+│   │  do work     │                  │   │
+│   └──────┬───────┘                  │   │
+│          │                          │   │
+│          ▼                          │   │
+│   ┌──────────────┐                  │   │
+│   │ write resp   │──────────────────┘   │
+│   └──────────────┘                      │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+1. Call `get_task` to wait for work
+2. Do the work described in the task
+3. Write your response to `response_file`
+4. **Go back to step 1** - call `get_task` again
+
 ## Getting tasks
 
 ```bash
-pnpm dlx @gsd-now/agent-pool@main [--pool-root <POOL_ROOT>] get_task --pool <POOL_ID> [--name <AGENT_NAME>]
+agent_pool [--pool-root <POOL_ROOT>] get_task --pool <POOL_ID> [--name <AGENT_NAME>]
 ```
 
 If `--pool-root` is not specified, it defaults to `/tmp/agent_pool`. The `--name` parameter is optional and used for debugging/logging only.
@@ -24,7 +53,7 @@ This registers you with the pool and waits for a message. The response includes:
 }
 ```
 
-The `uuid` identifies this task cycle. Use it when submitting your response.
+The `uuid` identifies this task cycle. The `response_file` is where you write your response.
 
 ### Task kinds
 
@@ -75,7 +104,7 @@ You've been removed from the pool (usually due to timeout):
 }
 ```
 
-When you receive this, exit gracefully and call `get_task` again to reconnect.
+When you receive this, you can call `get_task` again to reconnect.
 
 ## Doing the work
 
@@ -85,50 +114,33 @@ Follow the instructions from the task **exactly**. The instructions specify:
 
 **Your response format is dictated by the instructions.** For example, if instructions say "Return an empty array", respond with exactly `[]`. If instructions say "Return a JSON object with field X", respond with exactly that structure. The orchestrator parses your response, so incorrect formats will cause task failures.
 
-## Getting the next task
+## Submitting your response
 
-After completing your work, call `next_task` to submit your response and wait for the next task:
-
-```bash
-pnpm dlx @gsd-now/agent-pool@main [--pool-root <POOL_ROOT>] next_task \
-  --pool <POOL_ID> \
-  --uuid <UUID_FROM_PREVIOUS_TASK> \
-  --data '<YOUR_JSON_RESPONSE>'
-```
-
-**Important:**
-- The `--uuid` must match the UUID from the task you're responding to
-- Always call `next_task` after completing a task, even if the task felt "terminal"
-- The orchestrator decides when work is done - there may always be more tasks
-
-## Alternative: write response file directly
-
-Instead of using `next_task`, you can write directly to the `response_file` path from the task, then call `get_task` again:
+Write your JSON response to the `response_file` path from the task:
 
 ```bash
-# Write response
 echo '<YOUR_JSON_RESPONSE>' > "$RESPONSE_FILE"
-
-# Wait for next task
-pnpm dlx @gsd-now/agent-pool@main get_task --pool <POOL_ID>
 ```
 
-This is equivalent to calling `next_task` but gives you more control.
+Then immediately call `get_task` again to wait for the next task:
+
+```bash
+agent_pool get_task --pool <POOL_ID>
+```
+
+**Do not exit after completing a task.** The orchestrator decides when all work is done. There may always be more tasks coming. Keep calling `get_task` in a loop.
 
 ## Shutting down
 
-### Graceful exit (after submitting final response)
+### Graceful exit
 
-Use `--deregister` to submit your response and exit cleanly without waiting for the next task:
+Simply stop calling `get_task`. Any in-progress task will time out eventually, but no explicit deregistration is needed. The daemon cleans up automatically.
 
-```bash
-pnpm dlx @gsd-now/agent-pool@main next_task \
-  --pool <POOL_ID> \
-  --uuid <UUID> \
-  --data '<YOUR_JSON_RESPONSE>' \
-  --deregister
-```
+### When to shut down
 
-### Immediate exit
+As an agent, you typically run until:
+- The pool shuts down (you'll stop receiving tasks)
+- You're explicitly told to stop by your operator
+- An unrecoverable error occurs
 
-With anonymous workers, you can simply stop calling `get_task`. Any in-progress task will time out eventually, but no explicit deregistration is needed. The daemon cleans up automatically.
+Don't shut down just because a task "felt terminal" - the orchestrator manages the workflow and will keep sending tasks as long as there's work to do.
