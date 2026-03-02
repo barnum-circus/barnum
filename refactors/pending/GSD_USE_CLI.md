@@ -250,6 +250,7 @@ These parts **do not change**:
    - The CLI's `submit_task` defaults to 5 minutes if not specified, which isn't enough
    - GSD handles its own per-step timeouts separately via the task payload
    - **TODO:** Add `--no-timeout` or `--timeout-secs 0` support for truly infinite waits
+   - **TODO:** CLI commands should check status file contains "ready" (not just exists) and understand shutdown signal ("stop")
 
 4. **Pool readiness** - Don't check. Let `submit_task` fail with its own error if daemon isn't running.
    - Removes duplicate logic and keeps error handling in one place
