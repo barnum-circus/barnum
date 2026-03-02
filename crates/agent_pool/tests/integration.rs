@@ -49,7 +49,6 @@ fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMe
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("agent-1");
 
     let response = submit_with_mode(
         &pool,
@@ -69,7 +68,6 @@ fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMe
 
     // === Sync point 4: Agent stopped ===
     let _ = agent.stop();
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("agent-1");
 
     cleanup_pool(&pool);
 }
@@ -103,7 +101,6 @@ fn single_agent_multiple_tasks(
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("agent-1");
 
     // Submit 3 tasks sequentially
     for i in 0..3 {
@@ -127,7 +124,6 @@ fn single_agent_multiple_tasks(
     // === Sync point 4: Agent stopped ===
     let processed = agent.stop();
     assert_eq!(processed.len(), 3, "Agent should process all 3 tasks");
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("agent-1");
 
     cleanup_pool(&pool);
 }
@@ -159,9 +155,6 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
 
     // === Sync point 2: Both agents ready ===
     wait_all_ready(&mut [&mut agent1, &mut agent2]);
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("agent-1");
-    agents.assert_agent_exists("agent-2");
 
     // Submit 4 tasks in parallel
     let handles: Vec<_> = (0..4)
@@ -192,9 +185,6 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
     let total = processed1.len() + processed2.len();
 
     assert_eq!(total, 4, "Both agents combined should process all 4 tasks");
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_not_exists("agent-1");
-    agents.assert_agent_not_exists("agent-2");
 
     cleanup_pool(&pool);
 }
@@ -225,7 +215,6 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
 
     // === Sync point 2: First agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("agent-1");
 
     let response = submit_with_mode(
         &pool,
@@ -242,7 +231,6 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     // === Sync point 4: First agent stopped ===
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("agent-1");
 
     // Wait for daemon to notice agent is gone (update internal state).
     // The directory is already removed, but the daemon needs time to
@@ -252,7 +240,6 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     // === Sync point 5: Second agent ready ===
     let mut agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(5), &pool);
     agent2.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("agent-2");
 
     let response2 = submit_with_mode(
         &pool,
@@ -267,7 +254,6 @@ fn agent_deregistration(#[case] data_source: DataSource, #[case] notify_method: 
     SubmissionsSnapshot::capture(&pool).assert_empty();
     let processed2 = agent2.stop();
     assert_eq!(processed2.len(), 1);
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("agent-2");
 
     cleanup_pool(&pool);
 }
@@ -315,7 +301,6 @@ fn tasks_queued_before_agents(
     // === Sync point 2: Agent joins late ===
     let mut agent = TestAgent::echo(&pool, "late-agent", Duration::from_millis(5), &pool);
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("late-agent");
 
     // Wait for all tasks to complete
     for handle in handles {
@@ -333,7 +318,6 @@ fn tasks_queued_before_agents(
         3,
         "Agent should process all 3 queued tasks"
     );
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("late-agent");
 
     cleanup_pool(&pool);
 }
@@ -364,7 +348,6 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("burst-agent");
 
     // Submit 10 tasks as fast as possible in parallel
     let handles: Vec<_> = (0..10)
@@ -389,7 +372,6 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
     // === Sync point 4: Agent stopped ===
     let processed = agent.stop();
     assert_eq!(processed.len(), 10, "Agent should process all 10 tasks");
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("burst-agent");
 
     cleanup_pool(&pool);
 }
@@ -420,7 +402,6 @@ fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("agent-1");
 
     // Submit 5 tasks with IDENTICAL content
     let task = r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"same"}}}"#;
@@ -440,7 +421,6 @@ fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method
         5,
         "Agent should process all 5 identical tasks"
     );
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("agent-1");
 
     cleanup_pool(&pool);
 }
@@ -475,7 +455,6 @@ fn agent_joins_mid_processing(
 
     // === Sync point 2: First agent ready ===
     agent1.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("slow-agent");
 
     // Submit 6 tasks in parallel
     let handles: Vec<_> = (0..6)
@@ -495,9 +474,6 @@ fn agent_joins_mid_processing(
     // === Sync point 3: Second agent joins mid-processing ===
     let mut agent2 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(5), &pool);
     agent2.wait_ready();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("slow-agent");
-    agents.assert_agent_exists("fast-agent");
 
     // Wait for all tasks to complete
     for handle in handles {
@@ -515,9 +491,6 @@ fn agent_joins_mid_processing(
 
     assert_eq!(total, 6, "Both agents combined should process all 6 tasks");
     assert!(!processed2.is_empty(), "Second agent should have helped");
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_not_exists("slow-agent");
-    agents.assert_agent_not_exists("fast-agent");
 
     cleanup_pool(&pool);
 }
@@ -554,7 +527,6 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    AgentsSnapshot::capture(&pool).assert_agent_exists("echo-agent");
 
     // Submit tasks with distinct IDs in parallel
     let handles: Vec<_> = ["A", "B", "C"]
@@ -589,7 +561,6 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
 
     // === Sync point 4: Agent stopped ===
     agent.stop();
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("echo-agent");
 
     cleanup_pool(&pool);
 }

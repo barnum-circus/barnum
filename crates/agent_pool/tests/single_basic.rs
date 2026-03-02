@@ -44,10 +44,6 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
 
     // === Sync point 2: Agent ready (processed initial heartbeat) ===
     agent.wait_ready();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("agent-1");
-    // Agent dir should have task.json (heartbeat response pending or next heartbeat)
-    // Note: exact files depend on timing, so we just check the dir exists
 
     // === Sync point 3: Task submitted and processed ===
     let response = submit_with_mode(
@@ -69,8 +65,6 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
 
     // === Sync point 4: Agent stopped ===
     let _ = agent.stop();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_not_exists("agent-1");
 
     cleanup_pool(&pool);
 }

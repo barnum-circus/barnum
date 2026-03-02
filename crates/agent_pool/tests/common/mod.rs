@@ -56,12 +56,13 @@ pub fn cleanup_pool(pool: &str) {
 // =============================================================================
 
 /// Snapshot of the agents directory structure.
+///
+/// Note: With the anonymous worker protocol, agents use flat files instead of
+/// directories. This struct checks for stale directories to ensure clean state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentsSnapshot {
-    /// Agent directories that exist (e.g., `agent-1`, `agent-2`)
+    /// Agent directories that exist (legacy - should be empty with anonymous workers)
     pub agent_dirs: BTreeSet<String>,
-    /// Files within each agent directory
-    pub agent_files: std::collections::BTreeMap<String, BTreeSet<String>>,
 }
 
 impl AgentsSnapshot {
@@ -69,7 +70,6 @@ impl AgentsSnapshot {
     pub fn capture(pool: &str) -> Self {
         let agents_dir = pool_path(pool).join("agents");
         let mut agent_dirs = BTreeSet::new();
-        let mut agent_files = std::collections::BTreeMap::new();
 
         if let Ok(entries) = fs::read_dir(&agents_dir) {
             for entry in entries.flatten() {
@@ -80,62 +80,12 @@ impl AgentsSnapshot {
                         .expect("path has filename")
                         .to_string_lossy()
                         .to_string();
-                    agent_dirs.insert(name.clone());
-
-                    let mut files = BTreeSet::new();
-                    if let Ok(file_entries) = fs::read_dir(&path) {
-                        for file_entry in file_entries.flatten() {
-                            let file_name = file_entry.file_name().to_string_lossy().to_string();
-                            files.insert(file_name);
-                        }
-                    }
-                    agent_files.insert(name, files);
+                    agent_dirs.insert(name);
                 }
             }
         }
 
-        Self {
-            agent_dirs,
-            agent_files,
-        }
-    }
-
-    /// Assert that a specific agent directory exists.
-    pub fn assert_agent_exists(&self, agent_name: &str) {
-        assert!(
-            self.agent_dirs.contains(agent_name),
-            "Expected agent '{}' to exist. Actual agents: {:?}",
-            agent_name,
-            self.agent_dirs
-        );
-    }
-
-    /// Assert that a specific agent directory does NOT exist.
-    pub fn assert_agent_not_exists(&self, agent_name: &str) {
-        assert!(
-            !self.agent_dirs.contains(agent_name),
-            "Expected agent '{}' to NOT exist. Actual agents: {:?}",
-            agent_name,
-            self.agent_dirs
-        );
-    }
-
-    /// Assert the exact set of agents that should exist.
-    pub fn assert_agents(&self, expected: &[&str]) {
-        let expected_set: BTreeSet<String> = expected.iter().copied().map(String::from).collect();
-        assert_eq!(self.agent_dirs, expected_set, "Agent directories mismatch");
-    }
-
-    /// Assert that an agent has specific files.
-    pub fn assert_agent_files(&self, agent_name: &str, expected_files: &[&str]) {
-        let expected_set: BTreeSet<String> =
-            expected_files.iter().copied().map(String::from).collect();
-        let actual = self.agent_files.get(agent_name);
-        assert_eq!(
-            actual,
-            Some(&expected_set),
-            "Files in agent '{agent_name}' mismatch. Expected: {expected_set:?}, Actual: {actual:?}",
-        );
+        Self { agent_dirs }
     }
 
     /// Assert no agent directories exist.

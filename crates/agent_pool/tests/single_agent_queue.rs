@@ -49,8 +49,6 @@ fn single_agent_queues_multiple_tasks(
 
     // === Sync point 2: Agent ready ===
     agent.wait_ready();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("only-agent");
 
     // Submit 4 tasks rapidly (they should queue since there's only one agent)
     let handles: Vec<_> = ["Task-A", "Task-B", "Task-C", "Task-D"]
@@ -84,7 +82,6 @@ fn single_agent_queues_multiple_tasks(
 
     // === Sync point 4: Agent stopped ===
     let _ = agent.stop();
-    AgentsSnapshot::capture(&pool).assert_agent_not_exists("only-agent");
 
     cleanup_pool(&pool);
 }

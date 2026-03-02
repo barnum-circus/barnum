@@ -59,10 +59,6 @@ fn multiple_agents_parallel_tasks(
 
     // === Sync point 2: All agents ready ===
     wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_exists("fast-agent");
-    agents.assert_agent_exists("medium-agent");
-    agents.assert_agent_exists("slow-agent");
 
     // Submit 6 tasks rapidly - they'll be distributed across agents
     let handles: Vec<_> = (1..=6)
@@ -96,10 +92,6 @@ fn multiple_agents_parallel_tasks(
     let _ = agent1.stop();
     let _ = agent2.stop();
     let _ = agent3.stop();
-    let agents = AgentsSnapshot::capture(&pool);
-    agents.assert_agent_not_exists("fast-agent");
-    agents.assert_agent_not_exists("medium-agent");
-    agents.assert_agent_not_exists("slow-agent");
 
     cleanup_pool(&pool);
 }
