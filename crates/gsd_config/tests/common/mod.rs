@@ -141,14 +141,16 @@ impl GsdTestAgent {
             let mut processed_tasks = Vec::new();
 
             while running_clone.load(Ordering::SeqCst) {
-                // Wait for task using proper anonymous worker protocol
-                let assignment = match wait_for_task(&pool_root, None, None) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("[test-agent] wait_for_task error: {e}");
-                        break;
-                    }
-                };
+                // Wait for task with short timeout, checking running flag between iterations
+                let assignment =
+                    match wait_for_task(&pool_root, None, Some(Duration::from_millis(100))) {
+                        Ok(a) => a,
+                        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                        Err(e) => {
+                            eprintln!("[test-agent] wait_for_task error: {e}");
+                            break;
+                        }
+                    };
 
                 let TaskAssignment { uuid, content } = assignment;
                 let envelope = extract_task_envelope(&content);

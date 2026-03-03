@@ -123,9 +123,15 @@ impl FileWriterAgent {
         let agent_id = agent_id.to_string();
         let handle = thread::spawn(move || {
             while running_clone.load(Ordering::SeqCst) {
-                // Wait for task using proper protocol (writes ready file, uses canary watcher)
-                let Ok(assignment) = wait_for_task(&pool_root, Some(&agent_id), None) else {
-                    break; // Watcher error or pool shutdown
+                // Wait for task with short timeout, checking running flag between iterations
+                let assignment = match wait_for_task(
+                    &pool_root,
+                    Some(&agent_id),
+                    Some(Duration::from_millis(100)),
+                ) {
+                    Ok(a) => a,
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => continue,
+                    Err(_) => break, // Watcher error or pool shutdown
                 };
 
                 let TaskAssignment { uuid, content } = assignment;
