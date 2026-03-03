@@ -82,7 +82,8 @@ fn categorize_root(path: &Path, event_kind: EventKind, root: &Path) -> Option<Pa
         && let Ok(content) = std::fs::read_to_string(path)
     {
         let trimmed = content.trim();
-        if trimmed == "stop" {
+        // Check for "stop" or "stop|..." marker (for debugging who wrote it)
+        if trimmed == "stop" || trimmed.starts_with("stop|") {
             warn!(
                 path = %path.display(),
                 content = %trimmed,

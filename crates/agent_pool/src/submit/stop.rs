@@ -38,10 +38,21 @@ pub fn stop(root: impl AsRef<Path>) -> io::Result<()> {
     // Signal graceful shutdown by writing "stop" to status file
     warn!(
         pool = %root.display(),
-        pid = pid,
+        target_pid = pid,
+        our_pid = std::process::id(),
         "STOP: writing 'stop' to status file"
     );
-    let _ = fs::write(&status_path, "stop");
+
+    // Write a unique marker to help debug who wrote this
+    let marker = format!(
+        "stop|{}|{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+    );
+    let _ = fs::write(&status_path, &marker);
 
     // Give the daemon a moment to shut down gracefully
     thread::sleep(Duration::from_millis(100));
