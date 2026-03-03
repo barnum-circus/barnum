@@ -105,12 +105,10 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Run tests
-        # -j 1: Run test binaries sequentially (different binaries can't run in parallel)
-        # --test-threads=1: Run tests within a binary sequentially
-        # This avoids inotify race conditions and pool directory conflicts
+        # Run single-threaded to avoid inotify race conditions
         env:
           AGENT_POOL: ${{ github.workspace }}/target/debug/agent_pool
-        run: cargo test --workspace -j 1 -- --nocapture --test-threads=1
+        run: cargo test --workspace -- --nocapture --test-threads=1
 
   demos:
     needs: [gate, build-linux-x64]
