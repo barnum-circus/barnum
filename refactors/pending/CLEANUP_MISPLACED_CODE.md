@@ -29,3 +29,20 @@ Options:
 1. Simplify to just `pool_root.join(id)`
 2. Delete the function entirely and use `pool_root.join(id)` at call sites
 3. Add `debug_assert!(!id.contains('/'))` if we want to catch bugs during development
+
+## 3. String literals with meaning should be constants
+
+Example: The literal `"stop"` and `"ready"` are written/read in multiple places to control daemon state.
+
+Locations:
+- `crates/agent_pool/src/submit/stop.rs:44` - writes `"stop"`
+- `crates/agent_pool/src/daemon/wiring.rs` - checks for `"stop"`
+- `crates/agent_pool/src/daemon/` - writes `"ready"`
+
+These magic strings should be constants (like `STATUS_FILE`, `LOCK_FILE`, etc. in `constants.rs`):
+```rust
+pub const STATUS_READY: &str = "ready";
+pub const STATUS_STOP: &str = "stop";
+```
+
+Ideally this could be enforced via a lint rule, but at minimum document the pattern.

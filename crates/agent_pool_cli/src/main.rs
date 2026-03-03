@@ -56,6 +56,10 @@ struct Cli {
     #[arg(long, global = true)]
     pool_root: Option<PathBuf>,
 
+    /// Log level
+    #[arg(short, long, global = true, default_value = "info")]
+    log_level: LogLevel,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -68,9 +72,6 @@ enum Command {
         /// IDs resolve to `<pool-root>/<id>/` (default: `/tmp/agent_pool/<id>/`)
         #[arg(long)]
         pool: Option<String>,
-        /// Log level
-        #[arg(short, long, default_value = "info")]
-        log_level: LogLevel,
         /// Output pool info as JSON (for scripts)
         #[arg(long)]
         json: bool,
@@ -142,9 +143,6 @@ enum Command {
         /// Agent name (optional, for debugging)
         #[arg(long)]
         name: Option<String>,
-        /// Log level
-        #[arg(short, long, default_value = "off")]
-        log_level: LogLevel,
     },
 }
 
@@ -207,12 +205,12 @@ fn format_task_output(
 #[allow(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    init_tracing(cli.log_level);
     let pool_root = cli.pool_root.unwrap_or_else(default_pool_root);
 
     match cli.command {
         Command::Start {
             pool,
-            log_level,
             json,
             idle_timeout_secs,
             task_timeout_secs,
@@ -228,8 +226,6 @@ fn main() -> ExitCode {
                 eprintln!("{e}");
                 return ExitCode::FAILURE;
             }
-
-            init_tracing(log_level);
 
             // Resolve pool ID or generate new one
             let id = pool.unwrap_or_else(generate_id);
@@ -405,16 +401,11 @@ fn main() -> ExitCode {
 
             print!("{output}");
         }
-        Command::GetTask {
-            pool,
-            name,
-            log_level,
-        } => {
+        Command::GetTask { pool, name } => {
             if let Err(e) = validate_pool_id(&pool) {
                 eprintln!("{e}");
                 return ExitCode::FAILURE;
             }
-            init_tracing(log_level);
 
             let root = resolve_pool(&pool_root, &pool);
 
