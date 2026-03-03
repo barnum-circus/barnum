@@ -100,7 +100,9 @@ struct CanaryGuard {
 }
 
 impl CanaryGuard {
-    fn new(dir: PathBuf) -> io::Result<Self> {
+    fn new(dir: &Path) -> io::Result<Self> {
+        // Canonicalize to match FSEvents paths (e.g., /tmp -> /private/tmp on macOS)
+        let dir = fs::canonicalize(dir)?;
         let path = dir.join(format!("{}.canary", Uuid::new_v4()));
         fs::write(&path, "0")?;
         Ok(Self {
@@ -178,7 +180,7 @@ impl VerifiedWatcher {
 
         let remaining_canaries = canary_dirs
             .iter()
-            .map(|dir| CanaryGuard::new(dir.clone()))
+            .map(|dir| CanaryGuard::new(dir))
             .collect::<io::Result<Vec<_>>>()?;
 
         Ok(Self {
