@@ -60,7 +60,12 @@ fn single_step_terminates() {
 
     agent.stop();
 
-    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        result.status.success(),
+        "GSD should succeed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(
         output_dir.join("Start.done").exists(),
         "Start step should have executed"
@@ -111,7 +116,12 @@ fn multi_stage_linear() {
 
     agent.stop();
 
-    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        result.status.success(),
+        "GSD should succeed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(
         output_dir.join("Start.done").exists(),
         "Start step should have executed"
@@ -287,7 +297,12 @@ fn config_from_file() {
 
     agent.stop();
 
-    assert!(result.status.success(), "GSD should succeed");
+    assert!(
+        result.status.success(),
+        "GSD should succeed.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(
         output_dir.join("FileStep.done").exists(),
         "FileStep should have executed"
