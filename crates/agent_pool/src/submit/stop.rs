@@ -46,12 +46,15 @@ pub fn stop(root: impl AsRef<Path>) -> io::Result<()> {
         "STOP: writing 'stop' to status file"
     );
 
-    // Write a unique marker with pool path to help debug
-    let marker = format!("stop|pid:{}|pool:{}", std::process::id(), root.display());
+    // TEMPORARY: Capture backtrace and write to status file
+    let bt = std::backtrace::Backtrace::force_capture();
+    let marker = format!(
+        "stop|pid:{}|pool:{}|BACKTRACE:\n{}",
+        std::process::id(),
+        root.display(),
+        bt
+    );
     let _ = fs::write(&status_path, &marker);
-
-    // TEMPORARY: Panic to get backtrace showing who called stop()
-    panic!("DEBUG: stop() called on pool {}", root.display());
 
     // Give the daemon a moment to shut down gracefully
     thread::sleep(Duration::from_millis(100));
