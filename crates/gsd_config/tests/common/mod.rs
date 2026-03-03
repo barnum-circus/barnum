@@ -142,13 +142,13 @@ impl GsdTestAgent {
             let mut processed_tasks = Vec::new();
 
             while running_clone.load(Ordering::SeqCst) {
-                // Wait for task - no timeout, stop() triggers exit by deleting agents dir
-                let assignment = match wait_for_task(&pool_root, None, None) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("[test-agent] wait_for_task error: {e}");
-                        break;
-                    }
+                // Use timeout so we can check running flag periodically.
+                // CLI stop may not reliably cause the watcher to error.
+                let Ok(assignment) =
+                    wait_for_task(&pool_root, None, Some(Duration::from_millis(500)))
+                else {
+                    // Timeout or error - check running flag and retry
+                    continue;
                 };
 
                 let TaskAssignment { uuid, content } = assignment;
@@ -227,10 +227,8 @@ impl GsdTestAgent {
 
     /// Stop the agent and return the list of payloads it processed.
     ///
-    /// Stops the daemon via CLI, which:
-    /// 1. Cleans up the agents directory
-    /// 2. Causes `wait_for_task` to fail with a watcher error
-    /// 3. Agent threads exit and return their processed tasks
+    /// Sets the running flag to false and stops the daemon via CLI.
+    /// The agent thread exits on the next timeout check.
     pub fn stop(mut self) -> Vec<String> {
         self.running.store(false, Ordering::SeqCst);
         // Stop the daemon via CLI - this kicks all agents as part of cleanup
