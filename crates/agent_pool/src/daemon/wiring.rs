@@ -15,7 +15,6 @@ use std::time::Duration;
 use interprocess::local_socket::{
     GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, prelude::*,
 };
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tracing::{debug, info, trace, warn};
 
 use std::collections::HashSet;
@@ -25,6 +24,7 @@ use crate::constants::{
 };
 use crate::lock::{LockGuard, acquire_lock};
 use crate::submit::Payload;
+use crate::verified_watcher::VerifiedWatcher;
 
 use super::core::{Effect, Event, WorkerId};
 use super::io::{
@@ -188,24 +188,33 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
         fs::remove_file(&socket_path)?;
     }
 
-    // Create unified event channel
-    let (io_tx, io_rx) = mpsc::channel();
+    // Create directories first (needed for watcher canary)
+    fs::create_dir_all(&submissions_dir)?;
+    fs::create_dir_all(&agents_dir)?;
+    fs::create_dir_all(&scratch_dir)?;
 
-    // Start watcher FIRST - before creating anything - so we can verify all FS events
-    let _fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
     // Clean up pool state on exit (SIGTERM or panic)
     let _pool_cleanup = PoolStateCleanup(root.clone());
 
-    // Now create everything and verify we see all the events
-    let (_lock, listener) = sync_and_setup(
-        &root,
-        &lock_path,
-        &socket_path,
-        &submissions_dir,
-        &agents_dir,
-        &scratch_dir,
-        &io_rx,
-    )?;
+    // Use VerifiedWatcher with canary verification
+    let verified_watcher = VerifiedWatcher::new(&root, root.clone())?;
+    let (_fs_watcher, fs_rx) = verified_watcher.into_receiver(Duration::from_secs(5))?;
+
+    // Create unified event channel
+    let (io_tx, io_rx) = mpsc::channel();
+
+    // Spawn thread to forward FS events to unified channel
+    let fs_io_tx = io_tx.clone();
+    thread::spawn(move || {
+        while let Ok(event) = fs_rx.recv() {
+            if fs_io_tx.send(IoEvent::Fs(event)).is_err() {
+                break;
+            }
+        }
+    });
+
+    // Acquire lock and create socket listener
+    let (_lock, listener) = acquire_lock_and_socket(&lock_path, &socket_path)?;
 
     let _cleanup = SocketCleanup(socket_path.clone());
 
@@ -752,118 +761,14 @@ fn create_socket_listener(socket_path: &Path) -> io::Result<Listener> {
     Ok(listener)
 }
 
-fn create_fs_watcher(root: &Path, io_tx: mpsc::Sender<IoEvent>) -> io::Result<RecommendedWatcher> {
-    let config =
-        notify::Config::default().with_poll_interval(std::time::Duration::from_millis(100));
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                // Send all events - categorize() filters for meaningful ones
-                let _ = io_tx.send(IoEvent::Fs(event));
-            }
-        },
-        config,
-    )
-    .map_err(io::Error::other)?;
-
-    // Watch root recursively to catch both agents/ and pending/ events
-    watcher
-        .watch(root, RecursiveMode::Recursive)
-        .map_err(io::Error::other)?;
-
-    Ok(watcher)
-}
-
-/// Set up the daemon and verify the watcher sees events.
-///
-/// This function:
-/// 1. Creates the lock file and acquires the lock
-/// 2. Creates the socket and starts listening
-/// 3. Creates both directories (submissions, agents)
-/// 4. Writes a canary file to verify watcher sees events
-/// 5. Waits until we see ANY filesystem event (proves watcher is working)
-/// 6. Cleans up canary file
-///
-/// # Key Assumption
-///
-/// Once we observe any filesystem event, the watcher is fully operational.
-/// Filesystem watchers (`FSEvents` on macOS, inotify on Linux) don't "partially work".
-/// The only failure mode is during initial setup - there's a brief window after
-/// `watch()` returns where events might not be delivered yet. Once we receive ANY
-/// event, we can trust the watcher is working for the entire directory tree.
-///
-/// Returns the lock guard and socket listener on success.
-///
-/// # Panics
-///
-/// Panics if an unexpected non-FS event is received.
-#[allow(clippy::panic)]
-fn sync_and_setup(
-    root: &Path,
+/// Acquire the daemon lock and create the socket listener.
+fn acquire_lock_and_socket(
     lock_path: &Path,
     socket_path: &Path,
-    submissions_dir: &Path,
-    agents_dir: &Path,
-    scratch_dir: &Path,
-    io_rx: &mpsc::Receiver<IoEvent>,
 ) -> io::Result<(LockGuard, Listener)> {
-    const POLL_TIMEOUT: Duration = Duration::from_millis(100);
-    const MAX_DURATION: Duration = Duration::from_secs(5);
-
-    let canary_path = root.join("daemon.canary");
-
-    debug!("waiting for watcher sync via canary file");
-
-    // Create lock and socket first (before watcher matters)
     let lock = acquire_lock(lock_path)?;
     let listener = create_socket_listener(socket_path)?;
-
-    // Create directories
-    fs::create_dir_all(submissions_dir)?;
-    fs::create_dir_all(agents_dir)?;
-    fs::create_dir_all(scratch_dir)?;
-
-    // Write canary file to trigger an event
-    fs::write(&canary_path, "0")?;
-
-    let start = std::time::Instant::now();
-    let mut retry_count = 0u32;
-    while start.elapsed() < MAX_DURATION {
-        match io_rx.recv_timeout(POLL_TIMEOUT) {
-            Ok(IoEvent::Fs(event)) => {
-                // Any filesystem event proves the watcher is working.
-                // We don't care which path triggered it - the key insight is that
-                // filesystem watchers don't "partially work".
-                debug!(
-                    "watcher sync complete - received event {:?} for {:?}",
-                    event.kind, event.paths
-                );
-                let _ = fs::remove_file(&canary_path);
-                return Ok((lock, listener));
-            }
-            Ok(_) => panic!("unexpected non-FS event during startup sync"),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                // On timeout, rewrite canary with incrementing value to trigger new event
-                retry_count += 1;
-                fs::write(&canary_path, retry_count.to_string())?;
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = fs::remove_file(&canary_path);
-                return Err(io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "watcher channel disconnected",
-                ));
-            }
-        }
-    }
-
-    warn!("watcher sync timed out - no events received");
-    let _ = fs::remove_file(&canary_path);
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        "watcher sync timed out - no events received",
-    ))
+    Ok((lock, listener))
 }
 
 struct SocketCleanup(PathBuf);

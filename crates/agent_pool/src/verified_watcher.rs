@@ -128,7 +128,7 @@ impl Drop for CanaryGuard {
 
 /// Internal state of the watcher.
 struct WatcherState {
-    rx: mpsc::Receiver<PathBuf>,
+    rx: mpsc::Receiver<notify::Event>,
     /// Canary guards for directories still being verified.
     /// As directories are verified, their canaries are removed.
     remaining_canaries: Vec<CanaryGuard>,
@@ -144,7 +144,7 @@ struct WatcherState {
 /// Canaries are removed as their directories are verified. When all canaries
 /// are gone, the watcher is fully verified.
 pub struct VerifiedWatcher {
-    _watcher: RecommendedWatcher,
+    watcher: RecommendedWatcher,
     state: WatcherState,
 }
 
@@ -164,9 +164,7 @@ impl VerifiedWatcher {
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
                 if let Ok(event) = res {
-                    for path in event.paths {
-                        let _ = tx.send(path);
-                    }
+                    let _ = tx.send(event);
                 }
             },
             Config::default(),
@@ -180,7 +178,7 @@ impl VerifiedWatcher {
         let canary = CanaryGuard::new(canary_dir)?;
 
         Ok(Self {
-            _watcher: watcher,
+            watcher,
             state: WatcherState {
                 rx,
                 remaining_canaries: vec![canary],
@@ -222,14 +220,16 @@ impl VerifiedWatcher {
             }
 
             match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(path) => {
-                    // Remove canary for verified directory
-                    if let Some(parent) = path.parent() {
-                        remaining_canaries.retain(|c| c.dir() != parent);
-                    }
+                Ok(event) => {
+                    for path in &event.paths {
+                        // Remove canary for verified directory
+                        if let Some(parent) = path.parent() {
+                            remaining_canaries.retain(|c| c.dir() != parent);
+                        }
 
-                    if path == target {
-                        return Ok(());
+                        if path == target {
+                            return Ok(());
+                        }
                     }
                     if target.exists() {
                         return Ok(());
@@ -252,6 +252,59 @@ impl VerifiedWatcher {
                 }
             }
         }
+    }
+
+    /// Consume the watcher and return the raw receiver after verification.
+    ///
+    /// Blocks until all canary directories are verified, then returns both the
+    /// watcher handle and the event receiver. The caller must keep the watcher
+    /// in scope - dropping it stops the filesystem watch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if verification times out.
+    pub fn into_receiver(
+        self,
+        timeout: Duration,
+    ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>)> {
+        let WatcherState {
+            rx,
+            mut remaining_canaries,
+        } = self.state;
+
+        let start = Instant::now();
+        while !remaining_canaries.is_empty() {
+            if start.elapsed() > timeout {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "verification timed out",
+                ));
+            }
+
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(event) => {
+                    for path in &event.paths {
+                        if let Some(parent) = path.parent() {
+                            remaining_canaries.retain(|c| c.dir() != parent);
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    for canary in &mut remaining_canaries {
+                        canary.retry()?;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "watcher disconnected",
+                    ));
+                }
+            }
+        }
+
+        // Canaries verified and will be cleaned up when remaining_canaries drops
+        Ok((self.watcher, rx))
     }
 }
 
