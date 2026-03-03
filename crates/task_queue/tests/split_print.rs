@@ -6,8 +6,10 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::use_self)]
 
+use rstest::rstest;
 use std::collections::HashSet;
 use std::process::Command;
+use std::time::Duration;
 use task_queue::{IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem, process_queue};
 
 /// Test context tracking task lifecycle events.
@@ -163,7 +165,9 @@ impl QueueItem<Context> for Print {
     }
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 async fn split_then_print_collects_all_values() {
     let mut ctx = Context::default();
 

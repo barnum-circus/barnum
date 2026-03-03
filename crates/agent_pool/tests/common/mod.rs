@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use uuid::Uuid;
@@ -164,8 +163,6 @@ pub struct TestAgent {
     /// PID of current CLI subprocess (for killing on stop)
     current_pid: Arc<AtomicU32>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
-    /// Receiver that signals when the agent has registered (ready file written).
-    ready_rx: Option<mpsc::Receiver<()>>,
     /// Test name for logging purposes
     #[allow(dead_code)]
     test_name: String,
@@ -182,9 +179,6 @@ impl TestAgent {
     ///
     /// The processor receives the task content (as JSON string) and agent ID,
     /// returning the response string.
-    ///
-    /// After starting, call `wait_ready()` to block until the agent has registered
-    /// with the daemon and is ready to receive tasks.
     pub fn start<F>(
         pool: &str,
         agent_id: &str,
@@ -204,17 +198,12 @@ impl TestAgent {
         let bin = find_agent_pool_binary();
         let test_name_owned = test_name.to_string();
 
-        // Channel to signal when the agent has registered (ready file written)
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
-
         // Shared storage for the ready file path (for cleanup on stop)
         let ready_file = Arc::new(std::sync::Mutex::new(None::<PathBuf>));
-        let ready_file_clone = ready_file.clone();
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
             let mut pending_response: Option<(String, String)> = None; // (response_file, response_data)
-            let mut first_iteration = true;
 
             loop {
                 if !running_clone.load(Ordering::SeqCst) {
@@ -251,58 +240,6 @@ impl TestAgent {
 
                 // Store PID for potential killing by stop()
                 current_pid_clone.store(child.id(), Ordering::SeqCst);
-
-                // Signal ready on first iteration after spawning get_task command.
-                // The get_task command writes the ready file before waiting for tasks.
-                // We need to wait for:
-                // 1. CLI to write the ready file
-                // 2. FSEvents to deliver the event
-                // 3. Daemon to process the event and add the worker
-                //
-                // We detect a NEW ready file by comparing sets before and after.
-                if first_iteration {
-                    first_iteration = false;
-                    let agents_dir = pool_path(&pool_owned).join("agents");
-
-                    // Get existing ready files
-                    let get_ready_files = || -> std::collections::HashSet<PathBuf> {
-                        fs::read_dir(&agents_dir)
-                            .map(|entries| {
-                                entries
-                                    .filter_map(Result::ok)
-                                    .filter(|e| {
-                                        e.path()
-                                            .file_name()
-                                            .and_then(|n| n.to_str())
-                                            .is_some_and(|n| n.ends_with(".ready.json"))
-                                    })
-                                    .map(|e| e.path())
-                                    .collect()
-                            })
-                            .unwrap_or_default()
-                    };
-
-                    let initial_files = get_ready_files();
-
-                    // Poll for a NEW ready file to appear
-                    let start = std::time::Instant::now();
-                    while start.elapsed() < Duration::from_secs(5) {
-                        let current_files = get_ready_files();
-                        let new_files: Vec<_> =
-                            current_files.difference(&initial_files).cloned().collect();
-                        if !new_files.is_empty() {
-                            // Store the ready file path for cleanup
-                            if let Ok(mut guard) = ready_file_clone.lock() {
-                                *guard = Some(new_files[0].clone());
-                            }
-                            // Give daemon a moment to process the FSEvent
-                            thread::sleep(Duration::from_millis(200));
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    let _ = ready_tx.send(());
-                }
 
                 // Forward stderr in background thread so it shows with --nocapture
                 let stderr_agent_id = agent_id_owned.clone();
@@ -414,7 +351,6 @@ impl TestAgent {
             running,
             current_pid,
             handle: Some(handle),
-            ready_rx: Some(ready_rx),
             test_name: test_name.to_string(),
             pool: pool.to_string(),
             agent_id: agent_id.to_string(),
@@ -465,21 +401,6 @@ impl TestAgent {
             },
             test_name,
         )
-    }
-
-    /// Wait for the agent to be ready (registered with the daemon).
-    ///
-    /// This blocks until the agent has written its ready file and the daemon
-    /// has processed the registration event.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the agent thread exits before signaling readiness.
-    pub fn wait_ready(&mut self) {
-        if let Some(rx) = self.ready_rx.take() {
-            rx.recv().expect("Agent exited before signaling readiness");
-        }
-        // If ready_rx is None, we've already waited - that's fine
     }
 
     /// Stop the agent and return the list of tasks it processed.

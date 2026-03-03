@@ -3,9 +3,11 @@
 #![expect(clippy::expect_used)]
 #![expect(clippy::needless_raw_string_hashes)]
 
+use rstest::rstest;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 use task_queue::{NoMoreTasks, ProcessQueueOptions, QueueItem, process_queue};
 
 /// A task that tracks how many tasks are running concurrently.
@@ -55,7 +57,9 @@ impl QueueItem<()> for ConcurrencyTask {
 // If this test becomes flaky in CI, increase the sleep duration or lower the
 // "at least 2" assertion. Some timing dependency is unavoidable when testing
 // real concurrent command execution without mocking.
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 async fn respects_max_concurrency() {
     let current_count = Arc::new(AtomicUsize::new(0));
     let max_observed = Arc::new(AtomicUsize::new(0));

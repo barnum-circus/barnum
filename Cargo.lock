@@ -494,7 +494,9 @@ dependencies = [
  "agent_pool",
  "clap",
  "gsd_config",
+ "interprocess",
  "json5",
+ "rstest",
  "serde_json",
  "tracing-subscriber",
 ]
@@ -506,6 +508,7 @@ dependencies = [
  "agent_pool",
  "interprocess",
  "jsonschema",
+ "rstest",
  "serde",
  "serde_json",
  "tracing",
@@ -1590,6 +1593,7 @@ dependencies = [
 name = "task_queue"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "serde",
  "serde_json",
  "task_queue_macro",

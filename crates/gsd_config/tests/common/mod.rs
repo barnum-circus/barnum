@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{AGENTS_DIR, RESPONSE_FILE, TASK_FILE, wait_for_pool_ready};
+use agent_pool::{TaskAssignment, wait_for_pool_ready, wait_for_task, write_response};
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -119,92 +118,54 @@ fn extract_task_envelope(raw: &str) -> TaskEnvelope {
 pub struct GsdTestAgent {
     running: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
-    /// Receiver that signals when the agent has processed its first message (heartbeat).
-    /// This allows tests to wait for the agent to be fully ready without arbitrary sleeps.
-    ready_rx: Option<mpsc::Receiver<()>>,
 }
 
 impl GsdTestAgent {
     /// Start a GSD test agent with a custom processing function.
     ///
-    /// The processor receives the full payload JSON and returns the response JSON.
+    /// Uses the anonymous worker protocol:
+    /// 1. Writes `<uuid>.ready.json` to signal availability
+    /// 2. Waits for `<uuid>.task.json` from daemon
+    /// 3. Processes task and writes `<uuid>.response.json`
     ///
-    /// After starting, call `wait_ready()` to block until the agent has processed
-    /// its first message (heartbeat) and is ready to receive real tasks.
-    pub fn start<F>(root: &Path, agent_id: &str, processing_delay: Duration, processor: F) -> Self
+    /// The processor receives the full payload JSON and returns the response JSON.
+    pub fn start<F>(root: &Path, _agent_id: &str, processing_delay: Duration, processor: F) -> Self
     where
         F: Fn(&str) -> String + Send + 'static,
     {
-        let agent_dir = root.join(AGENTS_DIR).join(agent_id);
-        fs::create_dir_all(&agent_dir).expect("Failed to create agent directory");
-
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
-
-        // Channel to signal when the agent has processed its first message (heartbeat)
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
+        let pool_root = root.to_path_buf();
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
-            let task_file = agent_dir.join(TASK_FILE);
-            let response_file = agent_dir.join(RESPONSE_FILE);
-            let mut first_message_processed = false;
 
             while running_clone.load(Ordering::SeqCst) {
-                // Check for task file
-                if task_file.exists() && !response_file.exists() {
-                    let Ok(raw) = fs::read_to_string(&task_file) else {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
-                    };
-
-                    // Skip empty reads (file might still be written)
-                    if raw.is_empty() {
-                        thread::sleep(Duration::from_millis(10));
-                        continue;
+                // Wait for task using proper anonymous worker protocol
+                let assignment = match wait_for_task(&pool_root, None, None) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("[test-agent] wait_for_task error: {e}");
+                        break;
                     }
+                };
 
-                    // Extract kind/content from envelope
-                    let envelope = extract_task_envelope(&raw);
+                let TaskAssignment { uuid, content } = assignment;
+                let envelope = extract_task_envelope(&content);
 
-                    // Handle daemon control messages immediately
-                    match envelope.kind.as_str() {
-                        "Heartbeat" => {
-                            let _ = fs::write(&response_file, "{}");
-                            // Signal ready after processing first heartbeat
-                            if !first_message_processed {
-                                first_message_processed = true;
-                                let _ = ready_tx.send(());
-                            }
-                            thread::sleep(Duration::from_millis(10));
-                            continue;
-                        }
-                        "Kicked" => {
-                            // Agent is being kicked, exit gracefully
-                            break;
-                        }
-                        _ => {}
-                    }
-
-                    thread::sleep(processing_delay);
-
-                    let response = processor(&envelope.content);
-
-                    // Push BEFORE writing response to avoid race where daemon sees
-                    // response but agent is stopped before incrementing count
-                    processed_tasks.push(envelope.content.trim().to_string());
-
-                    // Write response (daemon handles cleanup of both files)
-                    let _ = fs::write(&response_file, &response);
-
-                    // Signal ready AFTER writing response for non-heartbeat messages
-                    if !first_message_processed {
-                        first_message_processed = true;
-                        let _ = ready_tx.send(());
-                    }
+                // Handle daemon control messages (Kicked = shutdown)
+                if envelope.kind == "Kicked" {
+                    break;
                 }
 
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(processing_delay);
+
+                let response = processor(&envelope.content);
+
+                // Track processed tasks before writing response
+                processed_tasks.push(envelope.content.trim().to_string());
+
+                let _ = write_response(&pool_root, &uuid, &response);
             }
 
             processed_tasks
@@ -213,7 +174,6 @@ impl GsdTestAgent {
         Self {
             running,
             handle: Some(handle),
-            ready_rx: Some(ready_rx),
         }
     }
 
@@ -269,21 +229,6 @@ impl GsdTestAgent {
         })
     }
 
-    /// Wait for the agent to be ready (has processed its first message).
-    ///
-    /// This blocks until the agent has received and processed the initial heartbeat
-    /// from the daemon, indicating it's fully registered and ready to receive tasks.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the agent thread exits before signaling readiness.
-    pub fn wait_ready(&mut self) {
-        if let Some(rx) = self.ready_rx.take() {
-            rx.recv().expect("Agent exited before signaling readiness");
-        }
-        // If ready_rx is None, we've already waited - that's fine
-    }
-
     /// Stop the agent and return the list of payloads it processed.
     pub fn stop(mut self) -> Vec<String> {
         self.running.store(false, Ordering::SeqCst);
@@ -300,7 +245,7 @@ impl GsdTestAgent {
 // =============================================================================
 
 /// Find the `agent_pool` binary.
-fn find_agent_pool_binary() -> PathBuf {
+pub fn find_agent_pool_binary() -> PathBuf {
     if let Ok(bin) = std::env::var("AGENT_POOL_BIN") {
         return PathBuf::from(bin);
     }
@@ -343,7 +288,9 @@ impl AgentPoolHandle {
             .arg("--pool")
             .arg(root.file_name().unwrap_or_default())
             .arg("--log-level")
-            .arg("trace");
+            .arg("trace")
+            // No heartbeats needed - agents signal ready immediately
+            .arg("--no-heartbeat");
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

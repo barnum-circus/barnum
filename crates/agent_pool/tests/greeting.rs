@@ -43,10 +43,7 @@ fn greeting_casual_and_formal(
     let agents = AgentsSnapshot::capture(&pool);
     agents.assert_no_agents();
 
-    let mut agent = TestAgent::greeting(&pool, "friendly-bot", Duration::from_millis(10), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::greeting(&pool, "friendly-bot", Duration::from_millis(10), &pool);
 
     let casual = submit_with_mode(
         &pool,

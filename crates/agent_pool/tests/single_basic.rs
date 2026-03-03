@@ -40,12 +40,9 @@ fn single_agent_single_task(#[case] data_source: DataSource, #[case] notify_meth
     let agents = AgentsSnapshot::capture(&pool);
     agents.assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(10), &pool);
+    let agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(10), &pool);
 
-    // === Sync point 2: Agent ready (registered with daemon) ===
-    agent.wait_ready();
-
-    // === Sync point 3: Task submitted and processed ===
+    // Submit task
     let response = submit_with_mode(
         &pool,
         r#"{"kind":"Task","task":{"instructions":"echo","data":"Hello, World!"}}"#,

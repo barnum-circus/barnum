@@ -9,8 +9,12 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
+use rstest::rstest;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,7 +23,8 @@ use std::time::Duration;
 const TEST_DIR: &str = "retry_behavior";
 
 /// Test that retry_on_invalid_response=false drops tasks immediately.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn retry_on_invalid_response_false_drops_task() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -35,7 +40,7 @@ fn retry_on_invalid_response_false_drops_task() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "invalid-agent",
         Duration::from_millis(10),
@@ -47,7 +52,6 @@ fn retry_on_invalid_response_false_drops_task() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -77,6 +81,7 @@ fn retry_on_invalid_response_false_drops_task() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped
@@ -94,7 +99,8 @@ fn retry_on_invalid_response_false_drops_task() {
 }
 
 /// Test that retry_on_invalid_response=true retries up to max_retries.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn retry_on_invalid_response_true_retries() {
     let root = setup_test_dir(&format!("{TEST_DIR}_retry_true"));
 
@@ -110,7 +116,7 @@ fn retry_on_invalid_response_true_retries() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "invalid-agent",
         Duration::from_millis(10),
@@ -121,7 +127,6 @@ fn retry_on_invalid_response_true_retries() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -151,6 +156,7 @@ fn retry_on_invalid_response_true_retries() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped after all retries
@@ -168,7 +174,8 @@ fn retry_on_invalid_response_true_retries() {
 }
 
 /// Test that agent returning malformed JSON triggers retry.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn malformed_json_triggers_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_malformed"));
 
@@ -184,7 +191,7 @@ fn malformed_json_triggers_retry() {
     let count_clone = call_count.clone();
 
     // Agent that returns invalid JSON
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "malformed-agent",
         Duration::from_millis(10),
@@ -195,7 +202,6 @@ fn malformed_json_triggers_retry() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -220,6 +226,7 @@ fn malformed_json_triggers_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped after all retries
@@ -237,7 +244,8 @@ fn malformed_json_triggers_retry() {
 }
 
 /// Test that per-step options override global options.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn per_step_options_override_global() {
     let root = setup_test_dir(&format!("{TEST_DIR}_per_step"));
 
@@ -253,7 +261,7 @@ fn per_step_options_override_global() {
     let count_clone = call_count.clone();
 
     // Agent that always returns invalid response
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "override-agent",
         Duration::from_millis(10),
@@ -264,7 +272,6 @@ fn per_step_options_override_global() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     // Global: retry=true, max_retries=5
     // Step: retry=false (override)
@@ -299,6 +306,7 @@ fn per_step_options_override_global() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("NoRetryStep", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped
@@ -316,7 +324,8 @@ fn per_step_options_override_global() {
 }
 
 /// Test successful recovery after initial failures.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn recovery_on_nth_attempt() {
     let root = setup_test_dir(&format!("{TEST_DIR}_recovery"));
 
@@ -332,7 +341,7 @@ fn recovery_on_nth_attempt() {
     let count_clone = call_count.clone();
 
     // Agent that fails twice, then succeeds
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "recovery-agent",
         Duration::from_millis(10),
@@ -349,7 +358,6 @@ fn recovery_on_nth_attempt() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -374,6 +382,7 @@ fn recovery_on_nth_attempt() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -389,7 +398,8 @@ fn recovery_on_nth_attempt() {
 }
 
 /// Test that max_retries=0 means no retries at all.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn max_retries_zero_no_retries() {
     let root = setup_test_dir(&format!("{TEST_DIR}_zero_retries"));
 
@@ -404,7 +414,7 @@ fn max_retries_zero_no_retries() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
 
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "no-retry-agent",
         Duration::from_millis(10),
@@ -415,7 +425,6 @@ fn max_retries_zero_no_retries() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -440,6 +449,7 @@ fn max_retries_zero_no_retries() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped

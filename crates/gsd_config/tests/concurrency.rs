@@ -10,21 +10,18 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task, TaskRunner};
+use rstest::rstest;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-
-/// Wait for all agents to be ready (have processed their initial heartbeats).
-fn wait_all_ready(agents: &mut [&mut GsdTestAgent]) {
-    for agent in agents {
-        agent.wait_ready();
-    }
-}
 
 const TEST_DIR: &str = "concurrency";
 
@@ -47,7 +44,8 @@ fn worker_config() -> Config {
 ///
 /// If tasks were processed sequentially, N tasks with 100ms delay would take
 /// at least N*100ms. With parallelism, they should complete much faster.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn tasks_execute_in_parallel() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -61,12 +59,9 @@ fn tasks_execute_in_parallel() {
 
     // Start 3 agents with 100ms processing delay
     let processing_delay = Duration::from_millis(100);
-    let mut agent1 = GsdTestAgent::terminator(&root, "agent-1", processing_delay);
-    let mut agent2 = GsdTestAgent::terminator(&root, "agent-2", processing_delay);
-    let mut agent3 = GsdTestAgent::terminator(&root, "agent-3", processing_delay);
-
-    // Wait for all agents to be ready (have processed initial heartbeats)
-    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
+    let _agent1 = GsdTestAgent::terminator(&root, "agent-1", processing_delay);
+    let _agent2 = GsdTestAgent::terminator(&root, "agent-2", processing_delay);
+    let _agent3 = GsdTestAgent::terminator(&root, "agent-3", processing_delay);
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -82,6 +77,7 @@ fn tasks_execute_in_parallel() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     let start = Instant::now();
@@ -100,7 +96,8 @@ fn tasks_execute_in_parallel() {
 }
 
 /// Test that work is distributed across multiple agents.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn work_distributed_across_agents() {
     let root = setup_test_dir(&format!("{TEST_DIR}_distribution"));
 
@@ -124,21 +121,18 @@ fn work_distributed_across_agents() {
     // Use longer delay to ensure multiple agents get work
     let delay = Duration::from_millis(50);
 
-    let mut agent1 = GsdTestAgent::start(&root, "agent-1", delay, move |_| {
+    let _agent1 = GsdTestAgent::start(&root, "agent-1", delay, move |_| {
         count1.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
-    let mut agent2 = GsdTestAgent::start(&root, "agent-2", delay, move |_| {
+    let _agent2 = GsdTestAgent::start(&root, "agent-2", delay, move |_| {
         count2.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
-    let mut agent3 = GsdTestAgent::start(&root, "agent-3", delay, move |_| {
+    let _agent3 = GsdTestAgent::start(&root, "agent-3", delay, move |_| {
         count3.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
-
-    // Wait for all agents to be ready (have processed initial heartbeats)
-    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -152,6 +146,7 @@ fn work_distributed_across_agents() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -177,7 +172,8 @@ fn work_distributed_across_agents() {
 }
 
 /// Test that max_concurrency limits concurrent task submission.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn max_concurrency_limits_parallel_tasks() {
     let root = setup_test_dir(&format!("{TEST_DIR}_max_concurrency"));
 
@@ -198,7 +194,7 @@ fn max_concurrency_limits_parallel_tasks() {
     let delay = Duration::from_millis(50);
 
     // Single agent that tracks concurrency
-    let mut agent = GsdTestAgent::start(&root, "tracker", delay, move |_| {
+    let _agent = GsdTestAgent::start(&root, "tracker", delay, move |_| {
         let current = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Update max if higher
@@ -219,7 +215,6 @@ fn max_concurrency_limits_parallel_tasks() {
     });
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     // Config with max_concurrency = 2
     let config: Config = serde_json::from_str(
@@ -249,6 +244,7 @@ fn max_concurrency_limits_parallel_tasks() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -265,7 +261,8 @@ fn max_concurrency_limits_parallel_tasks() {
 }
 
 /// Test the TaskRunner iterator interface yields results as they complete.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn task_runner_yields_results_incrementally() {
     let root = setup_test_dir(&format!("{TEST_DIR}_iterator"));
 
@@ -276,10 +273,9 @@ fn task_runner_yields_results_incrementally() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -293,6 +289,7 @@ fn task_runner_yields_results_incrementally() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -309,7 +306,8 @@ fn task_runner_yields_results_incrementally() {
 }
 
 /// Test that TaskRunner.is_empty() returns correct status.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn task_runner_is_empty_status() {
     let root = setup_test_dir(&format!("{TEST_DIR}_is_empty"));
 
@@ -320,10 +318,9 @@ fn task_runner_is_empty_status() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = worker_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -333,6 +330,7 @@ fn task_runner_is_empty_status() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Worker", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -348,7 +346,8 @@ fn task_runner_is_empty_status() {
 }
 
 /// Test that nested fan-out works correctly (A -> B1,B2 -> each spawns C).
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn nested_fan_out() {
     let root = setup_test_dir(&format!("{TEST_DIR}_nested"));
 
@@ -363,7 +362,7 @@ fn nested_fan_out() {
     let processed_kinds = Arc::new(std::sync::Mutex::new(Vec::new()));
     let kinds_clone = processed_kinds.clone();
 
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "nested-agent",
         Duration::from_millis(10),
@@ -389,7 +388,6 @@ fn nested_fan_out() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -413,6 +411,7 @@ fn nested_fan_out() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Root", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

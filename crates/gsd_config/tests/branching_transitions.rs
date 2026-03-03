@@ -6,8 +6,12 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
+use rstest::rstest;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,7 +49,8 @@ fn branching_config() -> Config {
     .expect("parse config")
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn branch_to_path_a() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -56,7 +61,7 @@ fn branch_to_path_a() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::with_transitions(
+    let agent = GsdTestAgent::with_transitions(
         &root,
         "path-a-agent",
         Duration::from_millis(10),
@@ -64,7 +69,6 @@ fn branch_to_path_a() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -73,6 +77,7 @@ fn branch_to_path_a() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -91,7 +96,8 @@ fn branch_to_path_a() {
     cleanup_test_dir(TEST_DIR);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn branch_to_path_b() {
     let root = setup_test_dir(&format!("{TEST_DIR}_path_b"));
 
@@ -102,7 +108,7 @@ fn branch_to_path_b() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::with_transitions(
+    let agent = GsdTestAgent::with_transitions(
         &root,
         "path-b-agent",
         Duration::from_millis(10),
@@ -110,7 +116,6 @@ fn branch_to_path_b() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -119,6 +124,7 @@ fn branch_to_path_b() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -137,7 +143,8 @@ fn branch_to_path_b() {
     cleanup_test_dir(&format!("{TEST_DIR}_path_b"));
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn fan_out_multiple_tasks() {
     let root = setup_test_dir(&format!("{TEST_DIR}_fan_out"));
 
@@ -153,7 +160,7 @@ fn fan_out_multiple_tasks() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = call_count.clone();
 
-    let mut agent = GsdTestAgent::start(
+    let agent = GsdTestAgent::start(
         &root,
         "fan-out-agent",
         Duration::from_millis(10),
@@ -175,7 +182,6 @@ fn fan_out_multiple_tasks() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = branching_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -184,6 +190,7 @@ fn fan_out_multiple_tasks() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Decide", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

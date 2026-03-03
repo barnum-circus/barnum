@@ -12,7 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -99,7 +98,6 @@ fn extract_task_envelope(raw: &str) -> (String, String) {
 pub struct FileWriterAgent {
     running: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
-    ready_rx: Option<mpsc::Receiver<()>>,
 }
 
 impl FileWriterAgent {
@@ -123,11 +121,7 @@ impl FileWriterAgent {
         let output_dir = output_dir.to_path_buf();
         let pool_root = pool_root.to_path_buf();
         let agent_id = agent_id.to_string();
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(0);
-
         let handle = thread::spawn(move || {
-            let mut first_task = true;
-
             while running_clone.load(Ordering::SeqCst) {
                 // Wait for task using proper protocol (writes ready file, uses canary watcher)
                 let Ok(assignment) = wait_for_task(&pool_root, Some(&agent_id), None) else {
@@ -138,17 +132,8 @@ impl FileWriterAgent {
                 let (kind, task_content) = extract_task_envelope(&content);
 
                 // Handle control messages
-                match kind.as_str() {
-                    "Heartbeat" => {
-                        let _ = write_response(&pool_root, &uuid, "{}");
-                        if first_task {
-                            first_task = false;
-                            let _ = ready_tx.send(());
-                        }
-                        continue;
-                    }
-                    "Kicked" => break,
-                    _ => {}
+                if kind == "Kicked" {
+                    break;
                 }
 
                 // Parse task to get step name
@@ -178,11 +163,6 @@ impl FileWriterAgent {
                         );
 
                     let _ = write_response(&pool_root, &uuid, &response);
-
-                    if first_task {
-                        first_task = false;
-                        let _ = ready_tx.send(());
-                    }
                     continue;
                 }
 
@@ -194,14 +174,6 @@ impl FileWriterAgent {
         Self {
             running,
             handle: Some(handle),
-            ready_rx: Some(ready_rx),
-        }
-    }
-
-    /// Wait for the agent to be ready (has processed first task or heartbeat).
-    pub fn wait_ready(&mut self) {
-        if let Some(rx) = self.ready_rx.take() {
-            rx.recv().expect("Agent exited before signaling readiness");
         }
     }
 
@@ -255,7 +227,9 @@ impl AgentPoolHandle {
             .arg("--pool")
             .arg(root.file_name().unwrap_or_default())
             .arg("--log-level")
-            .arg("trace");
+            .arg("trace")
+            // No heartbeats needed - agents signal ready immediately
+            .arg("--no-heartbeat");
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

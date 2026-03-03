@@ -67,6 +67,8 @@ pub struct RunnerConfig<'a> {
     pub wake_script: Option<&'a str>,
     /// Initial tasks to process (must not be empty).
     pub initial_tasks: Vec<Task>,
+    /// Optional path to the `agent_pool` binary. If not specified, uses `AGENT_POOL` env var or PATH.
+    pub agent_pool_binary: Option<&'a Path>,
 }
 
 /// The outcome of processing a task.
@@ -122,6 +124,7 @@ pub struct TaskRunner<'a> {
     queue: VecDeque<QueuedTask>,
     agent_pool_root: &'a Path,
     config_base_path: &'a Path,
+    agent_pool_binary: Option<&'a Path>,
     max_concurrency: usize,
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
@@ -222,6 +225,7 @@ impl<'a> TaskRunner<'a> {
             queue,
             agent_pool_root: runner_config.agent_pool_root,
             config_base_path: runner_config.config_base_path,
+            agent_pool_binary: runner_config.agent_pool_binary,
             max_concurrency,
             in_flight: 0,
             tx,
@@ -298,6 +302,7 @@ impl<'a> TaskRunner<'a> {
                     let docs = generate_step_docs(step, self.config, self.config_base_path);
                     let timeout = effective.timeout;
                     let root = self.agent_pool_root.to_path_buf();
+                    let binary = self.agent_pool_binary.map(Path::to_path_buf);
                     let tx = self.tx.clone();
                     let original_value = task.value.clone();
 
@@ -332,7 +337,7 @@ impl<'a> TaskRunner<'a> {
                         );
                         debug!(payload = %payload, "task payload");
 
-                        let result = submit_via_cli(&root, &payload);
+                        let result = submit_via_cli(&root, &payload, binary.as_deref());
                         let _ = tx.send(InFlightResult {
                             task,
                             task_id,
@@ -944,8 +949,12 @@ fn build_agent_payload_with_value(
 }
 
 /// Submit a task via the CLI instead of internal API.
-fn submit_via_cli(pool_path: &Path, payload: &str) -> io::Result<Response> {
-    let binary = resolve_agent_pool_binary();
+fn submit_via_cli(
+    pool_path: &Path,
+    payload: &str,
+    agent_pool_binary: Option<&Path>,
+) -> io::Result<Response> {
+    let binary = agent_pool_binary.map_or_else(resolve_agent_pool_binary, Path::to_path_buf);
 
     // Extract pool_root (parent) and pool_id (basename) from full path
     let pool_root = pool_path.parent().ok_or_else(|| {

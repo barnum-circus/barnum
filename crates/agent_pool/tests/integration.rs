@@ -16,13 +16,6 @@ use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
-/// Wait for all agents to be ready (registered with the daemon).
-fn wait_all_ready(agents: &mut [&mut TestAgent]) {
-    for agent in agents {
-        agent.wait_ready();
-    }
-}
-
 /// Test basic submission flow.
 #[rstest]
 #[timeout(std::time::Duration::from_secs(20))]
@@ -45,10 +38,7 @@ fn basic_submit(#[case] data_source: DataSource, #[case] notify_method: NotifyMe
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
 
     let response = submit_with_mode(
         &pool,
@@ -97,10 +87,7 @@ fn single_agent_multiple_tasks(
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
 
     // Submit 3 tasks sequentially
     for i in 0..3 {
@@ -150,11 +137,8 @@ fn multiple_agents_parallel(#[case] data_source: DataSource, #[case] notify_meth
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent1 = TestAgent::echo(&pool, "agent-1", Duration::from_millis(50), &pool);
-    let mut agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(50), &pool);
-
-    // === Sync point 2: Both agents ready ===
-    wait_all_ready(&mut [&mut agent1, &mut agent2]);
+    let agent1 = TestAgent::echo(&pool, "agent-1", Duration::from_millis(50), &pool);
+    let agent2 = TestAgent::echo(&pool, "agent-2", Duration::from_millis(50), &pool);
 
     // Submit 4 tasks in parallel
     let handles: Vec<_> = (0..4)
@@ -229,9 +213,8 @@ fn tasks_queued_before_agents(
     // Small delay to ensure tasks are queued, then register an agent
     thread::sleep(Duration::from_millis(50));
 
-    // === Sync point 2: Agent joins late ===
-    let mut agent = TestAgent::echo(&pool, "late-agent", Duration::from_millis(5), &pool);
-    agent.wait_ready();
+    // Agent joins late
+    let agent = TestAgent::echo(&pool, "late-agent", Duration::from_millis(5), &pool);
 
     // Wait for all tasks to complete
     for handle in handles {
@@ -275,10 +258,7 @@ fn rapid_task_burst(#[case] data_source: DataSource, #[case] notify_method: Noti
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "burst-agent", Duration::from_millis(2), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::echo(&pool, "burst-agent", Duration::from_millis(2), &pool);
 
     // Submit 10 tasks as fast as possible in parallel
     let handles: Vec<_> = (0..10)
@@ -329,10 +309,7 @@ fn identical_task_content(#[case] data_source: DataSource, #[case] notify_method
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::echo(&pool, "agent-1", Duration::from_millis(5), &pool);
 
     // Submit 5 tasks with IDENTICAL content
     let task = r#"{"kind":"Task","task":{"instructions":"echo","data":{"message":"same"}}}"#;
@@ -382,10 +359,7 @@ fn agent_joins_mid_processing(
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
     // Start one slow agent
-    let mut agent1 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(100), &pool);
-
-    // === Sync point 2: First agent ready ===
-    agent1.wait_ready();
+    let agent1 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(100), &pool);
 
     // Submit 6 tasks in parallel
     let handles: Vec<_> = (0..6)
@@ -402,9 +376,8 @@ fn agent_joins_mid_processing(
     // Wait a bit to let first agent start processing, then add a second fast agent
     thread::sleep(Duration::from_millis(150));
 
-    // === Sync point 3: Second agent joins mid-processing ===
-    let mut agent2 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(5), &pool);
-    agent2.wait_ready();
+    // Second agent joins mid-processing
+    let agent2 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(5), &pool);
 
     // Wait for all tasks to complete
     for handle in handles {
@@ -448,16 +421,13 @@ fn response_isolation(#[case] data_source: DataSource, #[case] notify_method: No
     let _pool_handle = AgentPoolHandle::start(&pool, &pool);
     AgentsSnapshot::capture(&pool).assert_no_agents();
 
-    let mut agent = TestAgent::start(
+    let agent = TestAgent::start(
         &pool,
         "echo-agent",
         Duration::from_millis(5),
         |task, _| format!("processed: {}", task.trim()),
         &pool,
     );
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
 
     // Submit tasks with distinct IDs in parallel
     let handles: Vec<_> = ["A", "B", "C"]

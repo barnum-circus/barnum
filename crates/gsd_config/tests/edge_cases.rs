@@ -6,8 +6,12 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task, TaskRunner};
+use rstest::rstest;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -16,7 +20,8 @@ use std::time::Duration;
 const TEST_DIR: &str = "edge_cases";
 
 /// Test that empty initial_tasks completes immediately.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn empty_initial_tasks_completes() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -45,6 +50,7 @@ fn empty_initial_tasks_completes() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![], // Empty!
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Should complete immediately without error
@@ -54,7 +60,8 @@ fn empty_initial_tasks_completes() {
 }
 
 /// Test that TaskRunner with empty initial_tasks is_empty from start.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn empty_runner_is_empty() {
     let root = setup_test_dir(&format!("{TEST_DIR}_empty_runner"));
 
@@ -77,6 +84,7 @@ fn empty_runner_is_empty() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -92,7 +100,8 @@ fn empty_runner_is_empty() {
 }
 
 /// Test that unknown step in initial_tasks is skipped gracefully.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn unknown_initial_step_skipped() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown_step"));
 
@@ -103,10 +112,9 @@ fn unknown_initial_step_skipped() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
+    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -126,6 +134,7 @@ fn unknown_initial_step_skipped() {
             Task::new("Unknown", serde_json::json!({})), // Unknown step
             Task::new("Known", serde_json::json!({})),   // Known step
         ],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Should complete - unknown task skipped, known task processed
@@ -135,7 +144,8 @@ fn unknown_initial_step_skipped() {
 }
 
 /// Test that task with invalid value schema is skipped.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn invalid_value_schema_skipped() {
     let root = setup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
 
@@ -150,13 +160,12 @@ fn invalid_value_schema_skipped() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
 
-    let mut agent = GsdTestAgent::start(&root, "agent", Duration::from_millis(10), move |_| {
+    let _agent = GsdTestAgent::start(&root, "agent", Duration::from_millis(10), move |_| {
         count_clone.fetch_add(1, Ordering::SeqCst);
         "[]".to_string()
     });
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     // Config with schema requiring "name" field
     let config: Config = serde_json::from_str(
@@ -186,6 +195,7 @@ fn invalid_value_schema_skipped() {
             Task::new("Validated", serde_json::json!({})), // Missing required "name"
             Task::new("Validated", serde_json::json!({"name": "ok"})), // Valid
         ],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -201,7 +211,8 @@ fn invalid_value_schema_skipped() {
 }
 
 /// Test that large fan-out works correctly.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn large_fan_out() {
     let root = setup_test_dir(&format!("{TEST_DIR}_large_fanout"));
 
@@ -216,7 +227,7 @@ fn large_fan_out() {
     let task_count = Arc::new(AtomicUsize::new(0));
     let count_clone = task_count.clone();
 
-    let mut agent = GsdTestAgent::start(
+    let _agent = GsdTestAgent::start(
         &root,
         "fanout-agent",
         Duration::from_millis(5),
@@ -239,7 +250,6 @@ fn large_fan_out() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -257,6 +267,7 @@ fn large_fan_out() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Distribute", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -272,7 +283,8 @@ fn large_fan_out() {
 }
 
 /// Test Command action executes script correctly.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn command_action_executes() {
     let root = setup_test_dir(&format!("{TEST_DIR}_command"));
 
@@ -301,6 +313,7 @@ fn command_action_executes() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Echo", serde_json::json!({"message": "hello"}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Should complete without error
@@ -310,7 +323,8 @@ fn command_action_executes() {
 }
 
 /// Test that runner handles rapid task completion.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn rapid_task_completion() {
     let root = setup_test_dir(&format!("{TEST_DIR}_rapid"));
 
@@ -323,10 +337,9 @@ fn rapid_task_completion() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent with minimal delay (zero can cause races)
-    let mut agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::from_millis(1));
+    let _agent = GsdTestAgent::terminator(&root, "fast-agent", Duration::from_millis(1));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config = serde_json::from_str(
         r#"{
@@ -349,6 +362,7 @@ fn rapid_task_completion() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -357,7 +371,8 @@ fn rapid_task_completion() {
 }
 
 /// Test that TaskRunner.pending() tracks queue size correctly.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn pending_count_accurate() {
     let root = setup_test_dir(&format!("{TEST_DIR}_pending"));
 
@@ -368,10 +383,9 @@ fn pending_count_accurate() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(50));
+    let _agent = GsdTestAgent::terminator(&root, "agent", Duration::from_millis(50));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config: Config =
         serde_json::from_str(r#"{"steps": [{"name": "Work", "next": []}]}"#).expect("parse config");
@@ -386,6 +400,7 @@ fn pending_count_accurate() {
             Task::new("Work", serde_json::json!({})),
             Task::new("Work", serde_json::json!({})),
         ],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     let runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");

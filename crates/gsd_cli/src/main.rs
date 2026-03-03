@@ -101,6 +101,7 @@ fn main() -> io::Result<()> {
                 config_base_path: &config_dir,
                 wake_script: wake.as_deref(),
                 initial_tasks,
+                agent_pool_binary: None, // Use AGENT_POOL env var or PATH
             };
 
             run(&cfg, &schemas, runner_config)?;

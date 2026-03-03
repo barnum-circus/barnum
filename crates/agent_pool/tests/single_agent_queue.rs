@@ -45,10 +45,7 @@ fn single_agent_queues_multiple_tasks(
     let agents = AgentsSnapshot::capture(&pool);
     agents.assert_no_agents();
 
-    let mut agent = TestAgent::echo(&pool, "only-agent", Duration::from_millis(50), &pool);
-
-    // === Sync point 2: Agent ready ===
-    agent.wait_ready();
+    let agent = TestAgent::echo(&pool, "only-agent", Duration::from_millis(50), &pool);
 
     // Submit 4 tasks rapidly (they should queue since there's only one agent)
     let handles: Vec<_> = ["Task-A", "Task-B", "Task-C", "Task-D"]

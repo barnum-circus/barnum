@@ -12,7 +12,9 @@ mod common;
 use common::{
     AgentPoolHandle, FileWriterAgent, GsdRunner, cleanup_test_dir, is_ipc_available, setup_test_dir,
 };
+use rstest::rstest;
 use std::fs;
+use std::time::Duration;
 
 const TEST_DIR: &str = "cli_integration";
 
@@ -20,7 +22,8 @@ const TEST_DIR: &str = "cli_integration";
 // Basic Config Tests
 // =============================================================================
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn single_step_terminates() {
     let test_name = format!("{TEST_DIR}_single_step");
     let root = setup_test_dir(&test_name);
@@ -36,13 +39,12 @@ fn single_step_terminates() {
     fs::create_dir_all(&pool_root).expect("create pool dir");
 
     let _pool = AgentPoolHandle::start(&pool_root);
-    let mut agent = FileWriterAgent::start(
+    let agent = FileWriterAgent::start(
         &pool_root,
         "test-agent",
         &output_dir,
         vec![("Start".to_string(), String::new())], // Terminate
     );
-    agent.wait_ready();
 
     let config = r#"{
         "steps": [{
@@ -68,7 +70,8 @@ fn single_step_terminates() {
     cleanup_test_dir(&test_name);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn multi_stage_linear() {
     let test_name = format!("{TEST_DIR}_multi_stage");
     let root = setup_test_dir(&test_name);
@@ -84,7 +87,7 @@ fn multi_stage_linear() {
     fs::create_dir_all(&pool_root).expect("create pool dir");
 
     let _pool = AgentPoolHandle::start(&pool_root);
-    let mut agent = FileWriterAgent::start(
+    let agent = FileWriterAgent::start(
         &pool_root,
         "test-agent",
         &output_dir,
@@ -94,7 +97,6 @@ fn multi_stage_linear() {
             ("End".to_string(), String::new()),
         ],
     );
-    agent.wait_ready();
 
     let config = r#"{
         "steps": [
@@ -132,7 +134,8 @@ fn multi_stage_linear() {
 // Empty Initial Tasks
 // =============================================================================
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn empty_initial_tasks_succeeds() {
     let test_name = format!("{TEST_DIR}_empty_initial");
     let root = setup_test_dir(&test_name);
@@ -161,7 +164,8 @@ fn empty_initial_tasks_succeeds() {
 // CLI Subcommands
 // =============================================================================
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 fn validate_valid_config() {
     let config = r#"{
         "steps": [
@@ -178,7 +182,8 @@ fn validate_valid_config() {
     assert!(stdout.contains("Config is valid"), "Should say valid");
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 fn validate_invalid_config_missing_step() {
     let config = r#"{
         "steps": [
@@ -192,7 +197,8 @@ fn validate_invalid_config_missing_step() {
     assert!(!result.status.success(), "Invalid config should fail");
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 fn docs_generates_markdown() {
     let config = r#"{
         "steps": [
@@ -208,7 +214,8 @@ fn docs_generates_markdown() {
     assert!(stdout.contains("Start"), "Should contain step name");
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 fn graph_generates_dot() {
     let config = r#"{
         "steps": [
@@ -230,7 +237,8 @@ fn graph_generates_dot() {
 // Config From File
 // =============================================================================
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn config_from_file() {
     let test_name = format!("{TEST_DIR}_config_file");
     let root = setup_test_dir(&test_name);
@@ -264,13 +272,12 @@ fn config_from_file() {
     fs::write(&initial_path, r#"[{"kind": "FileStep", "value": {}}]"#).expect("write initial");
 
     let _pool = AgentPoolHandle::start(&pool_root);
-    let mut agent = FileWriterAgent::start(
+    let agent = FileWriterAgent::start(
         &pool_root,
         "test-agent",
         &output_dir,
         vec![("FileStep".to_string(), String::new())],
     );
-    agent.wait_ready();
 
     let gsd = GsdRunner::new();
     let result = gsd

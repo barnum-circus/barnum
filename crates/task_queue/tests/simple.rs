@@ -2,8 +2,10 @@
 
 #![expect(clippy::expect_used)]
 
+use rstest::rstest;
 use serde::Deserialize;
 use std::process::Command;
+use std::time::Duration;
 use task_queue::{NoMoreTasks, ProcessQueueOptions, QueueItem, process_queue};
 
 /// Response deserialized from the echo command's JSON output.
@@ -46,7 +48,9 @@ impl QueueItem<SimpleContext> for SimpleTask {
     }
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 async fn valid_json_gives_ok_result() {
     let mut ctx = SimpleContext { result: None };
 
@@ -69,7 +73,9 @@ async fn valid_json_gives_ok_result() {
     assert_eq!(response.value, 42);
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 async fn invalid_json_gives_err_result() {
     let mut ctx = SimpleContext { result: None };
 

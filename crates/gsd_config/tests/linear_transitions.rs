@@ -6,8 +6,12 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
+use rstest::rstest;
 use std::path::Path;
 use std::time::Duration;
 
@@ -38,7 +42,8 @@ fn linear_config() -> Config {
     .expect("parse config")
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn three_step_linear_machine() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -49,7 +54,7 @@ fn three_step_linear_machine() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::with_transitions(
+    let agent = GsdTestAgent::with_transitions(
         &root,
         "linear-agent",
         Duration::from_millis(10),
@@ -57,7 +62,6 @@ fn three_step_linear_machine() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = linear_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -66,6 +70,7 @@ fn three_step_linear_machine() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -86,7 +91,8 @@ fn three_step_linear_machine() {
     cleanup_test_dir(TEST_DIR);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn instructions_included_in_payload() {
     let root = setup_test_dir(&format!("{TEST_DIR}_instructions"));
 
@@ -97,10 +103,9 @@ fn instructions_included_in_payload() {
     }
 
     let _pool = AgentPoolHandle::start(&root);
-    let mut agent = GsdTestAgent::terminator(&root, "checker-agent", Duration::from_millis(10));
+    let agent = GsdTestAgent::terminator(&root, "checker-agent", Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = linear_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -109,6 +114,7 @@ fn instructions_included_in_payload() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

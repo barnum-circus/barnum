@@ -6,8 +6,12 @@
 
 mod common;
 
-use common::{AgentPoolHandle, GsdTestAgent, cleanup_test_dir, is_ipc_available, setup_test_dir};
+use common::{
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    setup_test_dir,
+};
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
+use rstest::rstest;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -43,7 +47,8 @@ fn strict_config() -> Config {
     .expect("parse config")
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn invalid_transition_causes_retry() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -56,12 +61,11 @@ fn invalid_transition_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent tries to skip from Start directly to End (invalid)
-    let mut agent = GsdTestAgent::start(&root, "bad-transition", Duration::from_millis(10), |_| {
+    let agent = GsdTestAgent::start(&root, "bad-transition", Duration::from_millis(10), |_| {
         r#"[{"kind": "End", "value": {}}]"#.to_string()
     });
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -70,6 +74,7 @@ fn invalid_transition_causes_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped after retries exhausted
@@ -83,7 +88,8 @@ fn invalid_transition_causes_retry() {
     cleanup_test_dir(TEST_DIR);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn unknown_step_causes_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown"));
 
@@ -96,12 +102,11 @@ fn unknown_step_causes_retry() {
     let _pool = AgentPoolHandle::start(&root);
 
     // Agent returns a step that doesn't exist
-    let mut agent = GsdTestAgent::start(&root, "unknown-step", Duration::from_millis(10), |_| {
+    let agent = GsdTestAgent::start(&root, "unknown-step", Duration::from_millis(10), |_| {
         r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
     });
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -110,6 +115,7 @@ fn unknown_step_causes_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     // Run should return error because task is dropped after retries exhausted
@@ -123,7 +129,8 @@ fn unknown_step_causes_retry() {
     cleanup_test_dir(&format!("{TEST_DIR}_unknown"));
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(20))]
 fn recovery_after_invalid_then_valid() {
     let root = setup_test_dir(&format!("{TEST_DIR}_recovery"));
 
@@ -139,7 +146,7 @@ fn recovery_after_invalid_then_valid() {
     let call_count = Arc::new(AtomicUsize::new(0));
     let call_count_clone = call_count.clone();
 
-    let mut agent = GsdTestAgent::start(
+    let agent = GsdTestAgent::start(
         &root,
         "recovering-agent",
         Duration::from_millis(10),
@@ -165,7 +172,6 @@ fn recovery_after_invalid_then_valid() {
     );
 
     // Wait for agent to be ready (has processed initial heartbeat)
-    agent.wait_ready();
 
     let config = strict_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
@@ -174,6 +180,7 @@ fn recovery_after_invalid_then_valid() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
+        agent_pool_binary: Some(&find_agent_pool_binary()),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

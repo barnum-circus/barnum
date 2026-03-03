@@ -17,13 +17,6 @@ use rstest::rstest;
 use std::thread;
 use std::time::Duration;
 
-/// Wait for all agents to be ready (registered with the daemon).
-fn wait_all_ready(agents: &mut [&mut TestAgent]) {
-    for agent in agents {
-        agent.wait_ready();
-    }
-}
-
 const TEST_NAME: &str = "many_agents";
 
 #[rstest]
@@ -53,12 +46,9 @@ fn multiple_agents_parallel_tasks(
     agents.assert_no_agents();
 
     // 3 agents with varying response times
-    let mut agent1 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(10), &pool);
-    let mut agent2 = TestAgent::echo(&pool, "medium-agent", Duration::from_millis(30), &pool);
-    let mut agent3 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(50), &pool);
-
-    // === Sync point 2: All agents ready ===
-    wait_all_ready(&mut [&mut agent1, &mut agent2, &mut agent3]);
+    let agent1 = TestAgent::echo(&pool, "fast-agent", Duration::from_millis(10), &pool);
+    let agent2 = TestAgent::echo(&pool, "medium-agent", Duration::from_millis(30), &pool);
+    let agent3 = TestAgent::echo(&pool, "slow-agent", Duration::from_millis(50), &pool);
 
     // Submit 6 tasks rapidly - they'll be distributed across agents
     let handles: Vec<_> = (1..=6)
