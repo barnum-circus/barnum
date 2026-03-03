@@ -72,6 +72,31 @@ Each subtask should be small enough that someone could implement it without aski
 
 For examples, see `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `refactors/past/`.
 
+## Branching strategy
+
+**Work on feature branches, merge clean commits to master.**
+
+When implementing a refactor:
+
+1. **Create a feature branch** for the refactor (e.g., `refactor/crossbeam-channels`)
+2. **Do all exploratory work on the branch** - experiments, debugging, test fixes, false starts
+3. **Only merge to master when ready** - clean, tested, atomic commits
+
+What stays on the branch until ready:
+- Debug logging and temporary diagnostics
+- Failed approaches and reverts
+- Work-in-progress commits
+- Test fixes that are still being validated
+
+What gets merged to master:
+- Clean, atomic commits that pass all tests
+- Each commit should be independently deployable
+- Commit messages should explain the "why", not the exploration process
+
+This keeps master clean and bisectable. The branch preserves the full history of how you got there, but master only sees the polished result.
+
+**Cherry-pick individual commits** from the feature branch to master as they become ready, rather than waiting for the entire refactor to complete. This way independent improvements land incrementally.
+
 ## Extract independent work (after approval)
 
 **Critical**: After receiving approval, actively identify changes that are independent of the main refactor. These should be:
