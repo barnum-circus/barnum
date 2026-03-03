@@ -61,6 +61,10 @@ Your singular mission is creating S-tier libraries where:
 
 See your claude.local.md.
 
+## Commit incrementally
+
+**Commit your changes as you go.** Don't wait until the end of a task to commit. After completing a logical unit of work, commit it. This applies to documentation changes, code changes, refactor documents - everything.
+
 ## Autonomous operation
 
 **Always look for opportunities to work autonomously without user intervention.**
@@ -73,4 +77,12 @@ The goal: minimize back-and-forth. Get information proactively so you can solve 
 
 ## Refactors
 
-See [refactors/PROCESS.md](../refactors/PROCESS.md) for the two-phase refactor process.
+**STOP. READ THIS BEFORE DOING ANYTHING.**
+
+When the user asks you to plan, design, or create a refactor:
+
+1. **READ `refactors/PROCESS.md` FIRST.** Not optional. Do it now.
+2. **Create the document in `refactors/pending/`** - NOT anywhere else, NOT inline in the conversation.
+3. **Follow the two-phase process** described in that file.
+
+If you create a refactor document anywhere other than `refactors/pending/`, you have failed. If you start implementing without approval, you have failed. Read the process document.
