@@ -17,6 +17,7 @@ path = "src/main.rs"
 agent_pool = { path = "../agent_pool" }
 clap = { workspace = true }
 serde_json = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [lints]

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 use std::{fs, thread};
+use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 const AGENT_PROTOCOL: &str = include_str!("../../agent_pool/protocols/AGENT_PROTOCOL.md");
@@ -64,7 +65,7 @@ struct Cli {
     command: Command,
 }
 
-#[derive(Subcommand)]
+#[derive(Debug, Subcommand)]
 enum Command {
     /// Start the agent pool server
     Start {
@@ -206,7 +207,13 @@ fn format_task_output(
 fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.log_level);
-    let pool_root = cli.pool_root.unwrap_or_else(default_pool_root);
+    let pool_root = cli.pool_root.clone().unwrap_or_else(default_pool_root);
+    info!(
+        command = ?cli.command,
+        pool_root = %pool_root.display(),
+        log_level = ?cli.log_level,
+        "CLI invoked"
+    );
 
     match cli.command {
         Command::Start {

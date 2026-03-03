@@ -23,6 +23,7 @@ dependencies = [
  "agent_pool",
  "clap",
  "serde_json",
+ "tracing",
  "tracing-subscriber",
 ]
 
