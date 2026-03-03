@@ -9,7 +9,6 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::time::Duration;
-use uuid::Uuid;
 
 /// Default timeout for waiting for pool to become ready (10 seconds).
 const POOL_READY_TIMEOUT: Duration = Duration::from_secs(10);
@@ -30,9 +29,8 @@ pub fn submit(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response>
     let root = fs::canonicalize(root.as_ref())?;
 
     // Wait for daemon to be ready using filesystem watcher
-    let canary_path = root.join(format!("{}.canary", Uuid::new_v4()));
     let status_path = root.join(STATUS_FILE);
-    let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
+    let mut watcher = VerifiedWatcher::new(&root, root.clone())?;
     watcher.wait_for(&status_path, Some(POOL_READY_TIMEOUT))?;
 
     let socket_path = root.join(SOCKET_NAME);

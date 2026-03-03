@@ -22,19 +22,41 @@ The daemon's canary file is written to the pool root, which proves the root watc
 Both `VerifiedWatcher` and the daemon's `sync_and_setup` have this comment:
 
 ```rust
-// crates/agent_pool/src/fs.rs:136-143
 /// Once we observe any filesystem event, the watcher is fully operational.
 /// Filesystem watchers (`FSEvents` on macOS, `inotify` on Linux) don't "partially work".
 ```
 
 This is **incorrect** for recursive watching on Linux. The root watch may work while subdirectory watches are still being set up.
 
-## Current State
+---
 
-### `CanaryGuard` (fs.rs:96-117)
+## Implementation Plan
 
-Manages a single canary file:
+| Phase | Goal | Risk |
+|-------|------|------|
+| 1 | Refactor `VerifiedWatcher`, daemon uses it | Low - behavior unchanged |
+| 2 | Enable multi-directory verification | Medium - new behavior |
 
+---
+
+## Phase 1: Refactor VerifiedWatcher, Daemon Uses It
+
+Phase 1 is broken into independently shippable changes:
+
+| Change | Description | Dependencies |
+|--------|-------------|--------------|
+| 1a | Update `CanaryGuard` API | None |
+| 1b | Update `WatcherState` to use `Vec<CanaryGuard>` | 1a |
+| 1c | Restore `into_receiver` method | 1b |
+| 1d | Refactor daemon to use `VerifiedWatcher` | 1c |
+
+---
+
+### Change 1a: Update CanaryGuard API
+
+**Goal:** `CanaryGuard` generates its own canary path from a directory.
+
+**Before:**
 ```rust
 struct CanaryGuard {
     path: PathBuf,
@@ -46,237 +68,18 @@ impl CanaryGuard {
         fs::write(&path, "0")?;
         Ok(Self { path, writes: 0 })
     }
-
-    fn retry(&mut self) -> io::Result<()> {
-        self.writes += 1;
-        fs::write(&self.path, self.writes.to_string())
-    }
 }
 
-impl Drop for CanaryGuard {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-    }
-}
+// Caller constructs path:
+let canary_path = dir.join(format!("{}.canary", Uuid::new_v4()));
+let canary = CanaryGuard::new(canary_path)?;
 ```
 
-**No changes needed.** This correctly manages a single canary file.
-
-### `WatcherState` (fs.rs:119-130)
-
+**After:**
 ```rust
-enum WatcherState {
-    Connected {
-        rx: mpsc::Receiver<PathBuf>,
-        canary: Option<CanaryGuard>,  // Single canary
-    },
-    Disconnected,
-}
-```
-
-### `VerifiedWatcher::new` (fs.rs:160-188)
-
-```rust
-pub fn new(watch_dir: &Path, canary_path: PathBuf) -> io::Result<Self> {
-    let (tx, rx) = mpsc::channel();
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                for path in event.paths {
-                    let _ = tx.send(path);
-                }
-            }
-        },
-        Config::default(),
-    )
-    .map_err(io::Error::other)?;
-
-    watcher
-        .watch(watch_dir, RecursiveMode::Recursive)
-        .map_err(io::Error::other)?;
-
-    let canary = CanaryGuard::new(canary_path)?;  // Single canary
-
-    Ok(Self {
-        _watcher: watcher,
-        state: WatcherState::Connected {
-            rx,
-            canary: Some(canary),
-        },
-    })
-}
-```
-
-### `VerifiedWatcher::wait_for` verification logic (fs.rs:245-248)
-
-```rust
-// Any event proves watcher works - clean up canary
-if canary.is_some() {
-    *canary = None;
-}
-```
-
-### Callers of `VerifiedWatcher::new`
-
-| File | Line | Current Usage |
-|------|------|---------------|
-| `worker.rs` | 63 | `VerifiedWatcher::new(&agents_dir, canary)` |
-| `submit/file.rs` | 86 | `VerifiedWatcher::new(&root, canary_path)` |
-| `submit/mod.rs` | 54 | `VerifiedWatcher::new(&root, canary_path)` |
-| `submit/socket.rs` | 35 | `VerifiedWatcher::new(&root, canary_path)` |
-
-All callers pass a single directory. They don't need multi-directory verification.
-
-### Daemon's `sync_and_setup` (wiring.rs:802-867)
-
-Has its own inline canary logic, doesn't use `VerifiedWatcher`:
-
-```rust
-fn sync_and_setup(
-    root: &Path,
-    lock_path: &Path,
-    socket_path: &Path,
-    submissions_dir: &Path,
-    agents_dir: &Path,
-    scratch_dir: &Path,
-    io_rx: &mpsc::Receiver<IoEvent>,
-) -> io::Result<(LockGuard, Listener)> {
-    let canary_path = root.join("daemon.canary");  // Only root!
-
-    // Create directories
-    fs::create_dir_all(submissions_dir)?;
-    fs::create_dir_all(agents_dir)?;
-    fs::create_dir_all(scratch_dir)?;
-
-    // Write canary file to trigger an event
-    fs::write(&canary_path, "0")?;
-
-    // ... wait for ANY event, then return ...
-}
-```
-
-**This is the bug.** Only writes canary to root, not to subdirectories.
-
-## Proposed Changes
-
-### 1. Update `WatcherState` to support multiple canaries
-
-```rust
-// Before
-enum WatcherState {
-    Connected {
-        rx: mpsc::Receiver<PathBuf>,
-        canary: Option<CanaryGuard>,
-    },
-    Disconnected,
-}
-
-// After
-enum WatcherState {
-    Connected {
-        rx: mpsc::Receiver<PathBuf>,
-        canaries: Vec<CanaryGuard>,
-        verified_dirs: HashSet<PathBuf>,
-    },
-    Disconnected,
-}
-```
-
-### 2. Update `VerifiedWatcher::new` signature
-
-```rust
-// Before
-pub fn new(watch_dir: &Path, canary_path: PathBuf) -> io::Result<Self>
-
-// After
-pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self>
-```
-
-Implementation:
-
-```rust
-pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self> {
-    let (tx, rx) = mpsc::channel();
-
-    let mut watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| {
-            if let Ok(event) = res {
-                for path in event.paths {
-                    let _ = tx.send(path);
-                }
-            }
-        },
-        Config::default(),
-    )
-    .map_err(io::Error::other)?;
-
-    watcher
-        .watch(watch_dir, RecursiveMode::Recursive)
-        .map_err(io::Error::other)?;
-
-    // Create a canary in each directory
-    let canaries = canary_dirs
-        .iter()
-        .map(|dir| {
-            let canary_path = dir.join(format!("{}.canary", Uuid::new_v4()));
-            CanaryGuard::new(canary_path)
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-
-    Ok(Self {
-        _watcher: watcher,
-        state: WatcherState::Connected {
-            rx,
-            canaries,
-            verified_dirs: HashSet::new(),
-        },
-    })
-}
-```
-
-### 3. Update `VerifiedWatcher::wait_for` verification logic
-
-```rust
-// Before (fs.rs:245-248)
-// Any event proves watcher works - clean up canary
-if canary.is_some() {
-    *canary = None;
-}
-
-// After
-// Check which directory this event came from
-if let Some(parent) = path.parent() {
-    for canary in &*canaries {
-        if let Some(canary_parent) = canary.path.parent() {
-            if parent == canary_parent {
-                verified_dirs.insert(canary_parent.to_path_buf());
-            }
-        }
-    }
-}
-
-// Only clean up canaries when ALL directories verified
-if verified_dirs.len() == canaries.len() {
-    canaries.clear();
-}
-```
-
-Note: `CanaryGuard` needs to expose `path` or provide a `parent_dir()` method.
-
-### 4. Update `CanaryGuard` to expose directory
-
-```rust
-// Before
 struct CanaryGuard {
     path: PathBuf,
-    writes: u32,
-}
-
-// After
-struct CanaryGuard {
-    path: PathBuf,
-    dir: PathBuf,  // The directory this canary verifies
+    dir: PathBuf,
     writes: u32,
 }
 
@@ -291,152 +94,408 @@ impl CanaryGuard {
         &self.dir
     }
 
-    // ... rest unchanged ...
-}
-```
-
-### 5. Update callers of `VerifiedWatcher::new`
-
-**worker.rs:63**
-```rust
-// Before
-let mut watcher = VerifiedWatcher::new(&agents_dir, canary)?;
-
-// After
-let mut watcher = VerifiedWatcher::new(&agents_dir, &[agents_dir.clone()])?;
-```
-
-**submit/file.rs:86**
-```rust
-// Before
-let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
-
-// After
-let mut watcher = VerifiedWatcher::new(&root, &[root.clone()])?;
-```
-
-**submit/mod.rs:54**
-```rust
-// Before
-let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
-
-// After
-let mut watcher = VerifiedWatcher::new(&root, &[root.clone()])?;
-```
-
-**submit/socket.rs:35**
-```rust
-// Before
-let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
-
-// After
-let mut watcher = VerifiedWatcher::new(&root, &[root.clone()])?;
-```
-
-### 6. Update daemon's `sync_and_setup`
-
-Two options:
-
-**Option A: Use `VerifiedWatcher`**
-
-Replace the inline canary logic with `VerifiedWatcher`. However, this is tricky because `sync_and_setup` receives events via `io_rx` (the unified channel), not a separate watcher.
-
-**Option B: Update inline logic to match**
-
-We only need to verify the **leaf directories** where the daemon expects to receive events:
-- `agents/` - for `.ready.json`, `.response.json` (agent registration and responses)
-- `submissions/` - for task submission files
-
-We do NOT need to verify:
-- `root/` - the daemon writes to root (`daemon.sock`, `status`) but doesn't watch for external files there
-- `scratch/` - only used for atomic write temp files
-
-```rust
-// Before (wiring.rs:814-828)
-let canary_path = root.join("daemon.canary");
-
-// Create directories
-fs::create_dir_all(submissions_dir)?;
-fs::create_dir_all(agents_dir)?;
-fs::create_dir_all(scratch_dir)?;
-
-// Write canary file to trigger an event
-fs::write(&canary_path, "0")?;
-
-// After
-// Create directories first
-fs::create_dir_all(submissions_dir)?;
-fs::create_dir_all(agents_dir)?;
-fs::create_dir_all(scratch_dir)?;
-
-// Write canary files to leaf directories we need to watch for external events
-let canary_paths = [
-    agents_dir.join("daemon.canary"),
-    submissions_dir.join("daemon.canary"),
-];
-let mut verified_dirs: HashSet<PathBuf> = HashSet::new();
-
-for path in &canary_paths {
-    fs::write(path, "0")?;
-}
-```
-
-Then update the event loop:
-
-```rust
-// Before (wiring.rs:834-843)
-Ok(IoEvent::Fs(event)) => {
-    // Any filesystem event proves the watcher is working.
-    debug!(
-        "watcher sync complete - received event {:?} for {:?}",
-        event.kind, event.paths
-    );
-    let _ = fs::remove_file(&canary_path);
-    return Ok((lock, listener));
-}
-
-// After
-Ok(IoEvent::Fs(event)) => {
-    // Track which directories we've seen events from
-    for path in &event.paths {
-        if let Some(parent) = path.parent() {
-            verified_dirs.insert(parent.to_path_buf());
-        }
-    }
-
-    // Only proceed when both leaf directories are verified
-    if verified_dirs.contains(agents_dir)
-        && verified_dirs.contains(submissions_dir)
-    {
-        debug!(
-            "watcher sync complete - verified all {} directories",
-            canary_paths.len()
-        );
-        for path in &canary_paths {
-            let _ = fs::remove_file(path);
-        }
-        return Ok((lock, listener));
+    fn retry(&mut self) -> io::Result<()> {
+        self.writes += 1;
+        fs::write(&self.path, self.writes.to_string())
     }
 }
+
+// Caller passes directory:
+let canary = CanaryGuard::new(dir.clone())?;
 ```
 
-I recommend **Option B** because:
-- The daemon already has its own event channel (`io_rx`)
-- Introducing `VerifiedWatcher` would require architectural changes to how the daemon receives events
-- The fix is localized to `sync_and_setup`
+**Files changed:**
+- `verified_watcher.rs`: Update `CanaryGuard`
 
-## Open Questions
+---
 
-1. **Should we extract a shared helper?** The daemon's inline logic and `VerifiedWatcher` will have similar multi-directory verification. Should we extract a `MultiDirVerifier` trait or helper function?
+### Change 1b: Update WatcherState
 
-2. **Retry behavior:** Currently `CanaryGuard::retry()` rewrites the canary on timeout. With multiple canaries, should we rewrite all of them or only the ones for unverified directories?
+**Goal:** Use `Vec<CanaryGuard>` instead of `Option<CanaryGuard>`. Clearer semantics: empty = verified.
 
-3. **Timeout semantics:** The current 5-second timeout is for seeing ANY event. With multiple directories, should it be 5 seconds total or 5 seconds per directory?
+**Before:**
+```rust
+enum WatcherState {
+    Connected {
+        rx: mpsc::Receiver<PathBuf>,
+        canary: Option<CanaryGuard>,  // None = verified OR never created (ambiguous)
+    },
+    Disconnected,
+}
+```
+
+**After:**
+```rust
+enum WatcherState {
+    Connected {
+        rx: mpsc::Receiver<notify::Event>,  // Full event, not just path
+        remaining_canaries: Vec<CanaryGuard>,  // Empty = verified (clear)
+    },
+    Disconnected,
+}
+```
+
+**Update `VerifiedWatcher::new`:**
+```rust
+pub fn new(watch_dir: &Path, canary_dir: PathBuf) -> io::Result<Self> {
+    let (tx, rx) = mpsc::channel();
+
+    let watcher = RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| {
+            if let Ok(event) = res {
+                let _ = tx.send(event);  // Send full event
+            }
+        },
+        Config::default(),
+    )?;
+    watcher.watch(watch_dir, RecursiveMode::Recursive)?;
+
+    let canary = CanaryGuard::new(canary_dir)?;
+
+    Ok(Self {
+        watcher,  // No longer prefixed with _ since into_receiver uses it
+        state: WatcherState::Connected {
+            rx,
+            remaining_canaries: vec![canary],
+        },
+    })
+}
+```
+
+**Update `wait_for`:**
+```rust
+pub fn wait_for(&mut self, target: &Path, timeout: Option<Duration>) -> io::Result<()> {
+    if target.exists() {
+        return Ok(());
+    }
+
+    let WatcherState::Connected { rx, remaining_canaries } = &mut self.state else {
+        return Err(io::Error::new(io::ErrorKind::NotConnected, "watcher disconnected"));
+    };
+
+    let start = Instant::now();
+    loop {
+        if let Some(t) = timeout && start.elapsed() > t {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("timed out waiting for {}", target.display()),
+            ));
+        }
+
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(event) => {
+                // Remove canary for verified directories
+                for path in &event.paths {
+                    if let Some(parent) = path.parent() {
+                        remaining_canaries.retain(|c| c.dir() != parent);
+                    }
+
+                    if path == target {
+                        return Ok(());
+                    }
+                }
+
+                if target.exists() {
+                    return Ok(());
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if target.exists() {
+                    return Ok(());
+                }
+                // Retry only unverified canaries
+                for canary in remaining_canaries.iter_mut() {
+                    canary.retry()?;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "watcher disconnected",
+                ));
+            }
+        }
+    }
+}
+```
+
+**Files changed:**
+- `verified_watcher.rs`: Update `WatcherState`, `new`, `wait_for`
+
+---
+
+### Change 1c: Restore `into_receiver` Method
+
+**Goal:** Allow callers to consume the watcher and get the raw receiver for custom event loops.
+
+This method previously existed but was removed as dead code in commit `9f10353`. We restore it with the correct signature that returns both the watcher and receiver (caller must keep watcher alive).
+
+```rust
+impl VerifiedWatcher {
+    /// Block until verified, then return the watcher and receiver.
+    ///
+    /// Waits until events have been seen from all canary directories,
+    /// then consumes self and returns the underlying watcher and receiver
+    /// for use in a custom event loop.
+    ///
+    /// The caller must keep the returned `RecommendedWatcher` alive -
+    /// dropping it stops the filesystem watch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if verification times out.
+    pub fn into_receiver(
+        mut self,
+        timeout: Duration,
+    ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>)> {
+        let WatcherState::Connected { rx, remaining_canaries } = &mut self.state else {
+            return Err(io::Error::new(io::ErrorKind::NotConnected, "watcher disconnected"));
+        };
+
+        let start = Instant::now();
+        while !remaining_canaries.is_empty() {
+            let remaining = timeout.saturating_sub(start.elapsed());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    format!("timed out verifying {} directories", remaining_canaries.len()),
+                ));
+            }
+
+            let poll = Duration::from_millis(100).min(remaining);
+            match rx.recv_timeout(poll) {
+                Ok(event) => {
+                    for path in &event.paths {
+                        if let Some(parent) = path.parent() {
+                            remaining_canaries.retain(|c| c.dir() != parent);
+                        }
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    for canary in remaining_canaries.iter_mut() {
+                        canary.retry()?;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "watcher disconnected",
+                    ));
+                }
+            }
+        }
+
+        // Extract watcher and rx
+        let rx = match std::mem::replace(&mut self.state, WatcherState::Disconnected) {
+            WatcherState::Connected { rx, .. } => rx,
+            WatcherState::Disconnected => unreachable!(),
+        };
+
+        Ok((self.watcher, rx))
+    }
+}
+```
+
+**Usage:**
+```rust
+let verified_watcher = VerifiedWatcher::new(&root, &[agents_dir, submissions_dir])?;
+let (_watcher, rx) = verified_watcher.into_receiver(Duration::from_secs(5))?;
+// _watcher must stay in scope to keep the watch alive
+// rx yields notify::Event for each filesystem event
+```
+
+**Files changed:**
+- `verified_watcher.rs`: Add `into_receiver` method, change `_watcher` to `watcher` (no longer unused)
+
+---
+
+### Change 1d: Refactor Daemon to Use VerifiedWatcher
+
+**Goal:** Replace `create_fs_watcher` + inline `sync_and_setup` canary logic with `VerifiedWatcher`.
+
+**Before (wiring.rs):**
+```rust
+pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<Infallible> {
+    // ...
+    let (io_tx, io_rx) = mpsc::channel();
+    let _fs_watcher = create_fs_watcher(&root, io_tx.clone())?;
+
+    let (_lock, listener) = sync_and_setup(
+        &root, &lock_path, &socket_path,
+        &submissions_dir, &agents_dir, &scratch_dir,
+        &io_rx,
+    )?;
+    // ...
+}
+
+fn sync_and_setup(..., io_rx: &mpsc::Receiver<IoEvent>) -> io::Result<(LockGuard, Listener)> {
+    let canary_path = root.join("daemon.canary");
+
+    fs::create_dir_all(submissions_dir)?;
+    fs::create_dir_all(agents_dir)?;
+    fs::create_dir_all(scratch_dir)?;
+
+    fs::write(&canary_path, "0")?;
+
+    // Inline verification loop...
+    while start.elapsed() < MAX_DURATION {
+        match io_rx.recv_timeout(POLL_TIMEOUT) {
+            Ok(IoEvent::Fs(event)) => {
+                let _ = fs::remove_file(&canary_path);
+                return Ok((lock, listener));
+            }
+            // ...
+        }
+    }
+}
+```
+
+**After:**
+```rust
+pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Result<Infallible> {
+    // ...
+
+    // Create directories first
+    fs::create_dir_all(&submissions_dir)?;
+    fs::create_dir_all(&agents_dir)?;
+    fs::create_dir_all(&scratch_dir)?;
+
+    // Use VerifiedWatcher - single directory for now (Phase 1)
+    let verified_watcher = VerifiedWatcher::new(&root, root.clone())?;
+    let (_watcher, fs_rx) = verified_watcher.into_receiver(Duration::from_secs(5))?;
+
+    // Create unified channel
+    let (io_tx, io_rx) = mpsc::channel();
+
+    // Spawn thread to forward FS events to unified channel
+    let io_tx_fs = io_tx.clone();
+    thread::spawn(move || {
+        while let Ok(path) = fs_rx.recv() {
+            // Convert PathBuf to notify::Event for IoEvent::Fs
+            // (or change channel type - see note below)
+        }
+    });
+
+    let (_lock, listener) = setup_lock_and_socket(&lock_path, &socket_path)?;
+    // ...
+}
+```
+
+**Issue:** `VerifiedWatcher` currently sends `PathBuf`, but daemon needs `notify::Event` for `IoEvent::Fs`. Two options:
+
+1. Change `VerifiedWatcher` to send full `notify::Event` through its channel
+2. Keep `PathBuf` and reconstruct minimal event info
+
+Option 1 is cleaner - update the channel type:
+
+```rust
+// In VerifiedWatcher
+let (tx, rx) = mpsc::channel::<notify::Event>();
+
+// Watcher callback sends full event
+move |res: Result<notify::Event, notify::Error>| {
+    if let Ok(event) = res {
+        let _ = tx.send(event);
+    }
+}
+```
+
+Then daemon can forward directly:
+```rust
+while let Ok(event) = fs_rx.recv() {
+    if io_tx.send(IoEvent::Fs(event)).is_err() {
+        break;
+    }
+}
+```
+
+**Files changed:**
+- `verified_watcher.rs`: Change channel to `Receiver<notify::Event>`
+- `daemon/wiring.rs`: Use `VerifiedWatcher`, remove `create_fs_watcher`, simplify `sync_and_setup`
+
+---
+
+## Phase 2: Multi-Directory Verification
+
+Single change after Phase 1 is complete.
+
+### Change 2: Enable Multi-Directory Verification
+
+**Goal:** Verify multiple directories. Daemon verifies `agents/` and `submissions/`.
+
+**Update `VerifiedWatcher::new` signature:**
+```rust
+// Before
+pub fn new(watch_dir: &Path, canary_dir: PathBuf) -> io::Result<Self>
+
+// After
+pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self>
+```
+
+**Implementation:**
+```rust
+pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self> {
+    let (tx, rx) = mpsc::channel();
+
+    let mut watcher = RecommendedWatcher::new(/* ... */)?;
+    watcher.watch(watch_dir, RecursiveMode::Recursive)?;
+
+    let remaining_canaries = canary_dirs
+        .iter()
+        .map(|dir| CanaryGuard::new(dir.clone()))
+        .collect::<io::Result<Vec<_>>>()?;
+
+    Ok(Self {
+        watcher,
+        state: WatcherState::Connected { rx, remaining_canaries },
+    })
+}
+```
+
+**Update callers:**
+```rust
+// Existing callers (single directory) - wrap in slice
+VerifiedWatcher::new(&dir, &[dir.clone()])
+
+// Daemon - verify leaf directories
+VerifiedWatcher::new(&root, &[agents_dir.clone(), submissions_dir.clone()])
+```
+
+**Files changed:**
+- `verified_watcher.rs`: Update `new` signature
+- `worker.rs`, `submit/*.rs`: Update callers to pass slice
+- `daemon/wiring.rs`: Pass `[agents_dir, submissions_dir]`
+
+---
+
+## Impossible States Made Unrepresentable
+
+### 1. `Option<CanaryGuard>` → `Vec<CanaryGuard>`
+
+Before: `None` could mean "verified" or "never created" - ambiguous.
+After: Empty vec = verified. Clear semantics.
+
+### 2. Remove Panic-Only Code Paths
+
+Before: Set `Disconnected` state then panic.
+After: Return `Err` directly. `Disconnected` state may be removable.
+
+### 3. Retry Only Unverified Canaries
+
+State encodes what needs retrying:
+```rust
+// Only remaining (unverified) canaries get retried
+for canary in remaining_canaries.iter_mut() {
+    canary.retry()?;
+}
+```
+
+---
 
 ## Testing
 
-The fix should make `greeting_casual_and_formal::case_1` (and similar tests) reliable. To verify:
+After all changes:
 
-1. Run `cargo test -p agent_pool --test greeting -- --test-threads=1` multiple times
-2. All cases should pass consistently
-3. The daemon logs should show "verified all 2 directories" instead of "received event"
+1. `cargo test -p agent_pool` - all tests pass
+2. `cargo test -p agent_pool --test greeting -- --test-threads=1` (multiple runs)
+3. All cases should pass consistently

@@ -95,13 +95,23 @@ pub fn atomic_write_str(pool_root: &Path, target: &Path, content: &str) -> io::R
 /// Guard that cleans up the canary file when dropped.
 struct CanaryGuard {
     path: PathBuf,
+    dir: PathBuf,
     writes: u32,
 }
 
 impl CanaryGuard {
-    fn new(path: PathBuf) -> io::Result<Self> {
+    fn new(dir: PathBuf) -> io::Result<Self> {
+        let path = dir.join(format!("{}.canary", Uuid::new_v4()));
         fs::write(&path, "0")?;
-        Ok(Self { path, writes: 0 })
+        Ok(Self {
+            path,
+            dir,
+            writes: 0,
+        })
+    }
+
+    fn dir(&self) -> &Path {
+        &self.dir
     }
 
     fn retry(&mut self) -> io::Result<()> {
@@ -117,47 +127,38 @@ impl Drop for CanaryGuard {
 }
 
 /// Internal state of the watcher.
-enum WatcherState {
-    /// Watcher is operational. Has receiver and optional canary guard.
-    /// - `canary: Some(_)` = unverified, still waiting for first event
-    /// - `canary: None` = verified, canary was cleaned up
-    Connected {
-        rx: mpsc::Receiver<PathBuf>,
-        canary: Option<CanaryGuard>,
-    },
-    /// Channel disconnected; watcher is broken.
-    Disconnected,
+struct WatcherState {
+    rx: mpsc::Receiver<PathBuf>,
+    /// Canary guards for directories still being verified.
+    /// As directories are verified, their canaries are removed.
+    remaining_canaries: Vec<CanaryGuard>,
 }
 
-/// A file watcher with lazy canary verification.
+/// A file watcher with canary verification.
 ///
-/// # Key Assumption
+/// On Linux with inotify, recursive file watching has a race condition: when
+/// a new subdirectory is created, there's a window where files can be written
+/// before the watch is set up. This watcher uses canary files to verify that
+/// watches are operational before proceeding.
 ///
-/// Once we observe any filesystem event, the watcher is fully operational.
-/// Filesystem watchers (`FSEvents` on macOS, `inotify` on Linux) don't "partially work".
-/// The only failure mode is during initial setup - there's a brief window after
-/// `watch()` returns where events might not be delivered yet. Once we receive ANY
-/// event, we can trust that:
-/// - The watcher is fully registered with the kernel
-/// - All subsequent filesystem operations in the watched directory will generate events
-/// - We won't miss events due to setup races
+/// Canaries are removed as their directories are verified. When all canaries
+/// are gone, the watcher is fully verified.
 pub struct VerifiedWatcher {
     _watcher: RecommendedWatcher,
     state: WatcherState,
 }
 
-#[allow(clippy::panic)] // Panics are intentional for invalid state transitions
 impl VerifiedWatcher {
     /// Create a watcher and start canary verification (non-blocking).
     ///
-    /// Writes the canary file but returns immediately. Verification happens
-    /// lazily during [`wait_for`] or [`ensure_verified`] calls.
+    /// Writes a canary file to `canary_dir` to verify the watcher is working.
+    /// Verification happens lazily during [`wait_for`] calls.
     ///
     /// # Errors
     ///
     /// Returns an error if the watcher cannot be created or the canary file
     /// cannot be written.
-    pub fn new(watch_dir: &Path, canary_path: PathBuf) -> io::Result<Self> {
+    pub fn new(watch_dir: &Path, canary_dir: PathBuf) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
 
         let mut watcher = RecommendedWatcher::new(
@@ -176,38 +177,37 @@ impl VerifiedWatcher {
             .watch(watch_dir, RecursiveMode::Recursive)
             .map_err(io::Error::other)?;
 
-        let canary = CanaryGuard::new(canary_path)?;
+        let canary = CanaryGuard::new(canary_dir)?;
 
         Ok(Self {
             _watcher: watcher,
-            state: WatcherState::Connected {
+            state: WatcherState {
                 rx,
-                canary: Some(canary),
+                remaining_canaries: vec![canary],
             },
         })
     }
 
     /// Wait for a specific file to appear.
     ///
-    /// If not yet verified, handles canary verification alongside waiting.
+    /// Handles canary verification alongside waiting. Canaries are removed
+    /// as their directories are verified.
+    ///
     /// Returns immediately if the file already exists.
     ///
     /// # Errors
     ///
     /// Returns an error if the wait times out before the file appears.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called when watcher is disconnected.
     pub fn wait_for(&mut self, target: &Path, timeout: Option<Duration>) -> io::Result<()> {
         // Fast path: file already exists
         if target.exists() {
             return Ok(());
         }
 
-        let WatcherState::Connected { rx, canary } = &mut self.state else {
-            panic!("wait_for called on disconnected watcher");
-        };
+        let WatcherState {
+            rx,
+            remaining_canaries,
+        } = &mut self.state;
 
         let start = Instant::now();
         loop {
@@ -223,9 +223,9 @@ impl VerifiedWatcher {
 
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(path) => {
-                    // Any event proves watcher works
-                    if canary.is_some() {
-                        *canary = None;
+                    // Remove canary for verified directory
+                    if let Some(parent) = path.parent() {
+                        remaining_canaries.retain(|c| c.dir() != parent);
                     }
 
                     if path == target {
@@ -239,13 +239,16 @@ impl VerifiedWatcher {
                     if target.exists() {
                         return Ok(());
                     }
-                    if let Some(c) = canary {
-                        c.retry()?;
+                    // Retry only unverified canaries
+                    for canary in remaining_canaries.iter_mut() {
+                        canary.retry()?;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    self.state = WatcherState::Disconnected;
-                    panic!("watcher disconnected unexpectedly");
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "watcher disconnected",
+                    ));
                 }
             }
         }

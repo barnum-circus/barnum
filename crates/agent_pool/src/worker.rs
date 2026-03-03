@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
-use crate::constants::{AGENTS_DIR, canary_path, ready_path, response_path, task_path};
+use crate::constants::{AGENTS_DIR, ready_path, response_path, task_path};
 use crate::verified_watcher::VerifiedWatcher;
 
 /// Result of waiting for a task.
@@ -53,14 +53,13 @@ pub fn wait_for_task(
 
     let ready = ready_path(&agents_dir, &uuid);
     let task = task_path(&agents_dir, &uuid);
-    let canary = canary_path(&agents_dir, &uuid);
 
     // Write ready file with optional metadata
     let metadata = name.map_or_else(|| "{}".to_string(), |n| format!(r#"{{"name":"{n}"}}"#));
     fs::write(&ready, &metadata)?;
 
     // Wait for task file using VerifiedWatcher
-    let mut watcher = VerifiedWatcher::new(&agents_dir, canary)?;
+    let mut watcher = VerifiedWatcher::new(&agents_dir, agents_dir.clone())?;
     watcher.wait_for(&task, timeout)?;
 
     let content = fs::read_to_string(&task)?;

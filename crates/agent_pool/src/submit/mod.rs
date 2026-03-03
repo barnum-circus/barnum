@@ -10,7 +10,6 @@ use std::io;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
-use uuid::Uuid;
 
 use crate::constants::STATUS_FILE;
 use crate::verified_watcher::VerifiedWatcher;
@@ -48,9 +47,8 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
     let root = fs::canonicalize(root)?;
 
     let status_path = root.join(STATUS_FILE);
-    let canary_path = root.join(format!("{}.canary", Uuid::new_v4()));
 
     // Use VerifiedWatcher with lazy verification
-    let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
+    let mut watcher = VerifiedWatcher::new(&root, root.clone())?;
     watcher.wait_for(&status_path, Some(timeout))
 }

@@ -46,9 +46,6 @@ pub const TASK_SUFFIX: &str = ".task.json";
 /// Suffix for worker response files: `<uuid>.response.json`
 pub const WORKER_RESPONSE_SUFFIX: &str = ".response.json";
 
-/// Suffix for canary files used in watcher verification: `<uuid>.canary`
-pub const CANARY_SUFFIX: &str = ".canary";
-
 // =============================================================================
 // Path helpers (shared by daemon IO and workers)
 // =============================================================================
@@ -69,10 +66,4 @@ pub fn task_path(agents_dir: &Path, uuid: &str) -> PathBuf {
 #[must_use]
 pub fn response_path(agents_dir: &Path, uuid: &str) -> PathBuf {
     agents_dir.join(format!("{uuid}{WORKER_RESPONSE_SUFFIX}"))
-}
-
-/// Build path to a worker's canary file.
-#[must_use]
-pub fn canary_path(agents_dir: &Path, uuid: &str) -> PathBuf {
-    agents_dir.join(format!("{uuid}{CANARY_SUFFIX}"))
 }

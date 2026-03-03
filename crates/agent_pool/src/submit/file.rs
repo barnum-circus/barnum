@@ -79,11 +79,10 @@ pub fn submit_file_with_timeout(
     // File paths
     let request_path = submissions_dir.join(format!("{submission_id}{REQUEST_SUFFIX}"));
     let response_path = submissions_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
-    let canary_path = root.join(format!("{submission_id}.canary"));
     let status_path = root.join(STATUS_FILE);
 
     // Create watcher on pool root (watches recursively to see both status and response)
-    let mut watcher = VerifiedWatcher::new(&root, canary_path)?;
+    let mut watcher = VerifiedWatcher::new(&root, root.clone())?;
 
     // Wait for pool to become ready (returns immediately if status file exists)
     watcher.wait_for(&status_path, Some(POOL_READY_TIMEOUT))?;
