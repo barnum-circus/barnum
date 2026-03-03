@@ -888,54 +888,9 @@ GSD now invokes the CLI via `submit_via_cli()` which spawns `agent_pool submit_t
 
 ---
 
-## wait_for_task Should Watch for Stop Signal
+## wait_for_task Should Accept Cancellation Signal
 
-**Status: TODO**
-
-`wait_for_task` (and `VerifiedWatcher`) should watch for BOTH the task file AND a stop file. This eliminates the need for callers to poll with timeouts to check a running flag.
-
-**Current problem:**
-
-Callers must loop with short timeouts to enable clean shutdown:
-```rust
-while running.load(Ordering::SeqCst) {
-    let Ok(task) = wait_for_task(&pool, None, Some(Duration::from_millis(500))) else {
-        continue;  // Timeout - check running flag
-    };
-    // ...
-}
-```
-
-This is error-prone (commit 54549e3 accidentally removed the timeout, causing test hangs).
-
-**Proposed fix:**
-
-`wait_for_task` should accept a stop signal path and return immediately when either:
-1. Task file appears (return `Ok(TaskAssignment)`)
-2. Stop file appears (return `Err(Stopped)`)
-
-```rust
-// New API
-wait_for_task(&pool, name, stop_file)?;  // Returns Stopped error if stop_file appears
-
-// Caller creates stop file to signal shutdown
-fs::write(&stop_file, "")?;
-```
-
-Or use a channel/condvar instead of a stop file:
-```rust
-// With channel
-let (tx, rx) = channel();
-wait_for_task(&pool, name, Some(rx))?;
-
-// To stop
-tx.send(())?;
-```
-
-**Benefits:**
-- No polling/timeouts needed
-- Clean API - shutdown is explicit, not via side effects
-- Harder to accidentally break (no implicit timeout dependency)
+**Status: REFACTOR PLANNED** - See `refactors/pending/CANCELLABLE_WAIT_FOR_TASK.md`
 
 ---
 
