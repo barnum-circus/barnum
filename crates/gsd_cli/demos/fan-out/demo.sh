@@ -28,8 +28,8 @@ cargo build -p agent_pool -p gsd_cli --quiet
 echo "Build complete."
 echo ""
 
-AGENT_POOL="${AGENT_POOL:-$WORKSPACE_ROOT/target/debug/agent_pool}"
-GSD="${GSD:-$WORKSPACE_ROOT/target/debug/gsd}"
+export AGENT_POOL="${AGENT_POOL:-$WORKSPACE_ROOT/target/debug/agent_pool}"
+export GSD="${GSD:-$WORKSPACE_ROOT/target/debug/gsd}"
 
 NUM_WORKERS=20
 NUM_AGENTS=3
