@@ -10,6 +10,7 @@
 use std::path::Path;
 
 use notify::event::EventKind;
+use tracing::warn;
 
 use crate::constants::{READY_SUFFIX, REQUEST_SUFFIX, STATUS_FILE, WORKER_RESPONSE_SUFFIX};
 use crate::verified_watcher::is_write_complete;
@@ -79,9 +80,17 @@ fn categorize_root(path: &Path, event_kind: EventKind, root: &Path) -> Option<Pa
     let status_path = root.join(STATUS_FILE);
     if path == status_path
         && let Ok(content) = std::fs::read_to_string(path)
-        && content.trim() == "stop"
     {
-        return Some(PathCategory::Stop);
+        let trimmed = content.trim();
+        if trimmed == "stop" {
+            warn!(
+                path = %path.display(),
+                content = %trimmed,
+                content_len = content.len(),
+                "CATEGORIZE: detected Stop signal in status file"
+            );
+            return Some(PathCategory::Stop);
+        }
     }
 
     None
