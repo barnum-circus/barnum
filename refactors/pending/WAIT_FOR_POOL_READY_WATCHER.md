@@ -122,23 +122,12 @@ impl VerifiedWatcher {
 }
 ```
 
-### Watcher Reuse
+### Updated wait_for_pool_ready
 
-Currently each function creates its own `VerifiedWatcher`:
-- `wait_for_pool_ready` creates one
-- `wait_for_task` creates one
-- `submit_file` creates one
-
-If multiple are called in the same process, we waste resources creating multiple watchers for the same directory.
-
-**Solution:** Accept an optional watcher reference, create one only if not provided:
+This is a one-shot operation (startup check), so it creates its own watcher internally:
 
 ```rust
-pub fn wait_for_pool_ready(
-    root: impl AsRef<Path>,
-    timeout: Duration,
-    watcher: Option<&mut VerifiedWatcher>,
-) -> io::Result<()> {
+pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
     let root = root.as_ref();
     let status_path = root.join(STATUS_FILE);
 
@@ -146,35 +135,30 @@ pub fn wait_for_pool_ready(
         return Ok(());
     }
 
-    match watcher {
-        Some(w) => w.wait_for_file_with_timeout(&status_path, timeout),
-        None => {
-            let mut w = VerifiedWatcher::new(root, std::slice::from_ref(&root))?;
-            w.wait_for_file_with_timeout(&status_path, timeout)
-        }
-    }
+    let mut watcher = VerifiedWatcher::new(root, std::slice::from_ref(&root))?;
+    watcher.wait_for_file_with_timeout(&status_path, timeout)
 }
 ```
 
-Same pattern for `wait_for_task` and `submit_file`. Callers that need multiple operations can create one watcher and pass it to all.
+### Watcher Reuse (for repeated operations)
 
-### Convenience wrapper (no watcher param)
-
-For simple use cases, keep zero-config versions:
+`wait_for_task` and `submit_file` may be called repeatedly and watch the same directories. These should accept an optional watcher:
 
 ```rust
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
-    wait_for_pool_ready_with_watcher(root, timeout, None)
-}
-
-pub fn wait_for_pool_ready_with_watcher(
-    root: impl AsRef<Path>,
-    timeout: Duration,
+// Agent loop can reuse watcher across multiple wait_for_task calls
+pub fn wait_for_task_with_watcher(
+    pool_root: &Path,
+    name: Option<&str>,
     watcher: Option<&mut VerifiedWatcher>,
-) -> io::Result<()> {
-    // ... implementation above
+) -> io::Result<TaskAssignment>;
+
+// Convenience version creates its own
+pub fn wait_for_task(pool_root: &Path, name: Option<&str>) -> io::Result<TaskAssignment> {
+    wait_for_task_with_watcher(pool_root, name, None)
 }
 ```
+
+Note: `wait_for_pool_ready` watches the **pool root**, while `wait_for_task` watches the **agents dir** - different directories, so they can't share a watcher anyway.
 
 ### CLI Update
 
@@ -215,14 +199,13 @@ watcher.wait_for_file(&response_path)?;
 
 1. Add private `wait_for_file_impl` with `Option<Duration>`
 2. Add public `wait_for_file` and `wait_for_file_with_timeout` that call impl
-3. Add `wait_for_pool_ready_with_watcher` that accepts optional watcher
-4. Add convenience `wait_for_pool_ready` that passes `None`
-5. Update `wait_for_task` similarly (accept optional watcher)
-6. Update `submit_file` similarly (accept optional watcher)
-7. Update all `wait_for` call sites to use new names
-8. Update CLI to use `wait_for_pool_ready` instead of `wait_for_status_file`
-9. Delete `wait_for_status_file` from CLI
-10. Run tests to verify
+3. Update `wait_for_pool_ready` to use `VerifiedWatcher` (creates its own, one-shot)
+4. Add `wait_for_task_with_watcher` that accepts optional watcher (for agent loops)
+5. Add `submit_file_with_watcher` that accepts optional watcher (for repeated submissions)
+6. Update all `wait_for` call sites to use new names
+7. Update CLI to use `wait_for_pool_ready` instead of `wait_for_status_file`
+8. Delete `wait_for_status_file` from CLI
+9. Run tests to verify
 
 ## Testing
 
