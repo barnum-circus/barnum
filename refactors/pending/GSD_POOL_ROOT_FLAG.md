@@ -74,8 +74,17 @@ let pool_path = pool.map_or_else(
         std::fs::create_dir_all(&temp).ok();
         temp
     },
-    |p| agent_pool::resolve_pool(&pool_root, &p),
-);
+    |p| {
+        // Validate pool ID doesn't contain path separators
+        if p.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Pool ID cannot contain '/'. Use --pool-root to specify the base directory.",
+            ));
+        }
+        Ok(agent_pool::resolve_pool(&pool_root, &p))
+    },
+)?;
 ```
 
 Note: Need to restructure the match to access `cli.pool_root` alongside `cli.command`.
@@ -85,6 +94,7 @@ Note: Need to restructure the match to access `cli.pool_root` alongside `cli.com
 1. Add `pool_root: Option<PathBuf>` field to `Cli` struct with `#[arg(long, global = true)]`
 2. Restructure `main()` to extract `pool_root` before matching on `command`
 3. Pass `pool_root` to `resolve_pool()` instead of `default_pool_root()`
+4. Validate that `--pool` doesn't contain forward slashes (error with helpful message)
 
 ## Testing
 
@@ -95,6 +105,10 @@ gsd run config.json --pool my-pool
 
 # Verify custom pool root works
 gsd run config.json --pool my-pool --pool-root /custom/path
+
+# Verify validation rejects paths with slashes
+gsd run config.json --pool /some/path/pool  # Should error with helpful message
+gsd run config.json --pool some/nested/pool  # Should error with helpful message
 ```
 
 ## Benefits
