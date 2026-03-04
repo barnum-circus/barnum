@@ -334,7 +334,7 @@ fn find_package_manager_field() -> Option<String> {
 ### CLI type definitions
 
 ```rust
-// crates/agent_pool/src/lib.rs (or separate module)
+// crates/agent_pool_cli/src/invoker.rs (new file)
 
 pub struct AgentPoolCli;
 
@@ -346,7 +346,7 @@ impl cli_invoker::InvokableCli for AgentPoolCli {
     const ENV_VAR_COMMAND: &'static str = "AGENT_POOL_COMMAND";
 }
 
-// crates/gsd_cli/src/main.rs (or separate module)
+// crates/gsd_cli/src/invoker.rs (new file)
 
 pub struct GsdCli;
 
@@ -358,6 +358,8 @@ impl cli_invoker::InvokableCli for GsdCli {
     const ENV_VAR_COMMAND: &'static str = "GSD_COMMAND";
 }
 ```
+
+**Note:** `AgentPoolCli` lives in `agent_pool_cli`, not `agent_pool`. `gsd_cli` depends on `agent_pool_cli` for this type. This minimizes dependencies on the `agent_pool` library crate.
 
 ### `gsd_config/src/runner.rs` (after)
 
@@ -401,7 +403,7 @@ fn submit_via_cli(
 
 ```rust
 use cli_invoker::Invoker;
-use agent_pool::AgentPoolCli;
+use agent_pool_cli::AgentPoolCli;
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
@@ -459,14 +461,16 @@ Branch: `cli-invoker-crate`
 
 ### Step 2: Define CLI types and integrate
 
-Branch: `cli-invoker-types`
+Branch: `cli-invoker-integration`
 
-1. Add `cli_invoker` dependency to `agent_pool` and `gsd_config`
-2. Define `AgentPoolCli` in `agent_pool` crate
-3. Update `RunnerConfig` to take `&Invoker<AgentPoolCli>` instead of `Option<&Path>`
-4. Update `submit_via_cli` to use the invoker
-5. Delete `resolve_agent_pool_binary` function
-6. Update `gsd_cli/src/main.rs` to create invoker and pass it
+1. Add `cli_invoker` dependency to `agent_pool_cli` and `gsd_cli`
+2. Create `crates/agent_pool_cli/src/invoker.rs` with `AgentPoolCli` type
+3. Export `AgentPoolCli` from `agent_pool_cli` crate
+4. Add `agent_pool_cli` dependency to `gsd_config` (for `AgentPoolCli` type)
+5. Update `RunnerConfig` to take `&Invoker<AgentPoolCli>` instead of `Option<&Path>`
+6. Update `submit_via_cli` to use the invoker
+7. Delete `resolve_agent_pool_binary` function
+8. Update `gsd_cli/src/main.rs` to create invoker and pass it
 
 **Merge criteria:** gsd_cli uses invoker throughout, old code removed, CI green.
 
