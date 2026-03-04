@@ -923,6 +923,65 @@ The agent module already has proper canary verification and is event-driven (not
 
 ---
 
+## Annotate All Error Messages with Context
+
+**Status: TODO**
+
+Many error messages in the codebase pass through raw OS errors without adding context about what operation failed or which file/path/ID was involved. This makes debugging difficult.
+
+**Example of the problem:**
+```
+Submit error: No such file or directory (os error 2)
+```
+This tells you nothing about which directory is missing.
+
+### Critical (opaque OS errors that need path context)
+
+| File | Line | Operation | Fix |
+|------|------|-----------|-----|
+| `verified_watcher.rs` | 74 | `fs::write(&temp_path, content)?` | Add `.map_err()` with temp_path |
+| `verified_watcher.rs` | 75 | `fs::rename(&temp_path, target)?` | Add `.map_err()` with both paths |
+| `submit/file.rs` | 77 | `fs::canonicalize(root.as_ref())?` | Add `.map_err()` with root path |
+| `submit/file.rs` | 100 | `fs::read_to_string(&response_path)?` | Add `.map_err()` with response_path |
+
+### Poor context (generic messages lacking IDs/values)
+
+| File | Line | Current Message | Fix |
+|------|------|-----------------|-----|
+| `daemon/io.rs` | 300, 308 | "id not found" | Include actual ID value |
+| `daemon/io.rs` | 342 | "submission not found" | Include submission ID |
+| `verified_watcher.rs` | 262 | "watcher disconnected" | Include what was being watched |
+
+### Pattern to follow
+
+**Before:**
+```rust
+fs::write(&path, content)?;
+```
+
+**After:**
+```rust
+fs::write(&path, content)
+    .map_err(|e| io::Error::new(e.kind(), format!("failed to write {}: {e}", path.display())))?;
+```
+
+Or use a helper:
+```rust
+fn write_with_context(path: &Path, content: &[u8]) -> io::Result<()> {
+    fs::write(path, content)
+        .map_err(|e| io::Error::new(e.kind(), format!("failed to write {}: {e}", path.display())))
+}
+```
+
+### Scope
+
+Best-effort pass through all `crates/` looking for:
+- Bare `fs::` calls with `?`
+- `.map_err(io::Error::other)` that loses context
+- Error messages with "not found" that don't include the ID/path
+
+---
+
 ## CLI Invoker Version Checking
 
 **Status: TODO**
