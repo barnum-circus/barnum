@@ -12,132 +12,153 @@ pnpm dlx @gsd-now/gsd run ...
 
 And have it "just work" without setting environment variables.
 
-## Architecture
+## Resolution Order
 
-**Key principle:** Resolve the invocation method ONCE at program startup, then pass an opaque invoker through the call stack. Detection logic never leaks into business logic.
+1. **`AGENT_POOL` env var** - explicit binary path (CI uses this)
+2. **`AGENT_POOL_COMMAND` env var** - explicit command (e.g., `pnpm dlx @gsd-now/agent-pool`)
+3. **Cargo workspace binary** - `target/debug/agent_pool` (local dev)
+4. **`node_modules/.bin/agent_pool`** - already installed via npm/pnpm
+5. **`packageManager` field in package.json** - use appropriate dlx command
+6. **Global package manager in PATH** - check for pnpm, npx, yarn
 
-### New Crate: `cli_invoker`
+### How environments use this
 
-This is a generic utility, not specific to agent_pool or gsd. It lives in its own crate and is parameterized by a zero-sized type implementing a trait.
+| Environment | Resolution Step | Notes |
+|-------------|-----------------|-------|
+| CI | 1 (env var) | CI downloads pre-built binary and sets env var |
+| Local Rust dev | 3 (cargo binary) | `cargo build` first, invoker finds it |
+| npm user (installed) | 4 (node_modules) | `pnpm add @gsd-now/agent-pool` |
+| npm user (not installed) | 5 or 6 | Uses dlx with detected package manager |
 
-```
-┌─────────────────┐
-│  main() / CLI   │  ← Invoker::<AgentPoolCli>::detect() called here
-└────────┬────────┘
-         │ &Invoker<AgentPoolCli>
-         ▼
-┌─────────────────┐
-│  submit_task()  │  ← invoker.run(&["submit_task", ...])
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  other fns...   │  ← just passes invoker through, never inspects it
-└─────────────────┘
-```
+---
 
-## Implementation
+## Current State (Before)
 
-### The Trait
+### `gsd_config/src/runner.rs:70-71`
 
 ```rust
-// crates/cli_invoker/src/lib.rs
+pub struct RunnerConfig<'a> {
+    // ...
+    /// Optional path to the `agent_pool` binary. If not specified, uses `AGENT_POOL` env var or PATH.
+    pub agent_pool_binary: Option<&'a Path>,
+}
+```
 
+### `gsd_config/src/runner.rs:1016-1025`
+
+```rust
+/// Resolve the `agent_pool` binary path.
+fn resolve_agent_pool_binary() -> std::path::PathBuf {
+    // 1. Environment variable override (AGENT_POOL is the standard name)
+    if let Ok(path) = std::env::var("AGENT_POOL") {
+        return std::path::PathBuf::from(path);
+    }
+
+    // 2. Default: assume it's in PATH
+    std::path::PathBuf::from("agent_pool")
+}
+```
+
+### `gsd_config/src/runner.rs:951-998`
+
+```rust
+fn submit_via_cli(
+    pool_path: &Path,
+    payload: &str,
+    agent_pool_binary: Option<&Path>,
+) -> io::Result<Response> {
+    let binary = agent_pool_binary.map_or_else(resolve_agent_pool_binary, Path::to_path_buf);
+    // ...
+    let output = Command::new(&binary)
+        .arg("submit_task")
+        // ...
+        .output()?;
+    // ...
+}
+```
+
+### `gsd_cli/src/main.rs:108-114`
+
+```rust
+let runner_config = RunnerConfig {
+    agent_pool_root: &pool_path,
+    config_base_path: &config_dir,
+    wake_script: wake.as_deref(),
+    initial_tasks,
+    agent_pool_binary: None, // Use AGENT_POOL env var or PATH
+};
+```
+
+---
+
+## Proposed State (After)
+
+### New crate: `crates/cli_invoker/src/lib.rs`
+
+```rust
 use std::ffi::OsStr;
 use std::io;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-/// Defines how to invoke a CLI tool via different methods.
+/// Defines how to invoke a CLI tool.
 pub trait InvokableCli {
     /// npm package name, e.g., "@gsd-now/agent-pool"
     const NPM_PACKAGE: &'static str;
-
-    /// Binary name in target/debug/, e.g., "agent_pool_cli"
+    /// Binary name, e.g., "agent_pool"
     const BINARY_NAME: &'static str;
-
-    /// Cargo package name (for error messages), e.g., "agent_pool_cli"
+    /// Cargo package name, e.g., "agent_pool_cli"
     const CARGO_PACKAGE: &'static str;
-
-    /// Environment variable for explicit binary path, e.g., "AGENT_POOL"
+    /// Env var for explicit binary path, e.g., "AGENT_POOL"
     const ENV_VAR_BINARY: &'static str;
-
-    /// Environment variable for explicit command, e.g., "AGENT_POOL_COMMAND"
+    /// Env var for explicit command, e.g., "AGENT_POOL_COMMAND"
     const ENV_VAR_COMMAND: &'static str;
 }
-```
 
-### The Invoker
-
-```rust
-/// Opaque handle for invoking a CLI tool.
-/// Created once at startup, passed to functions that need it.
 pub struct Invoker<T: InvokableCli> {
     kind: InvokerKind,
     _marker: PhantomData<T>,
 }
 
 enum InvokerKind {
-    /// Direct binary path
     Binary(PathBuf),
-    /// Package manager: (program, prefix_args)
-    /// e.g., ("pnpm", ["dlx", "@gsd-now/agent-pool"])
-    PackageManager {
-        program: String,
-        prefix_args: Vec<String>,
-    },
+    PackageManager { program: String, prefix_args: Vec<String> },
 }
 
 impl<T: InvokableCli> Invoker<T> {
-    /// Detect how to invoke the CLI.
-    /// Resolution order:
-    /// 1. {ENV_VAR_BINARY} env var (binary path) - CI uses this
-    /// 2. {ENV_VAR_COMMAND} env var (full command)
-    /// 3. Local cargo workspace binary (target/debug/{BINARY_NAME}) - local dev
-    /// 4. package.json packageManager field
-    /// 5. Global package manager in PATH
     pub fn detect() -> Self {
-        // 1. Explicit binary path (CI sets this)
+        // 1. AGENT_POOL env var
         if let Ok(path) = std::env::var(T::ENV_VAR_BINARY) {
-            return Self {
-                kind: InvokerKind::Binary(PathBuf::from(path)),
-                _marker: PhantomData,
-            };
+            return Self::binary(PathBuf::from(path));
         }
 
-        // 2. Explicit command (e.g., "pnpm dlx @gsd-now/agent-pool")
+        // 2. AGENT_POOL_COMMAND env var
         if let Ok(cmd) = std::env::var(T::ENV_VAR_COMMAND) {
-            let parts: Vec<&str> = cmd.split_whitespace().collect();
-            if !parts.is_empty() {
-                return Self {
-                    kind: InvokerKind::PackageManager {
-                        program: parts[0].to_string(),
-                        prefix_args: parts[1..].iter().map(|s| s.to_string()).collect(),
-                    },
-                    _marker: PhantomData,
-                };
+            if let Some(invoker) = Self::from_command_string(&cmd) {
+                return invoker;
             }
         }
 
-        // 3. Check for local cargo workspace binary (local dev)
+        // 3. Cargo workspace binary (local dev)
         if let Some(binary) = find_cargo_workspace_binary(T::BINARY_NAME) {
-            return Self {
-                kind: InvokerKind::Binary(binary),
-                _marker: PhantomData,
-            };
+            return Self::binary(binary);
         }
 
-        // 4. Find package.json and detect package manager
-        if let Some(pkg_manager) = detect_package_manager() {
-            return Self::from_package_manager(&pkg_manager);
+        // 4. node_modules/.bin (already installed)
+        if let Some(binary) = find_node_modules_binary(T::BINARY_NAME) {
+            return Self::binary(binary);
         }
 
-        // 5. Fallback: check for global package managers
-        Self::from_global_package_manager()
+        // 5. packageManager field in package.json
+        if let Some(pm) = find_package_manager_field() {
+            return Self::from_package_manager(&pm, T::NPM_PACKAGE);
+        }
+
+        // 6. Global package manager in PATH
+        Self::from_global_package_manager(T::NPM_PACKAGE)
     }
 
-    /// Run the CLI with the given arguments.
     pub fn run<I, S>(&self, args: I) -> io::Result<Output>
     where
         I: IntoIterator<Item = S>,
@@ -145,14 +166,12 @@ impl<T: InvokableCli> Invoker<T> {
     {
         match &self.kind {
             InvokerKind::Binary(path) => Command::new(path).args(args).output(),
-            InvokerKind::PackageManager { program, prefix_args } => Command::new(program)
-                .args(prefix_args)
-                .args(args)
-                .output(),
+            InvokerKind::PackageManager { program, prefix_args } => {
+                Command::new(program).args(prefix_args).args(args).output()
+            }
         }
     }
 
-    /// Spawn the CLI (non-blocking).
     pub fn spawn<I, S>(&self, args: I) -> io::Result<std::process::Child>
     where
         I: IntoIterator<Item = S>,
@@ -160,79 +179,74 @@ impl<T: InvokableCli> Invoker<T> {
     {
         match &self.kind {
             InvokerKind::Binary(path) => Command::new(path).args(args).spawn(),
-            InvokerKind::PackageManager { program, prefix_args } => Command::new(program)
-                .args(prefix_args)
-                .args(args)
-                .spawn(),
+            InvokerKind::PackageManager { program, prefix_args } => {
+                Command::new(program).args(prefix_args).args(args).spawn()
+            }
         }
     }
 
-    fn from_package_manager(pm: &str) -> Self {
-        let (program, dlx_arg) = match pm {
-            s if s.starts_with("pnpm") => ("pnpm", "dlx"),
-            s if s.starts_with("yarn") => ("yarn", "dlx"),
-            s if s.starts_with("bun") => ("bun", "x"),
-            _ => ("npx", ""),
-        };
+    fn binary(path: PathBuf) -> Self {
+        Self { kind: InvokerKind::Binary(path), _marker: PhantomData }
+    }
 
-        let prefix_args = if dlx_arg.is_empty() {
-            vec![T::NPM_PACKAGE.to_string()]
-        } else {
-            vec![dlx_arg.to_string(), T::NPM_PACKAGE.to_string()]
-        };
+    fn from_command_string(cmd: &str) -> Option<Self> {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return None;
+        }
+        Some(Self {
+            kind: InvokerKind::PackageManager {
+                program: parts[0].to_string(),
+                prefix_args: parts[1..].iter().map(|s| s.to_string()).collect(),
+            },
+            _marker: PhantomData,
+        })
+    }
 
+    fn from_package_manager(pm: &str, npm_package: &str) -> Self {
+        let (program, prefix_args) = match pm {
+            s if s.starts_with("pnpm") => ("pnpm", vec!["dlx", npm_package]),
+            s if s.starts_with("yarn") => ("yarn", vec!["dlx", npm_package]),
+            s if s.starts_with("bun") => ("bun", vec!["x", npm_package]),
+            _ => ("npx", vec![npm_package]),
+        };
         Self {
             kind: InvokerKind::PackageManager {
                 program: program.to_string(),
-                prefix_args,
+                prefix_args: prefix_args.into_iter().map(String::from).collect(),
             },
             _marker: PhantomData,
         }
     }
 
-    fn from_global_package_manager() -> Self {
-        let (program, dlx_arg) = if is_in_path("pnpm") {
-            ("pnpm", "dlx")
+    fn from_global_package_manager(npm_package: &str) -> Self {
+        let (program, prefix_args) = if is_in_path("pnpm") {
+            ("pnpm", vec!["dlx", npm_package])
         } else if is_in_path("npx") {
-            ("npx", "")
+            ("npx", vec![npm_package])
         } else if is_in_path("yarn") {
-            ("yarn", "dlx")
+            ("yarn", vec!["dlx", npm_package])
         } else {
-            ("npx", "")
+            ("npx", vec![npm_package]) // last resort
         };
-
-        let prefix_args = if dlx_arg.is_empty() {
-            vec![T::NPM_PACKAGE.to_string()]
-        } else {
-            vec![dlx_arg.to_string(), T::NPM_PACKAGE.to_string()]
-        };
-
         Self {
             kind: InvokerKind::PackageManager {
                 program: program.to_string(),
-                prefix_args,
+                prefix_args: prefix_args.into_iter().map(String::from).collect(),
             },
             _marker: PhantomData,
         }
     }
 }
-```
 
-### Helper Functions
-
-```rust
 fn is_in_path(binary: &str) -> bool {
-    Command::new("which")
-        .arg(binary)
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    Command::new("which").arg(binary).output()
+        .map(|o| o.status.success()).unwrap_or(false)
 }
 
-/// Check for target/debug/{binary_name} in a cargo workspace.
+/// Traverse up from CWD looking for Cargo.toml with [workspace], check target/debug/{binary}
 fn find_cargo_workspace_binary(binary_name: &str) -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
-
     loop {
         let cargo_toml = dir.join("Cargo.toml");
         if cargo_toml.exists() {
@@ -242,23 +256,30 @@ fn find_cargo_workspace_binary(binary_name: &str) -> Option<PathBuf> {
                 if binary.exists() {
                     return Some(binary);
                 }
-                // Found workspace but binary not built - fall through
-                return None;
+                return None; // found workspace but no binary
             }
         }
-
-        if !dir.pop() {
-            break;
-        }
+        if !dir.pop() { break; }
     }
-
     None
 }
 
-/// Traverse up from CWD to find package.json and read packageManager field
-fn detect_package_manager() -> Option<String> {
+/// Traverse up from CWD looking for node_modules/.bin/{binary}
+fn find_node_modules_binary(binary_name: &str) -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let binary = dir.join("node_modules/.bin").join(binary_name);
+        if binary.exists() {
+            return Some(binary);
+        }
+        if !dir.pop() { break; }
+    }
+    None
+}
 
+/// Traverse up from CWD looking for package.json with packageManager field
+fn find_package_manager_field() -> Option<String> {
+    let mut dir = std::env::current_dir().ok()?;
     loop {
         let pkg_json = dir.join("package.json");
         if pkg_json.exists() {
@@ -267,38 +288,34 @@ fn detect_package_manager() -> Option<String> {
             if let Some(pm) = json.get("packageManager").and_then(|v| v.as_str()) {
                 return Some(pm.to_string());
             }
-            return Some("npm".to_string());
+            return None; // found package.json but no packageManager field
         }
-
-        if !dir.pop() {
-            break;
-        }
+        if !dir.pop() { break; }
     }
-
     None
 }
 ```
 
-### CLI Definitions
+### CLI type definitions
 
 ```rust
-// In agent_pool crate (or wherever appropriate)
+// crates/agent_pool/src/lib.rs (or separate module)
 
 pub struct AgentPoolCli;
 
-impl InvokableCli for AgentPoolCli {
+impl cli_invoker::InvokableCli for AgentPoolCli {
     const NPM_PACKAGE: &'static str = "@gsd-now/agent-pool";
-    const BINARY_NAME: &'static str = "agent_pool";  // NOT agent_pool_cli
+    const BINARY_NAME: &'static str = "agent_pool";
     const CARGO_PACKAGE: &'static str = "agent_pool_cli";
     const ENV_VAR_BINARY: &'static str = "AGENT_POOL";
     const ENV_VAR_COMMAND: &'static str = "AGENT_POOL_COMMAND";
 }
 
-// In gsd_cli crate
+// crates/gsd_cli/src/main.rs (or separate module)
 
 pub struct GsdCli;
 
-impl InvokableCli for GsdCli {
+impl cli_invoker::InvokableCli for GsdCli {
     const NPM_PACKAGE: &'static str = "@gsd-now/gsd";
     const BINARY_NAME: &'static str = "gsd";
     const CARGO_PACKAGE: &'static str = "gsd_cli";
@@ -307,141 +324,157 @@ impl InvokableCli for GsdCli {
 }
 ```
 
-**Note:** The binary names match the npm bin names:
-- `agent_pool` (from `crates/agent_pool_cli/Cargo.toml` `[[bin]]` section)
-- `gsd` (from `crates/gsd_cli/Cargo.toml` `[[bin]]` section)
-
-### Usage
+### `gsd_config/src/runner.rs` (after)
 
 ```rust
-// gsd_cli/src/main.rs
+// REMOVE: agent_pool_binary field from RunnerConfig
+pub struct RunnerConfig<'a> {
+    pub agent_pool_root: &'a Path,
+    pub config_base_path: &'a Path,
+    pub wake_script: Option<&'a str>,
+    pub initial_tasks: Vec<Task>,
+    pub invoker: &'a Invoker<AgentPoolCli>,  // NEW: replaces agent_pool_binary
+}
 
-use cli_invoker::{Invoker, InvokableCli};
+// REMOVE: resolve_agent_pool_binary function entirely (lines 1016-1025)
 
-fn main() -> ExitCode {
-    let agent_pool = Invoker::<AgentPoolCli>::detect();
+// CHANGE: submit_via_cli signature and implementation
+fn submit_via_cli(
+    pool_path: &Path,
+    payload: &str,
+    invoker: &Invoker<AgentPoolCli>,  // CHANGED from agent_pool_binary: Option<&Path>
+) -> io::Result<Response> {
+    // REMOVE: let binary = agent_pool_binary.map_or_else(...)
 
-    match command {
-        Command::Run { config } => run_workflow(&agent_pool, &config),
+    let pool_root = pool_path.parent().ok_or_else(|| /* ... */)?;
+    let pool_id = pool_path.file_name().and_then(|s| s.to_str()).ok_or_else(|| /* ... */)?;
+
+    let output = invoker.run([
+        "submit_task",
+        "--pool-root", pool_root.to_str().unwrap(),
+        "--pool", pool_id,
+        "--notify", "file",
+        "--timeout-secs", "86400",
+        "--data", payload,
+    ])?;
+
+    // ... rest unchanged
+}
+```
+
+### `gsd_cli/src/main.rs` (after)
+
+```rust
+use cli_invoker::Invoker;
+use agent_pool::AgentPoolCli;
+
+fn main() -> io::Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Command::Run { config, initial, pool, wake, log_file } => {
+            init_tracing(log_file.as_ref())?;
+
+            // NEW: Create invoker once at entry point
+            let invoker = Invoker::<AgentPoolCli>::detect();
+
+            let (cfg, config_dir) = parse_config(&config)?;
+            // ...
+
+            let runner_config = RunnerConfig {
+                agent_pool_root: &pool_path,
+                config_base_path: &config_dir,
+                wake_script: wake.as_deref(),
+                initial_tasks,
+                invoker: &invoker,  // NEW: pass invoker instead of binary path
+            };
+
+            run(&cfg, &schemas, runner_config)?;
+        }
         // ...
     }
 }
-
-fn run_workflow(invoker: &Invoker<AgentPoolCli>, config: &Path) -> ExitCode {
-    let output = invoker.run(["submit_task", "--pool", "foo", "--data", payload])?;
-    // ...
-}
 ```
 
-## Resolution Order
-
-1. **`{ENV_VAR_BINARY}` env var** - explicit binary path (CI uses this with pre-built binary)
-2. **`{ENV_VAR_COMMAND}` env var** - explicit command override (e.g., `pnpm dlx @gsd-now/agent-pool`)
-3. **Local cargo workspace binary** - check for `target/debug/{BINARY_NAME}` in workspace root (local dev uses this)
-4. **Traverse up to find `package.json`** - check `packageManager` field
-5. **Global package manager in PATH** - check for `pnpm`, then `npx`, then `yarn`
-
-### How environments use this
-
-| Environment | Resolution Step | Notes |
-|-------------|-----------------|-------|
-| CI | 1 (env var) | CI downloads pre-built binary and sets env var |
-| Local dev | 3 (cargo binary) | `pnpm test` builds first, invoker finds it |
-| npm user | 4 or 5 | Uses their package manager via dlx |
-
-## Package Manager Detection
-
-The `packageManager` field in `package.json` follows the format `<name>@<version>`:
-
-```json
-{
-  "packageManager": "pnpm@10.15.0"
-}
-```
-
-Mapping:
-- `pnpm@*` → `pnpm dlx {NPM_PACKAGE}`
-- `yarn@*` → `yarn dlx {NPM_PACKAGE}`
-- `bun@*` → `bun x {NPM_PACKAGE}`
-- `npm@*` or missing → `npx {NPM_PACKAGE}`
-
-## Edge Cases
-
-1. **No package.json found** - Fall back to global package manager detection
-2. **packageManager field missing** - Assume npm, use `npx`
-3. **Running from subdirectory** - Traverse up until we find package.json or Cargo.toml
-4. **Windows** - Use `where` instead of `which` for PATH check
-5. **No package managers installed** - Last resort uses `npx` (will fail if not installed)
-6. **Cargo workspace exists but binary not built** - Falls through to package manager (no auto-build)
-
-## Testing
-
-### Unit tests for invoker detection
-
-1. Test with env var set - should use binary directly
-2. Test with command env var set - should use that command
-3. Test in cargo workspace with built binary - should use `target/debug/{BINARY_NAME}`
-4. Test in cargo workspace without built binary - should fall through to package manager
-5. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
-6. Test with `packageManager: "yarn@*"` - should use `yarn dlx`
-7. Test with no package.json but pnpm in PATH - should use `pnpm dlx`
-8. Test from subdirectory - should find parent Cargo.toml or package.json
-
-### Integration tests
-
-Integration tests don't need to do anything special. They run in the cargo workspace, so:
-- **Local dev**: `pnpm test` (or equivalent) builds the binary first, invoker finds it via step 3
-- **CI**: Sets env var to the pre-built binary, invoker uses it via step 1
-
-No special test setup required - the invoker "just works" in both environments.
+---
 
 ## Implementation Steps
 
-**Workflow:** Each step is a branch with atomic commits. CI must pass on every commit. When the branch is ready, merge to master without squashing. Remove redundant code as it becomes redundant (not in a separate cleanup step).
+**Workflow:** Each step is a branch with atomic commits. CI can break during development. Before merging, restructure into clean atomic commits where CI passes on each. Merge to master without squashing.
 
 ### Step 1: Create the `cli_invoker` crate
 
 Branch: `cli-invoker-crate`
 
-1. Create `crates/cli_invoker/Cargo.toml` with `serde_json` dependency
-2. Create `crates/cli_invoker/src/lib.rs` with:
-   - `InvokableCli` trait
-   - `Invoker<T>` struct
-   - `InvokerKind` enum
-   - Helper functions (`is_in_path`, `find_cargo_workspace_binary`, `detect_package_manager`)
-3. Add to workspace `Cargo.toml`
-4. Write unit tests for detection logic
+1. Create `crates/cli_invoker/Cargo.toml`:
+   ```toml
+   [package]
+   name = "cli_invoker"
+   version = "0.1.0"
+   edition = "2024"
 
-**Merge criteria:** Crate compiles, unit tests pass, CI green.
+   [dependencies]
+   serde_json = "1"
+   ```
+2. Create `crates/cli_invoker/src/lib.rs` with trait, struct, and helper functions
+3. Add `"crates/cli_invoker"` to workspace `Cargo.toml` members
+4. Write unit tests for each resolution step
 
-### Step 2: Define CLI types in their respective crates
+**Merge criteria:** Crate compiles, tests pass, CI green.
+
+### Step 2: Define CLI types and integrate
 
 Branch: `cli-invoker-types`
 
-1. In `agent_pool` crate: define `AgentPoolCli` implementing `InvokableCli`
-2. In `gsd_cli` crate: define `GsdCli` implementing `InvokableCli`
-3. Add `cli_invoker` as dependency to both
-
-**Merge criteria:** Types defined, compiles, CI green.
-
-### Step 3: Integrate invoker into gsd_cli and CI
-
-Branch: `cli-invoker-integration`
-
-1. In `gsd_cli/src/main.rs`:
-   - Create `Invoker::<AgentPoolCli>::detect()` at startup
-   - Pass `&Invoker<AgentPoolCli>` to functions that spawn agent_pool
-2. Remove redundant env var handling from call sites as they're updated
-3. Update CI to set `AGENT_POOL` env var to the pre-built binary path
-4. Verify tests pass with the new detection logic
+1. Add `cli_invoker` dependency to `agent_pool` and `gsd_config`
+2. Define `AgentPoolCli` in `agent_pool` crate
+3. Update `RunnerConfig` to take `&Invoker<AgentPoolCli>` instead of `Option<&Path>`
+4. Update `submit_via_cli` to use the invoker
+5. Delete `resolve_agent_pool_binary` function
+6. Update `gsd_cli/src/main.rs` to create invoker and pass it
 
 **Merge criteria:** gsd_cli uses invoker throughout, old code removed, CI green.
 
+---
+
+## Edge Cases
+
+1. **No node_modules** - Fall through to packageManager field or global detection
+2. **No package.json** - Fall through to global package manager detection
+3. **packageManager field missing** - Fall through to global detection
+4. **Running from subdirectory** - Traverse up for node_modules, package.json, Cargo.toml
+5. **Windows** - Use `where` instead of `which` for PATH check
+6. **Cargo workspace but binary not built** - Falls through to node_modules/package manager
+7. **Multiple node_modules** - First one found traversing up wins
+
+---
+
+## Testing
+
+### Unit tests for invoker detection
+
+1. With `AGENT_POOL` env var set → uses that binary
+2. With `AGENT_POOL_COMMAND` env var set → parses and uses that command
+3. In cargo workspace with `target/debug/agent_pool` → uses that binary
+4. In cargo workspace without binary → falls through
+5. With `node_modules/.bin/agent_pool` → uses that binary
+6. With `packageManager: "pnpm@10"` → uses `pnpm dlx`
+7. With `packageManager: "yarn@4"` → uses `yarn dlx`
+8. With pnpm in PATH but no package.json → uses `pnpm dlx`
+9. From subdirectory → traverses up correctly
+
+### Integration tests
+
+No special setup needed:
+- **Local dev**: binary found in `target/debug/` (step 3)
+- **CI**: `AGENT_POOL` env var set to pre-built binary (step 1)
+
+---
+
 ## Benefits
 
-- **Generic** - works for any CLI tool, not coupled to agent_pool or gsd
-- **Zero config** for npm/pnpm users
+- **Zero config** for npm/pnpm users who installed the package
 - **Clean architecture** - detection happens once, business logic stays clean
-- **Just works** with `pnpm add @gsd-now/agent-pool` or `pnpm dlx @gsd-now/gsd`
-- **Backwards compatible** - existing env vars still work
-- **Respects project settings** - uses the project's configured package manager
+- **Works everywhere** - dev, CI, npm installed, npm dlx
+- **Backwards compatible** - `AGENT_POOL` env var still works
+- **Respects project settings** - uses installed binary before dlx
