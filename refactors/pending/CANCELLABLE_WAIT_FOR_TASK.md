@@ -2,7 +2,7 @@
 
 **Depends on:**
 - `CROSSBEAM_CHANNELS.md` (completed)
-- `WAIT_FOR_POOL_READY_WATCHER.md` (must be completed first)
+- `WAIT_FOR_POOL_READY_WATCHER.md` (completed)
 
 ## Motivation
 
@@ -209,7 +209,12 @@ pub fn wait_for_task(
     fs::write(&ready, &metadata)?;
 
     let mut watcher = VerifiedWatcher::new(&agents_dir, std::slice::from_ref(&agents_dir))?;
-    watcher.wait_for_file(&task, cancel)?;  // Pass through cancel
+
+    // Wait for task, clean up ready file on cancel
+    if let Err(e) = watcher.wait_for_file(&task, cancel) {
+        let _ = fs::remove_file(&ready);  // Clean up on cancel/error
+        return Err(e);
+    }
 
     let content = fs::read_to_string(&task)?;
     Ok(TaskAssignment { uuid, content })
@@ -286,24 +291,27 @@ impl GsdTestAgent {
 9. Update all call sites to pass `None` for cancel (or actual channel)
 10. Update test agents to use cancel channel instead of AtomicBool + timeout
 
-## Open Questions
+## Design Decisions
 
-1. **Timeout vs cancel:** Keep timeout as separate parameter for actual deadlines?
-   ```rust
-   fn wait_for(&mut self, target: &Path, timeout: Option<Duration>, cancel: Option<&CancelRx>)
-   ```
+1. **Timeout vs cancel:** Keep both as separate parameters. Timeout is for actual deadlines, cancel is for graceful shutdown. The existing `wait_for_file` and `wait_for_file_with_timeout` methods are correctly named and will gain a cancel parameter.
 
-2. **Socket read:** The `submit()` function blocks on socket read after connecting. This can't be cancelled with channels. Options:
-   - Accept limitation (socket reads are typically fast)
-   - Use non-blocking socket with `select!` (complex)
-   - Set socket timeout
+2. **Socket read:** TODO for future work. The `submit()` function blocks on socket read after connecting. This can't be cancelled with channels. For now, accept the limitation (socket reads are typically fast). Future options: non-blocking socket with `select!` or socket timeout.
 
-3. **Cleanup on cancel:** When cancelled mid-wait, should we clean up the ready file in `wait_for_task`? Currently we don't, which could leave orphaned files.
+3. **Cleanup on cancel:** YES, clean up. When `wait_for_task` is cancelled, delete the ready file to avoid orphans.
+
+4. **Daemon stop cleanup:** When the daemon writes the stop file and shuts down, it should delete the entire pool folder. This simplifies cleanup since:
+   - All workers are dead anyway
+   - Any ready files are orphaned
+   - Any pending submissions will fail
+   - Starting a new daemon creates fresh directories
+
+   This means individual cancellation cleanup (point 3) only matters for non-stop scenarios like worker timeouts.
 
 ## Testing
 
-- `wait_for` returns `Interrupted` when cancel signal sent before call
-- `wait_for` returns `Interrupted` when cancel signal sent during wait
+- `wait_for_file` returns `Interrupted` when cancel signal sent before call
+- `wait_for_file` returns `Interrupted` when cancel signal sent during wait
 - Test agent stops within 100ms of `stop()` call (not 500ms timeout)
 - File submission can be cancelled mid-wait
-- Cancellation doesn't leave orphaned files
+- `wait_for_task` cleans up ready file when cancelled
+- Daemon stop deletes entire pool folder
