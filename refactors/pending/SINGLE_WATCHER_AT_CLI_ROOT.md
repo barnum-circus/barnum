@@ -1,10 +1,10 @@
-# Single Watcher Created at CLI Root
+# Single Watcher Created at Entry Point
 
 **Depends on:** `WAIT_FOR_POOL_READY_WATCHER.md`
 
 ## Motivation
 
-Various functions create their own `VerifiedWatcher` internally. This is wasteful. Create one at the CLI entry point and pass it down.
+Various functions create their own `VerifiedWatcher` internally. This is wasteful. Create one at the entry point (CLI or daemon) and pass it down.
 
 ## Changes
 
@@ -30,15 +30,16 @@ let mut watcher = VerifiedWatcher::new(&pool_path, &[pool_path.clone()])?;
 // Pass &mut watcher to runner
 ```
 
-### 3. Daemon needs canaries in subdirectories
+### 3. Daemon creates watcher at startup, passes it down
 
-The daemon creates `agents/` and `submissions/` after setting up the watcher. Due to the inotify race condition, it needs canaries in those directories:
+Same pattern as CLIs, but daemon needs canaries in subdirectories (it creates `agents/` and `submissions/` after watcher setup, so inotify race condition applies):
 
 ```rust
 // Daemon startup
 let agents_dir = pool_root.join(AGENTS_DIR);
 let submissions_dir = pool_root.join(SUBMISSIONS_DIR);
-let watcher = VerifiedWatcher::new(&pool_root, &[agents_dir, submissions_dir])?;
+let mut watcher = VerifiedWatcher::new(&pool_root, &[agents_dir, submissions_dir])?;
+// Pass &mut watcher to all functions that need it
 ```
 
 ### 4. Remove internal watcher creation from library functions
