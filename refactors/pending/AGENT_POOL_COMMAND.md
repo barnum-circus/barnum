@@ -395,6 +395,43 @@ Integration tests don't need to do anything special. They run in the cargo works
 
 No special test setup required - the invoker "just works" in both environments.
 
+## Implementation Steps
+
+### Step 1: Create the `cli_invoker` crate
+
+1. Create `crates/cli_invoker/Cargo.toml` with `serde_json` dependency
+2. Create `crates/cli_invoker/src/lib.rs` with:
+   - `InvokableCli` trait
+   - `Invoker<T>` struct
+   - `InvokerKind` enum
+   - Helper functions (`is_in_path`, `find_cargo_workspace_binary`, `detect_package_manager`)
+3. Add to workspace `Cargo.toml`
+4. Write unit tests for detection logic
+
+### Step 2: Define CLI types in their respective crates
+
+1. In `agent_pool` crate: define `AgentPoolCli` implementing `InvokableCli`
+2. In `gsd_cli` crate: define `GsdCli` implementing `InvokableCli`
+3. Add `cli_invoker` as dependency to both
+
+### Step 3: Update gsd_cli to use the invoker
+
+1. In `gsd_cli/src/main.rs`:
+   - Create `Invoker::<AgentPoolCli>::detect()` at startup
+   - Pass `&Invoker<AgentPoolCli>` to functions that spawn agent_pool
+2. Update any functions that currently use `AGENT_POOL` env var directly
+
+### Step 4: Update CI
+
+1. Ensure CI sets `AGENT_POOL` env var to the pre-built binary path
+2. Verify tests pass with the new detection logic
+
+### Step 5: Clean up
+
+1. Remove any redundant env var handling from call sites
+2. Remove old binary path threading if any exists
+3. Update documentation
+
 ## Benefits
 
 - **Generic** - works for any CLI tool, not coupled to agent_pool or gsd
