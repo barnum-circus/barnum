@@ -128,14 +128,6 @@ impl Drop for CanaryGuard {
     }
 }
 
-/// Internal state of the watcher.
-struct WatcherState {
-    rx: Receiver<notify::Event>,
-    /// Canary guards for directories still being verified.
-    /// As directories are verified, their canaries are removed.
-    remaining_canaries: Vec<CanaryGuard>,
-}
-
 /// A file watcher with canary verification.
 ///
 /// On Linux with inotify, recursive file watching has a race condition: when
@@ -147,7 +139,10 @@ struct WatcherState {
 /// are gone, the watcher is fully verified.
 pub struct VerifiedWatcher {
     watcher: RecommendedWatcher,
-    state: WatcherState,
+    rx: Receiver<notify::Event>,
+    /// Canary guards for directories still being verified.
+    /// As directories are verified, their canaries are removed.
+    remaining_canaries: Vec<CanaryGuard>,
 }
 
 impl VerifiedWatcher {
@@ -185,10 +180,8 @@ impl VerifiedWatcher {
 
         Ok(Self {
             watcher,
-            state: WatcherState {
-                rx,
-                remaining_canaries,
-            },
+            rx,
+            remaining_canaries,
         })
     }
 
@@ -208,11 +201,6 @@ impl VerifiedWatcher {
             return Ok(());
         }
 
-        let WatcherState {
-            rx,
-            remaining_canaries,
-        } = &mut self.state;
-
         let start = Instant::now();
         loop {
             // Check timeout
@@ -225,12 +213,12 @@ impl VerifiedWatcher {
                 ));
             }
 
-            match rx.recv_timeout(Duration::from_millis(100)) {
+            match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(event) => {
                     for path in &event.paths {
                         // Remove canary for verified directory
                         if let Some(parent) = path.parent() {
-                            remaining_canaries.retain(|c| c.dir() != parent);
+                            self.remaining_canaries.retain(|c| c.dir() != parent);
                         }
 
                         if path == target {
@@ -246,7 +234,7 @@ impl VerifiedWatcher {
                         return Ok(());
                     }
                     // Retry only unverified canaries
-                    for canary in remaining_canaries.iter_mut() {
+                    for canary in &mut self.remaining_canaries {
                         canary.retry()?;
                     }
                 }
@@ -270,16 +258,11 @@ impl VerifiedWatcher {
     ///
     /// Returns an error if verification times out.
     pub fn into_receiver(
-        self,
+        mut self,
         timeout: Duration,
     ) -> io::Result<(RecommendedWatcher, Receiver<notify::Event>)> {
-        let WatcherState {
-            rx,
-            mut remaining_canaries,
-        } = self.state;
-
         let start = Instant::now();
-        while !remaining_canaries.is_empty() {
+        while !self.remaining_canaries.is_empty() {
             if start.elapsed() > timeout {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
@@ -287,16 +270,16 @@ impl VerifiedWatcher {
                 ));
             }
 
-            match rx.recv_timeout(Duration::from_millis(100)) {
+            match self.rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(event) => {
                     for path in &event.paths {
                         if let Some(parent) = path.parent() {
-                            remaining_canaries.retain(|c| c.dir() != parent);
+                            self.remaining_canaries.retain(|c| c.dir() != parent);
                         }
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    for canary in &mut remaining_canaries {
+                    for canary in &mut self.remaining_canaries {
                         canary.retry()?;
                     }
                 }
@@ -310,7 +293,7 @@ impl VerifiedWatcher {
         }
 
         // Canaries verified and will be cleaned up when remaining_canaries drops
-        Ok((self.watcher, rx))
+        Ok((self.watcher, self.rx))
     }
 }
 
