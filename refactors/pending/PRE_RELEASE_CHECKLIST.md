@@ -58,7 +58,18 @@ Add `gsd schema` subcommand that prints the JSON schema of the config format. Th
 
 ---
 
-### 7. Documentation
+### 7. State Persistence and Resume
+**Doc:** (needs creation)
+
+Write task queue state to a file so runs can be resumed after interruption. Enables:
+- `gsd run --state-file state.json` - writes state as it runs
+- `gsd resume state.json` - resumes from saved state
+
+**Status:** Not started.
+
+---
+
+### 8. Documentation
 **Doc:** (needs creation)
 
 - README with quick start
