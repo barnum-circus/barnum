@@ -19,9 +19,9 @@ Automatically detect the package manager and use `npx` or `pnpm dlx` when the bi
 ### Resolution Order
 
 1. **`AGENT_POOL` env var** - explicit binary path override
-2. **`agent_pool` in PATH** - global install or PATH configured
-3. **`./node_modules/.bin/agent_pool`** - local npm/pnpm install
-4. **Traverse up to find `package.json`** - check `packageManager` field, use appropriate dlx command
+2. **`AGENT_POOL_COMMAND` env var** - explicit command override (e.g., `pnpm dlx @gsd-now/agent-pool`)
+3. **Traverse up to find `package.json`** - check `packageManager` field, use appropriate dlx command
+4. **Global package manager in PATH** - check for `pnpm`, then `npm`, then `yarn` (in that order)
 
 ### Implementation
 
@@ -39,25 +39,23 @@ enum AgentPoolInvocation {
 }
 
 fn resolve_agent_pool_invocation() -> AgentPoolInvocation {
-    // 1. Explicit env var
+    // 1. Explicit binary path
     if let Ok(path) = std::env::var("AGENT_POOL") {
         return AgentPoolInvocation::Binary(PathBuf::from(path));
     }
 
-    // 2. Check PATH
-    if is_in_path("agent_pool") {
-        return AgentPoolInvocation::Binary(PathBuf::from("agent_pool"));
+    // 2. Explicit command (e.g., "pnpm dlx @gsd-now/agent-pool")
+    if let Ok(cmd) = std::env::var("AGENT_POOL_COMMAND") {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if !parts.is_empty() {
+            return AgentPoolInvocation::PackageManager {
+                program: parts[0].to_string(),
+                prefix_args: parts[1..].iter().map(|s| s.to_string()).collect(),
+            };
+        }
     }
 
-    // 3. Check local node_modules
-    let local_bin = Path::new("./node_modules/.bin/agent_pool");
-    if local_bin.exists() {
-        return AgentPoolInvocation::Binary(
-            local_bin.canonicalize().unwrap_or_else(|_| local_bin.to_path_buf())
-        );
-    }
-
-    // 4. Find package.json and detect package manager
+    // 3. Find package.json and detect package manager
     if let Some(pkg_manager) = detect_package_manager() {
         let (program, dlx_arg) = match pkg_manager.as_str() {
             pm if pm.starts_with("pnpm") => ("pnpm", "dlx"),
@@ -78,7 +76,27 @@ fn resolve_agent_pool_invocation() -> AgentPoolInvocation {
         };
     }
 
-    // 5. Fallback: try npx
+    // 4. Fallback: check for global package managers (pnpm > npm > yarn)
+    if is_in_path("pnpm") {
+        return AgentPoolInvocation::PackageManager {
+            program: "pnpm".to_string(),
+            prefix_args: vec!["dlx".to_string(), "@gsd-now/agent-pool".to_string()],
+        };
+    }
+    if is_in_path("npx") {
+        return AgentPoolInvocation::PackageManager {
+            program: "npx".to_string(),
+            prefix_args: vec!["@gsd-now/agent-pool".to_string()],
+        };
+    }
+    if is_in_path("yarn") {
+        return AgentPoolInvocation::PackageManager {
+            program: "yarn".to_string(),
+            prefix_args: vec!["dlx".to_string(), "@gsd-now/agent-pool".to_string()],
+        };
+    }
+
+    // Last resort: assume npx exists
     AgentPoolInvocation::PackageManager {
         program: "npx".to_string(),
         prefix_args: vec!["@gsd-now/agent-pool".to_string()],
@@ -182,19 +200,21 @@ Mapping:
 
 ## Edge Cases
 
-1. **No package.json found** - Fall back to `npx` (most common)
+1. **No package.json found** - Fall back to global package manager detection
 2. **packageManager field missing** - Assume npm, use `npx`
 3. **Running from subdirectory** - Traverse up until we find package.json
 4. **Windows** - Use `where` instead of `which` for PATH check
+5. **No package managers installed** - Last resort uses `npx` (will fail if not installed)
 
 ## Testing
 
 1. Test with `AGENT_POOL` set - should use that directly
-2. Test with binary in PATH - should use it
-3. Test with local `node_modules/.bin/agent_pool` - should use it
-4. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
-5. Test with no package.json - should fallback to `npx`
-6. Test from subdirectory - should find parent package.json
+2. Test with `AGENT_POOL_COMMAND` set - should use that command
+3. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
+4. Test with `packageManager: "yarn@*"` - should use `yarn dlx`
+5. Test with no package.json but pnpm in PATH - should use `pnpm dlx`
+6. Test with no package.json but only npx in PATH - should use `npx`
+7. Test from subdirectory - should find parent package.json
 
 ## Benefits
 
