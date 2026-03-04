@@ -49,7 +49,7 @@ Use `VerifiedWatcher` to watch for the status file. Rename existing method for c
 
 ### New VerifiedWatcher Methods
 
-Rename existing `wait_for` and add timeout variant:
+Rename existing `wait_for` and add timeout variant. The no-timeout version delegates to the timeout version:
 
 ```rust
 // crates/agent_pool/src/verified_watcher.rs
@@ -58,33 +58,9 @@ impl VerifiedWatcher {
     /// Wait for a target file to exist (no timeout).
     /// Renamed from `wait_for` for clarity.
     pub fn wait_for_file(&mut self, target: &Path) -> io::Result<()> {
-        if target.exists() {
-            return Ok(());
-        }
-
-        loop {
-            match self.state.rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(event) => {
-                    if event.paths.iter().any(|p| p == target) || target.exists() {
-                        return Ok(());
-                    }
-                }
-                Err(crossbeam::channel::RecvTimeoutError::Timeout) => {
-                    if target.exists() {
-                        return Ok(());
-                    }
-                    for canary in &mut self.state.remaining_canaries {
-                        canary.retry()?;
-                    }
-                }
-                Err(crossbeam::channel::RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "watcher disconnected",
-                    ));
-                }
-            }
-        }
+        // Delegate to timeout version with very long timeout
+        // (effectively infinite, but avoids actual infinite loop concerns)
+        self.wait_for_file_with_timeout(target, Duration::from_secs(86400 * 365))
     }
 
     /// Wait for a target file to exist, with a timeout.

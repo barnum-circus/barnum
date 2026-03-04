@@ -107,7 +107,7 @@ pub fn wait_for_pool_ready(
 
 ### VerifiedWatcher::wait_for_file
 
-Add cancel parameter using `crossbeam::select!`:
+Delegates to the timeout version:
 
 ```rust
 pub fn wait_for_file(
@@ -115,52 +115,13 @@ pub fn wait_for_file(
     target: &Path,
     cancel: Option<&CancelRx>,
 ) -> io::Result<()> {
-    if target.exists() {
-        return Ok(());
-    }
-
-    let never = crossbeam::channel::never();
-    let cancel = cancel.unwrap_or(&never);
-
-    loop {
-        crossbeam::select! {
-            recv(self.state.rx) -> event => {
-                match event {
-                    Ok(e) => {
-                        if e.paths.iter().any(|p| p == target) || target.exists() {
-                            return Ok(());
-                        }
-                    }
-                    Err(_) => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "watcher disconnected",
-                        ));
-                    }
-                }
-            }
-            recv(cancel) -> _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "cancelled",
-                ));
-            }
-            default(Duration::from_millis(100)) => {
-                if target.exists() {
-                    return Ok(());
-                }
-                for canary in &mut self.state.remaining_canaries {
-                    canary.retry()?;
-                }
-            }
-        }
-    }
+    self.wait_for_file_with_timeout(target, Duration::from_secs(86400 * 365), cancel)
 }
 ```
 
 ### VerifiedWatcher::wait_for_file_with_timeout
 
-Same pattern with deadline:
+Add cancel parameter using `crossbeam::select!`:
 
 ```rust
 pub fn wait_for_file_with_timeout(
