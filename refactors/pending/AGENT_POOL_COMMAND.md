@@ -397,7 +397,7 @@ No special test setup required - the invoker "just works" in both environments.
 
 ## Implementation Steps
 
-**Workflow:** Each step is done on a branch, pushed, CI verified, then merged to master. Remove redundant code as it becomes redundant (not in a separate cleanup step).
+**Workflow:** Each step is a branch with atomic commits. CI must pass on every commit. When the branch is ready, merge to master without squashing. Remove redundant code as it becomes redundant (not in a separate cleanup step).
 
 ### Step 1: Create the `cli_invoker` crate
 

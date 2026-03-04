@@ -100,28 +100,44 @@ For examples, see `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `refact
 
 ## Branching strategy
 
-**Work on feature branches, merge clean commits to master.**
+**Work on feature branches with atomic commits. CI must pass on every commit.**
 
 When implementing a refactor:
 
 1. **Create a feature branch** for the refactor (e.g., `refactor/crossbeam-channels`)
-2. **Do all exploratory work on the branch** - experiments, debugging, test fixes, false starts
-3. **Only merge to master when ready** - clean, tested, atomic commits
+2. **Make atomic commits where CI passes on every commit** - each commit should be a complete, working state
+3. **Push and verify CI is green** before moving to the next commit
+4. **When the branch is fully ready, merge to master without squashing** - preserve the atomic commit history
 
-What stays on the branch until ready:
-- Debug logging and temporary diagnostics
-- Failed approaches and reverts
-- Work-in-progress commits
-- Test fixes that are still being validated
+### What makes a good atomic commit
 
-What gets merged to master:
-- Clean, atomic commits that pass all tests
-- Each commit should be independently deployable
-- Commit messages should explain the "why", not the exploration process
+- Self-contained change that compiles and passes tests
+- Does one logical thing (add a type, update a function, remove dead code)
+- Commit message explains the "why"
+- Can be reverted independently if needed
 
-This keeps master clean and bisectable. The branch preserves the full history of how you got there, but master only sees the polished result.
+### What to avoid
 
-**Cherry-pick individual commits** from the feature branch to master as they become ready, rather than waiting for the entire refactor to complete. This way independent improvements land incrementally.
+- Commits that break CI (even temporarily)
+- "WIP" or "fixup" commits in the final history
+- Squashing - we want the atomic commits preserved on master
+- Large commits that do multiple unrelated things
+
+### If you need to experiment
+
+If you need exploratory work (debugging, false starts), do it locally and then restructure into clean atomic commits before pushing. Use `git rebase -i` to clean up history before the branch is shared.
+
+### Merging to master
+
+When the branch is complete and CI is green on all commits:
+
+```bash
+git checkout master
+git merge --no-ff feature-branch  # or fast-forward if linear
+git push
+```
+
+Do NOT squash. The atomic commits are the value - they make master bisectable and each change understandable in isolation.
 
 ## Extract independent work (after approval)
 
