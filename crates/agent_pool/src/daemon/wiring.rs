@@ -8,10 +8,11 @@ use std::convert::Infallible;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel::{self as channel, Receiver, Sender, select};
 use interprocess::local_socket::{
     GenericFilePath, Listener, ListenerNonblockingMode, ListenerOptions, Stream, prelude::*,
 };
@@ -144,23 +145,6 @@ impl From<DaemonConfig> for IoConfig {
 }
 
 // =============================================================================
-// Unified Event Type
-// =============================================================================
-
-/// Unified event type for all I/O sources.
-///
-/// Instead of multiple channels plus a wake channel, all event sources send to a single
-/// channel. The main loop blocks on `recv()`. Shutdown is signaled by `Shutdown` variant.
-enum IoEvent {
-    /// Filesystem event from notify watcher.
-    Fs(notify::Event),
-    /// Socket connection with task payload.
-    Socket(String, Stream),
-    /// Effect from the core event loop.
-    Effect(Effect),
-}
-
-// =============================================================================
 // Public API
 // =============================================================================
 
@@ -202,19 +186,6 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
         VerifiedWatcher::new(&root, &[agents_dir.clone(), submissions_dir.clone()])?;
     let (_fs_watcher, fs_rx) = verified_watcher.into_receiver(Duration::from_secs(5))?;
 
-    // Create unified event channel
-    let (io_tx, io_rx) = mpsc::channel();
-
-    // Spawn thread to forward FS events to unified channel
-    let fs_io_tx = io_tx.clone();
-    thread::spawn(move || {
-        while let Ok(event) = fs_rx.recv() {
-            if fs_io_tx.send(IoEvent::Fs(event)).is_err() {
-                break;
-            }
-        }
-    });
-
     // Acquire lock and create socket listener
     let (_lock, listener) = acquire_lock_and_socket(&lock_path, &socket_path)?;
 
@@ -228,8 +199,7 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     let io_config = config.into();
     match run_daemon(
         listener,
-        io_rx,
-        io_tx,
+        fs_rx,
         &root,
         &agents_dir,
         &submissions_dir,
@@ -248,22 +218,26 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run_daemon(
     listener: Listener,
-    io_rx: mpsc::Receiver<IoEvent>,
-    io_tx: mpsc::Sender<IoEvent>,
+    fs_rx: Receiver<notify::Event>,
     root: &Path,
     agents_dir: &Path,
     submissions_dir: &Path,
     io_config: &IoConfig,
 ) -> io::Result<()> {
     // Create channel for core events (from I/O to event loop)
-    let (events_tx, events_rx) = mpsc::channel::<Event>();
+    let (events_tx, events_rx) = channel::unbounded::<Event>();
+
+    // Create channel for effects (from event loop to I/O)
+    let (effect_tx, effect_rx) = channel::unbounded::<Effect>();
+
+    // Create channel for socket connections
+    let (socket_tx, socket_rx) = channel::unbounded::<(String, Stream)>();
 
     // Shutdown notifier - signals timer threads to exit immediately
     let shutdown = Arc::new(ShutdownNotifier::new());
 
-    // Spawn socket accept thread - sends IoEvent::Socket to unified channel
-    let socket_io_tx = io_tx.clone();
-    let _socket_thread = spawn_socket_accept_thread(listener, socket_io_tx);
+    // Spawn socket accept thread
+    let _socket_thread = spawn_socket_accept_thread(listener, socket_tx);
 
     // I/O state
     let mut worker_map = WorkerMap::new();
@@ -275,12 +249,14 @@ fn run_daemon(
     // Track kicked worker paths to reject re-registration attempts
     let mut kicked_paths: HashSet<PathBuf> = HashSet::new();
 
-    // Spawn event loop in a separate thread - sends IoEvent::Effect to unified channel
-    let event_loop_handle = thread::spawn(move || run_event_loop(events_rx, io_tx));
+    // Spawn event loop in a separate thread
+    let event_loop_handle = thread::spawn(move || run_event_loop(events_rx, effect_tx));
 
-    // Run the I/O loop - receives from unified channel
+    // Run the I/O loop with select! on all channels
     let result = io_loop(
-        io_rx,
+        fs_rx,
+        socket_rx,
+        effect_rx,
         &events_tx,
         &mut worker_map,
         &mut submission_map,
@@ -314,12 +290,9 @@ fn run_daemon(
 /// Run the core event loop.
 ///
 /// Receives core events, runs the state machine, and sends effects
-/// to the unified I/O channel. Exits when the events channel closes.
+/// to the effect channel. Exits when the events channel closes.
 #[allow(clippy::needless_pass_by_value)] // We take ownership intentionally - runs in spawned thread
-fn run_event_loop(
-    events_rx: mpsc::Receiver<Event>,
-    io_tx: mpsc::Sender<IoEvent>,
-) -> super::core::PoolState {
+fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> super::core::PoolState {
     use super::core::{PoolState, step};
 
     let mut state = PoolState::new();
@@ -332,10 +305,9 @@ fn run_event_loop(
 
         for effect in effects {
             info!(?effect, "emitting effect");
-            // Send effect to unified I/O channel
-            if io_tx.send(IoEvent::Effect(effect)).is_err() {
+            if effect_tx.send(effect).is_err() {
                 // I/O loop is gone, exit
-                debug!("event loop: I/O channel closed");
+                debug!("event loop: effect channel closed");
                 break;
             }
         }
@@ -350,13 +322,16 @@ fn run_event_loop(
     state
 }
 
-/// The I/O loop that handles all events from the unified channel.
+/// The I/O loop that handles events from multiple channels using select!.
 ///
-/// Blocks on `recv()` from the unified `IoEvent` channel. Channel closing signals shutdown.
+/// Uses `crossbeam_channel::select!` to wait on filesystem, socket, and effect
+/// channels simultaneously. Exits on stop signal or when all channels close.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn io_loop(
-    io_rx: mpsc::Receiver<IoEvent>,
-    events_tx: &mpsc::Sender<Event>,
+    fs_rx: Receiver<notify::Event>,
+    socket_rx: Receiver<(String, Stream)>,
+    effect_rx: Receiver<Effect>,
+    events_tx: &Sender<Event>,
     worker_map: &mut WorkerMap,
     submission_map: &mut SubmissionMap,
     id_allocator: &mut IdAllocator,
@@ -373,10 +348,13 @@ fn io_loop(
         agents_dir, submissions_dir
     );
 
-    // Block on recv until channel is closed (process termination) or stop signal
-    while let Ok(io_event) = io_rx.recv() {
-        match io_event {
-            IoEvent::Fs(event) => {
+    loop {
+        select! {
+            recv(fs_rx) -> event => {
+                let Ok(event) = event else {
+                    debug!("fs channel closed");
+                    break;
+                };
                 debug!(kind = ?event.kind, paths = ?event.paths, "io_loop: fs event");
                 let should_continue = handle_fs_event(
                     &event,
@@ -396,7 +374,11 @@ fn io_loop(
                     break;
                 }
             }
-            IoEvent::Socket(raw, stream) => {
+            recv(socket_rx) -> conn => {
+                let Ok((raw, stream)) = conn else {
+                    debug!("socket channel closed");
+                    break;
+                };
                 let content = match resolve_payload(&raw) {
                     Ok(c) => c,
                     Err(e) => {
@@ -415,7 +397,11 @@ fn io_loop(
                 );
                 let _ = events_tx.send(Event::TaskSubmitted { submission_id });
             }
-            IoEvent::Effect(effect) => {
+            recv(effect_rx) -> effect => {
+                let Ok(effect) = effect else {
+                    debug!("effect channel closed");
+                    break;
+                };
                 debug!(?effect, "executing effect");
                 // Clear pending response tracking when TaskCompleted cleans up the response file
                 if let Effect::TaskCompleted { worker_id, .. } = &effect {
@@ -434,7 +420,6 @@ fn io_loop(
         }
     }
 
-    // Channel closed - all senders dropped (shouldn't happen in normal operation)
     Ok(())
 }
 
@@ -448,7 +433,7 @@ fn io_loop(
 #[allow(clippy::too_many_arguments)]
 fn handle_fs_event(
     event: &notify::Event,
-    events_tx: &mpsc::Sender<Event>,
+    events_tx: &Sender<Event>,
     worker_map: &mut WorkerMap,
     submission_map: &mut SubmissionMap,
     id_allocator: &mut IdAllocator,
@@ -525,7 +510,7 @@ fn handle_worker_ready_file(
     uuid: &str,
     ready_path: &Path,
     agents_dir: &Path,
-    events_tx: &mpsc::Sender<Event>,
+    events_tx: &Sender<Event>,
     worker_map: &mut WorkerMap,
     kicked_paths: &HashSet<PathBuf>,
 ) {
@@ -565,7 +550,7 @@ fn handle_worker_ready_file(
 fn handle_worker_response_file(
     uuid: &str,
     response_path: &Path,
-    events_tx: &mpsc::Sender<Event>,
+    events_tx: &Sender<Event>,
     worker_map: &WorkerMap,
     pending_responses: &mut HashSet<WorkerId>,
     kicked_paths: &HashSet<PathBuf>,
@@ -609,7 +594,7 @@ fn handle_worker_response_file(
 fn register_submission(
     id: &str,
     submissions_dir: &Path,
-    events_tx: &mpsc::Sender<Event>,
+    events_tx: &Sender<Event>,
     submission_map: &mut SubmissionMap,
     id_allocator: &mut IdAllocator,
     io_config: &IoConfig,
@@ -653,16 +638,16 @@ fn register_submission(
 // Socket Handling
 // =============================================================================
 
-/// Spawn a thread that accepts socket connections and sends them to the unified channel.
+/// Spawn a thread that accepts socket connections and sends them to the socket channel.
 fn spawn_socket_accept_thread(
     listener: Listener,
-    io_tx: mpsc::Sender<IoEvent>,
+    socket_tx: Sender<(String, Stream)>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         loop {
             match accept_socket_task(&listener) {
                 Ok(Some((raw, stream))) => {
-                    if io_tx.send(IoEvent::Socket(raw, stream)).is_err() {
+                    if socket_tx.send((raw, stream)).is_err() {
                         // Receiver dropped, shutdown
                         break;
                     }
@@ -839,7 +824,7 @@ mod tests {
         )
         .unwrap();
 
-        let (events_tx, events_rx) = mpsc::channel();
+        let (events_tx, events_rx) = channel::unbounded();
         let mut submission_map = SubmissionMap::new();
         let mut id_allocator = IdAllocator::new();
         let io_config = IoConfig::default();
@@ -868,10 +853,7 @@ mod tests {
     use tracing::{debug, info};
 
     /// Run the event loop until the events channel closes.
-    fn run_test_event_loop(
-        events_rx: mpsc::Receiver<Event>,
-        effects_tx: mpsc::Sender<Effect>,
-    ) -> PoolState {
+    fn run_test_event_loop(events_rx: Receiver<Event>, effects_tx: Sender<Effect>) -> PoolState {
         run_test_event_loop_with_state(PoolState::new(), events_rx, effects_tx)
     }
 
@@ -879,8 +861,8 @@ mod tests {
     #[allow(clippy::needless_pass_by_value)]
     fn run_test_event_loop_with_state(
         mut state: PoolState,
-        events_rx: mpsc::Receiver<Event>,
-        effects_tx: mpsc::Sender<Effect>,
+        events_rx: Receiver<Event>,
+        effects_tx: Sender<Effect>,
     ) -> PoolState {
         debug!("event loop starting");
 
@@ -907,8 +889,8 @@ mod tests {
 
     #[test]
     fn event_loop_processes_events_and_emits_effects() {
-        let (events_tx, events_rx) = mpsc::channel();
-        let (effects_tx, effects_rx) = mpsc::channel();
+        let (events_tx, events_rx) = channel::unbounded();
+        let (effects_tx, effects_rx) = channel::unbounded();
 
         let handle = thread::spawn(move || run_test_event_loop(events_rx, effects_tx));
 
@@ -942,8 +924,8 @@ mod tests {
 
     #[test]
     fn event_loop_handles_channel_close_gracefully() {
-        let (events_tx, events_rx) = mpsc::channel();
-        let (effects_tx, effects_rx) = mpsc::channel();
+        let (events_tx, events_rx) = channel::unbounded();
+        let (effects_tx, effects_rx) = channel::unbounded();
 
         let handle = thread::spawn(move || run_test_event_loop(events_rx, effects_tx));
 
@@ -963,8 +945,8 @@ mod tests {
 
     #[test]
     fn event_loop_uses_initial_state() {
-        let (events_tx, events_rx) = mpsc::channel();
-        let (effects_tx, effects_rx) = mpsc::channel();
+        let (events_tx, events_rx) = channel::unbounded();
+        let (effects_tx, effects_rx) = channel::unbounded();
 
         let initial_state = PoolState::new();
 

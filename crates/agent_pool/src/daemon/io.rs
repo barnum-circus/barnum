@@ -13,10 +13,11 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use crossbeam_channel::Sender;
 use interprocess::local_socket::Stream;
 use tracing::{debug, warn};
 
@@ -405,7 +406,7 @@ pub(super) fn execute_effect(
     worker_map: &mut WorkerMap,
     submission_map: &mut SubmissionMap,
     kicked_paths: &mut HashSet<PathBuf>,
-    events_tx: &mpsc::Sender<Event>,
+    events_tx: &Sender<Event>,
     config: &IoConfig,
     shutdown: &Arc<ShutdownNotifier>,
 ) -> io::Result<()> {
@@ -522,7 +523,7 @@ pub(super) fn execute_effect(
 /// The timer uses an interruptible wait. If shutdown is signaled during the wait,
 /// the timer exits immediately without sending an event.
 fn start_task_timeout_timer(
-    events_tx: mpsc::Sender<Event>,
+    events_tx: Sender<Event>,
     worker_id: WorkerId,
     timeout: Duration,
     shutdown: Arc<ShutdownNotifier>,
@@ -547,7 +548,7 @@ fn start_task_timeout_timer(
 /// The timer uses an interruptible wait. If shutdown is signaled during the wait,
 /// the timer exits immediately without sending an event.
 fn start_idle_timer(
-    events_tx: mpsc::Sender<Event>,
+    events_tx: Sender<Event>,
     worker_id: WorkerId,
     timeout: Duration,
     shutdown: Arc<ShutdownNotifier>,
