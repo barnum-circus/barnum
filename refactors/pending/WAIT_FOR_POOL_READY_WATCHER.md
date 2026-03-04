@@ -49,18 +49,15 @@ Use `VerifiedWatcher` to watch for the status file. Rename existing method for c
 
 ### New VerifiedWatcher Methods
 
-Rename existing `wait_for` and add timeout variant. The no-timeout version delegates to the timeout version:
+One private implementation, two public conveniences:
 
 ```rust
 // crates/agent_pool/src/verified_watcher.rs
 
 impl VerifiedWatcher {
     /// Wait for a target file to exist (no timeout).
-    /// Renamed from `wait_for` for clarity.
     pub fn wait_for_file(&mut self, target: &Path) -> io::Result<()> {
-        // Delegate to timeout version with very long timeout
-        // (effectively infinite, but avoids actual infinite loop concerns)
-        self.wait_for_file_with_timeout(target, Duration::from_secs(86400 * 365))
+        self.wait_for_file_impl(target, None)
     }
 
     /// Wait for a target file to exist, with a timeout.
@@ -69,22 +66,35 @@ impl VerifiedWatcher {
         target: &Path,
         timeout: Duration,
     ) -> io::Result<()> {
+        self.wait_for_file_impl(target, Some(timeout))
+    }
+
+    fn wait_for_file_impl(
+        &mut self,
+        target: &Path,
+        timeout: Option<Duration>,
+    ) -> io::Result<()> {
         if target.exists() {
             return Ok(());
         }
 
-        let deadline = Instant::now() + timeout;
+        let deadline = timeout.map(|t| Instant::now() + t);
 
         loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("timed out waiting for {}", target.display()),
-                ));
-            }
-
-            let wait_time = remaining.min(Duration::from_millis(100));
+            // Check timeout if set
+            let wait_time = match deadline {
+                Some(d) => {
+                    let remaining = d.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            format!("timed out waiting for {}", target.display()),
+                        ));
+                    }
+                    remaining.min(Duration::from_millis(100))
+                }
+                None => Duration::from_millis(100),
+            };
 
             match self.state.rx.recv_timeout(wait_time) {
                 Ok(event) => {
@@ -112,14 +122,23 @@ impl VerifiedWatcher {
 }
 ```
 
-### Updated wait_for_pool_ready
+### Watcher Reuse
+
+Currently each function creates its own `VerifiedWatcher`:
+- `wait_for_pool_ready` creates one
+- `wait_for_task` creates one
+- `submit_file` creates one
+
+If multiple are called in the same process, we waste resources creating multiple watchers for the same directory.
+
+**Solution:** Accept an optional watcher reference, create one only if not provided:
 
 ```rust
-// crates/agent_pool/src/submit/mod.rs
-
-use crate::verified_watcher::VerifiedWatcher;
-
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
+pub fn wait_for_pool_ready(
+    root: impl AsRef<Path>,
+    timeout: Duration,
+    watcher: Option<&mut VerifiedWatcher>,
+) -> io::Result<()> {
     let root = root.as_ref();
     let status_path = root.join(STATUS_FILE);
 
@@ -127,8 +146,33 @@ pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Res
         return Ok(());
     }
 
-    let mut watcher = VerifiedWatcher::new(root, std::slice::from_ref(&root))?;
-    watcher.wait_for_file_with_timeout(&status_path, timeout)
+    match watcher {
+        Some(w) => w.wait_for_file_with_timeout(&status_path, timeout),
+        None => {
+            let mut w = VerifiedWatcher::new(root, std::slice::from_ref(&root))?;
+            w.wait_for_file_with_timeout(&status_path, timeout)
+        }
+    }
+}
+```
+
+Same pattern for `wait_for_task` and `submit_file`. Callers that need multiple operations can create one watcher and pass it to all.
+
+### Convenience wrapper (no watcher param)
+
+For simple use cases, keep zero-config versions:
+
+```rust
+pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
+    wait_for_pool_ready_with_watcher(root, timeout, None)
+}
+
+pub fn wait_for_pool_ready_with_watcher(
+    root: impl AsRef<Path>,
+    timeout: Duration,
+    watcher: Option<&mut VerifiedWatcher>,
+) -> io::Result<()> {
+    // ... implementation above
 }
 ```
 
@@ -169,13 +213,16 @@ watcher.wait_for_file(&response_path)?;
 
 ## Migration Steps
 
-1. Rename `wait_for` to `wait_for_file`
-2. Add `wait_for_file_with_timeout` method
-3. Update `wait_for_pool_ready` to use `VerifiedWatcher`
-4. Update all `wait_for` call sites to use `wait_for_file`
-5. Update CLI to use `wait_for_pool_ready` instead of `wait_for_status_file`
-6. Delete `wait_for_status_file` from CLI
-7. Run tests to verify
+1. Add private `wait_for_file_impl` with `Option<Duration>`
+2. Add public `wait_for_file` and `wait_for_file_with_timeout` that call impl
+3. Add `wait_for_pool_ready_with_watcher` that accepts optional watcher
+4. Add convenience `wait_for_pool_ready` that passes `None`
+5. Update `wait_for_task` similarly (accept optional watcher)
+6. Update `submit_file` similarly (accept optional watcher)
+7. Update all `wait_for` call sites to use new names
+8. Update CLI to use `wait_for_pool_ready` instead of `wait_for_status_file`
+9. Delete `wait_for_status_file` from CLI
+10. Run tests to verify
 
 ## Testing
 

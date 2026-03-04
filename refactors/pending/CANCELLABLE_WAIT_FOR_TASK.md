@@ -105,9 +105,9 @@ pub fn wait_for_pool_ready(
 
 ## Implementation
 
-### VerifiedWatcher::wait_for_file
+### VerifiedWatcher methods
 
-Delegates to the timeout version:
+Update the private impl to accept cancel, public methods delegate:
 
 ```rust
 pub fn wait_for_file(
@@ -115,19 +115,22 @@ pub fn wait_for_file(
     target: &Path,
     cancel: Option<&CancelRx>,
 ) -> io::Result<()> {
-    self.wait_for_file_with_timeout(target, Duration::from_secs(86400 * 365), cancel)
+    self.wait_for_file_impl(target, None, cancel)
 }
-```
 
-### VerifiedWatcher::wait_for_file_with_timeout
-
-Add cancel parameter using `crossbeam::select!`:
-
-```rust
 pub fn wait_for_file_with_timeout(
     &mut self,
     target: &Path,
     timeout: Duration,
+    cancel: Option<&CancelRx>,
+) -> io::Result<()> {
+    self.wait_for_file_impl(target, Some(timeout), cancel)
+}
+
+fn wait_for_file_impl(
+    &mut self,
+    target: &Path,
+    timeout: Option<Duration>,
     cancel: Option<&CancelRx>,
 ) -> io::Result<()> {
     if target.exists() {
@@ -136,18 +139,22 @@ pub fn wait_for_file_with_timeout(
 
     let never = crossbeam::channel::never();
     let cancel = cancel.unwrap_or(&never);
-    let deadline = Instant::now() + timeout;
+    let deadline = timeout.map(|t| Instant::now() + t);
 
     loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("timed out waiting for {}", target.display()),
-            ));
-        }
-
-        let wait_time = remaining.min(Duration::from_millis(100));
+        let wait_time = match deadline {
+            Some(d) => {
+                let remaining = d.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("timed out waiting for {}", target.display()),
+                    ));
+                }
+                remaining.min(Duration::from_millis(100))
+            }
+            None => Duration::from_millis(100),
+        };
 
         crossbeam::select! {
             recv(self.state.rx) -> event => {
