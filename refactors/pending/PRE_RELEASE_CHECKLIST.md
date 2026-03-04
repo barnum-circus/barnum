@@ -1,6 +1,6 @@
 # Pre-Release Checklist
 
-Items that must be completed before shipping v1.0.
+Items that must be completed before shipping v0.2.
 
 ## Must Have
 
@@ -98,4 +98,4 @@ All "Must Have" items must be:
 4. Merged to master
 5. CI passing
 
-Then we can tag v1.0 and publish to npm with `latest` tag.
+Then we can tag v0.2 and publish to npm with `latest` tag.
