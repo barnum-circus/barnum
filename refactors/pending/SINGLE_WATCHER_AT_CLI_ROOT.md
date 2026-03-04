@@ -20,6 +20,7 @@ pub fn submit_file(watcher: &mut VerifiedWatcher, root: &Path, payload: &Payload
 
 ```rust
 // agent_pool CLI - GetTask command
+// Single canary at root is sufficient - directories already exist
 let mut watcher = VerifiedWatcher::new(&root, &[root.clone()])?;
 wait_for_pool_ready(&mut watcher, &root, Duration::from_secs(5))?;
 let assignment = wait_for_task(&mut watcher, &root, name.as_deref())?;
@@ -29,6 +30,17 @@ let mut watcher = VerifiedWatcher::new(&pool_path, &[pool_path.clone()])?;
 // Pass &mut watcher to runner
 ```
 
-### 3. Remove internal watcher creation from library functions
+### 3. Daemon needs canaries in subdirectories
+
+The daemon creates `agents/` and `submissions/` after setting up the watcher. Due to the inotify race condition, it needs canaries in those directories:
+
+```rust
+// Daemon startup
+let agents_dir = pool_root.join(AGENTS_DIR);
+let submissions_dir = pool_root.join(SUBMISSIONS_DIR);
+let watcher = VerifiedWatcher::new(&pool_root, &[agents_dir, submissions_dir])?;
+```
+
+### 4. Remove internal watcher creation from library functions
 
 Functions no longer create watchers - they receive them.
