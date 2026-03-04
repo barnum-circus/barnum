@@ -2,6 +2,8 @@
 
 GSD is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents. There are two interfaces provided: the GSD CLI and the underlying Rust libraries.
 
+> **Note:** Examples use `pnpm dlx`, but you can also use `npx` or install globally with `pnpm add -g @gsd-now/gsd @gsd-now/agent-pool`.
+
 ## Why?
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions.
@@ -50,6 +52,16 @@ Then run the GSD workflow:
 ```bash
 pnpm dlx @gsd-now/gsd run config.jsonc --pool agents --initial '[{"kind": "Start", "value": {}}]'
 ```
+
+## Creating Config Files
+
+To see the JSON schema for config files:
+
+```bash
+pnpm dlx @gsd-now/gsd config schema
+```
+
+**Tip for AI agents:** When asking an AI to create a GSD config, tell it to run `gsd config schema` first to see all available fields and their types.
 
 ## Components
 

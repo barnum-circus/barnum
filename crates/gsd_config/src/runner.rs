@@ -639,19 +639,36 @@ pub fn run(
     runner_config: RunnerConfig<'_>,
 ) -> io::Result<()> {
     let mut runner = TaskRunner::new(config, schemas, runner_config)?;
+    let mut completed_count = 0u32;
     let mut dropped_count = 0u32;
+
     while let Some(outcome) = runner.next() {
+        completed_count += 1;
         if matches!(outcome.result, TaskResult::Dropped { .. }) {
             dropped_count += 1;
         }
+
+        let remaining = runner.pending();
+        info!(
+            "{} {} completed, {} {} remaining",
+            completed_count,
+            if completed_count == 1 {
+                "task"
+            } else {
+                "tasks"
+            },
+            remaining,
+            if remaining == 1 { "task" } else { "tasks" }
+        );
     }
+
     if dropped_count > 0 {
         error!(dropped_count, "task queue completed with dropped tasks");
         return Err(io::Error::other(format!(
             "[E018] {dropped_count} task(s) were dropped (retries exhausted)"
         )));
     }
-    info!("task queue complete");
+    info!(total = completed_count, "task queue complete");
     Ok(())
 }
 

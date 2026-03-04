@@ -384,18 +384,27 @@ impl GsdRunner {
             .output()
     }
 
-    /// Run `gsd validate` with the given config.
+    /// Run `gsd config validate` with the given config.
     pub fn validate(&self, config: &str) -> std::io::Result<std::process::Output> {
-        Command::new(&self.bin).arg("validate").arg(config).output()
+        Command::new(&self.bin)
+            .args(["config", "validate"])
+            .arg(config)
+            .output()
     }
 
-    /// Run `gsd docs` with the given config.
+    /// Run `gsd config docs` with the given config.
     pub fn docs(&self, config: &str) -> std::io::Result<std::process::Output> {
-        Command::new(&self.bin).arg("docs").arg(config).output()
+        Command::new(&self.bin)
+            .args(["config", "docs"])
+            .arg(config)
+            .output()
     }
 
-    /// Run `gsd graph` with the given config.
+    /// Run `gsd config graph` with the given config.
     pub fn graph(&self, config: &str) -> std::io::Result<std::process::Output> {
-        Command::new(&self.bin).arg("graph").arg(config).output()
+        Command::new(&self.bin)
+            .args(["config", "graph"])
+            .arg(config)
+            .output()
     }
 }

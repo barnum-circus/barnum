@@ -53,13 +53,29 @@ enum Command {
         log_file: Option<PathBuf>,
     },
 
+    /// Config file operations (docs, validate, graph, schema)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+
+    /// Print version information
+    Version {
+        /// Output as JSON (for programmatic access)
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
     /// Generate markdown documentation from config
     Docs {
         /// Config (JSON string or path to file)
         config: String,
     },
 
-    /// Validate a config
+    /// Validate a config file
     Validate {
         /// Config (JSON string or path to file)
         config: String,
@@ -71,12 +87,8 @@ enum Command {
         config: String,
     },
 
-    /// Print version information
-    Version {
-        /// Output as JSON (for programmatic access)
-        #[arg(long)]
-        json: bool,
-    },
+    /// Print the JSON schema for config files
+    Schema,
 }
 
 fn main() -> io::Result<()> {
@@ -101,51 +113,61 @@ fn main() -> io::Result<()> {
             &pool_root,
         )?,
 
-        Command::Docs { config } => {
-            let (cfg, config_dir) = parse_config(&config)?;
-            let docs = generate_full_docs(&cfg, &config_dir);
-            print!("{docs}");
-        }
+        Command::Config { command } => match command {
+            ConfigCommand::Docs { config } => {
+                let (cfg, config_dir) = parse_config(&config)?;
+                let docs = generate_full_docs(&cfg, &config_dir);
+                print!("{docs}");
+            }
 
-        Command::Validate { config } => {
-            let (cfg, _) = parse_config(&config)?;
-            match cfg.validate() {
-                Ok(()) => {
-                    println!("Config is valid.");
-                    println!("Steps: {}", cfg.steps.len());
-                    for step in &cfg.steps {
-                        println!(
-                            "  {} -> {}",
-                            step.name,
-                            if step.next.is_empty() {
-                                "(terminal)".to_string()
-                            } else {
-                                step.next.join(", ")
-                            }
-                        );
+            ConfigCommand::Validate { config } => {
+                let (cfg, _) = parse_config(&config)?;
+                match cfg.validate() {
+                    Ok(()) => {
+                        println!("Config is valid.");
+                        println!("Steps: {}", cfg.steps.len());
+                        for step in &cfg.steps {
+                            println!(
+                                "  {} -> {}",
+                                step.name,
+                                if step.next.is_empty() {
+                                    "(terminal)".to_string()
+                                } else {
+                                    step.next.join(", ")
+                                }
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Config validation failed: {e}");
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("[E052] config validation failed: {e}"),
+                        ));
                     }
                 }
-                Err(e) => {
-                    eprintln!("Config validation failed: {e}");
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("[E052] config validation failed: {e}"),
-                    ));
-                }
             }
-        }
 
-        Command::Graph { config } => {
-            let (cfg, _) = parse_config(&config)?;
-            cfg.validate().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("[E053] config validation failed: {e}"),
-                )
-            })?;
-            let dot = generate_graphviz(&cfg);
-            print!("{dot}");
-        }
+            ConfigCommand::Graph { config } => {
+                let (cfg, _) = parse_config(&config)?;
+                cfg.validate().map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("[E053] config validation failed: {e}"),
+                    )
+                })?;
+                let dot = generate_graphviz(&cfg);
+                print!("{dot}");
+            }
+
+            ConfigCommand::Schema => {
+                // TODO: Output JSON schema using schemars
+                eprintln!("Not yet implemented: requires schemars dependency");
+                return Err(io::Error::other(
+                    "[E059] schema subcommand not yet implemented",
+                ));
+            }
+        },
 
         Command::Version { json } => {
             if json {
