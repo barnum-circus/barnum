@@ -282,7 +282,13 @@ impl AgentPoolHandle {
             }));
         }
 
-        // Wait for daemon to be ready using watcher
+        // Wait for daemon to be ready using a filesystem watcher.
+        //
+        // Race condition: we spawn the daemon process above, but it takes time to start
+        // and create the pool directory. VerifiedWatcher::new requires the watched
+        // directory to exist, so we create it here first. The daemon will clear and
+        // recreate the directory on startup, but FSEvents handles this gracefully.
+        fs::create_dir_all(root).expect("Failed to create pool directory");
         let root_buf = root.to_path_buf();
         let mut watcher = VerifiedWatcher::new(root, std::slice::from_ref(&root_buf))
             .expect("Failed to create watcher");
