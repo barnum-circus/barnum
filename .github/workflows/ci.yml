@@ -357,9 +357,24 @@ jobs:
           name: gsd-win-x64
           path: target/x86_64-pc-windows-msvc/release/gsd.exe
 
+  build-schema:
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Generate GSD config schema
+        run: cargo run -p gsd_config --bin build_gsd_schema
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gsd-config-schema
+          path: libs/gsd/gsd-config-schema.json
+
   publish:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
+    needs: [fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64, build-schema]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -444,6 +459,12 @@ jobs:
           chmod +x libs/gsd/artifacts/macos-arm64/gsd
           chmod +x libs/gsd/artifacts/linux-x64/gsd
           chmod +x libs/gsd/artifacts/linux-arm64/gsd
+
+      - name: Download GSD config schema
+        uses: actions/download-artifact@v4
+        with:
+          name: gsd-config-schema
+          path: libs/gsd
 
       - name: Set version for main branch
         if: "!startsWith(github.ref, 'refs/tags/v')"

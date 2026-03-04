@@ -9,11 +9,16 @@ description = "Declarative config-based task orchestrator library"
 keywords = ["task", "orchestrator", "state-machine", "config", "agent"]
 categories = ["development-tools"]
 
+[[bin]]
+name = "build_gsd_schema"
+path = "src/bin/build_gsd_schema.rs"
+
 [dependencies]
 agent_pool = { path = "../agent_pool" }
 agent_pool_cli = { path = "../agent_pool_cli" }
 cli_invoker = { path = "../cli_invoker" }
 jsonschema = "0.29"
+schemars = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
