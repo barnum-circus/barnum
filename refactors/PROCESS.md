@@ -130,8 +130,9 @@ While actively developing on the branch, feel free to:
 - Squash things together
 - Experiment and revert
 - Push work-in-progress
+- **Break CI** - it's fine, you'll fix it
 
-The branch is your workspace. Don't worry about commit cleanliness until you're ready to merge.
+The branch is your workspace for experimentation. Push wild changes, figure out what works, debug why CI is breaking. Don't worry about commit cleanliness until you're ready to merge.
 
 ### Before merging to master
 
