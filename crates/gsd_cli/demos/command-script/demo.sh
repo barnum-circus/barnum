@@ -37,8 +37,8 @@ echo "Running GSD with command-script config..."
 echo "This will list files in the demo directory and analyze each one."
 echo ""
 
-$GSD run "$SCRIPT_DIR/config.jsonc" \
-    --pool "$POOL_ROOT/$POOL_ID" \
+$GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+    --pool "$POOL_ID" \
     --initial "[{\"kind\": \"ListFiles\", \"value\": {\"folder\": \"$SCRIPT_DIR\"}}]"
 
 echo ""

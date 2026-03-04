@@ -116,8 +116,8 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $GSD run "$SCRIPT_DIR/config.jsonc" \
-        --pool "$POOL_ROOT/$POOL_ID" \
+    $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+        --pool "$POOL_ID" \
         --initial '[{"kind": "Distribute", "value": {}}]'
 
     END_TIME=$(date +%s.%N)

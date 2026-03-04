@@ -31,9 +31,10 @@ echo "No agent pool is needed - tasks are processed by jq commands."
 echo ""
 
 # Create a temp directory for the pool root (even though we don't use the pool)
-ROOT=$(mktemp -d)
+POOL_ROOT=$(mktemp -d)
+POOL_ID="demo"
 cleanup() {
-    rm -rf "$ROOT"
+    rm -rf "$POOL_ROOT"
 }
 trap cleanup EXIT
 
@@ -43,8 +44,8 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$GSD run "$SCRIPT_DIR/config.jsonc" \
-    --pool "$ROOT" \
+$GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+    --pool "$POOL_ID" \
     --initial '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 
 echo ""

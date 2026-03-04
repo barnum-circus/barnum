@@ -92,8 +92,8 @@ else
     # Run GSD
     echo ""
     echo "Running GSD with linear config..."
-    $GSD run "$SCRIPT_DIR/config.jsonc" \
-        --pool "$POOL_ROOT/$POOL_ID" \
+    $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+        --pool "$POOL_ID" \
         --initial '[{"kind": "Start", "value": {}}]'
 
     echo ""
