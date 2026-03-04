@@ -108,7 +108,8 @@ pub trait InvokableCli {
     const NPM_PACKAGE: &'static str;
     /// Binary name, e.g., "agent_pool"
     const BINARY_NAME: &'static str;
-    /// Cargo package name, e.g., "agent_pool_cli"
+    /// Cargo package name for error messages, e.g., "agent_pool_cli"
+    /// Used in hints like "cargo build -p agent_pool_cli"
     const CARGO_PACKAGE: &'static str;
     /// Env var for explicit binary path, e.g., "AGENT_POOL"
     const ENV_VAR_BINARY: &'static str;
@@ -176,12 +177,14 @@ impl<T: InvokableCli> Invoker<T> {
   6. Global package managers pnpm/npx/yarn (not in PATH)
 
 To fix this, either:
-  - Install the package: pnpm add {npm_package}
+  - Run: cargo build -p {cargo_package}
+  - Or install the package: pnpm add {npm_package}
   - Or install globally: pnpm add -g {npm_package}
   - Or set the environment variable: export {env_var}=/path/to/{binary}
   - Or install a package manager (pnpm, npm, or yarn) and run via:
       pnpm dlx {npm_package} <command>
 "#,
+            cargo_package = T::CARGO_PACKAGE,
             binary = T::BINARY_NAME,
             env_var = T::ENV_VAR_BINARY,
             env_var_cmd = T::ENV_VAR_COMMAND,
@@ -271,7 +274,8 @@ To fix this, either:
 }
 
 fn is_in_path(binary: &str) -> bool {
-    Command::new("which").arg(binary).output()
+    let cmd = if cfg!(windows) { "where" } else { "which" };
+    Command::new(cmd).arg(binary).output()
         .map(|o| o.status.success()).unwrap_or(false)
 }
 
@@ -474,7 +478,7 @@ Branch: `cli-invoker-types`
 2. **No package.json** - Fall through to global package manager detection
 3. **packageManager field missing** - Fall through to global detection
 4. **Running from subdirectory** - Traverse up for node_modules, package.json, Cargo.toml
-5. **Windows** - Use `where` instead of `which` for PATH check
+5. **Windows** - Uses `where` instead of `which` for PATH check (handled via `cfg!(windows)`)
 6. **Cargo workspace but binary not built** - Falls through to node_modules/package manager
 7. **Multiple node_modules** - First one found traversing up wins
 
