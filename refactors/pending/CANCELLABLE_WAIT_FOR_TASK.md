@@ -1,4 +1,4 @@
-# Universal Cancellation Channel
+# Stop File Cancellation
 
 **Depends on:**
 - `CROSSBEAM_CHANNELS.md` (completed)
@@ -15,130 +15,68 @@ Currently these use timeout-based polling, which is error-prone (we've broken it
 
 ## Goal
 
-Add a `CancelRx` parameter to all blocking operations. When a message arrives on the cancel channel, return `Err(Interrupted)` immediately.
+Bake stop file detection into `VerifiedWatcher`. When the stop file is written, all blocking operations return `Err(Interrupted)` immediately. No API changes needed - cancellation is automatic.
 
-## Prerequisite
+## Key Insight
 
-This refactor assumes `CROSSBEAM_CHANNELS.md` is complete:
-- `crossbeam` dependency added
-- `VerifiedWatcher` uses `crossbeam::channel` internally
-- Daemon uses `crossbeam::select!` instead of forwarder threads
+After `SINGLE_WATCHER_AT_ENTRY_POINT`, the `VerifiedWatcher` is always created at the pool root and passed down. All blocking operations go through it:
 
-## Blocking Operations That Need Cancellation
+| Function | Uses VerifiedWatcher |
+|----------|---------------------|
+| `wait_for_file` | ✓ |
+| `wait_for_file_with_timeout` | ✓ |
+| `into_receiver` | ✓ |
+| `wait_for_task` | ✓ (passed in) |
+| `submit_file` | ✓ (passed in) |
+| `submit` (socket) | ✓ + blocking socket read (punted) |
 
-After `WAIT_FOR_POOL_READY_WATCHER.md`, these functions exist but without cancel support:
-
-| Function | Location | Currently |
-|----------|----------|-----------|
-| `VerifiedWatcher::wait_for_file` | verified_watcher.rs | recv_timeout loop |
-| `VerifiedWatcher::wait_for_file_with_timeout` | verified_watcher.rs | recv_timeout loop |
-| `VerifiedWatcher::into_receiver` | verified_watcher.rs | recv_timeout loop |
-| `wait_for_task` | worker.rs | Uses wait_for_file |
-| `submit_file` | submit/file.rs | Uses wait_for_file |
-| `submit` | submit/socket.rs | Uses wait_for_file + blocking socket |
-| `wait_for_pool_ready` | submit/mod.rs | Uses wait_for_file_with_timeout |
-
-## API
-
-### Type Alias
-
-```rust
-// lib.rs or verified_watcher.rs
-pub type CancelRx = crossbeam::channel::Receiver<()>;
-```
-
-### VerifiedWatcher
-
-```rust
-impl VerifiedWatcher {
-    pub fn wait_for_file(
-        &mut self,
-        target: &Path,
-        cancel: Option<&CancelRx>,
-    ) -> io::Result<()>;
-
-    pub fn wait_for_file_with_timeout(
-        &mut self,
-        target: &Path,
-        timeout: Duration,
-        cancel: Option<&CancelRx>,
-    ) -> io::Result<()>;
-
-    pub fn into_receiver(
-        self,
-        cancel: Option<&CancelRx>,
-    ) -> io::Result<(RecommendedWatcher, Receiver<notify::Event>)>;
-}
-```
-
-### Worker
-
-```rust
-pub fn wait_for_task(
-    pool_root: &Path,
-    name: Option<&str>,
-    cancel: Option<&CancelRx>,
-) -> io::Result<TaskAssignment>;
-```
-
-### Submission
-
-```rust
-pub fn submit_file(
-    root: impl AsRef<Path>,
-    payload: &Payload,
-    cancel: Option<&CancelRx>,
-) -> io::Result<Response>;
-
-pub fn submit(
-    root: impl AsRef<Path>,
-    payload: &Payload,
-    cancel: Option<&CancelRx>,
-) -> io::Result<Response>;
-
-pub fn wait_for_pool_ready(
-    root: impl AsRef<Path>,
-    timeout: Duration,
-    cancel: Option<&CancelRx>,
-) -> io::Result<()>;
-```
+Since everything uses VerifiedWatcher, baking stop detection into it covers all cases.
 
 ## Implementation
 
-### VerifiedWatcher methods
+### VerifiedWatcher changes
 
-Update the private impl to accept cancel, public methods delegate:
+Store the stop file path and check for it on every event:
 
 ```rust
-pub fn wait_for_file(
-    &mut self,
-    target: &Path,
-    cancel: Option<&CancelRx>,
-) -> io::Result<()> {
-    self.wait_for_file_impl(target, None, cancel)
+pub struct VerifiedWatcher {
+    watcher: RecommendedWatcher,
+    rx: Receiver<notify::Event>,
+    remaining_canaries: Vec<CanaryGuard>,
+    stop_path: PathBuf,  // NEW: pool_root/status.json
 }
 
-pub fn wait_for_file_with_timeout(
-    &mut self,
-    target: &Path,
-    timeout: Duration,
-    cancel: Option<&CancelRx>,
-) -> io::Result<()> {
-    self.wait_for_file_impl(target, Some(timeout), cancel)
-}
+impl VerifiedWatcher {
+    pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self> {
+        // ... existing setup ...
 
+        // Assume watch_dir is pool root (true after SINGLE_WATCHER_AT_ENTRY_POINT)
+        let stop_path = watch_dir.join(STATUS_FILE);
+
+        Ok(Self {
+            watcher,
+            rx,
+            remaining_canaries,
+            stop_path,
+        })
+    }
+}
+```
+
+### wait_for_file_impl changes
+
+Check for stop file on every event:
+
+```rust
 fn wait_for_file_impl(
     &mut self,
     target: &Path,
     timeout: Option<Duration>,
-    cancel: Option<&CancelRx>,
 ) -> io::Result<()> {
     if target.exists() {
         return Ok(());
     }
 
-    let never = crossbeam::channel::never();
-    let cancel = cancel.unwrap_or(&never);
     let deadline = timeout.map(|t| Instant::now() + t);
 
     loop {
@@ -148,7 +86,7 @@ fn wait_for_file_impl(
                 if remaining.is_zero() {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!("timed out waiting for {}", target.display()),
+                        format!("[E046] timed out waiting for {}", target.display()),
                     ));
                 }
                 remaining.min(Duration::from_millis(100))
@@ -156,48 +94,58 @@ fn wait_for_file_impl(
             None => Duration::from_millis(100),
         };
 
-        crossbeam::select! {
-            recv(self.state.rx) -> event => {
-                match event {
-                    Ok(e) => {
-                        if e.paths.iter().any(|p| p == target) || target.exists() {
-                            return Ok(());
-                        }
-                    }
-                    Err(_) => {
+        match self.rx.recv_timeout(wait_time) {
+            Ok(event) => {
+                // Check for stop file
+                if event.paths.iter().any(|p| p == &self.stop_path) {
+                    if is_stop_requested(&self.stop_path) {
                         return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "watcher disconnected",
+                            io::ErrorKind::Interrupted,
+                            "pool stopped",
                         ));
                     }
                 }
+
+                // Check for target file
+                if event.paths.iter().any(|p| p == target) || target.exists() {
+                    return Ok(());
+                }
             }
-            recv(cancel) -> _ => {
-                return Err(io::Error::new(
-                    io::ErrorKind::Interrupted,
-                    "cancelled",
-                ));
-            }
-            default(wait_time) => {
+            Err(RecvTimeoutError::Timeout) => {
                 if target.exists() {
                     return Ok(());
                 }
-                for canary in &mut self.state.remaining_canaries {
+                for canary in &mut self.remaining_canaries {
                     canary.retry()?;
                 }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "[E003] watcher disconnected",
+                ));
             }
         }
     }
 }
+
+fn is_stop_requested(stop_path: &Path) -> bool {
+    std::fs::read_to_string(stop_path)
+        .map(|s| s.trim().starts_with("stop"))
+        .unwrap_or(false)
+}
 ```
 
-### wait_for_task
+### wait_for_task cleanup
+
+Still need to clean up ready file on error (including Interrupted):
 
 ```rust
 pub fn wait_for_task(
+    watcher: &mut VerifiedWatcher,
     pool_root: &Path,
     name: Option<&str>,
-    cancel: Option<&CancelRx>,
+    timeout: Option<Duration>,
 ) -> io::Result<TaskAssignment> {
     let agents_dir = pool_root.join(AGENTS_DIR);
     let uuid = Uuid::new_v4().to_string();
@@ -208,11 +156,12 @@ pub fn wait_for_task(
     let metadata = name.map_or_else(|| "{}".to_string(), |n| format!(r#"{{"name":"{n}"}}"#));
     fs::write(&ready, &metadata)?;
 
-    let mut watcher = VerifiedWatcher::new(&agents_dir, std::slice::from_ref(&agents_dir))?;
-
-    // Wait for task, clean up ready file on cancel
-    if let Err(e) = watcher.wait_for_file(&task, cancel) {
-        let _ = fs::remove_file(&ready);  // Clean up on cancel/error
+    // Wait for task, clean up ready file on any error
+    if let Err(e) = match timeout {
+        Some(t) => watcher.wait_for_file_with_timeout(&task, t),
+        None => watcher.wait_for_file(&task),
+    } {
+        let _ = fs::remove_file(&ready);
         return Err(e);
     }
 
@@ -221,13 +170,21 @@ pub fn wait_for_task(
 }
 ```
 
-## Usage Example
+## Usage
 
-### Test Agent
+### Stopping everything
+
+To cancel all operations, just write the stop file:
+
+```rust
+// This causes all wait_for_file calls to return Err(Interrupted)
+stop(&pool_root);
+```
+
+### Test Agent (simplified)
 
 ```rust
 pub struct GsdTestAgent {
-    cancel_tx: crossbeam::channel::Sender<()>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
     pool_root: PathBuf,
 }
@@ -237,14 +194,15 @@ impl GsdTestAgent {
     where
         F: Fn(&str) -> String + Send + 'static,
     {
-        let (cancel_tx, cancel_rx) = crossbeam::channel::bounded(1);
         let pool_root = root.to_path_buf();
 
         let handle = thread::spawn(move || {
+            let mut watcher = VerifiedWatcher::new(&pool_root, &[pool_root.join(AGENTS_DIR)])
+                .expect("create watcher");
             let mut processed = Vec::new();
 
             loop {
-                match wait_for_task(&pool_root, None, Some(&cancel_rx)) {
+                match wait_for_task(&mut watcher, &pool_root, None, None) {
                     Ok(assignment) => {
                         let response = processor(&assignment.content);
                         processed.push(assignment.content);
@@ -261,57 +219,45 @@ impl GsdTestAgent {
             processed
         });
 
-        Self { cancel_tx, handle: Some(handle), pool_root }
+        Self { handle: Some(handle), pool_root }
     }
 
     pub fn stop(mut self) -> Vec<String> {
-        // Signal cancellation
-        let _ = self.cancel_tx.send(());
-
-        // Also stop daemon
+        // Write stop file - agent will see it and return Interrupted
         let _ = stop(&self.pool_root);
-
         self.handle.take().unwrap().join().unwrap()
     }
 }
 ```
 
+No cancel channels needed - just write the stop file.
+
 ## Migration Steps
 
-(Assumes `WAIT_FOR_POOL_READY_WATCHER.md` is complete, which provides `wait_for_file` and `wait_for_file_with_timeout` methods)
-
-1. Add `CancelRx` type alias
-2. Update `VerifiedWatcher::wait_for_file` to accept cancel
-3. Update `VerifiedWatcher::wait_for_file_with_timeout` to accept cancel
-4. Update `VerifiedWatcher::into_receiver` to accept cancel
-5. Update `wait_for_task` to accept and pass through cancel
-6. Update `submit_file` to accept and pass through cancel
-7. Update `submit` to accept cancel (for wait_for_file phase)
-8. Update `wait_for_pool_ready` to accept and pass through cancel
-9. Update all call sites to pass `None` for cancel (or actual channel)
-10. Update test agents to use cancel channel instead of AtomicBool + timeout
+1. Add `stop_path: PathBuf` field to `VerifiedWatcher`
+2. Store `watch_dir.join(STATUS_FILE)` in constructor
+3. Add `is_stop_requested()` helper function
+4. Update `wait_for_file_impl` to check for stop file events
+5. Ensure `wait_for_task` cleans up ready file on all errors
+6. Update daemon to delete entire pool folder on stop
+7. Simplify test agents to use `stop()` instead of cancel channels
 
 ## Design Decisions
 
-1. **Timeout vs cancel:** Keep both as separate parameters. Timeout is for actual deadlines, cancel is for graceful shutdown. The existing `wait_for_file` and `wait_for_file_with_timeout` methods are correctly named and will gain a cancel parameter.
+1. **No CancelRx parameter:** The stop file IS the cancellation signal. VerifiedWatcher detects it internally. No API changes to downstream functions.
 
-2. **Socket read:** TODO for future work. The `submit()` function blocks on socket read after connecting. This can't be cancelled with channels. For now, accept the limitation (socket reads are typically fast). Future options: non-blocking socket with `select!` or socket timeout.
+2. **Assume watch_dir is pool root:** After SINGLE_WATCHER_AT_ENTRY_POINT, the watcher is always created at pool root. We can assume `watch_dir.join(STATUS_FILE)` is the stop file.
 
-3. **Cleanup on cancel:** YES, clean up in `wait_for_task` - delete the ready file to avoid orphans. Note: `submit_file` should NOT clean up request files on cancel because the daemon might already be processing them. The daemon handles request cleanup.
+3. **Socket read:** TODO for future work. The `submit()` function blocks on socket read. For now, accept the limitation (socket reads are typically fast).
 
-4. **Daemon stop cleanup:** When the daemon writes the stop file and shuts down, it should delete the entire pool folder. This simplifies cleanup since:
-   - All workers are dead anyway
-   - Any ready files are orphaned
-   - Any pending submissions will fail
-   - Starting a new daemon creates fresh directories
+4. **Cleanup on cancel:** `wait_for_task` cleans up its ready file on any error including Interrupted. `submit_file` does NOT clean up request files (daemon handles them).
 
-   This means individual cancellation cleanup (point 3) only matters for non-stop scenarios like worker timeouts.
+5. **Daemon stop cleanup:** When daemon stops, it deletes the entire pool folder. This automatically cleans up all orphaned files.
 
 ## Testing
 
-- `wait_for_file` returns `Interrupted` when cancel signal sent before call
-- `wait_for_file` returns `Interrupted` when cancel signal sent during wait
-- Test agent stops within 100ms of `stop()` call (not 500ms timeout)
-- File submission can be cancelled mid-wait
-- `wait_for_task` cleans up ready file when cancelled
+- `wait_for_file` returns `Interrupted` when stop file written before call
+- `wait_for_file` returns `Interrupted` when stop file written during wait
+- Test agent stops promptly when `stop()` called
+- `wait_for_task` cleans up ready file when interrupted
 - Daemon stop deletes entire pool folder
