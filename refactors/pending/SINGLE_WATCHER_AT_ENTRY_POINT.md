@@ -73,58 +73,20 @@ pub fn submit(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response>
 }
 ```
 
-### submit/mod.rs - `wait_for_pool_ready`
-
-```rust
-pub fn wait_for_pool_ready(root: impl AsRef<Path>, timeout: Duration) -> io::Result<()> {
-    let root = root.as_ref();
-    let status_path = root.join(STATUS_FILE);
-    let start = Instant::now();
-
-    // POLLS WITH THREAD::SLEEP - NO WATCHER AT ALL
-    while !status_path.exists() {
-        if start.elapsed() > timeout {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, ...));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    Ok(())
-}
-```
-
-### agent_pool_cli/src/main.rs - `wait_for_status_file`
-
-```rust
-fn wait_for_status_file(status_file: &std::path::Path) -> bool {
-    const TIMEOUT: Duration = Duration::from_secs(5);
-    const POLL_INTERVAL: Duration = Duration::from_millis(100);
-
-    let start = std::time::Instant::now();
-    // POLLS WITH THREAD::SLEEP
-    while start.elapsed() < TIMEOUT {
-        if status_file.exists() {
-            return true;
-        }
-        thread::sleep(POLL_INTERVAL);
-    }
-    false
-}
-```
-
 ### agent_pool_cli/src/main.rs - `Command::GetTask`
 
 ```rust
 Command::GetTask { pool, name } => {
     let root = resolve_pool(&pool_root, &pool);
 
-    // Uses polling function
+    // Uses polling function (separate refactor will change this)
     let status_file = root.join(STATUS_FILE);
     if !wait_for_status_file(&status_file) {
         eprintln!("Daemon not ready");
         return ExitCode::FAILURE;
     }
 
-    // Then calls wait_for_task which creates ANOTHER watcher
+    // Calls wait_for_task which creates its own watcher
     match wait_for_task(&root, name.as_deref(), None) {
         Ok(assignment) => { ... }
         Err(e) => { ... }
@@ -218,14 +180,6 @@ pub fn submit(
 }
 ```
 
-### submit/mod.rs - `wait_for_pool_ready`
-
-**DELETED** - Callers use `watcher.wait_for(&status_path, Some(timeout))` directly.
-
-### agent_pool_cli/src/main.rs - `wait_for_status_file`
-
-**DELETED** - Uses watcher instead.
-
 ### agent_pool_cli/src/main.rs - `Command::GetTask`
 
 ```rust
@@ -242,10 +196,10 @@ Command::GetTask { pool, name } => {
         }
     };
 
-    // Wait for pool ready using watcher
-    let status_path = root.join(STATUS_FILE);
-    if let Err(e) = watcher.wait_for(&status_path, Some(Duration::from_secs(5))) {
-        eprintln!("Daemon not ready: {e}");
+    // Still uses polling for now (WAIT_FOR_POOL_READY_WATCHER.md will change this)
+    let status_file = root.join(STATUS_FILE);
+    if !wait_for_status_file(&status_file) {
+        eprintln!("Daemon not ready");
         return ExitCode::FAILURE;
     }
 
@@ -319,11 +273,15 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 | `worker.rs` | Creates watcher | Takes `&mut VerifiedWatcher` |
 | `submit/file.rs` | Creates watcher | Takes `&mut VerifiedWatcher` |
 | `submit/socket.rs` | Creates watcher | Takes `&mut VerifiedWatcher` |
-| `submit/mod.rs` | Polls with sleep | **Delete** `wait_for_pool_ready` |
-| `agent_pool_cli` | Polls + calls funcs that create watchers | Creates watcher, passes down |
-| `daemon/wiring.rs` | Creates watcher (already correct pattern) | No change needed |
+| `agent_pool_cli` | Calls funcs that create watchers | Creates watcher at entry, passes down |
+| `daemon/wiring.rs` | Creates watcher (already correct) | No change needed |
 
 ## CLI vs Daemon Canary Difference
 
 - **CLI**: `VerifiedWatcher::new(&root, &[root.clone()])` - single canary at root, directories already exist
 - **Daemon**: `VerifiedWatcher::new(&root, &[agents_dir, submissions_dir])` - canaries in subdirs, directories just created
+
+## What This Refactor Does NOT Do
+
+- Does NOT change polling to watcher-based waiting (that's `WAIT_FOR_POOL_READY_WATCHER.md`)
+- Does NOT add cancellation support (that's `CANCELLABLE_WAIT_FOR_TASK.md`)
