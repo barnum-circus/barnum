@@ -14,13 +14,39 @@ This document captures the *shape* of the refactor without getting into implemen
 
 ## STOP: Wait for approval
 
-**After writing the architecture document, STOP and wait for explicit user approval before implementing ANYTHING.** Do not:
+**After writing the architecture document, STOP and wait for explicit user approval before implementing ANYTHING.**
+
+### What "approval" means
+
+Approval is ONLY one of these explicit statements:
+- "Go ahead"
+- "Implement it"
+- "Approved"
+- "Let's do it"
+- "Start implementing"
+
+### What is NOT approval
+
+- User asking questions about the document
+- User providing feedback or suggestions
+- User saying "looks good" (this is feedback, not approval)
+- User discussing the approach further
+- Silence
+
+### Do NOT:
 - Start implementing tasks
 - Make "small independent changes"
-- Commit code changes
+- Commit code changes (except the refactor document itself)
 - Push anything
+- Write ANY code
 
 The document exists for the user to review. They may have feedback, want changes to the approach, or decide not to proceed at all. **Only begin implementation after the user explicitly says to proceed.**
+
+### After writing the document
+
+Your response should be something like: "Created the refactor document at `refactors/pending/FOO.md`. Let me know if you'd like any changes or if you're ready to proceed with implementation."
+
+Then STOP. Do not do anything else until the user explicitly approves.
 
 ## Phase 2: Practical task list
 

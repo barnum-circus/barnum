@@ -87,10 +87,19 @@ The goal: minimize back-and-forth. Get information proactively so you can solve 
 
 **STOP. READ THIS BEFORE DOING ANYTHING.**
 
-When the user asks you to plan, design, or create a refactor:
+When the user asks you to plan, design, explore, or create a refactor:
 
 1. **READ `refactors/PROCESS.md` FIRST.** Not optional. Do it now.
 2. **Create the document in `refactors/pending/`** - NOT anywhere else, NOT inline in the conversation.
 3. **Follow the two-phase process** described in that file.
+4. **STOP AND WAIT FOR EXPLICIT APPROVAL.** Do NOT implement ANYTHING until the user explicitly says "go ahead", "implement it", "approved", or similar.
 
-If you create a refactor document anywhere other than `refactors/pending/`, you have failed. If you start implementing without approval, you have failed. Read the process document.
+**CRITICAL: After writing a refactor document, your job is DONE until the user approves.**
+
+You have FAILED if you:
+- Create a refactor document anywhere other than `refactors/pending/`
+- Start implementing without explicit user approval
+- Write ANY code changes after creating a refactor doc without approval
+- Assume silence or follow-up questions mean approval
+
+The user asking clarifying questions or providing feedback is NOT approval. Only explicit statements like "implement it" or "go ahead" are approval.
