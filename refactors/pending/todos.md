@@ -38,6 +38,26 @@ The command agent should have its own configurable timeout for executing command
 
 ---
 
+## Speculative: GSD Direct Library Integration
+
+**Status: Speculative**
+
+Currently GSD submits tasks by spawning `agent_pool submit_task` CLI processes. Each subprocess creates its own inotify watcher, which can exhaust the `max_user_instances` limit (typically 128) when submitting many tasks concurrently.
+
+**Current approach:**
+- GSD spawns subprocess per task submission
+- Each subprocess creates inotify watcher
+- `max_concurrency=20` mitigates but doesn't eliminate issue
+
+**Better approach:**
+- GSD links against agent_pool library directly
+- Single watcher shared across all submissions
+- No subprocess overhead
+
+This would also improve performance (no CLI spawn overhead) and simplify the codebase.
+
+---
+
 ## Re-enable Multi-Threaded Tests
 
 **Status: TODO**
