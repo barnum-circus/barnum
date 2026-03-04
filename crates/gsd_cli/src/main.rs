@@ -5,7 +5,9 @@
 #![expect(clippy::print_stdout)]
 #![expect(clippy::print_stderr)]
 
+use agent_pool_cli::AgentPoolCli;
 use clap::{Parser, Subcommand};
+use cli_invoker::Invoker;
 use gsd_config::{Action, CompiledSchemas, Config, RunnerConfig, Task, generate_full_docs, run};
 use std::fs::File;
 use std::io;
@@ -86,6 +88,9 @@ fn main() -> io::Result<()> {
             // Initialize tracing with optional log file
             init_tracing(log_file.as_ref())?;
 
+            // Detect how to invoke the agent_pool CLI (returns helpful error if not found)
+            let invoker = Invoker::<AgentPoolCli>::detect()?;
+
             let (cfg, config_dir) = parse_config(&config)?;
             cfg.validate()
                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -110,7 +115,7 @@ fn main() -> io::Result<()> {
                 config_base_path: &config_dir,
                 wake_script: wake.as_deref(),
                 initial_tasks,
-                agent_pool_binary: None, // Use AGENT_POOL env var or PATH
+                invoker: &invoker,
             };
 
             run(&cfg, &schemas, runner_config)?;

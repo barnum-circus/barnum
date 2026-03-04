@@ -7,7 +7,7 @@
 mod common;
 
 use common::{
-    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
@@ -74,7 +74,7 @@ fn invalid_transition_causes_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped after retries exhausted
@@ -115,7 +115,7 @@ fn unknown_step_causes_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped after retries exhausted
@@ -175,7 +175,7 @@ fn recovery_after_invalid_then_valid() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

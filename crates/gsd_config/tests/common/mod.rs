@@ -5,6 +5,8 @@
 #![expect(clippy::expect_used)]
 
 use agent_pool::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
+use agent_pool_cli::AgentPoolCli;
+use cli_invoker::Invoker;
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -279,6 +281,11 @@ pub fn find_agent_pool_binary() -> PathBuf {
         .expect("Could not find workspace root");
 
     workspace_root.join("target/debug/agent_pool")
+}
+
+/// Create an invoker for the agent pool CLI using the test binary.
+pub fn create_test_invoker() -> Invoker<AgentPoolCli> {
+    Invoker::from_binary(find_agent_pool_binary())
 }
 
 /// Wrapper that starts the daemon via CLI subprocess.

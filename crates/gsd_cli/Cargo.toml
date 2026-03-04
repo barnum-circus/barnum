@@ -11,6 +11,8 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 agent_pool = { path = "../agent_pool" }
+agent_pool_cli = { path = "../agent_pool_cli" }
+cli_invoker = { path = "../cli_invoker" }
 gsd_config = { path = "../gsd_config" }
 clap = { workspace = true }
 json5 = { workspace = true }

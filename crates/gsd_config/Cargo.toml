@@ -11,6 +11,8 @@ categories = ["development-tools"]
 
 [dependencies]
 agent_pool = { path = "../agent_pool" }
+agent_pool_cli = { path = "../agent_pool_cli" }
+cli_invoker = { path = "../cli_invoker" }
 jsonschema = "0.29"
 serde = { workspace = true }
 serde_json = { workspace = true }

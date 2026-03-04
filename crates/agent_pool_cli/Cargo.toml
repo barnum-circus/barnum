@@ -13,8 +13,13 @@ categories = ["command-line-utilities"]
 name = "agent_pool"
 path = "src/main.rs"
 
+[lib]
+name = "agent_pool_cli"
+path = "src/lib.rs"
+
 [dependencies]
 agent_pool = { path = "../agent_pool" }
+cli_invoker = { path = "../cli_invoker" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

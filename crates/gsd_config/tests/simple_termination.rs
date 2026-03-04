@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
@@ -49,12 +49,13 @@ fn single_step_terminates() {
 
     let config = simple_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
+    let invoker = create_test_invoker();
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &invoker,
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -77,12 +78,13 @@ fn empty_initial_tasks_does_nothing() {
     // No IPC needed - we're not even starting the pool
     let config = simple_config();
     let schemas = CompiledSchemas::compile(&config, Path::new(".")).expect("compile schemas");
+    let invoker = create_test_invoker();
     let runner_config = RunnerConfig {
         agent_pool_root: &root,
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &invoker,
     };
 
     // Should complete immediately without error

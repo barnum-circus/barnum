@@ -7,7 +7,7 @@
 mod common;
 
 use common::{
-    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task, TaskRunner};
@@ -50,7 +50,7 @@ fn empty_initial_tasks_completes() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![], // Empty!
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Should complete immediately without error
@@ -84,7 +84,7 @@ fn empty_runner_is_empty() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -134,7 +134,7 @@ fn unknown_initial_step_skipped() {
             Task::new("Unknown", serde_json::json!({})), // Unknown step
             Task::new("Known", serde_json::json!({})),   // Known step
         ],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Should complete - unknown task skipped, known task processed
@@ -195,7 +195,7 @@ fn invalid_value_schema_skipped() {
             Task::new("Validated", serde_json::json!({})), // Missing required "name"
             Task::new("Validated", serde_json::json!({"name": "ok"})), // Valid
         ],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -262,7 +262,7 @@ fn large_fan_out() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Distribute", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -308,7 +308,7 @@ fn command_action_executes() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Echo", serde_json::json!({"message": "hello"}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Should complete without error
@@ -357,7 +357,7 @@ fn rapid_task_completion() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -395,7 +395,7 @@ fn pending_count_accurate() {
             Task::new("Work", serde_json::json!({})),
             Task::new("Work", serde_json::json!({})),
         ],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     let runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");

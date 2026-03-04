@@ -10,7 +10,7 @@
 mod common;
 
 use common::{
-    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task};
@@ -76,7 +76,7 @@ fn retry_on_invalid_response_false_drops_task() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped
@@ -146,7 +146,7 @@ fn retry_on_invalid_response_true_retries() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped after all retries
@@ -211,7 +211,7 @@ fn malformed_json_triggers_retry() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped after all retries
@@ -286,7 +286,7 @@ fn per_step_options_override_global() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("NoRetryStep", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped
@@ -357,7 +357,7 @@ fn recovery_on_nth_attempt() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -419,7 +419,7 @@ fn max_retries_zero_no_retries() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Start", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     // Run should return error because task is dropped

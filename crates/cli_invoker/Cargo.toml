@@ -1,0 +1,14 @@
+[package]
+name = "cli_invoker"
+description = "Generic CLI invoker with package manager detection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -11,7 +11,7 @@
 mod common;
 
 use common::{
-    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, find_agent_pool_binary, is_ipc_available,
+    AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
 use gsd_config::{CompiledSchemas, Config, RunnerConfig, Task, TaskRunner};
@@ -77,7 +77,7 @@ fn tasks_execute_in_parallel() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     let start = Instant::now();
@@ -146,7 +146,7 @@ fn work_distributed_across_agents() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -244,7 +244,7 @@ fn max_concurrency_limits_parallel_tasks() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
@@ -289,7 +289,7 @@ fn task_runner_yields_results_incrementally() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks,
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -330,7 +330,7 @@ fn task_runner_is_empty_status() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Worker", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
@@ -404,7 +404,7 @@ fn nested_fan_out() {
         config_base_path: Path::new("."),
         wake_script: None,
         initial_tasks: vec![Task::new("Root", serde_json::json!({}))],
-        agent_pool_binary: Some(&find_agent_pool_binary()),
+        invoker: &create_test_invoker(),
     };
 
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");

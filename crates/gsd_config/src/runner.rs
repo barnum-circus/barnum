@@ -11,6 +11,8 @@ use crate::docs::generate_step_docs;
 use crate::types::StepName;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 use agent_pool::Response;
+use agent_pool_cli::AgentPoolCli;
+use cli_invoker::Invoker;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
@@ -67,8 +69,8 @@ pub struct RunnerConfig<'a> {
     pub wake_script: Option<&'a str>,
     /// Initial tasks to process (must not be empty).
     pub initial_tasks: Vec<Task>,
-    /// Optional path to the `agent_pool` binary. If not specified, uses `AGENT_POOL` env var or PATH.
-    pub agent_pool_binary: Option<&'a Path>,
+    /// Invoker for the `agent_pool` CLI.
+    pub invoker: &'a Invoker<AgentPoolCli>,
 }
 
 /// The outcome of processing a task.
@@ -124,7 +126,7 @@ pub struct TaskRunner<'a> {
     queue: VecDeque<QueuedTask>,
     agent_pool_root: &'a Path,
     config_base_path: &'a Path,
-    agent_pool_binary: Option<&'a Path>,
+    invoker: &'a Invoker<AgentPoolCli>,
     max_concurrency: usize,
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
@@ -225,7 +227,7 @@ impl<'a> TaskRunner<'a> {
             queue,
             agent_pool_root: runner_config.agent_pool_root,
             config_base_path: runner_config.config_base_path,
-            agent_pool_binary: runner_config.agent_pool_binary,
+            invoker: runner_config.invoker,
             max_concurrency,
             in_flight: 0,
             tx,
@@ -302,7 +304,7 @@ impl<'a> TaskRunner<'a> {
                     let docs = generate_step_docs(step, self.config, self.config_base_path);
                     let timeout = effective.timeout;
                     let root = self.agent_pool_root.to_path_buf();
-                    let binary = self.agent_pool_binary.map(Path::to_path_buf);
+                    let invoker = Clone::clone(self.invoker);
                     let tx = self.tx.clone();
                     let original_value = task.value.clone();
 
@@ -337,7 +339,7 @@ impl<'a> TaskRunner<'a> {
                         );
                         debug!(payload = %payload, "task payload");
 
-                        let result = submit_via_cli(&root, &payload, binary.as_deref());
+                        let result = submit_via_cli(&root, &payload, &invoker);
                         let _ = tx.send(InFlightResult {
                             task,
                             task_id,
@@ -952,10 +954,8 @@ fn build_agent_payload_with_value(
 fn submit_via_cli(
     pool_path: &Path,
     payload: &str,
-    agent_pool_binary: Option<&Path>,
+    invoker: &Invoker<AgentPoolCli>,
 ) -> io::Result<Response> {
-    let binary = agent_pool_binary.map_or_else(resolve_agent_pool_binary, Path::to_path_buf);
-
     // Extract pool_root (parent) and pool_id (basename) from full path
     let pool_root = pool_path.parent().ok_or_else(|| {
         io::Error::new(
@@ -974,28 +974,19 @@ fn submit_via_cli(
         })?;
 
     // Use 24-hour timeout. TODO: Add --no-timeout support to CLI.
-    let output = Command::new(&binary)
-        .arg("submit_task")
-        .arg("--pool-root")
-        .arg(pool_root)
-        .arg("--pool")
-        .arg(pool_id)
-        .arg("--notify")
-        .arg("file")
-        .arg("--timeout-secs")
-        .arg("86400")
-        .arg("--data")
-        .arg(payload)
-        .output()
-        .map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!(
-                    "Failed to run agent_pool binary '{}': {e}",
-                    binary.display()
-                ),
-            )
-        })?;
+    let output = invoker.run([
+        "submit_task",
+        "--pool-root",
+        pool_root.to_str().unwrap_or("."),
+        "--pool",
+        pool_id,
+        "--notify",
+        "file",
+        "--timeout-secs",
+        "86400",
+        "--data",
+        payload,
+    ])?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1011,17 +1002,6 @@ fn submit_via_cli(
             format!("Failed to parse agent_pool output: {e}"),
         )
     })
-}
-
-/// Resolve the `agent_pool` binary path.
-fn resolve_agent_pool_binary() -> std::path::PathBuf {
-    // 1. Environment variable override (AGENT_POOL is the standard name)
-    if let Ok(path) = std::env::var("AGENT_POOL") {
-        return std::path::PathBuf::from(path);
-    }
-
-    // 2. Default: assume it's in PATH
-    std::path::PathBuf::from("agent_pool")
 }
 
 #[cfg(test)]
