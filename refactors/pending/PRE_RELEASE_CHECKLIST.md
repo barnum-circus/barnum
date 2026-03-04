@@ -79,6 +79,20 @@ Write task queue state to a file so runs can be resumed after interruption.
 
 ---
 
+### 9. Task Progress Display
+**Doc:** (needs creation)
+
+When running GSD, show progress visualization - at minimum a count of remaining/completed tasks. Users need feedback that work is happening.
+
+Options:
+- Simple: `[3/10] Processing step_name...`
+- Progress bar: `[████░░░░░░] 3/10 tasks`
+- Periodic summary: Print task counts every N seconds
+
+**Status:** Not started.
+
+---
+
 ## Nice to Have (Post-Release)
 
 - Windows support for package manager detection
@@ -111,3 +125,4 @@ Then we can tag v0.2 and publish to npm with `latest` tag.
 | Config Schema | CONFIG_SCHEMA_SUBCOMMAND.md | Pending approval |
 | State Persistence | STATE_PERSISTENCE.md | Pending approval |
 | Documentation | DOCUMENTATION.md | Pending approval |
+| Task Progress Display | (needs creation) | Not started |
