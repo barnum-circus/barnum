@@ -195,7 +195,12 @@ impl<'a> TaskRunner<'a> {
 
         // Pool existence/readiness is checked by submit_via_cli on first task submission
 
-        let max_concurrency = config.options.max_concurrency.unwrap_or(usize::MAX);
+        // Default to 20 concurrent submissions to avoid exhausting inotify instances.
+        // Each submit_task process creates an inotify watcher, and Linux defaults to
+        // max_user_instances=128. With 3 agents, only ~5 submissions can be actively
+        // processed at once anyway - the rest just queue up holding watchers.
+        // TODO: Query the pool for actual agent count and use that + small buffer.
+        let max_concurrency = config.options.max_concurrency.unwrap_or(20);
 
         info!(
             tasks = runner_config.initial_tasks.len(),
