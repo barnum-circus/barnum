@@ -1,11 +1,11 @@
 //! Filesystem utilities for atomic operations and file watching.
 
 use crate::constants::SCRATCH_DIR;
+use crossbeam_channel::{self as channel, Receiver, RecvTimeoutError};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
@@ -130,7 +130,7 @@ impl Drop for CanaryGuard {
 
 /// Internal state of the watcher.
 struct WatcherState {
-    rx: mpsc::Receiver<notify::Event>,
+    rx: Receiver<notify::Event>,
     /// Canary guards for directories still being verified.
     /// As directories are verified, their canaries are removed.
     remaining_canaries: Vec<CanaryGuard>,
@@ -162,7 +162,7 @@ impl VerifiedWatcher {
     /// Returns an error if the watcher cannot be created or any canary file
     /// cannot be written.
     pub fn new(watch_dir: &Path, canary_dirs: &[PathBuf]) -> io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = channel::unbounded();
 
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<notify::Event, notify::Error>| {
@@ -241,7 +241,7 @@ impl VerifiedWatcher {
                         return Ok(());
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(RecvTimeoutError::Timeout) => {
                     if target.exists() {
                         return Ok(());
                     }
@@ -250,7 +250,7 @@ impl VerifiedWatcher {
                         canary.retry()?;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RecvTimeoutError::Disconnected) => {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "watcher disconnected",
@@ -272,7 +272,7 @@ impl VerifiedWatcher {
     pub fn into_receiver(
         self,
         timeout: Duration,
-    ) -> io::Result<(RecommendedWatcher, mpsc::Receiver<notify::Event>)> {
+    ) -> io::Result<(RecommendedWatcher, Receiver<notify::Event>)> {
         let WatcherState {
             rx,
             mut remaining_canaries,
@@ -295,12 +295,12 @@ impl VerifiedWatcher {
                         }
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(RecvTimeoutError::Timeout) => {
                     for canary in &mut remaining_canaries {
                         canary.retry()?;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RecvTimeoutError::Disconnected) => {
                     return Err(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         "watcher disconnected",

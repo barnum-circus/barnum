@@ -11,6 +11,7 @@ keywords = ["agent", "pool", "task-queue", "daemon", "ipc"]
 categories = ["concurrency"]
 
 [dependencies]
+crossbeam-channel = { workspace = true }
 interprocess = { workspace = true }
 notify = { workspace = true }
 serde = { workspace = true }

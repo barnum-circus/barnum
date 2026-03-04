@@ -71,18 +71,20 @@ match rx.recv_timeout(Duration::from_millis(100)) {
 
 ## Proposed Changes
 
-### 1. Add crossbeam dependency
+### 1. Add crossbeam-channel dependency
 
 ```toml
 # crates/agent_pool/Cargo.toml
 [dependencies]
-crossbeam = "0.8"
+crossbeam-channel = "0.5"
 ```
+
+Note: We use `crossbeam-channel` (just channels + select!) rather than the full `crossbeam` crate which includes atomics, epoch-based memory management, and other utilities we don't need.
 
 ### 2. Update VerifiedWatcher
 
 ```rust
-use crossbeam::channel::{self, Receiver, Sender};
+use crossbeam_channel::{self, Receiver, Sender};
 
 struct WatcherState {
     rx: Receiver<notify::Event>,
@@ -109,7 +111,7 @@ impl VerifiedWatcher {
 Replace forwarder threads with `select!`:
 
 ```rust
-use crossbeam::channel::{self, Receiver, Sender, select};
+use crossbeam_channel::{self, Receiver, Sender, select};
 
 // Instead of unified IoEvent channel with forwarders,
 // use select! on the individual channels directly
