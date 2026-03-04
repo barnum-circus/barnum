@@ -297,7 +297,7 @@ impl GsdTestAgent {
 
 2. **Socket read:** TODO for future work. The `submit()` function blocks on socket read after connecting. This can't be cancelled with channels. For now, accept the limitation (socket reads are typically fast). Future options: non-blocking socket with `select!` or socket timeout.
 
-3. **Cleanup on cancel:** YES, clean up. When `wait_for_task` is cancelled, delete the ready file to avoid orphans.
+3. **Cleanup on cancel:** YES, clean up in `wait_for_task` - delete the ready file to avoid orphans. Note: `submit_file` should NOT clean up request files on cancel because the daemon might already be processing them. The daemon handles request cleanup.
 
 4. **Daemon stop cleanup:** When the daemon writes the stop file and shuts down, it should delete the entire pool folder. This simplifies cleanup since:
    - All workers are dead anyway
