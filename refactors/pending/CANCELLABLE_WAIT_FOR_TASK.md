@@ -99,7 +99,7 @@ fn wait_for_file_impl(
                 // Check for stop file
                 if event.paths.iter().any(|p| p == &self.stop_path) {
                     if is_stop_requested(&self.stop_path) {
-                        return Err(shutdown_error());
+                        return Err(stop_error());
                     }
                 }
 
@@ -126,8 +126,8 @@ fn wait_for_file_impl(
     }
 }
 
-/// Error code for pool shutdown (distinguishable from other interrupts).
-pub const SHUTDOWN_ERROR: &str = "[E100] pool shutdown";
+/// Error code for pool stop.
+pub const STOP_ERROR: &str = "[E100] pool stopped";
 
 fn is_stop_requested(stop_path: &Path) -> bool {
     std::fs::read_to_string(stop_path)
@@ -135,13 +135,13 @@ fn is_stop_requested(stop_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Create shutdown error (pool is stopping).
-pub fn shutdown_error() -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, SHUTDOWN_ERROR)
+/// Create stop error.
+pub fn stop_error() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, STOP_ERROR)
 }
 
-/// Check if an error is a shutdown error (vs timeout, disconnect, etc).
-pub fn is_shutdown(err: &io::Error) -> bool {
+/// Check if an error is a stop error (vs timeout, disconnect, etc).
+pub fn is_stop(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Interrupted
         && err.to_string().contains("[E100]")
 }
@@ -219,7 +219,7 @@ impl GsdTestAgent {
                         processed.push(assignment.content);
                         let _ = write_response(&pool_root, &assignment.uuid, &response);
                     }
-                    Err(e) if is_shutdown(&e) => break,  // Clean shutdown
+                    Err(e) if is_stop(&e) => break,  // Pool stopped
                     Err(e) => {
                         eprintln!("[test-agent] error: {e}");
                         break;
@@ -247,11 +247,28 @@ No cancel channels needed - just write the stop file.
 
 1. Add `stop_path: PathBuf` field to `VerifiedWatcher`
 2. Store `watch_dir.join(STATUS_FILE)` in constructor
-3. Add `is_stop_requested()` helper function
+3. Add `STOP_ERROR`, `stop_error()`, `is_stop()` to constants/lib
 4. Update `wait_for_file_impl` to check for stop file events
 5. Ensure `wait_for_task` cleans up ready file on all errors
 6. Update daemon to delete entire pool folder on stop
 7. Simplify test agents to use `stop()` instead of cancel channels
+
+## Cleanup: Rename "shutdown" to "stop"
+
+Existing code uses "shutdown" in several places. Rename for consistency:
+
+| Current | New |
+|---------|-----|
+| `NotProcessedReason::Shutdown` | `NotProcessedReason::Stopped` |
+| `ShutdownNotifier` | `StopNotifier` |
+| `shutdown.shutdown()` | `stop_notifier.stop()` |
+| `shutdown_signaled` variable | `stopped` |
+| Comments mentioning "shutdown" | Update to "stop" |
+
+Files to update:
+- `crates/agent_pool/src/response.rs` - enum variant
+- `crates/agent_pool/src/daemon/io.rs` - StopNotifier struct
+- `crates/agent_pool/src/daemon/wiring.rs` - variable names, comments
 
 ## Design Decisions
 
@@ -267,9 +284,9 @@ No cancel channels needed - just write the stop file.
 
 ## Testing
 
-- `wait_for_file` returns shutdown error when stop file written before call
-- `wait_for_file` returns shutdown error when stop file written during wait
-- `is_shutdown()` returns true for shutdown errors, false for other Interrupted
+- `wait_for_file` returns stop error when stop file written before call
+- `wait_for_file` returns stop error when stop file written during wait
+- `is_stop()` returns true for stop errors, false for other Interrupted
 - Test agent stops promptly when `stop()` called
-- `wait_for_task` cleans up ready file on any error (including shutdown)
+- `wait_for_task` cleans up ready file on any error (including stop)
 - Daemon stop deletes entire pool folder
