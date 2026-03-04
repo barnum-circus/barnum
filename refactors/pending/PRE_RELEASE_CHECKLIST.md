@@ -25,9 +25,9 @@ Allow passing `--pool-root` to gsd CLI so users can specify where pools live. Cu
 ### 3. Version Subcommand
 **Doc:** `VERSION_SUBCOMMAND.md`
 
-Add `--version` flag and `version` subcommand. Generate version.txt during CI. Ensure gsd uses matching agent_pool version when using dlx.
+Add `version` subcommand. Generate version.txt during CI. Ensure gsd uses matching agent_pool version when using dlx.
 
-**Status:** Document created, awaiting approval.
+**Status:** IMPLEMENTED. Version subcommand with --json flag works. CI generates version.txt. Matching version for dlx is part of package manager auto-detection (item 1).
 
 ---
 
