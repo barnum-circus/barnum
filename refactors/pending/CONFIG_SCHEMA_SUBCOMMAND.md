@@ -141,6 +141,23 @@ Since we generate at build time and publish to npm, we don't need to check in th
 - `libs/gsd-cli/` - schema output location (npm package)
 - `.github/workflows/ci.yml` - add schema generation check
 
+## Usage with AI Agents
+
+When asking an AI agent to create or modify GSD config files, tell them about the schema command:
+
+```
+When creating GSD config files, run `pnpm dlx @gsd-now/gsd config schema` to see the JSON schema for the config format. This will show you all available fields and their types.
+```
+
+This gives agents the authoritative reference for the config format without needing to explain it manually.
+
+## README Updates
+
+Update the README to:
+1. Add a note at the top that examples use `pnpm dlx` but you can use `npx` or install globally
+2. Mention `gsd config schema` as the way to discover the config format
+3. Suggest telling AI agents about the schema command when asking them to create configs
+
 ## Design Decisions
 
 1. **Use schemars (same as isograph)** - proven approach, works well
@@ -148,3 +165,4 @@ Since we generate at build time and publish to npm, we don't need to check in th
 3. **Generate at build time** - schema is static, no need for runtime generation
 4. **Output to libs/ for npm** - makes schema accessible via CDN for IDE integration
 5. **Punt on agent_pool** - it already has schema support
+6. **AI agent friendly** - schema command provides authoritative reference for agents creating configs
