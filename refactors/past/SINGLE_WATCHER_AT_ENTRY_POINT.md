@@ -1,5 +1,7 @@
 # Single Watcher Created at Entry Point
 
+**Status:** Implemented
+
 **Depends on:** `WAIT_FOR_POOL_READY_WATCHER.md`
 
 ## Motivation
