@@ -12,56 +12,128 @@ pnpm dlx @gsd-now/gsd run ...
 
 And have it "just work" without setting environment variables.
 
-## Proposed Solution
+## Architecture
 
-Automatically detect the package manager and use `npx` or `pnpm dlx` when the binary isn't found.
+**Key principle:** Resolve the invocation method ONCE at program startup, then pass an opaque invoker through the call stack. Detection logic never leaks into business logic.
 
-### Resolution Order
+```
+┌─────────────────┐
+│  main() / CLI   │  ← AgentPoolInvoker::detect() called here
+└────────┬────────┘
+         │ &AgentPoolInvoker
+         ▼
+┌─────────────────┐
+│  submit_task()  │  ← invoker.run(&["submit_task", ...])
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  other fns...   │  ← just passes invoker through, never inspects it
+└─────────────────┘
+```
 
-1. **`AGENT_POOL` env var** - explicit binary path override
-2. **`AGENT_POOL_COMMAND` env var** - explicit command override (e.g., `pnpm dlx @gsd-now/agent-pool`)
-3. **Traverse up to find `package.json`** - check `packageManager` field, use appropriate dlx command
-4. **Global package manager in PATH** - check for `pnpm`, then `npm`, then `yarn` (in that order)
+## Implementation
 
-### Implementation
+### The Invoker Struct
 
 ```rust
-use std::path::{Path, PathBuf};
-use std::process::Command;
+// crates/agent_pool/src/invoker.rs
 
-/// How to invoke the agent_pool binary
-enum AgentPoolInvocation {
-    /// Direct binary path
-    Binary(PathBuf),
-    /// Package manager command: (program, args_before_subcommand)
-    /// e.g., ("pnpm", ["dlx", "@gsd-now/agent-pool"])
-    PackageManager { program: String, prefix_args: Vec<String> },
+use std::ffi::OsStr;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+/// Opaque handle for invoking agent_pool_cli.
+/// Created once at startup, passed to functions that need it.
+pub struct AgentPoolInvoker {
+    kind: InvokerKind,
 }
 
-fn resolve_agent_pool_invocation() -> AgentPoolInvocation {
-    // 1. Explicit binary path
-    if let Ok(path) = std::env::var("AGENT_POOL") {
-        return AgentPoolInvocation::Binary(PathBuf::from(path));
+enum InvokerKind {
+    /// Direct binary path
+    Binary(PathBuf),
+    /// Package manager: (program, prefix_args)
+    /// e.g., ("pnpm", ["dlx", "@gsd-now/agent-pool"])
+    PackageManager {
+        program: String,
+        prefix_args: Vec<String>,
+    },
+}
+
+impl AgentPoolInvoker {
+    /// Detect how to invoke agent_pool_cli.
+    /// Resolution order:
+    /// 1. AGENT_POOL env var (binary path)
+    /// 2. AGENT_POOL_COMMAND env var (full command)
+    /// 3. package.json packageManager field
+    /// 4. Global package manager in PATH
+    pub fn detect() -> Self {
+        // 1. Explicit binary path
+        if let Ok(path) = std::env::var("AGENT_POOL") {
+            return Self {
+                kind: InvokerKind::Binary(PathBuf::from(path)),
+            };
+        }
+
+        // 2. Explicit command (e.g., "pnpm dlx @gsd-now/agent-pool")
+        if let Ok(cmd) = std::env::var("AGENT_POOL_COMMAND") {
+            let parts: Vec<&str> = cmd.split_whitespace().collect();
+            if !parts.is_empty() {
+                return Self {
+                    kind: InvokerKind::PackageManager {
+                        program: parts[0].to_string(),
+                        prefix_args: parts[1..].iter().map(|s| s.to_string()).collect(),
+                    },
+                };
+            }
+        }
+
+        // 3. Find package.json and detect package manager
+        if let Some(pkg_manager) = detect_package_manager() {
+            return Self::from_package_manager(&pkg_manager);
+        }
+
+        // 4. Fallback: check for global package managers
+        Self::from_global_package_manager()
     }
 
-    // 2. Explicit command (e.g., "pnpm dlx @gsd-now/agent-pool")
-    if let Ok(cmd) = std::env::var("AGENT_POOL_COMMAND") {
-        let parts: Vec<&str> = cmd.split_whitespace().collect();
-        if !parts.is_empty() {
-            return AgentPoolInvocation::PackageManager {
-                program: parts[0].to_string(),
-                prefix_args: parts[1..].iter().map(|s| s.to_string()).collect(),
-            };
+    /// Run agent_pool_cli with the given arguments.
+    pub fn run<I, S>(&self, args: I) -> io::Result<Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        match &self.kind {
+            InvokerKind::Binary(path) => Command::new(path).args(args).output(),
+            InvokerKind::PackageManager { program, prefix_args } => Command::new(program)
+                .args(prefix_args)
+                .args(args)
+                .output(),
         }
     }
 
-    // 3. Find package.json and detect package manager
-    if let Some(pkg_manager) = detect_package_manager() {
-        let (program, dlx_arg) = match pkg_manager.as_str() {
-            pm if pm.starts_with("pnpm") => ("pnpm", "dlx"),
-            pm if pm.starts_with("yarn") => ("yarn", "dlx"),
-            pm if pm.starts_with("bun") => ("bun", "x"),
-            _ => ("npx", ""), // npm or unknown - use npx
+    /// Spawn agent_pool_cli (non-blocking).
+    pub fn spawn<I, S>(&self, args: I) -> io::Result<std::process::Child>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        match &self.kind {
+            InvokerKind::Binary(path) => Command::new(path).args(args).spawn(),
+            InvokerKind::PackageManager { program, prefix_args } => Command::new(program)
+                .args(prefix_args)
+                .args(args)
+                .spawn(),
+        }
+    }
+
+    fn from_package_manager(pm: &str) -> Self {
+        let (program, dlx_arg) = match pm {
+            s if s.starts_with("pnpm") => ("pnpm", "dlx"),
+            s if s.starts_with("yarn") => ("yarn", "dlx"),
+            s if s.starts_with("bun") => ("bun", "x"),
+            _ => ("npx", ""),
         };
 
         let prefix_args = if dlx_arg.is_empty() {
@@ -70,36 +142,32 @@ fn resolve_agent_pool_invocation() -> AgentPoolInvocation {
             vec![dlx_arg.to_string(), "@gsd-now/agent-pool".to_string()]
         };
 
-        return AgentPoolInvocation::PackageManager {
-            program: program.to_string(),
-            prefix_args,
-        };
+        Self {
+            kind: InvokerKind::PackageManager {
+                program: program.to_string(),
+                prefix_args,
+            },
+        }
     }
 
-    // 4. Fallback: check for global package managers (pnpm > npm > yarn)
-    if is_in_path("pnpm") {
-        return AgentPoolInvocation::PackageManager {
-            program: "pnpm".to_string(),
-            prefix_args: vec!["dlx".to_string(), "@gsd-now/agent-pool".to_string()],
+    fn from_global_package_manager() -> Self {
+        let (program, prefix_args) = if is_in_path("pnpm") {
+            ("pnpm", vec!["dlx", "@gsd-now/agent-pool"])
+        } else if is_in_path("npx") {
+            ("npx", vec!["@gsd-now/agent-pool"])
+        } else if is_in_path("yarn") {
+            ("yarn", vec!["dlx", "@gsd-now/agent-pool"])
+        } else {
+            // Last resort
+            ("npx", vec!["@gsd-now/agent-pool"])
         };
-    }
-    if is_in_path("npx") {
-        return AgentPoolInvocation::PackageManager {
-            program: "npx".to_string(),
-            prefix_args: vec!["@gsd-now/agent-pool".to_string()],
-        };
-    }
-    if is_in_path("yarn") {
-        return AgentPoolInvocation::PackageManager {
-            program: "yarn".to_string(),
-            prefix_args: vec!["dlx".to_string(), "@gsd-now/agent-pool".to_string()],
-        };
-    }
 
-    // Last resort: assume npx exists
-    AgentPoolInvocation::PackageManager {
-        program: "npx".to_string(),
-        prefix_args: vec!["@gsd-now/agent-pool".to_string()],
+        Self {
+            kind: InvokerKind::PackageManager {
+                program: program.to_string(),
+                prefix_args: prefix_args.into_iter().map(String::from).collect(),
+            },
+        }
     }
 }
 
@@ -136,49 +204,57 @@ fn detect_package_manager() -> Option<String> {
 }
 ```
 
-### Invocation
-
-Update `submit_via_cli` to handle both cases:
+### Usage at Entry Points
 
 ```rust
+// gsd_cli/src/main.rs
+
+fn main() -> ExitCode {
+    let invoker = AgentPoolInvoker::detect();
+
+    // ... parse args ...
+
+    match command {
+        Command::Run { config } => run_workflow(&invoker, &config),
+        // ...
+    }
+}
+
+fn run_workflow(invoker: &AgentPoolInvoker, config: &Path) -> ExitCode {
+    // invoker passed to anything that needs to spawn agents
+    let pool = start_pool(invoker, &pool_root)?;
+    // ...
+}
+```
+
+### Call Sites Just Use `.run()`
+
+```rust
+// Before (leaky - knows about binary paths)
 fn submit_via_cli(
     pool_path: &Path,
     payload: &str,
-    agent_pool_binary: Option<&Path>,
+    agent_pool_binary: Option<&Path>,  // ← leaky
 ) -> io::Result<Response> {
-    let invocation = agent_pool_binary
-        .map(|p| AgentPoolInvocation::Binary(p.to_path_buf()))
-        .unwrap_or_else(resolve_agent_pool_invocation);
+    let binary = agent_pool_binary.ok_or_else(|| ...)?;
+    Command::new(binary)
+        .args(["submit_task", ...])
+        .output()
+}
 
-    let cli_args = [
+// After (clean - just uses invoker)
+fn submit_via_cli(
+    invoker: &AgentPoolInvoker,  // ← opaque
+    pool_path: &Path,
+    payload: &str,
+) -> io::Result<Response> {
+    let output = invoker.run([
         "submit_task",
-        "--pool-root", pool_root.to_str().unwrap(),
-        "--pool", pool_id,
+        "--pool", pool_path.to_str().unwrap(),
         "--notify", "file",
-        "--timeout-secs", "86400",
         "--data", payload,
-    ];
-
-    let output = match invocation {
-        AgentPoolInvocation::Binary(binary) => {
-            Command::new(&binary)
-                .args(&cli_args)
-                .output()
-        }
-        AgentPoolInvocation::PackageManager { program, prefix_args } => {
-            Command::new(&program)
-                .args(&prefix_args)
-                .args(&cli_args)
-                .output()
-        }
-    }.map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("Failed to run agent_pool: {e}"),
-        )
-    })?;
-
-    // ... rest unchanged
+    ])?;
+    // ...
 }
 ```
 
@@ -198,6 +274,13 @@ Mapping:
 - `bun@*` → `bun x @gsd-now/agent-pool`
 - `npm@*` or missing → `npx @gsd-now/agent-pool`
 
+## Resolution Order
+
+1. **`AGENT_POOL` env var** - explicit binary path override
+2. **`AGENT_POOL_COMMAND` env var** - explicit command override (e.g., `pnpm dlx @gsd-now/agent-pool`)
+3. **Traverse up to find `package.json`** - check `packageManager` field
+4. **Global package manager in PATH** - check for `pnpm`, then `npx`, then `yarn`
+
 ## Edge Cases
 
 1. **No package.json found** - Fall back to global package manager detection
@@ -208,7 +291,7 @@ Mapping:
 
 ## Testing
 
-1. Test with `AGENT_POOL` set - should use that directly
+1. Test with `AGENT_POOL` set - should use binary directly
 2. Test with `AGENT_POOL_COMMAND` set - should use that command
 3. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
 4. Test with `packageManager: "yarn@*"` - should use `yarn dlx`
@@ -219,6 +302,7 @@ Mapping:
 ## Benefits
 
 - **Zero config** for npm/pnpm users
+- **Clean architecture** - detection happens once, business logic stays clean
 - **Just works** with `pnpm add @gsd-now/agent-pool` or `pnpm dlx @gsd-now/gsd`
 - **Backwards compatible** - existing `AGENT_POOL` env var still works
 - **Respects project settings** - uses the project's configured package manager
