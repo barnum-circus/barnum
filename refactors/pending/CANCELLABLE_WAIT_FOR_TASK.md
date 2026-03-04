@@ -258,7 +258,7 @@ No cancel channels needed - just write the stop file.
 5. Update `wait_for_file_impl` to check for stop file events, return `WaitError::Stopped`
 6. Update all callers to handle `WaitError` (match on Stopped vs Io)
 7. Ensure `wait_for_task` cleans up ready file on all errors
-8. Update daemon to delete entire pool folder on stop
+8. Simplify `PoolStateCleanup` drop guard to just `fs::remove_dir_all(root)`
 9. Simplify test agents to match on `WaitError::Stopped`
 
 ## Cleanup: Rename "shutdown" to "stop"
@@ -288,7 +288,7 @@ Files to update:
 
 4. **Cleanup on cancel:** `wait_for_task` cleans up its ready file on any error including Interrupted. `submit_file` does NOT clean up request files (daemon handles them).
 
-5. **Daemon stop cleanup:** When daemon stops, it deletes the entire pool folder. This automatically cleans up all orphaned files.
+5. **Daemon stop cleanup:** `PoolStateCleanup` drop guard becomes just `fs::remove_dir_all(root)`. Deletes entire pool folder on daemon exit, automatically cleaning up all orphaned files. Much simpler than the current per-file cleanup.
 
 ## Testing
 
