@@ -25,12 +25,15 @@ const POOL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// - The daemon socket doesn't exist or can't be connected to
 /// - Communication with the daemon fails
 /// - The response contains invalid JSON
-pub fn submit(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response> {
+pub fn submit(
+    watcher: &mut VerifiedWatcher,
+    root: impl AsRef<Path>,
+    payload: &Payload,
+) -> io::Result<Response> {
     let root = fs::canonicalize(root.as_ref())?;
 
     // Wait for daemon to be ready using filesystem watcher
     let status_path = root.join(STATUS_FILE);
-    let mut watcher = VerifiedWatcher::new(&root, std::slice::from_ref(&root))?;
     watcher.wait_for(&status_path, Some(POOL_READY_TIMEOUT))?;
 
     let socket_path = root.join(SOCKET_NAME);

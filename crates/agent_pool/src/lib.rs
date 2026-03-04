@@ -50,4 +50,5 @@ pub use response::Response;
 pub use stop::stop;
 pub use submit::{Payload, submit, submit_file, submit_file_with_timeout, wait_for_pool_ready};
 pub(crate) use transport::Transport;
+pub use verified_watcher::VerifiedWatcher;
 pub use worker::{TaskAssignment, wait_for_task, write_response};

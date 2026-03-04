@@ -32,7 +32,7 @@ pub struct TaskAssignment {
 /// This function:
 /// 1. Generates a fresh UUID
 /// 2. Writes `<uuid>.ready.json` to signal availability
-/// 3. Waits for `<uuid>.task.json` using a verified watcher
+/// 3. Waits for `<uuid>.task.json` using the provided watcher
 /// 4. Returns the UUID and task content
 ///
 /// The optional `name` parameter is included in the ready file for debugging.
@@ -42,8 +42,8 @@ pub struct TaskAssignment {
 /// Returns an error if:
 /// - File operations fail (writing ready file, reading task file)
 /// - Timeout is exceeded waiting for task
-/// - Watcher cannot be created
 pub fn wait_for_task(
+    watcher: &mut VerifiedWatcher,
     pool_root: &Path,
     name: Option<&str>,
     timeout: Option<Duration>,
@@ -58,8 +58,7 @@ pub fn wait_for_task(
     let metadata = name.map_or_else(|| "{}".to_string(), |n| format!(r#"{{"name":"{n}"}}"#));
     fs::write(&ready, &metadata)?;
 
-    // Wait for task file using VerifiedWatcher
-    let mut watcher = VerifiedWatcher::new(&agents_dir, std::slice::from_ref(&agents_dir))?;
+    // Wait for task file using provided watcher
     watcher.wait_for(&task, timeout)?;
 
     let content = fs::read_to_string(&task)?;

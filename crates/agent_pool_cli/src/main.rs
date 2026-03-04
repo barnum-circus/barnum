@@ -5,9 +5,10 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TaskAssignment, default_pool_root, generate_id,
-    id_to_path, is_daemon_running, list_pools, resolve_pool, response_path, run_with_config, stop,
-    submit, submit_file, submit_file_with_timeout, wait_for_task,
+    AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TaskAssignment, VerifiedWatcher,
+    default_pool_root, generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool,
+    response_path, run_with_config, stop, submit, submit_file, submit_file_with_timeout,
+    wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -335,6 +336,15 @@ fn main() -> ExitCode {
             }
             let root = resolve_pool(&pool_root, &pool);
 
+            // Create watcher at CLI entry point
+            let mut watcher = match VerifiedWatcher::new(&root, std::slice::from_ref(&root)) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("Failed to create watcher: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
             // Build payload from --data (inline) or --file (file reference)
             let payload = match (data, file) {
                 (Some(d), _) => Payload::inline(d),
@@ -347,11 +357,14 @@ fn main() -> ExitCode {
 
             // Send via chosen notification method
             let result = match (notify, timeout_secs) {
-                (NotifyMethod::Socket, _) => submit(&root, &payload),
-                (NotifyMethod::File, Some(secs)) => {
-                    submit_file_with_timeout(&root, &payload, Duration::from_secs(secs))
-                }
-                (NotifyMethod::File, None) => submit_file(&root, &payload),
+                (NotifyMethod::Socket, _) => submit(&mut watcher, &root, &payload),
+                (NotifyMethod::File, Some(secs)) => submit_file_with_timeout(
+                    &mut watcher,
+                    &root,
+                    &payload,
+                    Duration::from_secs(secs),
+                ),
+                (NotifyMethod::File, None) => submit_file(&mut watcher, &root, &payload),
             };
 
             match result {
@@ -423,6 +436,16 @@ fn main() -> ExitCode {
 
             let root = resolve_pool(&pool_root, &pool);
 
+            // Create watcher at CLI entry point
+            // Single canary at root - directories already exist (daemon created them)
+            let mut watcher = match VerifiedWatcher::new(&root, std::slice::from_ref(&root)) {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("Failed to create watcher: {e}");
+                    return ExitCode::FAILURE;
+                }
+            };
+
             // Wait for daemon to be ready (status file signals readiness after sync)
             let status_file = root.join(STATUS_FILE);
             if !wait_for_status_file(&status_file) {
@@ -431,7 +454,7 @@ fn main() -> ExitCode {
             }
 
             // Wait for task assignment using the new anonymous worker protocol
-            match wait_for_task(&root, name.as_deref(), None) {
+            match wait_for_task(&mut watcher, &root, name.as_deref(), None) {
                 Ok(assignment) => {
                     let output = format_task_output(&assignment, &root, name.as_deref());
                     println!("{output}");

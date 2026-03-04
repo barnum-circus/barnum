@@ -4,7 +4,9 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{TaskAssignment, wait_for_pool_ready, wait_for_task, write_response};
+use agent_pool::{
+    TaskAssignment, VerifiedWatcher, wait_for_pool_ready, wait_for_task, write_response,
+};
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -141,12 +143,25 @@ impl GsdTestAgent {
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
 
+            // Create watcher once for the thread
+            let mut watcher =
+                match VerifiedWatcher::new(&pool_root, std::slice::from_ref(&pool_root)) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        eprintln!("Failed to create watcher: {e}");
+                        return processed_tasks;
+                    }
+                };
+
             while running_clone.load(Ordering::SeqCst) {
                 // Use timeout so we can check running flag periodically.
                 // CLI stop may not reliably cause the watcher to error.
-                let Ok(assignment) =
-                    wait_for_task(&pool_root, None, Some(Duration::from_millis(500)))
-                else {
+                let Ok(assignment) = wait_for_task(
+                    &mut watcher,
+                    &pool_root,
+                    None,
+                    Some(Duration::from_millis(500)),
+                ) else {
                     // Timeout or error - check running flag and retry
                     continue;
                 };

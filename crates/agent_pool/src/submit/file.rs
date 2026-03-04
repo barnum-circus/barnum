@@ -39,7 +39,7 @@ const POOL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// # Protocol
 ///
 /// 1. Writes `<root>/submissions/<id>.request.json` with the payload
-/// 2. Polls for `<root>/submissions/<id>.response.json`
+/// 2. Waits for `<root>/submissions/<id>.response.json`
 /// 3. Returns the response and cleans up both files
 ///
 /// # Errors
@@ -49,14 +49,17 @@ const POOL_READY_TIMEOUT: Duration = Duration::from_secs(10);
 /// - The request file cannot be written
 /// - The response times out
 /// - The response contains invalid JSON
-pub fn submit_file(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Response> {
-    submit_file_with_timeout(root, payload, DEFAULT_TIMEOUT)
+pub fn submit_file(
+    watcher: &mut VerifiedWatcher,
+    root: impl AsRef<Path>,
+    payload: &Payload,
+) -> io::Result<Response> {
+    submit_file_with_timeout(watcher, root, payload, DEFAULT_TIMEOUT)
 }
 
 /// Submit a task with a custom timeout.
 ///
-/// Uses a filesystem watcher to efficiently wait for the response instead of
-/// polling with `thread::sleep`.
+/// Uses the provided filesystem watcher to efficiently wait for the response.
 ///
 /// # Errors
 ///
@@ -66,6 +69,7 @@ pub fn submit_file(root: impl AsRef<Path>, payload: &Payload) -> io::Result<Resp
 /// - The response times out (using the provided timeout)
 /// - The response contains invalid JSON
 pub fn submit_file_with_timeout(
+    watcher: &mut VerifiedWatcher,
     root: impl AsRef<Path>,
     payload: &Payload,
     timeout: Duration,
@@ -81,9 +85,6 @@ pub fn submit_file_with_timeout(
     let response_path = submissions_dir.join(format!("{submission_id}{RESPONSE_SUFFIX}"));
     let status_path = root.join(STATUS_FILE);
 
-    // Create watcher on pool root (watches recursively to see both status and response)
-    let mut watcher = VerifiedWatcher::new(&root, std::slice::from_ref(&root))?;
-
     // Wait for pool to become ready (returns immediately if status file exists)
     watcher.wait_for(&status_path, Some(POOL_READY_TIMEOUT))?;
 
@@ -92,7 +93,7 @@ pub fn submit_file_with_timeout(
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     atomic_write_str(&root, &request_path, &content)?;
 
-    // Wait for response using the same watcher (already verified)
+    // Wait for response using the watcher
     watcher.wait_for(&response_path, Some(timeout))?;
 
     // Read and parse response

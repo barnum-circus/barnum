@@ -3,7 +3,9 @@
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
 
-use agent_pool::{TaskAssignment, wait_for_pool_ready, wait_for_task, write_response};
+use agent_pool::{
+    TaskAssignment, VerifiedWatcher, wait_for_pool_ready, wait_for_task, write_response,
+};
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -118,11 +120,24 @@ impl FileWriterAgent {
         let pool_root = pool_root.to_path_buf();
         let pool_root_for_stop = pool_root.clone();
         let handle = thread::spawn(move || {
+            // Create watcher once for the thread
+            let mut watcher =
+                match VerifiedWatcher::new(&pool_root, std::slice::from_ref(&pool_root)) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        eprintln!("Failed to create watcher: {e}");
+                        return;
+                    }
+                };
+
             while running_clone.load(Ordering::SeqCst) {
                 // Wait for task with timeout - allows checking running flag periodically
-                let Ok(assignment) =
-                    wait_for_task(&pool_root, None, Some(Duration::from_millis(500)))
-                else {
+                let Ok(assignment) = wait_for_task(
+                    &mut watcher,
+                    &pool_root,
+                    None,
+                    Some(Duration::from_millis(500)),
+                ) else {
                     // Timeout or error - check running flag and retry
                     continue;
                 };
