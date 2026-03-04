@@ -64,12 +64,13 @@ enum InvokerKind {
 impl AgentPoolInvoker {
     /// Detect how to invoke agent_pool_cli.
     /// Resolution order:
-    /// 1. AGENT_POOL env var (binary path)
+    /// 1. AGENT_POOL env var (binary path) - CI uses this
     /// 2. AGENT_POOL_COMMAND env var (full command)
-    /// 3. package.json packageManager field
-    /// 4. Global package manager in PATH
+    /// 3. Local cargo workspace binary (target/debug/agent_pool_cli) - local dev uses this
+    /// 4. package.json packageManager field
+    /// 5. Global package manager in PATH
     pub fn detect() -> Self {
-        // 1. Explicit binary path
+        // 1. Explicit binary path (CI sets this)
         if let Ok(path) = std::env::var("AGENT_POOL") {
             return Self {
                 kind: InvokerKind::Binary(PathBuf::from(path)),
@@ -89,12 +90,19 @@ impl AgentPoolInvoker {
             }
         }
 
-        // 3. Find package.json and detect package manager
+        // 3. Check for local cargo workspace binary (local dev)
+        if let Some(binary) = find_cargo_workspace_binary() {
+            return Self {
+                kind: InvokerKind::Binary(binary),
+            };
+        }
+
+        // 4. Find package.json and detect package manager
         if let Some(pkg_manager) = detect_package_manager() {
             return Self::from_package_manager(&pkg_manager);
         }
 
-        // 4. Fallback: check for global package managers
+        // 5. Fallback: check for global package managers
         Self::from_global_package_manager()
     }
 
@@ -177,6 +185,35 @@ fn is_in_path(binary: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// Check for target/debug/agent_pool_cli in a cargo workspace.
+/// Traverses up from CWD looking for Cargo.toml with [workspace].
+fn find_cargo_workspace_binary() -> Option<PathBuf> {
+    let mut dir = std::env::current_dir().ok()?;
+
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            // Check if this is a workspace root (contains [workspace])
+            let content = std::fs::read_to_string(&cargo_toml).ok()?;
+            if content.contains("[workspace]") {
+                let binary = dir.join("target/debug/agent_pool_cli");
+                if binary.exists() {
+                    return Some(binary);
+                }
+                // Found workspace but binary not built - don't auto-build,
+                // just fall through to package manager detection
+                return None;
+            }
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    None
 }
 
 /// Traverse up from CWD to find package.json and read packageManager field
@@ -276,28 +313,49 @@ Mapping:
 
 ## Resolution Order
 
-1. **`AGENT_POOL` env var** - explicit binary path override
+1. **`AGENT_POOL` env var** - explicit binary path (CI uses this with pre-built binary)
 2. **`AGENT_POOL_COMMAND` env var** - explicit command override (e.g., `pnpm dlx @gsd-now/agent-pool`)
-3. **Traverse up to find `package.json`** - check `packageManager` field
-4. **Global package manager in PATH** - check for `pnpm`, then `npx`, then `yarn`
+3. **Local cargo workspace binary** - check for `target/debug/agent_pool_cli` in workspace root (local dev uses this)
+4. **Traverse up to find `package.json`** - check `packageManager` field
+5. **Global package manager in PATH** - check for `pnpm`, then `npx`, then `yarn`
+
+### How environments use this
+
+| Environment | Resolution Step | Notes |
+|-------------|-----------------|-------|
+| CI | 1 (AGENT_POOL) | CI downloads pre-built binary and sets env var |
+| Local dev | 3 (cargo binary) | `pnpm test` builds first, invoker finds it |
+| npm user | 4 or 5 | Uses their package manager via dlx |
 
 ## Edge Cases
 
 1. **No package.json found** - Fall back to global package manager detection
 2. **packageManager field missing** - Assume npm, use `npx`
-3. **Running from subdirectory** - Traverse up until we find package.json
+3. **Running from subdirectory** - Traverse up until we find package.json or Cargo.toml
 4. **Windows** - Use `where` instead of `which` for PATH check
 5. **No package managers installed** - Last resort uses `npx` (will fail if not installed)
+6. **Cargo workspace exists but binary not built** - Falls through to package manager (no auto-build)
 
 ## Testing
 
+### Unit tests for invoker detection
+
 1. Test with `AGENT_POOL` set - should use binary directly
 2. Test with `AGENT_POOL_COMMAND` set - should use that command
-3. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
-4. Test with `packageManager: "yarn@*"` - should use `yarn dlx`
-5. Test with no package.json but pnpm in PATH - should use `pnpm dlx`
-6. Test with no package.json but only npx in PATH - should use `npx`
-7. Test from subdirectory - should find parent package.json
+3. Test in cargo workspace with built binary - should use `target/debug/agent_pool_cli`
+4. Test in cargo workspace without built binary - should fall through to package manager
+5. Test with `packageManager: "pnpm@*"` - should use `pnpm dlx`
+6. Test with `packageManager: "yarn@*"` - should use `yarn dlx`
+7. Test with no package.json but pnpm in PATH - should use `pnpm dlx`
+8. Test from subdirectory - should find parent Cargo.toml or package.json
+
+### Integration tests
+
+Integration tests don't need to do anything special. They run in the cargo workspace, so:
+- **Local dev**: `pnpm test` (or equivalent) builds the binary first, invoker finds it via step 3
+- **CI**: Sets `AGENT_POOL` env var to the pre-built binary, invoker uses it via step 1
+
+No special test setup required - the invoker "just works" in both environments.
 
 ## Benefits
 
