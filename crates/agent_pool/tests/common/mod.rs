@@ -685,12 +685,15 @@ impl AgentPoolHandle {
 
         // Wait for daemon to be ready using a filesystem watcher.
         //
-        // Race condition: we spawn the daemon process above, but it takes time to start
-        // and create the pool directory. VerifiedWatcher::new requires the watched
-        // directory to exist, so we create it here first. The daemon will clear and
-        // recreate the directory on startup, but FSEvents handles this gracefully.
-        fs::create_dir_all(&root).expect("Failed to create pool directory");
-        let mut watcher = VerifiedWatcher::new(&root, std::slice::from_ref(&root))
+        // Race condition: The daemon CLI deletes and recreates the pool directory on
+        // startup. If we create the pool directory here, the daemon may delete it while
+        // we're setting up the watcher, causing `watcher.watch()` to fail with PathNotFound.
+        //
+        // Solution: Watch the parent directory (pool_root) instead, which is never deleted.
+        // The watcher will see the status file when the daemon creates it in the subdirectory.
+        let pool_root = default_pool_root();
+        fs::create_dir_all(&pool_root).expect("Failed to create pool root directory");
+        let mut watcher = VerifiedWatcher::new(&pool_root, std::slice::from_ref(&pool_root))
             .expect("Failed to create watcher");
         let status_path = root.join(STATUS_FILE);
         watcher
