@@ -1,6 +1,8 @@
 # Universal Cancellation Channel
 
-**Depends on:** `CROSSBEAM_CHANNELS.md` (must be completed first)
+**Depends on:**
+- `CROSSBEAM_CHANNELS.md` (completed)
+- `WAIT_FOR_POOL_READY_WATCHER.md` (must be completed first)
 
 ## Motivation
 
@@ -175,6 +177,8 @@ pub fn wait_for_task(
 
 ### wait_for_pool_ready
 
+After `WAIT_FOR_POOL_READY_WATCHER.md` is complete, this function will already use `VerifiedWatcher`. We just need to add the cancel parameter:
+
 ```rust
 pub fn wait_for_pool_ready(
     root: impl AsRef<Path>,
@@ -184,78 +188,24 @@ pub fn wait_for_pool_ready(
     let root = root.as_ref();
     let status_path = root.join(STATUS_FILE);
 
-    // Early return if already ready
     if status_path.exists() {
         return Ok(());
     }
 
-    // Use VerifiedWatcher like everything else
     let mut watcher = VerifiedWatcher::new(root, std::slice::from_ref(&root))?;
-    watcher.wait_for_with_timeout(&status_path, timeout, cancel)
+    watcher.wait_for_timeout(&status_path, timeout, cancel)  // Pass cancel through
 }
 ```
 
-This requires adding a `wait_for_with_timeout` variant to `VerifiedWatcher`:
+The `wait_for_timeout` method signature changes to accept cancel:
 
 ```rust
-impl VerifiedWatcher {
-    pub fn wait_for_with_timeout(
-        &mut self,
-        target: &Path,
-        timeout: Duration,
-        cancel: Option<&CancelRx>,
-    ) -> io::Result<()> {
-        if target.exists() {
-            return Ok(());
-        }
-
-        let never = channel::never();
-        let cancel = cancel.unwrap_or(&never);
-        let deadline = Instant::now() + timeout;
-
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    format!("timed out waiting for {}", target.display()),
-                ));
-            }
-
-            select! {
-                recv(self.state.rx) -> event => {
-                    match event {
-                        Ok(e) => {
-                            if e.paths.iter().any(|p| p == target) || target.exists() {
-                                return Ok(());
-                            }
-                        }
-                        Err(_) => {
-                            return Err(io::Error::new(
-                                io::ErrorKind::BrokenPipe,
-                                "watcher disconnected",
-                            ));
-                        }
-                    }
-                }
-                recv(cancel) -> _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Interrupted,
-                        "cancelled",
-                    ));
-                }
-                default(remaining.min(Duration::from_millis(100))) => {
-                    if target.exists() {
-                        return Ok(());
-                    }
-                    for canary in &mut self.state.remaining_canaries {
-                        canary.retry()?;
-                    }
-                }
-            }
-        }
-    }
-}
+pub fn wait_for_timeout(
+    &mut self,
+    target: &Path,
+    timeout: Duration,
+    cancel: Option<&CancelRx>,
+) -> io::Result<()>;
 ```
 
 ## Usage Example
