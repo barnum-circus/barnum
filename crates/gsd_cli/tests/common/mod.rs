@@ -2,6 +2,7 @@
 
 #![allow(dead_code)]
 #![expect(clippy::expect_used)]
+#![expect(clippy::print_stderr)]
 
 use agent_pool::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
 use std::fs;
@@ -406,5 +407,10 @@ impl GsdRunner {
             .args(["config", "graph"])
             .arg(config)
             .output()
+    }
+
+    /// Run `gsd config schema`.
+    pub fn schema(&self) -> std::io::Result<std::process::Output> {
+        Command::new(&self.bin).args(["config", "schema"]).output()
     }
 }
