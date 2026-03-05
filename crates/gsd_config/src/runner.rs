@@ -206,6 +206,12 @@ impl<'a> TaskRunner<'a> {
             tasks = runner_config.initial_tasks.len(),
             "starting task queue"
         );
+        info!(
+            pool_root = %runner_config.agent_pool_root.display(),
+            invoker = %runner_config.invoker.description(),
+            max_concurrency,
+            "agent pool connection"
+        );
 
         let (tx, rx) = mpsc::channel();
 
