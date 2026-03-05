@@ -994,6 +994,30 @@ Currently agents are manually told to use `@main` in the instructions. This shou
 
 ---
 
+## Validate Pool Root on Startup
+
+**Status: TODO**
+
+Currently, `gsd run` with an invalid pool root (non-existent directory) does not fail immediately. The error only surfaces later when the first task is submitted.
+
+**Current behavior:**
+```bash
+gsd run config.json --pool-root /nonexistent/path --pool mypool --initial '[...]'
+# Starts successfully, then fails on first task submission with cryptic error
+```
+
+**Desired behavior:**
+```bash
+gsd run config.json --pool-root /nonexistent/path --pool mypool --initial '[...]'
+# Fails immediately with clear error: "pool root does not exist: /nonexistent/path"
+```
+
+**Implementation:**
+- In `TaskRunner::new()`, verify the pool root directory exists before starting
+- Or at minimum, verify on the first `submit_via_cli` call and fail with a clear message
+
+---
+
 ## CLI Invoker Version Checking
 
 **Status: TODO**
