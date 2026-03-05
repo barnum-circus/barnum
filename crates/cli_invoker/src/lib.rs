@@ -308,11 +308,17 @@ fn find_cargo_workspace_binary(binary_name: &str) -> Option<PathBuf> {
 }
 
 /// Traverse up from CWD looking for `node_modules/.bin/{binary}`.
+///
+/// Uses `fs::metadata` to verify the binary is a real file (following symlinks).
+/// This catches broken symlinks that `exists()` might miss in edge cases.
 fn find_node_modules_binary(binary_name: &str) -> Option<PathBuf> {
     let mut dir = std::env::current_dir().ok()?;
     loop {
         let binary = dir.join("node_modules").join(".bin").join(binary_name);
-        if binary.exists() {
+        // Use metadata() which follows symlinks - fails for broken symlinks
+        if let Ok(meta) = std::fs::metadata(&binary)
+            && meta.is_file()
+        {
             return Some(binary);
         }
         if !dir.pop() {
