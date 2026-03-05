@@ -1020,9 +1020,13 @@ gsd run config.json --pool-root /nonexistent/path --pool mypool --initial '[...]
 
 ## CLI Invoker Version Checking
 
-**Status: TODO**
+**Status: TODO (workaround in place)**
 
 The `cli_invoker` crate resolves how to invoke CLI tools (binary path, package manager dlx, etc.) but doesn't verify version compatibility.
+
+**Current workaround:** `NPM_PACKAGE` is hardcoded to `@gsd-now/agent-pool@main` in `agent_pool_cli/src/lib.rs`. This is because `@latest` (0.1.0) was published without binaries and is broken. Using `@main` ensures we get a working version.
+
+**The real fix:** GSD and agent-pool should use matched versions. When gsd@X.Y.Z invokes agent-pool, it should request agent-pool@X.Y.Z, not whatever `@latest` or `@main` happens to be.
 
 **Issues:**
 
@@ -1036,4 +1040,4 @@ The `cli_invoker` crate resolves how to invoke CLI tools (binary path, package m
 2. For binary invocation: run `<binary> --version`, parse output, warn if mismatch
 3. For package manager invocation: append `@{VERSION}` to the package name in `prefix_args`
 
-**Priority:** Low - not a blocker for initial release, but important for stability when multiple versions exist.
+**Priority:** Medium - the `@main` workaround works but is fragile. Important for production use.
