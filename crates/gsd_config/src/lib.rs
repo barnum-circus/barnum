@@ -24,7 +24,7 @@ mod types;
 mod value_schema;
 
 // Public API - only what external users need
-pub use config::{Action, Config};
+pub use config::{Action, Config, config_schema};
 pub use docs::generate_full_docs;
 pub use runner::{RunnerConfig, TaskOutcome, TaskResult, TaskRunner, run};
 pub use types::StepName;

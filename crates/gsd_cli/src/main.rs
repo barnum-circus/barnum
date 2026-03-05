@@ -8,7 +8,9 @@
 use agent_pool_cli::AgentPoolCli;
 use clap::{Parser, Subcommand};
 use cli_invoker::Invoker;
-use gsd_config::{Action, CompiledSchemas, Config, RunnerConfig, Task, generate_full_docs, run};
+use gsd_config::{
+    Action, CompiledSchemas, Config, RunnerConfig, Task, config_schema, generate_full_docs, run,
+};
 use std::fs::File;
 use std::io;
 use std::path::PathBuf;
@@ -161,11 +163,11 @@ fn main() -> io::Result<()> {
             }
 
             ConfigCommand::Schema => {
-                // TODO: Output JSON schema using schemars
-                eprintln!("Not yet implemented: requires schemars dependency");
-                return Err(io::Error::other(
-                    "[E059] schema subcommand not yet implemented",
-                ));
+                let schema = config_schema();
+                let json = serde_json::to_string_pretty(&schema).map_err(|e| {
+                    io::Error::other(format!("[E059] failed to serialize schema: {e}"))
+                })?;
+                println!("{json}");
             }
         },
 

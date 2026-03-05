@@ -2,6 +2,7 @@
 //!
 //! These newtypes add semantic clarity to commonly confused string types.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 use std::fmt;
@@ -15,7 +16,7 @@ macro_rules! define_string_id {
         $vis:vis struct $name:ident;
     ) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
         #[serde(transparent)]
         $vis struct $name(String);
 

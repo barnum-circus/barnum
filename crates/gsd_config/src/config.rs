@@ -4,11 +4,12 @@
 //! These types are serialization-format agnostic (use serde).
 
 use crate::types::StepName;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Top-level GSD configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     /// JSON Schema reference for editor validation (ignored at runtime).
@@ -24,7 +25,7 @@ pub struct Config {
 }
 
 /// Runtime options for task execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
     /// Timeout in seconds for each task (None = no timeout).
@@ -65,7 +66,7 @@ const fn default_true() -> bool {
 }
 
 /// A step in the task queue.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Step {
     /// Step name (e.g., `Analyze`, `Implement`).
@@ -125,7 +126,7 @@ pub struct Step {
 }
 
 /// How a step processes tasks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Action {
     /// Send to the agent pool for processing.
@@ -162,7 +163,7 @@ impl Action {
 }
 
 /// Per-step options that override global defaults.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepOptions {
     /// Timeout in seconds for this step (overrides global).
@@ -215,7 +216,7 @@ impl EffectiveOptions {
 /// In config files:
 /// - String → link to schema file
 /// - Object → inline JSON Schema
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SchemaRef {
     /// Path to a JSON Schema file.
@@ -229,7 +230,7 @@ pub enum SchemaRef {
 /// In config files:
 /// - String → inline markdown
 /// - `{"link": "path"}` → link to markdown file
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum Instructions {
     /// Inline markdown text.
@@ -358,6 +359,12 @@ impl std::fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+/// Generate JSON Schema for the Config type.
+#[must_use]
+pub fn config_schema() -> schemars::schema::RootSchema {
+    schemars::schema_for!(Config)
+}
 
 #[cfg(test)]
 #[expect(clippy::expect_used)]
