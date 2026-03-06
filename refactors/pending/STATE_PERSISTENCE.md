@@ -215,8 +215,8 @@ gsd run config.jsonc --pool mypool --initial-state '[{"kind": "Start", "value": 
 # Run with state output
 gsd run config.jsonc --pool mypool --initial-state '[...]' --state-output /tmp/run.state.json
 
-# Resume from state file
-gsd run config.jsonc --pool mypool --initial-state /tmp/run.state.json
+# Resume from state file (config embedded in state, no config.jsonc needed)
+gsd run --pool mypool --initial-state /tmp/run.state.json
 ```
 
 ## What We Don't Track (v1)
@@ -235,6 +235,20 @@ gsd runs list --root /tmp/agent_pool
 # Shows: mypool.a3f2c1.json (3 pending, 5 completed, 2 failed)
 ```
 
-### Config Hash Validation
+### Embed Config in State File
 
-Store config hash in state file. On resume, validate config hasn't changed.
+Serialize the full config into the state file. Benefits:
+- Resume doesn't need the original config file - state is self-contained
+- No risk of config drift between start and resume
+- `gsd resume /tmp/run.state.json` just works
+
+The state file would include:
+```json
+{
+  "config": { ... },  // Full parsed config
+  "pending": [...],
+  "outcomes": [...]
+}
+```
+
+This means `gsd run config.jsonc` is only needed for the initial start. Resume only needs the state file.
