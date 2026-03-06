@@ -51,7 +51,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running GSD with branching config..."
     $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial '[{"kind": "Decide", "value": {}}]' \
+        --initial-state '[{"kind": "Decide", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -95,7 +95,7 @@ else
     echo "Running GSD with branching config..."
     $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
         --pool "$POOL_ID" \
-        --initial '[{"kind": "Decide", "value": {}}]'
+        --initial-state '[{"kind": "Decide", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="

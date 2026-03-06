@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "Decide", "value": {}}]' branching.jsonc
+// pnpm gsd run --pool <POOL> --initial-state '[{"kind": "Decide", "value": {}}]' branching.jsonc
 {
   "options": {
     "max_retries": 2

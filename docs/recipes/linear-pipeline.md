@@ -62,7 +62,7 @@ A linear pipeline processes data through a sequence of steps.
 To start the pipeline:
 
 ```bash
-gsd run config.json --pool agents --initial '[{"kind": "Analyze", "value": {"file": "src/main.rs", "contents": "fn main() { println!(\"hello\"); }"}}]'
+gsd run config.json --pool agents --initial-state '[{"kind": "Analyze", "value": {"file": "src/main.rs", "contents": "fn main() { println!(\"hello\"); }"}}]'
 ```
 
 ## Flow

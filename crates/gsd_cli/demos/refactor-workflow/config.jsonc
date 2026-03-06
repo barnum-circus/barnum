@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' config.jsonc
+// pnpm gsd run --pool <POOL> --initial-state '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' config.jsonc
 //
 // NOTE: This workflow is not included in run-all-demos.sh because it requires
 // a real codebase and Claude agents to function.

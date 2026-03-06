@@ -97,7 +97,7 @@ Analyze files, collect findings, then categorize and prioritize.
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial '[{"kind": "Coordinate", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
+gsd run config.json --pool agents --initial-state '[{"kind": "Coordinate", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
 ```
 
 **scripts/setup-and-split.sh:**

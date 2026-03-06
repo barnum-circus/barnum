@@ -46,7 +46,7 @@ echo ""
 
 $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
-    --initial '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
+    --initial-state '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 
 echo ""
 echo "=== Success! ==="

@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "Start", "value": {}}]' linear.jsonc
+// pnpm gsd run --pool <POOL> --initial-state '[{"kind": "Start", "value": {}}]' linear.jsonc
 {
   "steps": [
     {

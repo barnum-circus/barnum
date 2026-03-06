@@ -39,7 +39,7 @@ echo ""
 
 $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
-    --initial "[{\"kind\": \"ListFiles\", \"value\": {\"folder\": \"$SCRIPT_DIR\"}}]"
+    --initial-state "[{\"kind\": \"ListFiles\", \"value\": {\"folder\": \"$SCRIPT_DIR\"}}]"
 
 echo ""
 echo "=== Success! ==="

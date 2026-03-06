@@ -47,7 +47,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running GSD with simple config..."
     $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial '[{"kind": "Start", "value": {}}]' \
+        --initial-state '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -91,7 +91,7 @@ else
     echo "Running GSD with simple config..."
     $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
         --pool "$POOL_ID" \
-        --initial '[{"kind": "Start", "value": {}}]'
+        --initial-state '[{"kind": "Start", "value": {}}]'
 
     echo ""
     echo "=== Success! ==="

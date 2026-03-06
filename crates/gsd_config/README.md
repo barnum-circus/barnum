@@ -112,16 +112,16 @@ Agent responses are arrays of tasks:
 
 ```bash
 # Run with config file
-gsd run config.json --initial '[{"kind": "Analyze", "value": {}}]'
+gsd run config.json --initial-state '[{"kind": "Analyze", "value": {}}]'
 
 # Run with inline config (from script)
-gsd run '{"steps": [...]}' --initial tasks.json
+gsd run '{"steps": [...]}' --initial-state tasks.json
 
 # With agent_pool root and wake script
-gsd run config.json --root /tmp/pool --wake ./wake.sh --initial tasks.json
+gsd run config.json --root /tmp/pool --wake ./wake.sh --initial-state tasks.json
 
 # Log to file for later analysis
-gsd run config.json --log-file run.log --initial tasks.json
+gsd run config.json --log-file run.log --initial-state tasks.json
 
 # Generate docs
 gsd docs config.json

@@ -38,9 +38,15 @@ enum Command {
         /// Config (JSON string or path to file)
         config: String,
 
-        /// Initial tasks (JSON string or path to file) - required
+        /// Initial tasks (JSON string or path to file).
+        /// Required if config has no `entrypoint`. Cannot be used with `--entrypoint-value`.
         #[arg(long)]
-        initial: String,
+        initial_state: Option<String>,
+
+        /// Initial value for the entrypoint step (JSON string or path to file).
+        /// Only valid when config has an `entrypoint`. Defaults to `{}` if not provided.
+        #[arg(long)]
+        entrypoint_value: Option<String>,
 
         /// Agent pool ID or path (e.g., `abc123` or `/tmp/agent_pool/abc123`)
         #[arg(long)]
@@ -102,13 +108,15 @@ fn main() -> io::Result<()> {
     match cli.command {
         Command::Run {
             config,
-            initial,
+            initial_state,
+            entrypoint_value,
             pool,
             wake,
             log_file,
         } => run_command(
             &config,
-            &initial,
+            initial_state.as_deref(),
+            entrypoint_value.as_deref(),
             pool.as_deref(),
             wake.as_deref(),
             log_file.as_ref(),
@@ -185,7 +193,8 @@ fn main() -> io::Result<()> {
 
 fn run_command(
     config: &str,
-    initial: &str,
+    initial_state: Option<&str>,
+    entrypoint_value: Option<&str>,
     pool: Option<&str>,
     wake: Option<&str>,
     log_file: Option<&PathBuf>,
@@ -207,8 +216,8 @@ fn run_command(
 
     let schemas = CompiledSchemas::compile(&cfg, &config_dir)?;
 
-    // Parse initial tasks
-    let initial_tasks = parse_initial_tasks(initial)?;
+    // Resolve initial tasks based on entrypoint or initial_state
+    let initial_tasks = resolve_initial_tasks(&cfg, &schemas, initial_state, entrypoint_value)?;
 
     // Resolve pool ID or path
     let pool_path = resolve_pool_path(pool, pool_root)?;
@@ -278,6 +287,72 @@ fn parse_config(input: &str) -> io::Result<(Config, PathBuf)> {
         })?;
         Ok((cfg, PathBuf::from(".")))
     }
+}
+
+/// Resolve initial tasks from either --initial-state or entrypoint + --entrypoint-value.
+fn resolve_initial_tasks(
+    cfg: &Config,
+    schemas: &CompiledSchemas,
+    initial_state: Option<&str>,
+    entrypoint_value: Option<&str>,
+) -> io::Result<Vec<Task>> {
+    match (&cfg.entrypoint, initial_state, entrypoint_value) {
+        // Config has entrypoint
+        (Some(entrypoint), None, ev) => {
+            // Parse entrypoint value (default to empty object)
+            let value: serde_json::Value = match ev {
+                Some(v) => parse_json_input(v).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("[E060] invalid --entrypoint-value JSON: {e}"),
+                    )
+                })?,
+                None => serde_json::json!({}),
+            };
+
+            // Validate the value against the entrypoint step's schema
+            if let Err(e) = schemas.validate(entrypoint, &value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("[E061] entrypoint value validation failed: {e}"),
+                ));
+            }
+
+            Ok(vec![Task::new(entrypoint.clone(), value)])
+        }
+
+        // Config has entrypoint but --initial-state was also provided
+        (Some(_), Some(_), _) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "[E062] config has entrypoint, use --entrypoint-value instead of --initial-state",
+        )),
+
+        // No entrypoint, --initial-state required
+        (None, Some(initial), None) => parse_initial_tasks(initial),
+
+        // No entrypoint but --entrypoint-value provided
+        (None, _, Some(_)) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "[E063] --entrypoint-value requires config to have an entrypoint",
+        )),
+
+        // No entrypoint and no --initial-state
+        (None, None, None) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "[E064] --initial-state is required when config has no entrypoint",
+        )),
+    }
+}
+
+/// Parse JSON from a string or file path.
+fn parse_json_input(input: &str) -> Result<serde_json::Value, json5::Error> {
+    let path = PathBuf::from(input);
+    let content = if path.exists() {
+        std::fs::read_to_string(path).unwrap_or_else(|_| input.to_string())
+    } else {
+        input.to_string()
+    };
+    json5::from_str(&content)
 }
 
 fn parse_initial_tasks(initial: &str) -> io::Result<Vec<Task>> {

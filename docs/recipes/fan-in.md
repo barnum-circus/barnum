@@ -52,7 +52,7 @@ Use the filesystem to collect results, then aggregate:
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial '[{"kind": "Split", "value": {"items": ["a", "b", "c"]}}]'
+gsd run config.json --pool agents --initial-state '[{"kind": "Split", "value": {"items": ["a", "b", "c"]}}]'
 ```
 
 **scripts/save-result.sh** (post hook):

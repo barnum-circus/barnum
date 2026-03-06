@@ -51,7 +51,7 @@ Validate the value payload for each step:
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial '[{"kind": "ProcessOrder", "value": {"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}}]'
+gsd run config.json --pool agents --initial-state '[{"kind": "ProcessOrder", "value": {"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}}]'
 ```
 
 ## External Schema Files

@@ -107,7 +107,7 @@ Outer workflow config (`outer.json`):
 ## Initial Tasks
 
 ```bash
-gsd run outer.json --pool agents --initial '[{"kind": "Setup", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
+gsd run outer.json --pool agents --initial-state '[{"kind": "Setup", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
 ```
 
 **scripts/setup-workspace.sh:**
@@ -156,7 +156,7 @@ WORKSPACE=$(echo "$INPUT" | jq -r '.value.workspace')
 # Run inner workflow (blocks until complete)
 gsd run \
   --config "$WORKSPACE/inner.json" \
-  --initial "$WORKSPACE/initial.json" \
+  --initial-state "$WORKSPACE/initial.json" \
   --pool "$POOL_ID"
 
 # Collect results for aggregation step
@@ -235,7 +235,7 @@ echo "$CONFIG" > "$TMPDIR/config.json"
 echo "$INITIAL" > "$TMPDIR/initial.json"
 
 # Run sub-workflow (reusing same pool)
-gsd run --config "$TMPDIR/config.json" --initial "$TMPDIR/initial.json" --pool "$POOL_ID"
+gsd run --config "$TMPDIR/config.json" --initial-state "$TMPDIR/initial.json" --pool "$POOL_ID"
 
 # Return result
 echo '[{"kind": "Report", "value": {"status": "completed"}}]'

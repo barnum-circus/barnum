@@ -378,7 +378,7 @@ impl GsdRunner {
             .arg(pool_root)
             .arg("run")
             .arg(config)
-            .arg("--initial")
+            .arg("--initial-state")
             .arg(initial_tasks)
             .arg("--pool")
             .arg(pool_id)

@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm gsd run --pool <POOL> --initial '[{"kind": "Start", "value": {}}]' simple.jsonc
+// pnpm gsd run --pool <POOL> --initial-state '[{"kind": "Start", "value": {}}]' simple.jsonc
 {
   "$schema": "../schemas/config.schema.json",
   "steps": [

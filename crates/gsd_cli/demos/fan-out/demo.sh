@@ -55,7 +55,7 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running GSD with fan-out config..."
     $GSD run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial '[{"kind": "Distribute", "value": {}}]' \
+        --initial-state '[{"kind": "Distribute", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -118,7 +118,7 @@ else
 
     $GSD --pool-root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
         --pool "$POOL_ID" \
-        --initial '[{"kind": "Distribute", "value": {}}]'
+        --initial-state '[{"kind": "Distribute", "value": {}}]'
 
     END_TIME=$(date +%s.%N)
     ELAPSED=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "?")

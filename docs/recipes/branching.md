@@ -60,7 +60,7 @@ Branching allows agents to choose different paths based on their analysis.
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial '[{"kind": "Review", "value": {"pr_number": 123}}]'
+gsd run config.json --pool agents --initial-state '[{"kind": "Review", "value": {"pr_number": 123}}]'
 ```
 
 ## Flow

@@ -20,6 +20,12 @@ pub struct Config {
     #[serde(default)]
     pub options: Options,
 
+    /// Entry point step name. If specified, the workflow starts with this step
+    /// and `--entrypoint-value` can be used to provide the initial value (defaults to `{}`).
+    /// If not specified, `--initial-state` must be provided on the command line.
+    #[serde(default)]
+    pub entrypoint: Option<StepName>,
+
     /// Step definitions forming the task queue.
     pub steps: Vec<Step>,
 }
@@ -323,6 +329,15 @@ impl Config {
             }
         }
 
+        // Check entrypoint references a valid step
+        if let Some(ref entrypoint) = self.entrypoint
+            && !step_names.contains(entrypoint.as_str())
+        {
+            return Err(ConfigError::InvalidEntrypoint {
+                name: entrypoint.clone(),
+            });
+        }
+
         Ok(())
     }
 }
@@ -342,6 +357,11 @@ pub enum ConfigError {
         /// The referenced step that doesn't exist.
         to: StepName,
     },
+    /// The entrypoint references a non-existent step.
+    InvalidEntrypoint {
+        /// The entrypoint step name that doesn't exist.
+        name: StepName,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -353,6 +373,9 @@ impl std::fmt::Display for ConfigError {
             }
             Self::InvalidNextStep { from, to } => {
                 write!(f, "step '{from}' references non-existent step '{to}'")
+            }
+            Self::InvalidEntrypoint { name } => {
+                write!(f, "entrypoint '{name}' references non-existent step")
             }
         }
     }
