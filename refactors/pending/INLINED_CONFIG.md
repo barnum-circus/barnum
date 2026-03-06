@@ -2,7 +2,7 @@
 
 **Status:** Not started
 
-**Depends on:** Nothing
+**Depends on:** UNIFIED_LINK_FORMAT (complete)
 
 **Blocks:** STATE_PERSISTENCE (config must be fully resolved before serializing)
 
@@ -24,9 +24,11 @@ File reads happen at different times:
 
 | Reference Type | When Read | Location | Status |
 |----------------|-----------|----------|--------|
-| `SchemaRef::Link` | Startup (`CompiledSchemas::compile()`) | `value_schema.rs:34` | OK |
-| `Instructions::Link` | Per task execution | `docs.rs:23` | **PROBLEM** |
+| `SchemaRef::Link { link }` | Startup (`CompiledSchemas::compile()`) | `value_schema.rs` | OK |
+| `Instructions::Link { link }` | Per task execution | `docs.rs` | **PROBLEM** |
 | `Action::Command { script }` | N/A (inline string) | - | OK |
+
+Both `SchemaRef` and `Instructions` now use the unified `{"link": "path"}` format (see UNIFIED_LINK_FORMAT in past/).
 
 The main issue is `Instructions::Link` - linked markdown files are read every time we build the agent payload.
 
@@ -85,7 +87,7 @@ pub enum Instructions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SchemaRef {
-    Link(String),  // Stores path, read in CompiledSchemas::compile()
+    Link { link: String },  // Stores path, read in CompiledSchemas::compile()
     Inline(serde_json::Value),
 }
 ```
