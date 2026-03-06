@@ -22,10 +22,10 @@ Newline-delimited JSON. First entry MUST be `Config` (exactly once). Uses `#[ser
 
 ```json
 {"kind":"Config","config":{...}}
-{"kind":"TaskSubmitted","task_id":1,"step":"Analyze","value":{...},"origin_id":null,"retry_count":0}
-{"kind":"TaskSubmitted","task_id":2,"step":"Analyze","value":{...},"origin_id":null,"retry_count":0}
+{"kind":"TaskSubmitted","task_id":1,"step":"Analyze","value":{...},"origin_id":null,"retries":0}
+{"kind":"TaskSubmitted","task_id":2,"step":"Analyze","value":{...},"origin_id":null,"retries":0}
 {"kind":"TaskCompleted","task_id":1,"outcome":{"kind":"Success","value":{"new_task_ids":[3]}}}
-{"kind":"TaskSubmitted","task_id":3,"step":"Process","value":{...},"origin_id":1,"retry_count":0}
+{"kind":"TaskSubmitted","task_id":3,"step":"Process","value":{...},"origin_id":1,"retries":0}
 {"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed","value":{"kind":"Timeout"}}}
 {"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed","value":{"kind":"InvalidResponse","message":"parse error"}}}
 {"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Success","value":{"new_task_ids":[]}}}
@@ -60,7 +60,7 @@ pub struct TaskSubmitted {
     pub step: String,
     pub value: serde_json::Value,
     pub origin_id: Option<LogTaskId>,
-    pub retry_count: u32,
+    pub retries: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -129,8 +129,8 @@ fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max
                 panic!("Config appeared after first entry");
             }
             StateLogEntry::TaskSubmitted(task) => {
-                if task.retry_count > max_retries {
-                    panic!("retry_count {} exceeds max_retries {}", task.retry_count, max_retries);
+                if task.retries > max_retries {
+                    panic!("retries {} exceeds max_retries {}", task.retries, max_retries);
                 }
                 if pending.contains_key(&task.task_id) {
                     panic!("Duplicate task_id {:?}", task.task_id);
