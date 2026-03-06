@@ -176,17 +176,26 @@ fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max
 ## CLI
 
 ```bash
-# Normal run (no persistence)
+# Normal run - creates state log in default folder
 gsd run config.jsonc --pool mypool --initial-state '[...]'
+# Creates: <root>/runs/<pool>/<timestamp>.ndjson
 
-# Run with state logging
+# Explicit state log path
 gsd run config.jsonc --pool mypool --initial-state '[...]' --state-log /tmp/myrun.ndjson
 
-# Resume from state log
-gsd run --resume-from /tmp/myrun.ndjson
+# Resume to same default folder (new log file)
+gsd run --resume-from /tmp/old.ndjson
+# Creates new log, copies entries from old.ndjson, continues
+
+# Resume to explicit path
+gsd run --resume-from /tmp/old.ndjson --state-log /tmp/new.ndjson
+# Copies entries from old.ndjson to new.ndjson, continues writing to new.ndjson
+
+# PANIC: same path for both (no in-place mutation)
+gsd run --resume-from /tmp/run.ndjson --state-log /tmp/run.ndjson  # panic!
 ```
 
-`--state-log` and `--resume-from` are mutually exclusive. `--resume-from` is also mutually exclusive with config file and `--initial-state` (they come from the log).
+`--resume-from` is incompatible with config file and `--initial-state` (error if both provided).
 
 ## Implementation Phases
 
