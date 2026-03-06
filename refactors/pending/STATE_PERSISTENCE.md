@@ -37,7 +37,7 @@ Newline-delimited JSON. First entry MUST be `Config` (exactly once). Uses `#[ser
 use serde::{Deserialize, Serialize};
 use crate::resolved::Config;
 
-#[derive(Debug, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct LogTaskId(pub u64);
 
@@ -112,7 +112,7 @@ Validation (config first, config once) happens at the call site.
 ## Reconstructing State on Resume
 
 ```rust
-type PendingTasks = HashMap<LogTaskId, TaskSubmitted>;
+type PendingTasks = BTreeMap<LogTaskId, TaskSubmitted>;
 
 #[derive(Debug, thiserror::Error)]
 enum ReconstructError {
