@@ -94,30 +94,16 @@ impl QueueState {
         id
     }
 
-    /// Create state from initial tasks.
-    pub fn from_tasks(tasks: Vec<Task>) -> Self {
-        let mut state = Self::new();
-        for task in tasks {
-            state.enqueue_one(task);
-        }
-        state
-    }
-
     /// Add a task to the pending queue.
-    pub fn enqueue_one(&mut self, task: Task) -> TaskId {
+    pub fn enqueue(&mut self, step: StepName, value: serde_json::Value, retries: u32) -> TaskId {
         let id = self.next_id();
         self.pending.push(PendingTask {
             id: id.clone(),
-            step: task.step,
-            value: task.value,
-            retries_remaining: task.retries,
+            step,
+            value,
+            retries_remaining: retries,
         });
         id
-    }
-
-    /// Add multiple tasks to the pending queue, returning their IDs.
-    pub fn enqueue(&mut self, tasks: Vec<Task>) -> Vec<TaskId> {
-        tasks.into_iter().map(|t| self.enqueue_one(t)).collect()
     }
 
     /// Mark a task as completed successfully.
@@ -170,7 +156,7 @@ Change `TaskRunner` to use `QueueState` internally.
 - Replace `VecDeque<QueuedTask>` with iteration over `state.pending`
 - When task completes: call `state.complete(id, spawned_ids)`
 - When task fails: call `state.fail(id, error)`
-- When new tasks spawn: call `state.enqueue(tasks)`
+- When new tasks spawn: call `state.enqueue(step, value, retries)` for each
 
 **No CLI changes** - internal refactor only. Tests should pass unchanged.
 
@@ -181,16 +167,16 @@ Make `--initial-state` and `--entrypoint-value` flow through `QueueState`.
 **Changes:**
 - `RunnerConfig.initial_tasks: Vec<Task>` → `RunnerConfig.state: QueueState`
 - `resolve_initial_tasks()` → `resolve_initial_state()` returning `QueueState`
-- For `--initial-state '[...]'`: parse as `Vec<Task>`, convert via `QueueState::from_tasks()`
-- For `--entrypoint-value '{}'`: create single `Task`, convert via `QueueState::from_tasks()`
+- Parse inputs as `Vec<TaskInput>` where `TaskInput = {kind, value}`
+- For each input, look up step config to get retries, call `state.enqueue(step, value, retries)`
 
 **Flow:**
 ```
 --initial-state '[...]' or --entrypoint-value '{...}'
         ↓
-    Vec<Task>
+    Vec<TaskInput>  (just {kind, value})
         ↓
-    QueueState::from_tasks(tasks)
+    for each: look up step config, call state.enqueue(step, value, retries)
         ↓
     TaskRunner::new(state)
 ```
