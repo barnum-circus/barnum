@@ -24,11 +24,11 @@ Newline-delimited JSON. First entry MUST be `Config` (exactly once). Uses `#[ser
 {"kind":"Config","config":{...}}
 {"kind":"TaskSubmitted","task_id":1,"step":"Analyze","value":{...},"origin_id":null}
 {"kind":"TaskSubmitted","task_id":2,"step":"Analyze","value":{...},"origin_id":null}
-{"kind":"TaskCompleted","task_id":1,"new_task_ids":[3]}
+{"kind":"TaskCompleted","task_id":1,"outcome":{"kind":"Success","new_task_ids":[3]}}
 {"kind":"TaskSubmitted","task_id":3,"step":"Process","value":{...},"origin_id":1}
-{"kind":"TaskFailed","task_id":2}
-{"kind":"TaskFailed","task_id":2}
-{"kind":"TaskCompleted","task_id":2,"new_task_ids":[]}
+{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed"}}
+{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed"}}
+{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Success","new_task_ids":[]}}
 ```
 
 ## Data Structures
@@ -43,7 +43,6 @@ pub enum StateLogEntry {
     Config(StateLogConfig),
     TaskSubmitted(TaskSubmitted),
     TaskCompleted(TaskCompleted),
-    TaskFailed(TaskFailed),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,13 +61,23 @@ pub struct TaskSubmitted {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskCompleted {
     pub task_id: u64,
+    pub outcome: TaskOutcome,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TaskOutcome {
+    Success(TaskSuccess),
+    Failed(TaskFailed),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSuccess {
     pub new_task_ids: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskFailed {
-    pub task_id: u64,
-}
+pub struct TaskFailed {}
 ```
 
 ## Writing/Reading
@@ -119,11 +128,15 @@ fn reconstruct(entries: Vec<StateLogEntry>) -> Result<(Config, HashMap<u64, Pend
                 });
             }
             StateLogEntry::TaskCompleted(c) => {
-                pending.remove(&c.task_id);
-            }
-            StateLogEntry::TaskFailed(f) => {
-                if let Some(task) = pending.get_mut(&f.task_id) {
-                    task.failure_count += 1;
+                match c.outcome {
+                    TaskOutcome::Success(_) => {
+                        pending.remove(&c.task_id);
+                    }
+                    TaskOutcome::Failed(_) => {
+                        if let Some(task) = pending.get_mut(&c.task_id) {
+                            task.failure_count += 1;
+                        }
+                    }
                 }
             }
         }
@@ -163,7 +176,7 @@ gsd run --resume-from /tmp/myrun.ndjson
 
 ### Phase 3: Task Logging
 - Write `TaskSubmitted` when task queued
-- Write `TaskCompleted` or `TaskFailed` when task resolves
+- Write `TaskCompleted` with `Success` or `Failed` outcome when task resolves
 - Flush after each write
 
 ### Phase 4: Resume
