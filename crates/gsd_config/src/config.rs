@@ -220,13 +220,16 @@ impl EffectiveOptions {
 /// Reference to a JSON Schema (inline or external file).
 ///
 /// In config files:
-/// - String → link to schema file
+/// - `{"link": "path"}` → link to schema file
 /// - Object → inline JSON Schema
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SchemaRef {
-    /// Path to a JSON Schema file.
-    Link(String),
+    /// Link to a JSON Schema file.
+    Link {
+        /// Path to the schema file.
+        link: String,
+    },
     /// Inline JSON Schema.
     Inline(serde_json::Value),
 }
@@ -633,11 +636,11 @@ mod tests {
     }
 
     #[test]
-    fn schema_link_string() {
+    fn schema_link_object() {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "value_schema": "schemas/test.json",
+                "value_schema": {"link": "schemas/test.json"},
                 "next": []
             }]
         }"#;
@@ -645,7 +648,7 @@ mod tests {
         let config: Config = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].value_schema,
-            Some(SchemaRef::Link(path)) if path == "schemas/test.json"
+            Some(SchemaRef::Link { link }) if link == "schemas/test.json"
         ));
     }
 }

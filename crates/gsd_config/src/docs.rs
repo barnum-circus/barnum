@@ -100,8 +100,8 @@ pub fn generate_step_docs(step: &Step, config: &Config, base_path: &Path) -> Str
                         writeln!(doc, r#"{{"kind": "{next_name}", "value": {{...}}}}"#).ok();
                         writeln!(doc, "```").ok();
                     }
-                    Some(SchemaRef::Link(path)) => {
-                        writeln!(doc, "Value must match schema in `{path}`.").ok();
+                    Some(SchemaRef::Link { link }) => {
+                        writeln!(doc, "Value must match schema in `{link}`.").ok();
                         writeln!(doc).ok();
                         writeln!(doc, "```json").ok();
                         writeln!(doc, r#"{{"kind": "{next_name}", "value": {{...}}}}"#).ok();

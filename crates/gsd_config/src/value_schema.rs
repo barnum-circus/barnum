@@ -29,8 +29,8 @@ impl CompiledSchemas {
             let validator = match &step.value_schema {
                 None => None,
                 Some(SchemaRef::Inline(schema)) => Some(compile_schema(schema)?),
-                Some(SchemaRef::Link(path)) => {
-                    let full_path = base_path.join(path);
+                Some(SchemaRef::Link { link }) => {
+                    let full_path = base_path.join(link);
                     let content = fs::read_to_string(&full_path).map_err(|e| {
                         io::Error::new(
                             e.kind(),
