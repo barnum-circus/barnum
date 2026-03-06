@@ -22,6 +22,23 @@
 
 ---
 
+## Global Variables
+
+**Status: TODO (needs design)**
+
+Consider whether GSD configs should support global variables that steps can read/write. Use cases:
+- Accumulating results across steps
+- Sharing state between parallel tasks
+- Configuration values accessible to all steps
+
+Questions to resolve:
+- What's the scope? Per-run? Per-pool?
+- How are they initialized?
+- Thread safety for parallel access?
+- Should they be in the config or runtime-only?
+
+---
+
 ## Command Agent Improvements
 
 ### Reconnect on Timeout
