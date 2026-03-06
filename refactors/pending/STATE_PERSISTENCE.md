@@ -114,14 +114,21 @@ Validation (config first, config once) happens at the call site.
 ```rust
 type PendingTasks = HashMap<LogTaskId, TaskSubmitted>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum ReconstructError {
-    Io(io::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] io::Error),
+    #[error("empty log file")]
     EmptyLog,
+    #[error("first entry must be Config")]
     FirstEntryNotConfig,
+    #[error("Config appeared more than once")]
     DuplicateConfig,
+    #[error("duplicate task_id {0:?}")]
     DuplicateTaskId(LogTaskId),
+    #[error("TaskCompleted for unknown task_id {0:?}")]
     UnknownTaskId(LogTaskId),
+    #[error("task {task_id:?} has retries={retries} which exceeds max_retries={max}")]
     RetriesExceeded { task_id: LogTaskId, retries: u32, max: u32 },
 }
 
@@ -130,14 +137,14 @@ fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max
     let config = match entries.next() {
         Some(Ok(StateLogEntry::Config(c))) => c.config,
         Some(Ok(_)) => return Err(ReconstructError::FirstEntryNotConfig),
-        Some(Err(e)) => return Err(ReconstructError::Io(e)),
+        Some(Err(e)) => return Err(e.into()),
         None => return Err(ReconstructError::EmptyLog),
     };
 
     let mut pending = PendingTasks::new();
 
     for entry in entries {
-        match entry.map_err(ReconstructError::Io)? {
+        match entry? {
             StateLogEntry::Config(_) => {
                 return Err(ReconstructError::DuplicateConfig);
             }
