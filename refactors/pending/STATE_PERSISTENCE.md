@@ -4,11 +4,7 @@
 
 ## Motivation
 
-Long-running GSD jobs can be interrupted. State persistence enables:
-
-1. **Resume**: Continue from where you left off
-2. **Debugging**: Inspect state file to understand what happened
-3. **Monitoring**: External tools can read state file
+Long-running GSD jobs can be interrupted (crash, Ctrl+C, OOM). State persistence enables resuming from where you left off.
 
 ## CLI Changes
 
