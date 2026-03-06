@@ -56,14 +56,14 @@ gsd run config.json --pool agents --initial-state '[{"kind": "ProcessOrder", "va
 
 ## External Schema Files
 
-Reference schemas from files:
+Reference schemas from files using `{"link": "path"}`:
 
 ```json
 {
   "steps": [
     {
       "name": "ProcessOrder",
-      "value_schema": "schemas/order.json",
+      "value_schema": {"link": "schemas/order.json"},
       "action": { "kind": "Pool", "instructions": "Process the order. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" },
       "next": ["Ship"]
     },
