@@ -116,17 +116,21 @@ struct PendingTask {
     failure_count: u32,
 }
 
-fn reconstruct(entries: Vec<StateLogEntry>) -> Result<(Config, HashMap<LogTaskId, PendingTask>), Error> {
-    let mut config: Option<Config> = None;
+fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>) -> io::Result<(Config, HashMap<LogTaskId, PendingTask>)> {
+    // First entry must be Config
+    let config = match entries.next() {
+        Some(Ok(StateLogEntry::Config(c))) => c.config,
+        Some(Ok(_)) => return Err(io::Error::new(io::ErrorKind::InvalidData, "First entry must be Config")),
+        Some(Err(e)) => return Err(e),
+        None => return Err(io::Error::new(io::ErrorKind::InvalidData, "Empty log")),
+    };
+
     let mut pending: HashMap<LogTaskId, PendingTask> = HashMap::new();
 
     for entry in entries {
-        match entry {
-            StateLogEntry::Config(c) => {
-                if config.is_some() {
-                    return Err("Config appeared twice");
-                }
-                config = Some(c.config);
+        match entry? {
+            StateLogEntry::Config(_) => {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Config appeared after first entry"));
             }
             StateLogEntry::TaskSubmitted(task) => {
                 pending.insert(task.task_id, PendingTask {
@@ -149,7 +153,6 @@ fn reconstruct(entries: Vec<StateLogEntry>) -> Result<(Config, HashMap<LogTaskId
         }
     }
 
-    let config = config.ok_or("No config entry")?;
     Ok((config, pending))
 }
 ```
