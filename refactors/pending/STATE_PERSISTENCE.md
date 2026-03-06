@@ -112,34 +112,52 @@ Validation (config first, config once) happens at the call site.
 ## Reconstructing State on Resume
 
 ```rust
-fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max_retries: u32) -> io::Result<(Config, HashMap<LogTaskId, TaskSubmitted>)> {
+type PendingTasks = HashMap<LogTaskId, TaskSubmitted>;
+
+#[derive(Debug)]
+enum ReconstructError {
+    Io(io::Error),
+    EmptyLog,
+    FirstEntryNotConfig,
+    DuplicateConfig,
+    DuplicateTaskId(LogTaskId),
+    UnknownTaskId(LogTaskId),
+    RetriesExceeded { task_id: LogTaskId, retries: u32, max: u32 },
+}
+
+fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max_retries: u32) -> Result<(Config, PendingTasks), ReconstructError> {
     // First entry must be Config
     let config = match entries.next() {
         Some(Ok(StateLogEntry::Config(c))) => c.config,
-        Some(Ok(_)) => panic!("First entry must be Config"),
-        Some(Err(e)) => return Err(e),
-        None => panic!("Empty log"),
+        Some(Ok(_)) => return Err(ReconstructError::FirstEntryNotConfig),
+        Some(Err(e)) => return Err(ReconstructError::Io(e)),
+        None => return Err(ReconstructError::EmptyLog),
     };
 
-    let mut pending: HashMap<LogTaskId, TaskSubmitted> = HashMap::new();
+    let mut pending = PendingTasks::new();
 
     for entry in entries {
-        match entry? {
+        match entry.map_err(ReconstructError::Io)? {
             StateLogEntry::Config(_) => {
-                panic!("Config appeared after first entry");
+                return Err(ReconstructError::DuplicateConfig);
             }
             StateLogEntry::TaskSubmitted(task) => {
                 if task.retries > max_retries {
-                    panic!("retries {} exceeds max_retries {}", task.retries, max_retries);
+                    return Err(ReconstructError::RetriesExceeded {
+                        task_id: task.task_id,
+                        retries: task.retries,
+                        max: max_retries,
+                    });
                 }
                 if pending.contains_key(&task.task_id) {
-                    panic!("Duplicate task_id {:?}", task.task_id);
+                    return Err(ReconstructError::DuplicateTaskId(task.task_id));
                 }
                 pending.insert(task.task_id, task);
             }
             StateLogEntry::TaskCompleted(c) => {
-                pending.remove(&c.task_id)
-                    .expect("TaskCompleted for unknown task_id");
+                if pending.remove(&c.task_id).is_none() {
+                    return Err(ReconstructError::UnknownTaskId(c.task_id));
+                }
             }
         }
     }
