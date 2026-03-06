@@ -96,18 +96,18 @@ pub enum SchemaRef {
 // crates/gsd_config/src/config.rs
 
 /// Raw config as parsed from JSON (may contain file references)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ConfigFile {
     pub steps: Vec<StepFile>,
-    // ... other fields
 }
 
 /// Raw step (may contain file references)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct StepFile {
     pub name: StepName,
-    pub action: ActionFile,  // May have Instructions::Link
-    pub value_schema: Option<SchemaRefFile>,  // May have SchemaRef::Link
+    pub instructions: MaybeLinked<String>,
+    pub value_schema: Option<MaybeLinked<serde_json::Value>>,
+    pub next: Vec<StepName>,
     // ...
 }
 
@@ -115,30 +115,39 @@ pub struct StepFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub steps: Vec<Step>,
-    // ... other fields
 }
 
-/// Fully resolved step
+/// Fully resolved step - just values, no MaybeLinked
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Step {
     pub name: StepName,
-    pub action: Action,  // Instructions always inline
-    pub value_schema: Option<serde_json::Value>,  // Schema always inline
+    pub instructions: String,  // Just String
+    pub value_schema: Option<serde_json::Value>,  // Just Value
+    pub next: Vec<StepName>,
     // ...
 }
-
-/// Instructions are always inline after resolution
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Instructions(String);  // No Link variant
 
 impl ConfigFile {
     /// Load from JSON file
     pub fn load(path: &Path) -> io::Result<Self> { ... }
 
-    /// Resolve all file references, producing a fully inlined Config
+    /// Resolve all file references, returning Config with just values
     pub fn resolve(self, base_path: &Path) -> io::Result<Config> {
-        // Read all linked files here
-        // Return Config with everything inlined
+        let steps = self.steps.into_iter()
+            .map(|s| s.resolve(base_path))
+            .collect::<io::Result<Vec<_>>>()?;
+        Ok(Config { steps })
+    }
+}
+
+impl StepFile {
+    pub fn resolve(self, base_path: &Path) -> io::Result<Step> {
+        Ok(Step {
+            name: self.name,
+            instructions: self.instructions.resolve(base_path)?,
+            value_schema: self.value_schema.map(|s| s.resolve(base_path)).transpose()?,
+            next: self.next,
+        })
     }
 }
 ```
@@ -226,48 +235,25 @@ impl TaskRunner {
 
 First, introduce generic types to handle the inline-vs-linked pattern.
 
-#### Core Types
+#### Core Type
 
 ```rust
 // crates/gsd_config/src/maybe_linked.rs
 
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::io;
 
 /// Content that may be inline or linked to a file.
 ///
-/// Used during config parsing - before resolution.
+/// Used during config parsing. Call `resolve()` to get the actual value.
 #[derive(Debug, Clone)]
 pub enum MaybeLinked<T> {
     Inline(T),
     Link(String),
 }
-
-/// Fully resolved content (no link variant).
-///
-/// Used after resolution - ready for execution/serialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Inlined<T>(pub T);
-
-impl<T> Inlined<T> {
-    pub fn new(value: T) -> Self {
-        Self(value)
-    }
-
-    pub fn into_inner(self) -> T {
-        self.0
-    }
-}
-
-impl<T> std::ops::Deref for Inlined<T> {
-    type Target = T;
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
 ```
+
+No wrapper type needed - `resolve()` returns `T` directly, and the final config just stores `T`.
 
 #### Serde Strategies
 
@@ -315,43 +301,35 @@ impl<'de> Deserialize<'de> for MaybeLinked<serde_json::Value> {
 }
 ```
 
-#### Resolution Trait
+#### Resolution (concrete impls, no trait)
 
 ```rust
-/// Types that can be resolved from a file path.
-pub trait FromFile: Sized {
-    fn from_file(path: &Path) -> io::Result<Self>;
-}
-
-impl FromFile for String {
-    fn from_file(path: &Path) -> io::Result<Self> {
-        std::fs::read_to_string(path)
-    }
-}
-
-impl FromFile for serde_json::Value {
-    fn from_file(path: &Path) -> io::Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        serde_json::from_str(&content).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })
-    }
-}
-
-impl<T: FromFile> MaybeLinked<T> {
-    /// Resolve a link to inline content.
-    pub fn resolve(self, base_path: &Path) -> io::Result<Inlined<T>> {
+impl MaybeLinked<String> {
+    pub fn resolve(self, base_path: &Path) -> io::Result<String> {
         match self {
-            MaybeLinked::Inline(value) => Ok(Inlined(value)),
+            MaybeLinked::Inline(s) => Ok(s),
             MaybeLinked::Link(link) => {
-                let full_path = base_path.join(&link);
-                let value = T::from_file(&full_path).map_err(|e| {
-                    io::Error::new(
-                        e.kind(),
-                        format!("failed to read '{}': {e}", full_path.display())
-                    )
+                let path = base_path.join(&link);
+                std::fs::read_to_string(&path).map_err(|e| {
+                    io::Error::new(e.kind(), format!("failed to read '{}': {e}", path.display()))
+                })
+            }
+        }
+    }
+}
+
+impl MaybeLinked<serde_json::Value> {
+    pub fn resolve(self, base_path: &Path) -> io::Result<serde_json::Value> {
+        match self {
+            MaybeLinked::Inline(v) => Ok(v),
+            MaybeLinked::Link(link) => {
+                let path = base_path.join(&link);
+                let content = std::fs::read_to_string(&path).map_err(|e| {
+                    io::Error::new(e.kind(), format!("failed to read '{}': {e}", path.display()))
                 })?;
-                Ok(Inlined(value))
+                serde_json::from_str(&content).map_err(|e| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("invalid JSON in '{}': {e}", path.display()))
+                })
             }
         }
     }
@@ -361,7 +339,7 @@ impl<T: FromFile> MaybeLinked<T> {
 #### Usage in Config Types
 
 ```rust
-// Before resolution (ConfigFile)
+// Before resolution (ConfigFile) - may have links
 pub struct StepFile {
     pub name: StepName,
     pub instructions: MaybeLinked<String>,
@@ -369,16 +347,16 @@ pub struct StepFile {
     // ...
 }
 
-// After resolution (Config)
+// After resolution (Config) - just the values, no wrapper
 pub struct Step {
     pub name: StepName,
-    pub instructions: Inlined<String>,
-    pub value_schema: Option<Inlined<serde_json::Value>>,
+    pub instructions: String,  // Just String, not MaybeLinked or Inlined
+    pub value_schema: Option<serde_json::Value>,  // Just Value
     // ...
 }
 ```
 
-**This phase is pure addition** - doesn't change existing code. Just adds the new types to use in later phases.
+**This phase is pure addition** - doesn't change existing code. Just adds `MaybeLinked<T>` to use in later phases.
 
 ### Phase 1: Add ConfigFile type
 
