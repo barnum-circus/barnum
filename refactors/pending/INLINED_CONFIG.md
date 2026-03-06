@@ -70,7 +70,7 @@ The main issue is `Instructions::Link` - linked markdown files are read every ti
 
 ## Before/After: Rust Types
 
-### Before
+### Current (after UNIFIED_LINK_FORMAT)
 
 ```rust
 // crates/gsd_config/src/config.rs
@@ -80,19 +80,19 @@ The main issue is `Instructions::Link` - linked markdown files are read every ti
 #[serde(untagged)]
 pub enum Instructions {
     Inline(String),
-    Link { link: String },  // Stores path, read later
+    Link { link: String },  // Stores path, read at runtime in docs.rs
 }
 
 /// Schema can be inline or linked to a file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SchemaRef {
-    Link { link: String },  // Stores path, read in CompiledSchemas::compile()
+    Link { link: String },  // Stores path, read at startup in CompiledSchemas::compile()
     Inline(serde_json::Value),
 }
 ```
 
-### After
+### Goal (after INLINED_CONFIG)
 
 ```rust
 // crates/gsd_config/src/config.rs
@@ -156,7 +156,7 @@ impl StepFile {
 
 ## Before/After: Doc Generation
 
-### Before (docs.rs)
+### Current (docs.rs)
 
 ```rust
 fn write_instructions(doc: &mut String, action: &Action, base_path: &Path) {
@@ -180,7 +180,7 @@ fn write_instructions(doc: &mut String, action: &Action, base_path: &Path) {
 }
 ```
 
-### After (docs.rs)
+### Goal (docs.rs)
 
 ```rust
 fn write_instructions(doc: &mut String, action: &Action) {
@@ -196,7 +196,7 @@ fn write_instructions(doc: &mut String, action: &Action) {
 
 ## Before/After: TaskRunner
 
-### Before
+### Current
 
 ```rust
 pub struct TaskRunner<'a> {
@@ -214,7 +214,7 @@ impl TaskRunner<'_> {
 }
 ```
 
-### After
+### Goal
 
 ```rust
 pub struct TaskRunner {
