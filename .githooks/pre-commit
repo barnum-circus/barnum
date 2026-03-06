@@ -1,8 +1,17 @@
 #!/bin/bash
 # Pre-commit hook: runs fmt, check, clippy, test, and udeps
 # Format runs first (modifies files), then check/clippy/test/udeps run in parallel
+# Skips cargo commands if no Rust files are staged
 
 set -e
+
+# Check if any Rust-related files are staged
+RUST_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(rs|toml)$' || true)
+
+if [ -z "$RUST_FILES" ]; then
+    echo "No Rust files changed, skipping cargo checks."
+    exit 0
+fi
 
 echo "Running cargo fmt..."
 cargo fmt --all
