@@ -5,10 +5,9 @@
 #![expect(clippy::print_stderr)]
 
 use agent_pool::{
-    AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TaskAssignment, VerifiedWatcher,
-    default_pool_root, generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool,
-    response_path, run_with_config, stop, submit, submit_file, submit_file_with_timeout,
-    wait_for_task,
+    AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TaskAssignment, VerifiedWatcher, default_root,
+    generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool, response_path,
+    run_with_config, stop, submit, submit_file, submit_file_with_timeout, wait_for_task,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -54,10 +53,10 @@ enum NotifyMethod {
 #[command(name = "agent_pool")]
 #[command(about = "Agent pool for managing workers with file-based task dispatch")]
 struct Cli {
-    /// Base directory for pools. Pool IDs resolve to `<pool-root>/<id>/`.
+    /// Root directory. Pools live in `<root>/pools/<id>/`.
     /// Defaults to `/tmp/agent_pool` on Unix.
     #[arg(long, global = true)]
-    pool_root: Option<PathBuf>,
+    root: Option<PathBuf>,
 
     /// Log level
     #[arg(short, long, global = true, default_value = "info")]
@@ -72,7 +71,7 @@ enum Command {
     /// Start the agent pool server
     Start {
         /// Pool ID. If omitted, generates a new ID.
-        /// IDs resolve to `<pool-root>/<id>/` (default: `/tmp/agent_pool/<id>/`)
+        /// IDs resolve to `<root>/pools/<id>/` (default: `/tmp/agent_pool/pools/<id>/`)
         #[arg(long)]
         pool: Option<String>,
         /// Output pool info as JSON (for scripts)
@@ -215,10 +214,10 @@ fn format_task_output(
 fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.log_level);
-    let pool_root = cli.pool_root.clone().unwrap_or_else(default_pool_root);
+    let root = cli.root.clone().unwrap_or_else(default_root);
     info!(
         command = ?cli.command,
-        pool_root = %pool_root.display(),
+        root = %root.display(),
         log_level = ?cli.log_level,
         "CLI invoked"
     );
@@ -244,7 +243,7 @@ fn main() -> ExitCode {
 
             // Resolve pool ID or generate new one
             let id = pool.unwrap_or_else(generate_id);
-            let root = id_to_path(&pool_root, &id);
+            let root = id_to_path(&root, &id);
 
             // TODO: Pass periodic/initial heartbeat flags to DaemonConfig when supported
             // For now, --no-heartbeat disables all; finer-grained control requires DaemonConfig changes
@@ -316,7 +315,7 @@ fn main() -> ExitCode {
                 eprintln!("{e}");
                 return ExitCode::FAILURE;
             }
-            let root = resolve_pool(&pool_root, &pool);
+            let root = resolve_pool(&root, &pool);
             if let Err(e) = stop(&root) {
                 eprintln!("Failed to stop: {e}");
                 return ExitCode::FAILURE;
@@ -334,7 +333,7 @@ fn main() -> ExitCode {
                 eprintln!("{e}");
                 return ExitCode::FAILURE;
             }
-            let root = resolve_pool(&pool_root, &pool);
+            let root = resolve_pool(&root, &pool);
 
             // Create watcher at CLI entry point
             let mut watcher = match VerifiedWatcher::new(&root, std::slice::from_ref(&root)) {
@@ -384,7 +383,7 @@ fn main() -> ExitCode {
                 }
             }
         }
-        Command::List => match list_pools(&pool_root) {
+        Command::List => match list_pools(&root) {
             Ok(pools) => {
                 if pools.is_empty() {
                     eprintln!("No pools found");
@@ -413,7 +412,7 @@ fn main() -> ExitCode {
             };
 
             if let Some(id) = &pool {
-                let path = id_to_path(&pool_root, id);
+                let path = id_to_path(&root, id);
                 output = output
                     .replace("<POOL_ID>", id)
                     .replace("abc12345", id)
@@ -434,7 +433,7 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            let root = resolve_pool(&pool_root, &pool);
+            let root = resolve_pool(&root, &pool);
 
             // Create watcher at CLI entry point
             // Single canary at root - directories already exist (daemon created them)

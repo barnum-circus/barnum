@@ -1,22 +1,25 @@
 //! Pool ID management.
 //!
-//! Pools live in `<pool_root>/<id>/` with short, memorable IDs.
-//! Default pool root on Unix: `/tmp/agent_pool/`
-//! Default pool root on Windows: `%TEMP%\agent_pool\`
+//! Pools live in `<root>/pools/<id>/` with short, memorable IDs.
+//! Default root on Unix: `/tmp/agent_pool/`
+//! Default root on Windows: `%TEMP%\agent_pool\`
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Default directory name for the pool root.
+/// Default directory name for the root.
 const DEFAULT_ROOT_DIR: &str = "agent_pool";
 
-/// Get the default base directory for all pools.
+/// Subdirectory within root where pools live.
+const POOLS_DIR: &str = "pools";
+
+/// Get the default root directory.
 ///
 /// Uses /tmp explicitly on Unix to ensure atomic writes (which also use /tmp)
 /// are on the same filesystem.
 #[must_use]
-pub fn default_pool_root() -> PathBuf {
+pub fn default_root() -> PathBuf {
     #[cfg(unix)]
     {
         PathBuf::from("/tmp").join(DEFAULT_ROOT_DIR)
@@ -25,6 +28,12 @@ pub fn default_pool_root() -> PathBuf {
     {
         std::env::temp_dir().join(DEFAULT_ROOT_DIR)
     }
+}
+
+/// Get the pools directory within the root.
+#[must_use]
+pub fn pools_dir(root: &Path) -> PathBuf {
+    root.join(POOLS_DIR)
 }
 
 /// Length of generated pool IDs.
@@ -62,10 +71,12 @@ pub fn generate_id() -> String {
     id
 }
 
-/// Get the path for a pool ID within the given pool root.
+/// Get the path for a pool ID within the given root.
+///
+/// Returns `<root>/pools/<id>`.
 #[must_use]
-pub fn id_to_path(pool_root: &Path, id: &str) -> PathBuf {
-    pool_root.join(id)
+pub fn id_to_path(root: &Path, id: &str) -> PathBuf {
+    pools_dir(root).join(id)
 }
 
 /// Information about a pool.
@@ -79,24 +90,25 @@ pub struct PoolInfo {
     pub running: bool,
 }
 
-/// List all pools in the given pool root directory.
+/// List all pools in the given root directory.
 ///
 /// # Errors
 ///
 /// Returns an error if the pools directory cannot be read.
-pub fn list_pools(pool_root: &Path) -> io::Result<Vec<PoolInfo>> {
-    if !pool_root.exists() {
+pub fn list_pools(root: &Path) -> io::Result<Vec<PoolInfo>> {
+    let pools_path = pools_dir(root);
+    if !pools_path.exists() {
         return Ok(Vec::new());
     }
 
     let mut pools = Vec::new();
 
-    let entries = fs::read_dir(pool_root).map_err(|e| {
+    let entries = fs::read_dir(&pools_path).map_err(|e| {
         io::Error::new(
             e.kind(),
             format!(
-                "[E065] failed to read pool root {}: {e}",
-                pool_root.display()
+                "[E065] failed to read pools dir {}: {e}",
+                pools_path.display()
             ),
         )
     })?;
@@ -106,7 +118,7 @@ pub fn list_pools(pool_root: &Path) -> io::Result<Vec<PoolInfo>> {
                 e.kind(),
                 format!(
                     "[E066] failed to read pool entry in {}: {e}",
-                    pool_root.display()
+                    pools_path.display()
                 ),
             )
         })?;
@@ -167,12 +179,12 @@ fn is_pool_running(_pool_path: &std::path::Path) -> bool {
 /// Resolve a pool reference (ID or path) to a full path.
 ///
 /// If the reference looks like a path (contains `/` or `\`), returns it as-is.
-/// Otherwise, treats it as an ID and converts to `<pool_root>/<id>`.
+/// Otherwise, treats it as an ID and converts to `<root>/pools/<id>`.
 #[must_use]
-pub fn resolve_pool(pool_root: &Path, reference: &str) -> PathBuf {
+pub fn resolve_pool(root: &Path, reference: &str) -> PathBuf {
     if reference.contains('/') || reference.contains('\\') {
         PathBuf::from(reference)
     } else {
-        id_to_path(pool_root, reference)
+        id_to_path(root, reference)
     }
 }

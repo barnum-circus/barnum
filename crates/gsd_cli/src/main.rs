@@ -22,10 +22,10 @@ const VERSION: &str = env!("GSD_VERSION");
 #[command(name = "gsd")]
 #[command(about = "Get Sh*** Done - JSON-based task orchestrator")]
 struct Cli {
-    /// Base directory for pools. Pool IDs resolve to `<pool-root>/<id>/`.
+    /// Root directory. Pools live in `<root>/pools/<id>/`.
     /// Defaults to `/tmp/agent_pool` on Unix.
     #[arg(long, global = true)]
-    pool_root: Option<PathBuf>,
+    root: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Command,
@@ -48,7 +48,7 @@ enum Command {
         #[arg(long)]
         entrypoint_value: Option<String>,
 
-        /// Agent pool ID or path (e.g., `abc123` or `/tmp/agent_pool/abc123`)
+        /// Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`)
         #[arg(long)]
         pool: Option<String>,
 
@@ -102,8 +102,8 @@ enum ConfigCommand {
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
-    // Extract pool_root for commands that need it
-    let pool_root = cli.pool_root.unwrap_or_else(agent_pool::default_pool_root);
+    // Extract root for commands that need it
+    let root = cli.root.unwrap_or_else(agent_pool::default_root);
 
     match cli.command {
         Command::Run {
@@ -120,7 +120,7 @@ fn main() -> io::Result<()> {
             pool.as_deref(),
             wake.as_deref(),
             log_file.as_ref(),
-            &pool_root,
+            &root,
         )?,
 
         Command::Config { command } => match command {
@@ -198,7 +198,7 @@ fn run_command(
     pool: Option<&str>,
     wake: Option<&str>,
     log_file: Option<&PathBuf>,
-    pool_root: &std::path::Path,
+    root: &std::path::Path,
 ) -> io::Result<()> {
     // Initialize tracing with optional log file
     init_tracing(log_file)?;
@@ -219,8 +219,8 @@ fn run_command(
     // Resolve initial tasks based on entrypoint or initial_state
     let initial_tasks = resolve_initial_tasks(&cfg, &schemas, initial_state, entrypoint_value)?;
 
-    // Resolve pool ID or path
-    let pool_path = resolve_pool_path(pool, pool_root)?;
+    // Resolve pool ID
+    let pool_path = resolve_pool_path(pool, root)?;
 
     let runner_config = RunnerConfig {
         agent_pool_root: &pool_path,
@@ -235,24 +235,25 @@ fn run_command(
 
 /// Resolve pool ID to full path.
 ///
-/// Pool IDs cannot contain `/` - use `--pool-root` to specify the base directory.
-fn resolve_pool_path(pool: Option<&str>, pool_root: &std::path::Path) -> io::Result<PathBuf> {
+/// Pool IDs cannot contain `/` - use `--root` to specify the base directory.
+fn resolve_pool_path(pool: Option<&str>, root: &std::path::Path) -> io::Result<PathBuf> {
     match pool {
         None => {
-            let temp = std::env::temp_dir().join("gsd-pool");
-            std::fs::create_dir_all(&temp).ok();
-            Ok(temp)
+            // Default pool lives in <root>/pools/default
+            let path = agent_pool::pools_dir(root).join("default");
+            std::fs::create_dir_all(&path).ok();
+            Ok(path)
         }
         Some(p) => {
             if p.contains('/') {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
-                        "[E058] pool ID '{p}' cannot contain '/'. Use --pool-root to specify the base directory."
+                        "[E058] pool ID '{p}' cannot contain '/'. Use --root to specify the base directory."
                     ),
                 ));
             }
-            Ok(agent_pool::resolve_pool(pool_root, p))
+            Ok(agent_pool::resolve_pool(root, p))
         }
     }
 }

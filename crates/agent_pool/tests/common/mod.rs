@@ -8,7 +8,7 @@
 #![allow(clippy::missing_const_for_fn)]
 #![allow(clippy::print_stderr)]
 
-use agent_pool::{Response, STATUS_FILE, VerifiedWatcher, default_pool_root, id_to_path};
+use agent_pool::{Response, STATUS_FILE, VerifiedWatcher, default_root, id_to_path};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::{self, BufRead, BufReader};
@@ -39,9 +39,9 @@ pub fn mode_abbrev(data_source: DataSource, notify_method: NotifyMethod) -> &'st
 }
 
 /// Get the path for a pool name.
-/// Pools live in `/tmp/agent_pool/<pool>/`.
+/// Pools live in `/tmp/agent_pool/pools/<pool>/`.
 pub fn pool_path(pool: &str) -> PathBuf {
-    id_to_path(&default_pool_root(), pool)
+    id_to_path(&default_root(), pool)
 }
 
 /// Clean up a pool by name.
@@ -691,7 +691,7 @@ impl AgentPoolHandle {
         //
         // Solution: Watch the parent directory (pool_root) instead, which is never deleted.
         // The watcher will see the status file when the daemon creates it in the subdirectory.
-        let pool_root = default_pool_root();
+        let pool_root = default_root();
         fs::create_dir_all(&pool_root).expect("Failed to create pool root directory");
         let mut watcher = VerifiedWatcher::new(&pool_root, std::slice::from_ref(&pool_root))
             .expect("Failed to create watcher");
