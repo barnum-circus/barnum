@@ -298,7 +298,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for MaybeLinked<T> {
 }
 ```
 
-Both `Instructions` and `SchemaRef` already use the `{"link": "path"}` format (see UNIFIED_LINK_FORMAT in past/).
+Both `Instructions` and `SchemaRef` use the `{"link": "path"}` format for links (see UNIFIED_LINK_FORMAT in past/).
 
 #### Resolution
 
