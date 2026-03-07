@@ -86,11 +86,22 @@ impl FinallyTracker {
 }
 
 pub fn run_finally_hook(state: &FinallyState) -> Vec<Task> {
-    info!(command = %state.finally_command, "running finally hook");
+    run_finally_hook_direct(&state.finally_command, &state.original_value)
+}
 
-    let input_json = serde_json::to_string(&state.original_value).unwrap_or_default();
+/// Run a finally hook directly without going through the tracker.
+/// Used when a task with a finally hook spawns no children (runs immediately).
+#[expect(clippy::expect_used, reason = "serde_json::Value always serializes")]
+pub fn run_finally_hook_direct(
+    finally_command: &HookScript,
+    value: &serde_json::Value,
+) -> Vec<Task> {
+    info!(command = %finally_command, "running finally hook");
 
-    match run_shell_command(state.finally_command.as_str(), &input_json, None) {
+    let input_json =
+        serde_json::to_string(value).expect("serde_json::Value should always serialize");
+
+    match run_shell_command(finally_command.as_str(), &input_json, None) {
         Ok(stdout) => match serde_json::from_str::<Vec<Task>>(&stdout) {
             Ok(tasks) => {
                 info!(count = tasks.len(), "finally hook spawned tasks");

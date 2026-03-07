@@ -23,10 +23,10 @@ use crate::types::{LogTaskId, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use dispatch::{TaskContext, dispatch_command_task, dispatch_pool_task};
-use finally::{FinallyTracker, run_finally_hook};
+use finally::{FinallyTracker, run_finally_hook, run_finally_hook_direct};
 use hooks::{call_wake_script, run_post_hook};
 use response::{FailureKind, ProcessedSubmit, process_retry, process_submit_result};
-use types::{InFlightResult, PoolConnection, QueuedTask, TaskIdentity};
+use types::{InFlightResult, PoolConnection, QueuedTask, TaskIdentity, TaskOutcome};
 
 use types::TaskResult;
 pub use types::{PostHookInput, RunnerConfig};
@@ -121,7 +121,7 @@ impl<'a> TaskRunner<'a> {
             runner.queue.push_back(QueuedTask {
                 task,
                 id,
-                origin_id: None,
+                finally_origin_id: None,
             });
         }
 
@@ -153,7 +153,7 @@ impl<'a> TaskRunner<'a> {
         let QueuedTask {
             task,
             id: task_id,
-            origin_id,
+            finally_origin_id,
         } = queued;
 
         #[expect(clippy::expect_used)] // Invariant: config validation ensures all step names exist
@@ -163,7 +163,7 @@ impl<'a> TaskRunner<'a> {
         let identity = TaskIdentity {
             task,
             task_id,
-            origin_id,
+            finally_origin_id,
         };
         let ctx = TaskContext {
             identity,
@@ -197,14 +197,14 @@ impl<'a> TaskRunner<'a> {
         self.in_flight += 1;
     }
 
-    /// Notify that a descendant of `origin_id` has completed. Runs finally hook
-    /// if all descendants are done.
-    ///
-    /// BUG: Currently called when task completes, but should only be called when
-    /// task is "fully done" (including finally hook). See `FINALLY_TRACKING` refactor.
+    /// Notify that a descendant of `finally_origin_id` has completed.
+    /// Runs finally hook if all descendants are done.
     #[expect(clippy::panic)] // Finally hook returning invalid tasks is a config bug
-    fn notify_origin_of_completion(&mut self, origin_id: LogTaskId) {
-        if let Some(state) = self.finally_tracker.record_descendant_done(origin_id) {
+    fn notify_origin_of_completion(&mut self, finally_origin_id: LogTaskId) {
+        if let Some(state) = self
+            .finally_tracker
+            .record_descendant_done(finally_origin_id)
+        {
             let spawned = run_finally_hook(&state);
             for task in spawned {
                 // Validate finally hook spawned tasks
@@ -224,7 +224,7 @@ impl<'a> TaskRunner<'a> {
                 self.queue.push_back(QueuedTask {
                     task,
                     id,
-                    origin_id: None, // Finally tasks don't inherit origin
+                    finally_origin_id: None, // Finally tasks are new roots
                 });
             }
         }
@@ -236,7 +236,7 @@ impl<'a> TaskRunner<'a> {
         let TaskIdentity {
             task,
             task_id,
-            origin_id,
+            finally_origin_id,
         } = identity;
 
         #[expect(clippy::expect_used)] // Invariant: all queued tasks are validated at entry points
@@ -245,58 +245,104 @@ impl<'a> TaskRunner<'a> {
         );
 
         let ProcessedSubmit {
-            result: task_result,
-            tasks: new_tasks,
+            outcome,
             post_input,
-            finally_value,
         } = process_submit_result(result, &task, step, self.schemas);
 
-        let (final_result, final_tasks) = if let Some(hook) = &step.post {
+        // Post hook can modify the outcome (e.g., filter spawned tasks)
+        let outcome = if let Some(hook) = &step.post {
             match run_post_hook(hook, &post_input) {
-                Ok(modified) => {
-                    let tasks = extract_next_tasks(&modified);
-                    (task_result, tasks)
-                }
+                Ok(modified) => match outcome {
+                    TaskOutcome::Success { finally_value, .. } => {
+                        let tasks = extract_next_tasks(&modified);
+                        TaskOutcome::Success {
+                            spawned: tasks,
+                            finally_value,
+                        }
+                    }
+                    other => other,
+                },
                 Err(e) => {
                     warn!(step = %task.step, error = %e, "post hook failed");
                     process_retry(&task, &step.options, FailureKind::SubmitError)
                 }
             }
         } else {
-            (task_result, new_tasks)
+            outcome
         };
 
-        let child_origin_id = if let Some(finally) = &step.finally_hook {
-            if final_tasks.is_empty() {
-                origin_id
-            } else {
-                self.finally_tracker.start_tracking(
-                    task_id,
-                    final_tasks.len(),
-                    finally_value,
-                    finally.clone(),
-                );
-                Some(task_id)
+        match outcome {
+            TaskOutcome::Success {
+                spawned,
+                finally_value,
+            } => {
+                // Determine finally_origin_id for children
+                let child_finally_origin_id = if let Some(finally) = &step.finally_hook {
+                    if spawned.is_empty() {
+                        // No children - run finally hook immediately
+                        let finally_spawned = run_finally_hook_direct(finally, &finally_value.0);
+                        for child in finally_spawned {
+                            let id = self.next_task_id();
+                            self.queue.push_back(QueuedTask {
+                                task: child,
+                                id,
+                                finally_origin_id: None, // Finally tasks are new roots
+                            });
+                        }
+                        finally_origin_id
+                    } else {
+                        self.finally_tracker.start_tracking(
+                            task_id,
+                            spawned.len(),
+                            finally_value.0,
+                            finally.clone(),
+                        );
+                        Some(task_id)
+                    }
+                } else {
+                    finally_origin_id
+                };
+
+                // Queue spawned children
+                for child in spawned {
+                    let id = self.next_task_id();
+                    self.queue.push_back(QueuedTask {
+                        task: child,
+                        id,
+                        finally_origin_id: child_finally_origin_id,
+                    });
+                }
+
+                // Task succeeded - notify origin
+                if let Some(oid) = finally_origin_id {
+                    self.notify_origin_of_completion(oid);
+                }
+
+                TaskResult::Completed
             }
-        } else {
-            origin_id
-        };
 
-        for new_task in final_tasks {
-            let id = self.next_task_id();
-            self.queue.push_back(QueuedTask {
-                task: new_task,
-                id,
-                origin_id: child_origin_id,
-            });
+            TaskOutcome::Retry(retry_task) => {
+                // Queue retry with SAME finally_origin_id - origin still waiting
+                let id = self.next_task_id();
+                self.queue.push_back(QueuedTask {
+                    task: retry_task,
+                    id,
+                    finally_origin_id, // Propagate - origin still waiting
+                });
+
+                // Do NOT notify origin - the logical task isn't done, it's retrying
+                TaskResult::Requeued
+            }
+
+            TaskOutcome::Dropped => {
+                // Task failed permanently - notify origin (descendant is done, failed)
+                if let Some(oid) = finally_origin_id {
+                    self.notify_origin_of_completion(oid);
+                }
+
+                TaskResult::Dropped
+            }
         }
-
-        // Root tasks and finally tasks have no origin - nothing to notify
-        if let Some(oid) = origin_id {
-            self.notify_origin_of_completion(oid);
-        }
-
-        final_result
     }
 }
 

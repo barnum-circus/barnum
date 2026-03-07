@@ -77,11 +77,30 @@ pub(super) enum TaskResult {
     Dropped,
 }
 
+/// Outcome of processing a task submission.
+///
+/// Separates spawned children (from successful execution) from retries (failed execution).
+/// This distinction is crucial for finally hook tracking:
+/// - Spawned children are "descendants" that the parent waits for
+/// - Retries are continuations of the same logical task, not new descendants
+pub(super) enum TaskOutcome {
+    /// Task succeeded, may have spawned children.
+    Success {
+        spawned: Vec<Task>,
+        finally_value: EffectiveValue,
+    },
+    /// Task failed, should be retried.
+    Retry(Task),
+    /// Task failed permanently (max retries exceeded or retry disabled).
+    Dropped,
+}
+
 /// Task queued for execution.
 pub(super) struct QueuedTask {
     pub task: Task,
     pub id: LogTaskId,
-    pub origin_id: Option<LogTaskId>,
+    /// Origin task with finally hook waiting for this task's completion.
+    pub finally_origin_id: Option<LogTaskId>,
 }
 
 /// Identity of a task being processed.
@@ -89,7 +108,8 @@ pub(super) struct QueuedTask {
 pub(super) struct TaskIdentity {
     pub task: Task,
     pub task_id: LogTaskId,
-    pub origin_id: Option<LogTaskId>,
+    /// Origin task with finally hook waiting for this task's completion.
+    pub finally_origin_id: Option<LogTaskId>,
 }
 
 /// Result of task execution, returned from dispatch threads.
