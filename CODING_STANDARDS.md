@@ -33,6 +33,8 @@
 
 - **Validate once, panic on invariant violations.** Validate external input (user input, files, network) at the boundary. After validation, internal code can panic if invariants are violated - this indicates a bug, not bad input.
 
+- **Never silently skip or accommodate errors.** If something goes wrong, fail loudly. Don't write code that "gracefully handles" invalid states by skipping over them - this masks bugs and makes debugging harder. If you find yourself writing code to skip invalid data, ask whether the data should have been validated upstream.
+
 ## Low-level conventions
 
 - **Newtypes for semantic clarity.** Wrap primitives and opaque types (strings, numbers, `serde_json::Value`) to prevent mixing up values. Cloning newtypes (especially string-based) is fine - they will eventually be interned. Corollaries:
