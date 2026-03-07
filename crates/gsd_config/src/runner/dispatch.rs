@@ -1,6 +1,5 @@
 //! Task dispatch - spawns threads to execute pool and command tasks.
 
-use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
@@ -39,7 +38,6 @@ fn run_pre_hook_or_send_error(
         Err(e) => {
             let _ = tx.send(InFlightResult {
                 identity: ctx.identity.clone(),
-                effective_value: original_value.clone(),
                 result: SubmitResult::PreHookError(e),
                 post_hook: ctx.post_hook.clone(),
                 finally_hook: ctx.finally_hook.clone(),
@@ -67,11 +65,13 @@ pub fn dispatch_pool_task(
     let payload = build_agent_payload(&ctx.identity.step_name, &effective_value, docs, timeout);
     debug!(payload = %payload, "task payload");
 
-    let result = submit_via_cli(pool_root, &payload, invoker);
+    let response = submit_via_cli(pool_root, &payload, invoker);
     let _ = tx.send(InFlightResult {
         identity: ctx.identity,
-        effective_value,
-        result: SubmitResult::Pool(result),
+        result: SubmitResult::Pool {
+            effective_value,
+            response,
+        },
         post_hook: ctx.post_hook,
         finally_hook: ctx.finally_hook,
     });
@@ -97,11 +97,13 @@ pub fn dispatch_command_task(
     }))
     .unwrap_or_default();
 
-    let result: io::Result<String> = run_command_action(script, &task_json, working_dir);
+    let output = run_command_action(script, &task_json, working_dir);
     let _ = tx.send(InFlightResult {
         identity: ctx.identity,
-        effective_value,
-        result: SubmitResult::Command(result),
+        result: SubmitResult::Command {
+            effective_value,
+            output,
+        },
         post_hook: ctx.post_hook,
         finally_hook: ctx.finally_hook,
     });

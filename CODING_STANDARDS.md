@@ -2,7 +2,10 @@
 
 ## Code should be easy to review and reason about
 
-- **Make impossible states unrepresentable.** Use enums with data, not structs with conditional fields. Go overboard with this - always prefer making impossible states unrepresentable over verbosity. There is no "reasonable" limit. Corollary: **single source of truth** - don't pass around data that can be derived (e.g., don't pass step_name if it can be looked up from task_id).
+- **Make impossible states unrepresentable.** Use enums with data, not structs with conditional fields. Go overboard with this - always prefer making impossible states unrepresentable over verbosity. There is no "reasonable" limit. Corollaries:
+  - **Single source of truth** - don't pass around data that can be derived (e.g., don't pass step_name if it can be looked up from task_id).
+  - **Values exist only where meaningful** - don't carry data alongside error paths where it's semantically invalid. If a value only makes sense when an operation succeeded, put it in the success variant, not in a shared struct.
+  - **Unnecessary cloning signals missing single source of truth** - if you're cloning data to pass it somewhere, ask whether the recipient could look it up instead. The performance cost of cloning is minor; the real issue is that redundant data can diverge and makes code harder to reason about.
 
 - **Functions stay at the same abstraction level.** The function the reviewer reads should not mix high and low-level details.
 

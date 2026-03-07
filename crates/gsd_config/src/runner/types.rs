@@ -98,14 +98,20 @@ pub(super) struct TaskIdentity {
 /// Result of task execution, returned from dispatch threads.
 pub(super) struct InFlightResult {
     pub identity: TaskIdentity,
-    pub effective_value: serde_json::Value,
     pub result: SubmitResult,
     pub post_hook: Option<HookScript>,
     pub finally_hook: Option<HookScript>,
 }
 
+/// Result of task submission. `effective_value` only exists when pre-hook succeeded.
 pub(super) enum SubmitResult {
-    Pool(io::Result<Response>),
-    Command(io::Result<String>),
+    Pool {
+        effective_value: serde_json::Value,
+        response: io::Result<Response>,
+    },
+    Command {
+        effective_value: serde_json::Value,
+        output: io::Result<String>,
+    },
     PreHookError(String),
 }

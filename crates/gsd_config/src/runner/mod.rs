@@ -24,8 +24,8 @@ use crate::value_schema::{CompiledSchemas, Task};
 use dispatch::{TaskContext, dispatch_command_task, dispatch_pool_task};
 use finally::{FinallyTracker, run_finally_hook};
 use hooks::{call_wake_script, run_post_hook};
-use response::{FailureKind, process_command_response, process_pool_response, process_retry};
-use types::{InFlightResult, PoolConnection, QueuedTask, SubmitResult, TaskIdentity};
+use response::{FailureKind, ProcessedSubmit, process_retry, process_submit_result};
+use types::{InFlightResult, PoolConnection, QueuedTask, TaskIdentity};
 
 use types::TaskResult;
 pub use types::{PostHookInput, RunnerConfig};
@@ -205,7 +205,6 @@ impl<'a> TaskRunner<'a> {
     fn process_result(&mut self, inflight: InFlightResult) -> TaskResult {
         let InFlightResult {
             identity,
-            effective_value,
             result,
             post_hook,
             finally_hook,
@@ -222,41 +221,12 @@ impl<'a> TaskRunner<'a> {
             return TaskResult::Skipped;
         };
 
-        let (task_result, new_tasks, post_input) = match result {
-            SubmitResult::Pool(Ok(response)) => {
-                process_pool_response(response, &task, &effective_value, step, self.schemas)
-            }
-            SubmitResult::Pool(Err(e)) => {
-                error!(step = %task.step, error = %e, "submit failed");
-                let (result, tasks) = process_retry(&task, &step.options, FailureKind::SubmitError);
-                let post_input = PostHookInput::Error {
-                    input: effective_value.clone(),
-                    error: e.to_string(),
-                };
-                (result, tasks, post_input)
-            }
-            SubmitResult::Command(Ok(stdout)) => {
-                process_command_response(&stdout, &task, &effective_value, step, self.schemas)
-            }
-            SubmitResult::Command(Err(e)) => {
-                error!(step = %task.step, error = %e, "command failed");
-                let (result, tasks) = process_retry(&task, &step.options, FailureKind::SubmitError);
-                let post_input = PostHookInput::Error {
-                    input: effective_value.clone(),
-                    error: e.to_string(),
-                };
-                (result, tasks, post_input)
-            }
-            SubmitResult::PreHookError(e) => {
-                error!(step = %task.step, error = %e, "pre hook failed");
-                let (result, tasks) = process_retry(&task, &step.options, FailureKind::SubmitError);
-                let post_input = PostHookInput::PreHookError {
-                    input: task.value.clone(),
-                    error: e,
-                };
-                (result, tasks, post_input)
-            }
-        };
+        let ProcessedSubmit {
+            result: task_result,
+            tasks: new_tasks,
+            post_input,
+            value_for_finally,
+        } = process_submit_result(result, &task, step, self.schemas);
 
         let (final_result, final_tasks) = if let Some(ref hook) = post_hook {
             match run_post_hook(hook, &post_input) {
@@ -280,7 +250,7 @@ impl<'a> TaskRunner<'a> {
                 self.finally_tracker.start_tracking(
                     task_id,
                     final_tasks.len(),
-                    effective_value,
+                    value_for_finally,
                     finally,
                 );
                 Some(task_id)
