@@ -133,7 +133,7 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
         .map(|(id, _)| *id)?;
 
     // Transition Pending → InFlight, return task for dispatching
-    let entry = self.tasks.get_mut(&task_id).unwrap();
+    let entry = self.tasks.get_mut(&task_id).expect("task_id from iterator must exist");
     if let TaskState::Pending { task } = &entry.state {
         let task_to_dispatch = task.clone();
         entry.state = TaskState::InFlight { step_name: task.step.clone() };
@@ -149,7 +149,7 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
 
 ```rust
 fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_value: EffectiveValue) {
-    let entry = self.tasks.get(&task_id).unwrap();
+    let entry = self.tasks.get(&task_id).expect("task_succeeded called with unknown task_id");
     let step_name = match &entry.state {
         TaskState::InFlight { step_name } => step_name.clone(),
         _ => panic!("task_succeeded on non-InFlight task"),
@@ -163,7 +163,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
     } else {
         // Has children - transition to WaitingForDescendants
         let parent_id = entry.parent_id;
-        let count = NonZeroU16::new(spawned.len() as u16).unwrap();
+        let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
         self.tasks.insert(task_id, TaskEntry {
             parent_id,
             state: TaskState::WaitingForDescendants {
@@ -189,7 +189,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
 
 ```rust
 fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective_value: EffectiveValue) {
-    let entry = self.tasks.remove(&task_id).unwrap();
+    let entry = self.tasks.remove(&task_id).expect("task_fully_done called with unknown task_id");
     let parent_id = entry.parent_id;
 
     // Look up finally hook from config
@@ -201,7 +201,7 @@ fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective
 
         if !spawned.is_empty() {
             // Finally spawned tasks - re-add ourselves as WaitingForDescendants
-            let count = NonZeroU16::new(spawned.len() as u16).unwrap();
+            let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
             self.tasks.insert(task_id, TaskEntry {
                 parent_id,
                 state: TaskState::WaitingForDescendants {
@@ -230,7 +230,7 @@ fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective
 }
 
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&parent_id).unwrap();
+    let entry = self.tasks.get_mut(&parent_id).expect("parent_id must exist in tasks");
 
     match &mut entry.state {
         TaskState::WaitingForDescendants { pending_count, effective_value, step_name } => {
@@ -241,7 +241,7 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
                 let sn = step_name.clone();
                 self.task_fully_done(parent_id, sn, ev);
             } else {
-                *pending_count = NonZeroU16::new(new_count).unwrap();
+                *pending_count = NonZeroU16::new(new_count).expect("new_count > 0 checked above");
             }
         }
         _ => panic!("decrement_parent on non-WaitingForDescendants task"),
