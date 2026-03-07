@@ -183,11 +183,13 @@ impl<'a> TaskRunner<'a> {
         self.in_flight += 1;
     }
 
-    /// Decrement the pending count for an origin and run finally if done.
-    fn decrement_origin(&mut self, origin_id: Option<LogTaskId>) {
-        let Some(oid) = origin_id else { return };
-
-        if let Some(state) = self.finally_tracker.decrement(oid) {
+    /// Notify that a descendant of `origin_id` has completed. Runs finally hook
+    /// if all descendants are done.
+    ///
+    /// BUG: Currently called when task completes, but should only be called when
+    /// task is "fully done" (including finally hook). See `FINALLY_TRACKING` refactor.
+    fn notify_origin_of_completion(&mut self, origin_id: LogTaskId) {
+        if let Some(state) = self.finally_tracker.record_descendant_done(origin_id) {
             let spawned = run_finally_hook(state);
             for task in spawned {
                 let id = self.next_task_id();
@@ -296,7 +298,10 @@ impl<'a> TaskRunner<'a> {
             });
         }
 
-        self.decrement_origin(origin_id);
+        // Root tasks and finally tasks have no origin - nothing to notify
+        if let Some(oid) = origin_id {
+            self.notify_origin_of_completion(oid);
+        }
 
         final_result
     }

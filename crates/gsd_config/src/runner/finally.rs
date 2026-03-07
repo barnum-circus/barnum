@@ -42,15 +42,21 @@ impl FinallyTracker {
         );
     }
 
-    pub fn decrement(&mut self, origin_id: LogTaskId) -> Option<FinallyState> {
-        let should_run = if let Some(state) = self.tracking.get_mut(&origin_id) {
+    /// Record that a descendant of `origin_id` has completed.
+    ///
+    /// Returns `Some(FinallyState)` when all descendants are done and the
+    /// finally hook is ready to run. Returns `None` if descendants remain
+    /// or if `origin_id` has no finally tracking (no-op for tasks without finally hooks).
+    pub fn record_descendant_done(&mut self, origin_id: LogTaskId) -> Option<FinallyState> {
+        let ready_for_finally = if let Some(state) = self.tracking.get_mut(&origin_id) {
             state.pending_count = state.pending_count.saturating_sub(1);
             state.pending_count == 0
         } else {
-            false
+            // Not tracked - origin has no finally hook, this is expected
+            return None;
         };
 
-        if should_run {
+        if ready_for_finally {
             self.tracking.remove(&origin_id)
         } else {
             None

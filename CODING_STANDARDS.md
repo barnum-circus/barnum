@@ -47,3 +47,7 @@
 - **Use `thiserror`** for error enums.
 
 - **Use `with_xyz` for scoped resources.** For setup/teardown patterns, accept `impl FnOnce()` and handle cleanup automatically.
+
+- **TODOs in markdown, not code.** Track TODOs in `refactors/pending/todos.md`, not as `// TODO` comments in code. Code comments become stale; the markdown file is the single source of truth for work items.
+
+- **Comment graceful early returns.** When code returns early or handles a case gracefully (rather than panicking), add a comment explaining why this is expected, not an error. Example: `let Some(x) = foo else { return }; // expected: root tasks have no parent`

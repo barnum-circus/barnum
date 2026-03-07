@@ -69,6 +69,21 @@ Eager is simpler and the cost is low (one-time at startup). The docs generation 
 
 ---
 
+## Explore Passing TaskContext by Reference
+
+**Status: TODO (needs investigation)**
+
+Currently `TaskContext` is moved into the spawned thread in `dispatch_pool_task` and `dispatch_command_task`. This requires cloning several fields (pre_hook, post_hook, finally_hook, step_name).
+
+Questions to investigate:
+- Can we pass `&TaskContext` instead and use scoped threads or async?
+- Would this reduce cloning overhead?
+- Does the thread lifetime allow borrowing from TaskRunner?
+
+The challenge is that spawned threads outlive the `submit_one` call, so references to TaskRunner data would need careful lifetime management (possibly scoped threads from `crossbeam` or `std::thread::scope`).
+
+---
+
 ## QueuedTask Contains Full Task Instead of ID
 
 **Status: TODO (needs design)**
