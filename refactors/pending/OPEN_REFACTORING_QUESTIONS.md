@@ -65,3 +65,31 @@ struct Paths {
 ### Too Many Arguments: handle_fs_event
 
 Same issue - 11 parameters could be reduced with `IoState` and `Paths` structs.
+
+---
+
+## agent_pool_cli
+
+### File Length: main.rs (~490 lines)
+
+`agent_pool_cli/src/main.rs` is borderline at 490 lines. The `main()` function has `#[expect(clippy::too_many_lines)]`. Could potentially extract subcommand handlers, but lower priority - CLI tools often have large dispatch functions.
+
+---
+
+## Audit Status
+
+**Completed 2026-03-07:** Full codebase audit against CODING_STANDARDS.md
+
+**Files reviewed and found compliant:**
+- All gsd_config modules (runner extracted, tests updated)
+- All agent_pool modules except wiring.rs/io.rs (flagged above)
+- task_queue, task_queue_macro, cli_invoker, string_id crates
+- All test files
+
+**Actions taken:**
+- Separated `initial_tasks` from `RunnerConfig` (input data vs config)
+- Extracted `dispatch.rs` with `TaskContext` and dispatch functions
+- Simplified `hooks.rs` with `run_shell_command` helper
+- Updated `RunnerConfig` to pass by reference
+
+**Remaining work:** The items flagged above in agent_pool.
