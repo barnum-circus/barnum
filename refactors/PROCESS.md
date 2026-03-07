@@ -1,5 +1,24 @@
 # Refactor Process
 
+## CRITICAL: Never Start Without Explicit Approval
+
+**DO NOT begin any implementation work without explicit user approval.** This includes:
+- Writing code
+- Creating branches
+- Running tests on proposed changes
+- Committing anything
+- "Investigating" by making changes
+
+When the user describes a task or asks you to design something:
+1. Write the plan/design document
+2. Present it to the user
+3. **STOP AND WAIT** for explicit approval ("go ahead", "implement it", "approved")
+4. Only then begin implementation
+
+**Asking "Want me to run this?" is NOT the same as waiting for approval.** Just present what you've designed and wait. The user will tell you when to proceed.
+
+---
+
 Big refactors follow a two-phase process:
 
 ## Phase 1: Architecture document
