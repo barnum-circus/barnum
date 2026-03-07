@@ -25,7 +25,7 @@ use tracing::{error, info, warn};
 
 use crate::docs::generate_step_docs;
 use crate::resolved::{Action, Config, Step};
-use crate::types::LogTaskId;
+use crate::types::{LogTaskId, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use dispatch::{TaskContext, dispatch_command_task, dispatch_pool_task};
@@ -56,7 +56,7 @@ const DEFAULT_MAX_CONCURRENCY: usize = 20;
 pub struct TaskRunner<'a> {
     config: &'a Config,
     schemas: &'a CompiledSchemas,
-    step_map: HashMap<&'a str, &'a Step>,
+    step_map: HashMap<&'a StepName, &'a Step>,
     queue: VecDeque<QueuedTask>,
     agent_pool_root: &'a Path,
     working_dir: &'a Path,
@@ -167,7 +167,7 @@ impl<'a> TaskRunner<'a> {
         #[allow(clippy::expect_used)] // Invariant: steps are validated at config load time
         let step = self
             .step_map
-            .get(task.step.as_str())
+            .get(&task.step)
             .expect("unknown step - config should have been validated");
 
         #[allow(clippy::expect_used)] // Invariant: task values are validated before queuing
@@ -243,7 +243,7 @@ impl<'a> TaskRunner<'a> {
             finally_hook,
         } = inflight;
 
-        let Some(step) = self.step_map.get(step_name.as_str()) else {
+        let Some(step) = self.step_map.get(&step_name) else {
             return TaskOutcome {
                 task,
                 result: TaskResult::Skipped {

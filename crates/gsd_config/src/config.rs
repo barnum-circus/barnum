@@ -244,8 +244,8 @@ pub struct Instructions(pub String);
 impl ConfigFile {
     /// Build a map of step name to step for efficient lookup.
     #[must_use]
-    pub fn step_map(&self) -> HashMap<&str, &StepFile> {
-        self.steps.iter().map(|s| (s.name.as_str(), s)).collect()
+    pub fn step_map(&self) -> HashMap<&StepName, &StepFile> {
+        self.steps.iter().map(|s| (&s.name, s)).collect()
     }
 
     /// Check if any step uses the Pool action.
