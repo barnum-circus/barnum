@@ -19,17 +19,17 @@ struct TaskRunner<'a> {
     // ...
     /// Tracks pending descendants for tasks with `finally` hooks.
     /// Key: origin task ID, Value: (pending count, original value, finally command)
-    finally_tracking: HashMap<u64, FinallyState>,
+    finally_tracking: HashMap<LogTaskId, FinallyState>,
 }
 
 /// Internal task wrapper with lineage tracking.
 struct QueuedTask {
     task: Task,
     /// Unique ID for this task instance.
-    id: u64,
+    id: LogTaskId,
     /// If this task descended from a task with `finally`, tracks that origin.
     /// NOTE: This skips intermediate tasks - points directly to finally-ancestor
-    origin_id: Option<u64>,
+    origin_id: Option<LogTaskId>,
 }
 
 /// State for tracking when a `finally` hook should run.
@@ -78,7 +78,7 @@ for new_task in final_tasks {
 
 ```rust
 /// Decrement the pending count for an origin and run finally if done.
-fn decrement_origin(&mut self, origin_id: Option<u64>) {
+fn decrement_origin(&mut self, origin_id: Option<LogTaskId>) {
     let Some(oid) = origin_id else { return };
 
     let should_run_finally = if let Some(state) = self.finally_tracking.get_mut(&oid) {
@@ -125,12 +125,12 @@ We lose the tree structure.
 struct TaskRunner<'a> {
     // ...
     /// Per-task state tracking. Tasks not in this map are fully done.
-    task_states: HashMap<u64, TrackedTask>,
+    task_states: HashMap<LogTaskId, TrackedTask>,
 }
 
 struct TrackedTask {
     /// Immediate parent (always set except for initial tasks)
-    parent_id: Option<u64>,
+    parent_id: Option<LogTaskId>,
     /// Current state of this task
     state: TaskState,
     /// Step name (needed to look up finally hook in config)
@@ -150,8 +150,8 @@ enum TaskState {
 /// Internal task wrapper - simpler now
 struct QueuedTask {
     task: Task,
-    id: u64,
-    parent_id: Option<u64>,  // Always immediate parent, never skips
+    id: LogTaskId,
+    parent_id: Option<LogTaskId>,  // Always immediate parent, never skips
 }
 ```
 
@@ -161,8 +161,7 @@ struct QueuedTask {
 // When any task spawns children (regardless of finally hook):
 
 for new_task in final_tasks {
-    let child_id = self.next_task_id;
-    self.next_task_id += 1;
+    let child_id = self.next_task_id();
 
     // Track the child
     self.task_states.insert(child_id, TrackedTask {
@@ -192,8 +191,9 @@ if !final_tasks.is_empty() {
 
 ```rust
 /// Called when a task is fully done (agent complete + all descendants done)
-fn task_fully_done(&mut self, task_id: u64) {
-    let Some(tracked) = self.task_states.remove(&task_id) else { return };
+fn task_fully_done(&mut self, task_id: LogTaskId) {
+    let tracked = self.task_states.remove(&task_id)
+        .expect("task_fully_done called with unknown task_id");
 
     // Run finally hook if this step has one
     if let Some(finally_cmd) = self.get_finally_hook(&tracked.step) {
@@ -207,8 +207,9 @@ fn task_fully_done(&mut self, task_id: u64) {
 }
 
 /// Decrement parent's child count, maybe mark parent as fully done
-fn decrement_parent(&mut self, parent_id: u64) {
-    let Some(tracked) = self.task_states.get_mut(&parent_id) else { return };
+fn decrement_parent(&mut self, parent_id: LogTaskId) {
+    let tracked = self.task_states.get_mut(&parent_id)
+        .expect("decrement_parent called with unknown parent_id");
 
     match &mut tracked.state {
         TaskState::AwaitingDescendants(count) => {
@@ -228,16 +229,13 @@ fn decrement_parent(&mut self, parent_id: u64) {
     }
 }
 
-/// Called when agent returns success
-fn on_agent_complete(&mut self, task_id: u64, spawned: Vec<Task>) {
-    if spawned.is_empty() {
-        // No children - task is immediately fully done
-        self.task_fully_done(task_id);
-    } else {
-        // Has children - queue them, parent state already updated
-        // (see "Setting Up Child Tracking" above)
-    }
+// After processing task result and queuing any spawned children:
+if spawned.is_empty() {
+    // No children - task is immediately fully done
+    self.task_fully_done(task_id);
 }
+// If spawned is non-empty, children were queued above and parent
+// state was updated to AwaitingDescendants
 ```
 
 ### Example Trace (After)
@@ -281,7 +279,7 @@ C completes (no children):
 On resume, reconstruct `task_states` from the log:
 
 ```rust
-fn reconstruct_task_states(entries: &[StateLogEntry]) -> HashMap<u64, TrackedTask> {
+fn reconstruct_task_states(entries: &[StateLogEntry]) -> HashMap<LogTaskId, TrackedTask> {
     let mut states = HashMap::new();
 
     for entry in entries {
@@ -325,8 +323,8 @@ The tree structure is preserved because `origin_id` (now `parent_id`) always poi
 ## Files Changed
 
 - `crates/gsd_config/src/runner.rs`
-  - Remove `finally_tracking: HashMap<u64, FinallyState>`
-  - Add `task_states: HashMap<u64, TrackedTask>`
+  - Remove `finally_tracking: HashMap<LogTaskId, FinallyState>`
+  - Add `task_states: HashMap<LogTaskId, TrackedTask>`
   - Change `QueuedTask.origin_id` to `parent_id` (always immediate parent)
   - Rewrite `decrement_origin` → `decrement_parent` + `task_fully_done`
   - Update task spawning to always track parent relationship

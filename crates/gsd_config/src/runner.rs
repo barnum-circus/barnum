@@ -278,6 +278,14 @@ impl<'a> TaskRunner<'a> {
         self.queue.is_empty() && self.in_flight == 0
     }
 
+    /// Allocate the next task ID.
+    #[allow(clippy::missing_const_for_fn)] // &mut self can't be const
+    fn next_task_id(&mut self) -> LogTaskId {
+        let id = LogTaskId(self.next_task_id);
+        self.next_task_id += 1;
+        id
+    }
+
     #[allow(clippy::too_many_lines)]
     fn submit_pending(&mut self) {
         while self.in_flight < self.max_concurrency {
@@ -461,8 +469,7 @@ impl<'a> TaskRunner<'a> {
                     Ok(tasks) => {
                         info!(count = tasks.len(), "finally hook spawned tasks");
                         for task in tasks {
-                            let id = LogTaskId(self.next_task_id);
-                            self.next_task_id += 1;
+                            let id = self.next_task_id();
                             self.queue.push_back(QueuedTask {
                                 task,
                                 id,
@@ -585,8 +592,7 @@ impl<'a> TaskRunner<'a> {
 
         // Queue new tasks with proper origin tracking
         for new_task in final_tasks {
-            let id = LogTaskId(self.next_task_id);
-            self.next_task_id += 1;
+            let id = self.next_task_id();
             self.queue.push_back(QueuedTask {
                 task: new_task,
                 id,
