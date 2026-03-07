@@ -71,20 +71,27 @@ struct TaskEntry {
     state: TaskState,
 }
 
+/// Task waiting to be dispatched
+struct PendingTask {
+    task: Task,
+}
+
+/// Task currently executing (dispatched to agent/command)
+struct InFlightTask {
+    step_name: StepName,  // Only need this to look up finally hook when task completes
+}
+
+/// Task succeeded, waiting for descendants to complete before running finally
+struct WaitingForDescendants {
+    pending_count: NonZeroU16,
+    effective_value: EffectiveValue,
+    step_name: StepName,  // Look up finally_hook from config when needed
+}
+
 enum TaskState {
-    /// Waiting to be dispatched
-    Pending { task: Task },
-
-    /// Currently executing (dispatched to agent/command)
-    /// Only need step_name to look up finally hook when task completes
-    InFlight { step_name: StepName },
-
-    /// Execution succeeded, waiting for descendants to complete before running finally
-    WaitingForDescendants {
-        pending_count: NonZeroU16,
-        effective_value: EffectiveValue,
-        step_name: StepName,  // Look up finally_hook from config when needed
-    },
+    Pending(PendingTask),
+    InFlight(InFlightTask),
+    WaitingForDescendants(WaitingForDescendants),
 }
 ```
 
@@ -128,17 +135,18 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
     }
 
     // Find first Pending task (BTreeMap gives us FIFO order)
-    let task_id = self.tasks.iter()
-        .find(|(_, entry)| matches!(entry.state, TaskState::Pending { .. }))
-        .map(|(id, _)| *id)?;
+    let (task_id, pending) = self.tasks.iter()
+        .find_map(|(id, entry)| match &entry.state {
+            TaskState::Pending(p) => Some((*id, p)),
+            _ => None,
+        })?;
 
-    // Transition Pending → InFlight, return task for dispatching
+    let task_to_dispatch = pending.task.clone();
+    let step_name = pending.task.step.clone();
+
+    // Transition Pending → InFlight
     let entry = self.tasks.get_mut(&task_id).expect("task_id from iterator must exist");
-    let TaskState::Pending { task } = &entry.state else {
-        unreachable!("found Pending in iterator but not Pending on lookup");
-    };
-    let task_to_dispatch = task.clone();
-    entry.state = TaskState::InFlight { step_name: task.step.clone() };
+    entry.state = TaskState::InFlight(InFlightTask { step_name });
     self.in_flight += 1;
     Some((task_id, task_to_dispatch))
 }
@@ -149,10 +157,11 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
 ```rust
 fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_value: EffectiveValue) {
     let entry = self.tasks.get(&task_id).expect("task_succeeded called with unknown task_id");
-    let step_name = match &entry.state {
-        TaskState::InFlight { step_name } => step_name.clone(),
-        _ => panic!("task_succeeded on non-InFlight task"),
+    let TaskState::InFlight(in_flight) = &entry.state else {
+        panic!("task_succeeded on non-InFlight task");
     };
+    let step_name = in_flight.step_name.clone();
+    let parent_id = entry.parent_id;
 
     self.in_flight -= 1;
 
@@ -161,15 +170,14 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
         self.task_fully_done(task_id, step_name, effective_value);
     } else {
         // Has children - transition to WaitingForDescendants
-        let parent_id = entry.parent_id;
         let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
         self.tasks.insert(task_id, TaskEntry {
             parent_id,
-            state: TaskState::WaitingForDescendants {
+            state: TaskState::WaitingForDescendants(WaitingForDescendants {
                 pending_count: count,
                 effective_value,
                 step_name,
-            },
+            }),
         });
 
         // Queue children
@@ -177,7 +185,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
             let child_id = self.next_task_id();
             self.tasks.insert(child_id, TaskEntry {
                 parent_id: Some(task_id),  // Always immediate parent!
-                state: TaskState::Pending { task: child_task },
+                state: TaskState::Pending(PendingTask { task: child_task }),
             });
         }
     }
@@ -203,11 +211,11 @@ fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective
             let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
             self.tasks.insert(task_id, TaskEntry {
                 parent_id,
-                state: TaskState::WaitingForDescendants {
+                state: TaskState::WaitingForDescendants(WaitingForDescendants {
                     pending_count: count,
                     effective_value,
                     step_name: StepName::FinallyCleanup,  // Marker: finally already ran
-                },
+                }),
             });
 
             // Queue finally-spawned tasks with this task as parent
@@ -215,7 +223,7 @@ fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective
                 let child_id = self.next_task_id();
                 self.tasks.insert(child_id, TaskEntry {
                     parent_id: Some(task_id),
-                    state: TaskState::Pending { task: child_task },
+                    state: TaskState::Pending(PendingTask { task: child_task }),
                 });
             }
             return;  // Don't notify parent yet
@@ -231,19 +239,18 @@ fn task_fully_done(&mut self, task_id: LogTaskId, step_name: StepName, effective
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
     let entry = self.tasks.get_mut(&parent_id).expect("parent_id must exist in tasks");
 
-    match &mut entry.state {
-        TaskState::WaitingForDescendants { pending_count, effective_value, step_name } => {
-            let new_count = pending_count.get() - 1;
-            if new_count == 0 {
-                // Parent is now fully done
-                let ev = effective_value.clone();
-                let sn = step_name.clone();
-                self.task_fully_done(parent_id, sn, ev);
-            } else {
-                *pending_count = NonZeroU16::new(new_count).expect("new_count > 0 checked above");
-            }
-        }
-        _ => panic!("decrement_parent on non-WaitingForDescendants task"),
+    let TaskState::WaitingForDescendants(waiting) = &mut entry.state else {
+        panic!("decrement_parent on non-WaitingForDescendants task");
+    };
+
+    let new_count = waiting.pending_count.get() - 1;
+    if new_count == 0 {
+        // Parent is now fully done
+        let ev = waiting.effective_value.clone();
+        let sn = waiting.step_name.clone();
+        self.task_fully_done(parent_id, sn, ev);
+    } else {
+        waiting.pending_count = NonZeroU16::new(new_count).expect("new_count > 0 checked above");
     }
 }
 ```
@@ -254,27 +261,27 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
 A (finally) spawns B (finally), B spawns C
 
 Initial:
-  tasks[0/A] = { parent: None, state: Pending { task: A } }
+  tasks[0/A] = { parent: None, state: Pending(task: A) }
   in_flight = 0
 
 A dispatched:
-  tasks[0/A] = { parent: None, state: InFlight { step: "A" } }
+  tasks[0/A] = { parent: None, state: InFlight(step: "A") }
   in_flight = 1
 
 A succeeds, spawns B:
-  tasks[0/A] = { parent: None, state: WaitingForDescendants { count: 1, step: "A" } }
-  tasks[1/B] = { parent: Some(0), state: Pending { task: B } }
+  tasks[0/A] = { parent: None, state: WaitingForDescendants(count: 1, step: "A") }
+  tasks[1/B] = { parent: Some(0), state: Pending(task: B) }
   in_flight = 0
 
 B dispatched:
-  tasks[0/A] = { parent: None, state: WaitingForDescendants { count: 1, step: "A" } }
-  tasks[1/B] = { parent: Some(0), state: InFlight { step: "B" } }
+  tasks[0/A] = { parent: None, state: WaitingForDescendants(count: 1, step: "A") }
+  tasks[1/B] = { parent: Some(0), state: InFlight(step: "B") }
   in_flight = 1
 
 B succeeds, spawns C:
-  tasks[0/A] = { parent: None, state: WaitingForDescendants { count: 1, step: "A" } }
-  tasks[1/B] = { parent: Some(0), state: WaitingForDescendants { count: 1, step: "B" } }
-  tasks[2/C] = { parent: Some(1), state: Pending { task: C } }
+  tasks[0/A] = { parent: None, state: WaitingForDescendants(count: 1, step: "A") }
+  tasks[1/B] = { parent: Some(0), state: WaitingForDescendants(count: 1, step: "B") }
+  tasks[2/C] = { parent: Some(1), state: Pending(task: C) }
   in_flight = 0
 
 C dispatched and succeeds (no children, no finally):
