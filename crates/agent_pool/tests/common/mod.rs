@@ -164,7 +164,7 @@ pub struct TestAgent {
     current_pid: Arc<AtomicU32>,
     handle: Option<thread::JoinHandle<Vec<String>>>,
     /// Test name for logging purposes
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     test_name: String,
     /// Pool name for deregistration on stop
     pool: String,

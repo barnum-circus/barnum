@@ -210,7 +210,7 @@ fn format_task_output(
     serde_json::to_string_pretty(&output).unwrap_or_default()
 }
 
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.log_level);

@@ -1,6 +1,6 @@
 //! Tests for concurrent task execution.
 //!
-//! These tests verify that the `TaskRunner` actually submits tasks concurrently
+//! These tests verify that tasks are submitted concurrently
 //! and that multiple agents can process work in parallel.
 
 #![expect(clippy::print_stderr)]
@@ -14,7 +14,7 @@ use common::{
     AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
-use gsd_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, Task, TaskRunner};
+use gsd_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, Task};
 use rstest::rstest;
 use std::collections::HashSet;
 use std::path::Path;
@@ -260,91 +260,6 @@ fn max_concurrency_limits_parallel_tasks() {
     );
 
     cleanup_test_dir(&format!("{TEST_DIR}_max_concurrency"));
-}
-
-/// Test the TaskRunner iterator interface yields results as they complete.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-fn task_runner_yields_results_incrementally() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_iterator"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_iterator"));
-        return;
-    }
-
-    let pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::terminator(&root, Duration::from_millis(10));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let config = worker_config();
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-
-    let initial_tasks: Vec<Task> = (0..3)
-        .map(|i| Task::new("Worker", serde_json::json!({"id": i})))
-        .collect();
-
-    let runner_config = RunnerConfig {
-        agent_pool_root: pool.pool_path(),
-        working_dir: Path::new("."),
-        wake_script: None,
-        initial_tasks,
-        invoker: &create_test_invoker(),
-    };
-
-    let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
-    let mut outcomes = Vec::new();
-
-    for outcome in &mut runner {
-        outcomes.push(outcome);
-    }
-
-    assert_eq!(outcomes.len(), 3, "Should yield 3 outcomes");
-
-    drop(agent);
-    cleanup_test_dir(&format!("{TEST_DIR}_iterator"));
-}
-
-/// Test that TaskRunner.is_empty() returns correct status.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-fn task_runner_is_empty_status() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_is_empty"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_is_empty"));
-        return;
-    }
-
-    let pool = AgentPoolHandle::start(&root);
-    let agent = GsdTestAgent::terminator(&root, Duration::from_millis(10));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let config = worker_config();
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-
-    let runner_config = RunnerConfig {
-        agent_pool_root: pool.pool_path(),
-        working_dir: Path::new("."),
-        wake_script: None,
-        initial_tasks: vec![Task::new("Worker", serde_json::json!({}))],
-        invoker: &create_test_invoker(),
-    };
-
-    let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
-
-    assert!(!runner.is_empty(), "Runner should not be empty initially");
-
-    while runner.next().is_some() {}
-
-    assert!(runner.is_empty(), "Runner should be empty after completion");
-
-    drop(agent);
-    cleanup_test_dir(&format!("{TEST_DIR}_is_empty"));
 }
 
 /// Test that nested fan-out works correctly (A -> B1,B2 -> each spawns C).

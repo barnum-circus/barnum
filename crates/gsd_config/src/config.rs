@@ -3,7 +3,7 @@
 //! Defines the task queue with steps, schemas, and transitions.
 //! These types are serialization-format agnostic (use serde).
 
-use crate::types::StepName;
+use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -85,48 +85,25 @@ pub struct StepFile {
     #[serde(default)]
     pub value_schema: Option<SchemaRef>,
 
-    /// Shell command to run before the action.
-    ///
-    /// Receives the task value JSON on stdin, must output modified task value JSON on stdout.
-    /// If the command fails (non-zero exit), the task is treated as failed and the post
-    /// hook (if any) is called with `{kind: "PreHookError", ...}`.
+    /// Pre-execution hook script.
     #[serde(default)]
-    pub pre: Option<String>,
+    pub pre: Option<HookScript>,
 
-    /// How this step processes tasks.
+    /// How to execute the step.
     #[serde(default)]
     pub action: ActionFile,
 
-    /// Shell command to run after the action completes.
-    ///
-    /// Receives result JSON on stdin with structure:
-    /// - `{kind: "Success", input: <value>, output: <agent_output>, next: [...]}`
-    /// - `{kind: "Timeout", input: <value>}`
-    /// - `{kind: "Error", input: <value>, error: "..."}`
-    /// - `{kind: "PreHookError", input: <value>, error: "..."}`
-    ///
-    /// Must output modified result JSON on stdout. Can modify the `next` array to
-    /// filter, add, or transform the tasks that will be spawned.
-    ///
-    /// Runs even on timeout or error. Post hook failures trigger retry policy.
+    /// Post-execution hook script.
     #[serde(default)]
-    pub post: Option<String>,
+    pub post: Option<HookScript>,
 
-    /// Valid next step names (empty = terminal step).
+    /// Valid next steps.
     #[serde(default)]
     pub next: Vec<StepName>,
 
-    /// Shell command to run after ALL tasks spawned by this step (and their
-    /// descendants) have completed.
-    ///
-    /// Receives the original task value on stdin. Outputs next tasks on stdout.
-    /// Useful for cleanup, aggregation, or triggering follow-up work after a
-    /// fan-out completes.
-    ///
-    /// Runs even if some descendants failed. Failures are logged but don't
-    /// prevent the workflow from continuing.
+    /// Finally hook (runs after all children complete).
     #[serde(default, rename = "finally")]
-    pub finally_hook: Option<String>,
+    pub finally_hook: Option<HookScript>,
 
     /// Per-step options that override global options.
     #[serde(default)]

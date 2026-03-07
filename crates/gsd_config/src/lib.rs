@@ -17,21 +17,18 @@
 //! Tasks have a `kind` (step name) and `value` (payload).
 //! Agents return arrays of tasks as their response.
 
-pub mod config;
+mod config;
 mod docs;
-pub mod maybe_linked;
-pub mod resolved;
+mod maybe_linked;
+mod resolved;
 mod runner;
 mod types;
 mod value_schema;
 
-// Public API - only what external users need
-// Config file types (for parsing)
+// Public API - only what gsd_cli actually uses
 pub use config::{ConfigFile, config_schema};
-// Resolved types (for runtime)
 pub use docs::generate_full_docs;
-pub use maybe_linked::MaybeLinked;
-pub use resolved::{Action, Config, Options, Step};
-pub use runner::{RunnerConfig, TaskOutcome, TaskResult, TaskRunner, run};
+pub use resolved::{Action, Config};
+pub use runner::{RunnerConfig, run};
 pub use types::StepName;
 pub use value_schema::{CompiledSchemas, Task};

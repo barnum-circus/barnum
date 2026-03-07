@@ -56,17 +56,15 @@ impl StopNotifier {
     ///
     /// Returns `true` if stop was signaled (either before or during the wait).
     /// Returns `false` if the timeout elapsed without stop.
-    #[allow(clippy::significant_drop_tightening)] // Guard must be held for condvar wait
+    #[expect(clippy::significant_drop_tightening)] // Guard must be held for condvar wait
     pub fn wait_timeout(&self, timeout: Duration) -> bool {
-        // Check if already stopped
         if self.flag.load(Ordering::Relaxed) {
             return true;
         }
 
-        // Wait with timeout
-        #[allow(clippy::expect_used)] // Mutex poisoning indicates a bug
+        #[expect(clippy::expect_used)] // Mutex poisoning indicates a bug
         let guard = self.mutex.lock().expect("mutex poisoned");
-        #[allow(clippy::expect_used)] // Condvar wait can't fail if mutex isn't poisoned
+        #[expect(clippy::expect_used)] // Condvar wait can't fail if mutex isn't poisoned
         let (_guard, timeout_result) = self
             .condvar
             .wait_timeout(guard, timeout)
@@ -145,7 +143,7 @@ impl IdAllocator {
     }
 
     /// Allocate a submission ID.
-    #[allow(clippy::missing_const_for_fn)] // const fn with &mut self not stable
+    #[expect(clippy::missing_const_for_fn)] // const fn with &mut self not stable
     pub fn allocate_submission(&mut self) -> SubmissionId {
         let id = SubmissionId(self.next_submission_id);
         self.next_submission_id += 1;
@@ -217,19 +215,6 @@ impl<Id: TransportId> TransportMap<Id> {
         entry.insert(id);
         self.entries.insert(id, (Transport::Directory(path), data));
         true
-    }
-
-    /// Register a directory-based transport with associated data.
-    ///
-    /// Returns `None` if the path is already registered (duplicate FS event).
-    #[allow(dead_code)] // Will be used by anonymous worker protocol
-    pub fn register_directory(&mut self, path: PathBuf, data: Id::Data) -> Option<Id> {
-        let id = self.allocate_id();
-        if self.register(id, path, data) {
-            Some(id)
-        } else {
-            None
-        }
     }
 
     /// Register a socket-based transport with associated data.
@@ -351,7 +336,7 @@ impl SubmissionMap {
         })?;
 
         match &mut transport {
-            #[allow(clippy::expect_used)]
+            #[expect(clippy::expect_used)]
             // Internal invariant: request path must have REQUEST_SUFFIX
             Transport::Directory(path) => {
                 // path is the request file; derive response path
@@ -425,8 +410,7 @@ impl SubmissionMap {
 ///
 /// Panics if the effect references an ID that doesn't exist. This indicates a
 /// core bug, since core should only emit effects for IDs it knows about.
-#[allow(clippy::expect_used)] // Internal invariants - effects reference valid IDs
-#[allow(clippy::too_many_lines)] // Large match on Effect variants
+#[expect(clippy::expect_used)] // Internal invariants - effects reference valid IDs
 pub(super) fn execute_effect(
     effect: Effect,
     worker_map: &mut WorkerMap,
@@ -589,73 +573,4 @@ fn start_idle_timer(
             let _ = events_tx.send(Event::AssignHeartbeatIfIdle { worker_id });
         }
     });
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn worker_map_register_and_lookup() {
-        let mut map = WorkerMap::new();
-        let path = PathBuf::from("/tmp/test/agents/worker-1");
-
-        let id = map.register_directory(path.clone(), ()).unwrap();
-        assert_eq!(id, WorkerId(0));
-
-        // Look up by ID
-        assert!(map.get_transport(id).is_some());
-
-        // Look up by path
-        assert_eq!(map.get_id_by_path(&path), Some(id));
-
-        // Duplicate registration returns None
-        assert!(map.register_directory(path, ()).is_none());
-    }
-
-    #[test]
-    fn worker_map_remove() {
-        let mut map = WorkerMap::new();
-        let path = PathBuf::from("/tmp/test/agents/worker-1");
-
-        let id = map.register_directory(path.clone(), ()).unwrap();
-        let (transport, ()) = map.remove(id).unwrap();
-
-        assert!(matches!(transport, Transport::Directory(_)));
-        assert!(map.get_transport(id).is_none());
-        assert!(map.get_id_by_path(&path).is_none());
-    }
-
-    #[test]
-    fn submission_map_register_and_finish() {
-        let tmp = TempDir::new().unwrap();
-        let request_path = tmp.path().join("submission-1.request.json");
-
-        let mut map = SubmissionMap::new();
-        let id = map
-            .register_directory(
-                request_path,
-                SubmissionData {
-                    content: "test content".to_string(),
-                    timeout: Duration::from_secs(60),
-                },
-            )
-            .unwrap();
-
-        assert_eq!(id, SubmissionId(0));
-        assert_eq!(map.get_data(id).unwrap().content, "test content");
-
-        // Finish the submission
-        map.finish(id, r#"{"result": "ok"}"#).unwrap();
-
-        // Submission should be removed
-        assert!(map.get_data(id).is_none());
-
-        // Response should be written to the derived response path
-        let response_path = tmp.path().join("submission-1.response.json");
-        let response = fs::read_to_string(response_path).unwrap();
-        assert_eq!(response, r#"{"result": "ok"}"#);
-    }
 }

@@ -5,10 +5,17 @@ use agent_pool_cli::AgentPoolCli;
 use cli_invoker::Invoker;
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use crate::types::{LogTaskId, StepName};
+use crate::types::{HookScript, LogTaskId, StepName};
 use crate::value_schema::Task;
+
+/// Connection details for the agent pool.
+pub(super) struct PoolConnection {
+    pub root: PathBuf,
+    pub working_dir: PathBuf,
+    pub invoker: Invoker<AgentPoolCli>,
+}
 
 /// Input/output for post hooks.
 ///
@@ -61,70 +68,45 @@ pub struct RunnerConfig<'a> {
     pub invoker: &'a Invoker<AgentPoolCli>,
 }
 
-/// The outcome of processing a task.
+/// Result of task processing.
 #[derive(Debug)]
-pub struct TaskOutcome {
-    /// The task that was processed.
-    pub task: Task,
-    /// What happened to the task.
-    pub result: TaskResult,
+pub(super) enum TaskResult {
+    /// Task completed successfully.
+    Completed,
+    /// Task will be retried.
+    Requeued,
+    /// Task was dropped after exhausting retries.
+    Dropped,
+    /// Task was skipped (step not found).
+    Skipped,
 }
 
-/// Result of processing a single task.
-#[derive(Debug)]
-pub enum TaskResult {
-    /// Task completed successfully, spawning new tasks.
-    Completed {
-        /// New tasks spawned by this task's completion.
-        new_tasks: Vec<Task>,
-    },
-    /// Task was requeued for retry.
-    Requeued {
-        /// Reason for retry.
-        reason: String,
-        /// Current retry count.
-        retry_count: u32,
-    },
-    /// Task was dropped (validation failed or retries exhausted).
-    Dropped {
-        /// Reason the task was dropped.
-        reason: String,
-    },
-    /// Task was skipped (unknown step or validation failure).
-    Skipped {
-        /// Reason the task was skipped.
-        reason: String,
-    },
-}
-
-/// Internal task wrapper with lineage tracking.
+/// Task queued for execution.
 pub(super) struct QueuedTask {
     pub task: Task,
-    /// Unique ID for this task instance.
     pub id: LogTaskId,
-    /// If this task descended from a task with `finally`, tracks that origin.
     pub origin_id: Option<LogTaskId>,
 }
 
-/// Result from an in-flight task submission.
-pub(super) struct InFlightResult {
+/// Identity of a task being processed.
+pub(super) struct TaskIdentity {
     pub task: Task,
     pub task_id: LogTaskId,
     pub origin_id: Option<LogTaskId>,
     pub step_name: StepName,
-    /// The value passed to the action (possibly modified by pre hook).
-    pub effective_value: serde_json::Value,
-    pub result: SubmitResult,
-    /// Post hook command to run after processing (if any).
-    pub post_hook: Option<String>,
-    /// Finally hook for this step (if any) - used when spawning children.
-    pub finally_hook: Option<String>,
 }
 
-/// Result of submitting a task.
+/// Result of task execution, returned from dispatch threads.
+pub(super) struct InFlightResult {
+    pub identity: TaskIdentity,
+    pub effective_value: serde_json::Value,
+    pub result: SubmitResult,
+    pub post_hook: Option<HookScript>,
+    pub finally_hook: Option<HookScript>,
+}
+
 pub(super) enum SubmitResult {
     Pool(io::Result<Response>),
     Command(io::Result<String>),
-    /// Pre hook failed before the action could run.
     PreHookError(String),
 }

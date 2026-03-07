@@ -69,13 +69,7 @@ fn process_stdout(
                     output: output_value,
                     next: new_tasks.clone(),
                 };
-                (
-                    TaskResult::Completed {
-                        new_tasks: new_tasks.clone(),
-                    },
-                    new_tasks,
-                    post_input,
-                )
+                (TaskResult::Completed, new_tasks, post_input)
             }
             Err(e) => {
                 warn!(step = %task.step, error = %e, "invalid response");
@@ -114,12 +108,7 @@ pub fn process_retry(
 
     if !retry_allowed {
         warn!(step = %task.step, failure = ?failure_kind, "retry disabled, dropping task");
-        return (
-            TaskResult::Dropped {
-                reason: format!("retry disabled for {failure_kind:?}"),
-            },
-            vec![],
-        );
+        return (TaskResult::Dropped, vec![]);
     }
 
     let mut retry_task = task.clone();
@@ -133,20 +122,9 @@ pub fn process_retry(
             failure = ?failure_kind,
             "requeuing task"
         );
-        (
-            TaskResult::Requeued {
-                reason: format!("{failure_kind:?}"),
-                retry_count: retry_task.retries,
-            },
-            vec![retry_task],
-        )
+        (TaskResult::Requeued, vec![retry_task])
     } else {
-        error!(step = %task.step, retries = retry_task.retries, "max retries exceeded, dropping task");
-        (
-            TaskResult::Dropped {
-                reason: format!("max retries ({}) exceeded", options.max_retries),
-            },
-            vec![],
-        )
+        error!(step = %task.step, retries = retry_task.retries, "max retries exceeded");
+        (TaskResult::Dropped, vec![])
     }
 }

@@ -272,7 +272,6 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
 // =============================================================================
 
 /// The main daemon function that orchestrates core and I/O.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn run_daemon(
     listener: Listener,
     fs_rx: Receiver<notify::Event>,
@@ -348,7 +347,7 @@ fn run_daemon(
 ///
 /// Receives core events, runs the state machine, and sends effects
 /// to the effect channel. Exits when the events channel closes.
-#[allow(clippy::needless_pass_by_value)] // We take ownership intentionally - runs in spawned thread
+#[expect(clippy::needless_pass_by_value)] // Runs in spawned thread
 fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> super::core::PoolState {
     use super::core::{PoolState, step};
 
@@ -383,7 +382,7 @@ fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> supe
 ///
 /// Uses `crossbeam_channel::select!` to wait on filesystem, socket, and effect
 /// channels simultaneously. Exits on stop signal or when all channels close.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[expect(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn io_loop(
     fs_rx: Receiver<notify::Event>,
     socket_rx: Receiver<(String, Stream)>,
@@ -487,7 +486,7 @@ fn io_loop(
 /// Handle a filesystem event, converting it to core events.
 ///
 /// Returns `true` to continue processing, `false` to signal shutdown.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn handle_fs_event(
     event: &notify::Event,
     events_tx: &Sender<Event>,
@@ -863,7 +862,7 @@ impl Drop for PoolStateCleanup {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -940,7 +939,7 @@ mod tests {
     }
 
     /// Run the event loop with an initial state.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn run_test_event_loop_with_state(
         mut state: PoolState,
         events_rx: Receiver<Event>,

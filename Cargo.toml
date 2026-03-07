@@ -12,6 +12,7 @@ authors = ["Robert Balicki <robert.balicki@gmail.com>"]
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
 crossbeam-channel = "0.5"
+string_id = { path = "./crates/string_id" }
 interprocess = "2.2"
 notify = "7.0"
 proc-macro2 = "1.0.92"

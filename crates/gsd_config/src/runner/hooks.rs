@@ -5,24 +5,22 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use tracing::{debug, info};
 
+use crate::types::HookScript;
+
 use super::PostHookInput;
 
-/// Run a pre hook if present, returning the (possibly modified) value.
+/// Run a pre hook and return the (possibly modified) value.
 pub fn run_pre_hook(
-    hook: Option<&String>,
+    script: &HookScript,
     value: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let Some(script) = hook else {
-        return Ok(value.clone());
-    };
-
     info!(script = %script, "running pre hook");
 
     let input = serde_json::to_string(value).unwrap_or_default();
 
     let mut child = match Command::new("sh")
         .arg("-c")
-        .arg(script)
+        .arg(script.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -67,14 +65,14 @@ pub fn run_pre_hook(
 /// Run a post hook synchronously and return the (possibly modified) result.
 ///
 /// Post hooks can modify the `next` array to filter, add, or transform tasks.
-pub fn run_post_hook(script: &str, input: &PostHookInput) -> Result<PostHookInput, String> {
+pub fn run_post_hook(script: &HookScript, input: &PostHookInput) -> Result<PostHookInput, String> {
     info!(script = %script, kind = ?std::mem::discriminant(input), "running post hook");
 
     let input_json = serde_json::to_string(&input).unwrap_or_default();
 
     let mut child = match Command::new("sh")
         .arg("-c")
-        .arg(script)
+        .arg(script.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -109,7 +107,7 @@ pub fn run_post_hook(script: &str, input: &PostHookInput) -> Result<PostHookInpu
 
     match serde_json::from_str(&stdout) {
         Ok(modified) => {
-            debug!(script = %script, "post hook completed");
+            debug!(script = %script.as_str(), "post hook completed");
             Ok(modified)
         }
         Err(e) => Err(format!("post hook output is not valid JSON: {e}")),

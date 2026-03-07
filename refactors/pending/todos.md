@@ -2,6 +2,9 @@
 
 ## Most Important
 
+0. **String Interning** - Consider interning strings (StepName, HookScript, etc.) to reduce memory usage and enable cheap equality checks. Could use a crate like `lasso` or `string-interner`.
+
+
 1. ~~**Command Steps**~~ ✓ COMPLETE - Steps can use `action.kind = "Command"` with a `script` field to execute bash locally instead of dispatching to an agent pool.
 
 2. **Multi-Pool Task Routing** - Allow different steps to be routed to different agent pools. This enables heterogeneous workflows where some tasks require specialized agents (e.g., code review agents vs. implementation agents) or where command execution happens in a separate pool from AI reasoning.

@@ -10,7 +10,7 @@ use common::{
     AgentPoolHandle, GsdTestAgent, cleanup_test_dir, create_test_invoker, is_ipc_available,
     setup_test_dir,
 };
-use gsd_config::{CompiledSchemas, ConfigFile, RunnerConfig, Task, TaskRunner};
+use gsd_config::{CompiledSchemas, ConfigFile, RunnerConfig, Task};
 use rstest::rstest;
 use std::path::Path;
 use std::sync::Arc;
@@ -58,47 +58,6 @@ fn empty_initial_tasks_completes() {
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
     cleanup_test_dir(TEST_DIR);
-}
-
-/// Test that TaskRunner with empty initial_tasks is_empty from start.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-fn empty_runner_is_empty() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_empty_runner"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_empty_runner"));
-        return;
-    }
-
-    let pool = AgentPoolHandle::start(&root);
-
-    // No sleep needed - pool is ready after start() returns, and no tasks means no agent needed
-
-    let config_file: ConfigFile =
-        serde_json::from_str(r#"{"steps": [{"name": "X", "next": []}]}"#).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
-
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-    let runner_config = RunnerConfig {
-        agent_pool_root: pool.pool_path(),
-        working_dir: Path::new("."),
-        wake_script: None,
-        initial_tasks: vec![],
-        invoker: &create_test_invoker(),
-    };
-
-    let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
-
-    assert!(runner.is_empty(), "Runner with no tasks should be empty");
-    assert_eq!(runner.pending(), 0, "Pending count should be 0");
-    assert!(
-        runner.next().is_none(),
-        "next() should return None immediately"
-    );
-
-    cleanup_test_dir(&format!("{TEST_DIR}_empty_runner"));
 }
 
 /// Test that unknown step in initial_tasks is skipped gracefully.
@@ -371,46 +330,4 @@ fn rapid_task_completion() {
     gsd_config::run(&config, &schemas, runner_config).expect("run failed");
 
     cleanup_test_dir(&format!("{TEST_DIR}_rapid"));
-}
-
-/// Test that TaskRunner.pending() tracks queue size correctly.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-fn pending_count_accurate() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_pending"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_pending"));
-        return;
-    }
-
-    let pool = AgentPoolHandle::start(&root);
-    let _agent = GsdTestAgent::terminator(&root, Duration::from_millis(50));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let config_file: ConfigFile =
-        serde_json::from_str(r#"{"steps": [{"name": "Work", "next": []}]}"#).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
-
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-    let runner_config = RunnerConfig {
-        agent_pool_root: pool.pool_path(),
-        working_dir: Path::new("."),
-        wake_script: None,
-        initial_tasks: vec![
-            Task::new("Work", serde_json::json!({})),
-            Task::new("Work", serde_json::json!({})),
-            Task::new("Work", serde_json::json!({})),
-        ],
-        invoker: &create_test_invoker(),
-    };
-
-    let runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
-
-    // Initial pending should be 3 (before any submission)
-    assert_eq!(runner.pending(), 3, "Initial pending should be 3");
-
-    cleanup_test_dir(&format!("{TEST_DIR}_pending"));
 }

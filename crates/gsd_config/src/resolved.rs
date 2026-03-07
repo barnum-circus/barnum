@@ -3,7 +3,7 @@
 //! These types have all file references resolved and options computed.
 //! They're the runtime representation after loading a config file.
 
-use crate::types::StepName;
+use crate::types::{HookScript, StepName};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -45,24 +45,24 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_schema: Option<serde_json::Value>,
 
-    /// Shell command to run before the action.
+    /// Pre-execution hook script.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pre: Option<String>,
+    pub pre: Option<HookScript>,
 
-    /// How this step processes tasks.
+    /// How to execute the step.
     pub action: Action,
 
-    /// Shell command to run after the action completes.
+    /// Post-execution hook script.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post: Option<String>,
+    pub post: Option<HookScript>,
 
-    /// Valid next step names (empty = terminal step).
+    /// Valid next steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub next: Vec<StepName>,
 
-    /// Shell command to run after all descendants complete.
+    /// Finally hook (runs after all children complete).
     #[serde(default, rename = "finally", skip_serializing_if = "Option::is_none")]
-    pub finally_hook: Option<String>,
+    pub finally_hook: Option<HookScript>,
 
     /// Effective options (global + per-step merged).
     pub options: Options,

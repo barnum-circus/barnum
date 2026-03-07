@@ -8,22 +8,18 @@ use agent_pool_cli::AgentPoolCli;
 use cli_invoker::Invoker;
 use tracing::debug;
 
-use crate::types::{LogTaskId, StepName};
-use crate::value_schema::Task;
+use crate::types::HookScript;
 
 use super::hooks::{run_command_action, run_pre_hook};
 use super::submit::{build_agent_payload, submit_via_cli};
-use super::types::{InFlightResult, SubmitResult};
+use super::types::{InFlightResult, SubmitResult, TaskIdentity};
 
-/// Common context for dispatching a task.
+/// Context for dispatching a task.
 pub struct TaskContext {
-    pub task: Task,
-    pub task_id: LogTaskId,
-    pub origin_id: Option<LogTaskId>,
-    pub step_name: StepName,
-    pub pre_hook: Option<String>,
-    pub post_hook: Option<String>,
-    pub finally_hook: Option<String>,
+    pub identity: TaskIdentity,
+    pub pre_hook: Option<HookScript>,
+    pub post_hook: Option<HookScript>,
+    pub finally_hook: Option<HookScript>,
 }
 
 /// Execute a pool task (runs in spawned thread).
@@ -35,34 +31,31 @@ pub fn dispatch_pool_task(
     invoker: &Invoker<AgentPoolCli>,
     tx: &mpsc::Sender<InFlightResult>,
 ) {
-    let original_value = ctx.task.value.clone();
+    let original_value = ctx.identity.task.value.clone();
 
-    let effective_value = match run_pre_hook(ctx.pre_hook.as_ref(), &original_value) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = tx.send(InFlightResult {
-                task: ctx.task,
-                task_id: ctx.task_id,
-                origin_id: ctx.origin_id,
-                step_name: ctx.step_name,
-                effective_value: original_value,
-                result: SubmitResult::PreHookError(e),
-                post_hook: ctx.post_hook,
-                finally_hook: ctx.finally_hook,
-            });
-            return;
-        }
+    let effective_value = match &ctx.pre_hook {
+        Some(hook) => match run_pre_hook(hook, &original_value) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tx.send(InFlightResult {
+                    identity: ctx.identity,
+                    effective_value: original_value,
+                    result: SubmitResult::PreHookError(e),
+                    post_hook: ctx.post_hook,
+                    finally_hook: ctx.finally_hook,
+                });
+                return;
+            }
+        },
+        None => original_value,
     };
 
-    let payload = build_agent_payload(&ctx.step_name, &effective_value, docs, timeout);
+    let payload = build_agent_payload(&ctx.identity.step_name, &effective_value, docs, timeout);
     debug!(payload = %payload, "task payload");
 
     let result = submit_via_cli(pool_root, &payload, invoker);
     let _ = tx.send(InFlightResult {
-        task: ctx.task,
-        task_id: ctx.task_id,
-        origin_id: ctx.origin_id,
-        step_name: ctx.step_name,
+        identity: ctx.identity,
         effective_value,
         result: SubmitResult::Pool(result),
         post_hook: ctx.post_hook,
@@ -77,24 +70,24 @@ pub fn dispatch_command_task(
     working_dir: &Path,
     tx: &mpsc::Sender<InFlightResult>,
 ) {
-    let original_value = ctx.task.value.clone();
-    let task_step = ctx.task.step.clone();
+    let original_value = ctx.identity.task.value.clone();
+    let task_step = ctx.identity.task.step.clone();
 
-    let effective_value = match run_pre_hook(ctx.pre_hook.as_ref(), &original_value) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = tx.send(InFlightResult {
-                task: ctx.task,
-                task_id: ctx.task_id,
-                origin_id: ctx.origin_id,
-                step_name: ctx.step_name,
-                effective_value: original_value,
-                result: SubmitResult::PreHookError(e),
-                post_hook: ctx.post_hook,
-                finally_hook: ctx.finally_hook,
-            });
-            return;
-        }
+    let effective_value = match &ctx.pre_hook {
+        Some(hook) => match run_pre_hook(hook, &original_value) {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = tx.send(InFlightResult {
+                    identity: ctx.identity,
+                    effective_value: original_value,
+                    result: SubmitResult::PreHookError(e),
+                    post_hook: ctx.post_hook,
+                    finally_hook: ctx.finally_hook,
+                });
+                return;
+            }
+        },
+        None => original_value,
     };
 
     let task_json = serde_json::to_string(&serde_json::json!({
@@ -105,10 +98,7 @@ pub fn dispatch_command_task(
 
     let result: io::Result<String> = run_command_action(script, &task_json, working_dir);
     let _ = tx.send(InFlightResult {
-        task: ctx.task,
-        task_id: ctx.task_id,
-        origin_id: ctx.origin_id,
-        step_name: ctx.step_name,
+        identity: ctx.identity,
         effective_value,
         result: SubmitResult::Command(result),
         post_hook: ctx.post_hook,

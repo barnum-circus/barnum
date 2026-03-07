@@ -1,29 +1,20 @@
 //! Finally hook tracking and execution.
-//!
-//! Tracks pending descendants for tasks with finally hooks. When all descendants
-//! complete, the finally hook runs.
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use tracing::{info, warn};
 
-use crate::types::LogTaskId;
+use crate::types::{HookScript, LogTaskId};
 use crate::value_schema::Task;
 
-/// State for tracking when a `finally` hook should run.
 pub struct FinallyState {
-    /// Number of descendants still pending (in queue or in flight).
     pub pending_count: usize,
-    /// The original task's value (input to finally hook).
     pub original_value: serde_json::Value,
-    /// The finally hook command.
-    pub finally_command: String,
+    pub finally_command: HookScript,
 }
 
-/// Tracks finally hooks for tasks with pending descendants.
 pub struct FinallyTracker {
-    /// Key: origin task ID, Value: finally state
     tracking: HashMap<LogTaskId, FinallyState>,
 }
 
@@ -34,13 +25,12 @@ impl FinallyTracker {
         }
     }
 
-    /// Start tracking a task's finally hook.
     pub fn start_tracking(
         &mut self,
         task_id: LogTaskId,
         pending_count: usize,
         original_value: serde_json::Value,
-        finally_command: String,
+        finally_command: HookScript,
     ) {
         self.tracking.insert(
             task_id,
@@ -52,8 +42,6 @@ impl FinallyTracker {
         );
     }
 
-    /// Decrement the pending count for an origin task.
-    /// Returns the `FinallyState` if the count reaches zero and the hook should run.
     pub fn decrement(&mut self, origin_id: LogTaskId) -> Option<FinallyState> {
         let should_run = if let Some(state) = self.tracking.get_mut(&origin_id) {
             state.pending_count = state.pending_count.saturating_sub(1);
@@ -70,8 +58,7 @@ impl FinallyTracker {
     }
 }
 
-/// Run a finally hook and return any spawned tasks.
-#[allow(clippy::needless_pass_by_value)] // We own state from HashMap removal
+#[expect(clippy::needless_pass_by_value)]
 pub fn run_finally_hook(state: FinallyState) -> Vec<Task> {
     info!(command = %state.finally_command, "running finally hook");
 
@@ -79,7 +66,7 @@ pub fn run_finally_hook(state: FinallyState) -> Vec<Task> {
 
     let result = Command::new("sh")
         .arg("-c")
-        .arg(&state.finally_command)
+        .arg(state.finally_command.as_str())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

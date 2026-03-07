@@ -1,10 +1,6 @@
 //! Task queue runner for GSD.
 //!
 //! Executes tasks through `agent_pool`, validating transitions and handling timeouts.
-//!
-//! Two APIs are provided:
-//! - [`run()`] - Run the queue to completion
-//! - [`TaskRunner`] - Iterator over task completions for fine-grained control
 
 mod dispatch;
 mod finally;
@@ -15,12 +11,9 @@ mod types;
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
-use agent_pool_cli::AgentPoolCli;
-use cli_invoker::Invoker;
 use tracing::{error, info, warn};
 
 use crate::docs::generate_step_docs;
@@ -32,10 +25,10 @@ use dispatch::{TaskContext, dispatch_command_task, dispatch_pool_task};
 use finally::{FinallyTracker, run_finally_hook};
 use hooks::{call_wake_script, run_post_hook};
 use response::{FailureKind, process_command_response, process_pool_response, process_retry};
-use types::{InFlightResult, QueuedTask, SubmitResult};
+use types::{InFlightResult, PoolConnection, QueuedTask, SubmitResult, TaskIdentity};
 
-// Re-export public types
-pub use types::{PostHookInput, RunnerConfig, TaskOutcome, TaskResult};
+use types::TaskResult;
+pub use types::{PostHookInput, RunnerConfig};
 
 /// Default maximum concurrent task submissions.
 ///
@@ -43,24 +36,15 @@ pub use types::{PostHookInput, RunnerConfig, TaskOutcome, TaskResult};
 /// Linux defaults to `max_user_instances=128`.
 const DEFAULT_MAX_CONCURRENCY: usize = 20;
 
-/// Task queue runner that yields outcomes as tasks complete.
+/// Internal task queue runner.
 ///
 /// Tasks are submitted concurrently, and results are yielded as they complete.
-///
-/// ```text
-/// let mut runner = TaskRunner::new(&config, &schemas, runner_config)?;
-/// while let Some(outcome) = runner.next() {
-///     println!("Task {} -> {:?}", outcome.task.step, outcome.result);
-/// }
-/// ```
-pub struct TaskRunner<'a> {
+struct TaskRunner<'a> {
     config: &'a Config,
     schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
     queue: VecDeque<QueuedTask>,
-    agent_pool_root: &'a Path,
-    working_dir: &'a Path,
-    invoker: &'a Invoker<AgentPoolCli>,
+    pool: PoolConnection,
     max_concurrency: usize,
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
@@ -72,12 +56,7 @@ pub struct TaskRunner<'a> {
 }
 
 impl<'a> TaskRunner<'a> {
-    /// Create a new task runner.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the wake script fails.
-    pub fn new(
+    fn new(
         config: &'a Config,
         schemas: &'a CompiledSchemas,
         runner_config: RunnerConfig<'a>,
@@ -99,14 +78,18 @@ impl<'a> TaskRunner<'a> {
 
         let (tx, rx) = mpsc::channel();
 
+        let pool = PoolConnection {
+            root: runner_config.agent_pool_root.to_path_buf(),
+            working_dir: runner_config.working_dir.to_path_buf(),
+            invoker: Clone::clone(runner_config.invoker),
+        };
+
         let mut runner = Self {
             config,
             schemas,
             step_map: config.step_map(),
             queue: VecDeque::new(),
-            agent_pool_root: runner_config.agent_pool_root,
-            working_dir: runner_config.working_dir,
-            invoker: runner_config.invoker,
+            pool,
             max_concurrency,
             in_flight: 0,
             tx,
@@ -115,7 +98,6 @@ impl<'a> TaskRunner<'a> {
             finally_tracker: FinallyTracker::new(),
         };
 
-        // Queue initial tasks (no origin since they're root tasks)
         for task in runner_config.initial_tasks {
             let id = runner.next_task_id();
             runner.queue.push_back(QueuedTask {
@@ -128,20 +110,12 @@ impl<'a> TaskRunner<'a> {
         Ok(runner)
     }
 
-    /// Returns the number of tasks in the queue (not including in-flight).
-    #[must_use]
-    pub fn pending(&self) -> usize {
+    fn pending(&self) -> usize {
         self.queue.len()
     }
 
-    /// Returns true if queue is empty and no tasks are in flight.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.queue.is_empty() && self.in_flight == 0
-    }
-
     /// Allocate the next task ID.
-    #[allow(clippy::missing_const_for_fn)] // &mut self can't be const
+    #[expect(clippy::missing_const_for_fn)] // &mut self can't be const
     fn next_task_id(&mut self) -> LogTaskId {
         let id = LogTaskId(self.next_task_id);
         self.next_task_id += 1;
@@ -164,24 +138,19 @@ impl<'a> TaskRunner<'a> {
             origin_id,
         } = queued;
 
-        #[allow(clippy::expect_used)] // Invariant: steps are validated at config load time
-        let step = self
-            .step_map
-            .get(&task.step)
-            .expect("unknown step - config should have been validated");
-
-        #[allow(clippy::expect_used)] // Invariant: task values are validated before queuing
-        self.schemas
-            .validate(&task.step, &task.value)
-            .expect("task validation failed - should have been validated");
+        #[expect(clippy::expect_used)] // Invariant: config validation ensures all step names exist
+        let step = self.step_map.get(&task.step).expect("unknown step");
 
         let timeout = step.options.timeout;
         let tx = self.tx.clone();
-        let ctx = TaskContext {
+        let identity = TaskIdentity {
             task,
             task_id,
             origin_id,
             step_name: step.name.clone(),
+        };
+        let ctx = TaskContext {
+            identity,
             pre_hook: step.pre.clone(),
             post_hook: step.post.clone(),
             finally_hook: step.finally_hook.clone(),
@@ -190,10 +159,10 @@ impl<'a> TaskRunner<'a> {
         match &step.action {
             Action::Pool { .. } => {
                 let docs = generate_step_docs(step, self.config);
-                let pool_root = self.agent_pool_root.to_path_buf();
-                let invoker = Clone::clone(self.invoker);
+                let pool_root = self.pool.root.clone();
+                let invoker = self.pool.invoker.clone();
 
-                info!(step = %ctx.task.step, "submitting task to pool");
+                info!(step = %ctx.identity.task.step, "submitting task to pool");
 
                 thread::spawn(move || {
                     dispatch_pool_task(ctx, &docs, timeout, &pool_root, &invoker, &tx);
@@ -201,9 +170,9 @@ impl<'a> TaskRunner<'a> {
             }
             Action::Command { script } => {
                 let script = script.clone();
-                let working_dir = self.working_dir.to_path_buf();
+                let working_dir = self.pool.working_dir.clone();
 
-                info!(step = %ctx.task.step, script = %script, "executing command");
+                info!(step = %ctx.identity.task.step, script = %script, "executing command");
 
                 thread::spawn(move || {
                     dispatch_command_task(ctx, &script, &working_dir, &tx);
@@ -230,26 +199,24 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
-    #[allow(clippy::too_many_lines)]
-    fn process_result(&mut self, inflight: InFlightResult) -> TaskOutcome {
+    fn process_result(&mut self, inflight: InFlightResult) -> TaskResult {
         let InFlightResult {
-            task,
-            task_id,
-            origin_id,
-            step_name,
+            identity,
             effective_value,
             result,
             post_hook,
             finally_hook,
         } = inflight;
 
+        let TaskIdentity {
+            task,
+            task_id,
+            origin_id,
+            step_name,
+        } = identity;
+
         let Some(step) = self.step_map.get(&step_name) else {
-            return TaskOutcome {
-                task,
-                result: TaskResult::Skipped {
-                    reason: "step no longer exists".to_string(),
-                },
-            };
+            return TaskResult::Skipped;
         };
 
         let (task_result, new_tasks, post_input) = match result {
@@ -288,16 +255,13 @@ impl<'a> TaskRunner<'a> {
             }
         };
 
-        // Run post hook synchronously - it can modify the next tasks
-        let (final_result, final_tasks) = if let Some(hook) = post_hook {
-            match run_post_hook(&hook, &post_input) {
+        let (final_result, final_tasks) = if let Some(ref hook) = post_hook {
+            match run_post_hook(hook, &post_input) {
                 Ok(modified) => {
-                    // Extract next tasks from post hook output
                     let tasks = extract_next_tasks(&modified);
                     (task_result, tasks)
                 }
                 Err(e) => {
-                    // Post hook failed - trigger retry
                     warn!(step = %task.step, error = %e, "post hook failed");
                     process_retry(&task, &step.options, FailureKind::SubmitError)
                 }
@@ -306,23 +270,22 @@ impl<'a> TaskRunner<'a> {
             (task_result, new_tasks)
         };
 
-        // Determine origin_id for new tasks:
-        // - If this task has a finally hook and spawns children, they get this task's ID
-        // - Otherwise, children inherit the parent's origin_id
-        let child_origin_id = if finally_hook.is_some() && !final_tasks.is_empty() {
-            // Set up finally tracking for this task
-            self.finally_tracker.start_tracking(
-                task_id,
-                final_tasks.len(),
-                effective_value,
-                finally_hook.unwrap_or_default(),
-            );
-            Some(task_id)
+        let child_origin_id = if let Some(finally) = finally_hook {
+            if final_tasks.is_empty() {
+                origin_id
+            } else {
+                self.finally_tracker.start_tracking(
+                    task_id,
+                    final_tasks.len(),
+                    effective_value,
+                    finally,
+                );
+                Some(task_id)
+            }
         } else {
             origin_id
         };
 
-        // Queue new tasks with proper origin tracking
         for new_task in final_tasks {
             let id = self.next_task_id();
             self.queue.push_back(QueuedTask {
@@ -332,18 +295,14 @@ impl<'a> TaskRunner<'a> {
             });
         }
 
-        // This task is done - decrement its origin's pending count
         self.decrement_origin(origin_id);
 
-        TaskOutcome {
-            task,
-            result: final_result,
-        }
+        final_result
     }
 }
 
 impl Iterator for TaskRunner<'_> {
-    type Item = TaskOutcome;
+    type Item = TaskResult;
 
     /// Get the next completed task outcome.
     ///
@@ -387,10 +346,9 @@ pub fn run(
     let mut completed_count = 0u32;
     let mut dropped_count = 0u32;
 
-    #[allow(clippy::while_let_on_iterator)] // Need to access runner.pending() in loop
-    while let Some(outcome) = runner.next() {
+    while let Some(result) = runner.next() {
         completed_count += 1;
-        if matches!(outcome.result, TaskResult::Dropped { .. }) {
+        if matches!(result, TaskResult::Dropped) {
             dropped_count += 1;
         }
 

@@ -44,7 +44,7 @@ const ID_CHARS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
 
 /// Generate a short random pool ID.
 #[must_use]
-#[allow(clippy::cast_possible_truncation)] // Intentional truncation for randomness
+#[expect(clippy::cast_possible_truncation)] // Intentional truncation for randomness
 pub fn generate_id() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
 
