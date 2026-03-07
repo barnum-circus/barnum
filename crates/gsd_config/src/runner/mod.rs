@@ -142,7 +142,6 @@ impl<'a> TaskRunner<'a> {
         #[expect(clippy::expect_used)] // Invariant: config validation ensures all step names exist
         let step = self.step_map.get(&task.step).expect("unknown step");
 
-        let timeout = step.options.timeout;
         let tx = self.tx.clone();
         let identity = TaskIdentity {
             task,
@@ -159,6 +158,7 @@ impl<'a> TaskRunner<'a> {
 
         match &step.action {
             Action::Pool { .. } => {
+                let timeout = step.options.timeout;
                 let docs = generate_step_docs(step, self.config);
                 let pool_root = self.pool.root.clone();
                 let invoker = self.pool.invoker.clone();

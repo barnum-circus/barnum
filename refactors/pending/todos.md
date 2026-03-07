@@ -55,6 +55,20 @@ Questions:
 
 ---
 
+## Cache Step Docs Instead of Regenerating
+
+**Status: TODO**
+
+`generate_step_docs(step, config)` is called every time a pool task is submitted in `submit_one()`. The docs are deterministic per step - they only depend on the config which doesn't change during a run.
+
+Options:
+1. **Eager**: Generate all step docs in `TaskRunner::new()`, store in `HashMap<StepName, String>`
+2. **Lazy**: Generate on first use per step, cache in `HashMap<StepName, String>`
+
+Eager is simpler and the cost is low (one-time at startup). The docs generation involves string formatting but no I/O.
+
+---
+
 ## QueuedTask Contains Full Task Instead of ID
 
 **Status: TODO (needs design)**
