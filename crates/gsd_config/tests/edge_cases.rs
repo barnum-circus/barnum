@@ -218,3 +218,88 @@ fn rapid_task_completion() {
 
     cleanup_test_dir(&format!("{TEST_DIR}_rapid"));
 }
+
+/// Test that unknown step in initial tasks returns an error.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+fn unknown_step_in_initial_tasks_returns_error() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_unknown_step"));
+
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "steps": [
+                {"name": "Known", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+    let initial_tasks = vec![
+        Task::new("Unknown", serde_json::json!({})), // Unknown step - should error
+    ];
+    let runner_config = RunnerConfig {
+        agent_pool_root: &root,
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    // Should return an error for unknown step
+    let result = gsd_config::run(&config, &schemas, &runner_config, initial_tasks);
+    assert!(result.is_err(), "should error for unknown step");
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("E019") && err.contains("Unknown"),
+        "error should mention unknown step: {err}"
+    );
+
+    cleanup_test_dir(&format!("{TEST_DIR}_unknown_step"));
+}
+
+/// Test that invalid value schema in initial tasks returns an error.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+fn invalid_value_schema_in_initial_tasks_returns_error() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
+
+    // Config with schema requiring "name" field
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "steps": [
+                {
+                    "name": "Validated",
+                    "value_schema": {
+                        "type": "object",
+                        "required": ["name"],
+                        "properties": {"name": {"type": "string"}}
+                    },
+                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "next": []
+                }
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+    let initial_tasks = vec![
+        Task::new("Validated", serde_json::json!({})), // Missing required "name" - should error
+    ];
+    let runner_config = RunnerConfig {
+        agent_pool_root: &root,
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    // Should return an error for invalid value schema
+    let result = gsd_config::run(&config, &schemas, &runner_config, initial_tasks);
+    assert!(result.is_err(), "should error for invalid value schema");
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("E020"), "error should mention validation failure: {err}");
+
+    cleanup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
+}

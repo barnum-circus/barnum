@@ -101,6 +101,22 @@ impl<'a> TaskRunner<'a> {
         };
 
         for task in initial_tasks {
+            // Validate step exists
+            if !runner.step_map.contains_key(&task.step) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("[E019] unknown step '{}' in initial tasks", task.step),
+                ));
+            }
+
+            // Validate value against step's schema
+            if let Err(e) = schemas.validate(&task.step, &task.value) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("[E020] initial task validation failed: {e}"),
+                ));
+            }
+
             let id = runner.next_task_id();
             runner.queue.push_back(QueuedTask {
                 task,
