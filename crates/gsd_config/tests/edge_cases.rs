@@ -60,7 +60,6 @@ fn empty_initial_tasks_completes() {
     cleanup_test_dir(TEST_DIR);
 }
 
-
 /// Test that large fan-out works correctly.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
@@ -299,7 +298,10 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
     let result = gsd_config::run(&config, &schemas, &runner_config, initial_tasks);
     assert!(result.is_err(), "should error for invalid value schema");
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("E020"), "error should mention validation failure: {err}");
+    assert!(
+        err.contains("E020"),
+        "error should mention validation failure: {err}"
+    );
 
     cleanup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
 }
