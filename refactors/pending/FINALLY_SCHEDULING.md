@@ -105,5 +105,6 @@ Submit finally tasks for these, in correct order (deepest first).
 
 ## Files Changed
 
-- `crates/gsd_config/src/runner.rs` - remove sync finally, add queued finally
+- `crates/gsd_config/src/runner/mod.rs` - add queued finally (queue task instead of running sync)
+- `crates/gsd_config/src/runner/finally.rs` - remove `run_finally_hook` synchronous execution
 - `crates/gsd_config/src/state_log.rs` - add `finally_for` field
