@@ -100,14 +100,20 @@ pub(super) struct InFlightResult {
     pub result: SubmitResult,
 }
 
-/// Result of task submission. `effective_value` only exists when pre-hook succeeded.
+/// The task value after pre-hook transformation (or original if no pre-hook).
+///
+/// This is the value that was actually sent to the agent/command for processing.
+#[derive(Clone)]
+pub struct EffectiveValue(pub serde_json::Value);
+
+/// Result of task submission. `EffectiveValue` only exists when pre-hook succeeded.
 pub(super) enum SubmitResult {
     Pool {
-        effective_value: serde_json::Value,
+        effective_value: EffectiveValue,
         response: io::Result<Response>,
     },
     Command {
-        effective_value: serde_json::Value,
+        effective_value: EffectiveValue,
         output: io::Result<String>,
     },
     PreHookError(String),

@@ -35,7 +35,9 @@
 
 ## Low-level conventions
 
-- **Newtypes for semantic clarity.** Wrap primitives to prevent mixing up values. Cloning newtypes (especially string-based) is fine - they will eventually be interned.
+- **Newtypes for semantic clarity.** Wrap primitives and opaque types (strings, numbers, `serde_json::Value`) to prevent mixing up values. Cloning newtypes (especially string-based) is fine - they will eventually be interned. Corollaries:
+  - **Wrap at production site** - create the newtype when you produce the value and know its semantic type, not when you consume it.
+  - **Never convert between newtypes** - if you need to transform `TypeA` to `TypeB`, unwrap to the primitive, transform, then wrap. Direct newtype-to-newtype conversion hides what's actually happening.
 
 - **Use `#[expect(...)]`, not `#[allow(...)]`.** Lint suppressions error when no longer needed.
 

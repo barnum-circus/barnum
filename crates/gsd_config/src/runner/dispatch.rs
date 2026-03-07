@@ -11,7 +11,7 @@ use crate::types::HookScript;
 
 use super::hooks::{run_command_action, run_pre_hook};
 use super::submit::{build_agent_payload, submit_via_cli};
-use super::types::{InFlightResult, SubmitResult, TaskIdentity};
+use super::types::{EffectiveValue, InFlightResult, SubmitResult, TaskIdentity};
 
 /// Context for dispatching a task.
 pub struct TaskContext {
@@ -21,18 +21,19 @@ pub struct TaskContext {
 
 /// Run pre-hook if present, returning the effective value or sending an error result.
 ///
-/// Returns `Some(value)` to continue processing, `None` if error was sent.
+/// Returns `Some(EffectiveValue)` to continue processing, `None` if error was sent.
 fn run_pre_hook_or_send_error(
     ctx: &TaskContext,
     original_value: &serde_json::Value,
     tx: &mpsc::Sender<InFlightResult>,
-) -> Option<serde_json::Value> {
+) -> Option<EffectiveValue> {
     let Some(hook) = &ctx.pre_hook else {
-        return Some(original_value.clone());
+        // No pre-hook, original value is the effective value
+        return Some(EffectiveValue(original_value.clone()));
     };
 
     match run_pre_hook(hook, original_value) {
-        Ok(v) => Some(v),
+        Ok(v) => Some(EffectiveValue(v)),
         Err(e) => {
             let _ = tx.send(InFlightResult {
                 identity: ctx.identity.clone(),
@@ -58,7 +59,7 @@ pub fn dispatch_pool_task(
         return;
     };
 
-    let payload = build_agent_payload(&ctx.identity.task.step, &effective_value, docs, timeout);
+    let payload = build_agent_payload(&ctx.identity.task.step, &effective_value.0, docs, timeout);
     debug!(payload = %payload, "task payload");
 
     let response = submit_via_cli(pool_root, &payload, invoker);
@@ -86,7 +87,7 @@ pub fn dispatch_command_task(
 
     let task_json = serde_json::to_string(&serde_json::json!({
         "kind": &ctx.identity.task.step,
-        "value": effective_value,
+        "value": &effective_value.0,
     }))
     .unwrap_or_default();
 

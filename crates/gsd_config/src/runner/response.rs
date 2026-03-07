@@ -6,7 +6,7 @@ use tracing::{debug, error, info, warn};
 use crate::resolved::{Options, Step};
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 
-use super::types::SubmitResult;
+use super::types::{EffectiveValue, SubmitResult};
 use super::{PostHookInput, TaskResult};
 
 /// Why a task failed and needs retry consideration.
@@ -18,15 +18,12 @@ pub enum FailureKind {
 }
 
 /// Output from processing a submit result.
-///
-/// Includes `value_for_finally` - the value to pass to finally hooks.
-/// For successful submissions, this is the effective (transformed) value.
-/// For pre-hook errors, this is the original task value.
 pub struct ProcessedSubmit {
     pub result: TaskResult,
     pub tasks: Vec<Task>,
     pub post_input: PostHookInput,
-    pub value_for_finally: serde_json::Value,
+    /// Value to pass to finally hook (effective value if pre-hook ran, else original).
+    pub finally_value: serde_json::Value,
 }
 
 /// Process a submit result, extracting `effective_value` where it exists.
@@ -39,62 +36,60 @@ pub fn process_submit_result(
     match result {
         SubmitResult::Pool {
             effective_value,
-            response: Ok(response),
-        } => {
-            let (result, tasks, post_input) =
-                process_pool_response(response, task, &effective_value, step, schemas);
-            ProcessedSubmit {
-                result,
-                tasks,
-                post_input,
-                value_for_finally: effective_value,
+            response,
+        } => match response {
+            Ok(response) => {
+                let (result, tasks, post_input) =
+                    process_pool_response(response, task, &effective_value, step, schemas);
+                ProcessedSubmit {
+                    result,
+                    tasks,
+                    post_input,
+                    finally_value: effective_value.0,
+                }
             }
-        }
-        SubmitResult::Pool {
-            effective_value,
-            response: Err(e),
-        } => {
-            error!(step = %task.step, error = %e, "submit failed");
-            let (result, tasks) = process_retry(task, &step.options, FailureKind::SubmitError);
-            ProcessedSubmit {
-                result,
-                tasks,
-                post_input: PostHookInput::Error {
-                    input: effective_value.clone(),
-                    error: e.to_string(),
-                },
-                value_for_finally: effective_value,
+            Err(e) => {
+                error!(step = %task.step, error = %e, "submit failed");
+                let (result, tasks) = process_retry(task, &step.options, FailureKind::SubmitError);
+                ProcessedSubmit {
+                    result,
+                    tasks,
+                    post_input: PostHookInput::Error {
+                        input: effective_value.0.clone(),
+                        error: e.to_string(),
+                    },
+                    finally_value: effective_value.0,
+                }
             }
-        }
+        },
         SubmitResult::Command {
             effective_value,
-            output: Ok(stdout),
-        } => {
-            let (result, tasks, post_input) =
-                process_command_response(&stdout, task, &effective_value, step, schemas);
-            ProcessedSubmit {
-                result,
-                tasks,
-                post_input,
-                value_for_finally: effective_value,
+            output,
+        } => match output {
+            Ok(stdout) => {
+                let (result, tasks, post_input) =
+                    process_command_response(&stdout, task, &effective_value, step, schemas);
+                ProcessedSubmit {
+                    result,
+                    tasks,
+                    post_input,
+                    finally_value: effective_value.0,
+                }
             }
-        }
-        SubmitResult::Command {
-            effective_value,
-            output: Err(e),
-        } => {
-            error!(step = %task.step, error = %e, "command failed");
-            let (result, tasks) = process_retry(task, &step.options, FailureKind::SubmitError);
-            ProcessedSubmit {
-                result,
-                tasks,
-                post_input: PostHookInput::Error {
-                    input: effective_value.clone(),
-                    error: e.to_string(),
-                },
-                value_for_finally: effective_value,
+            Err(e) => {
+                error!(step = %task.step, error = %e, "command failed");
+                let (result, tasks) = process_retry(task, &step.options, FailureKind::SubmitError);
+                ProcessedSubmit {
+                    result,
+                    tasks,
+                    post_input: PostHookInput::Error {
+                        input: effective_value.0.clone(),
+                        error: e.to_string(),
+                    },
+                    finally_value: effective_value.0,
+                }
             }
-        }
+        },
         SubmitResult::PreHookError(e) => {
             error!(step = %task.step, error = %e, "pre hook failed");
             let (result, tasks) = process_retry(task, &step.options, FailureKind::SubmitError);
@@ -106,30 +101,30 @@ pub fn process_submit_result(
                     error: e,
                 },
                 // Pre-hook failed, so use original task value for finally hook
-                value_for_finally: task.value.clone(),
+                finally_value: task.value.clone(),
             }
         }
     }
 }
 
 /// Process a response from the agent pool.
-pub fn process_pool_response(
+fn process_pool_response(
     response: Response,
     task: &Task,
-    effective_value: &serde_json::Value,
+    effective_value: &EffectiveValue,
     step: &Step,
     schemas: &CompiledSchemas,
 ) -> (TaskResult, Vec<Task>, PostHookInput) {
     match response {
         Response::Processed { stdout, .. } => {
             debug!(stdout = %stdout, "agent response");
-            process_stdout(&stdout, task, effective_value, step, schemas)
+            process_stdout(&stdout, task, &effective_value.0, step, schemas)
         }
         Response::NotProcessed { reason } => {
             warn!(step = %task.step, ?reason, "task outcome unknown");
             let (result, tasks) = process_retry(task, &step.options, FailureKind::Timeout);
             let post_input = PostHookInput::Timeout {
-                input: effective_value.clone(),
+                input: effective_value.0.clone(),
             };
             (result, tasks, post_input)
         }
@@ -137,15 +132,15 @@ pub fn process_pool_response(
 }
 
 /// Process stdout from a command action.
-pub fn process_command_response(
+fn process_command_response(
     stdout: &str,
     task: &Task,
-    effective_value: &serde_json::Value,
+    effective_value: &EffectiveValue,
     step: &Step,
     schemas: &CompiledSchemas,
 ) -> (TaskResult, Vec<Task>, PostHookInput) {
     debug!(stdout = %stdout, "command output");
-    process_stdout(stdout, task, effective_value, step, schemas)
+    process_stdout(stdout, task, &effective_value.0, step, schemas)
 }
 
 /// Process stdout from either pool or command action.
@@ -179,7 +174,7 @@ fn process_stdout(
             }
         },
         Err(e) => {
-            warn!(step = %task.step, error = %e, "failed to parse response JSON");
+            warn!(step = %task.step, error = %e, stdout = %stdout, "failed to parse response JSON");
             let (result, tasks) = process_retry(task, &step.options, FailureKind::InvalidResponse);
             let post_input = PostHookInput::Error {
                 input: effective_value.clone(),

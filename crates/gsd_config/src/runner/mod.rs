@@ -217,7 +217,7 @@ impl<'a> TaskRunner<'a> {
             result: task_result,
             tasks: new_tasks,
             post_input,
-            value_for_finally,
+            finally_value,
         } = process_submit_result(result, &task, step, self.schemas);
 
         let (final_result, final_tasks) = if let Some(hook) = &step.post {
@@ -242,7 +242,7 @@ impl<'a> TaskRunner<'a> {
                 self.finally_tracker.start_tracking(
                     task_id,
                     final_tasks.len(),
-                    value_for_finally,
+                    finally_value,
                     finally.clone(),
                 );
                 Some(task_id)
