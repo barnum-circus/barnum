@@ -248,7 +248,7 @@ fn unknown_step_in_initial_tasks_returns_error() {
     // Should return an error for unknown step
     let result = gsd_config::run(&config, &schemas, &runner_config, initial_tasks);
     assert!(result.is_err(), "should error for unknown step");
-    let err = result.unwrap_err().to_string();
+    let err = result.expect_err("should error").to_string();
     assert!(
         err.contains("E019") && err.contains("Unknown"),
         "error should mention unknown step: {err}"
@@ -297,7 +297,7 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
     // Should return an error for invalid value schema
     let result = gsd_config::run(&config, &schemas, &runner_config, initial_tasks);
     assert!(result.is_err(), "should error for invalid value schema");
-    let err = result.unwrap_err().to_string();
+    let err = result.expect_err("should error").to_string();
     assert!(
         err.contains("E020"),
         "error should mention validation failure: {err}"
