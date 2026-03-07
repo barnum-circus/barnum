@@ -157,6 +157,24 @@ runner/
   submit.rs     // task submission to pool
 ```
 
+### 7. Minimal Visibility, No Dead Code
+
+**Don't make things `pub` unless they need to be.** Visibility is a one-way door - once something is public, you can't easily remove it. Start private, make public only when needed.
+
+**Delete unused code immediately.** No dead code, no "might use later", no backwards compatibility shims. If it's not used, it doesn't exist.
+
+```rust
+// BAD: Everything public "just in case"
+pub struct InternalHelper { ... }
+pub fn unused_helper() { ... }
+
+// GOOD: Minimal visibility
+struct InternalHelper { ... }  // Only pub if external crate needs it
+// unused_helper() deleted entirely
+```
+
+**Don't use `#[allow(dead_code)]`** - if the code isn't used, delete it. The exception is tests and examples that exercise code.
+
 ---
 
 ## Specific Patterns
