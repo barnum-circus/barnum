@@ -133,7 +133,40 @@ impl Runner {
 
 The pure core can be tested without mocks, network, or timing issues.
 
-### 6. Keep Files Small
+### 6. Extract Testable Inner Functions
+
+Loops and conditionals should be thin wrappers around testable functions. The control flow stays outside; the logic goes inside.
+
+```rust
+// BAD: Logic buried in loop
+fn submit_pending(&mut self) {
+    while self.in_flight < self.max_concurrency {
+        let Some(queued) = self.queue.pop_front() else { break };
+        // 50 lines of validation, setup, spawning...
+    }
+}
+
+// GOOD: Loop is thin, logic is extracted
+fn submit_pending(&mut self) {
+    while self.in_flight < self.max_concurrency {
+        let Some(queued) = self.queue.pop_front() else { break };
+        self.submit_one(queued);
+    }
+}
+
+fn submit_one(&mut self, queued: QueuedTask) {
+    // All the logic here - can be tested independently
+}
+```
+
+This pattern applies to:
+- Loop bodies → extract to methods
+- `if let Some(x)` bodies → extract to functions taking `x`
+- Match arms with significant logic → extract to functions
+
+The outer structure handles iteration and unwrapping; the inner function handles the actual work.
+
+### 7. Keep Files Small
 
 Files should not exceed ~400 lines (excluding tests). Long files are:
 - Hard to navigate
@@ -157,7 +190,7 @@ runner/
   submit.rs     // task submission to pool
 ```
 
-### 7. Minimal Visibility, No Dead Code
+### 8. Minimal Visibility, No Dead Code
 
 **Don't make things `pub` unless they need to be.** Visibility is a one-way door - once something is public, you can't easily remove it. Start private, make public only when needed.
 
@@ -174,6 +207,38 @@ struct InternalHelper { ... }  // Only pub if external crate needs it
 ```
 
 **Don't use `#[allow(dead_code)]`** - if the code isn't used, delete it. The exception is tests and examples that exercise code.
+
+### 9. Prefer Pure Functions Over Methods, Keep Structs Small
+
+Methods that take `&mut self` lock the entire struct. Prefer pure functions that take only what they need.
+
+```rust
+// BAD: Method takes &mut self, blocks everything
+impl TaskRunner {
+    fn process(&mut self, task: Task) -> Result {
+        // Can't call other methods on self while this runs
+        // Hard to test - need entire TaskRunner setup
+    }
+}
+
+// GOOD: Pure function takes only what it needs
+fn process_task(task: &Task, config: &Config) -> Result {
+    // Easy to test - just pass the inputs
+    // Doesn't block anything
+}
+
+impl TaskRunner {
+    fn handle(&mut self, task: Task) {
+        let result = process_task(&task, &self.config);
+        self.apply(result);
+    }
+}
+```
+
+Large structs with many fields are a code smell. If a struct has more than ~5 fields, consider:
+- Grouping related fields into sub-structs
+- Extracting pure functions that don't need all fields
+- Splitting into multiple smaller types
 
 ---
 

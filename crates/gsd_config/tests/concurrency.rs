@@ -297,7 +297,7 @@ fn task_runner_yields_results_incrementally() {
     let mut runner = TaskRunner::new(&config, &schemas, runner_config).expect("create runner");
     let mut outcomes = Vec::new();
 
-    while let Some(outcome) = runner.next() {
+    for outcome in &mut runner {
         outcomes.push(outcome);
     }
 

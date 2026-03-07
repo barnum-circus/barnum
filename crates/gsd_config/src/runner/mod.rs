@@ -128,24 +128,6 @@ impl<'a> TaskRunner<'a> {
         Ok(runner)
     }
 
-    /// Get the next completed task outcome.
-    ///
-    /// This submits pending tasks concurrently and returns results as they complete.
-    /// Returns `None` when queue is empty and no tasks are in flight.
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Option<TaskOutcome> {
-        self.submit_pending();
-
-        if self.in_flight == 0 {
-            return None;
-        }
-
-        let result = self.rx.recv().ok()?;
-        self.in_flight -= 1;
-
-        Some(self.process_result(result))
-    }
-
     /// Returns the number of tasks in the queue (not including in-flight).
     #[must_use]
     pub fn pending(&self) -> usize {
@@ -171,62 +153,64 @@ impl<'a> TaskRunner<'a> {
             let Some(queued) = self.queue.pop_front() else {
                 break;
             };
-
-            let QueuedTask {
-                task,
-                id: task_id,
-                origin_id,
-            } = queued;
-
-            let Some(step) = self.step_map.get(task.step.as_str()) else {
-                error!(step = %task.step, "unknown step, skipping task");
-                self.decrement_origin(origin_id);
-                continue;
-            };
-
-            if let Err(e) = self.schemas.validate(&task.step, &task.value) {
-                error!(step = %task.step, error = %e, "task validation failed, skipping");
-                self.decrement_origin(origin_id);
-                continue;
-            }
-
-            let timeout = step.options.timeout;
-            let tx = self.tx.clone();
-            let ctx = TaskContext {
-                task,
-                task_id,
-                origin_id,
-                step_name: step.name.clone(),
-                pre_hook: step.pre.clone(),
-                post_hook: step.post.clone(),
-                finally_hook: step.finally_hook.clone(),
-            };
-
-            match &step.action {
-                Action::Pool { .. } => {
-                    let docs = generate_step_docs(step, self.config);
-                    let pool_root = self.agent_pool_root.to_path_buf();
-                    let invoker = Clone::clone(self.invoker);
-
-                    info!(step = %ctx.task.step, "submitting task to pool");
-
-                    thread::spawn(move || {
-                        dispatch_pool_task(ctx, &docs, timeout, &pool_root, &invoker, &tx);
-                    });
-                }
-                Action::Command { script } => {
-                    let script = script.clone();
-                    let working_dir = self.working_dir.to_path_buf();
-
-                    info!(step = %ctx.task.step, script = %script, "executing command");
-
-                    thread::spawn(move || {
-                        dispatch_command_task(ctx, &script, &working_dir, &tx);
-                    });
-                }
-            }
-            self.in_flight += 1;
+            self.submit_one(queued);
         }
+    }
+
+    fn submit_one(&mut self, queued: QueuedTask) {
+        let QueuedTask {
+            task,
+            id: task_id,
+            origin_id,
+        } = queued;
+
+        #[allow(clippy::expect_used)] // Invariant: steps are validated at config load time
+        let step = self
+            .step_map
+            .get(task.step.as_str())
+            .expect("unknown step - config should have been validated");
+
+        #[allow(clippy::expect_used)] // Invariant: task values are validated before queuing
+        self.schemas
+            .validate(&task.step, &task.value)
+            .expect("task validation failed - should have been validated");
+
+        let timeout = step.options.timeout;
+        let tx = self.tx.clone();
+        let ctx = TaskContext {
+            task,
+            task_id,
+            origin_id,
+            step_name: step.name.clone(),
+            pre_hook: step.pre.clone(),
+            post_hook: step.post.clone(),
+            finally_hook: step.finally_hook.clone(),
+        };
+
+        match &step.action {
+            Action::Pool { .. } => {
+                let docs = generate_step_docs(step, self.config);
+                let pool_root = self.agent_pool_root.to_path_buf();
+                let invoker = Clone::clone(self.invoker);
+
+                info!(step = %ctx.task.step, "submitting task to pool");
+
+                thread::spawn(move || {
+                    dispatch_pool_task(ctx, &docs, timeout, &pool_root, &invoker, &tx);
+                });
+            }
+            Action::Command { script } => {
+                let script = script.clone();
+                let working_dir = self.working_dir.to_path_buf();
+
+                info!(step = %ctx.task.step, script = %script, "executing command");
+
+                thread::spawn(move || {
+                    dispatch_command_task(ctx, &script, &working_dir, &tx);
+                });
+            }
+        }
+        self.in_flight += 1;
     }
 
     /// Decrement the pending count for an origin and run finally if done.
@@ -358,6 +342,27 @@ impl<'a> TaskRunner<'a> {
     }
 }
 
+impl Iterator for TaskRunner<'_> {
+    type Item = TaskOutcome;
+
+    /// Get the next completed task outcome.
+    ///
+    /// Submits pending tasks concurrently and returns results as they complete.
+    /// Returns `None` when queue is empty and no tasks are in flight.
+    fn next(&mut self) -> Option<Self::Item> {
+        self.submit_pending();
+
+        if self.in_flight == 0 {
+            return None;
+        }
+
+        let result = self.rx.recv().ok()?;
+        self.in_flight -= 1;
+
+        Some(self.process_result(result))
+    }
+}
+
 /// Extract next tasks from a post hook result.
 fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
     match input {
@@ -382,6 +387,7 @@ pub fn run(
     let mut completed_count = 0u32;
     let mut dropped_count = 0u32;
 
+    #[allow(clippy::while_let_on_iterator)] // Need to access runner.pending() in loop
     while let Some(outcome) = runner.next() {
         completed_count += 1;
         if matches!(outcome.result, TaskResult::Dropped { .. }) {
