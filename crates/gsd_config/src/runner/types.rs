@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use crate::types::{HookScript, LogTaskId, StepName};
+use crate::types::LogTaskId;
 use crate::value_schema::Task;
 
 /// Connection details for the agent pool.
@@ -92,15 +92,12 @@ pub(super) struct TaskIdentity {
     pub task: Task,
     pub task_id: LogTaskId,
     pub origin_id: Option<LogTaskId>,
-    pub step_name: StepName,
 }
 
 /// Result of task execution, returned from dispatch threads.
 pub(super) struct InFlightResult {
     pub identity: TaskIdentity,
     pub result: SubmitResult,
-    pub post_hook: Option<HookScript>,
-    pub finally_hook: Option<HookScript>,
 }
 
 /// Result of task submission. `effective_value` only exists when pre-hook succeeded.

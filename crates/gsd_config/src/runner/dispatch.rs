@@ -17,8 +17,6 @@ use super::types::{InFlightResult, SubmitResult, TaskIdentity};
 pub struct TaskContext {
     pub identity: TaskIdentity,
     pub pre_hook: Option<HookScript>,
-    pub post_hook: Option<HookScript>,
-    pub finally_hook: Option<HookScript>,
 }
 
 /// Run pre-hook if present, returning the effective value or sending an error result.
@@ -39,8 +37,6 @@ fn run_pre_hook_or_send_error(
             let _ = tx.send(InFlightResult {
                 identity: ctx.identity.clone(),
                 result: SubmitResult::PreHookError(e),
-                post_hook: ctx.post_hook.clone(),
-                finally_hook: ctx.finally_hook.clone(),
             });
             None
         }
@@ -62,7 +58,7 @@ pub fn dispatch_pool_task(
         return;
     };
 
-    let payload = build_agent_payload(&ctx.identity.step_name, &effective_value, docs, timeout);
+    let payload = build_agent_payload(&ctx.identity.task.step, &effective_value, docs, timeout);
     debug!(payload = %payload, "task payload");
 
     let response = submit_via_cli(pool_root, &payload, invoker);
@@ -72,8 +68,6 @@ pub fn dispatch_pool_task(
             effective_value,
             response,
         },
-        post_hook: ctx.post_hook,
-        finally_hook: ctx.finally_hook,
     });
 }
 
@@ -85,14 +79,13 @@ pub fn dispatch_command_task(
     tx: &mpsc::Sender<InFlightResult>,
 ) {
     let original_value = ctx.identity.task.value.clone();
-    let task_step = ctx.identity.task.step.clone();
 
     let Some(effective_value) = run_pre_hook_or_send_error(&ctx, &original_value, tx) else {
         return;
     };
 
     let task_json = serde_json::to_string(&serde_json::json!({
-        "kind": task_step,
+        "kind": &ctx.identity.task.step,
         "value": effective_value,
     }))
     .unwrap_or_default();
@@ -104,7 +97,5 @@ pub fn dispatch_command_task(
             effective_value,
             output,
         },
-        post_hook: ctx.post_hook,
-        finally_hook: ctx.finally_hook,
     });
 }

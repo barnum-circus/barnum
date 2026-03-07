@@ -147,13 +147,10 @@ impl<'a> TaskRunner<'a> {
             task,
             task_id,
             origin_id,
-            step_name: step.name.clone(),
         };
         let ctx = TaskContext {
             identity,
             pre_hook: step.pre.clone(),
-            post_hook: step.post.clone(),
-            finally_hook: step.finally_hook.clone(),
         };
 
         match &step.action {
@@ -203,21 +200,15 @@ impl<'a> TaskRunner<'a> {
     }
 
     fn process_result(&mut self, inflight: InFlightResult) -> TaskResult {
-        let InFlightResult {
-            identity,
-            result,
-            post_hook,
-            finally_hook,
-        } = inflight;
+        let InFlightResult { identity, result } = inflight;
 
         let TaskIdentity {
             task,
             task_id,
             origin_id,
-            step_name,
         } = identity;
 
-        let Some(step) = self.step_map.get(&step_name) else {
+        let Some(step) = self.step_map.get(&task.step) else {
             return TaskResult::Skipped;
         };
 
@@ -228,7 +219,7 @@ impl<'a> TaskRunner<'a> {
             value_for_finally,
         } = process_submit_result(result, &task, step, self.schemas);
 
-        let (final_result, final_tasks) = if let Some(ref hook) = post_hook {
+        let (final_result, final_tasks) = if let Some(hook) = &step.post {
             match run_post_hook(hook, &post_input) {
                 Ok(modified) => {
                     let tasks = extract_next_tasks(&modified);
@@ -243,7 +234,7 @@ impl<'a> TaskRunner<'a> {
             (task_result, new_tasks)
         };
 
-        let child_origin_id = if let Some(finally) = finally_hook {
+        let child_origin_id = if let Some(finally) = &step.finally_hook {
             if final_tasks.is_empty() {
                 origin_id
             } else {
@@ -251,7 +242,7 @@ impl<'a> TaskRunner<'a> {
                     task_id,
                     final_tasks.len(),
                     value_for_finally,
-                    finally,
+                    finally.clone(),
                 );
                 Some(task_id)
             }
