@@ -1030,3 +1030,17 @@ All prerequisites are now complete:
 
 - Visualize state logs (TUI or web UI)
 - `gsd runs list` command to show run status
+
+## Documentation Updates (when implementing)
+
+Add to `.claude/CLAUDE.md`:
+
+```markdown
+## Updating State Log Snapshots
+
+When state log format changes, update snapshots:
+\`\`\`bash
+GSD_UPDATE_SNAPSHOTS=1 ./scripts/run-all-demos.sh
+git add crates/gsd_cli/demos/*/snapshot.ndjson
+\`\`\`
+```
