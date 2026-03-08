@@ -1,8 +1,10 @@
 # Task Model Review
 
-**Status:** Not started (exploratory)
+**Status:** Explored, decision made (2026-03-08)
 
-**Blocks:** FINALLY_TRACKING, FINALLY_SCHEDULING (potentially changes direction)
+**Blocks:** Nothing for 2.0.0. Sequence model is post-release.
+
+**Note:** FINALLY_TRACKING completed 2026-03-08. FINALLY_SCHEDULING deferred - current shell-command finally acceptable for 2.0.0.
 
 ## Purpose
 
@@ -297,9 +299,97 @@ This is "finally" but:
 - Just a flag on a regular task
 - No special hooks or callbacks
 
+## Option H: Sequence as Fundamental Primitive (2026-03-08)
+
+**Key insight:** The real primitive is *sequence* - a chain of steps where each waits for the previous step's subtree to complete before running.
+
+### Why Sequences?
+
+The thread exhaustion problem: we can't block a thread waiting for children to complete. So continuation must be *declarative* - expressed as config data, not as a blocked call stack.
+
+Current model has an implicit sequence per step:
+```
+pre_hook → action → post_hook → [children] → finally_hook
+```
+
+But this is really just a sequence with special names. Pre/post are sequence items that happen to be synchronous transformations. Finally is a sequence item that runs after children complete.
+
+### Sequence Model
+
+A step could have a `next` field pointing to another step:
+
+```yaml
+steps:
+  - name: Analyze
+    action: { pool: analyze }
+    next: Aggregate  # after Analyze subtree completes, run Aggregate
+
+  - name: Aggregate
+    action: { command: "./aggregate.sh" }
+    next: Notify
+
+  - name: Notify
+    action: { command: "./notify.sh" }
+```
+
+Or equivalently, an explicit sequence:
+
+```yaml
+steps:
+  - name: ProcessAll
+    sequence: [Analyze, Aggregate, Notify]
+```
+
+Both express: run Analyze (wait for subtree), then Aggregate (wait for subtree), then Notify.
+
+### Value Flow
+
+In a sequence A → B:
+- B receives A's output (the effective value / result)
+- B also receives a hashmap of results from A's children
+
+This enables both:
+- **Cleanup patterns**: B uses A's original value to know what to clean up
+- **Aggregation patterns**: B uses children's results to compute summary
+
+### Relationship to Current Model
+
+| Current | Sequence Model |
+|---------|----------------|
+| `finally: "./cleanup.sh"` | `next: CleanupStep` |
+| `pre_hook` | First item in implicit sequence (sync) |
+| `post_hook` | Item after action in implicit sequence (sync) |
+
+Pre/post are just sequence items that happen to be synchronous. The distinction between sync/async doesn't matter at the model level - it's an implementation detail.
+
+### Config-Controlled, Not Agent-Controlled
+
+**Critical constraint:** Sequences must be defined in config, not by agents. The agent runs a step and spawns children, but the config determines what continuation runs after. This prevents agents from arbitrarily extending execution and keeps the workflow predictable.
+
+### Implementation Notes
+
+The FINALLY_TRACKING refactor (completed 2026-03-08) provides the foundation:
+- `BTreeMap<LogTaskId, TaskEntry>` with `parent_id` for tree structure
+- `Continuation` type that holds "what to run when children complete"
+- `TaskState::Waiting { pending_count, continuation }` for deferred execution
+
+Changing from shell-command finally to step-reference `next` would:
+1. Change `finally_hook: HookScript` to `next: Option<StepName>` in step config
+2. Create a task for the next step instead of running a shell command
+3. Pass (parent_output, children_results) as the next step's input value
+
+### Timeline
+
+This is a significant model change. **Not blocking 2.0.0 release.**
+
+For 2.0.0: proceed with state persistence using current shell-command finally model. Accept that finally hooks have limited persistence (may re-run on resume).
+
+Post-2.0.0: implement sequence model properly.
+
 ## Action Items
 
 1. List concrete use cases for finally in real workflows
 2. Sketch how each alternative handles those use cases
 3. Evaluate against criteria
-4. Decide: proceed with finally refactors, or pivot to new model
+4. ~~Decide: proceed with finally refactors, or pivot to new model~~
+5. **Decision (2026-03-08):** Proceed with current model for 2.0.0. Sequence model is post-release work.
