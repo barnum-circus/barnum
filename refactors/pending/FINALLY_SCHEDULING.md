@@ -130,19 +130,57 @@ fn finally_task_appears_in_task_tree() {
 }
 ```
 
-### Test 3: `finally_task_failure_handling`
+### Test 3: `finally_retries_on_failure`
 
 ```rust
-/// What happens when a finally task fails?
+/// Finally tasks should retry on failure.
 ///
-/// Current behavior: finally failures are silently ignored
-/// Expected behavior: TBD - probably still ignored, but logged
+/// Setup: A has finally that fails twice, succeeds on third try
+/// Expected: A completes successfully after finally succeeds
+/// Current (buggy): Finally failures are silently ignored, no retry
 #[test]
-fn finally_task_failure_is_logged() {
-    // Verify finally failures don't crash the runner
-    // Verify parent task still completes (finally failure doesn't block)
+#[should_panic(expected = "finally did not retry")]
+fn finally_retries_on_failure() {
+    // Config:
+    // - StepA: has finally hook that fails first 2 times, succeeds 3rd time
+    // - retries: 3 for finally
+    //
+    // Verify that finally is retried and eventually succeeds
 }
 ```
+
+### Test 4: `finally_failure_propagates_after_retries_exhausted`
+
+```rust
+/// When finally exhausts retries, failure should propagate to parent.
+///
+/// Setup: A has finally that always fails, retries = 2
+/// Expected: A's parent is notified of failure (or A is marked failed)
+/// Current (buggy): Finally failures silently ignored
+#[test]
+#[should_panic(expected = "finally failure not propagated")]
+fn finally_failure_propagates_after_retries_exhausted() {
+    // Config:
+    // - StepA: has finally hook that always fails
+    // - retries: 2
+    //
+    // Verify that after 3 attempts (initial + 2 retries), failure propagates
+}
+```
+
+### Test 5: `finally_spawned_tasks_are_children_of_finally`
+
+```rust
+/// Tasks spawned by finally should be children of the finally task, not the original task.
+///
+/// Setup: A has finally that spawns B
+/// Expected tree: A → F → B (finally F is child of A, B is child of F)
+/// Current (buggy): A → B (B is direct child of A, skipping finally)
+#[test]
+#[should_panic(expected = "wrong parent")]
+fn finally_spawned_tasks_are_children_of_finally() {
+    // Verify the tree structure when finally spawns tasks
+}
 
 ---
 
@@ -150,53 +188,55 @@ fn finally_task_failure_is_logged() {
 
 ### Data Structure Changes
 
-#### `types.rs` - Add finally task marker
+#### `types.rs` - TaskKind enum (no magic strings)
+
+Per coding standards, use enums instead of magic sentinel values like `"__finally__"`.
 
 ```rust
-// BEFORE:
+/// What kind of task this is - determines dispatch behavior.
+pub enum TaskKind {
+    /// Regular step task from config
+    Step(Task),
+    /// Finally task - runs a shell script when parent's children complete
+    Finally {
+        script: HookScript,
+        input: serde_json::Value,
+    },
+}
+
+impl TaskKind {
+    /// For logging - describe what this task is
+    pub fn description(&self) -> String {
+        match self {
+            TaskKind::Step(task) => format!("step {}", task.step),
+            TaskKind::Finally { .. } => "finally".to_string(),
+        }
+    }
+}
+```
+
+#### `types.rs` - TaskEntry changes
+
+```rust
 pub(super) struct TaskEntry {
     pub parent_id: Option<LogTaskId>,
     pub state: TaskState,
+    pub kind: TaskKind,           // NEW: replaces Task in Pending state
+    pub retries_remaining: u32,   // NEW: for retry logic (finally tasks retry too)
 }
 
-// AFTER:
-pub(super) struct TaskEntry {
-    pub parent_id: Option<LogTaskId>,
-    pub state: TaskState,
-    /// If this task is a finally task, which task is it finally for?
-    /// Used for logging/debugging, not for tree structure (parent_id handles that).
-    pub finally_for: Option<LogTaskId>,
-}
-```
-
-#### `types.rs` - Finally task identity
-
-Finally tasks need a way to identify what to run. Options:
-
-**Option A: Store hook script in task value**
-```rust
-// Finally task has special step name and value contains the script
-Task {
-    step: StepName::new("__finally__"),
-    value: json!({ "script": "./cleanup.sh", "input": original_value }),
+// TaskState::Pending no longer holds Task - it's in TaskEntry.kind
+pub(super) enum TaskState {
+    Pending,                      // CHANGED: no longer Pending(Task)
+    InFlight(InFlight),
+    Waiting {
+        pending_count: NonZeroU16,
+        continuation: Option<Continuation>,
+    },
 }
 ```
 
-**Option B: Synthetic step created at queue time**
-```rust
-// Create a temporary Command step for the finally hook
-// Pro: Uses existing dispatch path
-// Con: Step doesn't exist in config, validation issues?
-```
-
-**Option C: Special dispatch path for finally tasks**
-```rust
-// Check finally_for field and dispatch differently
-// Pro: Clean separation
-// Con: Another code path to maintain
-```
-
-**Recommendation:** Option A - store script in value, use sentinel step name `__finally__`. Dispatch checks for this and runs as command.
+**Note:** `finally_for` field is NOT needed. The `parent_id` already tells us which task the finally is for. We can identify finally tasks by matching on `TaskKind::Finally`.
 
 ### Code Changes
 
@@ -214,196 +254,137 @@ fn handle_completion(&mut self, task_id: LogTaskId, continuation: Option<Continu
     } else {
         vec![]
     };
-
-    if spawned.is_empty() {
-        // Remove and notify parent
-        let entry = self.tasks.remove(&task_id).expect("task must exist");
-        if matches!(entry.state, TaskState::InFlight(_)) {
-            self.in_flight -= 1;
-        }
-        if let Some(parent_id) = entry.parent_id {
-            self.decrement_parent(parent_id);
-        }
-    } else {
-        // Transition to Waiting for spawned tasks
-        // ...
-    }
+    // ... queue spawned tasks
 }
 
 // AFTER (async):
 fn handle_completion(&mut self, task_id: LogTaskId, continuation: Option<Continuation>) {
     if let Some(cont) = continuation {
         // Queue finally as a task instead of running synchronously
-        let finally_task = self.create_finally_task(&cont);
+        let hook = self.config.steps.iter()
+            .find(|s| s.name == cont.step_name)
+            .and_then(|s| s.finally_hook.as_ref())
+            .expect("continuation implies finally hook exists")
+            .clone();
 
-        // Transition to Waiting for the finally task
+        // Transition parent to Waiting for the finally task
         let entry = self.tasks.get_mut(&task_id).expect("task must exist");
         if matches!(entry.state, TaskState::InFlight(_)) {
             self.in_flight -= 1;
         }
         entry.state = TaskState::Waiting {
             pending_count: NonZeroU16::new(1).unwrap(),
-            continuation: None,  // continuation consumed
+            continuation: None,
         };
 
         // Queue finally task as child of this task
-        self.queue_finally_task(finally_task, task_id);
+        self.queue_finally_task(hook, cont.value.0, task_id);
         return;
     }
 
     // No continuation - remove and notify parent (unchanged)
-    let entry = self.tasks.remove(&task_id).expect("task must exist");
-    if matches!(entry.state, TaskState::InFlight(_)) {
-        self.in_flight -= 1;
-    }
-    if let Some(parent_id) = entry.parent_id {
-        self.decrement_parent(parent_id);
-    }
+    // ...
 }
 
-fn create_finally_task(&self, cont: &Continuation) -> Task {
-    let hook = self.config.steps.iter()
-        .find(|s| s.name == cont.step_name)
-        .and_then(|s| s.finally_hook.as_ref())
-        .expect("continuation implies finally hook exists");
-
-    Task {
-        step: StepName::new("__finally__"),
-        value: serde_json::json!({
-            "script": hook.as_str(),
-            "input": cont.value.0,
-        }),
-    }
-}
-
-fn queue_finally_task(&mut self, task: Task, finally_for: LogTaskId) {
+fn queue_finally_task(
+    &mut self,
+    script: HookScript,
+    input: serde_json::Value,
+    parent_id: LogTaskId,
+) {
     let id = self.next_task_id();
+    let kind = TaskKind::Finally { script, input };
+    let retries_remaining = 3;  // Finally tasks get retries like any other task
+
+    let entry = TaskEntry {
+        parent_id: Some(parent_id),
+        state: TaskState::Pending,
+        kind,
+        retries_remaining,
+    };
 
     if self.in_flight < self.max_concurrency {
-        self.dispatch_finally(id, task, finally_for);
+        self.dispatch_entry(id, entry);
     } else {
-        let prev = self.tasks.insert(
-            id,
-            TaskEntry {
-                parent_id: Some(finally_for),
-                state: TaskState::Pending(task),
-                finally_for: Some(finally_for),
-            },
-        );
+        let prev = self.tasks.insert(id, entry);
         assert!(prev.is_none());
     }
 }
 ```
 
-#### `mod.rs` - `dispatch()` changes for finally tasks
+#### `mod.rs` - `dispatch()` changes
+
+Dispatch now matches on `TaskKind`:
 
 ```rust
-fn dispatch(&mut self, task_id: LogTaskId, task: Task, parent_id: Option<LogTaskId>) {
-    // Check for finally task sentinel
-    if task.step.as_str() == "__finally__" {
-        self.dispatch_finally_task(task_id, task, parent_id);
-        return;
+fn dispatch_entry(&mut self, task_id: LogTaskId, mut entry: TaskEntry) {
+    let tx = self.tx.clone();
+
+    match &entry.kind {
+        TaskKind::Step(task) => {
+            // Existing dispatch logic for regular tasks
+            let step = self.step_map.get(&task.step).expect("step must exist");
+            // ... spawn thread, submit to pool or run command
+        }
+        TaskKind::Finally { script, input } => {
+            // Finally task - run as shell command
+            let script = script.clone();
+            let input_json = serde_json::to_string(input).expect("input serializes");
+            let working_dir = self.pool.working_dir.clone();
+
+            info!(task_id = ?task_id, "dispatching finally task");
+
+            thread::spawn(move || {
+                let result = run_shell_command(script.as_str(), &input_json, None);
+                // ... send result back via tx
+            });
+        }
     }
 
-    // Normal dispatch path (unchanged)
-    // ...
-}
-
-fn dispatch_finally_task(
-    &mut self,
-    task_id: LogTaskId,
-    task: Task,
-    parent_id: Option<LogTaskId>,
-) {
-    let script = task.value["script"].as_str().expect("finally task must have script");
-    let input = &task.value["input"];
-
-    let tx = self.tx.clone();
-    let working_dir = self.pool.working_dir.clone();
-    let script = script.to_string();
-    let input_json = serde_json::to_string(input).expect("input serializes");
-
-    let identity = TaskIdentity { task, task_id };
-
-    info!(task_id = ?task_id, "dispatching finally task");
-
-    thread::spawn(move || {
-        let result = run_shell_command(&script, &input_json, None);
-        let submit_result = match result {
-            Ok(stdout) => {
-                // Parse spawned tasks from stdout
-                let spawned: Vec<Task> = serde_json::from_str(&stdout).unwrap_or_default();
-                SubmitResult::Finally { spawned }
-            }
-            Err(e) => {
-                warn!(error = %e, "finally task failed");
-                SubmitResult::Finally { spawned: vec![] }
-            }
-        };
-        tx.send(InFlightResult { identity, result: submit_result }).ok();
-    });
-
-    let prev = self.tasks.insert(
-        task_id,
-        TaskEntry {
-            parent_id,
-            state: TaskState::InFlight(InFlight::new()),
-            finally_for: parent_id,  // finally_for == parent_id for finally tasks
-        },
-    );
+    entry.state = TaskState::InFlight(InFlight::new());
+    let prev = self.tasks.insert(task_id, entry);
     assert!(prev.is_none());
     self.in_flight += 1;
 }
 ```
 
-#### `types.rs` - Add Finally variant to SubmitResult
+#### Finally task retry behavior
+
+Finally tasks retry like any other task. On failure:
 
 ```rust
-pub(super) enum SubmitResult {
-    Pool {
-        effective_value: EffectiveValue,
-        response: io::Result<Response>,
-    },
-    Command {
-        effective_value: EffectiveValue,
-        output: io::Result<String>,
-    },
-    PreHookError(String),
-    Finally {  // NEW
-        spawned: Vec<Task>,
-    },
-}
-```
+fn handle_finally_failure(&mut self, task_id: LogTaskId) {
+    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
 
-#### `response.rs` - Handle Finally result
-
-```rust
-pub(super) fn process_submit_result(
-    result: SubmitResult,
-    task: &Task,
-    step: &Step,
-    schemas: &CompiledSchemas,
-) -> ProcessedSubmit {
-    match result {
-        SubmitResult::Finally { spawned } => {
-            // Finally tasks don't go through normal processing
-            // They just return spawned tasks (or empty)
-            ProcessedSubmit {
-                outcome: TaskOutcome::Success {
-                    spawned,
-                    finally_value: EffectiveValue(task.value.clone()),
-                },
-                post_input: PostHookInput::Success {
-                    input: task.value.clone(),
-                    output: serde_json::Value::Null,
-                    next: spawned,
-                },
-            }
-        }
-        // ... existing cases unchanged
+    if entry.retries_remaining > 0 {
+        entry.retries_remaining -= 1;
+        entry.state = TaskState::Pending;  // Re-queue for dispatch
+        self.in_flight -= 1;
+        // Task stays in map, will be dispatched on next dispatch_all_pending()
+    } else {
+        // Retries exhausted - finally failed permanently
+        // This is a failure that propagates to parent
+        self.task_failed(task_id, None);
     }
 }
 ```
+
+#### Result types - Finally uses existing patterns
+
+Finally tasks can use the existing `SubmitResult::Command` variant since they're shell commands. Alternatively, add a `Finally` variant if we want different processing:
+
+```rust
+pub(super) enum SubmitResult {
+    Pool { ... },
+    Command { ... },
+    PreHookError(String),
+    Finally {  // If we want distinct handling
+        output: io::Result<String>,
+    },
+}
+```
+
+The key difference from `Command`: finally results are parsed as `Vec<Task>` (spawned tasks), not as step output.
 
 ---
 
@@ -502,49 +483,62 @@ Currently not possible (shell commands don't have timeouts). After this change, 
 
 ### 2. Finally task fails
 
-Current behavior: failure is silently ignored, parent still completes.
-New behavior: same - failure is logged but parent still completes. Finally is best-effort.
+**Current behavior:** failure is silently ignored, parent still completes.
+**New behavior:** finally retries (default 3 attempts). If all retries exhausted, failure propagates - parent is notified that finally failed.
 
 ### 3. Crash during finally task
 
-Before: finally runs synchronously, crash = no record, finally might re-run on resume.
-After: finally is a task, TaskSubmitted logged. On resume, we see finally was submitted but not completed, so we re-run it.
+**Before:** finally runs synchronously, crash = no record, finally might re-run on resume.
+**After:** finally is a task, TaskSubmitted logged. On resume, we see finally was submitted but not completed, so we re-run it (respecting remaining retries).
 
 ### 4. Finally spawns tasks that fail
 
-Same as any parent whose children fail - parent's pending_count decrements, parent eventually completes.
+Tasks spawned by finally are children of the finally task. If they fail, finally's pending_count decrements. When finally completes (success or failure after retries), parent is notified.
+
+### 5. Retry of finally task
+
+Finally retry works like any task retry:
+- Retry gets same `parent_id` as failed finally
+- Failed finally removed from map
+- Retry takes its place
+- Parent's pending_count unchanged (still waiting for 1 task)
 
 ---
 
 ## Implementation Checklist
 
-### Phase 1: Add test documenting the bug
+### Phase 1: Add tests documenting bugs (one commit)
 
-- [ ] Add `finally_should_not_block_concurrency` test to `finally_retry_bugs.rs`
-- [ ] Test should `#[should_panic]` with current implementation
-- [ ] Commit with `--no-verify` (test skips in sandbox)
+- [ ] `finally_should_not_block_concurrency` - scheduling bug
+- [ ] `finally_retries_on_failure` - no retry bug
+- [ ] `finally_failure_propagates_after_retries_exhausted` - silent failure bug
+- [ ] `finally_spawned_tasks_are_children_of_finally` - wrong parent bug
+- [ ] All tests `#[should_panic]` with current implementation
+- [ ] Commit with `--no-verify` (tests skip in sandbox)
 
 ### Phase 2: Data structure changes
 
-- [ ] Add `finally_for: Option<LogTaskId>` to `TaskEntry`
-- [ ] Add `SubmitResult::Finally { spawned: Vec<Task> }` variant
+- [ ] Add `TaskKind` enum with `Step(Task)` and `Finally { script, input }` variants
+- [ ] Add `retries_remaining: u32` to `TaskEntry`
+- [ ] Change `TaskState::Pending` to not hold `Task` (task data now in `TaskEntry.kind`)
 - [ ] Update all `TaskEntry` construction sites
 
 ### Phase 3: Queue finally as task
 
 - [ ] Modify `handle_completion()` to queue finally task instead of running sync
-- [ ] Add `create_finally_task()` helper
-- [ ] Add `queue_finally_task()` helper
-- [ ] Add `dispatch_finally_task()` for finally-specific dispatch
+- [ ] Add `queue_finally_task(script, input, parent_id)` helper
+- [ ] Modify `dispatch()` to match on `TaskKind`
+- [ ] Add dispatch logic for `TaskKind::Finally`
 
-### Phase 4: Process finally results
+### Phase 4: Finally retry and failure handling
 
-- [ ] Handle `SubmitResult::Finally` in `process_submit_result()`
-- [ ] Spawned tasks from finally become children of finally task (not original task)
+- [ ] Implement retry logic for finally tasks (use `retries_remaining`)
+- [ ] On retry exhausted, propagate failure to parent via `task_failed()`
+- [ ] Spawned tasks from finally become children of finally task
 
 ### Phase 5: Verify and clean up
 
-- [ ] Remove `#[should_panic]` from test
+- [ ] Remove `#[should_panic]` from all tests
 - [ ] Verify all existing tests pass
 - [ ] Update STATE_PERSISTENCE.md to note finally is now loggable
 
@@ -554,7 +548,7 @@ Same as any parent whose children fail - parent's pending_count decrements, pare
 
 | File | Changes |
 |------|---------|
-| `runner/types.rs` | Add `finally_for` to `TaskEntry`, add `SubmitResult::Finally` |
-| `runner/mod.rs` | Modify `handle_completion()`, add `create_finally_task()`, `queue_finally_task()`, `dispatch_finally_task()` |
-| `runner/response.rs` | Handle `SubmitResult::Finally` |
-| `tests/finally_retry_bugs.rs` | Add `finally_should_not_block_concurrency` test |
+| `runner/types.rs` | Add `TaskKind` enum, add `retries_remaining` to `TaskEntry`, modify `TaskState::Pending` |
+| `runner/mod.rs` | Modify `handle_completion()`, add `queue_finally_task()`, modify `dispatch()` to match on `TaskKind` |
+| `runner/response.rs` | Handle finally task results |
+| `tests/finally_retry_bugs.rs` | Add 4 new tests for finally scheduling bugs |
