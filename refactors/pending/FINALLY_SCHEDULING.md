@@ -166,76 +166,55 @@ Per coding standards, use enums instead of magic sentinel values like `"__finall
 **Key constraint:** `TaskKind` is ONLY matched in `dispatch()` to determine how to spawn the task. All other code (retry, failure, completion, parent notification) treats tasks uniformly regardless of kind. This keeps the abstraction clean - "finally is just a task."
 
 ```rust
-/// Regular step task from config.
-pub struct StepTask {
-    pub step: StepName,
-    /// Input value before pre-hook transformation.
-    /// Some when Pending, None after dispatch (taken to run pre-hook).
-    pub input_value: Option<serde_json::Value>,
-    /// Output value after pre-hook.
-    /// None until dispatch. Some after dispatch only if task has children AND has finally.
-    /// Taken when children complete and finally is scheduled.
-    pub effective_value: Option<EffectiveValue>,
-}
-
-/// Finally task - runs when horizontal parent's children complete.
-pub struct FinallyTask {
-    /// The step whose finally hook this runs (used to look up the script)
-    pub step: StepName,
-    /// Input value passed to the finally script. Always present.
-    pub effective_value: EffectiveValue,
-}
-
-/// What kind of task this is - determines dispatch behavior.
-/// ONLY matched in dispatch(). All other task handling is kind-agnostic.
-pub enum TaskKind {
-    Step(StepTask),
-    Finally(FinallyTask),
-}
-
-impl TaskKind {
-    pub fn step_name(&self) -> &StepName {
-        match self {
-            TaskKind::Step(s) => &s.step,
-            TaskKind::Finally(f) => &f.step,
-        }
-    }
-
-    pub fn description(&self) -> String {
-        match self {
-            TaskKind::Step(s) => format!("step {}", s.step),
-            TaskKind::Finally(f) => format!("finally for {}", f.step),
-        }
-    }
-}
-```
-
-**Note:** `StepName` will eventually be interned as a `u32`, making this very efficient. The actual `HookScript` is looked up from `config.steps[step].finally_hook` at dispatch time.
-
-#### `types.rs` - TaskEntry changes
-
-```rust
 pub(super) struct TaskEntry {
+    pub step: StepName,
     pub parent_id: Option<LogTaskId>,
+    /// If true, this is a finally task (no pre-hook, just run script).
+    /// If false, this is a regular step task (run pre-hook, then action).
+    ///
+    /// Relationship to Pending.value (EffectiveValue concept):
+    /// - Step tasks (is_finally=false): Pending.value is INPUT (before pre-hook).
+    ///   Pre-hook transforms it to effective_value at dispatch time.
+    /// - Finally tasks (is_finally=true): Pending.value IS the effective_value
+    ///   (already transformed by the parent step's pre-hook).
+    ///
+    /// Relationship to finally_value:
+    /// - is_finally: "Am I a finally task?" (this task's identity)
+    /// - finally_value: "Do I have a finally hook to run after my children?" (this task's hook)
+    /// These are orthogonal. A Step task (is_finally=false) may have finally_value=Some.
+    /// A Finally task (is_finally=true) always has finally_value=None (finally tasks
+    /// don't have their own finally hooks - only Steps do).
+    pub is_finally: bool,
     pub state: TaskState,
-    pub kind: TaskKind,           // Contains task data + effective_value
     pub retries_remaining: u32,
 }
 
-// TaskState::Pending no longer holds Task - it's in TaskEntry.kind
-// TaskState::WaitingForChildren no longer holds continuation - finally is scheduled as sibling
 pub(super) enum TaskState {
-    Pending,                           // CHANGED: no longer Pending(Task)
+    /// Task is queued, waiting to be dispatched.
+    /// value: For Step tasks, this is the input (pre-pre-hook).
+    ///        For Finally tasks, this is the effective_value from parent.
+    Pending { value: serde_json::Value },
+
+    /// Task is currently executing.
     InFlight(InFlight),
+
+    /// Task completed its action, waiting for children to complete.
     WaitingForChildren {
         pending_children_count: NonZeroU16,
+        /// Value to pass to finally hook when all children complete.
+        /// Some only for Step tasks that have a finally hook configured.
+        /// None for Finally tasks (they don't have their own finally hooks).
+        finally_value: Option<serde_json::Value>,
     },
 }
 ```
 
-**Key simplification:** `WaitingForChildren` just holds `pending_children_count`. No continuation, no effective_value storage.
+**Key simplifications:**
+- `is_finally` bool instead of `TaskKind` enum - dispatch checks this flag
+- Three uniform states with clear data ownership
+- `finally_value` in WaitingForChildren replaces the old continuation pattern
 
-**Note:** `finally_for` field is NOT needed. The `parent_id` already tells us which task the finally is for. We can identify finally tasks by matching on `TaskKind::Finally`.
+**Note:** `finally_for` field is NOT needed. The `parent_id` already tells us which task the finally is for. We identify finally tasks by checking `is_finally == true`.
 
 ### Code Changes
 
@@ -270,15 +249,15 @@ fn task_succeeded(
     &mut self,
     task_id: LogTaskId,
     spawned: Vec<Task>,
-    effective_value: EffectiveValue,
+    effective_value: serde_json::Value,
 ) {
     self.in_flight -= 1;  // Unconditional - task was InFlight
 
     let entry = self.tasks.get(&task_id).expect("task must exist");
-    let step_name = entry.kind.step_name().clone();
+    let step_name = entry.step.clone();
 
-    // Check if this step has a finally hook
-    let has_finally = self.config.steps.iter()
+    // Check if this step has a finally hook (only Step tasks have finally hooks)
+    let has_finally = !entry.is_finally && self.config.steps.iter()
         .find(|s| s.name == step_name)
         .and_then(|s| s.finally_hook.as_ref())
         .is_some();
@@ -293,15 +272,10 @@ fn task_succeeded(
         // Has children - wait for them
         let entry = self.tasks.get_mut(&task_id).expect("task must exist");
         let count = NonZeroU16::new(spawned.len() as u16).unwrap();
-        entry.state = TaskState::WaitingForChildren { pending_children_count: count };
-
-        // Store effective_value in StepTask (only if we have finally)
-        if has_finally {
-            let TaskKind::Step(step_task) = &mut entry.kind else {
-                panic!("task_succeeded called on non-Step task");
-            };
-            step_task.effective_value = Some(effective_value);
-        }
+        entry.state = TaskState::WaitingForChildren {
+            pending_children_count: count,
+            finally_value: if has_finally { Some(effective_value) } else { None },
+        };
 
         for child in spawned {
             self.queue_task(child, Some(task_id));
@@ -314,7 +288,7 @@ fn schedule_finally(
     &mut self,
     task_id: LogTaskId,
     step: StepName,
-    effective_value: EffectiveValue,
+    effective_value: serde_json::Value,
 ) {
     let entry = self.tasks.get(&task_id).expect("task must exist");
     let parent_id = entry.parent_id;
@@ -324,45 +298,59 @@ fn schedule_finally(
         self.increment_pending_children(parent_id);
     }
 
-    // Create finally task with required effective_value
-    let kind = TaskKind::Finally(FinallyTask { step, effective_value });
-    self.queue_task_kind(kind, parent_id);
+    // Create finally task - is_finally=true, value is the effective_value
+    self.queue_finally_task(step, effective_value, parent_id);
 }
 
 /// Increment a WaitingForChildren task's pending_children_count.
 fn increment_pending_children(&mut self, task_id: LogTaskId) {
     let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    let TaskState::WaitingForChildren { pending_children_count } = &mut entry.state else {
+    let TaskState::WaitingForChildren { pending_children_count, .. } = &mut entry.state else {
         panic!("task not in WaitingForChildren state");
     };
     *pending_children_count = NonZeroU16::new(pending_children_count.get() + 1).unwrap();
 }
 
-/// Queue a task by kind.
-fn queue_task_kind(&mut self, kind: TaskKind, parent_id: Option<LogTaskId>) {
+/// Queue a regular step task.
+fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
     let id = self.next_task_id();
-    let retries_remaining = self.step_map.get(kind.step_name())
+    let retries_remaining = self.step_map.get(&task.step)
         .map(|s| s.options.max_retries)
         .unwrap_or(0);
 
     let entry = TaskEntry {
+        step: task.step,
         parent_id,
-        state: TaskState::Pending,
-        kind,
+        is_finally: false,
+        state: TaskState::Pending { value: task.value },
         retries_remaining,
     };
 
     self.tasks.insert(id, entry);
 }
 
-/// Queue a regular step task.
-fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
-    let step_task = StepTask {
-        step: task.step,
-        input_value: Some(task.value),
-        effective_value: None,
+/// Queue a finally task.
+fn queue_finally_task(
+    &mut self,
+    step: StepName,
+    effective_value: serde_json::Value,
+    parent_id: Option<LogTaskId>,
+) {
+    let id = self.next_task_id();
+    // Finally tasks use the same retry config as their step
+    let retries_remaining = self.step_map.get(&step)
+        .map(|s| s.options.max_retries)
+        .unwrap_or(0);
+
+    let entry = TaskEntry {
+        step,
+        parent_id,
+        is_finally: true,
+        state: TaskState::Pending { value: effective_value },
+        retries_remaining,
     };
-    self.queue_task_kind(TaskKind::Step(step_task), parent_id);
+
+    self.tasks.insert(id, entry);
 }
 
 /// Remove task from map and decrement parent's count.
@@ -376,28 +364,16 @@ fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
 /// Decrement parent's pending_children_count. If hits zero, schedule finally (if any), then remove.
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
     let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
-    let TaskState::WaitingForChildren { pending_children_count } = &mut entry.state else {
+    let TaskState::WaitingForChildren { pending_children_count, finally_value } = &mut entry.state else {
         panic!("parent not in WaitingForChildren state");
     };
 
     let new_count = pending_children_count.get() - 1;
     if new_count == 0 {
-        // All children done - same pattern as task_succeeded:
-        // schedule finally (if any), then unconditionally remove
-        let step_name = entry.kind.step_name().clone();
-        let has_finally = self.config.steps.iter()
-            .find(|s| s.name == step_name)
-            .and_then(|s| s.finally_hook.as_ref())
-            .is_some();
-
-        if has_finally {
-            // effective_value is stored in StepTask when task has children + finally
-            let TaskKind::Step(step_task) = &mut entry.kind else {
-                panic!("parent with finally must be Step");
-            };
-            let effective_value = step_task.effective_value.take()
-                .expect("effective_value must be set for task with finally");
-            self.schedule_finally(parent_id, step_name, effective_value);
+        // All children done - schedule finally (if stored), then unconditionally remove
+        let step_name = entry.step.clone();
+        if let Some(value) = finally_value.take() {
+            self.schedule_finally(parent_id, step_name, value);
         }
         self.remove_and_notify_parent(parent_id);  // Unconditional
     } else {
@@ -422,40 +398,34 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
 /// Precondition: task_id exists in self.tasks with state Pending.
 fn dispatch(&mut self, task_id: LogTaskId) {
     let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    let TaskState::Pending = &entry.state else {
+    let TaskState::Pending { value } = &mut entry.state else {
         panic!("dispatch called on non-Pending task");
     };
+    let value = std::mem::take(value);  // Take the value out
 
     let tx = self.tx.clone();
+    let step_config = self.step_map.get(&entry.step).expect("step must exist");
 
-    match &mut entry.kind {
-        TaskKind::Step(step_task) => {
-            // Take input_value - proves we're in Pending state
-            let input_value = step_task.input_value.take()
-                .expect("[P100] input_value must be Some for Pending task");
-            let step_config = self.step_map.get(&step_task.step).expect("step must exist");
-            // Run pre-hook with input_value, get effective_value
-            // ... spawn thread, submit to pool or run command
-        }
-        TaskKind::Finally(finally_task) => {
-            // Finally task - look up script from config, run as shell command
-            let script = self.config.steps.iter()
-                .find(|s| &s.name == finally_task.step)
-                .and_then(|s| s.finally_hook.as_ref())
-                .expect("finally task must have corresponding hook in config")
-                .clone();
+    if entry.is_finally {
+        // Finally task - look up script from config, run as shell command
+        let script = self.config.steps.iter()
+            .find(|s| s.name == entry.step)
+            .and_then(|s| s.finally_hook.as_ref())
+            .expect("finally task must have corresponding hook in config")
+            .clone();
 
-            // effective_value is stored in FinallyTask (always present)
-            let input_json = serde_json::to_string(&finally_task.effective_value.0)
-                .expect("input serializes");
+        let input_json = serde_json::to_string(&value).expect("input serializes");
+        let step = entry.step.clone();
 
-            info!(task_id = ?task_id, step = %finally_task.step, "dispatching finally task");
+        info!(task_id = ?task_id, step = %step, "dispatching finally task");
 
-            thread::spawn(move || {
-                let result = run_shell_command(script.as_str(), &input_json, None);
-                // ... send result back via tx
-            });
-        }
+        thread::spawn(move || {
+            let result = run_shell_command(script.as_str(), &input_json, None);
+            // ... send result back via tx
+        });
+    } else {
+        // Step task - run pre-hook with value, get effective_value, then run action
+        // ... spawn thread, submit to pool or run command
     }
 
     // InFlight::new() immediately after spawn - creating marker proves dispatch
@@ -642,26 +612,26 @@ Finally retry works like any task retry:
 
 ### Phase 2: Data structure changes
 
-- [ ] Add `TaskKind` enum with `Step(StepTask)` and `Finally(FinallyTask)` variants
-- [ ] Add `TaskEntry::step_name()` method to derive step from `TaskKind`
+- [ ] Add `step: StepName` to `TaskEntry`
+- [ ] Add `is_finally: bool` to `TaskEntry`
 - [ ] Add `retries_remaining: u32` to `TaskEntry`
-- [ ] Add `effective_value: Option<EffectiveValue>` to `TaskEntry` (only used when task has children AND finally)
-- [ ] Change `TaskState::Pending` to not hold `Task` (task data now in `TaskEntry.kind`)
-- [ ] Change `TaskState::Waiting` to `WaitingForChildren` with `pending_children_count` (remove `continuation`)
+- [ ] Change `TaskState::Pending` to hold `value: serde_json::Value`
+- [ ] Change `TaskState::Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_value`
 - [ ] Remove `Continuation` type entirely
+- [ ] Remove `TaskKind` enum (replaced by `is_finally` bool)
 - [ ] Update all `TaskEntry` construction sites
 
 ### Phase 3: Restructure completion flow
 
-- [ ] `queue_task_kind`: common task insertion for both Step and Finally
-- [ ] `queue_task`: wrap `queue_task_kind` with `TaskKind::Step`
+- [ ] `queue_task`: create Step task entry with `is_finally=false`
+- [ ] `queue_finally_task`: create Finally task entry with `is_finally=true`
 - [ ] `increment_pending_children`: bump a WaitingForChildren task's count
-- [ ] `schedule_finally`: increment parent count, create `TaskKind::Finally`, call `queue_task_kind`
-- [ ] `task_succeeded`: check for finally, schedule if present, then unconditionally remove
+- [ ] `schedule_finally`: increment parent count, call `queue_finally_task`
+- [ ] `task_succeeded`: store `finally_value` if needed, then schedule finally or remove
 - [ ] `remove_and_notify_parent`: remove task and decrement parent
-- [ ] `decrement_parent`: when count hits 0, check for finally, schedule if present, then remove
-- [ ] Modify `dispatch()` to match on `TaskKind`
-- [ ] Add dispatch logic for `TaskKind::Finally`
+- [ ] `decrement_parent`: when count hits 0, check `finally_value`, schedule if Some, then remove
+- [ ] Modify `dispatch()` to check `is_finally` flag
+- [ ] Add dispatch logic for finally tasks (run script directly, no pre-hook)
 
 ### Phase 4: Finally retry and failure handling
 
@@ -681,8 +651,8 @@ Finally retry works like any task retry:
 
 | File | Changes |
 |------|---------|
-| `runner/types.rs` | Add `TaskKind` enum, add `step_name()` method and `effective_value`/`retries_remaining` fields to `TaskEntry`, simplify `Waiting` (remove `continuation`), remove `Continuation` type |
-| `runner/mod.rs` | Add `schedule_finally()`, `remove_and_notify_parent()`, restructure `task_succeeded()` and `decrement_parent()`, modify `dispatch()` to match on `TaskKind` |
+| `runner/types.rs` | Add `step`, `is_finally`, `retries_remaining` to `TaskEntry`. Change `TaskState::Pending` to hold `value`. Change `Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_value`. Remove `Continuation` type. |
+| `runner/mod.rs` | Add `queue_finally_task()`, `schedule_finally()`, `remove_and_notify_parent()`. Restructure `task_succeeded()` and `decrement_parent()`. Modify `dispatch()` to check `is_finally`. |
 | `runner/response.rs` | Handle finally task results |
 | `runner/finally.rs` | Remove `run_finally_hook_direct()` (no longer needed) |
 | `tests/finally_retry_bugs.rs` | Add 3 new tests for finally scheduling bugs |
