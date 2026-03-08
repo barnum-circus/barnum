@@ -292,7 +292,13 @@ Create the new crate with log types and comprehensive tests (no integration with
 **Write/read functions:**
 - `write_entry(file, entry)` - append NDJSON line
 - `read_entries(file)` - iterator over entries
-- `reconstruct(entries)` - return (Config, PendingTasks)
+- `reconstruct(entries)` - return `(Config, ReconstructedState)`
+
+**ReconstructedState contains:**
+- Tasks needing action run (Pending)
+- Tasks waiting for children (WaitingForChildren with pending_count and finally_data)
+- Parent relationships preserved
+- Finally tasks identified
 
 **Tests to write:**
 - Serialization round-trips for all types
@@ -344,21 +350,32 @@ Add `--resume-from` flag and resume logic.
 **Tasks:**
 1. Add `--resume-from <path>` CLI flag
 2. Validate flag combinations (incompatible with config file, --initial-state)
-3. Read and reconstruct state from log
+3. Read log and call `reconstruct()` to get full runner state
 4. Create new log file, copy existing entries
-5. Feed reconstructed tasks into runner with parent relationships
+5. Initialize runner with reconstructed state (not just initial tasks)
 6. Continue normal execution, appending to new log
 
+**Runner changes for resume:**
+The runner needs a way to be initialized with pre-existing state:
+- Tasks in `Pending` state (need action run)
+- Tasks in `WaitingForChildren` state (don't run action, just wait)
+- Correct `pending_children_count` for waiting tasks
+- `finally_data` preserved for tasks that have finally hooks
+- Parent relationships intact
+
+This is NOT exposed via `--initial-state` CLI. It's internal to resume.
+
 **Resume entry point:**
-- Probably a new function like `run_from_log(log_path, new_log_path, runner_config)`
-- Or extend `run()` with an enum: `InitialTasks::Fresh(Vec<Task>) | InitialTasks::Resume(path)`
+- New function: `run_from_state(config, reconstructed_state, runner_config, log_writer)`
+- Or: runner accepts `InitialState::Fresh(Vec<Task>) | InitialState::Reconstructed(ReconstructedState)`
 
 **Tests:**
 - Resume with no pending tasks (completes immediately)
-- Resume with pending root tasks
-- Resume with pending child tasks (parent in WaitingForChildren)
-- Resume with pending retry
-- Resume with pending finally
+- Resume with pending root tasks (re-run actions)
+- Resume with parent in WaitingForChildren (don't re-run parent action)
+- Resume with pending retry task
+- Resume with pending finally task
+- Resume with nested: parent waiting, child pending, finally pending
 - Crash simulation: run partway, kill, resume, verify completion
 
 **Branch:** `state/04-resume`
@@ -372,10 +389,31 @@ Add `--resume-from` flag and resume logic.
 - Consider compression for large logs
 - Documentation
 
-## What We Don't Track (v1)
+## Resume Semantics
 
-- **In-flight tasks**: Lost on crash. May cause duplicate work on resume.
-- **Finally hook state**: [DONE] **Fixed by FINALLY_TRACKING + FINALLY_SCHEDULING** - finally hooks are now regular tasks that go through the queue and can be logged/resumed like any other task.
+On resume, we reconstruct the **exact runner state** from the log. This is NOT exposed via `--initial-state` CLI - it's internal to the resume logic.
+
+**Key insight:** Treat all in-flight tasks as cancelled. Re-queue them.
+
+**State reconstruction from log:**
+
+| Log state | Reconstructed state |
+|-----------|---------------------|
+| `TaskSubmitted` with no `TaskCompleted` | `Pending` - needs action run |
+| `TaskCompleted(Success{spawned})` where some spawned tasks incomplete | `WaitingForChildren` - don't re-run action |
+| `TaskCompleted(Success{spawned})` where all spawned tasks complete | Done - removed from state |
+| `TaskCompleted(Failed{retry_task_id: Some(id)})` | Done - retry task handles it |
+| `TaskCompleted(Failed{retry_task_id: None})` | Done - task dropped |
+
+**What we reconstruct:**
+- `BTreeMap<LogTaskId, TaskEntry>` with correct states (Pending or WaitingForChildren)
+- Parent relationships (`parent_id` from log)
+- Finally tasks (identified by `TaskOrigin::Finally`)
+- Pending children counts (computed from incomplete spawned_task_ids)
+
+**What we punt on:**
+- In-flight tasks at crash time → re-queued as Pending (may cause duplicate work)
+- Partial action execution → ignored (action runs again from scratch)
 
 ## Prerequisite Refactors
 
