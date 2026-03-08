@@ -9,7 +9,7 @@ use agent_pool_cli::AgentPoolCli;
 use cli_invoker::Invoker;
 use serde::{Deserialize, Serialize};
 
-use crate::types::{LogTaskId, StepInputValue, StepName};
+use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
 use crate::value_schema::Task;
 
 /// Connection details for the agent pool.
@@ -99,22 +99,51 @@ pub(super) enum TaskOutcome {
 
 /// Entry in the unified task state map.
 pub(super) struct TaskEntry {
+    /// The step this task is executing.
+    pub step: StepName,
     /// Parent task waiting for this task to complete.
     pub parent_id: Option<LogTaskId>,
+    /// **"Am I a finally task?"** (this task's type)
+    ///
+    /// - `None` = Step task (run pre-hook, then action)
+    /// - `Some` = Finally task with this script (no pre-hook, just run script)
+    ///
+    /// The script is looked up once when the finally is scheduled, not again at dispatch.
+    ///
+    /// **Not to be confused with `finally_data` in `WaitingForChildren`:**
+    /// - `finally_script`: "Am I a finally task?" (this task's type)
+    /// - `finally_data`:   "Do I have a finally hook to run after my children?" (step's config)
+    #[expect(dead_code)] // Used in Branch 4 (finally/04-completion-flow)
+    pub finally_script: Option<HookScript>,
     /// Current state of this task.
     pub state: TaskState,
+    /// Number of retries remaining for this task.
+    #[expect(dead_code)] // Used in Branch 4 (finally/04-completion-flow)
+    pub retries_remaining: u32,
 }
 
 /// State of a task in the runner.
 pub(super) enum TaskState {
     /// Task waiting to be dispatched (queued due to concurrency limit).
-    Pending(Task),
+    Pending {
+        /// The step input value. For Step tasks, may be transformed by pre-hook.
+        /// For Finally tasks, comes from parent (already through pre-hook).
+        value: StepInputValue,
+    },
     /// Task currently executing in a worker thread.
     InFlight(InFlight),
-    /// Task succeeded, waiting for children/continuation to complete.
-    Waiting {
-        pending_count: NonZeroU16,
-        continuation: Option<Continuation>,
+    /// Task completed its action, waiting for children to complete.
+    WaitingForChildren {
+        /// Number of children still pending.
+        pending_children_count: NonZeroU16,
+        /// **"Does this step have a finally hook to run after children?"** (step's config)
+        ///
+        /// Hook + value to schedule finally when all children complete.
+        /// - `Some` for Step tasks whose step config has a finally hook
+        /// - `None` for Finally tasks (no "finally of finally")
+        ///
+        /// The hook is looked up once when entering this state, not again when scheduling.
+        finally_data: Option<(HookScript, StepInputValue)>,
     },
 }
 
@@ -133,15 +162,6 @@ impl InFlight {
     pub(super) const fn new() -> Self {
         InFlight(())
     }
-}
-
-/// What to run when all children complete.
-///
-/// The task tree doesn't know what this does - it just runs it and
-/// queues any spawned tasks as children.
-pub(super) struct Continuation {
-    pub step_name: StepName,
-    pub value: StepInputValue,
 }
 
 /// Identity of a task being processed.

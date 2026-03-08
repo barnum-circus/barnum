@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 
 use crate::docs::generate_step_docs;
 use crate::resolved::{Action, Config, Step};
-use crate::types::{LogTaskId, StepName};
+use crate::types::{HookScript, LogTaskId, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use crate::types::StepInputValue;
@@ -29,8 +29,7 @@ use finally::run_finally_hook_direct;
 use hooks::{call_wake_script, run_post_hook};
 use response::{FailureKind, ProcessedSubmit, process_retry, process_submit_result};
 use types::{
-    Continuation, InFlight, InFlightResult, PoolConnection, TaskEntry, TaskIdentity, TaskOutcome,
-    TaskState,
+    InFlight, InFlightResult, PoolConnection, TaskEntry, TaskIdentity, TaskOutcome, TaskState,
 };
 
 use types::TaskResult;
@@ -131,7 +130,7 @@ impl<'a> TaskRunner<'a> {
     fn pending(&self) -> usize {
         self.tasks
             .values()
-            .filter(|e| matches!(e.state, TaskState::Pending(_)))
+            .filter(|e| matches!(e.state, TaskState::Pending { .. }))
             .count()
     }
 
@@ -148,14 +147,21 @@ impl<'a> TaskRunner<'a> {
     /// Add a new task - dispatch immediately if under concurrency, otherwise queue as Pending.
     fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
         let id = self.next_task_id();
+        let retries_remaining = self
+            .step_map
+            .get(&task.step)
+            .map_or(0, |s| s.options.max_retries);
 
         if self.in_flight < self.max_concurrency {
             // Create entry in InFlight state and dispatch
             let prev = self.tasks.insert(
                 id,
                 TaskEntry {
+                    step: task.step.clone(),
                     parent_id,
+                    finally_script: None,
                     state: TaskState::InFlight(InFlight::new()),
+                    retries_remaining,
                 },
             );
             assert!(prev.is_none(), "task_id collision: {id:?} already in map");
@@ -166,8 +172,11 @@ impl<'a> TaskRunner<'a> {
             let prev = self.tasks.insert(
                 id,
                 TaskEntry {
+                    step: task.step,
                     parent_id,
-                    state: TaskState::Pending(task),
+                    finally_script: None,
+                    state: TaskState::Pending { value: task.value },
+                    retries_remaining,
                 },
             );
             assert!(prev.is_none(), "task_id collision: {id:?} already in map");
@@ -231,9 +240,9 @@ impl<'a> TaskRunner<'a> {
     /// The task is transitioned to `InFlight` state in the map.
     fn take_next_pending(&mut self) -> Option<(LogTaskId, Task)> {
         let result = self.tasks.iter_mut().find_map(|(id, entry)| {
-            if let TaskState::Pending(task) = &mut entry.state {
-                let task =
-                    std::mem::replace(task, Task::new("", StepInputValue(serde_json::Value::Null)));
+            if let TaskState::Pending { value } = &mut entry.state {
+                let value = std::mem::replace(value, StepInputValue(serde_json::Value::Null));
+                let task = Task::new(entry.step.as_str(), value);
                 entry.state = TaskState::InFlight(InFlight::new());
                 Some((*id, task))
             } else {
@@ -247,19 +256,19 @@ impl<'a> TaskRunner<'a> {
         result
     }
 
-    /// Transition `InFlight` → `Waiting`.
+    /// Transition `InFlight` → `WaitingForChildren`.
     #[expect(clippy::expect_used)] // Invariant: task must exist
     fn transition_to_waiting(
         &mut self,
         task_id: LogTaskId,
-        pending_count: NonZeroU16,
-        continuation: Option<Continuation>,
+        pending_children_count: NonZeroU16,
+        finally_data: Option<(HookScript, StepInputValue)>,
     ) {
         let entry = self.tasks.get_mut(&task_id).expect("task must exist");
         assert!(matches!(entry.state, TaskState::InFlight(_)));
-        entry.state = TaskState::Waiting {
-            pending_count,
-            continuation,
+        entry.state = TaskState::WaitingForChildren {
+            pending_children_count,
+            finally_data,
         };
         self.in_flight -= 1;
     }
@@ -275,21 +284,17 @@ impl<'a> TaskRunner<'a> {
 
     // ==================== Key Operations ====================
 
-    /// Handle completion of a task (`InFlight` success with no children, or `Waiting` with count=0).
-    /// Runs continuation if present; if that spawns tasks, waits for them.
+    /// Handle completion of a task (`InFlight` success with no children, or `WaitingForChildren` with count=0).
+    /// Runs finally hook if present; if that spawns tasks, waits for them.
     /// Otherwise removes task and notifies parent.
     #[expect(clippy::panic, clippy::expect_used)] // Finally hook returning invalid tasks is a config bug
-    fn handle_completion(&mut self, task_id: LogTaskId, continuation: Option<Continuation>) {
-        let spawned = if let Some(cont) = continuation {
-            let hook = self
-                .config
-                .steps
-                .iter()
-                .find(|s| s.name == cont.step_name)
-                .and_then(|s| s.finally_hook.as_ref())
-                .expect("continuation implies finally hook exists");
-
-            let tasks = run_finally_hook_direct(hook, &cont.value.0);
+    fn handle_completion(
+        &mut self,
+        task_id: LogTaskId,
+        finally_data: Option<(HookScript, StepInputValue)>,
+    ) {
+        let spawned = if let Some((hook, value)) = finally_data {
+            let tasks = run_finally_hook_direct(&hook, &value.0);
 
             // Validate finally hook spawned tasks
             for task in &tasks {
@@ -320,7 +325,7 @@ impl<'a> TaskRunner<'a> {
                 self.decrement_parent(parent_id);
             }
         } else {
-            // Transition to or update Waiting state
+            // Transition to or update WaitingForChildren state
             #[expect(clippy::unwrap_used, clippy::cast_possible_truncation)]
             let count = NonZeroU16::new(spawned.len() as u16).unwrap();
 
@@ -328,9 +333,9 @@ impl<'a> TaskRunner<'a> {
             if matches!(entry.state, TaskState::InFlight(_)) {
                 self.in_flight -= 1;
             }
-            entry.state = TaskState::Waiting {
-                pending_count: count,
-                continuation: None,
+            entry.state = TaskState::WaitingForChildren {
+                pending_children_count: count,
+                finally_data: None,
             };
 
             for child in spawned {
@@ -339,30 +344,30 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
-    /// Decrement parent's pending count, run continuation or finish when count hits 0.
+    /// Decrement parent's pending count, run finally or finish when count hits 0.
     #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // Invariants
     fn decrement_parent(&mut self, parent_id: LogTaskId) {
-        let (hit_zero, continuation) = {
+        let (hit_zero, finally_data) = {
             let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
-            let TaskState::Waiting {
-                pending_count,
-                continuation,
+            let TaskState::WaitingForChildren {
+                pending_children_count,
+                finally_data,
             } = &mut entry.state
             else {
-                panic!("parent not in Waiting state");
+                panic!("parent not in WaitingForChildren state");
             };
 
-            let new_count = pending_count.get() - 1;
+            let new_count = pending_children_count.get() - 1;
             if new_count == 0 {
-                (true, continuation.take())
+                (true, finally_data.take())
             } else {
-                *pending_count = NonZeroU16::new(new_count).unwrap();
+                *pending_children_count = NonZeroU16::new(new_count).unwrap();
                 (false, None)
             }
         };
 
         if hit_zero {
-            self.handle_completion(parent_id, continuation);
+            self.handle_completion(parent_id, finally_data);
         }
     }
 
@@ -381,18 +386,15 @@ impl<'a> TaskRunner<'a> {
             .iter()
             .find(|s| &s.name == step_name)
             .and_then(|s| s.finally_hook.clone());
-        let continuation = finally_hook.map(|_| Continuation {
-            step_name: step_name.clone(),
-            value,
-        });
+        let finally_data = finally_hook.map(|hook| (hook, value));
 
         if spawned.is_empty() {
-            // No children - handle completion (may run continuation)
-            self.handle_completion(task_id, continuation);
+            // No children - handle completion (may run finally)
+            self.handle_completion(task_id, finally_data);
         } else {
             // Has children - wait for them
             let count = NonZeroU16::new(spawned.len() as u16).unwrap();
-            self.transition_to_waiting(task_id, count, continuation);
+            self.transition_to_waiting(task_id, count, finally_data);
             for child in spawned {
                 self.queue_task(child, Some(task_id));
             }
