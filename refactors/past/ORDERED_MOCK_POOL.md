@@ -1,6 +1,10 @@
 # Ordered Mock Pool for Deterministic Tests
 
-**Status:** Not started
+**Status:** Complete
+
+Phase 1 implemented. Phases 2-3 are not needed:
+- Phase 2 (PayloadAwareController) is redundant - `OrderedAgentController.waiting_tasks()` already exposes payloads
+- Phase 3 (demo tests) belongs to STATE_PERSISTENCE refactor
 
 ## Motivation
 
@@ -12,7 +16,7 @@ Current tests use `GsdTestAgent` with `processing_delay` (time-based delays) to 
 
 ## Current Test Infrastructure
 
-`GsdTestAgent` in `crates/gsd_cli/tests/common/mod.rs`:
+`GsdTestAgent` in `crates/gsd_config/tests/common/mod.rs`:
 
 ```rust
 impl GsdTestAgent {
@@ -204,7 +208,7 @@ fn fan_out_deterministic_order() {
 
 ### Phase 1: Add OrderedAgentController
 
-**File:** `crates/gsd_cli/tests/common/mod.rs`
+**File:** `crates/gsd_config/tests/common/mod.rs`
 
 1. Add `WaitingTask` struct and `OrderedAgentController` with:
    - `wait_for_tasks(count)` - block until count tasks waiting
