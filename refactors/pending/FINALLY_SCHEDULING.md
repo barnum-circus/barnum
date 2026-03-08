@@ -593,8 +593,16 @@ Each step is a separate branch stacked on the previous. All must pass CI before 
 ### Branch 1: `finally/01-tests`
 **Base:** `master`
 
-Add all tests with `#[should_panic]`. One commit, tests document the bugs.
+Add `#[should_panic]` to existing tests that document bugs, plus add new tests.
 
+**Existing tests to mark with `#[should_panic]`:**
+```
+- subtree_finally_waits_for_grandchildren
+- finally_waits_for_finally_spawned_tasks
+- (others TBD based on which actually fail)
+```
+
+**New tests to add with `#[should_panic]`:**
 ```
 - finally_retries_on_failure
 - finally_failure_propagates_after_retries_exhausted
