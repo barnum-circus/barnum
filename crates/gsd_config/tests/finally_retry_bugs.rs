@@ -578,7 +578,6 @@ echo "finally_executed" > "{}"
 /// - A's finally runs when B succeeds (before C completes, before B's finally)
 /// - Order is: `A_finally`, `C_done`, `B_finally` (wrong!)
 #[test]
-#[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
 fn subtree_finally_waits_for_grandchildren() {
     let test_name = "finally_subtree_grandchildren";
@@ -738,7 +737,6 @@ cat  # pass through stdin to stdout
 /// - A's finally runs when B's finally completes (before C runs)
 /// - Order is: `B_finally`, `A_finally`, `C_done` (wrong!)
 #[test]
-#[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
 fn finally_waits_for_finally_spawned_tasks() {
     let test_name = "finally_spawned_tasks";
@@ -887,7 +885,6 @@ cat  # pass through stdin to stdout
 ///
 /// This is a more extreme version of Bug 1 - cascading grandchild issue.
 #[test]
-#[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
 fn deeply_nested_finally_chain() {
     let test_name = "finally_deeply_nested";
@@ -1031,7 +1028,6 @@ fn deeply_nested_finally_chain() {
 ///
 /// Bug: A gets notified when B succeeds, before B's subtree (D, `B_finally`) completes.
 #[test]
-#[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
 fn multiple_children_with_finally() {
     let test_name = "finally_multiple_children";
@@ -1191,7 +1187,6 @@ fn multiple_children_with_finally() {
 ///
 /// Bug: A's finally runs when B's finally completes, not when C and D complete.
 #[test]
-#[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
 fn finally_spawns_multiple_tasks() {
     let test_name = "finally_spawns_multiple";
