@@ -85,11 +85,23 @@ struct TaskEntry {
     state: TaskState,
 }
 
+/// Zero-sized proof that a task was dispatched to a worker.
+/// Can only be created via submit_to_worker(), enforcing the invariant
+/// that InFlight state means the task is actually running.
+struct InFlight(());
+
+impl InFlight {
+    fn new(runner: &TaskRunner, task_id: LogTaskId, task: Task) -> Self {
+        runner.submit_to_worker(task_id, task);
+        InFlight(())
+    }
+}
+
 enum TaskState {
     /// Task waiting to be dispatched
     Pending(Task),
-    /// Task currently executing
-    InFlight,
+    /// Task currently executing - ZST proves dispatch happened
+    InFlight(InFlight),
     /// Task succeeded, waiting for children to complete
     Waiting {
         pending_count: NonZeroU16,
@@ -140,24 +152,26 @@ Task created → [Pending] → [InFlight] ──┬── success with children 
 ### State Transitions
 
 ```rust
-/// Create InFlight task AND dispatch to worker (atomic)
+/// Create InFlight task - ZST constructor enforces dispatch
 fn dispatch(&mut self, task_id: LogTaskId, task: Task, parent_id: Option<LogTaskId>) {
+    let in_flight = InFlight::new(self, task_id, task);  // Submits to worker
     self.tasks.insert(task_id, TaskEntry {
         parent_id,
-        state: TaskState::InFlight,
+        state: TaskState::InFlight(in_flight),
     });
     self.in_flight += 1;
-    self.submit_to_worker(task_id, task);  // Actually send to worker
 }
 
 /// Pending → InFlight (for tasks that were queued while at max concurrency)
 fn dispatch_pending(&mut self, task_id: LogTaskId) {
     let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    let TaskState::Pending(task) = std::mem::replace(&mut entry.state, TaskState::InFlight) else {
+    let TaskState::Pending(task) = &entry.state else {
         panic!("dispatch_pending called on non-Pending task");
     };
+    let task = task.clone();
+    let in_flight = InFlight::new(self, task_id, task);  // Submits to worker
+    entry.state = TaskState::InFlight(in_flight);
     self.in_flight += 1;
-    self.submit_to_worker(task_id, task);
 }
 
 /// InFlight → Waiting
@@ -168,7 +182,7 @@ fn transition_to_waiting(
     continuation: Option<Continuation>,
 ) {
     let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    assert!(matches!(entry.state, TaskState::InFlight));
+    assert!(matches!(entry.state, TaskState::InFlight(_)));
     entry.state = TaskState::Waiting { pending_count, continuation };
     self.in_flight -= 1;
 }
@@ -176,7 +190,7 @@ fn transition_to_waiting(
 /// InFlight → removed
 fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
     let entry = self.tasks.remove(&task_id).expect("task must exist");
-    assert!(matches!(entry.state, TaskState::InFlight));
+    assert!(matches!(entry.state, TaskState::InFlight(_)));
     self.in_flight -= 1;
     entry.parent_id
 }
