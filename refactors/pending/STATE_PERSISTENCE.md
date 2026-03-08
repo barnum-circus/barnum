@@ -43,23 +43,28 @@ Newline-delimited JSON. First entry MUST be `Config` (exactly once). Uses `#[ser
 
 ```json
 {"kind":"Config","config":{...}}
-{"kind":"TaskSubmitted","task_id":1,"step":"Analyze","value":{...},"origin_id":null,"retries":0}
-{"kind":"TaskSubmitted","task_id":2,"step":"Analyze","value":{...},"origin_id":null,"retries":0}
-{"kind":"TaskCompleted","task_id":1,"outcome":{"kind":"Success","value":{"new_task_ids":[3]}}}
-{"kind":"TaskSubmitted","task_id":3,"step":"Process","value":{...},"origin_id":1,"retries":0}
-{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed","value":{"kind":"Timeout"}}}
-{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed","value":{"kind":"InvalidResponse","message":"parse error"}}}
-{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Success","value":{"new_task_ids":[]}}}
-{"kind":"TaskSubmitted","task_id":4,"step":"Process","value":{...},"origin_id":null,"retries":0,"finally_script":"./cleanup.sh"}
+{"kind":"TaskSubmitted","task_id":1,"step":"Analyze","value":{...},"parent_id":null,"origin":{"kind":"Initial"}}
+{"kind":"TaskSubmitted","task_id":2,"step":"Analyze","value":{...},"parent_id":null,"origin":{"kind":"Initial"}}
+{"kind":"TaskCompleted","task_id":1,"outcome":{"kind":"Success","value":{"spawned_task_ids":[3]}}}
+{"kind":"TaskSubmitted","task_id":3,"step":"Process","value":{...},"parent_id":1,"origin":{"kind":"Spawned"}}
+{"kind":"TaskCompleted","task_id":2,"outcome":{"kind":"Failed","value":{"reason":{"kind":"Timeout"},"retry_task_id":4}}}
+{"kind":"TaskSubmitted","task_id":4,"step":"Analyze","value":{...},"parent_id":null,"origin":{"kind":"Retry","replaces":2}}
+{"kind":"TaskCompleted","task_id":4,"outcome":{"kind":"Success","value":{"spawned_task_ids":[]}}}
+{"kind":"TaskSubmitted","task_id":5,"step":"Analyze","value":{...},"parent_id":1,"origin":{"kind":"Finally","finally_for":1}}
 ```
 
-Note: `finally_script` is only present for finally tasks. Regular step tasks omit this field.
+**Task origins:**
+- `Initial`: From `--initial-state`
+- `Spawned`: Created by parent task's output (regular child)
+- `Retry`: Replacement for a failed task
+- `Finally`: Finally hook task for a completed task
 
 ## Data Structures
 
 ```rust
 use serde::{Deserialize, Serialize};
 use crate::resolved::Config;
+use crate::types::StepName;
 
 // Defined in crate::types - shown here for reference
 #[derive(Debug, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -82,14 +87,32 @@ pub struct StateLogConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TaskSubmitted {
     pub task_id: LogTaskId,
-    pub step: String,
+    pub step: StepName,
     pub value: serde_json::Value,
-    pub origin_id: Option<LogTaskId>,
-    pub retries: u32,
-    /// For finally tasks: the script to run. Absent for regular step tasks.
-    /// Finally tasks use the same step name as their parent but are dispatched differently.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finally_script: Option<String>,
+    /// Task waiting for this one to complete (tree parent).
+    pub parent_id: Option<LogTaskId>,
+    /// How this task came to exist.
+    pub origin: TaskOrigin,
+}
+
+/// How a task came to be created.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum TaskOrigin {
+    /// From `--initial-state` (root task).
+    Initial,
+    /// Spawned by parent task's action output.
+    Spawned,
+    /// Retry of a failed task.
+    Retry {
+        /// The task this replaces.
+        replaces: LogTaskId,
+    },
+    /// Finally hook for a completed task.
+    Finally {
+        /// The task whose finally hook this is.
+        finally_for: LogTaskId,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,12 +125,21 @@ pub struct TaskCompleted {
 #[serde(tag = "kind", content = "value")]
 pub enum TaskOutcome {
     Success(TaskSuccess),
-    Failed(FailureReason),
+    Failed(TaskFailed),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TaskSuccess {
-    pub new_task_ids: Vec<LogTaskId>,
+    /// IDs of tasks spawned by this task's output.
+    pub spawned_task_ids: Vec<LogTaskId>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TaskFailed {
+    pub reason: FailureReason,
+    /// If the task was retried, the ID of the retry task.
+    /// None if retries were exhausted or disabled.
+    pub retry_task_id: Option<LogTaskId>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -157,11 +189,11 @@ enum ReconstructError {
     DuplicateTaskId(LogTaskId),
     #[error("TaskCompleted for unknown task_id {0:?}")]
     UnknownTaskId(LogTaskId),
-    #[error("task {task_id:?} has retries={retries} which exceeds max_retries={max}")]
-    RetriesExceeded { task_id: LogTaskId, retries: u32, max: u32 },
 }
 
-fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max_retries: u32) -> Result<(Config, PendingTasks), ReconstructError> {
+fn reconstruct(
+    mut entries: impl Iterator<Item = io::Result<StateLogEntry>>,
+) -> Result<(Config, PendingTasks), ReconstructError> {
     // First entry must be Config
     let config = match entries.next() {
         Some(Ok(StateLogEntry::Config(c))) => c.config,
@@ -178,13 +210,6 @@ fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max
                 return Err(ReconstructError::DuplicateConfig);
             }
             StateLogEntry::TaskSubmitted(task) => {
-                if task.retries > max_retries {
-                    return Err(ReconstructError::RetriesExceeded {
-                        task_id: task.task_id,
-                        retries: task.retries,
-                        max: max_retries,
-                    });
-                }
                 if pending.contains_key(&task.task_id) {
                     return Err(ReconstructError::DuplicateTaskId(task.task_id));
                 }
@@ -201,6 +226,8 @@ fn reconstruct(mut entries: impl Iterator<Item = io::Result<StateLogEntry>>, max
     Ok((config, pending))
 }
 ```
+
+**Notes on retry counting:** The number of retries is not stored in the log. Instead, it can be computed by following the `Retry { replaces }` chain backwards. On resume, we validate against `max_retries` from the config.
 
 ## CLI
 
