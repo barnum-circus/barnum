@@ -570,13 +570,13 @@ echo "finally_executed" > "{}"
 /// Expected order:
 /// 1. A runs, spawns B
 /// 2. B runs, spawns C
-/// 3. C runs, completes → writes "C_done"
-/// 4. B's finally runs (B's subtree done) → writes "B_finally"
-/// 5. A's finally runs (A's subtree done, including B's finally) → writes "A_finally"
+/// 3. C runs, completes → writes `C_done`
+/// 4. B's finally runs (B's subtree done) → writes `B_finally`
+/// 5. A's finally runs (A's subtree done, including B's finally) → writes `A_finally`
 ///
 /// Bug behavior:
 /// - A's finally runs when B succeeds (before C completes, before B's finally)
-/// - Order is: A_finally, C_done, B_finally (wrong!)
+/// - Order is: `A_finally`, `C_done`, `B_finally` (wrong!)
 #[test]
 #[should_panic(expected = "Finally hooks ran in wrong order")]
 #[expect(clippy::too_many_lines)]
@@ -609,8 +609,7 @@ fn subtree_finally_waits_for_grandchildren() {
         match kind {
             "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
             "StepB" => r#"[{"kind": "StepC", "value": {}}]"#.to_string(),
-            "StepC" => "[]".to_string(),
-            _ => "[]".to_string(),
+            _ => "[]".to_string(), // StepC and all others return empty
         }
     });
 
@@ -648,8 +647,10 @@ cat  # pass through stdin to stdout
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod A finally");
-        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod B finally");
+        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod A finally");
+        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod B finally");
         fs::set_permissions(&c_post, fs::Permissions::from_mode(0o755)).expect("chmod C post");
     }
 
