@@ -141,11 +141,13 @@ Task created → [Pending] → [InFlight] ──┬── success with children 
 
 ```rust
 /// Pending → InFlight
-fn dispatch(&mut self, task_id: LogTaskId) {
+fn dispatch(&mut self, task_id: LogTaskId) -> Task {
     let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    assert!(matches!(entry.state, TaskState::Pending(_)));
-    entry.state = TaskState::InFlight;
+    let TaskState::Pending(task) = std::mem::replace(&mut entry.state, TaskState::InFlight) else {
+        panic!("dispatch called on non-Pending task");
+    };
     self.in_flight += 1;
+    task
 }
 
 /// InFlight → Waiting
@@ -169,26 +171,31 @@ fn finish_in_flight(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
     entry.parent_id
 }
 
-/// Waiting → removed
-fn finish_waiting(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("task must exist");
-    assert!(matches!(entry.state, TaskState::Waiting { .. }));
-    entry.parent_id
-}
-
-/// Add a new pending task
-fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+/// Add a new pending task, dispatch immediately if under concurrency limit
+fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) -> Option<(LogTaskId, Task)> {
     let id = self.next_task_id();
     self.tasks.insert(id, TaskEntry {
         parent_id,
         state: TaskState::Pending(task),
     });
+
+    // Opportunistically dispatch if we have capacity
+    if self.in_flight < self.max_concurrency {
+        let task = self.dispatch(id);
+        Some((id, task))
+    } else {
+        None
+    }
 }
 ```
+
+Note: No `finish_waiting` - callers that know they're in `Waiting` state remove directly to avoid redundant matching.
 
 ### Key Operations
 
 #### Dispatch next task
+
+Only needed for initial bootstrap or when tasks were queued while at max concurrency.
 
 ```rust
 fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
@@ -196,13 +203,10 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
         return None;
     }
 
-    let (task_id, task) = self.tasks.iter()
-        .find_map(|(id, entry)| match &entry.state {
-            TaskState::Pending(t) => Some((*id, t.clone())),
-            _ => None,
-        })?;
+    let task_id = self.tasks.iter()
+        .find_map(|(id, entry)| matches!(entry.state, TaskState::Pending(_)).then_some(*id))?;
 
-    self.dispatch(task_id);
+    let task = self.dispatch(task_id);
     Some((task_id, task))
 }
 ```
@@ -210,9 +214,10 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
 #### Task succeeds
 
 ```rust
-fn task_succeeded(&mut self, task_id: LogTaskId, step_name: StepName, spawned: Vec<Task>, effective_value: EffectiveValue) {
+fn task_succeeded(&mut self, task_id: LogTaskId, step_name: StepName, spawned: Vec<Task>, effective_value: EffectiveValue) -> Vec<(LogTaskId, Task)> {
     let parent_id = self.tasks.get(&task_id).expect("task must exist").parent_id;
     let finally_hook = self.config.steps.get(&step_name).and_then(|s| s.finally_hook.clone());
+    let mut to_dispatch = Vec::new();
 
     if !spawned.is_empty() {
         // Has children - wait for them
@@ -220,29 +225,34 @@ fn task_succeeded(&mut self, task_id: LogTaskId, step_name: StepName, spawned: V
         let count = NonZeroU16::new(spawned.len() as u16).unwrap();
         self.start_waiting(task_id, count, continuation);
         for child in spawned {
-            self.queue_task(child, Some(task_id));
+            if let Some(dispatch) = self.queue_task(child, Some(task_id)) {
+                to_dispatch.push(dispatch);
+            }
         }
     } else if let Some(hook) = finally_hook {
-        // No children, has continuation - run it now
+        // No children, has finally - run it now (synchronously)
         let continuation_spawned = run_finally_hook_direct(&hook, &effective_value.0);
         if !continuation_spawned.is_empty() {
             let count = NonZeroU16::new(continuation_spawned.len() as u16).unwrap();
             self.start_waiting(task_id, count, None);  // continuation already ran
             for child in continuation_spawned {
-                self.queue_task(child, Some(task_id));
+                if let Some(dispatch) = self.queue_task(child, Some(task_id)) {
+                    to_dispatch.push(dispatch);
+                }
             }
         } else {
-            self.finish_in_flight_and_notify(task_id);
+            self.finish_in_flight_and_notify(task_id, &mut to_dispatch);
         }
     } else {
-        // No children, no continuation - done
-        self.finish_in_flight_and_notify(task_id);
+        // No children, no finally - done
+        self.finish_in_flight_and_notify(task_id, &mut to_dispatch);
     }
+    to_dispatch
 }
 
-fn finish_in_flight_and_notify(&mut self, task_id: LogTaskId) {
+fn finish_in_flight_and_notify(&mut self, task_id: LogTaskId, to_dispatch: &mut Vec<(LogTaskId, Task)>) {
     if let Some(parent_id) = self.finish_in_flight(task_id) {
-        self.decrement_parent(parent_id);
+        self.decrement_parent(parent_id, to_dispatch);
     }
 }
 ```
@@ -250,25 +260,28 @@ fn finish_in_flight_and_notify(&mut self, task_id: LogTaskId) {
 #### Task retries
 
 ```rust
-fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) {
+fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) -> Option<(LogTaskId, Task)> {
     let parent_id = self.tasks.get(&task_id).expect("task must exist").parent_id;
-    self.queue_task(retry_task, parent_id);
+    let dispatch = self.queue_task(retry_task, parent_id);
     self.finish_in_flight(task_id);  // Don't notify parent
+    dispatch
 }
 ```
 
 #### Task fails permanently
 
 ```rust
-fn task_failed(&mut self, task_id: LogTaskId) {
-    self.finish_in_flight_and_notify(task_id);
+fn task_failed(&mut self, task_id: LogTaskId) -> Vec<(LogTaskId, Task)> {
+    let mut to_dispatch = Vec::new();
+    self.finish_in_flight_and_notify(task_id, &mut to_dispatch);
+    to_dispatch
 }
 ```
 
 #### Decrement parent count
 
 ```rust
-fn decrement_parent(&mut self, parent_id: LogTaskId) {
+fn decrement_parent(&mut self, parent_id: LogTaskId, to_dispatch: &mut Vec<(LogTaskId, Task)>) {
     let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
     let TaskState::Waiting { pending_count, continuation } = &mut entry.state else {
         panic!("parent not in Waiting state");
@@ -276,26 +289,36 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
 
     let new_count = pending_count.get() - 1;
     if new_count == 0 {
-        // All children done
-        if let Some(continuation_data) = continuation.take() {
-            // Run continuation hook
-            let hook = self.config.steps.get(&continuation_data.step_name)
-                .and_then(|s| s.finally_hook.as_ref())
-                .expect("continuation_data implies finally hook exists");
-            let continuation_spawned = run_finally_hook_direct(hook, &continuation_data.value.0);
+        // All children done - extract what we need before modifying
+        let continuation_data = continuation.take();
+        let grandparent_id = entry.parent_id;
 
-            if !continuation_spawned.is_empty() {
-                // Finally spawned tasks - update count, continuation is now None
-                *pending_count = NonZeroU16::new(continuation_spawned.len() as u16).unwrap();
-                for child in continuation_spawned {
-                    self.queue_task(child, Some(parent_id));
+        if let Some(cont) = continuation_data {
+            // Run finally hook (synchronously)
+            let hook = self.config.steps.get(&cont.step_name)
+                .and_then(|s| s.finally_hook.as_ref())
+                .expect("continuation implies finally hook exists");
+            let spawned = run_finally_hook_direct(hook, &cont.value.0);
+
+            if !spawned.is_empty() {
+                // Finally spawned tasks - update count, queue children
+                let entry = self.tasks.get_mut(&parent_id).expect("parent exists");
+                if let TaskState::Waiting { pending_count, .. } = &mut entry.state {
+                    *pending_count = NonZeroU16::new(spawned.len() as u16).unwrap();
+                }
+                for child in spawned {
+                    if let Some(dispatch) = self.queue_task(child, Some(parent_id)) {
+                        to_dispatch.push(dispatch);
+                    }
                 }
                 return;
             }
         }
-        // No continuation or continuation spawned nothing - done
-        if let Some(grandparent_id) = self.finish_waiting(parent_id) {
-            self.decrement_parent(grandparent_id);
+
+        // No continuation or continuation spawned nothing - remove and notify grandparent
+        self.tasks.remove(&parent_id);  // Direct removal, no finish_waiting
+        if let Some(gpid) = grandparent_id {
+            self.decrement_parent(gpid, to_dispatch);
         }
     } else {
         *pending_count = NonZeroU16::new(new_count).unwrap();
