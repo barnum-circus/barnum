@@ -13,8 +13,9 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -281,6 +282,117 @@ impl GsdTestAgent {
             .expect("Agent already stopped")
             .join()
             .expect("Agent thread panicked")
+    }
+
+    /// Start an agent that waits for explicit completion signals.
+    ///
+    /// Tasks register with the controller when they arrive and block
+    /// until the test explicitly completes them. Tests can complete
+    /// tasks in any order by index.
+    ///
+    /// Returns (agent, controller).
+    pub fn ordered(root: &Path) -> (Self, OrderedAgentController) {
+        let waiting: Arc<Mutex<Vec<WaitingTask>>> = Arc::new(Mutex::new(Vec::new()));
+        let (arrival_tx, arrival_rx) = mpsc::channel::<()>();
+
+        let waiting_clone = waiting.clone();
+
+        let agent = Self::start(root, Duration::ZERO, move |payload| {
+            // Parse task kind from payload
+            let kind = serde_json::from_str::<serde_json::Value>(payload)
+                .ok()
+                .and_then(|v| v.get("task")?.get("kind")?.as_str().map(String::from))
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            // Create channel for this task's response (send once, then drop)
+            let (tx, rx) = mpsc::channel::<String>();
+
+            // Register as waiting
+            {
+                let mut waiting = waiting_clone.lock().expect("waiting lock poisoned");
+                waiting.push(WaitingTask {
+                    kind,
+                    payload: payload.to_string(),
+                    response_tx: tx,
+                });
+            }
+
+            // Notify controller that a task arrived
+            let _ = arrival_tx.send(());
+
+            // Block until test sends response
+            rx.recv().unwrap_or_else(|_| "[]".to_string())
+        });
+
+        let controller = OrderedAgentController {
+            waiting,
+            arrival_rx,
+        };
+
+        (agent, controller)
+    }
+}
+
+// =============================================================================
+// Ordered Agent Controller
+// =============================================================================
+
+/// A waiting task that hasn't been completed yet.
+struct WaitingTask {
+    /// The task kind (e.g., "Worker", "Analyze").
+    kind: String,
+    /// The full payload JSON.
+    payload: String,
+    /// Channel to send the response (send once, then drop).
+    response_tx: Sender<String>,
+}
+
+/// Controller for completing tasks in any order.
+///
+/// Minimal API: wait for tasks, inspect them, complete by index.
+pub struct OrderedAgentController {
+    /// Tasks waiting for completion.
+    waiting: Arc<Mutex<Vec<WaitingTask>>>,
+    /// Channel that receives notifications when tasks arrive.
+    arrival_rx: Receiver<()>,
+}
+
+impl OrderedAgentController {
+    /// Block until at least `count` tasks are waiting.
+    pub fn wait_for_tasks(&self, count: usize) {
+        loop {
+            {
+                let waiting = self.waiting.lock().expect("waiting lock poisoned");
+                if waiting.len() >= count {
+                    return;
+                }
+            }
+            // Block until a task arrives
+            if self.arrival_rx.recv().is_err() {
+                // Agent dropped - return with whatever we have
+                return;
+            }
+        }
+    }
+
+    /// Get list of currently waiting tasks (kind, payload).
+    pub fn waiting_tasks(&self) -> Vec<(String, String)> {
+        let waiting = self.waiting.lock().expect("waiting lock poisoned");
+        waiting
+            .iter()
+            .map(|t| (t.kind.clone(), t.payload.clone()))
+            .collect()
+    }
+
+    /// Complete a specific waiting task by index.
+    ///
+    /// Panics if index is out of bounds.
+    pub fn complete_at(&self, index: usize, response: &str) {
+        let task = {
+            let mut waiting = self.waiting.lock().expect("waiting lock poisoned");
+            waiting.remove(index)
+        };
+        let _ = task.response_tx.send(response.to_string());
     }
 }
 
