@@ -164,8 +164,11 @@ fn finally_failure_propagates_after_retries_exhausted() {
 
 Per coding standards, use enums instead of magic sentinel values like `"__finally__"`.
 
+**Key constraint:** `TaskKind` is ONLY matched in `dispatch()` to determine how to spawn the task. All other code (retry, failure, completion, parent notification) treats tasks uniformly regardless of kind. This keeps the abstraction clean - "finally is just a task."
+
 ```rust
 /// What kind of task this is - determines dispatch behavior.
+/// ONLY matched in dispatch(). All other task handling is kind-agnostic.
 pub enum TaskKind {
     /// Regular step task from config
     Step(Task),
@@ -288,7 +291,7 @@ fn queue_finally_task(
 
 #### `mod.rs` - `dispatch()` changes
 
-Dispatch matches on `TaskKind`. The key invariant: `InFlight::new()` is only called immediately after spawning the thread - creating the marker proves dispatch happened.
+**This is the ONLY place that matches on `TaskKind`.** The key invariant: `InFlight::new()` is only called immediately after spawning the thread - creating the marker proves dispatch happened.
 
 ```rust
 /// Dispatch a pending task. Called from dispatch_all_pending().
@@ -344,43 +347,15 @@ fn dispatch_all_pending(&mut self) {
 }
 ```
 
-#### Finally task retry behavior
+#### Finally uses existing task handling
 
-Finally tasks retry like any other task. On failure:
+**No special handling needed.** Outside of `dispatch()`, `TaskKind` is never matched. All task handling is kind-agnostic:
+- Retry: uses existing `task_failed()` - no special case for finally
+- Failure: uses existing failure propagation to parent - no special case for finally
+- Result: uses `SubmitResult::Command` (it's a shell command) - same as any command task
+- Spawned tasks: parsed from stdout as `Vec<Task>`, become children of finally task - standard behavior
 
-```rust
-fn handle_finally_failure(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-
-    if entry.retries_remaining > 0 {
-        entry.retries_remaining -= 1;
-        entry.state = TaskState::Pending;  // Re-queue for dispatch
-        self.in_flight -= 1;
-        // Task stays in map, will be dispatched on next dispatch_all_pending()
-    } else {
-        // Retries exhausted - finally failed permanently
-        // This is a failure that propagates to parent
-        self.task_failed(task_id, None);
-    }
-}
-```
-
-#### Result types - Finally uses existing patterns
-
-Finally tasks can use the existing `SubmitResult::Command` variant since they're shell commands. Alternatively, add a `Finally` variant if we want different processing:
-
-```rust
-pub(super) enum SubmitResult {
-    Pool { ... },
-    Command { ... },
-    PreHookError(String),
-    Finally {  // If we want distinct handling
-        output: io::Result<String>,
-    },
-}
-```
-
-The key difference from `Command`: finally results are parsed as `Vec<Task>` (spawned tasks), not as step output.
+The only finally-specific code is the match arm in `dispatch()` that looks up the script from config.
 
 ---
 
