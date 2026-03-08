@@ -6,6 +6,7 @@
   - **Single source of truth** - don't pass around data that can be derived (e.g., don't pass step_name if it can be looked up from task_id).
   - **Values exist only where meaningful** - don't carry data alongside error paths where it's semantically invalid. If a value only makes sense when an operation succeeded, put it in the success variant, not in a shared struct.
   - **Unnecessary cloning signals missing single source of truth** - if you're cloning data to pass it somewhere, ask whether the recipient could look it up instead. The performance cost of cloning is minor; the real issue is that redundant data can diverge and makes code harder to reason about.
+  - **No magic strings** - use enums instead of special sentinel values like `"__finally__"` or `"__internal__"`. Magic strings make impossible states representable (any string could be the magic value) and bypass the type system.
 
 - **Functions stay at the same abstraction level.** The function the reviewer reads should not mix high and low-level details.
 
