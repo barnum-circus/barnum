@@ -205,8 +205,17 @@ pub(super) struct TaskEntry {
     pub state: TaskState,
     pub kind: TaskKind,           // NEW: replaces Task in Pending state
     pub retries_remaining: u32,   // NEW: for retry logic (finally tasks retry too)
-    pub step_name: StepName,      // NEW: which step this task is (for finally lookup)
     pub effective_value: Option<EffectiveValue>,  // NEW: set when task succeeds (for finally input)
+}
+
+impl TaskEntry {
+    /// Get the step name from the task kind.
+    pub fn step_name(&self) -> &StepName {
+        match &self.kind {
+            TaskKind::Step(task) => &task.step,
+            TaskKind::Finally { step, .. } => step,
+        }
+    }
 }
 
 // TaskState::Pending no longer holds Task - it's in TaskEntry.kind
@@ -220,7 +229,7 @@ pub(super) enum TaskState {
 }
 ```
 
-**Key simplification:** `Waiting` just holds `pending_count`. When count hits zero, we look up whether the step has a finally hook (using `step_name` from TaskEntry) and schedule it then. The `effective_value` is stored on TaskEntry when the task succeeds, ready to pass to finally.
+**Key simplification:** `Waiting` just holds `pending_count`. When count hits zero, we look up whether the step has a finally hook (using `entry.step_name()` derived from `TaskKind`) and schedule it then. The `effective_value` is stored on TaskEntry when the task succeeds, ready to pass to finally.
 
 **Note:** `finally_for` field is NOT needed. The `parent_id` already tells us which task the finally is for. We can identify finally tasks by matching on `TaskKind::Finally`.
 
@@ -252,7 +261,7 @@ fn children_done(&mut self, task_id: LogTaskId) {
     // .take() atomically checks and clears effective_value
     // If Some, we haven't scheduled finally yet; if None, we have (or task never succeeded)
     if let Some(effective_value) = entry.effective_value.take() {
-        let step_name = entry.step_name.clone();
+        let step_name = entry.step_name().clone();  // Derived from TaskKind
 
         // Check if this step has a finally hook
         let has_finally = self.config.steps.iter()
@@ -279,6 +288,7 @@ fn schedule_finally(
     effective_value: EffectiveValue,
 ) {
     let id = self.next_task_id();
+    // step is stored in TaskKind::Finally, accessible via entry.step_name()
     let kind = TaskKind::Finally { step: step.clone(), input: effective_value.0 };
 
     // Get retry count from step config
@@ -289,9 +299,8 @@ fn schedule_finally(
     let entry = TaskEntry {
         parent_id: Some(parent_id),
         state: TaskState::Pending,
-        kind,
+        kind,  // step_name derived from kind.step
         retries_remaining,
-        step_name: step,  // Finally task uses same step (for config lookup)
         effective_value: None,  // Finally tasks don't have their own effective_value
     };
 
@@ -551,8 +560,8 @@ Finally retry works like any task retry:
 ### Phase 2: Data structure changes
 
 - [ ] Add `TaskKind` enum with `Step(Task)` and `Finally { step, input }` variants
+- [ ] Add `TaskEntry::step_name()` method to derive step from `TaskKind`
 - [ ] Add `retries_remaining: u32` to `TaskEntry`
-- [ ] Add `step_name: StepName` to `TaskEntry`
 - [ ] Add `effective_value: Option<EffectiveValue>` to `TaskEntry`
 - [ ] Change `TaskState::Pending` to not hold `Task` (task data now in `TaskEntry.kind`)
 - [ ] Change `TaskState::Waiting` to only hold `pending_count` (remove `continuation`)
@@ -586,7 +595,7 @@ Finally retry works like any task retry:
 
 | File | Changes |
 |------|---------|
-| `runner/types.rs` | Add `TaskKind` enum, add `step_name`/`effective_value`/`retries_remaining` to `TaskEntry`, simplify `Waiting` (remove `continuation`), remove `Continuation` type |
+| `runner/types.rs` | Add `TaskKind` enum, add `step_name()` method and `effective_value`/`retries_remaining` fields to `TaskEntry`, simplify `Waiting` (remove `continuation`), remove `Continuation` type |
 | `runner/mod.rs` | Add `children_done()`, `schedule_finally()`, simplify `handle_completion()`, modify `task_succeeded()` to store `effective_value`, modify `dispatch()` to match on `TaskKind` |
 | `runner/response.rs` | Handle finally task results |
 | `runner/finally.rs` | Remove `run_finally_hook_direct()` (no longer needed) |
