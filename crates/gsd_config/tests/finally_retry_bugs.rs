@@ -718,3 +718,164 @@ cat  # pass through stdin to stdout
 
     cleanup_test_dir(test_name);
 }
+
+/// Test that A's finally waits for tasks spawned by B's finally hook.
+///
+/// Setup:
+/// - A (with finally) spawns B (with finally that spawns cleanup task C)
+/// - B completes, B's finally runs and outputs `[{"kind": "Cleanup", "value": {}}]`
+/// - C (cleanup task) runs and completes
+///
+/// Expected order:
+/// 1. A runs, spawns B
+/// 2. B runs, completes
+/// 3. B's finally runs → spawns C, writes `B_finally`
+/// 4. C runs, completes → writes `C_done`
+/// 5. A's finally runs (A's subtree done, including B's finally-spawned tasks) → writes `A_finally`
+///
+/// Bug behavior:
+/// - B's finally spawns C as a "new root" with `finally_origin_id: None`
+/// - A's finally runs when B's finally completes (before C runs)
+/// - Order is: `B_finally`, `A_finally`, `C_done` (wrong!)
+#[test]
+#[should_panic(expected = "Finally hooks ran in wrong order")]
+#[expect(clippy::too_many_lines)]
+fn finally_waits_for_finally_spawned_tasks() {
+    let test_name = "finally_spawned_tasks";
+    let root = setup_test_dir(test_name);
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(test_name);
+        return;
+    }
+
+    let pool = AgentPoolHandle::start(&root);
+
+    // Log file to track ordering
+    let order_log = root.join("order.log");
+    let order_log_a = order_log.clone();
+    let order_log_b = order_log.clone();
+    let order_log_c = order_log.clone();
+
+    let agent = GsdTestAgent::start(&root, Duration::from_millis(10), move |payload| {
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+        let kind = parsed
+            .get("task")
+            .and_then(|t| t.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
+
+        match kind {
+            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
+            _ => "[]".to_string(), // StepB and Cleanup return empty
+        }
+    });
+
+    // A's finally hook - just writes marker
+    let a_finally = root.join("a_finally.sh");
+    let script = format!(
+        r#"#!/bin/bash
+echo "A_finally" >> "{}"
+"#,
+        order_log_a.display()
+    );
+    fs::write(&a_finally, &script).expect("write A finally");
+
+    // B's finally hook - spawns a cleanup task
+    let b_finally = root.join("b_finally.sh");
+    let script = format!(
+        r#"#!/bin/bash
+echo "B_finally" >> "{}"
+echo '[{{"kind": "Cleanup", "value": {{}}}}]'
+"#,
+        order_log_b.display()
+    );
+    fs::write(&b_finally, &script).expect("write B finally");
+
+    // Cleanup task's post hook - writes completion marker
+    let cleanup_post = root.join("cleanup_post.sh");
+    let script = format!(
+        r#"#!/bin/bash
+echo "C_done" >> "{}"
+cat  # pass through stdin to stdout
+"#,
+        order_log_c.display()
+    );
+    fs::write(&cleanup_post, &script).expect("write cleanup post");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod A finally");
+        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod B finally");
+        fs::set_permissions(&cleanup_post, fs::Permissions::from_mode(0o755))
+            .expect("chmod cleanup post");
+    }
+
+    let config_json = format!(
+        r#"{{
+        "steps": [
+            {{
+                "name": "StepA",
+                "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
+                "next": ["StepB"],
+                "finally": "{}"
+            }},
+            {{
+                "name": "StepB",
+                "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
+                "next": [],
+                "finally": "{}"
+            }},
+            {{
+                "name": "Cleanup",
+                "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
+                "next": [],
+                "post": "{}"
+            }}
+        ]
+    }}"#,
+        a_finally.display(),
+        b_finally.display(),
+        cleanup_post.display()
+    );
+
+    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
+    let runner_config = RunnerConfig {
+        agent_pool_root: pool.pool_path(),
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    let result = gsd_config::run(
+        &config,
+        &schemas,
+        &runner_config,
+        vec![Task::new("StepA", serde_json::json!({}))],
+    );
+
+    let _processed = agent.stop();
+
+    assert!(result.is_ok(), "run should succeed: {result:?}");
+
+    // Read the order log
+    let order_content = fs::read_to_string(&order_log).unwrap_or_default();
+    let lines: Vec<&str> = order_content.lines().collect();
+
+    // Correct order: B's finally runs and spawns cleanup, cleanup completes, then A's finally
+    // A waits for entire subtree (including tasks spawned by B's finally) before running its finally
+    assert_eq!(
+        lines,
+        vec!["B_finally", "C_done", "A_finally"],
+        "Finally hooks ran in wrong order. Expected B_finally, C_done, A_finally, got: {lines:?}"
+    );
+
+    cleanup_test_dir(test_name);
+}
