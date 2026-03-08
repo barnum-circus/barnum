@@ -161,24 +161,10 @@ fn transition_to_waiting(
     self.in_flight -= 1;
 }
 
-/// Transition: InFlight → Pending (retry) (decrements in_flight)
-/// Creates a new Pending task with same parent but new ID.
-fn transition_to_retry(&mut self, task_id: LogTaskId, retry_task: Task) {
-    let entry = self.tasks.remove(&task_id).expect("[P020] task must exist for retry");
-    self.in_flight -= 1;
-
-    // Queue retry with same parent - parent's count stays the same
-    let new_id = self.next_task_id();
-    self.tasks.insert(new_id, TaskEntry {
-        parent_id: entry.parent_id,
-        state: TaskState::Pending(retry_task),
-    });
-}
-
 /// Transition: InFlight → removed (decrements in_flight)
 /// Returns parent_id so caller can notify. Pure state management.
 fn finish_in_flight(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
+    let entry = self.tasks.remove(&task_id).expect("[P020] task must exist");
     self.in_flight -= 1;
     entry.parent_id
 }
@@ -186,19 +172,17 @@ fn finish_in_flight(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
 /// Transition: WaitingForDescendants → removed (no in_flight change)
 /// Returns parent_id so caller can notify. Pure state management.
 fn finish_waiting(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("[P022] task must exist");
+    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
     entry.parent_id
 }
 
-/// Queue children with the given parent.
-fn queue_children(&mut self, parent_id: LogTaskId, children: Vec<Task>) {
-    for child_task in children {
-        let child_id = self.next_task_id();
-        self.tasks.insert(child_id, TaskEntry {
-            parent_id: Some(parent_id),
-            state: TaskState::Pending(child_task),
-        });
-    }
+/// Queue a task with the given parent.
+fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+    let id = self.next_task_id();
+    self.tasks.insert(id, TaskEntry {
+        parent_id,
+        state: TaskState::Pending(task),
+    });
 }
 ```
 
@@ -245,28 +229,32 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
 
     if !spawned.is_empty() {
         // Has children - wait for them before running finally
-        let count = NonZeroU16::new(spawned.len() as u16).expect("[P025] spawned is non-empty");
+        let count = NonZeroU16::new(spawned.len() as u16).expect("[P022] spawned is non-empty");
         self.transition_to_waiting(task_id, parent_id, WaitingForDescendants {
             pending_count: count,
             effective_value,
             step_name,
             finally_already_ran: false,
         });
-        self.queue_children(task_id, spawned);
+        for child in spawned {
+            self.queue_task(child, Some(task_id));
+        }
     } else if let Some(hook) = finally_hook {
         // No children, but has finally hook - run it now
         let finally_spawned = run_finally_hook_direct(&hook, &effective_value.0);
 
         if !finally_spawned.is_empty() {
             // Finally spawned tasks - wait for them (finally already ran)
-            let count = NonZeroU16::new(finally_spawned.len() as u16).expect("[P026] non-empty");
+            let count = NonZeroU16::new(finally_spawned.len() as u16).expect("[P023] non-empty");
             self.transition_to_waiting(task_id, parent_id, WaitingForDescendants {
                 pending_count: count,
                 effective_value,
                 step_name,
                 finally_already_ran: true,  // Don't run finally again
             });
-            self.queue_children(task_id, finally_spawned);
+            for child in finally_spawned {
+                self.queue_task(child, Some(task_id));
+            }
         } else {
             // Finally spawned nothing - fully done
             let parent = self.finish_in_flight(task_id);
@@ -281,6 +269,21 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
             self.decrement_parent(pid);
         }
     }
+}
+```
+
+#### Task retries
+
+Retry is just: queue a new task with the same parent, then finish the old one. Parent's count doesn't change - the logical task is still in progress.
+
+```rust
+fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) {
+    // Queue retry BEFORE finishing - preserves parent relationship
+    let parent_id = self.tasks.get(&task_id).expect("[P024] task must exist").parent_id;
+    self.queue_task(retry_task, parent_id);
+
+    // Now finish the old task (don't notify parent - retry continues the work)
+    self.finish_in_flight(task_id);
 }
 ```
 
@@ -302,10 +305,10 @@ When a descendant completes (success or failure), decrement the parent's count. 
 
 ```rust
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&parent_id).expect("[P027] parent must exist");
+    let entry = self.tasks.get_mut(&parent_id).expect("[P025] parent must exist");
 
     let TaskState::WaitingForDescendants(waiting) = &mut entry.state else {
-        panic!("[P028] decrement_parent on non-WaitingForDescendants task");
+        panic!("[P026] decrement_parent on non-WaitingForDescendants task");
     };
 
     let new_count = waiting.pending_count.get() - 1;
@@ -326,13 +329,15 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
                 if !finally_spawned.is_empty() {
                     // Finally spawned tasks - update state to wait for them
                     let count = NonZeroU16::new(finally_spawned.len() as u16)
-                        .expect("[P029] non-empty");
-                    let entry = self.tasks.get_mut(&parent_id).expect("[P030] parent exists");
+                        .expect("[P027] non-empty");
+                    let entry = self.tasks.get_mut(&parent_id).expect("[P028] parent exists");
                     if let TaskState::WaitingForDescendants(w) = &mut entry.state {
                         w.pending_count = count;
                         w.finally_already_ran = true;
                     }
-                    self.queue_children(parent_id, finally_spawned);
+                    for child in finally_spawned {
+                        self.queue_task(child, Some(parent_id));
+                    }
                     return;  // Don't notify grandparent yet
                 }
             }
@@ -344,7 +349,7 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
             self.decrement_parent(gpid);
         }
     } else {
-        waiting.pending_count = NonZeroU16::new(new_count).expect("[P031] checked above");
+        waiting.pending_count = NonZeroU16::new(new_count).expect("[P029] checked above");
     }
 }
 ```
