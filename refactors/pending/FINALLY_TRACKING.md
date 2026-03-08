@@ -86,16 +86,6 @@ struct TaskEntry {
     state: TaskState,
 }
 
-/// Task waiting to be dispatched
-struct PendingTask {
-    task: Task,
-}
-
-/// Task currently executing (dispatched to agent/command)
-struct InFlightTask {
-    step_name: StepName,  // Only need this to look up finally hook when task completes
-}
-
 /// Task succeeded, waiting for descendants to complete before running finally
 struct WaitingForDescendants {
     pending_count: NonZeroU16,
@@ -105,8 +95,11 @@ struct WaitingForDescendants {
 }
 
 enum TaskState {
-    Pending(PendingTask),
-    InFlight(InFlightTask),
+    /// Task waiting to be dispatched
+    Pending(Task),
+    /// Task currently executing (step_name needed to look up finally hook)
+    InFlight(StepName),
+    /// Task succeeded, waiting for descendants
     WaitingForDescendants(WaitingForDescendants),
 }
 ```
@@ -140,6 +133,75 @@ Task created → [Pending] → [InFlight] ──┬── success ────�
                                         (finally may spawn new Pending tasks)
 ```
 
+### State Transition Functions (Centralized `in_flight` Management)
+
+All `in_flight` counter modifications happen in these transition functions. No other code touches the counter directly.
+
+```rust
+/// Transition: Pending → InFlight (increments in_flight)
+fn transition_to_in_flight(&mut self, task_id: LogTaskId, step_name: StepName) {
+    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
+    debug_assert!(matches!(entry.state, TaskState::Pending(_)));
+    entry.state = TaskState::InFlight(step_name);
+    self.in_flight += 1;
+}
+
+/// Transition: InFlight → WaitingForDescendants (decrements in_flight)
+fn transition_to_waiting(
+    &mut self,
+    task_id: LogTaskId,
+    parent_id: Option<LogTaskId>,
+    pending_count: NonZeroU16,
+    effective_value: EffectiveValue,
+    step_name: StepName,
+) {
+    // Task is being replaced, so we just insert the new state
+    self.tasks.insert(task_id, TaskEntry {
+        parent_id,
+        state: TaskState::WaitingForDescendants(WaitingForDescendants {
+            pending_count,
+            effective_value,
+            step_name,
+            finally_already_ran: false,
+        }),
+    });
+    self.in_flight -= 1;
+}
+
+/// Transition: InFlight → removed (decrements in_flight)
+/// Used when task completes with no children.
+fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
+    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    self.in_flight -= 1;
+    entry.parent_id
+}
+
+/// Transition: InFlight → Pending (retry) (decrements in_flight)
+/// Creates a new Pending task with same parent but new ID.
+fn transition_to_retry(&mut self, task_id: LogTaskId, retry_task: Task) {
+    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    self.in_flight -= 1;
+
+    // Queue retry with same parent - parent's count stays the same
+    let new_id = self.next_task_id();
+    self.tasks.insert(new_id, TaskEntry {
+        parent_id: entry.parent_id,
+        state: TaskState::Pending(retry_task),
+    });
+}
+
+/// Transition: InFlight → removed (dropped) (decrements in_flight)
+/// Task failed permanently. Notifies parent.
+fn transition_to_dropped(&mut self, task_id: LogTaskId) {
+    let parent_id = self.transition_to_done(task_id);
+
+    // Notify parent - descendant is done (failed)
+    if let Some(pid) = parent_id {
+        self.decrement_parent(pid);
+    }
+}
+```
+
 ### Key Operations
 
 #### Dispatch next task
@@ -151,19 +213,16 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
     }
 
     // Find first Pending task (BTreeMap gives us FIFO order)
-    let (task_id, pending) = self.tasks.iter()
+    let (task_id, task) = self.tasks.iter()
         .find_map(|(id, entry)| match &entry.state {
-            TaskState::Pending(p) => Some((*id, p)),
+            TaskState::Pending(t) => Some((*id, t)),
             _ => None,
         })?;
 
-    let task_to_dispatch = pending.task.clone();
-    let step_name = pending.task.step.clone();
+    let task_to_dispatch = task.clone();
+    let step_name = task.step.clone();
 
-    // Transition Pending → InFlight
-    let entry = self.tasks.get_mut(&task_id).expect("task_id from iterator must exist");
-    entry.state = TaskState::InFlight(InFlightTask { step_name });
-    self.in_flight += 1;
+    self.transition_to_in_flight(task_id, step_name);
     Some((task_id, task_to_dispatch))
 }
 ```
@@ -173,55 +232,77 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
 ```rust
 fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_value: EffectiveValue) {
     let entry = self.tasks.get(&task_id).expect("task_succeeded called with unknown task_id");
-    let TaskState::InFlight(in_flight) = &entry.state else {
+    let TaskState::InFlight(step_name) = &entry.state else {
         panic!("task_succeeded on non-InFlight task");
     };
-    let step_name = in_flight.step_name.clone();
+    let step_name = step_name.clone();
     let parent_id = entry.parent_id;
 
-    self.in_flight -= 1;
-
     if spawned.is_empty() {
-        // No children - run finally (if any) and mark done
-        self.task_fully_done(task_id, step_name, effective_value, false);
+        // No children - transition to done (decrements in_flight)
+        self.task_completed_no_children(task_id, step_name, effective_value);
     } else {
         // Has children - transition to WaitingForDescendants
         let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
-        self.tasks.insert(task_id, TaskEntry {
-            parent_id,
-            state: TaskState::WaitingForDescendants(WaitingForDescendants {
-                pending_count: count,
-                effective_value,
-                step_name,
-                finally_already_ran: false,
-            }),
-        });
+        self.transition_to_waiting(task_id, parent_id, count, effective_value, step_name);
 
         // Queue children
         for child_task in spawned {
             let child_id = self.next_task_id();
             self.tasks.insert(child_id, TaskEntry {
                 parent_id: Some(task_id),  // Always immediate parent!
-                state: TaskState::Pending(PendingTask { task: child_task }),
+                state: TaskState::Pending(child_task),
             });
         }
     }
 }
 ```
 
-#### Task fully done (all descendants complete)
+#### Task completes with no children (InFlight → done)
+
+Called when a task succeeds with no children. Handles the InFlight → done transition.
 
 ```rust
-fn task_fully_done(
+fn task_completed_no_children(
     &mut self,
     task_id: LogTaskId,
     step_name: StepName,
     effective_value: EffectiveValue,
+) {
+    let parent_id = self.transition_to_done(task_id);  // Decrements in_flight
+    self.run_finally_and_notify(task_id, parent_id, step_name, effective_value, false);
+}
+```
+
+#### All descendants complete (WaitingForDescendants → done)
+
+Called when all children/descendants finish. Does NOT touch in_flight (already decremented).
+
+```rust
+fn all_descendants_done(
+    &mut self,
+    task_id: LogTaskId,
+    parent_id: Option<LogTaskId>,
+    step_name: StepName,
+    effective_value: EffectiveValue,
     finally_already_ran: bool,
 ) {
-    let entry = self.tasks.remove(&task_id).expect("task_fully_done called with unknown task_id");
-    let parent_id = entry.parent_id;
+    self.tasks.remove(&task_id);  // No in_flight change - already decremented
+    self.run_finally_and_notify(task_id, parent_id, step_name, effective_value, finally_already_ran);
+}
+```
 
+#### Run finally hook and notify parent (shared logic)
+
+```rust
+fn run_finally_and_notify(
+    &mut self,
+    task_id: LogTaskId,
+    parent_id: Option<LogTaskId>,
+    step_name: StepName,
+    effective_value: EffectiveValue,
+    finally_already_ran: bool,
+) {
     // Run finally hook if present AND not already run
     if !finally_already_ran {
         let finally_hook = self.config.steps.get(&step_name).and_then(|s| s.finally_hook.as_ref());
@@ -238,7 +319,7 @@ fn task_fully_done(
                         pending_count: count,
                         effective_value,
                         step_name,
-                        finally_already_ran: true,  // Mark: finally already ran
+                        finally_already_ran: true,
                     }),
                 });
 
@@ -247,7 +328,7 @@ fn task_fully_done(
                     let child_id = self.next_task_id();
                     self.tasks.insert(child_id, TaskEntry {
                         parent_id: Some(task_id),
-                        state: TaskState::Pending(PendingTask { task: child_task }),
+                        state: TaskState::Pending(child_task),
                     });
                 }
                 return;  // Don't notify parent yet
@@ -270,11 +351,12 @@ fn decrement_parent(&mut self, parent_id: LogTaskId) {
 
     let new_count = waiting.pending_count.get() - 1;
     if new_count == 0 {
-        // Parent is now fully done
+        // Parent is now fully done - extract data before removing
         let ev = waiting.effective_value.clone();
         let sn = waiting.step_name.clone();
         let far = waiting.finally_already_ran;
-        self.task_fully_done(parent_id, sn, ev, far);
+        let grandparent_id = self.tasks.get(&parent_id).unwrap().parent_id;
+        self.all_descendants_done(parent_id, grandparent_id, sn, ev, far);
     } else {
         waiting.pending_count = NonZeroU16::new(new_count).expect("new_count > 0 checked above");
     }
@@ -330,42 +412,16 @@ Order of finally hooks: B_finally, A_finally ✓
 ### Retry Handling
 
 When a task fails and will retry:
-1. Create a new `Pending` task with new ID but **same parent_id**
+1. Call `transition_to_retry(task_id, retry_task)` - decrements `in_flight`, creates new Pending task with same parent
 2. Do NOT decrement the parent's `pending_count` - the logical task is still in progress
 3. The retried task is a continuation, not a new descendant
 
 When a task is dropped (max retries exceeded):
-1. Remove the task from the map
-2. Decrement parent's `pending_count` (the descendant is "done" even though it failed)
+1. Call `transition_to_dropped(task_id)` - decrements `in_flight`, removes task, notifies parent
+2. Parent's `pending_count` is decremented (the descendant is "done" even though it failed)
 3. If parent's count reaches 0, parent runs its finally hook
 
-```rust
-fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) {
-    let entry = self.tasks.remove(&task_id).expect("task_retried on unknown task");
-    let parent_id = entry.parent_id;
-
-    self.in_flight -= 1;
-
-    // Queue retry with same parent - parent's count stays the same
-    let new_id = self.next_task_id();
-    self.tasks.insert(new_id, TaskEntry {
-        parent_id,  // Keep same parent relationship
-        state: TaskState::Pending(PendingTask { task: retry_task }),
-    });
-}
-
-fn task_dropped(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.remove(&task_id).expect("task_dropped on unknown task");
-    let parent_id = entry.parent_id;
-
-    self.in_flight -= 1;
-
-    // Notify parent - descendant is done (failed)
-    if let Some(pid) = parent_id {
-        self.decrement_parent(pid);
-    }
-}
-```
+(See `transition_to_retry` and `transition_to_dropped` in State Transition Functions above.)
 
 ### StepName Marker for Finally-Spawned Tasks
 
