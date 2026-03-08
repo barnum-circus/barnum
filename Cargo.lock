@@ -541,6 +541,7 @@ dependencies = [
  "agent_pool",
  "agent_pool_cli",
  "cli_invoker",
+ "gsd_types",
  "interprocess",
  "jsonschema",
  "rstest",
@@ -549,6 +550,16 @@ dependencies = [
  "serde_json",
  "string_id",
  "tracing",
+]
+
+[[package]]
+name = "gsd_types"
+version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+ "string_id",
 ]
 
 [[package]]
