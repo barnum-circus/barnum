@@ -640,6 +640,7 @@ Changes:
 **Base:** `finally/03-data-structures`
 
 The main logic change. Restructure completion to schedule finally as sibling.
+Also removes `#[should_panic]` from tests (they now pass).
 
 New functions:
 - `lookup_finally_hook()` - check if step has finally hook
@@ -653,17 +654,9 @@ Modified:
 
 Removed:
 - `run_finally_hook_direct()` - no longer needed
+- `#[should_panic]` from tests
 
-**Files:** `runner/mod.rs`, `runner/finally.rs`, `runner/dispatch.rs`
-
----
-
-### Branch 5: `finally/05-tests-pass`
-**Base:** `finally/04-completion-flow`
-
-Remove `#[should_panic]` from tests. They should now pass.
-
-**Files:** `tests/finally_retry_bugs.rs`
+**Files:** `runner/mod.rs`, `runner/finally.rs`, `runner/dispatch.rs`, `tests/finally_retry_bugs.rs`
 
 ---
 
@@ -672,7 +665,7 @@ Remove `#[should_panic]` from tests. They should now pass.
 ```bash
 # After all branches pass CI:
 git checkout master
-git merge finally/05-tests-pass
+git merge finally/04-completion-flow
 git push
 
 # Move doc to past/
@@ -685,7 +678,7 @@ mv refactors/pending/FINALLY_SCHEDULING.md refactors/past/
 
 | File | Branch | Changes |
 |------|--------|---------|
-| `tests/finally_retry_bugs.rs` | 01, 05 | Add 3 tests (01), remove should_panic (05) |
+| `tests/finally_retry_bugs.rs` | 01, 04 | Add 3 tests with should_panic (01), remove should_panic (04) |
 | `runner/mod.rs` | 02, 03, 04 | Dispatch refactor (02), data structures (03), completion flow (04) |
 | `runner/types.rs` | 03 | TaskEntry + TaskState changes |
 | `runner/finally.rs` | 04 | Remove `run_finally_hook_direct()` |
