@@ -26,40 +26,46 @@ jobs:
       - name: Check for changes
         id: check
         run: |
-          # Always run on master/main, tags, or PRs
-          if [[ "${{ github.ref }}" == "refs/heads/master" ]] || \
-             [[ "${{ github.ref }}" == "refs/heads/main" ]] || \
-             [[ "${{ github.ref }}" == refs/tags/* ]] || \
-             [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          # Always run on tags
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "Running: on master/main, tag, or PR"
+            echo "Running: tag push"
             exit 0
           fi
 
-          # On feature branches, check if crates/ or libs/ changed since merge-base with master
-          # Try master first, fall back to main
-          if git rev-parse origin/master >/dev/null 2>&1; then
-            BASE_BRANCH="origin/master"
-          elif git rev-parse origin/main >/dev/null 2>&1; then
-            BASE_BRANCH="origin/main"
-          else
-            # Can't find base branch, run to be safe
-            echo "should_run=true" >> $GITHUB_OUTPUT
-            echo "Running: cannot find origin/master or origin/main for comparison"
+          # For PRs, check what changed in the PR
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
+            if [[ -n "$CHANGES" ]]; then
+              echo "should_run=true" >> $GITHUB_OUTPUT
+              echo "Running: PR has changes in crates/, libs/, or .github/"
+              echo "$CHANGES"
+            else
+              echo "should_run=false" >> $GITHUB_OUTPUT
+              echo "Skipping: PR has no changes to crates/, libs/, or .github/"
+            fi
             exit 0
           fi
 
-          # Find merge-base and compare
-          MERGE_BASE=$(git merge-base $BASE_BRANCH HEAD)
-          echo "Comparing HEAD against merge-base: $MERGE_BASE (from $BASE_BRANCH)"
-          CHANGES=$(git diff --name-only $MERGE_BASE HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
+          # For pushes (including to master), check what changed in this push
+          # Compare against the commit before this push
+          BEFORE="${{ github.event.before }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
+            # New branch or can't determine before - run to be safe
+            echo "should_run=true" >> $GITHUB_OUTPUT
+            echo "Running: new branch or cannot determine previous commit"
+            exit 0
+          fi
+
+          echo "Comparing HEAD against before: $BEFORE"
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
           if [[ -n "$CHANGES" ]]; then
             echo "should_run=true" >> $GITHUB_OUTPUT
             echo "Running: changes detected in crates/, libs/, or .github/"
             echo "$CHANGES"
           else
             echo "should_run=false" >> $GITHUB_OUTPUT
-            echo "Skipping: no changes to crates/, libs/, or .github/ since $BASE_BRANCH"
+            echo "Skipping: no changes to crates/, libs/, or .github/"
           fi
 
   # Gate job - all other jobs depend on this
