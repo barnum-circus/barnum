@@ -116,21 +116,7 @@ fn finally_should_not_block_concurrency() {
 }
 ```
 
-### Test 2: `finally_task_appears_in_task_tree`
-
-```rust
-/// Finally task F should be a child of A in the task tree.
-///
-/// Setup: A has finally that spawns C
-/// Tree should be: A → F → C (not A → C)
-#[test]
-#[should_panic(expected = "wrong parent")]
-fn finally_task_appears_in_task_tree() {
-    // Verify that when finally spawns tasks, they are children of F, not A
-}
-```
-
-### Test 3: `finally_retries_on_failure`
+### Test 2: `finally_retries_on_failure`
 
 ```rust
 /// Finally tasks should retry on failure.
@@ -149,7 +135,7 @@ fn finally_retries_on_failure() {
 }
 ```
 
-### Test 4: `finally_failure_propagates_after_retries_exhausted`
+### Test 3: `finally_failure_propagates_after_retries_exhausted`
 
 ```rust
 /// When finally exhausts retries, failure should propagate to parent.
@@ -167,20 +153,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
     // Verify that after 3 attempts (initial + 2 retries), failure propagates
 }
 ```
-
-### Test 5: `finally_spawned_tasks_are_children_of_finally`
-
-```rust
-/// Tasks spawned by finally should be children of the finally task, not the original task.
-///
-/// Setup: A has finally that spawns B
-/// Expected tree: A → F → B (finally F is child of A, B is child of F)
-/// Current (buggy): A → B (B is direct child of A, skipping finally)
-#[test]
-#[should_panic(expected = "wrong parent")]
-fn finally_spawned_tasks_are_children_of_finally() {
-    // Verify the tree structure when finally spawns tasks
-}
 
 ---
 
@@ -512,7 +484,6 @@ Finally retry works like any task retry:
 - [ ] `finally_should_not_block_concurrency` - scheduling bug
 - [ ] `finally_retries_on_failure` - no retry bug
 - [ ] `finally_failure_propagates_after_retries_exhausted` - silent failure bug
-- [ ] `finally_spawned_tasks_are_children_of_finally` - wrong parent bug
 - [ ] All tests `#[should_panic]` with current implementation
 - [ ] Commit with `--no-verify` (tests skip in sandbox)
 
@@ -551,4 +522,4 @@ Finally retry works like any task retry:
 | `runner/types.rs` | Add `TaskKind` enum, add `retries_remaining` to `TaskEntry`, modify `TaskState::Pending` |
 | `runner/mod.rs` | Modify `handle_completion()`, add `queue_finally_task()`, modify `dispatch()` to match on `TaskKind` |
 | `runner/response.rs` | Handle finally task results |
-| `tests/finally_retry_bugs.rs` | Add 4 new tests for finally scheduling bugs |
+| `tests/finally_retry_bugs.rs` | Add 3 new tests for finally scheduling bugs |
