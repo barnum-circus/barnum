@@ -168,18 +168,10 @@ fn transition_to_waiting(
     self.in_flight -= 1;
 }
 
-/// Transition: InFlight → removed (decrements in_flight)
-/// Used when task completes with no children.
-fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("task must exist");
-    self.in_flight -= 1;
-    entry.parent_id
-}
-
 /// Transition: InFlight → Pending (retry) (decrements in_flight)
 /// Creates a new Pending task with same parent but new ID.
 fn transition_to_retry(&mut self, task_id: LogTaskId, retry_task: Task) {
-    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    let entry = self.tasks.remove(&task_id).expect("[P019] task must exist for retry");
     self.in_flight -= 1;
 
     // Queue retry with same parent - parent's count stays the same
@@ -190,13 +182,25 @@ fn transition_to_retry(&mut self, task_id: LogTaskId, retry_task: Task) {
     });
 }
 
-/// Transition: InFlight → removed (dropped) (decrements in_flight)
-/// Task failed permanently. Notifies parent.
-fn transition_to_dropped(&mut self, task_id: LogTaskId) {
-    let parent_id = self.transition_to_done(task_id);
+/// Transition: InFlight → removed (success, no children)
+/// Decrements in_flight, runs finally hook, notifies parent.
+fn transition_to_fully_complete(
+    &mut self,
+    task_id: LogTaskId,
+    step_name: StepName,
+    effective_value: EffectiveValue,
+) {
+    let entry = self.tasks.remove(&task_id).expect("[P020] task must exist");
+    self.in_flight -= 1;
+    self.run_finally_and_notify(task_id, entry.parent_id, step_name, effective_value, false);
+}
 
-    // Notify parent - descendant is done (failed)
-    if let Some(pid) = parent_id {
+/// Transition: InFlight → removed (failed permanently)
+/// Decrements in_flight, notifies parent. No finally hook.
+fn transition_to_failed(&mut self, task_id: LogTaskId) {
+    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
+    self.in_flight -= 1;
+    if let Some(pid) = entry.parent_id {
         self.decrement_parent(pid);
     }
 }
@@ -240,7 +244,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
 
     if spawned.is_empty() {
         // No children - transition to done (decrements in_flight)
-        self.task_completed_no_children(task_id, step_name, effective_value);
+        self.transition_to_fully_complete(task_id, step_name, effective_value);
     } else {
         // Has children - transition to WaitingForDescendants
         let count = NonZeroU16::new(spawned.len() as u16).expect("spawned is non-empty");
@@ -255,22 +259,6 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_v
             });
         }
     }
-}
-```
-
-#### Task completes with no children (InFlight → done)
-
-Called when a task succeeds with no children. Handles the InFlight → done transition.
-
-```rust
-fn task_completed_no_children(
-    &mut self,
-    task_id: LogTaskId,
-    step_name: StepName,
-    effective_value: EffectiveValue,
-) {
-    let parent_id = self.transition_to_done(task_id);  // Decrements in_flight
-    self.run_finally_and_notify(task_id, parent_id, step_name, effective_value, false);
 }
 ```
 
