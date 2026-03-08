@@ -1,13 +1,15 @@
 //! Types for the task runner.
 
+use std::io;
+use std::num::NonZeroU16;
+use std::path::{Path, PathBuf};
+
 use agent_pool::Response;
 use agent_pool_cli::AgentPoolCli;
 use cli_invoker::Invoker;
 use serde::{Deserialize, Serialize};
-use std::io;
-use std::path::{Path, PathBuf};
 
-use crate::types::LogTaskId;
+use crate::types::{LogTaskId, StepName};
 use crate::value_schema::Task;
 
 /// Connection details for the agent pool.
@@ -95,12 +97,51 @@ pub(super) enum TaskOutcome {
     Dropped,
 }
 
-/// Task queued for execution.
-pub(super) struct QueuedTask {
-    pub task: Task,
-    pub id: LogTaskId,
-    /// Origin task with finally hook waiting for this task's completion.
-    pub finally_origin_id: Option<LogTaskId>,
+/// Entry in the unified task state map.
+pub(super) struct TaskEntry {
+    /// Parent task waiting for this task to complete.
+    pub parent_id: Option<LogTaskId>,
+    /// Current state of this task.
+    pub state: TaskState,
+}
+
+/// State of a task in the runner.
+pub(super) enum TaskState {
+    /// Task waiting to be dispatched (queued due to concurrency limit).
+    Pending(Task),
+    /// Task currently executing in a worker thread.
+    InFlight(InFlight),
+    /// Task succeeded, waiting for children/continuation to complete.
+    Waiting {
+        pending_count: NonZeroU16,
+        continuation: Option<Continuation>,
+    },
+}
+
+/// Zero-sized marker that a task is currently executing.
+///
+/// Only created when spawning a worker thread, enforcing that
+/// `InFlight` state means the task is actually running.
+pub(super) struct InFlight(());
+
+impl InFlight {
+    /// Create an `InFlight` marker.
+    ///
+    /// # Safety (invariant)
+    ///
+    /// Only call this immediately after spawning a worker thread for the task.
+    pub(super) const fn new() -> Self {
+        InFlight(())
+    }
+}
+
+/// What to run when all children complete.
+///
+/// The task tree doesn't know what this does - it just runs it and
+/// queues any spawned tasks as children.
+pub(super) struct Continuation {
+    pub step_name: StepName,
+    pub value: EffectiveValue,
 }
 
 /// Identity of a task being processed.
@@ -108,8 +149,6 @@ pub(super) struct QueuedTask {
 pub(super) struct TaskIdentity {
     pub task: Task,
     pub task_id: LogTaskId,
-    /// Origin task with finally hook waiting for this task's completion.
-    pub finally_origin_id: Option<LogTaskId>,
 }
 
 /// Result of task execution, returned from dispatch threads.

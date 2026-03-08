@@ -10,8 +10,9 @@ mod shell;
 mod submit;
 mod types;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 use std::io;
+use std::num::NonZeroU16;
 use std::sync::mpsc;
 use std::thread;
 
@@ -23,10 +24,13 @@ use crate::types::{LogTaskId, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use dispatch::{TaskContext, dispatch_command_task, dispatch_pool_task};
-use finally::{FinallyTracker, run_finally_hook, run_finally_hook_direct};
+use finally::run_finally_hook_direct;
 use hooks::{call_wake_script, run_post_hook};
 use response::{FailureKind, ProcessedSubmit, process_retry, process_submit_result};
-use types::{InFlightResult, PoolConnection, QueuedTask, TaskIdentity, TaskOutcome};
+use types::{
+    Continuation, EffectiveValue, InFlight, InFlightResult, PoolConnection, TaskEntry,
+    TaskIdentity, TaskOutcome, TaskState,
+};
 
 use types::TaskResult;
 pub use types::{PostHookInput, RunnerConfig};
@@ -44,16 +48,17 @@ struct TaskRunner<'a> {
     config: &'a Config,
     schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
-    queue: VecDeque<QueuedTask>,
+    /// All task state in one place. Tasks not in this map are fully done.
+    /// `BTreeMap` ordering by key = FIFO dispatch order (task IDs are monotonic).
+    tasks: BTreeMap<LogTaskId, TaskEntry>,
     pool: PoolConnection,
     max_concurrency: usize,
+    /// Cached count of `InFlight` tasks (for concurrency limiting).
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
     rx: mpsc::Receiver<InFlightResult>,
     /// Counter for assigning unique task IDs.
     next_task_id: u32,
-    /// Tracks pending descendants for tasks with `finally` hooks.
-    finally_tracker: FinallyTracker,
 }
 
 impl<'a> TaskRunner<'a> {
@@ -90,14 +95,13 @@ impl<'a> TaskRunner<'a> {
             config,
             schemas,
             step_map: config.step_map(),
-            queue: VecDeque::new(),
+            tasks: BTreeMap::new(),
             pool,
             max_concurrency,
             in_flight: 0,
             tx,
             rx,
             next_task_id: 0,
-            finally_tracker: FinallyTracker::new(),
         };
 
         for task in initial_tasks {
@@ -117,19 +121,17 @@ impl<'a> TaskRunner<'a> {
                 ));
             }
 
-            let id = runner.next_task_id();
-            runner.queue.push_back(QueuedTask {
-                task,
-                id,
-                finally_origin_id: None,
-            });
+            runner.queue_task(task, None);
         }
 
         Ok(runner)
     }
 
     fn pending(&self) -> usize {
-        self.queue.len()
+        self.tasks
+            .values()
+            .filter(|e| matches!(e.state, TaskState::Pending(_)))
+            .count()
     }
 
     /// Allocate the next task ID.
@@ -140,31 +142,33 @@ impl<'a> TaskRunner<'a> {
         id
     }
 
-    fn submit_pending(&mut self) {
-        while self.in_flight < self.max_concurrency {
-            let Some(queued) = self.queue.pop_front() else {
-                break;
-            };
-            self.submit_one(queued);
+    // ==================== State Transitions ====================
+
+    /// Add a new task - dispatch immediately if under concurrency, otherwise queue as Pending.
+    fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+        let id = self.next_task_id();
+
+        if self.in_flight < self.max_concurrency {
+            self.dispatch(id, task, parent_id);
+        } else {
+            let prev = self.tasks.insert(
+                id,
+                TaskEntry {
+                    parent_id,
+                    state: TaskState::Pending(task),
+                },
+            );
+            assert!(prev.is_none(), "task_id collision: {id:?} already in map");
         }
     }
 
-    fn submit_one(&mut self, queued: QueuedTask) {
-        let QueuedTask {
-            task,
-            id: task_id,
-            finally_origin_id,
-        } = queued;
-
+    /// Dispatch a task to a worker thread, creating `InFlight` state.
+    fn dispatch(&mut self, task_id: LogTaskId, task: Task, parent_id: Option<LogTaskId>) {
         #[expect(clippy::expect_used)] // Invariant: config validation ensures all step names exist
         let step = self.step_map.get(&task.step).expect("[P014] unknown step");
 
         let tx = self.tx.clone();
-        let identity = TaskIdentity {
-            task,
-            task_id,
-            finally_origin_id,
-        };
+        let identity = TaskIdentity { task, task_id };
         let ctx = TaskContext {
             identity,
             pre_hook: step.pre.clone(),
@@ -194,20 +198,90 @@ impl<'a> TaskRunner<'a> {
                 });
             }
         }
+
+        let prev = self.tasks.insert(
+            task_id,
+            TaskEntry {
+                parent_id,
+                state: TaskState::InFlight(InFlight::new()),
+            },
+        );
+        assert!(
+            prev.is_none(),
+            "task_id collision: {task_id:?} already in map"
+        );
         self.in_flight += 1;
     }
 
-    /// Notify that a descendant of `finally_origin_id` has completed.
-    /// Runs finally hook if all descendants are done.
-    #[expect(clippy::panic)] // Finally hook returning invalid tasks is a config bug
-    fn notify_origin_of_completion(&mut self, finally_origin_id: LogTaskId) {
-        if let Some(state) = self
-            .finally_tracker
-            .record_descendant_done(finally_origin_id)
-        {
-            let spawned = run_finally_hook(&state);
-            for task in spawned {
-                // Validate finally hook spawned tasks
+    /// Dispatch pending tasks up to max concurrency.
+    fn dispatch_all_pending(&mut self) {
+        while self.in_flight < self.max_concurrency {
+            // Find first Pending task (BTreeMap iteration = FIFO by task_id)
+            let Some(task_id) = self.tasks.iter().find_map(|(id, entry)| {
+                matches!(entry.state, TaskState::Pending(_)).then_some(*id)
+            }) else {
+                break;
+            };
+            self.dispatch_pending(task_id);
+        }
+    }
+
+    /// Dispatch a specific pending task.
+    #[expect(clippy::expect_used, clippy::panic)] // Invariant: task must exist in Pending state
+    fn dispatch_pending(&mut self, task_id: LogTaskId) {
+        let entry = self.tasks.remove(&task_id).expect("task must exist");
+        let TaskState::Pending(task) = entry.state else {
+            panic!("dispatch_pending called on non-Pending task");
+        };
+        self.dispatch(task_id, task, entry.parent_id);
+    }
+
+    /// Transition `InFlight` → `Waiting`.
+    #[expect(clippy::expect_used)] // Invariant: task must exist
+    fn transition_to_waiting(
+        &mut self,
+        task_id: LogTaskId,
+        pending_count: NonZeroU16,
+        continuation: Option<Continuation>,
+    ) {
+        let entry = self.tasks.get_mut(&task_id).expect("task must exist");
+        assert!(matches!(entry.state, TaskState::InFlight(_)));
+        entry.state = TaskState::Waiting {
+            pending_count,
+            continuation,
+        };
+        self.in_flight -= 1;
+    }
+
+    /// Remove an `InFlight` task (for retry - don't notify parent).
+    #[expect(clippy::expect_used)] // Invariant: task must exist
+    fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
+        let entry = self.tasks.remove(&task_id).expect("task must exist");
+        assert!(matches!(entry.state, TaskState::InFlight(_)));
+        self.in_flight -= 1;
+        entry.parent_id
+    }
+
+    // ==================== Key Operations ====================
+
+    /// Handle completion of a task (`InFlight` success with no children, or `Waiting` with count=0).
+    /// Runs continuation if present; if that spawns tasks, waits for them.
+    /// Otherwise removes task and notifies parent.
+    #[expect(clippy::panic, clippy::expect_used)] // Finally hook returning invalid tasks is a config bug
+    fn handle_completion(&mut self, task_id: LogTaskId, continuation: Option<Continuation>) {
+        let spawned = if let Some(cont) = continuation {
+            let hook = self
+                .config
+                .steps
+                .iter()
+                .find(|s| s.name == cont.step_name)
+                .and_then(|s| s.finally_hook.as_ref())
+                .expect("continuation implies finally hook exists");
+
+            let tasks = run_finally_hook_direct(hook, &cont.value.0);
+
+            // Validate finally hook spawned tasks
+            for task in &tasks {
                 assert!(
                     self.step_map.contains_key(&task.step),
                     "[P016] BUG: finally hook returned unknown step '{}' - this is a configuration error",
@@ -219,13 +293,117 @@ impl<'a> TaskRunner<'a> {
                         task.step
                     );
                 }
+            }
+            tasks
+        } else {
+            vec![]
+        };
 
-                let id = self.next_task_id();
-                self.queue.push_back(QueuedTask {
-                    task,
-                    id,
-                    finally_origin_id: None, // Finally tasks are new roots
-                });
+        if spawned.is_empty() {
+            // Remove and notify parent
+            let entry = self.tasks.remove(&task_id).expect("task must exist");
+            if matches!(entry.state, TaskState::InFlight(_)) {
+                self.in_flight -= 1;
+            }
+            if let Some(parent_id) = entry.parent_id {
+                self.decrement_parent(parent_id);
+            }
+        } else {
+            // Transition to or update Waiting state
+            #[expect(clippy::unwrap_used, clippy::cast_possible_truncation)]
+            let count = NonZeroU16::new(spawned.len() as u16).unwrap();
+
+            let entry = self.tasks.get_mut(&task_id).expect("task must exist");
+            if matches!(entry.state, TaskState::InFlight(_)) {
+                self.in_flight -= 1;
+            }
+            entry.state = TaskState::Waiting {
+                pending_count: count,
+                continuation: None,
+            };
+
+            for child in spawned {
+                self.queue_task(child, Some(task_id));
+            }
+        }
+    }
+
+    /// Decrement parent's pending count, run continuation or finish when count hits 0.
+    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // Invariants
+    fn decrement_parent(&mut self, parent_id: LogTaskId) {
+        let (hit_zero, continuation) = {
+            let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
+            let TaskState::Waiting {
+                pending_count,
+                continuation,
+            } = &mut entry.state
+            else {
+                panic!("parent not in Waiting state");
+            };
+
+            let new_count = pending_count.get() - 1;
+            if new_count == 0 {
+                (true, continuation.take())
+            } else {
+                *pending_count = NonZeroU16::new(new_count).unwrap();
+                (false, None)
+            }
+        };
+
+        if hit_zero {
+            self.handle_completion(parent_id, continuation);
+        }
+    }
+
+    /// Handle task success.
+    #[expect(clippy::unwrap_used, clippy::cast_possible_truncation)] // spawned.len() fits in u16
+    fn task_succeeded(
+        &mut self,
+        task_id: LogTaskId,
+        step_name: &StepName,
+        spawned: Vec<Task>,
+        effective_value: EffectiveValue,
+    ) {
+        let finally_hook = self
+            .config
+            .steps
+            .iter()
+            .find(|s| &s.name == step_name)
+            .and_then(|s| s.finally_hook.clone());
+        let continuation = finally_hook.map(|_| Continuation {
+            step_name: step_name.clone(),
+            value: effective_value,
+        });
+
+        if spawned.is_empty() {
+            // No children - handle completion (may run continuation)
+            self.handle_completion(task_id, continuation);
+        } else {
+            // Has children - wait for them
+            let count = NonZeroU16::new(spawned.len() as u16).unwrap();
+            self.transition_to_waiting(task_id, count, continuation);
+            for child in spawned {
+                self.queue_task(child, Some(task_id));
+            }
+        }
+    }
+
+    /// Handle task failure (with optional retry).
+    #[expect(clippy::expect_used)] // Invariant: task must exist
+    fn task_failed(&mut self, task_id: LogTaskId, retry: Option<Task>) {
+        let parent_id = self.tasks.get(&task_id).expect("task must exist").parent_id;
+
+        if let Some(retry_task) = retry {
+            self.queue_task(retry_task, parent_id);
+            self.transition_to_done(task_id); // Don't notify - retry takes over
+        } else {
+            // Permanent failure - remove and notify parent
+            let entry = self.tasks.remove(&task_id).expect("task must exist");
+            if matches!(entry.state, TaskState::InFlight(_)) {
+                self.in_flight -= 1;
+            }
+            if let Some(parent_id) = entry.parent_id {
+                self.decrement_parent(parent_id);
             }
         }
     }
@@ -233,11 +411,7 @@ impl<'a> TaskRunner<'a> {
     fn process_result(&mut self, inflight: InFlightResult) -> TaskResult {
         let InFlightResult { identity, result } = inflight;
 
-        let TaskIdentity {
-            task,
-            task_id,
-            finally_origin_id,
-        } = identity;
+        let TaskIdentity { task, task_id } = identity;
 
         #[expect(clippy::expect_used)] // Invariant: all queued tasks are validated at entry points
         let step = self.step_map.get(&task.step).expect(
@@ -276,70 +450,17 @@ impl<'a> TaskRunner<'a> {
                 spawned,
                 finally_value,
             } => {
-                // Determine finally_origin_id for children
-                let child_finally_origin_id = if let Some(finally) = &step.finally_hook {
-                    if spawned.is_empty() {
-                        // No children - run finally hook immediately
-                        let finally_spawned = run_finally_hook_direct(finally, &finally_value.0);
-                        for child in finally_spawned {
-                            let id = self.next_task_id();
-                            self.queue.push_back(QueuedTask {
-                                task: child,
-                                id,
-                                finally_origin_id: None, // Finally tasks are new roots
-                            });
-                        }
-                        finally_origin_id
-                    } else {
-                        self.finally_tracker.start_tracking(
-                            task_id,
-                            spawned.len(),
-                            finally_value.0,
-                            finally.clone(),
-                        );
-                        Some(task_id)
-                    }
-                } else {
-                    finally_origin_id
-                };
-
-                // Queue spawned children
-                for child in spawned {
-                    let id = self.next_task_id();
-                    self.queue.push_back(QueuedTask {
-                        task: child,
-                        id,
-                        finally_origin_id: child_finally_origin_id,
-                    });
-                }
-
-                // Task succeeded - notify origin
-                if let Some(oid) = finally_origin_id {
-                    self.notify_origin_of_completion(oid);
-                }
-
+                self.task_succeeded(task_id, &task.step, spawned, finally_value);
                 TaskResult::Completed
             }
 
             TaskOutcome::Retry(retry_task) => {
-                // Queue retry with SAME finally_origin_id - origin still waiting
-                let id = self.next_task_id();
-                self.queue.push_back(QueuedTask {
-                    task: retry_task,
-                    id,
-                    finally_origin_id, // Propagate - origin still waiting
-                });
-
-                // Do NOT notify origin - the logical task isn't done, it's retrying
+                self.task_failed(task_id, Some(retry_task));
                 TaskResult::Requeued
             }
 
             TaskOutcome::Dropped => {
-                // Task failed permanently - notify origin (descendant is done, failed)
-                if let Some(oid) = finally_origin_id {
-                    self.notify_origin_of_completion(oid);
-                }
-
+                self.task_failed(task_id, None);
                 TaskResult::Dropped
             }
         }
@@ -352,16 +473,16 @@ impl Iterator for TaskRunner<'_> {
     /// Get the next completed task outcome.
     ///
     /// Submits pending tasks concurrently and returns results as they complete.
-    /// Returns `None` when queue is empty and no tasks are in flight.
+    /// Returns `None` when all tasks are done (nothing pending, nothing in flight).
     fn next(&mut self) -> Option<Self::Item> {
-        self.submit_pending();
+        self.dispatch_all_pending();
 
         if self.in_flight == 0 {
             return None;
         }
 
         let result = self.rx.recv().ok()?;
-        self.in_flight -= 1;
+        // Note: in_flight is decremented inside process_result when task transitions out of InFlight
 
         Some(self.process_result(result))
     }
