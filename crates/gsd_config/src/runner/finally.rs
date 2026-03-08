@@ -99,7 +99,7 @@ pub fn run_finally_hook_direct(
     info!(command = %finally_command, "running finally hook");
 
     let input_json =
-        serde_json::to_string(value).expect("serde_json::Value should always serialize");
+        serde_json::to_string(value).expect("[P018] serde_json::Value should always serialize");
 
     match run_shell_command(finally_command.as_str(), &input_json, None) {
         Ok(stdout) => match serde_json::from_str::<Vec<Task>>(&stdout) {

@@ -47,6 +47,10 @@
 
 - **Use `assert!`, not `debug_assert!`.** If an invariant is worth checking, check it always. Debug-only assertions mask bugs in release builds.
 
+- **Unique error codes for all errors.** Every error message includes a unique code like `[E042]`. This makes errors searchable and unambiguous. Reserve ranges by crate if helpful.
+
+- **Use `.expect()`, not `.unwrap()`.** Always include a message with a unique panic code like `[P001]`. Makes panics searchable and provides context. Example: `.expect("[P001] task_id must exist in map")`
+
 - **Pass Copy types by value, not reference.**
 
 - **Variable names default to snake_case of their type.** Prefer long descriptive names over short ones.

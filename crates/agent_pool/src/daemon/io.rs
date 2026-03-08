@@ -63,12 +63,12 @@ impl StopNotifier {
         }
 
         #[expect(clippy::expect_used)] // Mutex poisoning indicates a bug
-        let guard = self.mutex.lock().expect("mutex poisoned");
+        let guard = self.mutex.lock().expect("[P003] mutex poisoned");
         #[expect(clippy::expect_used)] // Condvar wait can't fail if mutex isn't poisoned
         let (_guard, timeout_result) = self
             .condvar
             .wait_timeout(guard, timeout)
-            .expect("condvar wait failed");
+            .expect("[P004] condvar wait failed");
 
         // Check again after waking (might have been notified)
         if self.flag.load(Ordering::Relaxed) {
@@ -345,7 +345,7 @@ impl SubmissionMap {
                         .and_then(|n| n.to_str())
                         .and_then(|n| n.strip_suffix(REQUEST_SUFFIX))
                         .map(|id| format!("{id}{RESPONSE_SUFFIX}"))
-                        .expect("request path should have REQUEST_SUFFIX"),
+                        .expect("[P005] request path should have REQUEST_SUFFIX"),
                 );
                 debug!(
                     submission_id = id.0,
@@ -426,14 +426,14 @@ pub(super) fn execute_effect(
                 TaskId::External(submission_id) => {
                     let submission_data = submission_map
                         .get_data(submission_id)
-                        .expect("TaskAssigned for unknown submission - core bug");
+                        .expect("[P006] TaskAssigned for unknown submission - core bug");
 
                     // Submission format is identical to worker format:
                     // {"kind": "Task", "task": {"instructions": "...", "data": {...}}}
                     // Pass through directly.
                     worker_map
                         .write_to(worker_id, TASK_FILE, &submission_data.content)
-                        .expect("TaskAssigned for unknown worker - core bug");
+                        .expect("[P007] TaskAssigned for unknown worker - core bug");
 
                     start_task_timeout_timer(
                         events_tx.clone(),
@@ -452,7 +452,7 @@ pub(super) fn execute_effect(
                     });
                     worker_map
                         .write_to(worker_id, TASK_FILE, &heartbeat.to_string())
-                        .expect("TaskAssigned for unknown worker - core bug");
+                        .expect("[P008] TaskAssigned for unknown worker - core bug");
 
                     start_task_timeout_timer(
                         events_tx.clone(),
@@ -476,7 +476,7 @@ pub(super) fn execute_effect(
         Effect::TaskCompleted { worker_id, task_id } => {
             let worker_path = worker_map
                 .get_path(worker_id)
-                .expect("TaskCompleted for unknown worker - core bug");
+                .expect("[P009] TaskCompleted for unknown worker - core bug");
 
             match task_id {
                 TaskId::Heartbeat => {
@@ -486,7 +486,7 @@ pub(super) fn execute_effect(
                 TaskId::External(submission_id) => {
                     let worker_output = worker_map
                         .read_from(worker_id, RESPONSE_FILE)
-                        .expect("TaskCompleted for unknown worker - core bug");
+                        .expect("[P010] TaskCompleted for unknown worker - core bug");
 
                     let _ = fs::remove_file(worker_path.join(TASK_FILE));
                     let _ = fs::remove_file(worker_path.join(RESPONSE_FILE));
@@ -494,15 +494,15 @@ pub(super) fn execute_effect(
                     // Wrap worker output in typed Response
                     let response = Response::processed(worker_output);
                     let response_json = serde_json::to_string(&response)
-                        .expect("Response serialization cannot fail");
+                        .expect("[P011] Response serialization cannot fail");
                     submission_map.finish(submission_id, &response_json)?;
                 }
             }
         }
         Effect::TaskFailed { submission_id } => {
             let response = Response::not_processed(NotProcessedReason::Timeout);
-            let response_json =
-                serde_json::to_string(&response).expect("Response serialization cannot fail");
+            let response_json = serde_json::to_string(&response)
+                .expect("[P012] Response serialization cannot fail");
             submission_map.finish(submission_id, &response_json)?;
 
             warn!(submission_id = submission_id.0, "task failed (timeout)");
@@ -510,7 +510,7 @@ pub(super) fn execute_effect(
         Effect::WorkerRemoved { worker_id } => {
             let (transport, ()) = worker_map
                 .remove(worker_id)
-                .expect("WorkerRemoved for unknown worker - core bug");
+                .expect("[P013] WorkerRemoved for unknown worker - core bug");
 
             // Write kicked message so worker knows it was removed
             let kicked_msg = serde_json::json!({

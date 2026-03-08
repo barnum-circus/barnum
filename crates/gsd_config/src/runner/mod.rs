@@ -157,7 +157,7 @@ impl<'a> TaskRunner<'a> {
         } = queued;
 
         #[expect(clippy::expect_used)] // Invariant: config validation ensures all step names exist
-        let step = self.step_map.get(&task.step).expect("unknown step");
+        let step = self.step_map.get(&task.step).expect("[P014] unknown step");
 
         let tx = self.tx.clone();
         let identity = TaskIdentity {
@@ -210,12 +210,12 @@ impl<'a> TaskRunner<'a> {
                 // Validate finally hook spawned tasks
                 assert!(
                     self.step_map.contains_key(&task.step),
-                    "BUG: finally hook returned unknown step '{}' - this is a configuration error",
+                    "[P016] BUG: finally hook returned unknown step '{}' - this is a configuration error",
                     task.step
                 );
                 if let Err(e) = self.schemas.validate(&task.step, &task.value) {
                     panic!(
-                        "BUG: finally hook returned invalid task for step '{}': {e}",
+                        "[P017] BUG: finally hook returned invalid task for step '{}': {e}",
                         task.step
                     );
                 }
@@ -241,7 +241,7 @@ impl<'a> TaskRunner<'a> {
 
         #[expect(clippy::expect_used)] // Invariant: all queued tasks are validated at entry points
         let step = self.step_map.get(&task.step).expect(
-            "BUG: task step must exist - all queued tasks should be validated at entry points",
+            "[P015] BUG: task step must exist - all queued tasks should be validated at entry points",
         );
 
         let ProcessedSubmit {

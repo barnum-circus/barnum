@@ -223,7 +223,7 @@ fn handle_task_submitted(
             // Workers waiting - assign to first one
             let worker_id = worker_ids
                 .pop_front()
-                .expect("Workers variant with empty queue");
+                .expect("[P001] Workers variant with empty queue");
             if worker_ids.is_empty() {
                 state.waiting = Waiting::None;
             }
@@ -264,7 +264,7 @@ fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState,
             // Tasks waiting - assign first one to this worker
             let submission_id = submission_ids
                 .pop_front()
-                .expect("Tasks variant with empty queue");
+                .expect("[P002] Tasks variant with empty queue");
             if submission_ids.is_empty() {
                 state.waiting = Waiting::None;
             }
