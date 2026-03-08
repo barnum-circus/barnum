@@ -843,7 +843,8 @@ pub struct ReconstructedTask {
     pub value: StepInputValue,
     pub parent_id: Option<LogTaskId>,
     pub origin: TaskOrigin,
-    pub finally_script: Option<HookScript>,  // For Finally tasks
+    // Note: finally_script is NOT stored here. For Finally tasks, look up
+    // step.finally from the config using the step name.
 }
 
 pub struct WaitingTask {
@@ -882,10 +883,17 @@ impl TaskRunner<'_> {
                 .get(&pending.step)
                 .map_or(0, |s| s.options.max_retries);
 
+            // For Finally tasks, look up the hook from step config
+            let finally_script = if matches!(pending.origin, TaskOrigin::Finally { .. }) {
+                self.step_map.get(&pending.step).and_then(|s| s.finally.clone())
+            } else {
+                None
+            };
+
             self.tasks.insert(pending.task_id, TaskEntry {
                 step: pending.step,
                 parent_id: pending.parent_id,
-                finally_script: pending.finally_script,
+                finally_script,
                 state: TaskState::Pending { value: pending.value },
                 retries_remaining,
             });

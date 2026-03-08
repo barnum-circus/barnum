@@ -34,6 +34,8 @@
 
 - **Flaky tests are a five-alarm fire.** A flaky test indicates bad modeling - either the test is testing non-deterministic behavior, or the system under test has race conditions. Either way, flaky tests erode trust and must be fixed immediately. Never increase timeouts to fix flakiness - that treats symptoms, not causes. If a test is flaky, either fix the underlying issue or delete the test.
 
+- **All tests use rstest with timeouts.** Use `#[rstest]` and `#[timeout(Duration::from_secs(20))]` on every test. Hanging tests should fail quickly, not block CI for 10+ minutes.
+
 - **Validate once, panic on invariant violations.** Validate external input (user input, files, network) at the boundary. After validation, internal code can panic if invariants are violated - this indicates a bug, not bad input.
 
 - **Never silently skip or accommodate errors.** If something goes wrong, fail loudly. Don't write code that "gracefully handles" invalid states by skipping over them - this masks bugs and makes debugging harder. If you find yourself writing code to skip invalid data, ask whether the data should have been validated upstream.
