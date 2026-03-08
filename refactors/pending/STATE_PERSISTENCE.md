@@ -302,23 +302,41 @@ Create the new crate with log types and comprehensive tests (no integration with
 
 **Tests to write:**
 
-#### Serialization Tests
+#### Snapshot Tests (Demo-Based)
+
+Each demo produces a deterministic state log. We snapshot-test the log output.
+
 ```rust
-#[test] fn log_task_id_serializes_as_number()
-#[test] fn step_name_serializes_as_string()
-#[test] fn task_origin_initial_serializes()
-#[test] fn task_origin_spawned_serializes()
-#[test] fn task_origin_retry_serializes_with_replaces()
-#[test] fn task_origin_finally_serializes_with_finally_for()
-#[test] fn task_submitted_roundtrip()
-#[test] fn task_completed_success_roundtrip()
-#[test] fn task_completed_failed_with_retry_roundtrip()
-#[test] fn task_completed_failed_without_retry_roundtrip()
-#[test] fn failure_reason_timeout_serializes()
-#[test] fn failure_reason_agent_lost_serializes()
-#[test] fn failure_reason_invalid_response_serializes()
-#[test] fn state_log_entry_config_roundtrip()
-#[test] fn ndjson_multiple_entries_roundtrip()
+#[test] fn snapshot_demo_linear()
+#[test] fn snapshot_demo_fan_out()
+#[test] fn snapshot_demo_branching()
+#[test] fn snapshot_demo_command()
+#[test] fn snapshot_demo_hooks()  // exercises pre/post/finally
+```
+
+**Prerequisite: Deterministic Ordering**
+
+For snapshots to be stable, task completion order must be deterministic. Options:
+
+1. **Sequential mode** (`max_concurrency: 1`) - tasks complete in submission order
+2. **Mock pool with ordered responses** - test harness controls response order via channels
+3. **Barrier-based synchronization** - tasks wait at barriers, test releases them in order
+
+For demos that fan out, we need option 2 or 3. Add to test harness:
+
+```rust
+/// Test pool that queues responses and releases them in controlled order.
+struct OrderedMockPool {
+    pending: Vec<Sender<Response>>,
+}
+
+impl OrderedMockPool {
+    /// Complete the next pending task with the given response.
+    fn complete_next(&mut self, response: Response) {
+        let sender = self.pending.remove(0);
+        sender.send(response).unwrap();
+    }
+}
 ```
 
 #### Reconstruct: Basic Scenarios
@@ -391,6 +409,13 @@ Create the new crate with log types and comprehensive tests (no integration with
 #[test] fn read_entries_handles_trailing_newline()
 #[test] fn read_entries_errors_on_invalid_json()
 ```
+
+---
+
+**Note:** Snapshot tests require deterministic ordering. If no mechanism exists yet, Phase 2 should add `OrderedMockPool` (or similar) to the test harness before writing snapshot tests. This might warrant its own sub-branch:
+
+- `state/02a-deterministic-test-harness` - add ordered mock pool
+- `state/02b-crate-and-tests` - gsd_state crate with snapshot + reconstruct tests
 
 **Branch:** `state/02-crate-and-tests`
 
