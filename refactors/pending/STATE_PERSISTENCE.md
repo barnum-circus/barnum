@@ -1026,6 +1026,14 @@ All prerequisites are now complete:
 
 3. **Task ID Registry** - Not needed. The unified `BTreeMap<LogTaskId, TaskEntry>` already provides this.
 
+## Design Decisions
+
+1. **APPLY_PATTERN is non-blocking.** The atomic log/state consistency refactor can happen later - it's not a prerequisite for STATE_PERSISTENCE.
+
+2. **Config is frozen at start.** Once a run starts, config comes from the log. Never re-read the config file. On resume, use the config stored in the state log, not a fresh read. Trust the log.
+
+3. **Default log location.** Use the `--root` flag or CLI-provided `--state-log` path. No magic default discovery.
+
 ## Future Work
 
 - Visualize state logs (TUI or web UI)
