@@ -394,18 +394,21 @@ fn dispatch_all_pending(&mut self) {
 
 /// Extract the next pending task's data, transitioning it to InFlight.
 fn take_next_pending(&mut self) -> Option<(LogTaskId, StepName, StepInputValue)> {
-    let task_id = self.tasks.iter()
-        .find_map(|(id, e)| matches!(e.state, TaskState::Pending { .. }).then_some(*id))?;
+    let result = self.tasks.iter_mut().find_map(|(id, entry)| {
+        if let TaskState::Pending { value } = &mut entry.state {
+            let value = std::mem::take(value);
+            let step = entry.step.clone();
+            entry.state = TaskState::InFlight(InFlight::new());
+            Some((*id, step, value))
+        } else {
+            None
+        }
+    });
 
-    let entry = self.tasks.get_mut(&task_id).expect("[E060] task must exist");
-    let TaskState::Pending { value } = &mut entry.state else { unreachable!() };
-    let value = std::mem::take(value);
-    let step = entry.step.clone();
-
-    entry.state = TaskState::InFlight(InFlight::new());
-    self.in_flight += 1;
-
-    Some((task_id, step, value))
+    if result.is_some() {
+        self.in_flight += 1;
+    }
+    result
 }
 
 /// Dispatch a task that's already been transitioned to InFlight.
