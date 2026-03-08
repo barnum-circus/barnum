@@ -319,25 +319,47 @@ Each demo produces a deterministic state log. We snapshot-test the log output.
 For snapshots to be stable, task completion order must be deterministic. Options:
 
 1. **Sequential mode** (`max_concurrency: 1`) - tasks complete in submission order
-2. **Mock pool with ordered responses** - test harness controls response order via channels
-3. **Barrier-based synchronization** - tasks wait at barriers, test releases them in order
+2. **Extend `GsdTestAgent` for ordered completion** - agent blocks on channel until test releases
 
-For demos that fan out, we need option 2 or 3. Add to test harness:
+The existing test infrastructure (`GsdTestAgent` in `tests/common/mod.rs`) already handles Pool actions in Rust. Currently it uses `processing_delay` (time-based), which isn't deterministic for concurrent tasks.
+
+Extend `GsdTestAgent` to support channel-based completion:
 
 ```rust
-/// Test pool that queues responses and releases them in controlled order.
-struct OrderedMockPool {
-    pending: Vec<Sender<Response>>,
+impl GsdTestAgent {
+    /// Start an agent that waits for explicit completion signals.
+    /// Returns (agent, controller) - test uses controller to complete tasks in order.
+    pub fn ordered(root: &Path) -> (Self, OrderedAgentController) {
+        let (tx, rx) = mpsc::channel::<String>();
+        let controller = OrderedAgentController { tx };
+
+        let agent = Self::start(root, Duration::ZERO, move |_payload| {
+            // Block until test sends the response
+            rx.recv().unwrap_or_else(|_| "[]".to_string())
+        });
+
+        (agent, controller)
+    }
 }
 
-impl OrderedMockPool {
-    /// Complete the next pending task with the given response.
-    fn complete_next(&mut self, response: Response) {
-        let sender = self.pending.remove(0);
-        sender.send(response).unwrap();
+pub struct OrderedAgentController {
+    tx: mpsc::Sender<String>,
+}
+
+impl OrderedAgentController {
+    /// Complete the next waiting task with this response.
+    pub fn complete(&self, response: &str) {
+        self.tx.send(response.to_string()).unwrap();
+    }
+
+    /// Complete with empty array (terminate).
+    pub fn terminate(&self) {
+        self.complete("[]");
     }
 }
 ```
+
+For Command actions (bash), order is already deterministic with `max_concurrency: 1`.
 
 #### Reconstruct: Basic Scenarios
 ```rust
