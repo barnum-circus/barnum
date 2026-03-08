@@ -80,27 +80,28 @@ struct TaskRunner<'a> {
     in_flight: usize,
 }
 
-/// Wrapper containing parent relationship and current state
 struct TaskEntry {
     parent_id: Option<LogTaskId>,
     state: TaskState,
 }
 
-/// Task succeeded, waiting for descendants to complete before running finally
-struct WaitingForDescendants {
-    pending_count: NonZeroU16,
-    effective_value: EffectiveValue,
-    step_name: StepName,       // Look up finally_hook from config when needed
-    finally_already_ran: bool, // True if waiting for finally-spawned tasks
-}
-
 enum TaskState {
     /// Task waiting to be dispatched
     Pending(Task),
-    /// Task currently executing (step_name needed to look up finally hook)
-    InFlight(StepName),
-    /// Task succeeded, waiting for descendants
-    WaitingForDescendants(WaitingForDescendants),
+    /// Task currently executing
+    InFlight,
+    /// Task succeeded, waiting for children/cleanup to complete
+    Waiting {
+        pending_count: NonZeroU16,
+        finally: Option<FinallyData>,
+    },
+}
+
+/// Data needed to run a finally hook. Present = run finally when count hits 0.
+/// None = no subsequent step, just done when count hits 0.
+struct FinallyData {
+    step_name: StepName,
+    effective_value: EffectiveValue,
 }
 ```
 
@@ -118,65 +119,63 @@ Could calculate via `tasks.values().filter(|e| matches!(e.state, InFlight { .. }
 ### Task Lifecycle
 
 ```
-                    ┌──────────────────────────────────────┐
-                    │                                      │
-                    ▼                                      │
-Task created → [Pending] → [InFlight] ──┬── success ──────┼──┬── no children ────→ done (remove from map)
-                    ▲                   │                 │  │
-                    │                   │                 │  └── has children ───→ [WaitingForDescendants]
-                    │                   │                 │                              │
-                    │                   ├── retry ───────►│                              │ all descendants done
-                    │                   │                 │                              ▼
-                    │                   └── dropped ─────►└──────────────────────── run finally, notify parent
-                    │                                                                    │
-                    └────────────────────────────────────────────────────────────────────┘
-                                        (finally may spawn new Pending tasks)
+Task created → [Pending] → [InFlight] ──┬── success with children ──→ [Waiting { finally: Some/None }]
+                    ▲                   │                                        │
+                    │                   ├── success, no children, has finally ──→│ (run finally immediately)
+                    │                   │    └── finally spawns ────────────────→│ [Waiting { finally: None }]
+                    │                   │    └── finally spawns nothing ─────────┼──→ done
+                    │                   │                                        │
+                    │                   ├── success, no children, no finally ────┼──→ done
+                    │                   ├── retry ──────────────────────────────→│ (new Pending, same parent)
+                    │                   └── dropped ────────────────────────────→│ done (notify parent)
+                    │                                                            │
+                    │                                                            ▼ count hits 0
+                    │                   ┌── finally.is_some() ──→ run finally ───┤
+                    │                   │    └── spawns tasks ──→ [Waiting { finally: None }]
+                    │                   │    └── spawns nothing ─────────────────┼──→ done
+                    └───────────────────┴── finally.is_none() ───────────────────┴──→ done
 ```
 
-### State Transition Functions (Centralized `in_flight` Management)
-
-All `in_flight` counter modifications happen in these transition functions. No other code touches the counter directly. These are **pure state management** - they don't run hooks or make business logic decisions.
+### State Transitions
 
 ```rust
-/// Transition: Pending → InFlight (increments in_flight)
-fn transition_to_in_flight(&mut self, task_id: LogTaskId, step_name: StepName) {
-    let entry = self.tasks.get_mut(&task_id).expect("[P019] task must exist");
+/// Pending → InFlight
+fn dispatch(&mut self, task_id: LogTaskId) {
+    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
     assert!(matches!(entry.state, TaskState::Pending(_)));
-    entry.state = TaskState::InFlight(step_name);
+    entry.state = TaskState::InFlight;
     self.in_flight += 1;
 }
 
-/// Transition: InFlight → WaitingForDescendants (decrements in_flight)
-/// Caller provides the fully-constructed WaitingForDescendants struct.
-fn transition_to_waiting(
+/// InFlight → Waiting
+fn start_waiting(
     &mut self,
     task_id: LogTaskId,
-    parent_id: Option<LogTaskId>,
-    waiting: WaitingForDescendants,
+    pending_count: NonZeroU16,
+    finally: Option<FinallyData>,
 ) {
-    self.tasks.insert(task_id, TaskEntry {
-        parent_id,
-        state: TaskState::WaitingForDescendants(waiting),
-    });
+    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
+    assert!(matches!(entry.state, TaskState::InFlight));
+    entry.state = TaskState::Waiting { pending_count, finally };
     self.in_flight -= 1;
 }
 
-/// Transition: InFlight → removed (decrements in_flight)
-/// Returns parent_id so caller can notify. Pure state management.
+/// InFlight → removed
 fn finish_in_flight(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("[P020] task must exist");
+    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    assert!(matches!(entry.state, TaskState::InFlight));
     self.in_flight -= 1;
     entry.parent_id
 }
 
-/// Transition: WaitingForDescendants → removed (no in_flight change)
-/// Returns parent_id so caller can notify. Pure state management.
+/// Waiting → removed
 fn finish_waiting(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
+    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    assert!(matches!(entry.state, TaskState::Waiting { .. }));
     entry.parent_id
 }
 
-/// Queue a task with the given parent.
+/// Add a new pending task
 fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
     let id = self.next_task_id();
     self.tasks.insert(id, TaskEntry {
@@ -196,94 +195,64 @@ fn dispatch_next(&mut self) -> Option<(LogTaskId, Task)> {
         return None;
     }
 
-    // Find first Pending task (BTreeMap gives us FIFO order)
     let (task_id, task) = self.tasks.iter()
         .find_map(|(id, entry)| match &entry.state {
-            TaskState::Pending(t) => Some((*id, t)),
+            TaskState::Pending(t) => Some((*id, t.clone())),
             _ => None,
         })?;
 
-    let task_to_dispatch = task.clone();
-    let step_name = task.step.clone();
-
-    self.transition_to_in_flight(task_id, step_name);
-    Some((task_id, task_to_dispatch))
+    self.dispatch(task_id);
+    Some((task_id, task))
 }
 ```
 
-#### Task completes successfully
-
-The caller handles all finally hook logic BEFORE deciding which transition to call. This keeps transitions pure.
+#### Task succeeds
 
 ```rust
-fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, effective_value: EffectiveValue) {
-    let entry = self.tasks.get(&task_id).expect("[P023] task must exist");
-    let TaskState::InFlight(step_name) = &entry.state else {
-        panic!("[P024] task_succeeded on non-InFlight task");
-    };
-    let step_name = step_name.clone();
-    let parent_id = entry.parent_id;
-
-    // Look up finally hook for this step
+fn task_succeeded(&mut self, task_id: LogTaskId, step_name: StepName, spawned: Vec<Task>, effective_value: EffectiveValue) {
+    let parent_id = self.tasks.get(&task_id).expect("task must exist").parent_id;
     let finally_hook = self.config.steps.get(&step_name).and_then(|s| s.finally_hook.clone());
 
     if !spawned.is_empty() {
-        // Has children - wait for them before running finally
-        let count = NonZeroU16::new(spawned.len() as u16).expect("[P022] spawned is non-empty");
-        self.transition_to_waiting(task_id, parent_id, WaitingForDescendants {
-            pending_count: count,
-            effective_value,
-            step_name,
-            finally_already_ran: false,
-        });
+        // Has children - wait for them
+        let finally = finally_hook.map(|_| FinallyData { step_name, effective_value });
+        let count = NonZeroU16::new(spawned.len() as u16).unwrap();
+        self.start_waiting(task_id, count, finally);
         for child in spawned {
             self.queue_task(child, Some(task_id));
         }
     } else if let Some(hook) = finally_hook {
-        // No children, but has finally hook - run it now
+        // No children, has finally - run it now
         let finally_spawned = run_finally_hook_direct(&hook, &effective_value.0);
-
         if !finally_spawned.is_empty() {
-            // Finally spawned tasks - wait for them (finally already ran)
-            let count = NonZeroU16::new(finally_spawned.len() as u16).expect("[P023] non-empty");
-            self.transition_to_waiting(task_id, parent_id, WaitingForDescendants {
-                pending_count: count,
-                effective_value,
-                step_name,
-                finally_already_ran: true,  // Don't run finally again
-            });
+            let count = NonZeroU16::new(finally_spawned.len() as u16).unwrap();
+            self.start_waiting(task_id, count, None);  // finally already ran
             for child in finally_spawned {
                 self.queue_task(child, Some(task_id));
             }
         } else {
-            // Finally spawned nothing - fully done
-            let parent = self.finish_in_flight(task_id);
-            if let Some(pid) = parent {
-                self.decrement_parent(pid);
-            }
+            self.finish_in_flight_and_notify(task_id);
         }
     } else {
-        // No children, no finally hook - fully done
-        let parent = self.finish_in_flight(task_id);
-        if let Some(pid) = parent {
-            self.decrement_parent(pid);
-        }
+        // No children, no finally - done
+        self.finish_in_flight_and_notify(task_id);
+    }
+}
+
+fn finish_in_flight_and_notify(&mut self, task_id: LogTaskId) {
+    if let Some(parent_id) = self.finish_in_flight(task_id) {
+        self.decrement_parent(parent_id);
     }
 }
 ```
 
 #### Task retries
 
-Retry is just: queue a new task with the same parent, then finish the old one. Parent's count doesn't change - the logical task is still in progress.
-
 ```rust
 fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) {
-    // Queue retry BEFORE finishing - preserves parent relationship
-    let parent_id = self.tasks.get(&task_id).expect("[P024] task must exist").parent_id;
+    let parent_id = self.tasks.get(&task_id).expect("task must exist").parent_id;
     self.queue_task(retry_task, parent_id);
-
-    // Now finish the old task (don't notify parent - retry continues the work)
-    self.finish_in_flight(task_id);
+    self.finish_in_flight(task_id);  // Don't notify parent
 }
 ```
 
@@ -291,65 +260,44 @@ fn task_retried(&mut self, task_id: LogTaskId, retry_task: Task) {
 
 ```rust
 fn task_failed(&mut self, task_id: LogTaskId) {
-    // No finally hook on failure - just notify parent
-    let parent = self.finish_in_flight(task_id);
-    if let Some(pid) = parent {
-        self.decrement_parent(pid);
-    }
+    self.finish_in_flight_and_notify(task_id);
 }
 ```
 
-#### Decrement parent's pending count
-
-When a descendant completes (success or failure), decrement the parent's count. When count reaches 0, handle finally logic for the parent.
+#### Decrement parent count
 
 ```rust
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&parent_id).expect("[P025] parent must exist");
-
-    let TaskState::WaitingForDescendants(waiting) = &mut entry.state else {
-        panic!("[P026] decrement_parent on non-WaitingForDescendants task");
+    let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
+    let TaskState::Waiting { pending_count, finally } = &mut entry.state else {
+        panic!("parent not in Waiting state");
     };
 
-    let new_count = waiting.pending_count.get() - 1;
+    let new_count = pending_count.get() - 1;
     if new_count == 0 {
-        // All descendants done - extract data before modifying
-        let ev = waiting.effective_value.clone();
-        let sn = waiting.step_name.clone();
-        let finally_already_ran = waiting.finally_already_ran;
-        let grandparent_id = entry.parent_id;
+        // All children done
+        if let Some(finally_data) = finally.take() {
+            // Run finally hook
+            let hook = self.config.steps.get(&finally_data.step_name)
+                .and_then(|s| s.finally_hook.as_ref())
+                .expect("finally_data implies finally hook exists");
+            let finally_spawned = run_finally_hook_direct(hook, &finally_data.effective_value.0);
 
-        // Handle finally hook logic
-        if !finally_already_ran {
-            let finally_hook = self.config.steps.get(&sn).and_then(|s| s.finally_hook.clone());
-
-            if let Some(hook) = finally_hook {
-                let finally_spawned = run_finally_hook_direct(&hook, &ev.0);
-
-                if !finally_spawned.is_empty() {
-                    // Finally spawned tasks - update state to wait for them
-                    let count = NonZeroU16::new(finally_spawned.len() as u16)
-                        .expect("[P027] non-empty");
-                    let entry = self.tasks.get_mut(&parent_id).expect("[P028] parent exists");
-                    if let TaskState::WaitingForDescendants(w) = &mut entry.state {
-                        w.pending_count = count;
-                        w.finally_already_ran = true;
-                    }
-                    for child in finally_spawned {
-                        self.queue_task(child, Some(parent_id));
-                    }
-                    return;  // Don't notify grandparent yet
+            if !finally_spawned.is_empty() {
+                // Finally spawned tasks - update count, finally is now None
+                *pending_count = NonZeroU16::new(finally_spawned.len() as u16).unwrap();
+                for child in finally_spawned {
+                    self.queue_task(child, Some(parent_id));
                 }
+                return;
             }
         }
-
-        // No finally hook, or finally spawned nothing - remove and notify grandparent
-        let grandparent = self.finish_waiting(parent_id);
-        if let Some(gpid) = grandparent {
-            self.decrement_parent(gpid);
+        // No finally or finally spawned nothing - done
+        if let Some(grandparent_id) = self.finish_waiting(parent_id) {
+            self.decrement_parent(grandparent_id);
         }
     } else {
-        waiting.pending_count = NonZeroU16::new(new_count).expect("[P029] checked above");
+        *pending_count = NonZeroU16::new(new_count).unwrap();
     }
 }
 ```
@@ -363,111 +311,48 @@ A (finally) spawns B (finally), B spawns C
 
 Initial:
   tasks[0/A] = { parent: None, Pending(A) }
-  in_flight = 0
 
-A dispatched:
-  tasks[0/A] = { parent: None, InFlight("A") }
-  in_flight = 1
-
-A succeeds, spawns B:
-  tasks[0/A] = { parent: None, WaitingForDescendants(count:1, finally_ran:false) }
+A dispatched and succeeds, spawns B:
+  tasks[0/A] = { parent: None, Waiting { count: 1, finally: Some(...) } }
   tasks[1/B] = { parent: Some(0), Pending(B) }
-  in_flight = 0
 
-B dispatched:
-  tasks[0/A] = { parent: None, WaitingForDescendants(count:1, finally_ran:false) }
-  tasks[1/B] = { parent: Some(0), InFlight("B") }
-  in_flight = 1
-
-B succeeds, spawns C:
-  tasks[0/A] = { parent: None, WaitingForDescendants(count:1, finally_ran:false) }
-  tasks[1/B] = { parent: Some(0), WaitingForDescendants(count:1, finally_ran:false) }
+B dispatched and succeeds, spawns C:
+  tasks[0/A] = { parent: None, Waiting { count: 1, finally: Some(...) } }
+  tasks[1/B] = { parent: Some(0), Waiting { count: 1, finally: Some(...) } }
   tasks[2/C] = { parent: Some(1), Pending(C) }
-  in_flight = 0
 
 C dispatched and succeeds (no children, no finally):
-  finish_in_flight(2/C) → parent=Some(1)
-  decrement_parent(1/B): count 1→0
-    B's finally_ran=false, has finally hook → run B_finally (spawns nothing)
-    finish_waiting(1/B) → grandparent=Some(0)
-    decrement_parent(0/A): count 1→0
-      A's finally_ran=false, has finally hook → run A_finally
-      finish_waiting(0/A) → no grandparent
-
-  tasks = {} (empty, all done)
+  decrement_parent(1/B): count 1→0, finally.is_some() → run B_finally (spawns nothing)
+    decrement_parent(0/A): count 1→0, finally.is_some() → run A_finally
+    done
 ```
 
-**Order of finally hooks: B_finally, A_finally ✓**
+**Order: B_finally, A_finally ✓**
 
 #### Bug 2: A's finally waits for B's finally-spawned tasks
 
 ```
 A (finally) spawns B (finally that spawns C)
 
-Initial:
-  tasks[0/A] = { parent: None, Pending(A) }
-  in_flight = 0
-
 A dispatched and succeeds, spawns B:
-  tasks[0/A] = { parent: None, WaitingForDescendants(count:1, finally_ran:false) }
+  tasks[0/A] = { parent: None, Waiting { count: 1, finally: Some(...) } }
   tasks[1/B] = { parent: Some(0), Pending(B) }
-  in_flight = 0
 
 B dispatched and succeeds (no children, has finally):
   Run B_finally → spawns C
-  transition_to_waiting with finally_ran=true:
-  tasks[0/A] = { parent: None, WaitingForDescendants(count:1, finally_ran:false) }
-  tasks[1/B] = { parent: Some(0), WaitingForDescendants(count:1, finally_ran:true) }  ← KEY!
+  tasks[0/A] = { parent: None, Waiting { count: 1, finally: Some(...) } }
+  tasks[1/B] = { parent: Some(0), Waiting { count: 1, finally: None } }  ← KEY!
   tasks[2/C] = { parent: Some(1), Pending(C) }
-  in_flight = 0
 
-C dispatched and succeeds (no children, no finally):
-  finish_in_flight(2/C) → parent=Some(1)
-  decrement_parent(1/B): count 1→0
-    B's finally_ran=true → skip finally hook
-    finish_waiting(1/B) → grandparent=Some(0)
-    decrement_parent(0/A): count 1→0
-      A's finally_ran=false, has finally hook → run A_finally
-      finish_waiting(0/A) → no grandparent
-
-  tasks = {} (empty, all done)
+C dispatched and succeeds:
+  decrement_parent(1/B): count 1→0, finally.is_none() → done
+    decrement_parent(0/A): count 1→0, finally.is_some() → run A_finally
+    done
 ```
 
 **Order: B_finally runs, C completes, THEN A_finally ✓**
 
-The critical insight: when B's finally spawns C, B stays in `WaitingForDescendants` with `finally_already_ran: true`. B isn't "done" until C completes, so A's descendant count doesn't decrement until then.
-
-### Retry Handling
-
-When a task fails and will retry:
-1. Call `transition_to_retry(task_id, retry_task)` - decrements `in_flight`, creates new Pending task with same parent
-2. Do NOT decrement the parent's `pending_count` - the logical task is still in progress
-3. The retried task is a continuation, not a new descendant
-
-When a task is dropped (max retries exceeded):
-1. Call `transition_to_dropped(task_id)` - decrements `in_flight`, removes task, notifies parent
-2. Parent's `pending_count` is decremented (the descendant is "done" even though it failed)
-3. If parent's count reaches 0, parent runs its finally hook
-
-(See `transition_to_retry` and `transition_to_dropped` in State Transition Functions above.)
-
-### StepName Marker for Finally-Spawned Tasks
-
-When a finally hook spawns tasks, we re-add the task to `WaitingForDescendants` but need to avoid running the finally hook again. Options:
-
-1. **Use a boolean flag** in `WaitingForDescendants`: `finally_already_ran: bool`
-2. **Use a sentinel StepName** like `StepName::new("__finally_cleanup__")`
-
-**Decision:** Use a boolean flag `finally_already_ran: bool`. Simpler, doesn't require special StepName handling.
-
-```rust
-struct WaitingForDescendants {
-    pending_count: NonZeroU16,
-    effective_value: EffectiveValue,
-    step_name: StepName,
-    finally_already_ran: bool,  // <-- Add this
-}
-```
+The key: when B's finally spawns C, B enters `Waiting { finally: None }`. B isn't "done" until C completes, but there's no more finally to run - it already ran.
 
 ---
 
@@ -475,18 +360,17 @@ struct WaitingForDescendants {
 
 - `crates/gsd_config/src/runner/mod.rs`
   - Replace `queue: VecDeque<QueuedTask>` with `tasks: BTreeMap<LogTaskId, TaskEntry>`
-  - Keep `in_flight: usize` counter (but now properly maintained)
+  - Keep `in_flight: usize` counter
   - Remove `finally_tracker: FinallyTracker`
   - Rewrite dispatch/completion logic
 
 - `crates/gsd_config/src/runner/types.rs`
   - Remove `QueuedTask` struct
-  - Add `TaskEntry` wrapper struct
-  - Add `TaskState` enum
+  - Add `TaskEntry`, `TaskState`, `FinallyData`
 
 - `crates/gsd_config/src/runner/finally.rs`
   - Remove `FinallyTracker` and `FinallyState`
-  - Keep `run_finally_hook` function
+  - Keep `run_finally_hook_direct` function
 
 ---
 
