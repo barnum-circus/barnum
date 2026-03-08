@@ -315,6 +315,12 @@ fn schedule_finally(
 }
 
 /// Decrement parent's pending_count. If hits zero, call children_done.
+///
+/// IMPORTANT INVARIANT: The parent is never removed between "count hits 0" and
+/// "finally scheduled". This is guaranteed because the call chain is synchronous:
+///   decrement_parent → children_done → (schedule_finally OR handle_completion)
+/// handle_completion (which removes the task) is only reached if we don't schedule
+/// finally. There's no async gap where the task could be removed prematurely.
 fn decrement_parent(&mut self, parent_id: LogTaskId) {
     let entry = self.tasks.get_mut(&parent_id).expect("parent must exist");
     let TaskState::Waiting { pending_count } = &mut entry.state else {
