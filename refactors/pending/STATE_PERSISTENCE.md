@@ -435,7 +435,7 @@ For Command actions (bash), order is already deterministic with `max_concurrency
 #### Reconstruct: WaitingForChildren State
 ```rust
 #[test] fn reconstruct_waiting_has_correct_pending_count()
-#[test] fn reconstruct_waiting_preserves_finally_data()
+#[test] fn reconstruct_waiting_preserves_finally_value()
 #[test] fn reconstruct_waiting_task_not_re_queued_for_action()
 ```
 
@@ -523,7 +523,7 @@ struct TaskRunner<'a> {
     tx: mpsc::Sender<InFlightResult>,
     rx: mpsc::Receiver<InFlightResult>,
     next_task_id: u32,
-    log_writer: StateLogWriter,  // NEW
+    log_writer: StateLogWriter,
 }
 ```
 
@@ -843,8 +843,6 @@ pub struct ReconstructedTask {
     pub value: StepInputValue,
     pub parent_id: Option<LogTaskId>,
     pub origin: TaskOrigin,
-    // Note: finally_script is NOT stored here. For Finally tasks, look up
-    // step.finally from the config using the step name.
 }
 
 pub struct WaitingTask {
@@ -852,7 +850,7 @@ pub struct WaitingTask {
     pub step: StepName,
     pub parent_id: Option<LogTaskId>,
     pub pending_children_count: NonZeroU16,
-    pub finally_data: Option<(HookScript, StepInputValue)>,
+    pub finally_value: Option<StepInputValue>,
 }
 ```
 
@@ -863,27 +861,31 @@ impl TaskRunner<'_> {
     fn load_reconstructed_state(&mut self, state: ReconstructedState) {
         self.next_task_id = state.next_task_id;
 
-        // Load waiting tasks (don't dispatch, just wait for children)
         for waiting in state.waiting_tasks {
+            let finally_data = waiting.finally_value.and_then(|value| {
+                self.step_map
+                    .get(&waiting.step)
+                    .and_then(|s| s.finally.clone())
+                    .map(|hook| (hook, value))
+            });
+
             self.tasks.insert(waiting.task_id, TaskEntry {
                 step: waiting.step,
                 parent_id: waiting.parent_id,
-                finally_script: None,  // Waiting tasks are never finally tasks
+                finally_script: None,
                 state: TaskState::WaitingForChildren {
                     pending_children_count: waiting.pending_children_count,
-                    finally_data: waiting.finally_data,
+                    finally_data,
                 },
-                retries_remaining: 0,  // Not used for waiting tasks
+                retries_remaining: 0,
             });
         }
 
-        // Load pending tasks (will be dispatched by dispatch_all_pending)
         for pending in state.pending_tasks {
             let retries_remaining = self.step_map
                 .get(&pending.step)
                 .map_or(0, |s| s.options.max_retries);
 
-            // For Finally tasks, look up the hook from step config
             let finally_script = if matches!(pending.origin, TaskOrigin::Finally { .. }) {
                 self.step_map.get(&pending.step).and_then(|s| s.finally.clone())
             } else {
