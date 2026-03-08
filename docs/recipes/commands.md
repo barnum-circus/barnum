@@ -35,7 +35,7 @@ Use shell commands instead of agents for deterministic or system-level operation
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "ListFiles", "value": {}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "ListFiles", "value": {}}]'
 ```
 
 ## Command Contract
@@ -118,7 +118,7 @@ Commands and agents work together naturally:
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "Plan", "value": {"task": "Add logging"}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "Plan", "value": {"task": "Add logging"}}]'
 ```
 
 ## Key Points

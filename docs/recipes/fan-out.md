@@ -43,7 +43,7 @@ Fan-out splits one task into multiple parallel tasks.
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "ListFiles", "value": {}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "ListFiles", "value": {}}]'
 ```
 
 ## Flow
@@ -100,7 +100,7 @@ Agents can also fan out by returning multiple tasks:
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
 ```
 
 ## Key Points

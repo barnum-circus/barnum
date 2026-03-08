@@ -50,7 +50,7 @@ curl -O https://raw.githubusercontent.com/rbalicki2/gsd/main/crates/gsd_cli/demo
 Then run the GSD workflow:
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 ## Creating Config Files
@@ -70,7 +70,7 @@ pnpm dlx @gsd-now/gsd@main config schema
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 See below for detailed instructions, or [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.

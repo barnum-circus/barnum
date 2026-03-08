@@ -233,11 +233,11 @@ fn reconstruct(
 
 ```bash
 # Normal run - creates state log in default folder
-gsd run config.jsonc --pool mypool --initial-state '[...]'
+gsd run --config config.jsonc --pool mypool --initial-state '[...]'
 # Creates: <root>/runs/<pool>/<timestamp>.ndjson
 
 # Explicit state log path
-gsd run config.jsonc --pool mypool --initial-state '[...]' --state-log /tmp/myrun.ndjson
+gsd run --config config.jsonc --pool mypool --initial-state '[...]' --state-log /tmp/myrun.ndjson
 
 # Resume to same default folder (new log file)
 gsd run --resume-from /tmp/old.ndjson

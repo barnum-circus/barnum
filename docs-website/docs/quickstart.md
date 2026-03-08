@@ -56,7 +56,7 @@ pnpm dlx @gsd-now/gsd@main config schema
 Start the GSD workflow:
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 GSD will dispatch tasks to your agents, and they'll work through the state machine you defined.

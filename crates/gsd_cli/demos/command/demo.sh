@@ -44,7 +44,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$GSD --root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+$GSD --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
     --initial-state '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
 

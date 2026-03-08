@@ -22,7 +22,7 @@ GSD provides structure and protects context, enabling LLMs to perform dramatical
 The main command-line tool for running task queues:
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 ### Agent Pool

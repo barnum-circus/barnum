@@ -473,9 +473,9 @@ Global options `retry_on_timeout` and `retry_on_invalid_response` (both default 
 The `gsd` binary accepts JSON configuration:
 
 ```bash
-gsd run config.json --root /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
-gsd docs config.json
-gsd validate config.json
+gsd run --config config.json --root /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+gsd config docs --config config.json
+gsd config validate --config config.json
 ```
 
 See `crates/gsd_config/README.md` for full documentation.
@@ -592,7 +592,7 @@ For now, the CLI abstracts this away. Expose only if there's a concrete use case
 Currently, `gsd run` requires `--initial` to specify starting tasks. For simple workflows with a single entry point, this is verbose:
 
 ```bash
-gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+gsd run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
 ```
 
 Could support a `default_step` in config that makes `--initial` optional:
@@ -607,7 +607,7 @@ Could support a `default_step` in config that makes `--initial` optional:
 }
 ```
 
-Then `gsd run config.json --pool /tmp/pool` would automatically start with `[{"kind": "Start", "value": {}}]`.
+Then `gsd run --config config.json --pool /tmp/pool` would automatically start with `[{"kind": "Start", "value": {}}]`.
 
 Rules:
 - If `default_step` is set and `--initial` is provided, use `--initial` (explicit wins)
@@ -729,7 +729,7 @@ Add support for an `initial` step in the config that receives its data from the 
 **CLI usage:**
 ```bash
 # Data provided on command line goes to the initial step
-gsd run config.json --pool /tmp/pool --data '{"user_id": 123}'
+gsd run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
 ```
 
 Rules:
@@ -740,12 +740,12 @@ Rules:
 
 This replaces the verbose:
 ```bash
-gsd run config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {"user_id": 123}}]'
+gsd run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {"user_id": 123}}]'
 ```
 
 With:
 ```bash
-gsd run config.json --pool /tmp/pool --data '{"user_id": 123}'
+gsd run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
 ```
 
 ---
@@ -925,7 +925,7 @@ The `gsd` CLI now has `--root` global flag matching the `agent_pool` CLI:
 
 ```bash
 # Pool IDs are resolved relative to root
-gsd run config.json --pool my-pool --root /custom/path
+gsd run --config config.json --pool my-pool --root /custom/path
 ```
 
 Pool argument handling:
@@ -1104,13 +1104,13 @@ Currently, `gsd run` with an invalid pool root (non-existent directory) does not
 
 **Current behavior:**
 ```bash
-gsd run config.json --root /nonexistent/path --pool mypool --initial '[...]'
+gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
 # Starts successfully, then fails on first task submission with cryptic error
 ```
 
 **Desired behavior:**
 ```bash
-gsd run config.json --root /nonexistent/path --pool mypool --initial '[...]'
+gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
 # Fails immediately with clear error: "root does not exist: /nonexistent/path"
 ```
 

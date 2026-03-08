@@ -53,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run GSD against existing pool
     echo "Running GSD with fan-out config..."
-    $GSD run "$SCRIPT_DIR/config.jsonc" \
+    $GSD run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         --initial-state '[{"kind": "Distribute", "value": {}}]' \
         $WAKE_ARG

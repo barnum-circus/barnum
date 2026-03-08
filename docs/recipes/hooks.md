@@ -50,7 +50,7 @@ Pre hooks transform the input before it reaches the agent.
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "Analyze", "value": {"file": "src/main.rs"}}]'
 ```
 
 **Pre hook contract:**

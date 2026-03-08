@@ -37,6 +37,7 @@ enum Command {
     /// Run the task queue
     Run {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
 
         /// Initial tasks (JSON string or path to file).
@@ -81,18 +82,21 @@ enum ConfigCommand {
     /// Generate markdown documentation from config
     Docs {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 
     /// Validate a config file
     Validate {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 
     /// Generate DOT visualization of config (for `GraphViz`)
     Graph {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 

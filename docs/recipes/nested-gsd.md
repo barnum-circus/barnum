@@ -107,7 +107,7 @@ Outer workflow config (`outer.json`):
 ## Initial Tasks
 
 ```bash
-gsd run outer.json --pool agents --initial-state '[{"kind": "Setup", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
+gsd run --config outer.json --pool agents --initial-state '[{"kind": "Setup", "value": {"files": ["src/main.rs", "src/lib.rs"]}}]'
 ```
 
 **scripts/setup-workspace.sh:**
@@ -154,8 +154,7 @@ INPUT=$(cat)
 WORKSPACE=$(echo "$INPUT" | jq -r '.value.workspace')
 
 # Run inner workflow (blocks until complete)
-gsd run \
-  --config "$WORKSPACE/inner.json" \
+gsd run --config "$WORKSPACE/inner.json" \
   --initial-state "$WORKSPACE/initial.json" \
   --pool "$POOL_ID"
 
@@ -259,7 +258,7 @@ Cons:
 # Start dedicated pool for sub-workflow
 SUB_POOL=$(agent_pool start --json | jq -r '.id')
 # ... spawn agents for sub-pool ...
-gsd run --pool "$SUB_POOL" ...
+gsd run --config config.json --pool "$SUB_POOL" ...
 agent_pool stop --pool "$SUB_POOL"
 ```
 

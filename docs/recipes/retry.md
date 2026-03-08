@@ -61,7 +61,7 @@ Override global settings for specific steps:
 ## Initial Tasks
 
 ```bash
-gsd run config.json --pool agents --initial-state '[{"kind": "QuickCheck", "value": {}}]'
+gsd run --config config.json --pool agents --initial-state '[{"kind": "QuickCheck", "value": {}}]'
 ```
 
 ## Retry Triggers

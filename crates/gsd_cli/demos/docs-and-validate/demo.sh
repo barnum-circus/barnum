@@ -22,20 +22,20 @@ echo "=== Demo: GSD Config Docs and Validate ==="
 echo ""
 
 echo "--- Validating simple.jsonc ---"
-$GSD config validate "$SCRIPT_DIR/../simple/config.jsonc"
+$GSD config validate --config "$SCRIPT_DIR/../simple/config.jsonc"
 echo ""
 
 echo "--- Validating linear.jsonc ---"
-$GSD config validate "$SCRIPT_DIR/../linear/config.jsonc"
+$GSD config validate --config "$SCRIPT_DIR/../linear/config.jsonc"
 echo ""
 
 echo "--- Validating branching.jsonc ---"
-$GSD config validate "$SCRIPT_DIR/../branching/config.jsonc"
+$GSD config validate --config "$SCRIPT_DIR/../branching/config.jsonc"
 echo ""
 
 echo "--- Generating docs for linear.jsonc ---"
 echo ""
-$GSD config docs "$SCRIPT_DIR/../linear/config.jsonc"
+$GSD config docs --config "$SCRIPT_DIR/../linear/config.jsonc"
 
 echo ""
 echo "=== Success! ==="

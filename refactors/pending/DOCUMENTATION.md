@@ -27,7 +27,7 @@ npm install -g @gsd-now/gsd @gsd-now/agent-pool
 
 1. Create a config file (config.jsonc)
 2. Start a pool: \`agent_pool start --pool mypool\`
-3. Run: \`gsd run config.jsonc --pool mypool\`
+3. Run: \`gsd run --config config.jsonc --pool mypool\`
 
 ## Features
 

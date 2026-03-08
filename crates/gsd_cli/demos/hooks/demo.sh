@@ -38,7 +38,7 @@ echo "Running GSD with hooks config..."
 echo "Watch for hook messages in the output."
 echo ""
 
-$GSD --root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+$GSD --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
     --initial-state '[{"kind": "Process", "value": {"item": "test-item"}}]'
 
