@@ -88,68 +88,65 @@ Observed order: A_done, B_done, A_finally
 
 ## Test Cases
 
-### Test 1: `finally_should_not_block_concurrency`
-
 **File:** `crates/gsd_config/tests/finally_retry_bugs.rs`
 
-```rust
-/// Bug: Synchronous finally blocks other tasks from starting.
-///
-/// Setup: max_concurrency=1, tasks [A, B] where A has finally
-/// Expected order: A_done, B_done, A_finally (B starts while A waits for finally)
-/// Actual (buggy): A_done, A_finally, B_done (finally blocks B)
-#[test]
-#[should_panic(expected = "wrong order")]
-fn finally_should_not_block_concurrency() {
-    // Config:
-    // - max_concurrency: 1
-    // - StepA: action completes, has finally hook that records "A_finally"
-    // - StepB: action completes, records "B_done", no finally
-    //
-    // Initial tasks: [A, B]
-    //
-    // We use the mock pool's ability to control completion order.
-    // Both A and B complete their actions quickly.
-    // The finally hook also completes quickly.
-    // The question is: does B start before or after A's finally runs?
-}
-```
+Note: `finally_should_not_block_concurrency` is already covered by existing tests (`finally_runs_too_early_on_retry`, etc.).
 
-### Test 2: `finally_retries_on_failure`
+### Test 1: `finally_retries_on_failure`
 
 ```rust
 /// Finally tasks should retry on failure.
 ///
 /// Setup: A has finally that fails twice, succeeds on third try
-/// Expected: A completes successfully after finally succeeds
+/// Expected: run() succeeds (finally eventually succeeded)
 /// Current (buggy): Finally failures are silently ignored, no retry
 #[test]
 #[should_panic(expected = "finally did not retry")]
 fn finally_retries_on_failure() {
     // Config:
     // - StepA: has finally hook that fails first 2 times, succeeds 3rd time
-    // - retries: 3 for finally
+    // - max_retries: 3
     //
-    // Verify that finally is retried and eventually succeeds
+    // Track finally call count via file/counter
+    // Verify finally was called 3 times and run() succeeded
 }
 ```
 
-### Test 3: `finally_failure_propagates_after_retries_exhausted`
+### Test 2: `finally_failure_propagates_after_retries_exhausted`
 
 ```rust
-/// When finally exhausts retries, failure should propagate to parent.
+/// When finally exhausts retries, failure should propagate.
 ///
-/// Setup: A has finally that always fails, retries = 2
-/// Expected: A's parent is notified of failure (or A is marked failed)
-/// Current (buggy): Finally failures silently ignored
+/// Setup: A has finally that always fails, max_retries = 2
+/// Expected: run() returns error (finally failed after retries)
+/// Current (buggy): Finally failures silently ignored, run() succeeds
 #[test]
 #[should_panic(expected = "finally failure not propagated")]
 fn finally_failure_propagates_after_retries_exhausted() {
     // Config:
-    // - StepA: has finally hook that always fails
-    // - retries: 2
+    // - StepA: has finally hook that always fails (exit 1)
+    // - max_retries: 2
     //
-    // Verify that after 3 attempts (initial + 2 retries), failure propagates
+    // Verify run() returns Err after 3 attempts (initial + 2 retries)
+}
+```
+
+### Test 3: `finally_child_failure_propagates`
+
+```rust
+/// When a task spawned by finally fails, finally fails.
+///
+/// Setup: A has finally that spawns B, B always fails
+/// Expected: run() returns error (B failed → finally failed → propagates)
+/// Current (buggy): Unknown - need to verify behavior
+#[test]
+fn finally_child_failure_propagates() {
+    // Config:
+    // - StepA: has finally hook that outputs [{"kind": "Cleanup", "value": {}}]
+    // - Cleanup step: agent always returns invalid response (fails)
+    // - max_retries: 0 (fail immediately)
+    //
+    // Verify run() returns Err
 }
 ```
 
@@ -384,44 +381,49 @@ fn decrement_pending_children(&mut self, task_id: LogTaskId) {
 
 #### `mod.rs` - `dispatch()` changes
 
-**This is the ONLY place that checks `finally_script`.** The key invariant: `InFlight::new()` is only called immediately after spawning the thread - creating the marker proves dispatch happened.
+**This is the ONLY place that checks `finally_script`.**
 
 ```rust
-/// Dispatch a pending task.
-fn dispatch(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&task_id).expect("task must exist");
-    let TaskState::Pending { value } = &mut entry.state else {
-        panic!("dispatch called on non-Pending task");
-    };
-    let value = std::mem::take(value);
+/// Dispatch pending tasks up to max concurrency.
+fn dispatch_all_pending(&mut self) {
+    while self.in_flight < self.max_concurrency {
+        let Some((task_id, step, value)) = self.take_next_pending() else { break };
+        self.dispatch(task_id, step, value);
+    }
+}
 
+/// Extract the next pending task's data, transitioning it to InFlight.
+fn take_next_pending(&mut self) -> Option<(LogTaskId, StepName, StepInputValue)> {
+    let task_id = self.tasks.iter()
+        .find_map(|(id, e)| matches!(e.state, TaskState::Pending { .. }).then_some(*id))?;
+
+    let entry = self.tasks.get_mut(&task_id).expect("[E060] task must exist");
+    let TaskState::Pending { value } = &mut entry.state else { unreachable!() };
+    let value = std::mem::take(value);
+    let step = entry.step.clone();
+
+    entry.state = TaskState::InFlight(InFlight::new());
+    self.in_flight += 1;
+
+    Some((task_id, step, value))
+}
+
+/// Dispatch a task that's already been transitioned to InFlight.
+fn dispatch(&mut self, task_id: LogTaskId, step: StepName, value: StepInputValue) {
+    let entry = self.tasks.get(&task_id).expect("[E061] task must exist");
     let tx = self.tx.clone();
 
     if let Some(script) = &entry.finally_script {
         let script = script.clone();
-        let input_json = serde_json::to_string(&value).expect("input serializes");
-        let step = entry.step.clone();
+        let input_json = serde_json::to_string(&value).expect("[E062] input serializes");
         info!(task_id = ?task_id, step = %step, "dispatching finally task");
         thread::spawn(move || {
             let result = run_shell_command(script.as_str(), &input_json, None);
             // ... send result back via tx
         });
     } else {
-        let step_config = self.step_map.get(&entry.step).expect("step must exist");
+        let step_config = self.step_map.get(&step).expect("[E063] step must exist");
         // ... spawn thread, submit to pool or run command
-    }
-
-    entry.state = TaskState::InFlight(InFlight::new());
-    self.in_flight += 1;
-}
-
-/// Dispatch pending tasks up to max concurrency.
-fn dispatch_all_pending(&mut self) {
-    while self.in_flight < self.max_concurrency {
-        let Some(task_id) = self.tasks.iter()
-            .find_map(|(id, e)| matches!(e.state, TaskState::Pending).then_some(*id))
-        else { break };
-        self.dispatch(task_id);
     }
 }
 ```
@@ -585,9 +587,9 @@ Finally retry works like any task retry:
 
 ### Phase 1: Add tests documenting bugs (one commit)
 
-- [ ] `finally_should_not_block_concurrency` - scheduling bug
-- [ ] `finally_retries_on_failure` - no retry bug
-- [ ] `finally_failure_propagates_after_retries_exhausted` - silent failure bug
+- [ ] `finally_retries_on_failure` - finally hook doesn't retry
+- [ ] `finally_failure_propagates_after_retries_exhausted` - finally failure silently ignored
+- [ ] `finally_child_failure_propagates` - child of finally fails
 - [ ] All tests `#[should_panic]` with current implementation
 - [ ] Commit with `--no-verify` (tests skip in sandbox)
 
@@ -596,23 +598,23 @@ Finally retry works like any task retry:
 - [ ] Add `step: StepName` to `TaskEntry`
 - [ ] Add `finally_script: Option<HookScript>` to `TaskEntry` (None=Step, Some=Finally)
 - [ ] Add `retries_remaining: u32` to `TaskEntry`
-- [ ] Change `TaskState::Pending` to hold `value: serde_json::Value`
-- [ ] Change `TaskState::Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_data: Option<(HookScript, Value)>`
+- [ ] Change `TaskState::Pending` to hold `value: StepInputValue`
+- [ ] Change `TaskState::Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_data: Option<(HookScript, StepInputValue)>`
 - [ ] Remove `Continuation` type entirely
-- [ ] Remove `TaskKind` enum (replaced by `finally_script` option)
 - [ ] Update all `TaskEntry` construction sites
 
-### Phase 3: Restructure completion flow
+### Phase 3: Restructure dispatch and completion flow
 
+- [ ] `take_next_pending`: extract pending task data, transition to InFlight
+- [ ] `dispatch`: spawn thread for task (no state transition)
+- [ ] `dispatch_all_pending`: loop calling take_next_pending + dispatch
 - [ ] `queue_task`: create Step task entry with `finally_script=None`
-- [ ] `queue_finally_task`: create Finally task entry with `finally_script=Some(hook)`
+- [ ] `schedule_finally`: create Finally task entry, increment parent count
 - [ ] `increment_pending_children`: bump a WaitingForChildren task's count
-- [ ] `schedule_finally`: take pre-looked-up hook, increment parent count, call `queue_finally_task`
-- [ ] `task_succeeded`: look up finally hook once, store `finally_data` if needed, then schedule or remove
-- [ ] `remove_and_notify_parent`: remove task and decrement parent
-- [ ] `decrement_parent`: when count hits 0, check `finally_data`, schedule if Some, then remove
-- [ ] Modify `dispatch()` to check `finally_script.is_some()`
-- [ ] Add dispatch logic for finally tasks (use pre-stored script, no lookup)
+- [ ] `decrement_pending_children`: decrement count, schedule finally if zero
+- [ ] `lookup_finally_hook`: check if step has finally hook (None for Finally tasks)
+- [ ] `task_succeeded`: look up finally hook once, store `finally_data` if needed
+- [ ] `remove_and_notify_parent`: remove task and call decrement_pending_children
 
 ### Phase 4: Finally retry and failure handling
 
