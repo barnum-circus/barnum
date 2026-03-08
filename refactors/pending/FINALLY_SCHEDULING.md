@@ -4,7 +4,7 @@
 
 **Prerequisites:** VALUE_AND_RETRY_MODEL (COMPLETED - see `refactors/past/VALUE_AND_RETRY_MODEL.md`)
 
-**Depends on:** FINALLY_TRACKING
+**Depends on:** FINALLY_TRACKING (COMPLETED - see `refactors/past/FINALLY_TRACKING.md`)
 
 **Blocks:** STATE_PERSISTENCE
 
@@ -14,27 +14,47 @@ Currently finally hooks run synchronously as local shell commands (`sh -c`) imme
 
 Change finally to be a regular task that goes through the task pool.
 
-## Current Code Location (as of 2026-03-07)
+## Current Code Location (as of 2026-03-08)
 
-Finally hooks are implemented in `crates/gsd_config/src/runner/finally.rs`:
-- `FinallyTracker` - tracks pending descendants per task
-- `FinallyState` - holds pending_count, original_value, finally_command
-- `run_finally_hook()` - executes hook synchronously via `run_shell_command()`
+Finally hooks are implemented in `crates/gsd_config/src/runner/`:
+- `finally.rs` - `run_finally_hook_direct()` executes hook synchronously via `run_shell_command()`
+- `types.rs` - `Continuation` struct holds `step_name` and `value` for deferred finally execution
+- `mod.rs` - `handle_completion()` runs continuations when children complete
 
-The hook execution uses the shared `run_shell_command()` helper in `runner/hooks.rs`.
+The runner uses a unified `BTreeMap<LogTaskId, TaskEntry>` where:
+- `TaskEntry` has `parent_id: Option<LogTaskId>` (immediate parent for tree tracking)
+- `TaskState::Waiting { pending_count, continuation }` holds deferred finally hooks
+- When `pending_count` hits 0, `continuation` (if present) runs via `handle_completion()`
+
+The hook execution uses the shared `run_shell_command()` helper in `runner/shell.rs`.
 
 ## Current Behavior
 
 ```rust
 // runner/finally.rs
-pub fn run_finally_hook(state: FinallyState) -> Vec<Task> {
-    let input = serde_json::json!({
-        "kind": "Finally",
-        "value": state.original_value,
-    });
-    run_shell_command(&state.finally_command, &input)
-        .and_then(parse_tasks)
-        .unwrap_or_default()
+pub fn run_finally_hook_direct(
+    finally_command: &HookScript,
+    value: &serde_json::Value,
+) -> Vec<Task> {
+    let input_json = serde_json::to_string(value).expect("...");
+    match run_shell_command(finally_command.as_str(), &input_json, None) {
+        Ok(stdout) => serde_json::from_str(&stdout).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+// runner/mod.rs - called from handle_completion()
+fn handle_completion(&mut self, task_id: LogTaskId, continuation: Option<Continuation>) {
+    let spawned = if let Some(cont) = continuation {
+        let hook = self.config.steps.iter()
+            .find(|s| s.name == cont.step_name)
+            .and_then(|s| s.finally_hook.as_ref())
+            .expect("continuation implies finally hook exists");
+        run_finally_hook_direct(hook, &cont.value.0)
+    } else {
+        vec![]
+    };
+    // Queue spawned tasks as children, or remove task and notify parent
 }
 ```
 
@@ -120,8 +140,8 @@ Submit finally tasks for these, in correct order (deepest first).
 
 ## Files Changed
 
-- `crates/gsd_config/src/runner/mod.rs` - queue finally task instead of calling run_finally_hook synchronously
-- `crates/gsd_config/src/runner/finally.rs` - remove synchronous `run_finally_hook`, convert to task creation
-- `crates/gsd_config/src/runner/types.rs` - add `finally_for: Option<LogTaskId>` to track finally tasks
+- `crates/gsd_config/src/runner/mod.rs` - change `handle_completion()` to queue finally as a task instead of calling `run_finally_hook_direct()` synchronously
+- `crates/gsd_config/src/runner/finally.rs` - keep `run_finally_hook_direct()` but add `create_finally_task()` for async execution
+- `crates/gsd_config/src/runner/types.rs` - add `finally_for: Option<LogTaskId>` to `TaskEntry` to track finally tasks
 - `crates/gsd_config/src/runner/dispatch.rs` - handle finally task dispatch (uses command action)
 - `crates/gsd_config/src/state_log.rs` (new) - add `finally_for` field to TaskSubmitted

@@ -2,7 +2,7 @@
 
 **Status:** Not started
 
-**Depends on:** ROOT_FLAG_REFACTOR (complete), INLINED_CONFIG (complete), FINALLY_TRACKING, FINALLY_SCHEDULING
+**Depends on:** ROOT_FLAG_REFACTOR (complete), INLINED_CONFIG (complete), FINALLY_TRACKING (complete), FINALLY_SCHEDULING
 
 ## Motivation
 
@@ -16,22 +16,27 @@ A run creates a single NDJSON log file. First entry is config, then task events.
 - **Debug logs** (`--log-file`): Tracing output for debugging
 - **State logs** (this feature): Machine-readable NDJSON for persistence/resume
 
-## Current Runner Architecture (as of 2026-03-07)
+## Current Runner Architecture (as of 2026-03-08)
 
 The runner module (`crates/gsd_config/src/runner/`) has these submodules:
 - `mod.rs` - TaskRunner struct, main loop, `run()` public function
-- `types.rs` - QueuedTask, TaskIdentity, InFlightResult, RunnerConfig, etc.
+- `types.rs` - TaskEntry, TaskState, Continuation, InFlight, TaskIdentity, InFlightResult, RunnerConfig
 - `dispatch.rs` - TaskContext, dispatch_pool_task, dispatch_command_task
-- `finally.rs` - FinallyTracker, FinallyState, run_finally_hook
-- `hooks.rs` - run_pre_hook, run_post_hook, run_shell_command helper
+- `finally.rs` - `run_finally_hook_direct()` (synchronous finally execution)
+- `hooks.rs` - run_pre_hook, run_post_hook
+- `shell.rs` - `run_shell_command()` helper
 - `response.rs` - Response processing and retry logic
 - `submit.rs` - CLI invocation for agent_pool
 
 Key current state:
 - `initial_tasks` passed separately from `RunnerConfig`
 - `RunnerConfig` passed by reference
-- Tasks stored as full `Task` objects in `QueuedTask` (no central registry)
-- `origin_id` skips intermediate tasks (points to finally-ancestor, not parent)
+- Unified task state in `BTreeMap<LogTaskId, TaskEntry>`:
+  - `TaskEntry { parent_id: Option<LogTaskId>, state: TaskState }`
+  - `TaskState::Pending(Task)` - queued, waiting for dispatch
+  - `TaskState::InFlight(InFlight)` - currently executing
+  - `TaskState::Waiting { pending_count, continuation }` - waiting for children
+- `parent_id` is always the immediate parent (tree structure for proper finally tracking)
 
 ## State Log Format
 
@@ -239,20 +244,17 @@ gsd run --resume-from /tmp/run.ndjson --state-log /tmp/run.ndjson  # panic!
 ## What We Don't Track (v1)
 
 - **In-flight tasks**: Lost on crash. May cause duplicate work on resume.
-- **Finally hook state**: ~~Won't fire correctly if interrupted mid-fan-out.~~ **Fixed by FINALLY_TRACKING + FINALLY_SCHEDULING** - tree-based tracking with parent_id enables reconstruction
+- **Finally hook state**: ✅ **Fixed by FINALLY_TRACKING** - tree-based tracking with `parent_id` enables reconstruction. Once FINALLY_SCHEDULING is complete, finally hooks will be loggable tasks that can be resumed.
 
 ## Prerequisite Refactors
 
 Before implementing state persistence:
 
-1. **FINALLY_TRACKING** - Change `origin_id` to `parent_id` (always immediate parent). This enables reconstructing the task tree from the log.
+1. **FINALLY_TRACKING** ✅ COMPLETE - Changed to `parent_id` (always immediate parent) in unified `BTreeMap<LogTaskId, TaskEntry>`. Tree structure enables reconstructing task relationships from the log.
 
 2. **FINALLY_SCHEDULING** - Make finally hooks go through the task queue instead of running synchronously. This makes them loggable/resumable.
 
-3. **Task ID Registry** (optional but recommended) - Currently `QueuedTask` holds full `Task` objects. A central `HashMap<LogTaskId, Task>` would:
-   - Avoid duplicating task data
-   - Make the log the single source of truth
-   - Simplify reconstruction (log entries already have all data)
+3. **Task ID Registry** (optional but recommended) - Consider whether needed now that we have unified `BTreeMap<LogTaskId, TaskEntry>`. The current structure already provides a central task registry.
 
 ## Future Work
 
