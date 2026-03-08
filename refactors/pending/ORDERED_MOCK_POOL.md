@@ -206,9 +206,12 @@ fn fan_out_deterministic_order() {
 
 **File:** `crates/gsd_cli/tests/common/mod.rs`
 
-1. Add `OrderedAgentController` struct with `complete()`, `terminate()`, `spawn_one()`, `spawn()` methods
+1. Add `WaitingTask` struct and `OrderedAgentController` with:
+   - `wait_for_tasks(count)` - block until count tasks waiting
+   - `waiting_tasks()` - inspect waiting tasks
+   - `complete_at(index, response)` - complete by index
 2. Add `GsdTestAgent::ordered(root) -> (Self, OrderedAgentController)`
-3. Add basic test verifying ordered completion works
+3. Add basic tests verifying ordered completion works
 
 **Tests:**
 ```rust
@@ -268,7 +271,7 @@ impl PayloadAwareController {
 #[test] fn payload_aware_conditional_response()
 ```
 
-### Phase 3: Update Demos for Deterministic Testing
+### Phase 3: Add Deterministic Demo Tests
 
 Create test wrappers for existing demos that use ordered completion:
 
@@ -282,7 +285,7 @@ Create test wrappers for existing demos that use ordered completion:
 fn demo_fan_out_deterministic() {
     // Use same config as demos/fan-out/config.jsonc
     // Use OrderedAgentController to control completion order
-    // Assert state log matches snapshot
+    // Verify all tasks complete successfully
 }
 
 /// Run fan-out demo with reverse worker completion.
@@ -291,12 +294,13 @@ fn demo_fan_out_deterministic() {
 #[test]
 fn demo_fan_out_reverse_order() {
     // Same config, but complete workers in reverse order
+    // Verify finally hook runs after all workers regardless of order
 }
 
 /// Run branching demo with deterministic path.
 #[test]
 fn demo_branching_approve_path() {
-    // Control which branch is taken
+    // Control which branch is taken by controlling agent response
 }
 
 #[test]
@@ -304,36 +308,6 @@ fn demo_branching_reject_path() {
     // Control other branch
 }
 ```
-
-### Phase 4: Snapshot Testing Infrastructure
-
-Add snapshot comparison utilities:
-
-```rust
-/// Compare state log against expected snapshot.
-fn assert_log_matches_snapshot(log_path: &Path, snapshot_name: &str) {
-    let actual = fs::read_to_string(log_path).unwrap();
-    let expected_path = Path::new("tests/snapshots").join(format!("{snapshot_name}.ndjson"));
-
-    if env::var("UPDATE_SNAPSHOTS").is_ok() {
-        fs::write(&expected_path, &actual).unwrap();
-        return;
-    }
-
-    let expected = fs::read_to_string(&expected_path)
-        .unwrap_or_else(|_| panic!("snapshot not found: {}", expected_path.display()));
-
-    assert_eq!(actual, expected, "state log differs from snapshot");
-}
-```
-
-**Snapshots to create:**
-- `tests/snapshots/fan_out_forward.ndjson`
-- `tests/snapshots/fan_out_reverse.ndjson`
-- `tests/snapshots/branching_approve.ndjson`
-- `tests/snapshots/branching_reject.ndjson`
-- `tests/snapshots/linear.ndjson`
-- `tests/snapshots/hooks.ndjson`
 
 ## Testing the Refactor
 
@@ -346,3 +320,4 @@ After each phase:
 - Timeout handling for ordered agents (detect test bugs that forget to complete)
 - Multi-agent ordered pools (multiple agents, controlled interleaving)
 - Record/replay mode (record actual completion order, replay for debugging)
+- **Snapshot testing** - Once STATE_PERSISTENCE is implemented, use deterministic ordering for state log snapshot tests
