@@ -879,3 +879,462 @@ cat  # pass through stdin to stdout
 
     cleanup_test_dir(test_name);
 }
+
+/// Test deeply nested finally chain: A→B→C→D all with finally hooks.
+///
+/// Expected order: D completes, `C_finally`, `B_finally`, `A_finally`
+/// (innermost to outermost)
+///
+/// This is a more extreme version of Bug 1 - cascading grandchild issue.
+#[test]
+#[should_panic(expected = "Finally hooks ran in wrong order")]
+#[expect(clippy::too_many_lines)]
+fn deeply_nested_finally_chain() {
+    let test_name = "finally_deeply_nested";
+    let root = setup_test_dir(test_name);
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(test_name);
+        return;
+    }
+
+    let pool = AgentPoolHandle::start(&root);
+
+    let order_log = root.join("order.log");
+    let order_log_a = order_log.clone();
+    let order_log_b = order_log.clone();
+    let order_log_c = order_log.clone();
+    let order_log_d = order_log.clone();
+
+    let agent = GsdTestAgent::start(&root, Duration::from_millis(10), move |payload| {
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+        let kind = parsed
+            .get("task")
+            .and_then(|t| t.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
+
+        match kind {
+            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
+            "StepB" => r#"[{"kind": "StepC", "value": {}}]"#.to_string(),
+            "StepC" => r#"[{"kind": "StepD", "value": {}}]"#.to_string(),
+            _ => "[]".to_string(),
+        }
+    });
+
+    // Create finally hooks for A, B, C and a post hook for D
+    let a_finally = root.join("a_finally.sh");
+    fs::write(
+        &a_finally,
+        format!(
+            "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
+            order_log_a.display()
+        ),
+    )
+    .expect("write A finally");
+
+    let b_finally = root.join("b_finally.sh");
+    fs::write(
+        &b_finally,
+        format!(
+            "#!/bin/bash\necho \"B_finally\" >> \"{}\"\n",
+            order_log_b.display()
+        ),
+    )
+    .expect("write B finally");
+
+    let c_finally = root.join("c_finally.sh");
+    fs::write(
+        &c_finally,
+        format!(
+            "#!/bin/bash\necho \"C_finally\" >> \"{}\"\n",
+            order_log_c.display()
+        ),
+    )
+    .expect("write C finally");
+
+    let d_post = root.join("d_post.sh");
+    fs::write(
+        &d_post,
+        format!(
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            order_log_d.display()
+        ),
+    )
+    .expect("write D post");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    let config_json = format!(
+        r#"{{
+        "steps": [
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": "{}"}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepC"], "finally": "{}"}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": "{}"}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+        ]
+    }}"#,
+        a_finally.display(),
+        b_finally.display(),
+        c_finally.display(),
+        d_post.display()
+    );
+
+    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
+    let runner_config = RunnerConfig {
+        agent_pool_root: pool.pool_path(),
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    let result = gsd_config::run(
+        &config,
+        &schemas,
+        &runner_config,
+        vec![Task::new("StepA", serde_json::json!({}))],
+    );
+
+    let _processed = agent.stop();
+
+    assert!(result.is_ok(), "run should succeed: {result:?}");
+
+    let order_content = fs::read_to_string(&order_log).unwrap_or_default();
+    let lines: Vec<&str> = order_content.lines().collect();
+
+    // Expected: D completes, then C, B, A finally hooks in order
+    assert_eq!(
+        lines,
+        vec!["D_done", "C_finally", "B_finally", "A_finally"],
+        "Finally hooks ran in wrong order. Expected D_done, C_finally, B_finally, A_finally, got: {lines:?}"
+    );
+
+    cleanup_test_dir(test_name);
+}
+
+/// Test multiple children where one has a grandchild.
+///
+/// Setup: A spawns B and C. B spawns D. All have finally hooks.
+///
+/// Expected order: `D_done`, `B_finally`, `C_finally` (order of B/C flexible), `A_finally`
+///
+/// Bug: A gets notified when B succeeds, before B's subtree (D, `B_finally`) completes.
+#[test]
+#[should_panic(expected = "Finally hooks ran in wrong order")]
+#[expect(clippy::too_many_lines)]
+fn multiple_children_with_finally() {
+    let test_name = "finally_multiple_children";
+    let root = setup_test_dir(test_name);
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(test_name);
+        return;
+    }
+
+    let pool = AgentPoolHandle::start(&root);
+
+    let order_log = root.join("order.log");
+    let order_log_a = order_log.clone();
+    let order_log_b = order_log.clone();
+    let order_log_c = order_log.clone();
+    let order_log_d = order_log.clone();
+
+    let agent = GsdTestAgent::start(&root, Duration::from_millis(10), move |payload| {
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+        let kind = parsed
+            .get("task")
+            .and_then(|t| t.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
+
+        match kind {
+            // A spawns both B and C
+            "StepA" => {
+                r#"[{"kind": "StepB", "value": {}}, {"kind": "StepC", "value": {}}]"#.to_string()
+            }
+            // B spawns D (grandchild)
+            "StepB" => r#"[{"kind": "StepD", "value": {}}]"#.to_string(),
+            _ => "[]".to_string(),
+        }
+    });
+
+    let a_finally = root.join("a_finally.sh");
+    fs::write(
+        &a_finally,
+        format!(
+            "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
+            order_log_a.display()
+        ),
+    )
+    .expect("write");
+
+    let b_finally = root.join("b_finally.sh");
+    fs::write(
+        &b_finally,
+        format!(
+            "#!/bin/bash\necho \"B_finally\" >> \"{}\"\n",
+            order_log_b.display()
+        ),
+    )
+    .expect("write");
+
+    let c_finally = root.join("c_finally.sh");
+    fs::write(
+        &c_finally,
+        format!(
+            "#!/bin/bash\necho \"C_finally\" >> \"{}\"\n",
+            order_log_c.display()
+        ),
+    )
+    .expect("write");
+
+    let d_post = root.join("d_post.sh");
+    fs::write(
+        &d_post,
+        format!(
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            order_log_d.display()
+        ),
+    )
+    .expect("write");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    let config_json = format!(
+        r#"{{
+        "steps": [
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB", "StepC"], "finally": "{}"}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": "{}"}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": "{}"}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+        ]
+    }}"#,
+        a_finally.display(),
+        b_finally.display(),
+        c_finally.display(),
+        d_post.display()
+    );
+
+    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
+    let runner_config = RunnerConfig {
+        agent_pool_root: pool.pool_path(),
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    let result = gsd_config::run(
+        &config,
+        &schemas,
+        &runner_config,
+        vec![Task::new("StepA", serde_json::json!({}))],
+    );
+
+    let _processed = agent.stop();
+
+    assert!(result.is_ok(), "run should succeed: {result:?}");
+
+    let order_content = fs::read_to_string(&order_log).unwrap_or_default();
+    let lines: Vec<&str> = order_content.lines().collect();
+
+    // A_finally must be last. D_done must come before B_finally.
+    // C_finally can interleave with B's subtree completion.
+    // Valid orders: [D_done, B_finally, C_finally, A_finally] or [D_done, C_finally, B_finally, A_finally]
+    // or [C_finally, D_done, B_finally, A_finally]
+    let a_pos = lines.iter().position(|&x| x == "A_finally");
+    let b_pos = lines.iter().position(|&x| x == "B_finally");
+    let d_pos = lines.iter().position(|&x| x == "D_done");
+
+    let valid = match (a_pos, b_pos, d_pos) {
+        (Some(a), Some(b), Some(d)) => {
+            // A must be last, D must be before B
+            a == lines.len() - 1 && d < b
+        }
+        _ => false,
+    };
+
+    assert!(
+        valid,
+        "Finally hooks ran in wrong order. A_finally must be last, D_done before B_finally, got: {lines:?}"
+    );
+
+    cleanup_test_dir(test_name);
+}
+
+/// Test that finally hook spawning multiple tasks works correctly.
+///
+/// Setup: A spawns B. B's finally spawns C and D (two cleanup tasks).
+///
+/// Expected order: `B_finally` (spawns C, D), `C_done`, `D_done` (order flexible), `A_finally`
+///
+/// Bug: A's finally runs when B's finally completes, not when C and D complete.
+#[test]
+#[should_panic(expected = "Finally hooks ran in wrong order")]
+#[expect(clippy::too_many_lines)]
+fn finally_spawns_multiple_tasks() {
+    let test_name = "finally_spawns_multiple";
+    let root = setup_test_dir(test_name);
+
+    if !is_ipc_available(&root) {
+        eprintln!("SKIP: IPC not available");
+        cleanup_test_dir(test_name);
+        return;
+    }
+
+    let pool = AgentPoolHandle::start(&root);
+
+    let order_log = root.join("order.log");
+    let order_log_a = order_log.clone();
+    let order_log_b = order_log.clone();
+    let order_log_c = order_log.clone();
+    let order_log_d = order_log.clone();
+
+    let agent = GsdTestAgent::start(&root, Duration::from_millis(10), move |payload| {
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
+        let kind = parsed
+            .get("task")
+            .and_then(|t| t.get("kind"))
+            .and_then(|k| k.as_str())
+            .unwrap_or("");
+
+        match kind {
+            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
+            _ => "[]".to_string(),
+        }
+    });
+
+    let a_finally = root.join("a_finally.sh");
+    fs::write(
+        &a_finally,
+        format!(
+            "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
+            order_log_a.display()
+        ),
+    )
+    .expect("write");
+
+    // B's finally spawns TWO cleanup tasks
+    let b_finally = root.join("b_finally.sh");
+    fs::write(
+        &b_finally,
+        format!(
+            "#!/bin/bash\necho \"B_finally\" >> \"{}\"\necho '[{{\"kind\": \"CleanupC\", \"value\": {{}}}}, {{\"kind\": \"CleanupD\", \"value\": {{}}}}]'\n",
+            order_log_b.display()
+        ),
+    )
+    .expect("write");
+
+    let c_post = root.join("c_post.sh");
+    fs::write(
+        &c_post,
+        format!(
+            "#!/bin/bash\necho \"C_done\" >> \"{}\"\ncat\n",
+            order_log_c.display()
+        ),
+    )
+    .expect("write");
+
+    let d_post = root.join("d_post.sh");
+    fs::write(
+        &d_post,
+        format!(
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            order_log_d.display()
+        ),
+    )
+    .expect("write");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&c_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    let config_json = format!(
+        r#"{{
+        "steps": [
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": "{}"}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": "{}"}},
+            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}},
+            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+        ]
+    }}"#,
+        a_finally.display(),
+        b_finally.display(),
+        c_post.display(),
+        d_post.display()
+    );
+
+    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
+    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
+    let runner_config = RunnerConfig {
+        agent_pool_root: pool.pool_path(),
+        working_dir: Path::new("."),
+        wake_script: None,
+        invoker: &create_test_invoker(),
+    };
+
+    let result = gsd_config::run(
+        &config,
+        &schemas,
+        &runner_config,
+        vec![Task::new("StepA", serde_json::json!({}))],
+    );
+
+    let _processed = agent.stop();
+
+    assert!(result.is_ok(), "run should succeed: {result:?}");
+
+    let order_content = fs::read_to_string(&order_log).unwrap_or_default();
+    let lines: Vec<&str> = order_content.lines().collect();
+
+    // B_finally must come first (it spawns C and D)
+    // C_done and D_done must both come before A_finally
+    // A_finally must be last
+    let a_pos = lines.iter().position(|&x| x == "A_finally");
+    let b_pos = lines.iter().position(|&x| x == "B_finally");
+    let c_pos = lines.iter().position(|&x| x == "C_done");
+    let d_pos = lines.iter().position(|&x| x == "D_done");
+
+    let valid = match (a_pos, b_pos, c_pos, d_pos) {
+        (Some(a), Some(b), Some(c), Some(d)) => {
+            // B_finally first, C and D before A, A last
+            b == 0 && c < a && d < a && a == lines.len() - 1
+        }
+        _ => false,
+    };
+
+    assert!(
+        valid,
+        "Finally hooks ran in wrong order. B_finally first, C_done and D_done before A_finally, A_finally last, got: {lines:?}"
+    );
+
+    cleanup_test_dir(test_name);
+}
