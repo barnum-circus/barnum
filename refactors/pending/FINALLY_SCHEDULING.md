@@ -583,59 +583,110 @@ Finally retry works like any task retry:
 
 ---
 
-## Implementation Checklist
+## Temporal Steps (Stacked Branches)
 
-### Phase 1: Add tests documenting bugs (one commit)
+Each step is a separate branch stacked on the previous. All must pass CI before merging to master.
 
-- [ ] `finally_retries_on_failure` - finally hook doesn't retry
-- [ ] `finally_failure_propagates_after_retries_exhausted` - finally failure silently ignored
-- [ ] `finally_child_failure_propagates` - child of finally fails
-- [ ] All tests `#[should_panic]` with current implementation
-- [ ] Commit with `--no-verify` (tests skip in sandbox)
+### Branch 1: `finally/01-tests`
+**Base:** `master`
 
-### Phase 2: Data structure changes
+Add all tests with `#[should_panic]`. One commit, tests document the bugs.
 
-- [ ] Add `step: StepName` to `TaskEntry`
-- [ ] Add `finally_script: Option<HookScript>` to `TaskEntry` (None=Step, Some=Finally)
-- [ ] Add `retries_remaining: u32` to `TaskEntry`
-- [ ] Change `TaskState::Pending` to hold `value: StepInputValue`
-- [ ] Change `TaskState::Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_data: Option<(HookScript, StepInputValue)>`
-- [ ] Remove `Continuation` type entirely
-- [ ] Update all `TaskEntry` construction sites
+```
+- finally_retries_on_failure
+- finally_failure_propagates_after_retries_exhausted
+- finally_child_failure_propagates
+```
 
-### Phase 3: Restructure dispatch and completion flow
+**Files:** `tests/finally_retry_bugs.rs`
 
-- [ ] `take_next_pending`: extract pending task data, transition to InFlight
-- [ ] `dispatch`: spawn thread for task (no state transition)
-- [ ] `dispatch_all_pending`: loop calling take_next_pending + dispatch
-- [ ] `queue_task`: create Step task entry with `finally_script=None`
-- [ ] `schedule_finally`: create Finally task entry, increment parent count
-- [ ] `increment_pending_children`: bump a WaitingForChildren task's count
-- [ ] `decrement_pending_children`: decrement count, schedule finally if zero
-- [ ] `lookup_finally_hook`: check if step has finally hook (None for Finally tasks)
-- [ ] `task_succeeded`: look up finally hook once, store `finally_data` if needed
-- [ ] `remove_and_notify_parent`: remove task and call decrement_pending_children
+**Note:** Commit with `--no-verify` since tests skip in sandbox (no IPC). CI will run them.
 
-### Phase 4: Finally retry and failure handling
+---
 
-- [ ] Finally tasks use existing retry logic (via `retries_remaining`)
-- [ ] Finally failure propagates to parent via existing `task_failed()`
-- [ ] Spawned tasks from finally become children of finally task (standard behavior)
+### Branch 2: `finally/02-dispatch-refactor` (Pre-factor)
+**Base:** `finally/01-tests`
 
-### Phase 5: Verify and clean up
+Refactor dispatch into `take_next_pending()` + `dispatch()`. Pure cleanup, no behavior change.
 
-- [ ] Remove `#[should_panic]` from all tests
-- [ ] Verify all existing tests pass
-- [ ] Update STATE_PERSISTENCE.md to note finally is now loggable
+**Current:** `dispatch()` does: find pending → extract value → spawn thread → transition to InFlight
+
+**After:**
+- `take_next_pending()`: find pending → extract value → transition to InFlight → return data
+- `dispatch()`: spawn thread with provided data
+
+This is independent of the finally changes and makes the later refactor cleaner.
+
+**Files:** `runner/mod.rs`
+
+---
+
+### Branch 3: `finally/03-data-structures`
+**Base:** `finally/02-dispatch-refactor`
+
+Change `TaskEntry` and `TaskState`. Compilation will break until construction sites are updated.
+
+Changes:
+- Add `finally_script: Option<HookScript>` to `TaskEntry`
+- Change `TaskState::Pending` to hold `value: StepInputValue`
+- Change `TaskState::Waiting` to `WaitingForChildren { pending_children_count, finally_data }`
+- Update all `TaskEntry` construction sites to compile
+
+**Files:** `runner/types.rs`, `runner/mod.rs`
+
+---
+
+### Branch 4: `finally/04-completion-flow`
+**Base:** `finally/03-data-structures`
+
+The main logic change. Restructure completion to schedule finally as sibling.
+
+New functions:
+- `lookup_finally_hook()` - check if step has finally hook
+- `schedule_finally()` - create finally task as sibling, increment parent count
+- `increment_pending_children()` / `decrement_pending_children()` - symmetric count operations
+- `remove_and_notify_parent()` - remove task and decrement parent
+
+Modified:
+- `task_succeeded()` - look up hook once, schedule or store `finally_data`
+- `dispatch()` - check `finally_script` to determine how to spawn
+
+Removed:
+- `run_finally_hook_direct()` - no longer needed
+
+**Files:** `runner/mod.rs`, `runner/finally.rs`, `runner/dispatch.rs`
+
+---
+
+### Branch 5: `finally/05-tests-pass`
+**Base:** `finally/04-completion-flow`
+
+Remove `#[should_panic]` from tests. They should now pass.
+
+**Files:** `tests/finally_retry_bugs.rs`
+
+---
+
+## Merge Strategy
+
+```bash
+# After all branches pass CI:
+git checkout master
+git merge finally/05-tests-pass
+git push
+
+# Move doc to past/
+mv refactors/pending/FINALLY_SCHEDULING.md refactors/past/
+```
 
 ---
 
 ## Files Changed Summary
 
-| File | Changes |
-|------|---------|
-| `runner/types.rs` | Add `step`, `finally_script: Option<HookScript>`, `retries_remaining` to `TaskEntry`. Change `TaskState::Pending` to hold `value`. Change `Waiting` to `WaitingForChildren` with `pending_children_count` and `finally_data: Option<(HookScript, Value)>`. Remove `Continuation` type. |
-| `runner/mod.rs` | Add `queue_finally_task()`, `schedule_finally()`, `remove_and_notify_parent()`. Restructure `task_succeeded()` to look up hook once. Modify `dispatch()` to use pre-stored `finally_script`. |
-| `runner/response.rs` | Handle finally task results |
-| `runner/finally.rs` | Remove `run_finally_hook_direct()` (no longer needed) |
-| `tests/finally_retry_bugs.rs` | Add 3 new tests for finally scheduling bugs |
+| File | Branch | Changes |
+|------|--------|---------|
+| `tests/finally_retry_bugs.rs` | 01, 05 | Add 3 tests (01), remove should_panic (05) |
+| `runner/mod.rs` | 02, 03, 04 | Dispatch refactor (02), data structures (03), completion flow (04) |
+| `runner/types.rs` | 03 | TaskEntry + TaskState changes |
+| `runner/finally.rs` | 04 | Remove `run_finally_hook_direct()` |
+| `runner/dispatch.rs` | 04 | Check `finally_script` in dispatch |
