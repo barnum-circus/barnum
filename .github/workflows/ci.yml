@@ -8,10 +8,16 @@ on:
   pull_request:
     branches: [master, main]
 
+# Cancel in-progress runs when a new commit is pushed (except on master)
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 permissions:
   contents: read
   pages: write
   id-token: write
+  actions: write  # Required to cancel workflow runs
 
 env:
   CARGO_TERM_COLOR: always
@@ -94,6 +100,11 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   clippy:
     needs: gate
@@ -107,6 +118,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   test:
     needs: [gate, build-linux-x64]
@@ -133,6 +149,11 @@ jobs:
           AGENT_POOL_BIN: ${{ github.workspace }}/target/debug/agent_pool
           RUST_LOG: warn
         run: cargo test --workspace -- --test-threads=1
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   demos:
     needs: [gate, build-linux-x64]
@@ -164,6 +185,11 @@ jobs:
           GSD: ${{ github.workspace }}/bin/gsd
           RUST_LOG: off
         run: ./scripts/run-all-demos.sh
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-macos-x64:
     needs: gate
@@ -206,6 +232,11 @@ jobs:
         with:
           name: gsd-macos-x64
           path: target/x86_64-apple-darwin/release/gsd
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-macos-arm64:
     needs: gate
@@ -248,6 +279,11 @@ jobs:
         with:
           name: gsd-macos-arm64
           path: target/aarch64-apple-darwin/release/gsd
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-linux-x64:
     needs: gate
@@ -293,6 +329,11 @@ jobs:
         with:
           name: gsd-linux-x64
           path: target/x86_64-unknown-linux-musl/release/gsd
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-linux-arm64:
     needs: gate
@@ -338,6 +379,11 @@ jobs:
         with:
           name: gsd-linux-arm64
           path: target/aarch64-unknown-linux-musl/release/gsd
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-windows-x64:
     needs: gate
@@ -381,6 +427,11 @@ jobs:
         with:
           name: gsd-win-x64
           path: target/x86_64-pc-windows-msvc/release/gsd.exe
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-schema:
     needs: gate
@@ -396,6 +447,11 @@ jobs:
         with:
           name: gsd-config-schema
           path: libs/gsd/gsd-config-schema.json
+      - name: Cancel workflow on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
 
   build-website:
     runs-on: ubuntu-latest
