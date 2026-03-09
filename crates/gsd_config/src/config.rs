@@ -122,8 +122,13 @@ pub enum ActionFile {
     },
     /// Run a local command.
     Command {
-        /// Shell script to execute. Receives the task JSON on stdin,
-        /// must output response JSON (array of next tasks) on stdout.
+        /// Shell script to execute.
+        ///
+        /// **Input (stdin):** JSON object with the structure `{"kind": "<step name>", "value": <parameters>}`.
+        /// Use `jq '.value'` to extract parameters or `jq -r '.value.fieldName'` for specific fields.
+        ///
+        /// **Output (stdout):** JSON array of next tasks, e.g. `[{"kind": "NextStep", "value": {...}}]`.
+        /// Return `[]` to spawn no follow-up tasks.
         script: String,
     },
 }
