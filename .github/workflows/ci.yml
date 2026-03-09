@@ -128,10 +128,10 @@ jobs:
       - name: Run tests
         # Run single-threaded to avoid inotify race conditions
         # Remove --nocapture to reduce log output (only show on failure)
-        # Set RUST_LOG=warn to reduce daemon verbosity
+        # Disable RUST_LOG entirely in CI for minimal output
         env:
           AGENT_POOL: ${{ github.workspace }}/target/debug/agent_pool
-          RUST_LOG: warn
+          RUST_LOG: off
         run: cargo test --workspace -- --test-threads=1
 
   demos:
@@ -162,6 +162,7 @@ jobs:
         env:
           AGENT_POOL: ${{ github.workspace }}/bin/agent_pool
           GSD: ${{ github.workspace }}/bin/gsd
+          RUST_LOG: off
         run: ./scripts/run-all-demos.sh
 
   build-macos-x64:
