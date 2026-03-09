@@ -220,7 +220,7 @@ impl<'a> TaskRunner<'a> {
                 ));
             }
 
-            runner.queue_task(task, None);
+            runner.queue_task(task, None, None);
         }
 
         Ok(runner)
@@ -244,7 +244,14 @@ impl<'a> TaskRunner<'a> {
     // ==================== State Transitions ====================
 
     /// Add a new task - dispatch immediately if under concurrency, otherwise queue as Pending.
-    fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+    ///
+    /// If `finally_script` is `Some`, this is a finally task (retry or initial).
+    fn queue_task(
+        &mut self,
+        task: Task,
+        parent_id: Option<LogTaskId>,
+        finally_script: Option<HookScript>,
+    ) {
         let id = self.next_task_id();
         let retries_remaining = self
             .step_map
@@ -258,7 +265,7 @@ impl<'a> TaskRunner<'a> {
                 TaskEntry {
                     step: task.step.clone(),
                     parent_id,
-                    finally_script: None,
+                    finally_script,
                     state: TaskState::InFlight(InFlight::new()),
                     retries_remaining,
                 },
@@ -273,7 +280,7 @@ impl<'a> TaskRunner<'a> {
                 TaskEntry {
                     step: task.step,
                     parent_id,
-                    finally_script: None,
+                    finally_script,
                     state: TaskState::Pending { value: task.value },
                     retries_remaining,
                 },
@@ -538,7 +545,7 @@ impl<'a> TaskRunner<'a> {
                 finally_data,
             };
             for child in spawned {
-                self.queue_task(child, Some(task_id));
+                self.queue_task(child, Some(task_id), None);
             }
         }
     }
@@ -546,14 +553,12 @@ impl<'a> TaskRunner<'a> {
     /// Handle task failure (with optional retry).
     #[expect(clippy::expect_used)] // Invariant: task must exist
     fn task_failed(&mut self, task_id: LogTaskId, retry: Option<Task>) {
-        let parent_id = self
-            .tasks
-            .get(&task_id)
-            .expect("[P026] task must exist")
-            .parent_id;
+        let entry = self.tasks.get(&task_id).expect("[P026] task must exist");
+        let parent_id = entry.parent_id;
+        let finally_script = entry.finally_script.clone();
 
         if let Some(retry_task) = retry {
-            self.queue_task(retry_task, parent_id);
+            self.queue_task(retry_task, parent_id, finally_script);
             self.transition_to_done(task_id); // Don't notify - retry takes over
         } else {
             // Permanent failure - remove and notify parent

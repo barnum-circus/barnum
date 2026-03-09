@@ -130,8 +130,8 @@ jobs:
         # Remove --nocapture to reduce log output (only show on failure)
         # Disable RUST_LOG entirely in CI for minimal output
         env:
-          AGENT_POOL: ${{ github.workspace }}/target/debug/agent_pool
-          RUST_LOG: off
+          AGENT_POOL_BIN: ${{ github.workspace }}/target/debug/agent_pool
+          RUST_LOG: warn
         run: cargo test --workspace -- --test-threads=1
 
   demos:

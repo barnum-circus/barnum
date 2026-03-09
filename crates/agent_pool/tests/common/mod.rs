@@ -203,20 +203,9 @@ impl TestAgent {
 
         let handle = thread::spawn(move || {
             let mut processed_tasks = Vec::new();
-            let mut pending_response: Option<(String, String)> = None; // (response_file, response_data)
 
             loop {
                 if !running_clone.load(Ordering::SeqCst) {
-                    break;
-                }
-
-                // If we have a pending response from the previous iteration, write it first
-                if let Some((response_file, response_data)) = pending_response.take()
-                    && let Err(e) = fs::write(&response_file, &response_data)
-                {
-                    eprintln!(
-                        "[{test_name_owned}] [agent {agent_id_owned}] Failed to write response: {e}"
-                    );
                     break;
                 }
 
@@ -338,9 +327,14 @@ impl TestAgent {
                 let response = processor(&content_str, &agent_id_owned);
                 processed_tasks.push(content_str.trim().to_string());
 
-                // Store response to write at the start of the next iteration
-                if let Some(rf) = response_file {
-                    pending_response = Some((rf, response));
+                // Write response immediately
+                if let Some(rf) = response_file
+                    && let Err(e) = fs::write(&rf, &response)
+                {
+                    eprintln!(
+                        "[{test_name_owned}] [agent {agent_id_owned}] Failed to write response: {e}"
+                    );
+                    break;
                 }
             }
 
