@@ -458,6 +458,15 @@ impl AgentPoolHandle {
         let pool_name = root.file_name().unwrap_or_default();
         let actual_pool_path = cli_root.join("pools").join(pool_name);
 
+        // Stop any existing daemon first (cleanup from previous test runs)
+        let _ = Command::new(&bin)
+            .arg("stop")
+            .arg("--root")
+            .arg(cli_root)
+            .arg("--pool")
+            .arg(pool_name)
+            .output();
+
         // Build command - use --root and pool name
         let mut cmd = Command::new(&bin);
         cmd.arg("start")
