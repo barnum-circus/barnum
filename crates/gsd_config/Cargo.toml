@@ -17,6 +17,7 @@ path = "src/bin/build_gsd_schema.rs"
 agent_pool = { path = "../agent_pool" }
 agent_pool_cli = { path = "../agent_pool_cli" }
 cli_invoker = { path = "../cli_invoker" }
+gsd_types = { workspace = true }
 string_id = { workspace = true }
 jsonschema = "0.29"
 schemars = "0.8"

@@ -1,0 +1,17 @@
+[package]
+name = "gsd_types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Shared types for GSD crates"
+
+[dependencies]
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+string_id = { workspace = true }
+
+[lints]
+workspace = true
