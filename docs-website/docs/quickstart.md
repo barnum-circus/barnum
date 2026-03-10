@@ -10,7 +10,6 @@ GSD orchestrates AI agents through type-safe workflows. You define a state machi
 
 ## Prerequisites
 
-- Node.js 18+ (for `pnpm dlx`)
 - A Claude instance (Claude Code, claude.ai, or API)
 
 ## Step 1: Start the Agent Pool
@@ -20,6 +19,8 @@ The agent pool is a daemon that coordinates work between your agents. In a termi
 ```bash
 pnpm dlx @gsd-now/agent-pool start --pool agents
 ```
+
+You can also use `npx`, `bunx`, or `yarn dlx` instead of `pnpm dlx`. Or install the package first with `pnpm add -g @gsd-now/agent-pool`.
 
 This creates a pool named "agents". The pool manages task dispatch—when GSD submits a task, the pool routes it to an available agent.
 
@@ -58,7 +59,7 @@ curl -O https://raw.githubusercontent.com/gsd-now/gsd/main/crates/gsd_cli/demos/
 Now run it:
 
 ```bash
-pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --entrypoint-value '{}'
 ```
 
 **What happens:**
@@ -101,6 +102,7 @@ Here's what a basic refactor config looks like:
 
 ```json
 {
+  "entrypoint": "ListFiles",
   "steps": [
     {
       "name": "ListFiles",
@@ -154,7 +156,7 @@ Save this as `refactor.jsonc` and run:
 
 ```bash
 pnpm dlx @gsd-now/gsd run --config refactor.jsonc --pool agents \
-  --initial-state '[{"kind": "ListFiles", "value": {"folder": "./src"}}]'
+  --entrypoint-value '{"folder": "./src"}'
 ```
 
 For a more complete example, see the [refactor-workflow demo](https://github.com/gsd-now/gsd/tree/main/crates/gsd_cli/demos/refactor-workflow).
