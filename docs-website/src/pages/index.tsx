@@ -12,14 +12,14 @@ const exampleConfig = `{
       // Shell command — no agent needed
       "action": {
         "kind": "Command",
-        "script": "find src -name '*.rs' | jq ..."
+        "script": "find src -name '*.js' | jq ..."
       },
       // Each file fans out to a Refactor task
       "next": ["Refactor"]
     },
     {
       "name": "Refactor",
-      // Schema validates every task's data
+      // GSD validates every task's data
       "value_schema": {
         "type": "object",
         "required": ["file"],
@@ -34,10 +34,7 @@ const exampleConfig = `{
           "inline": "Refactor this file. Return []."
         }
       },
-      // Terminal step — no further transitions
-      "next": [],
-      // Runs after all Refactor tasks complete
-      "finally": "echo '[]'"
+      "next": []
     }
   ]
 }`;
@@ -86,8 +83,7 @@ function ExampleSection() {
             <h2>One config. Complex workflows.</h2>
             <p>
               A command lists files. Each file fans out to a parallel
-              refactoring agent. A <code>finally</code> hook runs when
-              all agents finish. The entire workflow is a single JSON
+              refactoring agent. The entire workflow is a single JSON
               file — no imperative glue code.
             </p>
             <div className={styles.codeBlockWrap}>
