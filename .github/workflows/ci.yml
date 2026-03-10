@@ -10,7 +10,7 @@ on:
 
 # Cancel in-progress runs when a new commit is pushed (except on master)
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/master' && github.sha || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 permissions:
