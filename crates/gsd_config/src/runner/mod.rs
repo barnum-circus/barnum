@@ -9,7 +9,7 @@ mod shell;
 mod submit;
 
 use std::collections::{BTreeMap, HashMap};
-use std::io;
+use std::io::{self, Write as _};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -18,8 +18,8 @@ use std::thread;
 use agent_pool_cli::AgentPoolCli;
 use cli_invoker::Invoker;
 use gsd_state::{
-    FailureReason, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed, TaskOrigin,
-    TaskSubmitted,
+    FailureReason, ReconstructedState, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed,
+    TaskOrigin, TaskSubmitted,
 };
 use tracing::{error, info, warn};
 
@@ -257,6 +257,116 @@ impl<'a> TaskRunner<'a> {
         }
 
         Ok(runner)
+    }
+
+    /// Create a `TaskRunner` from reconstructed state (for resume).
+    ///
+    /// The state log should already contain copied entries from the old log.
+    fn new_resumed(
+        config: &'a Config,
+        schemas: &'a CompiledSchemas,
+        runner_config: &RunnerConfig<'a>,
+        state: ReconstructedState,
+        state_log: Option<io::BufWriter<std::fs::File>>,
+    ) -> io::Result<Self> {
+        if let Some(script) = runner_config.wake_script {
+            call_wake_script(script)?;
+        }
+
+        let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+
+        info!(
+            pending = state.pending_tasks.len(),
+            waiting = state.waiting_tasks.len(),
+            next_task_id = state.next_task_id,
+            pool_root = %runner_config.agent_pool_root.display(),
+            max_concurrency,
+            "resuming task queue"
+        );
+
+        let (tx, rx) = mpsc::channel();
+
+        let pool = PoolConnection {
+            root: runner_config.agent_pool_root.to_path_buf(),
+            working_dir: runner_config.working_dir.to_path_buf(),
+            invoker: Clone::clone(runner_config.invoker),
+        };
+
+        let mut runner = Self {
+            config,
+            schemas,
+            step_map: config.step_map(),
+            tasks: BTreeMap::new(),
+            pool,
+            max_concurrency,
+            in_flight: 0,
+            tx,
+            rx,
+            next_task_id: state.next_task_id,
+            state_log,
+        };
+
+        runner.load_reconstructed_state(state);
+        Ok(runner)
+    }
+
+    /// Load pre-existing task state from a reconstructed log.
+    ///
+    /// Waiting tasks become `WaitingForChildren` entries in the task map.
+    /// Pending tasks become `Pending` entries (will be dispatched on next iteration).
+    fn load_reconstructed_state(&mut self, state: ReconstructedState) {
+        // Load waiting tasks (completed, have alive children)
+        for waiting in state.waiting_tasks {
+            let finally_data = self
+                .step_map
+                .get(&waiting.step)
+                .and_then(|s| s.finally_hook.clone())
+                .map(|hook| (hook, waiting.finally_value));
+
+            self.tasks.insert(
+                waiting.task_id,
+                TaskEntry {
+                    step: waiting.step,
+                    parent_id: waiting.parent_id,
+                    finally_script: None,
+                    state: TaskState::WaitingForChildren {
+                        pending_children_count: waiting.pending_children_count,
+                        finally_data,
+                    },
+                    retries_remaining: 0,
+                },
+            );
+        }
+
+        // Load pending tasks (need dispatch)
+        for pending in state.pending_tasks {
+            let retries_remaining = self
+                .step_map
+                .get(&pending.step)
+                .map_or(0, |s| s.options.max_retries);
+
+            // Finally tasks carry their hook script
+            let finally_script = if matches!(pending.origin, TaskOrigin::Finally { .. }) {
+                self.step_map
+                    .get(&pending.step)
+                    .and_then(|s| s.finally_hook.clone())
+            } else {
+                None
+            };
+
+            self.tasks.insert(
+                pending.task_id,
+                TaskEntry {
+                    step: pending.step,
+                    parent_id: pending.parent_id,
+                    finally_script,
+                    state: TaskState::Pending {
+                        value: pending.value,
+                    },
+                    retries_remaining,
+                },
+            );
+        }
     }
 
     fn pending(&self) -> usize {
@@ -597,6 +707,7 @@ impl<'a> TaskRunner<'a> {
                 task_id,
                 outcome: gsd_state::TaskOutcome::Success(gsd_state::TaskSuccess {
                     spawned_task_ids: vec![],
+                    finally_value: value.clone(),
                 }),
             }));
 
@@ -617,6 +728,7 @@ impl<'a> TaskRunner<'a> {
                 task_id,
                 outcome: gsd_state::TaskOutcome::Success(gsd_state::TaskSuccess {
                     spawned_task_ids,
+                    finally_value: value.clone(),
                 }),
             }));
 
@@ -801,6 +913,50 @@ pub fn run(
     initial_tasks: Vec<Task>,
 ) -> io::Result<()> {
     let mut runner = TaskRunner::new(config, schemas, runner_config, initial_tasks)?;
+    run_to_completion(&mut runner)
+}
+
+/// Resume a run from a state log file.
+///
+/// Reads the old log, reconstructs state, optionally copies entries to a new
+/// log, and continues executing pending tasks.
+///
+/// # Errors
+///
+/// Returns an error if the log is malformed, config deserialization fails,
+/// or any I/O error occurs.
+pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Result<()> {
+    // 1. Read and reconstruct state from old log
+    let file = std::fs::File::open(old_log_path)?;
+    let entries = gsd_state::read_entries(file);
+    let (config_json, state) = gsd_state::reconstruct(entries)
+        .map_err(|e| io::Error::other(format!("[E070] failed to reconstruct state: {e}")))?;
+
+    // 2. Deserialize config from the log's stored config
+    let config: Config = serde_json::from_value(config_json).map_err(|e| {
+        io::Error::other(format!("[E071] failed to deserialize config from log: {e}"))
+    })?;
+    let schemas = CompiledSchemas::compile(&config)?;
+
+    // 3. Open new state log and copy old entries (if state_log_path is set)
+    let state_log = runner_config
+        .state_log_path
+        .map(|path| -> io::Result<io::BufWriter<std::fs::File>> {
+            let mut writer = io::BufWriter::new(std::fs::File::create(path)?);
+            let old_content = std::fs::read(old_log_path)?;
+            writer.write_all(&old_content)?;
+            writer.flush()?;
+            Ok(writer)
+        })
+        .transpose()?;
+
+    // 4. Create runner with reconstructed state and continue
+    let mut runner = TaskRunner::new_resumed(&config, &schemas, runner_config, state, state_log)?;
+    run_to_completion(&mut runner)
+}
+
+/// Drive a `TaskRunner` to completion.
+fn run_to_completion(runner: &mut TaskRunner<'_>) -> io::Result<()> {
     let mut completed_count = 0u32;
     let mut dropped_count = 0u32;
 

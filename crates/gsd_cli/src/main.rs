@@ -10,11 +10,11 @@ use clap::{Parser, Subcommand};
 use cli_invoker::Invoker;
 use gsd_config::{
     Action, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
-    generate_full_docs, run,
+    generate_full_docs, resume, run,
 };
 use std::fs::File;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 const VERSION: &str = env!("GSD_VERSION");
@@ -36,18 +36,18 @@ struct Cli {
 enum Command {
     /// Run the task queue
     Run {
-        /// Config (JSON string or path to file)
-        #[arg(long)]
-        config: String,
+        /// Config (JSON string or path to file). Required unless `--resume-from` is used.
+        #[arg(long, required_unless_present = "resume_from")]
+        config: Option<String>,
 
         /// Initial tasks (JSON string or path to file).
         /// Required if config has no `entrypoint`. Cannot be used with `--entrypoint-value`.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "resume_from")]
         initial_state: Option<String>,
 
         /// Initial value for the entrypoint step (JSON string or path to file).
         /// Only valid when config has an `entrypoint`. Defaults to `{}` if not provided.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "resume_from")]
         entrypoint_value: Option<String>,
 
         /// Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`)
@@ -65,6 +65,11 @@ enum Command {
         /// State log file path (NDJSON file for persistence/resume)
         #[arg(long)]
         state_log: Option<PathBuf>,
+
+        /// Resume from a previous state log file.
+        /// Incompatible with `--config`, `--initial-state`, and `--entrypoint-value`.
+        #[arg(long, conflicts_with = "config")]
+        resume_from: Option<PathBuf>,
     },
 
     /// Config file operations (docs, validate, graph, schema)
@@ -123,16 +128,34 @@ fn main() -> io::Result<()> {
             wake,
             log_file,
             state_log,
-        } => run_command(
-            &config,
-            initial_state.as_deref(),
-            entrypoint_value.as_deref(),
-            pool.as_deref(),
-            wake.as_deref(),
-            log_file.as_ref(),
-            state_log.as_ref(),
-            &root,
-        )?,
+            resume_from,
+        } => match (resume_from, config) {
+            (Some(resume_path), _) => resume_command(
+                &resume_path,
+                pool.as_deref(),
+                wake.as_deref(),
+                log_file.as_ref(),
+                state_log.as_ref(),
+                &root,
+            )?,
+            (None, Some(config)) => run_command(
+                &config,
+                initial_state.as_deref(),
+                entrypoint_value.as_deref(),
+                pool.as_deref(),
+                wake.as_deref(),
+                log_file.as_ref(),
+                state_log.as_ref(),
+                &root,
+            )?,
+            (None, None) => {
+                // Unreachable: clap's required_unless_present prevents this
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "[E073] --config is required when not using --resume-from",
+                ));
+            }
+        },
 
         Command::Config { command } => handle_config_command(command)?,
 
@@ -208,6 +231,7 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
     }
     Ok(())
 }
+
 #[expect(clippy::too_many_arguments)]
 fn run_command(
     config: &str,
@@ -260,6 +284,49 @@ fn run_command(
     };
 
     run(&cfg, &schemas, &runner_config, initial_tasks)
+}
+
+fn resume_command(
+    resume_from: &Path,
+    pool: Option<&str>,
+    wake: Option<&str>,
+    log_file: Option<&PathBuf>,
+    state_log: Option<&PathBuf>,
+    root: &std::path::Path,
+) -> io::Result<()> {
+    init_tracing(log_file)?;
+
+    let invoker = Invoker::<AgentPoolCli>::detect()?;
+
+    // Validate: resume-from and state-log must not be the same path
+    if let Some(state_log_path) = state_log {
+        let resume_canonical = std::fs::canonicalize(resume_from)?;
+        if state_log_path.exists() {
+            let state_canonical = std::fs::canonicalize(state_log_path)?;
+            if resume_canonical == state_canonical {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "[E072] --resume-from and --state-log must be different files",
+                ));
+            }
+        }
+    }
+
+    let pool_path = resolve_pool_path(pool, root)?;
+
+    // For resume, working_dir defaults to current directory
+    // (the original working dir is not stored in the log)
+    let working_dir = std::env::current_dir()?;
+
+    let runner_config = RunnerConfig {
+        agent_pool_root: &pool_path,
+        working_dir: &working_dir,
+        wake_script: wake,
+        invoker: &invoker,
+        state_log_path: state_log.map(PathBuf::as_path),
+    };
+
+    resume(resume_from, &runner_config)
 }
 
 /// Resolve pool ID to full path.

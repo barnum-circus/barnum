@@ -88,6 +88,11 @@ pub enum TaskOutcome {
 pub struct TaskSuccess {
     /// IDs of child tasks spawned by this task's output.
     pub spawned_task_ids: Vec<LogTaskId>,
+    /// The (post-pre-hook) input value for scheduling the finally hook.
+    ///
+    /// Stored here so that on resume, `WaitingForChildren` tasks can
+    /// reconstruct their `finally_data` without re-running the pre-hook.
+    pub finally_value: StepInputValue,
 }
 
 /// Details of a task failure.

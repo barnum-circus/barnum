@@ -67,6 +67,11 @@ pub struct WaitingTask {
     pub parent_id: Option<LogTaskId>,
     /// Number of direct children still alive.
     pub pending_children_count: NonZeroU16,
+    /// The (post-pre-hook) input value for scheduling the finally hook.
+    ///
+    /// On resume, combined with the step's finally hook (from config) to
+    /// reconstruct `finally_data` in `WaitingForChildren` state.
+    pub finally_value: StepInputValue,
 }
 
 /// Full state reconstructed from a log file.
@@ -160,7 +165,7 @@ fn build_state(
 
         if let Some(comp) = completed.get(task_id) {
             // Task completed but is alive → it has alive dependents → Waiting
-            if let TaskOutcome::Success(_) = comp.outcome {
+            if let TaskOutcome::Success(ref success) = comp.outcome {
                 // Count all alive tasks that depend on this task.
                 // Uses parent_id for children/retries, and origin for finally tasks.
                 let alive_count = count_alive_dependents(*task_id, submitted, &alive);
@@ -170,6 +175,7 @@ fn build_state(
                         step: sub.step.clone(),
                         parent_id: sub.parent_id,
                         pending_children_count: count,
+                        finally_value: success.finally_value.clone(),
                     });
                 }
             }
@@ -332,6 +338,7 @@ mod tests {
             task_id: LogTaskId(task_id),
             outcome: TaskOutcome::Success(TaskSuccess {
                 spawned_task_ids: spawned.iter().map(|id| LogTaskId(*id)).collect(),
+                finally_value: StepInputValue(json!({"input": task_id})),
             }),
         })
     }
@@ -765,6 +772,30 @@ mod tests {
         // Task 0 is waiting, not pending
         assert!(waiting_ids.contains(&LogTaskId(0)));
         assert!(!pending_ids.contains(&LogTaskId(0)));
+    }
+
+    #[test]
+    fn reconstruct_waiting_preserves_finally_value() {
+        let (_, state) = run_reconstruct(vec![
+            config_entry(),
+            submit_initial(0, "A"),
+            // Task 0 completes with a specific finally_value
+            StateLogEntry::TaskCompleted(TaskCompleted {
+                task_id: LogTaskId(0),
+                outcome: TaskOutcome::Success(TaskSuccess {
+                    spawned_task_ids: vec![LogTaskId(1)],
+                    finally_value: StepInputValue(json!({"custom": "data"})),
+                }),
+            }),
+            submit_spawned(1, "B", 0),
+        ])
+        .unwrap();
+
+        assert_eq!(state.waiting_tasks.len(), 1);
+        assert_eq!(
+            state.waiting_tasks[0].finally_value,
+            StepInputValue(json!({"custom": "data"}))
+        );
     }
 
     // ==================== Error Cases ====================

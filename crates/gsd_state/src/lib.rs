@@ -82,6 +82,7 @@ mod tests {
             task_id: LogTaskId(0),
             outcome: TaskOutcome::Success(TaskSuccess {
                 spawned_task_ids: vec![LogTaskId(1)],
+                finally_value: StepInputValue(json!({"url": "https://example.com"})),
             }),
         })
     }

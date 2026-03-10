@@ -29,6 +29,6 @@ mod value_schema;
 pub use config::{ConfigFile, config_schema};
 pub use docs::generate_full_docs;
 pub use resolved::{Action, Config};
-pub use runner::{RunnerConfig, run};
+pub use runner::{RunnerConfig, resume, run};
 pub use types::{StepInputValue, StepName};
 pub use value_schema::{CompiledSchemas, Task};
