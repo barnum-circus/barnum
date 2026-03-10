@@ -61,6 +61,11 @@ const config: Config = {
           label: 'Documentation',
         },
         {
+          href: 'https://discord.gg/eBjM5XX6nk',
+          label: 'Discord',
+          position: 'right',
+        },
+        {
           href: 'https://github.com/gsd-now/gsd',
           label: 'GitHub',
           position: 'right',
@@ -84,8 +89,12 @@ const config: Config = {
           ],
         },
         {
-          title: 'More',
+          title: 'Community',
           items: [
+            {
+              label: 'Discord',
+              href: 'https://discord.gg/eBjM5XX6nk',
+            },
             {
               label: 'GitHub',
               href: 'https://github.com/gsd-now/gsd',
