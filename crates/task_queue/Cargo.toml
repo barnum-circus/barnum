@@ -10,7 +10,7 @@ keywords = ["task-queue", "async", "shell", "concurrency"]
 categories = ["asynchronous", "concurrency"]
 
 [dependencies]
-task_queue_macro = { path = "../task_queue_macro", version = "0.1.0" }
+task_queue_macro = { path = "../task_queue_macro" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

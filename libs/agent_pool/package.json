@@ -1,6 +1,6 @@
 {
   "name": "@gsd-now/agent-pool",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agent pool daemon for managing workers with file-based task dispatch.",
   "main": "index.js",
   "bin": {
