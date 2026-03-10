@@ -485,7 +485,7 @@ jobs:
   deploy-website:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [build-website, fmt, clippy, test, demos]
+    needs: [build-website]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     environment:
       name: github-pages
