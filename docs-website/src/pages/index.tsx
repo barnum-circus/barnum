@@ -8,13 +8,13 @@ const exampleConfig = `{
   "steps": [
     {
       "name": "ListFiles",
-      // Shell command fans out to one task per file
+      // Shell command: one task per .js file
       "action": {
         "kind": "Command",
         "script": "find src -name '*.js' | jq ..."
       },
       "next": ["ConvertToTS"],
-      // Runs after ALL ConvertToTS tasks finish
+      // After ALL conversions: run tsc, fan out errors
       "finally": "npx tsc --noEmit 2>&1 | jq ..."
     },
     {
@@ -22,14 +22,27 @@ const exampleConfig = `{
       "value_schema": {
         "type": "object",
         "required": ["file"],
-        "properties": {
-          "file": { "type": "string" }
-        }
+        "properties": { "file": { "type": "string" } }
       },
       "action": {
         "kind": "Pool",
         "instructions": {
           "inline": "Convert this JS file to TypeScript. Add types, rename to .ts. Return []."
+        }
+      },
+      "next": []
+    },
+    {
+      "name": "FixErrors",
+      "value_schema": {
+        "type": "object",
+        "required": ["file", "errors"],
+        "properties": { "file": { "type": "string" }, "errors": { "type": "string" } }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {
+          "inline": "Fix the TypeScript errors in this file. Return []."
         }
       },
       "next": []
@@ -78,11 +91,11 @@ function ExampleSection() {
       <div className="container padding-vert--lg">
         <h2>One config. Complex workflows.</h2>
         <p>
-          A command finds every <code>.js</code> file. Each one fans out
-          to an agent that converts it to TypeScript — in parallel.
-          When all agents finish, a <code>finally</code> hook
-          runs <code>tsc</code> to type-check everything. One JSON
-          file, no glue code.
+          A command finds every <code>.js</code> file and fans out to
+          agents that convert each one to TypeScript — in parallel.
+          When all conversions finish, a <code>finally</code> hook
+          runs <code>tsc</code>, finds remaining type errors, and fans
+          those out to agents that fix them. One JSON file, no glue code.
         </p>
         <div className="row">
           <div className="col col--6">
