@@ -59,14 +59,17 @@ Options:
 **Examples:**
 
 ```bash
-# Run with initial state
-gsd run config.json --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
-
 # Run with entrypoint (config defines entrypoint step)
 gsd run config.json --pool agents --entrypoint-value '{"file": "main.rs"}'
 
+# Run with entrypoint, default value ({})
+gsd run config.json --pool agents
+
 # Run with logging
-gsd run config.json --pool agents --initial-state tasks.json --log-file /tmp/gsd.log
+gsd run config.json --pool agents --log-file /tmp/gsd.log
+
+# Run without entrypoint (manual initial state)
+gsd run config.json --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 ### gsd config
