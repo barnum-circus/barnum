@@ -7,7 +7,7 @@ lightTheme.plain.backgroundColor = 'rgba(0, 0, 0, 0.02)';
 
 const config: Config = {
   title: 'GSD',
-  tagline: 'Don\'t just /loop it. The missing workflow engine for LLM agents.',
+  tagline: 'Don\'t just /loop it. The missing workflow engine for agents.',
   favicon: 'img/favicon.svg',
 
   url: 'https://gsd-now.github.io/',

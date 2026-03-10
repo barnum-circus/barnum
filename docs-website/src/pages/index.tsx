@@ -76,16 +76,16 @@ function ExampleSection() {
   return (
     <section>
       <div className="container padding-vert--lg">
+        <h2>One config. Complex workflows.</h2>
+        <p>
+          A command finds every <code>.js</code> file. Each one fans out
+          to an agent that converts it to TypeScript — in parallel.
+          When all agents finish, a <code>finally</code> hook
+          runs <code>tsc</code> to type-check everything. One JSON
+          file, no glue code.
+        </p>
         <div className="row">
           <div className="col col--6">
-            <h2>One config. Complex workflows.</h2>
-            <p>
-              A command finds every <code>.js</code> file. Each one fans out
-              to an agent that converts it to TypeScript — in parallel.
-              When all agents finish, a <code>finally</code> hook
-              runs <code>tsc</code> to type-check everything. One JSON
-              file, no glue code.
-            </p>
             <div className={styles.codeBlockWrap}>
               <CodeBlock language="json" title="config.jsonc">
                 {exampleConfig}
@@ -103,6 +103,9 @@ function ExampleSection() {
             </div>
           </div>
         </div>
+        <p className={styles.agentNote}>
+          Looks complicated? Agents can help you write these configs too.
+        </p>
       </div>
     </section>
   );
@@ -221,8 +224,8 @@ function HowItWorks() {
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="GSD - The missing workflow engine for LLM agents"
-      description="Don't just /loop it. GSD is the missing workflow engine for LLM agents — define complex trees of work as statically analyzable state machines."
+      title="GSD - The missing workflow engine for agents"
+      description="Don't just /loop it. GSD is the missing workflow engine for agents — define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>
