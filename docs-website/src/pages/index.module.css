@@ -44,20 +44,3 @@
   opacity: 0.7;
 }
 
-.agentAuthoringBox {
-  background: var(--ifm-color-primary-contrast-background);
-  border-left: 4px solid var(--ifm-color-primary);
-  border-radius: 8px;
-  padding: 1.5rem 2rem;
-}
-
-.agentAuthoringBox h2 {
-  margin-top: 0;
-  margin-bottom: 0.75rem;
-}
-
-.agentAuthoringBox p {
-  margin-bottom: 0;
-  font-size: 1.05rem;
-  line-height: 1.6;
-}

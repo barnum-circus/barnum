@@ -120,19 +120,17 @@ function AgentAuthoring() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <div className={styles.agentAuthoringBox}>
-          <h2>Looks complicated? Let agents write it.</h2>
-          <p>
-            GSD configs are just JSON with a{' '}
-            <a href="/gsd/docs/reference/config-schema">published schema</a>.
-            Point your agent at{' '}
-            <code>pnpm dlx @gsd-now/gsd@main config schema</code> to get
-            the full JSON Schema, show it the{' '}
-            <a href="/gsd/docs/recipes">recipes page</a> for common
-            patterns, and tell it what you want. It'll write a working
-            config.
-          </p>
-        </div>
+        <h2>Looks complicated? Let agents write it.</h2>
+        <p>
+          GSD configs are just JSON with a{' '}
+          <a href="/gsd/docs/reference/config-schema">published schema</a>.
+          Point your agent at{' '}
+          <code>pnpm dlx @gsd-now/gsd@main config schema</code> to get
+          the full JSON Schema, show it the{' '}
+          <a href="/gsd/docs/recipes">recipes page</a> for common
+          patterns, and tell it what you want. It'll write a working
+          config.
+        </p>
       </div>
     </section>
   );
@@ -140,7 +138,7 @@ function AgentAuthoring() {
 
 function WhyGSD() {
   return (
-    <section className="alt-background">
+    <section>
       <div className="container padding-vert--lg">
         <h2>
           Why GSD? <span className={styles.gsdSubtitle}>(Get Sh*** Done)</span>
@@ -214,7 +212,7 @@ function WhyGSD() {
 
 function HowItWorks() {
   return (
-    <section>
+    <section className="alt-background">
       <div className="container padding-vert--lg">
         <h2>How it works</h2>
         <div className="row">
