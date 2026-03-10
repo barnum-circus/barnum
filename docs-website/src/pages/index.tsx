@@ -4,22 +4,21 @@ import HomepageHeader from '../components/Header';
 import styles from './index.module.css';
 
 const exampleConfig = `{
-  // Workflow starts here
   "entrypoint": "ListFiles",
   "steps": [
     {
       "name": "ListFiles",
-      // Shell command — no agent needed
+      // Shell command fans out to one task per file
       "action": {
         "kind": "Command",
         "script": "find src -name '*.js' | jq ..."
       },
-      // Each file fans out to a Refactor task
-      "next": ["Refactor"]
+      "next": ["ConvertToTS"],
+      // Runs after ALL ConvertToTS tasks finish
+      "finally": "npx tsc --noEmit 2>&1 | jq ..."
     },
     {
-      "name": "Refactor",
-      // GSD validates every task's data
+      "name": "ConvertToTS",
       "value_schema": {
         "type": "object",
         "required": ["file"],
@@ -27,11 +26,10 @@ const exampleConfig = `{
           "file": { "type": "string" }
         }
       },
-      // Agent gets focused instructions
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Refactor this file. Return []."
+          "inline": "Convert this JS file to TypeScript. Add types, rename to .ts. Return []."
         }
       },
       "next": []
@@ -82,9 +80,11 @@ function ExampleSection() {
           <div className="col col--6">
             <h2>One config. Complex workflows.</h2>
             <p>
-              A command lists files. Each file fans out to a parallel
-              refactoring agent. The entire workflow is a single JSON
-              file — no imperative glue code.
+              A command finds every <code>.js</code> file. Each one fans out
+              to an agent that converts it to TypeScript — in parallel.
+              When all agents finish, a <code>finally</code> hook
+              runs <code>tsc</code> to type-check everything. One JSON
+              file, no glue code.
             </p>
             <div className={styles.codeBlockWrap}>
               <CodeBlock language="json" title="config.jsonc">
@@ -116,11 +116,11 @@ function WhyGSD() {
           Why GSD? <span className={styles.gsdSubtitle}>(Get Sh*** Done)</span>
         </h2>
         <p>
-          Looping tools are great for simple tasks: keep trying until it
-          works. But they hit a wall fast. Context fills up, the agent forgets
-          what it already did, and you can't reason about what will happen
-          before you run it. For anything beyond a single-file fix, you need
-          actual structure.
+          A single agent with a markdown plan can handle simple tasks. But
+          real work — migrating 50 files, refactoring across a codebase,
+          running multi-step pipelines — breaks that model fast. Context
+          fills up, the agent loses track, and you can't predict what it
+          will do before you run it.
         </p>
         <p>
           GSD is like a build system for agents. You declare the full graph of
