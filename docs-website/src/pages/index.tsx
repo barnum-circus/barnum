@@ -120,7 +120,7 @@ function AgentAuthoring() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2>Looks complicated? Let agents write it.</h2>
+        <h2 className={styles.centeredHeading}>Looks complicated? Let agents write it.</h2>
         <p>
           Barnum configs are just JSON with a{' '}
           <a href="/docs/reference/config-schema">published schema</a>.
@@ -212,14 +212,12 @@ function HowItWorks() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <div className={styles.centeredIntro}>
-          <h2>How it works</h2>
-          <p>
-            Barnum distributes work across a pool of agents running in parallel.
-            Start a pool, connect your agents, and hand Barnum a workflow —
-            it handles the rest.
-          </p>
-        </div>
+        <h2 className={styles.centeredHeading}>How it works</h2>
+        <p>
+          Barnum distributes work across a pool of agents running in parallel.
+          Start a pool, connect your agents, and hand Barnum a workflow —
+          it handles the rest.
+        </p>
         <div className="row">
           <div className="col col--4">
             <h3>1. Define</h3>
