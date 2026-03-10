@@ -23,23 +23,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Check if we should run CI at all
-  # Skip if on master and no changes to crates/ or libs/ since main
-  changes:
+  # Gate job - all other jobs depend on this.
+  # Checks if we should run CI at all (skips if no changes to crates/, libs/, etc.)
+  gate:
     runs-on: ubuntu-latest
     timeout-minutes: 2
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history to compare with main
+          fetch-depth: 0  # Need full history to compare
       - name: Check for changes
         id: check
         run: |
           # Always run on tags
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
             echo "Running: tag push"
             exit 0
           fi
@@ -48,22 +45,18 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
             if [[ -n "$CHANGES" ]]; then
-              echo "should_run=true" >> $GITHUB_OUTPUT
               echo "Running: PR has changes in crates/, libs/, or .github/"
               echo "$CHANGES"
             else
-              echo "should_run=false" >> $GITHUB_OUTPUT
               echo "Skipping: PR has no changes to crates/, libs/, or .github/"
+              echo "skip=true" >> $GITHUB_OUTPUT
             fi
             exit 0
           fi
 
-          # For pushes (including to master), check what changed in this push
-          # Compare against the commit before this push
+          # For pushes, compare against the commit before this push
           BEFORE="${{ github.event.before }}"
           if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
-            # New branch or can't determine before - run to be safe
-            echo "should_run=true" >> $GITHUB_OUTPUT
             echo "Running: new branch or cannot determine previous commit"
             exit 0
           fi
@@ -71,23 +64,19 @@ jobs:
           echo "Comparing HEAD against before: $BEFORE"
           CHANGES=$(git diff --name-only $BEFORE HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
           if [[ -n "$CHANGES" ]]; then
-            echo "should_run=true" >> $GITHUB_OUTPUT
             echo "Running: changes detected in crates/, libs/, or .github/"
             echo "$CHANGES"
           else
-            echo "should_run=false" >> $GITHUB_OUTPUT
             echo "Skipping: no changes to crates/, libs/, or .github/"
+            echo "skip=true" >> $GITHUB_OUTPUT
           fi
-
-  # Gate job - all other jobs depend on this
-  # When skipped, all downstream jobs are also skipped
-  gate:
-    needs: changes
-    if: needs.changes.outputs.should_run == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    steps:
-      - run: echo "CI gate passed, running all jobs"
+      - name: Cancel if no relevant changes
+        if: steps.check.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "No relevant changes, cancelling workflow"
+          gh run cancel ${{ github.run_id }}
 
   fmt:
     needs: gate
