@@ -1,6 +1,6 @@
 //! Troupe - agent pool daemon for managing workers.
 //!
-//! The daemon communicates with:
+//! Troupe communicates with:
 //! - **Submitters** via Unix socket or file-based submission
 //! - **Agents** via filesystem polling (`task.json`, `response.json`)
 //!
