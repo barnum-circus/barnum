@@ -86,6 +86,9 @@ First, run `pnpm dlx @gsd-now/gsd config schema` to see the config format.
 
 Then look at this example for reference:
 https://github.com/gsd-now/gsd/tree/main/crates/gsd_cli/demos/refactor-workflow
+
+For more complex patterns (branching, fan-out with finally, hooks, etc.),
+see the recipes: https://gsd-now.github.io/docs/recipes
 ```
 
 A simple refactoring workflow might look like:
