@@ -1,10 +1,10 @@
 # State persistence and resume
 
-Long-running GSD workflows can be interrupted — crashes, Ctrl+C, OOM. State persistence lets you pick up where you left off.
+Long-running Barnum workflows can be interrupted — crashes, Ctrl+C, OOM. State persistence lets you pick up where you left off.
 
 ## How it works
 
-Every run writes an NDJSON (newline-delimited JSON) state log. Each line records one event: a task being submitted or a task completing. On resume, GSD replays the log to figure out what's still pending, then continues from there.
+Every run writes an NDJSON (newline-delimited JSON) state log. Each line records one event: a task being submitted or a task completing. On resume, Barnum replays the log to figure out what's still pending, then continues from there.
 
 ```
 Normal run:
@@ -21,12 +21,12 @@ Completed tasks are never re-executed. Only pending and in-flight tasks are re-d
 
 ```bash
 # Normal run with state logging
-gsd run --config config.jsonc --pool agents \
+barnum run --config config.jsonc --pool agents \
   --entrypoint-value '{"files": ["src/main.rs"]}' \
   --state-log /tmp/myrun.ndjson
 
 # Resume from a previous run
-gsd run --resume-from /tmp/myrun.ndjson \
+barnum run --resume-from /tmp/myrun.ndjson \
   --state-log /tmp/myrun-resumed.ndjson
 ```
 
@@ -83,7 +83,7 @@ Every submitted task records how it came to exist:
 
 ## Reconstruction algorithm
 
-On resume, GSD replays the log and classifies every task:
+On resume, Barnum replays the log and classifies every task:
 
 | Log state | Reconstructed as |
 |-----------|-----------------|
@@ -144,7 +144,7 @@ On resume, reconstruction finds:
 - Task 2 (Refactor file-b.js): submitted, not completed → **pending** (re-dispatch)
 - Task 3 (Refactor file-c.js): submitted, not completed → **pending** (re-dispatch)
 
-GSD re-dispatches tasks 2 and 3. When both complete, task 0's finally hook fires. Task 1 (file-a.js) is not touched again.
+Barnum re-dispatches tasks 2 and 3. When both complete, task 0's finally hook fires. Task 1 (file-a.js) is not touched again.
 
 ## Key points
 

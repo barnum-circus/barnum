@@ -1,6 +1,6 @@
 # Retry Policies
 
-Configure how GSD handles failures and retries.
+Configure how Barnum handles failures and retries.
 
 ## Global Options
 
@@ -72,7 +72,7 @@ Override global settings for specific steps:
 ## Running
 
 ```bash
-gsd run --config config.json --pool agents
+barnum run --config config.json --pool agents
 ```
 
 ## Retry Triggers

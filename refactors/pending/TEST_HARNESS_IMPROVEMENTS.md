@@ -18,7 +18,7 @@
 
 ## Overview
 
-This document describes improvements needed to get the agent_pool tests into a robust, comprehensive state.
+This document describes improvements needed to get the troupe tests into a robust, comprehensive state.
 
 ---
 
@@ -189,7 +189,7 @@ Add test helper:
 ```rust
 pub fn init_test_tracing() {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter("agent_pool=debug")
+        .with_env_filter("troupe=debug")
         .with_test_writer()
         .try_init();
 }
@@ -197,7 +197,7 @@ pub fn init_test_tracing() {
 
 ### Task 4: Replace Polling with Notify in File Transport
 
-**File:** `crates/agent_pool/src/client/submit_file.rs`
+**File:** `crates/troupe/src/client/submit_file.rs`
 
 The file-based submission currently polls every 100ms waiting for `response.json`. This is inefficient and adds latency.
 
@@ -225,10 +225,10 @@ Ensure tests clean up properly even on panic. Use `scopeguard` or similar.
 
 ### Task 7: Move Tests to Separate Crate
 
-Move integration tests into their own crate (e.g., `agent_pool_tests`) so they can only use the public API. This ensures:
+Move integration tests into their own crate (e.g., `troupe_tests`) so they can only use the public API. This ensures:
 - Tests exercise the same interface that external users would use
 - No accidental coupling to internal implementation details
-- Clear separation between unit tests (in `agent_pool`) and integration tests
+- Clear separation between unit tests (in `troupe`) and integration tests
 
 ---
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Generate GraphViz DOT files for all GSD configs.
+# Generate GraphViz DOT files for all Barnum configs.
 #
 # Usage:
 #   ./scripts/generate-graphs.sh        # Regenerate all .dot files
@@ -10,15 +10,15 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKSPACE_ROOT="$SCRIPT_DIR/.."
 
-# Build gsd if not using environment override
-GSD="${GSD:-}"
-if [ -z "$GSD" ]; then
-    echo "Building gsd..."
-    cargo build -p gsd_cli --quiet
-    GSD="$WORKSPACE_ROOT/target/debug/gsd"
+# Build barnum if not using environment override
+BARNUM="${BARNUM:-}"
+if [ -z "$BARNUM" ]; then
+    echo "Building barnum..."
+    cargo build -p barnum_cli --quiet
+    BARNUM="$WORKSPACE_ROOT/target/debug/barnum"
 fi
 
-CONFIGS_DIR="$WORKSPACE_ROOT/crates/gsd_cli/demos/configs"
+CONFIGS_DIR="$WORKSPACE_ROOT/crates/barnum_cli/demos/configs"
 CHECK_MODE=false
 
 if [ "$1" = "--check" ]; then
@@ -35,7 +35,7 @@ for config in $CONFIGS; do
     dot_file="$CONFIGS_DIR/$name.dot"
 
     # Generate new content
-    new_content=$("$GSD" graph "$config")
+    new_content=$("$BARNUM" graph "$config")
 
     if [ "$CHECK_MODE" = true ]; then
         # Check mode: compare with existing

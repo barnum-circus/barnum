@@ -6,7 +6,7 @@ For the JSON format that agents receive, see [Task Format](task-format.md). For 
 
 ## Overview
 
-Submitters (like the `gsd` CLI) send tasks to the daemon, which dispatches them to available agents. There are two transport mechanisms:
+Submitters (like the `barnum` CLI) send tasks to the daemon, which dispatches them to available agents. There are two transport mechanisms:
 
 | | Socket (default) | File-based (fallback) |
 |---|---|---|
@@ -19,19 +19,19 @@ Submitters (like the `gsd` CLI) send tasks to the daemon, which dispatches them 
 
 ```bash
 # Inline payload
-agent_pool submit_task \
+troupe submit_task \
   --pool my-pool \
   --data '{"kind":"Task","task":{"instructions":"Do something","data":{"file":"main.rs"}}}' \
   --notify socket
 
 # Payload from file (avoids shell escaping issues)
-agent_pool submit_task \
+troupe submit_task \
   --pool my-pool \
   --file /path/to/payload.json \
   --notify file
 
 # With timeout
-agent_pool submit_task \
+troupe submit_task \
   --pool my-pool \
   --data '...' \
   --timeout-secs 300
@@ -41,7 +41,7 @@ The CLI blocks until the agent responds (or timeout), then prints the response J
 
 ## Payload Format
 
-The submission payload is the JSON that the agent will receive as `content` in its `get_task` response. For GSD, this is:
+The submission payload is the JSON that the agent will receive as `content` in its `get_task` response. For Barnum, this is:
 
 ```jsonc
 {
@@ -80,18 +80,18 @@ The `stdout` field contains the agent's response (a JSON array of next tasks, as
 
 Possible reasons: `"timeout"`, `"stopped"`.
 
-## How GSD Uses This
+## How Barnum Uses This
 
-GSD wraps the submission protocol to add workflow semantics. For each task:
+Barnum wraps the submission protocol to add workflow semantics. For each task:
 
 1. **Build payload** — Generates instructions from the step config (schemas, valid transitions, isolation preamble)
-2. **Submit** — Calls `agent_pool submit_task` via CLI
+2. **Submit** — Calls `troupe submit_task` via CLI
 3. **Parse response** — Extracts `stdout` from `Processed` response
 4. **Validate** — Checks that returned tasks are valid transitions with valid schemas
 5. **Retry** — On timeout, error, or invalid response, applies the step's retry policy
 
 ```
-GSD Runner                Agent Pool Daemon              Agent
+Barnum Runner             Troupe Daemon                  Agent
     │                            │                         │
     │── submit_task ────────────→│                         │
     │                            │── task.json ───────────→│

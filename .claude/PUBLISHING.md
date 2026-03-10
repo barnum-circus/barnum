@@ -6,8 +6,8 @@ Bump the version in all of these:
 
 1. **`Cargo.toml`** — `[workspace.package] version`
 2. **`crates/string_id/Cargo.toml`** — has its own `version` (not workspace)
-3. **`libs/gsd/package.json`** — `@gsd-now/gsd` npm package
-4. **`libs/agent_pool/package.json`** — `@gsd-now/agent-pool` npm package
+3. **`libs/barnum/package.json`** — `@barnum/barnum` npm package
+4. **`libs/troupe/package.json`** — `@barnum/troupe` npm package
 
 **Do NOT bump `docs-website/package.json`** — it stays at `0.0.0` (not published).
 
@@ -37,6 +37,6 @@ git push origin master --tags
 CI handles npm publishing when a tag is pushed (if configured), or publish manually:
 
 ```bash
-cd libs/gsd && npm publish --access public
-cd libs/agent_pool && npm publish --access public
+cd libs/barnum && npm publish --access public
+cd libs/troupe && npm publish --access public
 ```

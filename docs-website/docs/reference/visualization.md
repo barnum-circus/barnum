@@ -1,24 +1,24 @@
 # Visualization
 
-GSD can generate a graph of your workflow config before anything runs. This is useful for understanding the shape of complex workflows, verifying transitions, and sharing with teammates.
+Barnum can generate a graph of your workflow config before anything runs. This is useful for understanding the shape of complex workflows, verifying transitions, and sharing with teammates.
 
 ## Usage
 
 ```bash
-gsd config graph --config config.jsonc
+barnum config graph --config config.jsonc
 ```
 
 This outputs [DOT format](https://graphviz.org/doc/info/lang.html) (GraphViz) to stdout. Pipe it to `dot` to render an image:
 
 ```bash
 # SVG (best for docs and web)
-gsd config graph --config config.jsonc | dot -Tsvg -o workflow.svg
+barnum config graph --config config.jsonc | dot -Tsvg -o workflow.svg
 
 # PNG
-gsd config graph --config config.jsonc | dot -Tpng -o workflow.png
+barnum config graph --config config.jsonc | dot -Tpng -o workflow.png
 
 # PDF
-gsd config graph --config config.jsonc | dot -Tpdf -o workflow.pdf
+barnum config graph --config config.jsonc | dot -Tpdf -o workflow.pdf
 ```
 
 You need [GraphViz](https://graphviz.org/download/) installed for rendering. On macOS: `brew install graphviz`.
@@ -84,7 +84,7 @@ This config defines a branching refactor workflow: list files, analyze each one,
 }
 ```
 
-Running `gsd config graph` on this config produces:
+Running `barnum config graph` on this config produces:
 
 <div style={{textAlign: 'center'}}>
 
@@ -114,7 +114,7 @@ The graph shows the **static transition structure** — what `next` transitions 
 The raw DOT output for the example above:
 
 ```dot
-digraph GSD {
+digraph Barnum {
   rankdir=TB;
   node [fontname="Helvetica"];
   edge [fontname="Helvetica", fontsize=10];

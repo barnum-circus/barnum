@@ -32,20 +32,20 @@ use std::process::{Command, Output};
 
 /// Defines how to invoke a CLI tool via different methods.
 pub trait InvokableCli {
-    /// npm package name, e.g., `"@gsd-now/agent-pool"`
+    /// npm package name, e.g., `"@barnum/troupe"`
     const NPM_PACKAGE: &'static str;
 
-    /// Binary name in `target/debug/` and `node_modules/.bin/`, e.g., `"agent_pool"`
+    /// Binary name in `target/debug/` and `node_modules/.bin/`, e.g., `"troupe"`
     const BINARY_NAME: &'static str;
 
-    /// Cargo package name for error messages, e.g., `"agent_pool_cli"`.
-    /// Used in hints like `cargo build -p agent_pool_cli`.
+    /// Cargo package name for error messages, e.g., `"troupe_cli"`.
+    /// Used in hints like `cargo build -p troupe_cli`.
     const CARGO_PACKAGE: &'static str;
 
-    /// Environment variable for explicit binary path, e.g., `"AGENT_POOL"`
+    /// Environment variable for explicit binary path, e.g., `"TROUPE"`
     const ENV_VAR_BINARY: &'static str;
 
-    /// Environment variable for explicit command, e.g., `"AGENT_POOL_COMMAND"`
+    /// Environment variable for explicit command, e.g., `"TROUPE_COMMAND"`
     const ENV_VAR_COMMAND: &'static str;
 }
 
@@ -107,7 +107,7 @@ impl<T: InvokableCli> Invoker<T> {
             return Ok(Self::binary(PathBuf::from(path)));
         }
 
-        // 2. Explicit command (e.g., "pnpm dlx @gsd-now/agent-pool")
+        // 2. Explicit command (e.g., "pnpm dlx @barnum/troupe")
         if let Ok(cmd) = std::env::var(T::ENV_VAR_COMMAND)
             && let Some(invoker) = Self::from_command_string(&cmd)
         {

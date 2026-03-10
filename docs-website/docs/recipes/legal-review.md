@@ -118,7 +118,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
 ## Running
 
 ```bash
-gsd run \
+barnum run \
   --config config.json \
   --pool agents \
   --entrypoint-value '{"contract_path": "contracts/vendor-agreement.pdf", "output_dir": "review-output"}'

@@ -61,7 +61,7 @@ Branching allows agents to choose different paths based on their analysis.
 ## Running
 
 ```bash
-gsd run --config config.json --pool agents --entrypoint-value '{"pr_number": 123}'
+barnum run --config config.json --pool agents --entrypoint-value '{"pr_number": 123}'
 ```
 
 ## Flow

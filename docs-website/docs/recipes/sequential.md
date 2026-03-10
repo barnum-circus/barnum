@@ -2,7 +2,7 @@
 
 Process items one at a time by having a step loop back to itself. This is particularly useful when **multiple changes need to happen to the same file** in a specific order — each step sees the result of the previous one.
 
-> **Note:** The self-looping pattern works but is a bit awkward. Future versions of GSD will include better primitives for sequential workflows.
+> **Note:** The self-looping pattern works but is a bit awkward. Future versions of Barnum will include better primitives for sequential workflows.
 
 ## The Pattern
 
@@ -54,7 +54,7 @@ Migrate database schema files one at a time, in order, so each migration builds 
 ## Running
 
 ```bash
-gsd run --config config.json --pool agents \
+barnum run --config config.json --pool agents \
   --entrypoint-value '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}'
 ```
 

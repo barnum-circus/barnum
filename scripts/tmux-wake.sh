@@ -1,7 +1,7 @@
 #!/bin/bash
 # Wake script for Claude Code agents running in tmux.
 #
-# Usage: ./tmux-wake.sh <agent-pool-root>
+# Usage: ./tmux-wake.sh <troupe-root>
 #
 # Sends a wake message to tmux windows matching agent directory names.
 # The agent name must exactly match the tmux window name.
@@ -13,7 +13,7 @@ set -e
 ROOT="$1"
 
 if [ -z "$ROOT" ]; then
-    echo "Usage: $0 <agent-pool-root>" >&2
+    echo "Usage: $0 <troupe-root>" >&2
     exit 1
 fi
 

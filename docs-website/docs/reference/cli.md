@@ -1,13 +1,13 @@
 # CLI Reference
 
-GSD provides two command-line tools: `gsd` for running workflows and `agent_pool` for managing worker agents.
+Barnum provides two command-line tools: `barnum` for running workflows and `troupe` for managing worker agents.
 
-## GSD CLI
+## Barnum CLI
 
 The main orchestrator for running task queues.
 
 ```
-gsd [OPTIONS] <COMMAND>
+barnum [OPTIONS] <COMMAND>
 
 Commands:
   run      Run the task queue
@@ -16,16 +16,16 @@ Commands:
   help     Print this message or the help of the given subcommand(s)
 
 Options:
-  --root <ROOT>  Root directory for pools. Defaults to /tmp/agent_pool
+  --root <ROOT>  Root directory for pools. Defaults to /tmp/troupe
   -h, --help     Print help
 ```
 
-### gsd run
+### barnum run
 
 Execute a workflow defined in a config file.
 
 ```
-gsd run [OPTIONS] <CONFIG>
+barnum run [OPTIONS] <CONFIG>
 
 Arguments:
   <CONFIG>  Config file path or inline JSON
@@ -60,24 +60,24 @@ Options:
 
 ```bash
 # Run with entrypoint (config defines entrypoint step)
-gsd run config.json --pool agents --entrypoint-value '{"file": "main.rs"}'
+barnum run config.json --pool agents --entrypoint-value '{"file": "main.rs"}'
 
 # Run with entrypoint, default value ({})
-gsd run config.json --pool agents
+barnum run config.json --pool agents
 
 # Run with logging
-gsd run config.json --pool agents --log-file /tmp/gsd.log
+barnum run config.json --pool agents --log-file /tmp/barnum.log
 
 # Run without entrypoint (manual initial state)
-gsd run config.json --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+barnum run config.json --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
-### gsd config
+### barnum config
 
 Operations on config files.
 
 ```
-gsd config <COMMAND>
+barnum config <COMMAND>
 
 Commands:
   docs      Generate markdown documentation from config
@@ -90,25 +90,25 @@ Commands:
 
 ```bash
 # Validate a config
-gsd config validate config.json
+barnum config validate config.json
 
 # Generate documentation
-gsd config docs config.json > WORKFLOW.md
+barnum config docs config.json > WORKFLOW.md
 
 # Generate graph visualization
-gsd config graph config.json > workflow.dot
+barnum config graph config.json > workflow.dot
 dot -Tpng workflow.dot -o workflow.png
 
 # Get the JSON schema
-gsd config schema > gsd-config-schema.json
+barnum config schema > barnum-config-schema.json
 ```
 
-## Agent Pool CLI
+## Troupe CLI
 
 Daemon for managing worker agents.
 
 ```
-agent_pool [OPTIONS] <COMMAND>
+troupe [OPTIONS] <COMMAND>
 
 Commands:
   start        Start the agent pool server
@@ -126,57 +126,57 @@ Options:
   -h, --help               Print help
 ```
 
-### agent_pool start
+### troupe start
 
 Start the pool daemon.
 
 ```bash
 # Start a pool named "agents"
-agent_pool start --pool agents
+troupe start --pool agents
 
 # Start with custom root directory
-agent_pool start --pool agents --root /var/gsd
+troupe start --pool agents --root /var/barnum
 ```
 
-### agent_pool stop
+### troupe stop
 
 Stop a running pool.
 
 ```bash
-agent_pool stop --pool agents
+troupe stop --pool agents
 ```
 
-### agent_pool submit_task
+### troupe submit_task
 
-Submit a task and wait for a response (used by GSD internally).
+Submit a task and wait for a response (used by Barnum internally).
 
 ```bash
-agent_pool submit_task --pool agents --data '{"task": "data"}'
+troupe submit_task --pool agents --data '{"task": "data"}'
 ```
 
-### agent_pool get_task
+### troupe get_task
 
 Wait for the next available task (used by agents).
 
 ```bash
 # Agent waits for a task
-agent_pool get_task --pool agents --name agent1
+troupe get_task --pool agents --name agent1
 ```
 
-### agent_pool protocol
+### troupe protocol
 
 Print the full agent protocol documentation.
 
 ```bash
-agent_pool protocol
+troupe protocol
 ```
 
-### agent_pool list
+### troupe list
 
 List all active pools.
 
 ```bash
-agent_pool list
+troupe list
 ```
 
 ## Environment Variables

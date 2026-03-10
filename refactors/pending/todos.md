@@ -3,7 +3,7 @@
 ## State Persistence Polish (Phase 5)
 
 - Handle corrupted/truncated state logs gracefully (partial line at end, invalid JSON mid-file)
-- Add `gsd log inspect <path>` command to view state log contents (pending/waiting/completed tasks)
+- Add `barnum log inspect <path>` command to view state log contents (pending/waiting/completed tasks)
 - Consider compression for large state logs
 - Documentation for `--state-log` and `--resume-from` flags
 
@@ -44,7 +44,7 @@
 
 **Status: TODO (needs design)**
 
-Consider whether GSD configs should support global variables that steps can read/write. Use cases:
+Consider whether Barnum configs should support global variables that steps can read/write. Use cases:
 - Accumulating results across steps
 - Sharing state between parallel tasks
 - Configuration values accessible to all steps
@@ -173,19 +173,19 @@ The command agent should have its own configurable timeout for executing command
 
 ---
 
-## Speculative: GSD Direct Library Integration
+## Speculative: Barnum Direct Library Integration
 
 **Status: Speculative**
 
-Currently GSD submits tasks by spawning `agent_pool submit_task` CLI processes. Each subprocess creates its own inotify watcher, which can exhaust the `max_user_instances` limit (typically 128) when submitting many tasks concurrently.
+Currently Barnum submits tasks by spawning `troupe submit_task` CLI processes. Each subprocess creates its own inotify watcher, which can exhaust the `max_user_instances` limit (typically 128) when submitting many tasks concurrently.
 
 **Current approach:**
-- GSD spawns subprocess per task submission
+- Barnum spawns subprocess per task submission
 - Each subprocess creates inotify watcher
 - `max_concurrency=20` mitigates but doesn't eliminate issue
 
 **Better approach:**
-- GSD links against agent_pool library directly
+- Barnum links against troupe library directly
 - Single watcher shared across all submissions
 - No subprocess overhead
 
@@ -227,7 +227,7 @@ The `notify` crate uses FSEvents on macOS by default. KQueue might provide bette
 ~~2. **File-based submission response wait**~~ ✓ DONE - `submit/file.rs` now uses `VerifiedWatcher`.
 
 Remaining:
-1. **`wait_for_pool_ready`** in `crates/agent_pool/src/client/mod.rs` - spins with `thread::sleep(10ms)` waiting for pool directory to exist. Low priority since this is brief at startup.
+1. **`wait_for_pool_ready`** in `crates/troupe/src/client/mod.rs` - spins with `thread::sleep(10ms)` waiting for pool directory to exist. Low priority since this is brief at startup.
 
 ---
 
@@ -461,14 +461,14 @@ Currently no durability guarantees. Tasks in flight are lost on crash. Document 
 
 Need timeout support for tasks. Considerations:
 
-- Wrapper around `agent_pool submit` with timeout
-- If submit process dies, agent_pool should detect and requeue
+- Wrapper around `troupe submit` with timeout
+- If submit process dies, troupe should detect and requeue
 - Configurable per-task timeouts
 - Distinguish between task timeout vs agent death
 
 ## Granular Retry Options
 
-**Status: Implemented** in `crates/gsd_config/src/config.rs`.
+**Status: Implemented** in `crates/barnum_config/src/config.rs`.
 
 Global options `retry_on_timeout` and `retry_on_invalid_response` (both default `true`) can be overridden per-step via `StepOptions`. Use `EffectiveOptions::resolve()` to merge.
 
@@ -481,19 +481,19 @@ Global options `retry_on_timeout` and `retry_on_invalid_response` (both default 
 - Response written back to same folder
 - Submit blocks until response appears (via watcher)
 
-## GSD JSON Runner
+## Barnum JSON Runner
 
-**Status: Implemented** in `crates/gsd_config/` (library) and `crates/gsd_cli/` (binary).
+**Status: Implemented** in `crates/barnum_config/` (library) and `crates/barnum_cli/` (binary).
 
-The `gsd` binary accepts JSON configuration:
+The `barnum` binary accepts JSON configuration:
 
 ```bash
-gsd run --config config.json --root /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
-gsd config docs --config config.json
-gsd config validate --config config.json
+barnum run --config config.json --root /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+barnum config docs --config config.json
+barnum config validate --config config.json
 ```
 
-See `crates/gsd_config/README.md` for full documentation.
+See `crates/barnum_config/README.md` for full documentation.
 
 ## Binary vs Library Mode
 
@@ -528,7 +528,7 @@ Why not:
 - Can be implemented in userspace if needed (separate pools per capability)
 - Goes against the "simple pool of identical workers" model
 
-If differentiation is needed, consider running multiple `agent_pool` instances, one per agent type, and routing tasks appropriately at submission time.
+If differentiation is needed, consider running multiple `troupe` instances, one per agent type, and routing tasks appropriately at submission time.
 
 ## Step Cleanup/Post-Processing
 
@@ -604,10 +604,10 @@ For now, the CLI abstracts this away. Expose only if there's a concrete use case
 
 ## Default Entry Step
 
-Currently, `gsd run` requires `--initial` to specify starting tasks. For simple workflows with a single entry point, this is verbose:
+Currently, `barnum run` requires `--initial` to specify starting tasks. For simple workflows with a single entry point, this is verbose:
 
 ```bash
-gsd run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
+barnum run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {}}]'
 ```
 
 Could support a `default_step` in config that makes `--initial` optional:
@@ -622,7 +622,7 @@ Could support a `default_step` in config that makes `--initial` optional:
 }
 ```
 
-Then `gsd run --config config.json --pool /tmp/pool` would automatically start with `[{"kind": "Start", "value": {}}]`.
+Then `barnum run --config config.json --pool /tmp/pool` would automatically start with `[{"kind": "Start", "value": {}}]`.
 
 Rules:
 - If `default_step` is set and `--initial` is provided, use `--initial` (explicit wins)
@@ -669,15 +669,15 @@ This is a low-priority refactor - apply opportunistically when touching related 
 
 ---
 
-## Multi-Pool Support in GSD
+## Multi-Pool Support in Barnum
 
-GSD should support orchestrating agents across multiple pools. Use case: integrating command pools (for running shell commands outside sandbox) with agent pools (for AI agents).
+Barnum should support orchestrating agents across multiple pools. Use case: integrating command pools (for running shell commands outside sandbox) with agent pools (for AI agents).
 
 Example workflow:
 ```json
 {
   "pools": {
-    "agents": "/tmp/agent-pool",
+    "agents": "/tmp/troupe",
     "commands": "/tmp/cmd-pool"
   },
   "steps": [
@@ -709,7 +709,7 @@ Implementation considerations:
 
 ## JSON Schema Output Command
 
-Add a `gsd schema` command that outputs the JSON schema for the GSD configuration file. This enables:
+Add a `barnum schema` command that outputs the JSON schema for the Barnum configuration file. This enables:
 
 - IDE autocomplete via JSON schema support
 - Validation in external tools
@@ -717,10 +717,10 @@ Add a `gsd schema` command that outputs the JSON schema for the GSD configuratio
 - AI assistants to understand the config format
 
 ```bash
-gsd schema > gsd-config.schema.json
+barnum schema > barnum-config.schema.json
 ```
 
-The schema should be derived from the Rust types in `gsd_config::Config` and friends, possibly using `schemars` crate.
+The schema should be derived from the Rust types in `barnum_config::Config` and friends, possibly using `schemars` crate.
 
 ---
 
@@ -744,7 +744,7 @@ Add support for an `initial` step in the config that receives its data from the 
 **CLI usage:**
 ```bash
 # Data provided on command line goes to the initial step
-gsd run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
+barnum run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
 ```
 
 Rules:
@@ -755,12 +755,12 @@ Rules:
 
 This replaces the verbose:
 ```bash
-gsd run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {"user_id": 123}}]'
+barnum run --config config.json --pool /tmp/pool --initial '[{"kind": "Start", "value": {"user_id": 123}}]'
 ```
 
 With:
 ```bash
-gsd run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
+barnum run --config config.json --pool /tmp/pool --data '{"user_id": 123}'
 ```
 
 ---
@@ -847,9 +847,9 @@ This is simpler and more robust than relying on filesystem state. A completed su
 
 **Status: LOW PRIORITY**
 
-In `crates/agent_pool/src/client/mod.rs`, `wait_for_pool_ready` spins with `thread::sleep(10ms)` waiting for the pool directory to exist. This is because the daemon subprocess needs time to create the directory after being spawned.
+In `crates/troupe/src/client/mod.rs`, `wait_for_pool_ready` spins with `thread::sleep(10ms)` waiting for the pool directory to exist. This is because the daemon subprocess needs time to create the directory after being spawned.
 
-Should use a watcher on the parent directory (`/tmp/gsd/`) instead of spinning. Low priority because the spin is short-lived (directory is created quickly) and only happens during pool startup.
+Should use a watcher on the parent directory (`/tmp/troupe/`) instead of spinning. Low priority because the spin is short-lived (directory is created quickly) and only happens during pool startup.
 
 ---
 
@@ -911,36 +911,36 @@ Use cases:
 - Identify bottlenecks (which steps took longest, which agents were busiest)
 
 Implementation considerations:
-- GSD runner would need to track execution history (task spawns, completions, agent assignments)
-- New `gsd graph --from-history <history.json>` or similar command
+- Barnum runner would need to track execution history (task spawns, completions, agent assignments)
+- New `barnum graph --from-history <history.json>` or similar command
 - History could be written to a file during execution (`--trace execution.json`)
 - Graph output could use DOT format with additional styling for duplicates/agents
 
 ---
 
-## Rename Pool Directory from gsd to agent_pool
+## Rename Pool Directory from barnum to troupe
 
 **Status: COMPLETE**
 
-The default pool directory is now `/tmp/agent_pool/pools/<pool_id>/`. The `--root` CLI flag allows overriding this.
+The default pool directory is now `/tmp/troupe/pools/<pool_id>/`. The `--root` CLI flag allows overriding this.
 
 Changes made:
 - Added `default_root()` function in `pool.rs`
 - Added `--root` global CLI option (renamed from `--pool-root`)
 - Updated all functions to accept root as parameter
-- Updated all doc references from `/tmp/gsd/` to `/tmp/agent_pool/`
+- Updated all doc references from `/tmp/barnum/` to `/tmp/troupe/`
 
 ---
 
-## ~~GSD Pool Root Support~~ ✓ COMPLETE
+## ~~Barnum Pool Root Support~~ ✓ COMPLETE
 
 **Status: COMPLETE**
 
-The `gsd` CLI now has `--root` global flag matching the `agent_pool` CLI:
+The `barnum` CLI now has `--root` global flag matching the `troupe` CLI:
 
 ```bash
 # Pool IDs are resolved relative to root
-gsd run --config config.json --pool my-pool --root /custom/path
+barnum run --config config.json --pool my-pool --root /custom/path
 ```
 
 Pool argument handling:
@@ -1006,15 +1006,15 @@ Benefits:
 
 ---
 
-## GSD Task Monitoring via Log File
+## Barnum Task Monitoring via Log File
 
 **Status: TODO**
 
-Need a way to monitor active tasks while GSD is running. Currently there's no easy way to see what's happening.
+Need a way to monitor active tasks while Barnum is running. Currently there's no easy way to see what's happening.
 
 **Proposed changes:**
 
-1. **Always write a log file to the pool directory** - Remove the optional `--log` flag from GSD. Instead, always write to a well-known location like `<pool_root>/gsd.log` or `<pool_root>/gsd-<timestamp>.log`.
+1. **Always write a log file to the pool directory** - Remove the optional `--log` flag from Barnum. Instead, always write to a well-known location like `<pool_root>/barnum.log` or `<pool_root>/barnum-<timestamp>.log`.
 
 2. **Log active tasks** - The log should show:
    - Tasks submitted to agents
@@ -1022,17 +1022,17 @@ Need a way to monitor active tasks while GSD is running. Currently there's no ea
    - Current in-flight tasks
    - Queue depth
 
-3. **Easy monitoring** - Users can `tail -f <pool_root>/gsd.log` to watch progress in real-time.
+3. **Easy monitoring** - Users can `tail -f <pool_root>/barnum.log` to watch progress in real-time.
 
 This makes debugging and monitoring much simpler - just tail the log file in the pool directory.
 
 ---
 
-## GSD Should Use CLI Instead of Rust API
+## Barnum Should Use CLI Instead of Rust API
 
 **Status: COMPLETE**
 
-GSD now invokes the CLI via `submit_via_cli()` which spawns `agent_pool submit_task`. See `crates/gsd_config/src/runner/submit.rs`.
+Barnum now invokes the CLI via `submit_via_cli()` which spawns `troupe submit_task`. See `crates/barnum_config/src/runner/submit.rs`.
 
 ---
 
@@ -1092,7 +1092,7 @@ Error ID ranges:
 - E037-E043: submit/socket.rs (socket-based submission)
 - E044-E047: verified_watcher.rs (watcher creation, timeouts)
 - E048-E050: value_schema.rs (schema loading)
-- E051-E057: gsd_cli/main.rs (config parsing/validation)
+- E051-E057: barnum_cli/main.rs (config parsing/validation)
 
 Example:
 ```
@@ -1105,7 +1105,7 @@ Example:
 
 **Status: TODO**
 
-Add a `--tag` parameter to `agent_pool protocol` command (or the agent instructions) to specify which npm tag to use when running `pnpm dlx @gsd-now/agent-pool`.
+Add a `--tag` parameter to `troupe protocol` command (or the agent instructions) to specify which npm tag to use when running `pnpm dlx @barnum/troupe`.
 
 Currently agents use whatever `@latest` resolves to. This should be a first-class parameter so agents can be pinned to a specific version.
 
@@ -1115,17 +1115,17 @@ Currently agents use whatever `@latest` resolves to. This should be a first-clas
 
 **Status: TODO**
 
-Currently, `gsd run` with an invalid pool root (non-existent directory) does not fail immediately. The error only surfaces later when the first task is submitted.
+Currently, `barnum run` with an invalid pool root (non-existent directory) does not fail immediately. The error only surfaces later when the first task is submitted.
 
 **Current behavior:**
 ```bash
-gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
+barnum run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
 # Starts successfully, then fails on first task submission with cryptic error
 ```
 
 **Desired behavior:**
 ```bash
-gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
+barnum run --config config.json --root /nonexistent/path --pool mypool --initial '[...]'
 # Fails immediately with clear error: "root does not exist: /nonexistent/path"
 ```
 
@@ -1141,13 +1141,13 @@ gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[
 
 The `cli_invoker` crate resolves how to invoke CLI tools (binary path, package manager dlx, etc.) but doesn't verify version compatibility.
 
-**The real fix:** GSD and agent-pool should use matched versions. When gsd@X.Y.Z invokes agent-pool, it should request agent-pool@X.Y.Z, not whatever `@latest` happens to be.
+**The real fix:** Barnum and troupe should use matched versions. When barnum@X.Y.Z invokes troupe, it should request troupe@X.Y.Z, not whatever `@latest` happens to be.
 
 **Issues:**
 
 1. **Binary version mismatch** - When using a binary directly (env var, cargo workspace, node_modules), we should check `--version` first and warn if it differs from the current library version.
 
-2. **Package manager version pinning** - When using `pnpm dlx @gsd-now/agent-pool` (or similar), we should include the current version: `pnpm dlx @gsd-now/agent-pool@0.1.0`. Otherwise we might get a different version than expected.
+2. **Package manager version pinning** - When using `pnpm dlx @barnum/troupe` (or similar), we should include the current version: `pnpm dlx @barnum/troupe@0.1.0`. Otherwise we might get a different version than expected.
 
 **Implementation:**
 

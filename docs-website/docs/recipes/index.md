@@ -1,4 +1,4 @@
-# GSD Recipes
+# Barnum Recipes
 
 This directory contains example configurations for common task queue patterns.
 
@@ -22,7 +22,7 @@ This directory contains example configurations for common task queue patterns.
 
 ## Config Structure
 
-Every GSD config has this structure:
+Every Barnum config has this structure:
 
 ```jsonc
 {

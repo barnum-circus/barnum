@@ -1,6 +1,6 @@
 # Task Format
 
-GSD steps have two action types: **Pool** (dispatched to an agent) and **Command** (executed locally as a shell script). This document describes the JSON each receives and what it must return.
+Barnum steps have two action types: **Pool** (dispatched to an agent) and **Command** (executed locally as a shell script). This document describes the JSON each receives and what it must return.
 
 For how agents interact with the pool (get_task, heartbeat, response files), see [Agent Protocol](agent-protocol.md). For how tasks get submitted to the pool, see [Submission Protocol](submission-protocol.md).
 
@@ -21,7 +21,7 @@ Return `[]` to end the chain (terminal step, no further work).
 
 ## Agent Protocol
 
-When a step uses `"kind": "Pool"`, GSD submits a task to the agent pool. The agent receives a JSON payload with three fields:
+When a step uses `"kind": "Pool"`, Barnum submits a task to the agent pool. The agent receives a JSON payload with three fields:
 
 ```jsonc
 {
@@ -42,7 +42,7 @@ When a step uses `"kind": "Pool"`, GSD submits a task to the agent pool. The age
 
 ### What the instructions contain
 
-GSD auto-generates the `instructions` field from the config. It includes:
+Barnum auto-generates the `instructions` field from the config. It includes:
 
 1. **Isolation preamble** — tells the agent it has no memory of prior tasks
 2. **Step name header** — `# Current Step: AnalyzeFile`
@@ -106,7 +106,7 @@ The agent writes its response as a JSON array string:
 ]
 ```
 
-GSD validates the response:
+Barnum validates the response:
 - Must be a valid JSON array
 - Each task's `kind` must be in the step's `next` list
 - Each task's `value` must match the target step's `value_schema` (if defined)
@@ -117,7 +117,7 @@ Invalid responses trigger the retry policy.
 
 ## Command Protocol
 
-When a step uses `"kind": "Command"`, GSD executes the script locally via `sh -c`.
+When a step uses `"kind": "Command"`, Barnum executes the script locally via `sh -c`.
 
 ### Stdin
 

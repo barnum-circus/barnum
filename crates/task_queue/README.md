@@ -5,7 +5,7 @@ A type-safe Rust library for defining task queues as state machines.
 ## Concepts
 
 - **Queue Items** - Items that implement the `QueueItem` trait
-- **Task Enum** - Wraps queue items, dispatches to underlying impl (can be derived with `#[derive(GsdTask)]`)
+- **Task Enum** - Wraps queue items, dispatches to underlying impl (can be derived with `#[derive(BarnumTask)]`)
 - **Task Results** - Deserialized from script stdout
 
 Tasks returned from `process` are added back to the queue. Only script execution is parallel; everything else is synchronous.
@@ -13,11 +13,11 @@ Tasks returned from `process` are added back to the queue. Only script execution
 ## Example Usage
 
 ```rust
-use task_queue::{GsdTask, QueueItem, NoMoreTasks, ProcessQueueOptions, process_queue};
+use task_queue::{BarnumTask, QueueItem, NoMoreTasks, ProcessQueueOptions, process_queue};
 use serde::Deserialize;
 use std::process::Command;
 
-#[derive(GsdTask)]
+#[derive(BarnumTask)]
 enum Task {
     AnalyzeFile(AnalyzeFile),
 }

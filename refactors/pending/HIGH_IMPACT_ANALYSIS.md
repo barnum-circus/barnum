@@ -79,7 +79,7 @@ Requires careful design for reconnection and failure handling.
 
 May not be worth it - FSEvents works fine. Only investigate if file watching becomes a bottleneck.
 
-### 6. GSD Multi-Pool Support
+### 6. Barnum Multi-Pool Support
 
 **Impact:** Enable workflows spanning multiple pools.
 **Effort:** 4-8 hours.
@@ -127,6 +127,6 @@ Before optimizing, establish baselines:
 1. **Test suite time** - `time cargo test --workspace -- --test-threads=1`
 2. **Single task latency** - Time from submit to response
 3. **Throughput** - Tasks per second with N agents
-4. **CLI spawn overhead** - Time to run `agent_pool --help`
+4. **CLI spawn overhead** - Time to run `troupe --help`
 
 Optimize what matters, not what's theoretically improvable.

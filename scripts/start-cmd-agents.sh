@@ -9,14 +9,14 @@ cd "$(dirname "$0")/.."
 
 # Build if needed
 echo -n "Building... "
-cargo build -p agent_pool_cli --quiet
+cargo build -p troupe_cli --quiet
 echo "done"
 
 NUM_AGENTS="${1:-5}"
 
 # Kill any existing agents for cmd pool (both shell scripts and CLI subprocesses)
 pkill -9 -f "command-agent.sh --pool cmd" 2>/dev/null || true
-pkill -9 -f "agent_pool get_task --pool cmd" 2>/dev/null || true
+pkill -9 -f "troupe get_task --pool cmd" 2>/dev/null || true
 
 > /tmp/agent.log
 
@@ -24,7 +24,7 @@ cleanup() {
     echo ""
     echo "Stopping all agents..."
     pkill -9 -f "command-agent.sh --pool cmd" 2>/dev/null || true
-    pkill -9 -f "agent_pool get_task --pool cmd" 2>/dev/null || true
+    pkill -9 -f "troupe get_task --pool cmd" 2>/dev/null || true
     echo "Done."
     exit 0
 }
@@ -33,7 +33,7 @@ trap cleanup SIGINT SIGTERM
 
 # Start all agents in background
 for i in $(seq 1 "$NUM_AGENTS"); do
-    ./crates/agent_pool/scripts/command-agent.sh --pool cmd --log /tmp/agent.log &
+    ./crates/troupe/scripts/command-agent.sh --pool cmd --log /tmp/agent.log &
 done
 
 echo "Started $NUM_AGENTS agents. Press Ctrl+C to stop all."

@@ -6,7 +6,7 @@
 //! For more control, use [`TaskRunner`] which implements [`AsyncLendingIterator`]
 //! to yield `&mut Ctx` after each task completion.
 
-pub use task_queue_macro::GsdTask;
+pub use task_queue_macro::BarnumTask;
 
 use serde::de::DeserializeOwned;
 use std::collections::VecDeque;

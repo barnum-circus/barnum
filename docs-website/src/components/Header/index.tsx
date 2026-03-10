@@ -8,7 +8,7 @@ export default function HomepageHeader() {
       <div className="container">
         <div className="row">
           <div className="col">
-            <h1 className={styles.heroTitle}>⚡ GSD</h1>
+            <h1 className={styles.heroTitle}>🎪 Barnum</h1>
             <p
               className={clsx(
                 'hero__subtitle margin-bottom--lg',

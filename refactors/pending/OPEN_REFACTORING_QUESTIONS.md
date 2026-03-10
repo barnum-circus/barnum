@@ -4,7 +4,7 @@ Issues found during coding standards pass.
 
 ---
 
-## agent_pool
+## troupe
 
 ### File Length: wiring.rs (~1050 lines)
 
@@ -68,11 +68,11 @@ Same issue - 11 parameters could be reduced with `IoState` and `Paths` structs.
 
 ---
 
-## agent_pool_cli
+## troupe_cli
 
 ### File Length: main.rs (~490 lines)
 
-`agent_pool_cli/src/main.rs` is borderline at 490 lines. The `main()` function has `#[expect(clippy::too_many_lines)]`. Could potentially extract subcommand handlers, but lower priority - CLI tools often have large dispatch functions.
+`troupe_cli/src/main.rs` is borderline at 490 lines. The `main()` function has `#[expect(clippy::too_many_lines)]`. Could potentially extract subcommand handlers, but lower priority - CLI tools often have large dispatch functions.
 
 ---
 
@@ -81,8 +81,8 @@ Same issue - 11 parameters could be reduced with `IoState` and `Paths` structs.
 **Completed 2026-03-07:** Full codebase audit against CODING_STANDARDS.md
 
 **Files reviewed and found compliant:**
-- All gsd_config modules (runner extracted, tests updated)
-- All agent_pool modules except wiring.rs/io.rs (flagged above)
+- All barnum_config modules (runner extracted, tests updated)
+- All troupe modules except wiring.rs/io.rs (flagged above)
 - task_queue, task_queue_macro, cli_invoker, string_id crates
 - All test files
 
@@ -92,4 +92,4 @@ Same issue - 11 parameters could be reduced with `IoState` and `Paths` structs.
 - Simplified `hooks.rs` with `run_shell_command` helper
 - Updated `RunnerConfig` to pass by reference
 
-**Remaining work:** The items flagged above in agent_pool.
+**Remaining work:** The items flagged above in troupe.

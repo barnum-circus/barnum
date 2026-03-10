@@ -1,13 +1,13 @@
-# GSD Configuration
+# Barnum Configuration
 
-Example configuration with annotations. GSD config files are JSON;
+Example configuration with annotations. Barnum config files are JSON;
 the comments below (JSONC) are for explanation only.
 
 ```jsonc
 {
   // Optional: JSON Schema reference for editor autocompletion and validation.
-  // Ignored at runtime. Generate with `gsd config schema`.
-  "$schema": "./gsd.schema.json",
+  // Ignored at runtime. Generate with `barnum config schema`.
+  "$schema": "./barnum.schema.json",
 
   // Entry point step name. When set, the workflow starts here and you can
   // pass the initial value with --entrypoint-value (defaults to {}).
@@ -113,8 +113,8 @@ the comments below (JSONC) are for explanation only.
 
 ```bash
 # With entrypoint (config has "entrypoint" set):
-gsd run --config config.json --pool my-pool
-gsd run --config config.json --pool my-pool --entrypoint-value '{"files": ["src/main.rs"]}'
+barnum run --config config.json --pool my-pool
+barnum run --config config.json --pool my-pool --entrypoint-value '{"files": ["src/main.rs"]}'
 ```
 
 ## Writing command scripts
@@ -224,8 +224,8 @@ echo "[{\"kind\": \"Process\", \"value\": {\"contents\": $(echo "$CONTENTS" | jq
 ## Useful commands
 
 ```bash
-gsd config schema              # Print JSON schema for config files
-gsd config validate config.json # Validate a config file
-gsd config docs config.json    # Generate markdown docs from config
-gsd config graph config.json   # Generate DOT graph for GraphViz
+barnum config schema              # Print JSON schema for config files
+barnum config validate config.json # Validate a config file
+barnum config docs config.json    # Generate markdown docs from config
+barnum config graph config.json   # Generate DOT graph for GraphViz
 ```

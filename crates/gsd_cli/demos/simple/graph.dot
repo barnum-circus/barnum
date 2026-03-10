@@ -1,8 +1,0 @@
-digraph GSD {
-  rankdir=TB;
-  node [fontname="Helvetica"];
-  edge [fontname="Helvetica", fontsize=10];
-
-  "Start" [shape=box, peripheries=2, label="Start", style=filled, fillcolor="#e3f2fd"];
-
-}

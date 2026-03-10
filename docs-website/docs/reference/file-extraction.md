@@ -1,6 +1,6 @@
 # Extracting to separate files
 
-As configs grow, inline instructions and schemas can make the config hard to read. GSD supports extracting both into separate files using `{"link": "path"}`.
+As configs grow, inline instructions and schemas can make the config hard to read. Barnum supports extracting both into separate files using `{"link": "path"}`.
 
 ## Linkable fields
 
@@ -33,7 +33,7 @@ Pool action instructions can be inline strings or linked files:
 }
 ```
 
-When using `{"link": "..."}`, the path resolves relative to the config file's directory. So if your config is at `project/config.json` and the link is `instructions/analyze.md`, GSD reads `project/instructions/analyze.md`.
+When using `{"link": "..."}`, the path resolves relative to the config file's directory. So if your config is at `project/config.json` and the link is `instructions/analyze.md`, Barnum reads `project/instructions/analyze.md`.
 
 The linked file contains raw instruction text — no JSON wrapping needed:
 

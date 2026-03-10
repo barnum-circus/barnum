@@ -51,7 +51,7 @@ Your singular mission is creating S-tier libraries where:
 
 4. **Impossible states are unrepresentable.**
 
-5. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts. 
+5. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts.
 
 ## Backward compatibility
 

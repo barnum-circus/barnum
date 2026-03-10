@@ -12,7 +12,7 @@ export default function Buttons() {
       </Link>
       <Link
         className="button button--secondary button--lg"
-        to="https://github.com/gsd-now/gsd"
+        to="https://github.com/barnum-circus/barnum"
       >
         View on GitHub
       </Link>

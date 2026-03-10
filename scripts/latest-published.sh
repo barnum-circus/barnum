@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-GSD=$(pnpm view @gsd-now/gsd dist-tags.main --registry https://registry.npmjs.org 2>/dev/null)
-AGENT_POOL=$(pnpm view @gsd-now/agent-pool dist-tags.main --registry https://registry.npmjs.org 2>/dev/null)
+BARNUM=$(pnpm view @barnum/barnum dist-tags.main --registry https://registry.npmjs.org 2>/dev/null)
+TROUPE=$(pnpm view @barnum/troupe dist-tags.main --registry https://registry.npmjs.org 2>/dev/null)
 
 LOCAL_MASTER=$(git rev-parse --short master 2>/dev/null || echo "unknown")
 REMOTE_MASTER=$(git rev-parse --short origin/master 2>/dev/null || echo "unknown")
@@ -10,7 +10,7 @@ REMOTE_MASTER=$(git rev-parse --short origin/master 2>/dev/null || echo "unknown
 echo "Local master:  $LOCAL_MASTER"
 echo "Remote master: $REMOTE_MASTER"
 echo ""
-echo "Published: $GSD"
+echo "Published: $BARNUM"
 echo ""
-echo "pnpm install @gsd-now/gsd@$GSD --registry https://registry.npmjs.org"
-echo "pnpm install @gsd-now/agent-pool@$AGENT_POOL --registry https://registry.npmjs.org"
+echo "pnpm install @barnum/barnum@$BARNUM --registry https://registry.npmjs.org"
+echo "pnpm install @barnum/troupe@$TROUPE --registry https://registry.npmjs.org"

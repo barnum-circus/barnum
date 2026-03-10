@@ -345,37 +345,37 @@ fn initial_keepalive_before_real_tasks() {
 
 ### Task 1: Extract Transport trait
 
-**Files:** `crates/agent_pool/src/transport.rs`
+**Files:** `crates/troupe/src/transport.rs`
 
 Define the `Transport` trait and move file operations behind it.
 
 ### Task 2: Implement FileTransport
 
-**Files:** `crates/agent_pool/src/transport.rs`
+**Files:** `crates/troupe/src/transport.rs`
 
 Production transport using filesystem.
 
 ### Task 3: Implement SyncTransport
 
-**Files:** `crates/agent_pool/src/transport.rs`
+**Files:** `crates/troupe/src/transport.rs`
 
 In-memory transport for testing.
 
 ### Task 4: Refactor PoolState to use Transport
 
-**Files:** `crates/agent_pool/src/daemon.rs`
+**Files:** `crates/troupe/src/daemon.rs`
 
 Make `PoolState` generic over `Transport` instead of hardcoding file operations.
 
 ### Task 5: Create SyncPool test helper
 
-**Files:** `crates/agent_pool/src/testing.rs`
+**Files:** `crates/troupe/src/testing.rs`
 
 A synchronous pool wrapper for tests.
 
 ### Task 6: Migrate existing tests
 
-**Files:** `crates/agent_pool/tests/*.rs`
+**Files:** `crates/troupe/tests/*.rs`
 
 Convert existing tests to use `SyncPool` where appropriate. Keep some integration tests that exercise real I/O.
 

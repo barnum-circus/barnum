@@ -1,8 +1,8 @@
-# Refactor: GSD Uses task_queue
+# Refactor: Barnum Uses task_queue
 
 ## Goal
 
-Make `gsd_config` use `task_queue`'s execution engine. GSD will have a single dynamic task type that implements `QueueItem`.
+Make `barnum_config` use `task_queue`'s execution engine. Barnum will have a single dynamic task type that implements `QueueItem`.
 
 ## Current State
 
@@ -19,11 +19,11 @@ pub trait QueueItem<Context>: Sized {
 }
 ```
 
-**Problem:** `start()` returns a `Command`, which is executed locally. GSD needs to either:
-- Submit to agent_pool and wait for response
+**Problem:** `start()` returns a `Command`, which is executed locally. Barnum needs to either:
+- Submit to troupe and wait for response
 - Run a local command with pre/post hooks
 
-### gsd_config
+### barnum_config
 
 Has its own `TaskRunner` that manages:
 - Queue of tasks
@@ -71,7 +71,7 @@ pub enum TaskOutput<T> {
 ```
 
 **Why this works:**
-- GSD can return a future that submits to agent_pool, waits for response file, parses JSON
+- Barnum can return a future that submits to troupe, waits for response file, parses JSON
 - Typed task_queue users can return a future that spawns a local command
 - Both use the same `TaskRunner` execution engine
 
@@ -117,17 +117,17 @@ impl QueueItem<Ctx> for AnalyzeFile {
 }
 ```
 
-### Change 3: GSD implements `QueueItem` dynamically
+### Change 3: Barnum implements `QueueItem` dynamically
 
 ```rust
-// gsd_config/src/queue_item.rs
+// barnum_config/src/queue_item.rs
 
-impl QueueItem<GsdContext> for Task {
+impl QueueItem<BarnumContext> for Task {
     type InProgress = TaskInProgress;
     type Response = serde_json::Value;
     type NextTasks = Vec<Task>;
 
-    fn start(self, ctx: &mut GsdContext) -> (Self::InProgress, BoxFuture<'static, TaskOutput<Value>>) {
+    fn start(self, ctx: &mut BarnumContext) -> (Self::InProgress, BoxFuture<'static, TaskOutput<Value>>) {
         let step = ctx.step_for(&self.step).clone();
 
         // Run pre-hook (synchronously, before spawning)
@@ -151,7 +151,7 @@ impl QueueItem<GsdContext> for Task {
                 run_local_command(script.clone(), effective_value.clone())
             }
             Action::Pool { .. } => {
-                submit_to_agent_pool(
+                submit_to_troupe(
                     ctx.pool_path.clone(),
                     self.step.clone(),
                     effective_value.clone(),
@@ -174,7 +174,7 @@ impl QueueItem<GsdContext> for Task {
     fn process(
         ip: Self::InProgress,
         result: TaskOutput<Value>,
-        ctx: &mut GsdContext,
+        ctx: &mut BarnumContext,
     ) -> Vec<Task> {
         // Handle the result
         let (post_input, raw_tasks) = match result {
@@ -240,11 +240,11 @@ impl QueueItem<GsdContext> for Task {
 
 | Hook | Where it runs | Responsibility |
 |------|---------------|----------------|
-| **pre** | In `start()`, before returning future | GSD only |
-| **post** | In `process()`, after getting result | GSD only |
+| **pre** | In `start()`, before returning future | Barnum only |
+| **post** | In `process()`, after getting result | Barnum only |
 | **finally** | After all descendants complete | **task_queue** (native support) |
 
-Pre and post hooks are GSD-specific implementation details inside `QueueItem` impl.
+Pre and post hooks are Barnum-specific implementation details inside `QueueItem` impl.
 
 Finally is native to task_queue because it's a general concept: "run something after all spawned tasks complete."
 
@@ -339,13 +339,13 @@ struct FinallyState<InProgress> {
 
 The key insight: `finally()` is called twice - once after `process()` to check if tracking is needed, and again when all descendants complete to get the actual tasks. Both calls should be cheap (just checking config and building task list).
 
-### GSD implementation
+### Barnum implementation
 
 ```rust
-impl QueueItem<GsdContext> for Task {
+impl QueueItem<BarnumContext> for Task {
     // ... start() and process() as before ...
 
-    fn finally(ip: &Self::InProgress, ctx: &GsdContext) -> Option<Vec<Task>> {
+    fn finally(ip: &Self::InProgress, ctx: &BarnumContext) -> Option<Vec<Task>> {
         let finally_cmd = ip.step.finally_hook.as_ref()?;
 
         // Run the finally command with original value on stdin
@@ -380,19 +380,19 @@ impl QueueItem<Ctx> for DistributeTask {
 }
 ```
 
-## GsdContext
+## BarnumContext
 
-Consolidate GSD's scattered state into a single context:
+Consolidate Barnum's scattered state into a single context:
 
 ```rust
-pub struct GsdContext {
+pub struct BarnumContext {
     pub config: Config,
     pub schemas: CompiledSchemas,
     pub pool_path: PathBuf,
     pub config_base_path: PathBuf,
 }
 
-impl GsdContext {
+impl BarnumContext {
     pub fn step_for(&self, name: &StepName) -> Option<&Step> {
         self.config.step_map().get(name.as_str()).copied()
     }
@@ -419,22 +419,22 @@ impl GsdContext {
 - Add `finally_pending: HashMap<u64, FinallyState<InProgress>>`
 - Track parent-child relationships and run `finally()` when descendants complete
 
-### Task 3: Create GsdContext
+### Task 3: Create BarnumContext
 
 Consolidate config, schemas, paths into single struct.
 
-### Task 4: Implement QueueItem for Task in gsd_config
+### Task 4: Implement QueueItem for Task in barnum_config
 
 - `start()`: run pre-hook, return future for either pool submission or local command
 - `process()`: validate response, run post-hook, return next tasks
 - `finally()`: run finally hook if configured
 - `has_finally()`: check if step has finally_hook
 
-### Task 5: Replace gsd_config's TaskRunner
+### Task 5: Replace barnum_config's TaskRunner
 
 Delete the current `runner/` module, use task_queue's runner directly.
 
-### Task 6: Make gsd_config async
+### Task 6: Make barnum_config async
 
 Add tokio dependency, make `run()` async.
 
@@ -446,7 +446,7 @@ Add tokio dependency, make `run()` async.
 
 ## Current `finally` Implementation (for reference)
 
-From `gsd_config/src/runner/finally.rs`:
+From `barnum_config/src/runner/finally.rs`:
 
 ```rust
 /// State for tracking when a `finally` hook should run.
@@ -477,7 +477,7 @@ When a task completes:
 | Component | Responsibility |
 |-----------|----------------|
 | **task_queue** | Queue execution, concurrency, async futures |
-| **gsd_config** | Config parsing, validation, hooks, finally tracking |
-| **QueueItem impl** | Bridge between them - GSD's Task implements task_queue's trait |
+| **barnum_config** | Config parsing, validation, hooks, finally tracking |
+| **QueueItem impl** | Bridge between them - Barnum's Task implements task_queue's trait |
 
-The key insight: task_queue provides the execution engine, GSD provides the dynamic/config-driven behavior. They compose via the `QueueItem` trait, with GSD returning futures that do whatever GSD needs (pool submission, hooks, etc.).
+The key insight: task_queue provides the execution engine, Barnum provides the dynamic/config-driven behavior. They compose via the `QueueItem` trait, with Barnum returning futures that do whatever Barnum needs (pool submission, hooks, etc.).

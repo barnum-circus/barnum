@@ -51,13 +51,13 @@ Finally is bolted on - a separate concept attached to tasks.
    - Prefect: task dependencies, mapped tasks
    - Step Functions: parallel states, choice states
 
-## GSD as "Buck for Agents"
+## Barnum as "Buck for Agents"
 
-Conceptually, GSD is Buck/Bazel for AI agents:
+Conceptually, Barnum is Buck/Bazel for AI agents:
 - **Buck**: targets → actions → artifacts, DAG of dependencies
-- **GSD**: tasks → agents → spawned tasks, dynamic DAG
+- **Barnum**: tasks → agents → spawned tasks, dynamic DAG
 
-Key difference: Buck's DAG is known upfront. GSD's DAG is dynamic - tasks spawn new tasks at runtime.
+Key difference: Buck's DAG is known upfront. Barnum's DAG is dynamic - tasks spawn new tasks at runtime.
 
 ### Buck Model
 
@@ -71,7 +71,7 @@ B depends on D
 - Execution order derived from deps
 - No "finally" - if A depends on B, A runs after B
 
-### GSD Model
+### Barnum Model
 
 ```
 task A runs, spawns B, C at runtime
@@ -84,14 +84,14 @@ B runs, spawns D at runtime
 
 ## Build System Concepts à la Carte
 
-What primitives do build systems have? Which translate to GSD?
+What primitives do build systems have? Which translate to Barnum?
 
-| Concept | Buck/Bazel | GSD Equivalent | Notes |
+| Concept | Buck/Bazel | Barnum Equivalent | Notes |
 |---------|-----------|----------------|-------|
 | **Target** | Named build unit | Step | Static vs dynamic |
 | **Rule** | How to build a target | Step config + action | Similar |
 | **Action** | Actual work (compile, link) | Agent task | Agents instead of tools |
-| **Deps** | Explicit dependencies | `origin_id` (implicit) | GSD deps are runtime-discovered |
+| **Deps** | Explicit dependencies | `origin_id` (implicit) | Barnum deps are runtime-discovered |
 | **Provider** | Data passed between targets | Task value / response | Similar |
 | **Depset** | Accumulated deps | N/A | Could be useful for fan-in? |
 | **Configuration** | Build flavor (debug/release) | N/A | Not needed? |
@@ -99,27 +99,27 @@ What primitives do build systems have? Which translate to GSD?
 | **Aspect** | Cross-cutting concern | N/A | Could be useful? |
 | **Genrule** | Arbitrary shell command | Command action | Same |
 
-### Concepts GSD Is Missing?
+### Concepts Barnum Is Missing?
 
 **Depset / Accumulation**
 - Buck: depsets accumulate values up the tree
-- GSD currently: no equivalent. Finally gets parent's value, not children's results
+- Barnum currently: no equivalent. Finally gets parent's value, not children's results
 - After FINALLY_TRACKING refactor: tree-based tracking enables collecting child results
 - Could pass to after task: `{ parent_value: ..., child_results: [...] }`
 
 **Explicit Dependencies**
 - Buck: target declares what it depends on
-- GSD: deps discovered at runtime (agent spawns tasks)
+- Barnum: deps discovered at runtime (agent spawns tasks)
 - Trade-off: flexibility vs predictability
 
 **Providers / Typed Data Flow**
 - Buck: providers define what data flows between targets
-- GSD: just JSON values
+- Barnum: just JSON values
 - Could add: typed schemas for inter-task data
 
 **Build Graph Analysis**
 - Buck: can query/analyze graph before building
-- GSD: graph unknown until runtime
+- Barnum: graph unknown until runtime
 - Fundamental difference, probably can't change
 
 ### Insight
@@ -132,7 +132,7 @@ target(name="process_all", deps=[":process_1", ":process_2", ":process_3"])
 target(name="aggregate", deps=[":process_all"])  # runs after all process_* done
 ```
 
-But GSD can't do this because we don't know the spawned tasks upfront.
+But Barnum can't do this because we don't know the spawned tasks upfront.
 
 ### Possible Direction
 

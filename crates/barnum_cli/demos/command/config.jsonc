@@ -1,0 +1,75 @@
+// Example invocation:
+// pnpm barnum run --pool <POOL> --initial-state '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]' command-demo.jsonc
+{
+  "$schema": "../schemas/config.schema.json",
+  "steps": [
+    {
+      "name": "Split",
+      "value_schema": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["n"],
+              "properties": {
+                "n": { "type": "integer" }
+              }
+            },
+            "description": "Array of items to process"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "jq -c '.value.items[] | {kind: \"Process\", value: .}' | jq -s"
+      },
+      "next": ["Process"]
+    },
+    {
+      "name": "Process",
+      "value_schema": {
+        "type": "object",
+        "required": ["n"],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "description": "Number to process"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "jq -c '{kind: \"Collect\", value: {processed: .value, doubled: (.value.n * 2)}}' | jq -s"
+      },
+      "next": ["Collect"]
+    },
+    {
+      "name": "Collect",
+      "value_schema": {
+        "type": "object",
+        "required": ["processed", "doubled"],
+        "properties": {
+          "processed": {
+            "type": "object",
+            "description": "Original input"
+          },
+          "doubled": {
+            "type": "integer",
+            "description": "Doubled value"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "echo '[]'"
+      },
+      "next": []
+    }
+  ]
+}

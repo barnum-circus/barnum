@@ -1,0 +1,12 @@
+digraph Barnum {
+  rankdir=TB;
+  node [fontname="Helvetica"];
+  edge [fontname="Helvetica", fontsize=10];
+
+  "Start" [shape=box, label="Start", style=filled, fillcolor="#e3f2fd"];
+  "Middle" [shape=box, label="Middle", style=filled, fillcolor="#e3f2fd"];
+  "End" [shape=box, peripheries=2, label="End", style=filled, fillcolor="#e3f2fd"];
+
+  "Start" -> "Middle";
+  "Middle" -> "End";
+}

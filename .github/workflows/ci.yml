@@ -132,13 +132,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93.1
       - uses: Swatinem/rust-cache@v2
-      - name: Download agent_pool binary
+      - name: Download troupe binary
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-linux-x64
+          name: troupe-linux-x64
           path: target/debug
       - name: Make binary executable
-        run: chmod +x target/debug/agent_pool
+        run: chmod +x target/debug/troupe
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Run tests
@@ -146,7 +146,7 @@ jobs:
         # Remove --nocapture to reduce log output (only show on failure)
         # Disable RUST_LOG entirely in CI for minimal output
         env:
-          AGENT_POOL_BIN: ${{ github.workspace }}/target/debug/agent_pool
+          TROUPE_BIN: ${{ github.workspace }}/target/debug/troupe
           RUST_LOG: warn
         run: cargo test --workspace -- --test-threads=1
       - name: Cancel workflow on failure
@@ -161,28 +161,28 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Download agent_pool binary
+      - name: Download troupe binary
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-linux-x64
+          name: troupe-linux-x64
           path: bin
-      - name: Download gsd binary
+      - name: Download barnum binary
         uses: actions/download-artifact@v4
         with:
-          name: gsd-linux-x64
+          name: barnum-linux-x64
           path: bin
       - name: Make binaries executable
-        run: chmod +x bin/agent_pool bin/gsd
+        run: chmod +x bin/troupe bin/barnum
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq bc
       - name: Check .dot files are up-to-date
         env:
-          GSD: ${{ github.workspace }}/bin/gsd
+          BARNUM: ${{ github.workspace }}/bin/barnum
         run: ./scripts/generate-graphs.sh --check
       - name: Run all demos
         env:
-          AGENT_POOL: ${{ github.workspace }}/bin/agent_pool
-          GSD: ${{ github.workspace }}/bin/gsd
+          TROUPE: ${{ github.workspace }}/bin/troupe
+          BARNUM: ${{ github.workspace }}/bin/barnum
           RUST_LOG: off
         run: ./scripts/run-all-demos.sh
       - name: Cancel workflow on failure
@@ -202,8 +202,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/x86_64-apple-darwin/release/agent_pool
-            target/x86_64-apple-darwin/release/gsd
+            target/x86_64-apple-darwin/release/troupe
+            target/x86_64-apple-darwin/release/barnum
           key: macos-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -219,19 +219,19 @@ jobs:
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
-          echo "$VERSION" > libs/agent_pool/version.txt
-          echo "$VERSION" > libs/gsd/version.txt
+          echo "$VERSION" > libs/troupe/version.txt
+          echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-apple-darwin -p agent_pool_cli -p gsd_cli
+        run: cargo build --release --target x86_64-apple-darwin -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
-          name: agent_pool-macos-x64
-          path: target/x86_64-apple-darwin/release/agent_pool
+          name: troupe-macos-x64
+          path: target/x86_64-apple-darwin/release/troupe
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-macos-x64
-          path: target/x86_64-apple-darwin/release/gsd
+          name: barnum-macos-x64
+          path: target/x86_64-apple-darwin/release/barnum
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -249,8 +249,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/aarch64-apple-darwin/release/agent_pool
-            target/aarch64-apple-darwin/release/gsd
+            target/aarch64-apple-darwin/release/troupe
+            target/aarch64-apple-darwin/release/barnum
           key: macos-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -266,19 +266,19 @@ jobs:
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
-          echo "$VERSION" > libs/agent_pool/version.txt
-          echo "$VERSION" > libs/gsd/version.txt
+          echo "$VERSION" > libs/troupe/version.txt
+          echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target aarch64-apple-darwin -p agent_pool_cli -p gsd_cli
+        run: cargo build --release --target aarch64-apple-darwin -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
-          name: agent_pool-macos-arm64
-          path: target/aarch64-apple-darwin/release/agent_pool
+          name: troupe-macos-arm64
+          path: target/aarch64-apple-darwin/release/troupe
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-macos-arm64
-          path: target/aarch64-apple-darwin/release/gsd
+          name: barnum-macos-arm64
+          path: target/aarch64-apple-darwin/release/barnum
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -296,8 +296,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/x86_64-unknown-linux-musl/release/agent_pool
-            target/x86_64-unknown-linux-musl/release/gsd
+            target/x86_64-unknown-linux-musl/release/troupe
+            target/x86_64-unknown-linux-musl/release/barnum
           key: linux-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -316,19 +316,19 @@ jobs:
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
-          echo "$VERSION" > libs/agent_pool/version.txt
-          echo "$VERSION" > libs/gsd/version.txt
+          echo "$VERSION" > libs/troupe/version.txt
+          echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
+        run: cargo build --release --target x86_64-unknown-linux-musl -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
-          name: agent_pool-linux-x64
-          path: target/x86_64-unknown-linux-musl/release/agent_pool
+          name: troupe-linux-x64
+          path: target/x86_64-unknown-linux-musl/release/troupe
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-linux-x64
-          path: target/x86_64-unknown-linux-musl/release/gsd
+          name: barnum-linux-x64
+          path: target/x86_64-unknown-linux-musl/release/barnum
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -346,8 +346,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/aarch64-unknown-linux-musl/release/agent_pool
-            target/aarch64-unknown-linux-musl/release/gsd
+            target/aarch64-unknown-linux-musl/release/troupe
+            target/aarch64-unknown-linux-musl/release/barnum
           key: linux-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -366,19 +366,19 @@ jobs:
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
-          echo "$VERSION" > libs/agent_pool/version.txt
-          echo "$VERSION" > libs/gsd/version.txt
+          echo "$VERSION" > libs/troupe/version.txt
+          echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cross build --release --target aarch64-unknown-linux-musl -p agent_pool_cli -p gsd_cli
+        run: cross build --release --target aarch64-unknown-linux-musl -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
-          name: agent_pool-linux-arm64
-          path: target/aarch64-unknown-linux-musl/release/agent_pool
+          name: troupe-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/troupe
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-linux-arm64
-          path: target/aarch64-unknown-linux-musl/release/gsd
+          name: barnum-linux-arm64
+          path: target/aarch64-unknown-linux-musl/release/barnum
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -396,8 +396,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            target/x86_64-pc-windows-msvc/release/agent_pool.exe
-            target/x86_64-pc-windows-msvc/release/gsd.exe
+            target/x86_64-pc-windows-msvc/release/troupe.exe
+            target/x86_64-pc-windows-msvc/release/barnum.exe
           key: windows-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
@@ -414,19 +414,19 @@ jobs:
           } else {
             $VERSION = "0.0.0-main-$($env:GITHUB_SHA.Substring(0,8))"
           }
-          $VERSION | Out-File -FilePath libs/agent_pool/version.txt -Encoding utf8 -NoNewline
-          $VERSION | Out-File -FilePath libs/gsd/version.txt -Encoding utf8 -NoNewline
+          $VERSION | Out-File -FilePath libs/troupe/version.txt -Encoding utf8 -NoNewline
+          $VERSION | Out-File -FilePath libs/barnum/version.txt -Encoding utf8 -NoNewline
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-pc-windows-msvc -p agent_pool_cli -p gsd_cli
+        run: cargo build --release --target x86_64-pc-windows-msvc -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
-          name: agent_pool-win-x64
-          path: target/x86_64-pc-windows-msvc/release/agent_pool.exe
+          name: troupe-win-x64
+          path: target/x86_64-pc-windows-msvc/release/troupe.exe
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-win-x64
-          path: target/x86_64-pc-windows-msvc/release/gsd.exe
+          name: barnum-win-x64
+          path: target/x86_64-pc-windows-msvc/release/barnum.exe
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -441,12 +441,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.93.1
       - uses: Swatinem/rust-cache@v2
-      - name: Generate GSD config schema
-        run: cargo run -p gsd_config --bin build_gsd_schema
+      - name: Generate Barnum config schema
+        run: cargo run -p barnum_config --bin build_barnum_schema
       - uses: actions/upload-artifact@v4
         with:
-          name: gsd-config-schema
-          path: libs/gsd/gsd-config-schema.json
+          name: barnum-config-schema
+          path: libs/barnum/barnum-config-schema.json
       - name: Cancel workflow on failure
         if: failure()
         env:
@@ -493,16 +493,16 @@ jobs:
         with:
           name: docusaurus-build
           path: docs-website/build
-      - name: Deploy to gsd-now.github.io
+      - name: Deploy to barnum-circus.github.io
         uses: peaceiris/actions-gh-pages@v4
         with:
           personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
-          external_repository: gsd-now/gsd-now.github.io
+          external_repository: barnum-circus/barnum-circus.github.io
           publish_branch: main
           publish_dir: docs-website/build
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Deploy docs from gsd@${{ github.sha }}'
+          commit_message: 'Deploy docs from barnum@${{ github.sha }}'
 
   publish:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
@@ -519,118 +519,118 @@ jobs:
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
-          scope: '@gsd-now'
+          scope: '@barnum'
 
-      - name: Download agent_pool macOS x64 artifact
+      - name: Download troupe macOS x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-macos-x64
-          path: libs/agent_pool/artifacts/macos-x64
+          name: troupe-macos-x64
+          path: libs/troupe/artifacts/macos-x64
 
-      - name: Download agent_pool macOS arm64 artifact
+      - name: Download troupe macOS arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-macos-arm64
-          path: libs/agent_pool/artifacts/macos-arm64
+          name: troupe-macos-arm64
+          path: libs/troupe/artifacts/macos-arm64
 
-      - name: Download agent_pool Linux x64 artifact
+      - name: Download troupe Linux x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-linux-x64
-          path: libs/agent_pool/artifacts/linux-x64
+          name: troupe-linux-x64
+          path: libs/troupe/artifacts/linux-x64
 
-      - name: Download agent_pool Linux arm64 artifact
+      - name: Download troupe Linux arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-linux-arm64
-          path: libs/agent_pool/artifacts/linux-arm64
+          name: troupe-linux-arm64
+          path: libs/troupe/artifacts/linux-arm64
 
-      - name: Download agent_pool Windows x64 artifact
+      - name: Download troupe Windows x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: agent_pool-win-x64
-          path: libs/agent_pool/artifacts/win-x64
+          name: troupe-win-x64
+          path: libs/troupe/artifacts/win-x64
 
-      - name: Download gsd macOS x64 artifact
+      - name: Download barnum macOS x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-macos-x64
-          path: libs/gsd/artifacts/macos-x64
+          name: barnum-macos-x64
+          path: libs/barnum/artifacts/macos-x64
 
-      - name: Download gsd macOS arm64 artifact
+      - name: Download barnum macOS arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-macos-arm64
-          path: libs/gsd/artifacts/macos-arm64
+          name: barnum-macos-arm64
+          path: libs/barnum/artifacts/macos-arm64
 
-      - name: Download gsd Linux x64 artifact
+      - name: Download barnum Linux x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-linux-x64
-          path: libs/gsd/artifacts/linux-x64
+          name: barnum-linux-x64
+          path: libs/barnum/artifacts/linux-x64
 
-      - name: Download gsd Linux arm64 artifact
+      - name: Download barnum Linux arm64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-linux-arm64
-          path: libs/gsd/artifacts/linux-arm64
+          name: barnum-linux-arm64
+          path: libs/barnum/artifacts/linux-arm64
 
-      - name: Download gsd Windows x64 artifact
+      - name: Download barnum Windows x64 artifact
         uses: actions/download-artifact@v4
         with:
-          name: gsd-win-x64
-          path: libs/gsd/artifacts/win-x64
+          name: barnum-win-x64
+          path: libs/barnum/artifacts/win-x64
 
       - name: Make binaries executable
         run: |
-          chmod +x libs/agent_pool/artifacts/macos-x64/agent_pool
-          chmod +x libs/agent_pool/artifacts/macos-arm64/agent_pool
-          chmod +x libs/agent_pool/artifacts/linux-x64/agent_pool
-          chmod +x libs/agent_pool/artifacts/linux-arm64/agent_pool
-          chmod +x libs/gsd/artifacts/macos-x64/gsd
-          chmod +x libs/gsd/artifacts/macos-arm64/gsd
-          chmod +x libs/gsd/artifacts/linux-x64/gsd
-          chmod +x libs/gsd/artifacts/linux-arm64/gsd
+          chmod +x libs/troupe/artifacts/macos-x64/troupe
+          chmod +x libs/troupe/artifacts/macos-arm64/troupe
+          chmod +x libs/troupe/artifacts/linux-x64/troupe
+          chmod +x libs/troupe/artifacts/linux-arm64/troupe
+          chmod +x libs/barnum/artifacts/macos-x64/barnum
+          chmod +x libs/barnum/artifacts/macos-arm64/barnum
+          chmod +x libs/barnum/artifacts/linux-x64/barnum
+          chmod +x libs/barnum/artifacts/linux-arm64/barnum
 
-      - name: Download GSD config schema
+      - name: Download Barnum config schema
         uses: actions/download-artifact@v4
         with:
-          name: gsd-config-schema
-          path: libs/gsd
+          name: barnum-config-schema
+          path: libs/barnum
 
       - name: Set version for main branch
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: |
           VERSION="0.0.0-main-${GITHUB_SHA::8}"
-          cd libs/agent_pool
+          cd libs/troupe
           npm version $VERSION --no-git-tag-version
-          cd ../gsd
+          cd ../barnum
           npm version $VERSION --no-git-tag-version
 
-      - name: Publish agent_pool to npm (main tag)
+      - name: Publish troupe to npm (main tag)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: npm publish --access public --tag main
-        working-directory: libs/agent_pool
+        working-directory: libs/troupe
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish gsd to npm (main tag)
+      - name: Publish barnum to npm (main tag)
         if: "!startsWith(github.ref, 'refs/tags/v')"
         run: npm publish --access public --tag main
-        working-directory: libs/gsd
+        working-directory: libs/barnum
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish agent_pool to npm (latest tag)
+      - name: Publish troupe to npm (latest tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish --access public --tag latest
-        working-directory: libs/agent_pool
+        working-directory: libs/troupe
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish gsd to npm (latest tag)
+      - name: Publish barnum to npm (latest tag)
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm publish --access public --tag latest
-        working-directory: libs/gsd
+        working-directory: libs/barnum
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -1,10 +1,10 @@
-//! Derive macros for GSD task queue.
+//! Derive macros for Barnum task queue.
 //!
-//! This crate provides the `GsdTask` derive macro for automatically implementing
+//! This crate provides the `BarnumTask` derive macro for automatically implementing
 //! the `QueueItem` trait on enums where each variant wraps a type that already
 //! implements `QueueItem`.
 
-mod gsd_task_macro;
+mod barnum_task_macro;
 
 use proc_macro::TokenStream;
 
@@ -13,7 +13,7 @@ use proc_macro::TokenStream;
 /// Each variant must wrap a type that implements `QueueItem<Context>` for
 /// the same context type. The macro generates the dispatch logic to delegate
 /// to the inner type's implementation.
-#[proc_macro_derive(GsdTask, attributes(gsd_task))]
-pub fn gsd_task_derive(input: TokenStream) -> TokenStream {
-    gsd_task_macro::gsd_task_macro(input)
+#[proc_macro_derive(BarnumTask, attributes(barnum_task))]
+pub fn barnum_task_derive(input: TokenStream) -> TokenStream {
+    barnum_task_macro::barnum_task_macro(input)
 }

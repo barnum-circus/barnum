@@ -1,8 +1,8 @@
 # Config Schema Reference
 
-GSD workflows are defined in JSON (or JSONC) config files. This page documents all available fields.
+Barnum workflows are defined in JSON (or JSONC) config files. This page documents all available fields.
 
-Run `gsd config schema` to get the full JSON Schema for editor validation.
+Run `barnum config schema` to get the full JSON Schema for editor validation.
 
 ## Top-Level Structure
 
@@ -213,7 +213,7 @@ Runs after ALL descendants complete.
 
 ```json
 {
-  "$schema": "https://example.com/gsd-config-schema.json",
+  "$schema": "https://example.com/barnum-config-schema.json",
   "options": {
     "timeout": 120,
     "max_retries": 2,

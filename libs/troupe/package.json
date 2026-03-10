@@ -1,0 +1,32 @@
+{
+  "name": "@barnum/troupe",
+  "version": "0.2.0",
+  "description": "Troupe - agent pool daemon for managing workers with file-based task dispatch.",
+  "main": "index.js",
+  "bin": {
+    "troupe": "cli.js"
+  },
+  "author": "Robert Balicki",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/barnum-circus/barnum.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "keywords": [
+    "agent",
+    "pool",
+    "task-queue",
+    "cli",
+    "troupe"
+  ],
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*"
+  ],
+  "sideEffects": false
+}

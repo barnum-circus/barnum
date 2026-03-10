@@ -23,7 +23,7 @@ Each iteration uses a fresh anonymous worker UUID. Agents have no persistent ide
 Agents call the `get_task` CLI command to request work:
 
 ```bash
-agent_pool get_task --pool my-pool
+troupe get_task --pool my-pool
 ```
 
 This blocks until the daemon assigns work. The response is JSON on stdout:
@@ -37,7 +37,7 @@ This blocks until the daemon assigns work. The response is JSON on stdout:
   "kind": "Task",
 
   // Where to write the response when done
-  "response_file": "/tmp/agent_pool/pools/my-pool/agents/550e8400.response.json",
+  "response_file": "/tmp/troupe/pools/my-pool/agents/550e8400.response.json",
 
   // The task payload (see Task Format doc for details)
   "content": {
@@ -122,7 +122,7 @@ If an agent doesn't respond to a task (or heartbeat) within the configured timeo
 
 1. Writes a `Kicked` message to the agent
 2. Returns `NotProcessed { reason: "timeout" }` to the submitter
-3. The submitter (GSD) applies the retry policy
+3. The submitter (Barnum) applies the retry policy
 
 Agents that get kicked can reconnect immediately by calling `get_task` again.
 
@@ -136,7 +136,7 @@ POOL="my-pool"
 
 while true; do
   # Get next task (blocks until work available)
-  RESPONSE=$(agent_pool get_task --pool "$POOL")
+  RESPONSE=$(troupe get_task --pool "$POOL")
 
   KIND=$(echo "$RESPONSE" | jq -r '.kind')
   RESPONSE_FILE=$(echo "$RESPONSE" | jq -r '.response_file')

@@ -1,6 +1,6 @@
-//! Tests for the `GsdTask` derive macro.
+//! Tests for the `BarnumTask` derive macro.
 //!
-//! This is the same test as `split_print.rs` but uses `#[derive(GsdTask)]`
+//! This is the same test as `split_print.rs` but uses `#[derive(BarnumTask)]`
 //! instead of manually implementing the Task enum dispatch.
 
 #![expect(clippy::expect_used)]
@@ -9,7 +9,9 @@ use rstest::rstest;
 use std::collections::HashSet;
 use std::process::Command;
 use std::time::Duration;
-use task_queue::{GsdTask, IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem, process_queue};
+use task_queue::{
+    BarnumTask, IntoTasks, NoMoreTasks, ProcessQueueOptions, QueueItem, process_queue,
+};
 
 /// Test context tracking task lifecycle events.
 #[derive(Default)]
@@ -29,7 +31,7 @@ struct Context {
 }
 
 /// The top-level task enum using the derive macro.
-#[derive(GsdTask)]
+#[derive(BarnumTask)]
 enum Task {
     /// A task that splits CSV into individual values.
     Split(Split),

@@ -6,16 +6,16 @@ const lightTheme = prismThemes.github;
 lightTheme.plain.backgroundColor = 'rgba(0, 0, 0, 0.02)';
 
 const config: Config = {
-  title: 'GSD',
+  title: 'Barnum',
   tagline: 'Don\'t just /loop it. The missing workflow engine for agents.',
   favicon: 'img/favicon.svg',
 
-  url: 'https://gsd-now.github.io/',
+  url: 'https://barnum-circus.github.io/',
   baseUrl: '/',
   trailingSlash: true,
 
-  organizationName: 'gsd-now',
-  projectName: 'gsd-now.github.io',
+  organizationName: 'barnum-circus',
+  projectName: 'barnum-circus.github.io',
   deploymentBranch: 'main',
 
   onBrokenLinks: 'throw',
@@ -47,12 +47,12 @@ const config: Config = {
     metadata: [
       {
         name: 'keywords',
-        content: 'GSD, LLM, agents, task queue, state machine, Rust, CLI',
+        content: 'Barnum, LLM, agents, task queue, state machine, Rust, CLI',
       },
     ],
 
     navbar: {
-      title: '⚡ GSD',
+      title: '🎪 Barnum',
       items: [
         {
           type: 'docSidebar',
@@ -66,7 +66,7 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://github.com/gsd-now/gsd',
+          href: 'https://github.com/barnum-circus/barnum',
           label: 'GitHub',
           position: 'right',
         },
@@ -97,7 +97,7 @@ const config: Config = {
             },
             {
               label: 'GitHub',
-              href: 'https://github.com/gsd-now/gsd',
+              href: 'https://github.com/barnum-circus/barnum',
             },
           ],
         },

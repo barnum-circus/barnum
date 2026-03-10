@@ -86,7 +86,7 @@ function ExampleSection() {
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>One config. Complex workflows.</h2>
         <p>
-          A command lists every <code>.js</code> file. GSD dispatches one
+          A command lists every <code>.js</code> file. Barnum dispatches one
           agent per file to convert it to TypeScript — in parallel.
           When all conversions finish, a <code>finally</code> hook
           triggers an agent that runs <code>tsc</code> and fixes any
@@ -106,7 +106,7 @@ function ExampleSection() {
                 asciinema demo coming soon
               </p>
               <p className={styles.demoPlaceholderSubtitle}>
-                Watch GSD orchestrate a multi-file refactor in real time
+                Watch Barnum orchestrate a multi-file refactor in real time
               </p>
             </div>
           </div>
@@ -122,10 +122,10 @@ function AgentAuthoring() {
       <div className="container padding-vert--lg">
         <h2>Looks complicated? Let agents write it.</h2>
         <p>
-          GSD configs are just JSON with a{' '}
+          Barnum configs are just JSON with a{' '}
           <a href="/docs/reference/config-schema">published schema</a>.
           Point your agent at{' '}
-          <code>pnpm dlx @gsd-now/gsd config schema</code> to get
+          <code>pnpm dlx @barnum/barnum config schema</code> to get
           the full JSON Schema, show it the{' '}
           <a href="/docs/recipes">recipes page</a> for common
           patterns, and tell it what you want. It'll write a working
@@ -136,11 +136,11 @@ function AgentAuthoring() {
   );
 }
 
-function WhyGSD() {
+function WhyBarnum() {
   return (
     <section>
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>Why GSD?</h2>
+        <h2 className={styles.centeredHeading}>Why Barnum?</h2>
         <p>
           A single agent with a markdown plan can handle simple tasks. But
           real work — migrating 50 files, refactoring across a codebase,
@@ -149,12 +149,12 @@ function WhyGSD() {
           will do before you run it.
         </p>
         <p>
-          GSD is like a build system for agents. You declare the full graph of
+          Barnum is like a build system for agents. You declare the full graph of
           steps and valid transitions upfront — it's statically analyzable
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never leave the rails.
         </p>
-        <h3>What GSD gives you</h3>
+        <h3>What Barnum gives you</h3>
         <div className={`row ${styles.patternList}`}>
           <div className="col col--6">
             <ul>
@@ -201,7 +201,7 @@ function WhyGSD() {
         <p className={styles.closingNote}>
           Each pattern is a JSON config — no framework, no SDK, no
           custom language. Define the state machine, point it at an agent pool,
-          and let GSD handle the orchestration.
+          and let Barnum handle the orchestration.
         </p>
       </div>
     </section>
@@ -215,8 +215,8 @@ function HowItWorks() {
         <div className={styles.centeredIntro}>
           <h2>How it works</h2>
           <p>
-            GSD distributes work across a pool of agents running in parallel.
-            Start a pool, connect your agents, and hand GSD a workflow —
+            Barnum distributes work across a pool of agents running in parallel.
+            Start a pool, connect your agents, and hand Barnum a workflow —
             it handles the rest.
           </p>
         </div>
@@ -238,7 +238,7 @@ function HowItWorks() {
           <div className="col col--4">
             <h3>3. Run</h3>
             <p>
-              Pass the workflow to GSD. It distributes tasks across
+              Pass the workflow to Barnum. It distributes tasks across
               your agents, enforces valid transitions, retries failures,
               and respects concurrency limits.
             </p>
@@ -252,15 +252,15 @@ function HowItWorks() {
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="GSD - The missing workflow engine for agents"
-      description="Don't just /loop it. GSD is the missing workflow engine for agents — define complex trees of work as statically analyzable state machines."
+      title="Barnum - The missing workflow engine for agents"
+      description="Don't just /loop it. Barnum is the missing workflow engine for agents — define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>
         <Features />
         <ExampleSection />
         <AgentAuthoring />
-        <WhyGSD />
+        <WhyBarnum />
         <HowItWorks />
       </main>
     </Layout>

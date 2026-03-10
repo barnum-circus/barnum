@@ -6,12 +6,12 @@ resolver = "2"
 version = "0.2.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/gsd-now/gsd"
+repository = "https://github.com/barnum-circus/barnum"
 authors = ["Robert Balicki <robert.balicki@gmail.com>"]
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
-gsd_types = { path = "./crates/gsd_types" }
+barnum_types = { path = "./crates/barnum_types" }
 crossbeam-channel = "0.5"
 string_id = { path = "./crates/string_id" }
 interprocess = "2.2"

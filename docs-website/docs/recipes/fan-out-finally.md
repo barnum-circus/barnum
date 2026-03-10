@@ -83,7 +83,7 @@ List files, refactor them all in parallel, then commit the changes.
 ## Running
 
 ```bash
-gsd run --config config.json --pool agents --entrypoint-value '{"directory": "src"}'
+barnum run --config config.json --pool agents --entrypoint-value '{"directory": "src"}'
 ```
 
 ## How It Works

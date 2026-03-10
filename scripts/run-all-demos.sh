@@ -5,8 +5,8 @@
 #   ./scripts/run-all-demos.sh
 #
 # Environment variables (optional):
-#   AGENT_POOL - path to agent_pool binary (default: searches PATH, then target/debug)
-#   GSD - path to gsd binary (default: searches PATH, then target/debug)
+#   TROUPE - path to troupe binary (default: searches PATH, then target/debug)
+#   BARNUM - path to barnum binary (default: searches PATH, then target/debug)
 
 set -euo pipefail
 

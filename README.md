@@ -1,38 +1,38 @@
-# GSD (Get Sh*** Done)
+# Barnum
 
-GSD is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents. There are two interfaces provided: the GSD CLI and the underlying Rust libraries.
+Barnum is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents. There are two interfaces provided: the Barnum CLI and the underlying Rust libraries.
 
-> **Note:** Examples use `pnpm dlx`. You can also use `npx` or install globally with `pnpm add -g @gsd-now/gsd @gsd-now/agent-pool`.
+> **Note:** Examples use `pnpm dlx`. You can also use `npx` or install globally with `pnpm add -g @barnum/barnum @barnum/troupe`.
 
 ## Why?
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions.
 
-GSD is an attempt to provide structure and protect context, and thus enable LLMs to perform dramatically more complicated and ambitious tasks.
+Barnum is an attempt to provide structure and protect context, and thus enable LLMs to perform dramatically more complicated and ambitious tasks.
 
-With GSD, you define a state machine via JSON config. Transitions between states are validated. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and smaller. The CLI provides just the needed context for an individual task, meaning that if agents are given small atomic tasks, they can more reliably perform them correctly (this has been referred to as progressive disclosure).
+With Barnum, you define a state machine via JSON config. Transitions between states are validated. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and smaller. The CLI provides just the needed context for an individual task, meaning that if agents are given small atomic tasks, they can more reliably perform them correctly (this has been referred to as progressive disclosure).
 
-For example, if an agent is asked to list all the files in a folder and analyze each file, by default you would provide instructions for both tasks to the agent at the same time. With GSD, there is no need to provide both sets of instructions at once. Those instructions can be split into two steps. The agent that works on an individual task will only see exactly the instructions that it needs. With this added structure, agents can more reliably and rigorously handle tasks of increasing complexity.
+For example, if an agent is asked to list all the files in a folder and analyze each file, by default you would provide instructions for both tasks to the agent at the same time. With Barnum, there is no need to provide both sets of instructions at once. Those instructions can be split into two steps. The agent that works on an individual task will only see exactly the instructions that it needs. With this added structure, agents can more reliably and rigorously handle tasks of increasing complexity.
 
-See [crates/gsd_cli/demos](crates/gsd_cli/demos) for example workflows.
+See [crates/barnum_cli/demos](crates/barnum_cli/demos) for example workflows.
 
 ### Why isn't /loop sufficient?
 
 Tools like Claude's `/loop` command are great for simple, iterative tasks. But for complex refactors and multi-step workflows, they fall short:
 
-- **Predictability**: With GSD, you know exactly what states your workflow can be in and what transitions are valid. You can reason about the decision tree before running it.
+- **Predictability**: With Barnum, you know exactly what states your workflow can be in and what transitions are valid. You can reason about the decision tree before running it.
 - **Guaranteed Structure**: The state machine enforces that agents follow the defined workflow. Invalid transitions are rejected and retried.
 - **Separation of Concerns**: Each step has its own instructions, schema, and retry policy. Agents don't need to remember the entire workflow—they just handle their current task.
-- **Parallelism**: GSD naturally supports fan-out patterns where multiple tasks run concurrently, then aggregate results.
+- **Parallelism**: Barnum naturally supports fan-out patterns where multiple tasks run concurrently, then aggregate results.
 - **Auditability**: Every state transition is explicit and logged. You can trace exactly how the workflow progressed.
 
-For simple "keep trying until it works" loops, `/loop` is fine. For complex, multi-agent workflows where you need guarantees about behavior, GSD provides the structure that makes ambitious automation possible.
+For simple "keep trying until it works" loops, `/loop` is fine. For complex, multi-agent workflows where you need guarantees about behavior, Barnum provides the structure that makes ambitious automation possible.
 
 ## Quick Start
 
 ```bash
 # In one terminal, start the agent pool
-pnpm dlx @gsd-now/agent-pool start --pool agents
+pnpm dlx @barnum/troupe start --pool agents
 ```
 
 Pass this information to a Claude instance:
@@ -44,25 +44,25 @@ You are an AI agent in a task pool. You will be given a pool name, an agent name
 
 Run this to see the full protocol:
 
-pnpm dlx @gsd-now/agent-pool protocol
+pnpm dlx @barnum/troupe protocol
 
 ---
 
 Your name is c1. The pool name is agents.
 ```
 
-You can pass this to multiple Claudes; make sure they have distinct names for debugging purposes. See [AGENT_INSTRUCTIONS.md](crates/agent_pool/protocols/AGENT_INSTRUCTIONS.md) and [AGENT_PROTOCOL.md](crates/agent_pool/protocols/AGENT_PROTOCOL.md) for full details.
+You can pass this to multiple Claudes; make sure they have distinct names for debugging purposes. See [AGENT_INSTRUCTIONS.md](crates/troupe/protocols/AGENT_INSTRUCTIONS.md) and [AGENT_PROTOCOL.md](crates/troupe/protocols/AGENT_PROTOCOL.md) for full details.
 
 If you don't have a config, download a demo:
 
 ```bash
-curl -O https://raw.githubusercontent.com/gsd-now/gsd/master/crates/gsd_cli/demos/linear/config.jsonc
+curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/barnum_cli/demos/linear/config.jsonc
 ```
 
-Then run the GSD workflow:
+Then run the Barnum workflow:
 
 ```bash
-pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @barnum/barnum run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 ## Creating Config Files
@@ -70,22 +70,22 @@ pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[
 To see the JSON schema for config files:
 
 ```bash
-pnpm dlx @gsd-now/gsd config schema
+pnpm dlx @barnum/barnum config schema
 ```
 
-**Tip for AI agents:** When asking an AI to create a GSD config, tell it to run `gsd config schema` first to see all available fields and their types.
+**Tip for AI agents:** When asking an AI to create a Barnum config, tell it to run `barnum config schema` first to see all available fields and their types.
 
 ## Components
 
-### 1. GSD (`crates/gsd`)
+### 1. Barnum (`crates/barnum`)
 
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @barnum/barnum run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
-See below for detailed instructions, or [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
+See below for detailed instructions, or [crates/barnum/DESIGN.md](crates/barnum/DESIGN.md) for the config format and protocol.
 
 ### 2. Task Queue (`crates/task_queue`)
 
@@ -96,19 +96,19 @@ A Rust library for defining task queues as type-safe state machines. Tasks execu
 
 See [crates/task_queue/README.md](crates/task_queue/README.md) for API documentation.
 
-### 3. Agent Pool (`crates/agent_pool`)
+### 3. Troupe (`crates/troupe`)
 
 A daemon that manages a pool of long-running agents. Tasks are dispatched to available agents via a file-based protocol, enabling persistent workers that don't pay startup costs per task.
 
 ```bash
 # In a terminal, start the daemon
-pnpm dlx @gsd-now/agent-pool start --pool agents
+pnpm dlx @barnum/troupe start --pool agents
 
-# From another terminal, submit a task (GSD calls this internally)
-pnpm dlx @gsd-now/agent-pool submit_task --pool agents --data "task input"
+# From another terminal, submit a task (Barnum calls this internally)
+pnpm dlx @barnum/troupe submit_task --pool agents --data "task input"
 
 # An agent calls get_task to wait for work (writes response to returned file)
-pnpm dlx @gsd-now/agent-pool get_task --pool agents --name agent1
+pnpm dlx @barnum/troupe get_task --pool agents --name agent1
 # Returns JSON with response_file path - agent writes response there, then calls get_task again
 ```
 

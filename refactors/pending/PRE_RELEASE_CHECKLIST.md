@@ -57,7 +57,7 @@ Use crossbeam select! to make blocking operations cancellable. Foundation for gr
 
 ### 6. Task Progress Display
 
-When running GSD, show progress: "X task(s) completed, Y task(s) remaining"
+When running Barnum, show progress: "X task(s) completed, Y task(s) remaining"
 
 **Status:** DONE. Logs after each task completion. Merged to master.
 
@@ -66,7 +66,7 @@ When running GSD, show progress: "X task(s) completed, Y task(s) remaining"
 ### 7. Config Schema Subcommand
 **Doc:** `past/CONFIG_SCHEMA_SUBCOMMAND.md`
 
-Add `gsd config schema` subcommand that prints JSON schema. Enables validation and IDE autocomplete.
+Add `barnum config schema` subcommand that prints JSON schema. Enables validation and IDE autocomplete.
 
 **Status:** DONE. schemars derives JsonSchema on config types. Schema built as CI artifact and published to npm.
 
@@ -81,10 +81,10 @@ Auto-detect pnpm/yarn/npm from package.json and use appropriate dlx command.
 
 ---
 
-### 9. Pool Root Configuration for GSD
-**Doc:** `GSD_POOL_ROOT.md` (in past/)
+### 9. Pool Root Configuration for Barnum
+**Doc:** `Barnum_POOL_ROOT.md` (in past/)
 
-Allow passing `--root` to gsd CLI (renamed from `--pool-root`).
+Allow passing `--root` to barnum CLI (renamed from `--pool-root`).
 
 **Status:** DONE.
 

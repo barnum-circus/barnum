@@ -92,7 +92,7 @@ Analyze ──────┼─→ RenameVariables ──→ Done
 ## Running
 
 ```bash
-gsd run --config config.json --pool agents --entrypoint-value '{"file": "src/main.rs"}'
+barnum run --config config.json --pool agents --entrypoint-value '{"file": "src/main.rs"}'
 ```
 
 ## How It Works

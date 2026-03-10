@@ -17,7 +17,7 @@ finally ──→ CompileReport
 
 ## Why this pattern?
 
-Some tools charge $25 per code review. GSD runs the same checks — coding standards, security, JIRA compliance — in parallel across every changed file, each with focused context. The reviewing agent only sees its file and the relevant standards doc. No bloated context, no wasted tokens.
+Some tools charge $25 per code review. Barnum runs the same checks — coding standards, security, JIRA compliance — in parallel across every changed file, each with focused context. The reviewing agent only sees its file and the relevant standards doc. No bloated context, no wasted tokens.
 
 ## Example: PR review with standards and security checks
 
@@ -108,7 +108,7 @@ Return `[]`.
 ## Running
 
 ```bash
-gsd run --config code-review.jsonc --pool agents --entrypoint-value '{}'
+barnum run --config code-review.jsonc --pool agents --entrypoint-value '{}'
 ```
 
 ## How it works

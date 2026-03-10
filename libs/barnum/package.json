@@ -1,0 +1,33 @@
+{
+  "name": "@barnum/barnum",
+  "version": "0.2.0",
+  "description": "Barnum CLI - workflow engine for agents.",
+  "main": "index.js",
+  "bin": {
+    "barnum": "cli.js"
+  },
+  "author": "Robert Balicki",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/barnum-circus/barnum.git"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "keywords": [
+    "barnum",
+    "ai",
+    "agents",
+    "automation",
+    "cli"
+  ],
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*",
+    "barnum-config-schema.json"
+  ],
+  "sideEffects": false
+}

@@ -1,0 +1,38 @@
+// Example invocation:
+// pnpm barnum run --pool <POOL> --initial-state '[{"kind": "Distribute", "value": {}}]' fan-out.jsonc
+{
+  "steps": [
+    {
+      "name": "Distribute",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"inline": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks.\n\nReturn:\n```json\n[\n  {\"kind\": \"Worker\", \"value\": {\"id\": 1}},\n  {\"kind\": \"Worker\", \"value\": {\"id\": 2}},\n  ...\n  {\"kind\": \"Worker\", \"value\": {\"id\": 10}}\n]\n```"}
+      },
+      "next": ["Worker"]
+    },
+    {
+      "name": "Worker",
+      "value_schema": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Worker ID"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"inline": "Process your assigned work item.\n\nInput: `{\"id\": <number>}`\n\nReturn `[]` when done."}
+      },
+      "next": []
+    }
+  ]
+}
