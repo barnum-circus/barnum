@@ -17,31 +17,29 @@ permissions:
   contents: read
   pages: write
   id-token: write
-  actions: write  # Required to cancel workflow runs
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Gate job - all other jobs depend on this.
-  # Checks if we should run CI at all (skips if no changes to crates/, libs/, etc.)
-  gate:
+  # Gate for Rust jobs - skips if no changes to crates/, libs/, etc.
+  gate-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history to compare
+          fetch-depth: 0
       - name: Check for changes
         id: check
         run: |
-          # Always run on tags
           if [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo "Running: tag push"
             exit 0
           fi
 
-          # For PRs, check what changed in the PR
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
             if [[ -n "$CHANGES" ]]; then
@@ -54,7 +52,6 @@ jobs:
             exit 0
           fi
 
-          # For pushes, compare against the commit before this push
           BEFORE="${{ github.event.before }}"
           if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
             echo "Running: new branch or cannot determine previous commit"
@@ -70,16 +67,56 @@ jobs:
             echo "Skipping: no changes to crates/, libs/, or .github/"
             echo "skip=true" >> $GITHUB_OUTPUT
           fi
-      - name: Cancel if no relevant changes
-        if: steps.check.outputs.skip == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
+
+  # Gate for docs website - skips if no changes to docs-website/
+  gate-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for docs changes
+        id: check
         run: |
-          echo "No relevant changes, cancelling workflow"
-          gh run cancel ${{ github.run_id }}
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Running: tag push"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- docs-website/ .github/)
+            if [[ -n "$CHANGES" ]]; then
+              echo "Running: PR has changes in docs-website/ or .github/"
+              echo "$CHANGES"
+            else
+              echo "Skipping: PR has no changes to docs-website/ or .github/"
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+            exit 0
+          fi
+
+          BEFORE="${{ github.event.before }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
+            echo "Running: new branch or cannot determine previous commit"
+            exit 0
+          fi
+
+          echo "Comparing HEAD against before: $BEFORE"
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/)
+          if [[ -n "$CHANGES" ]]; then
+            echo "Running: changes detected in docs-website/ or .github/"
+            echo "$CHANGES"
+          else
+            echo "Skipping: no changes to docs-website/ or .github/"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
 
   fmt:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -89,14 +126,10 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   clippy:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -107,14 +140,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   test:
-    needs: [gate, build-linux-x64]
+    needs: [gate-rust, build-linux-x64]
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -141,14 +170,10 @@ jobs:
           # Use a short temp directory for test data instead of CARGO_MANIFEST_DIR.
           TEST_TMPDIR: /tmp/bt
         run: cargo test --workspace -- --test-threads=1
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   demos:
-    needs: [gate, build-linux-x64]
+    needs: [gate-rust, build-linux-x64]
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -177,14 +202,10 @@ jobs:
           BARNUM: ${{ github.workspace }}/bin/barnum
           RUST_LOG: off
         run: ./scripts/run-all-demos.sh
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-macos-x64:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -224,14 +245,10 @@ jobs:
         with:
           name: barnum-macos-x64
           path: target/x86_64-apple-darwin/release/barnum
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-macos-arm64:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -271,14 +288,10 @@ jobs:
         with:
           name: barnum-macos-arm64
           path: target/aarch64-apple-darwin/release/barnum
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-linux-x64:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -321,14 +334,10 @@ jobs:
         with:
           name: barnum-linux-x64
           path: target/x86_64-unknown-linux-musl/release/barnum
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-linux-arm64:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -371,14 +380,10 @@ jobs:
         with:
           name: barnum-linux-arm64
           path: target/aarch64-unknown-linux-musl/release/barnum
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-windows-x64:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -419,14 +424,10 @@ jobs:
         with:
           name: barnum-win-x64
           path: target/x86_64-pc-windows-msvc/release/barnum.exe
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-schema:
-    needs: gate
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -439,13 +440,10 @@ jobs:
         with:
           name: barnum-config-schema
           path: libs/barnum/barnum-config-schema.json
-      - name: Cancel workflow on failure
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run cancel ${{ github.run_id }}
 
   build-website:
+    needs: gate-docs
+    if: needs.gate-docs.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -477,8 +475,8 @@ jobs:
   deploy-website:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [build-website]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [gate-docs, build-website]
+    if: needs.gate-docs.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - name: Download build folder
         uses: actions/download-artifact@v4
@@ -497,8 +495,8 @@ jobs:
           commit_message: 'Deploy docs from barnum@${{ github.sha }}'
 
   publish:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64, build-schema]
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [gate-rust, fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64, build-schema]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
