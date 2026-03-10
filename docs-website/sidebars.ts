@@ -6,6 +6,20 @@ const sidebars: SidebarsConfig = {
     'quickstart',
     {
       type: 'category',
+      label: 'Reference',
+      items: [
+        'reference/cli',
+        'reference/config-schema',
+        'reference/task-format',
+        'reference/agent-protocol',
+        'reference/submission-protocol',
+        'reference/retry',
+        'reference/resume',
+        'reference/visualization',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Recipes',
       items: [
         'recipes/index',
@@ -21,20 +35,6 @@ const sidebars: SidebarsConfig = {
         'recipes/validation',
         'recipes/commands',
         'recipes/code-review',
-      ],
-    },
-    {
-      type: 'category',
-      label: 'Reference',
-      items: [
-        'reference/cli',
-        'reference/config-schema',
-        'reference/task-format',
-        'reference/agent-protocol',
-        'reference/submission-protocol',
-        'reference/retry',
-        'reference/resume',
-        'reference/visualization',
       ],
     },
     'roadmap',
