@@ -16,7 +16,7 @@ use rstest::rstest;
 use std::fs;
 use std::time::Duration;
 
-const TEST_DIR: &str = "cli_integration";
+const TEST_DIR: &str = "cli";
 
 // =============================================================================
 // Basic Config Tests
