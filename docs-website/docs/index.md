@@ -17,7 +17,7 @@ Barnum provides structure and protects context, enabling LLMs to perform dramati
 
 ### Why isn't /loop sufficient?
 
-Tools like Claude's `/loop` command are great for simple, iterative tasks. But for complex refactors and multi-step workflows, they fall short:
+Tools like Claude's `/loop` command (and similar features in other agents) are great for simple, iterative tasks. But for complex refactors and multi-step workflows, they fall short:
 
 - **Predictability**: With Barnum, you know exactly what states your workflow can be in and what transitions are valid. You can reason about the decision tree before running it.
 - **Guaranteed Structure**: The state machine enforces that agents follow the defined workflow. Invalid transitions are rejected and retried.

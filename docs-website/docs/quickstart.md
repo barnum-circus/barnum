@@ -1,16 +1,16 @@
 # Quick Start
 
-This guide walks you through running your first Barnum workflow with Claude agents.
+This guide walks you through running your first Barnum workflow. We use Claude in this example, but Barnum works with any AI agent that can follow instructions and write to a file.
 
 ## What is Barnum?
 
-Barnum orchestrates AI agents through type-safe workflows. You define a state machine in JSON, and Barnum dispatches tasks to long-lived Claude agents. Each agent only sees the instructions for its current task—no context overload, no confusion about what to do next.
+Barnum orchestrates AI agents through type-safe workflows. You define a state machine in JSON, and Barnum dispatches tasks to long-lived agents. Each agent only sees the instructions for its current task—no context overload, no confusion about what to do next.
 
 **The key insight:** By breaking complex work into discrete steps with clear instructions, agents can reliably tackle ambitious refactoring and codebase changes.
 
 ## Prerequisites
 
-- A Claude instance (Claude Code, claude.ai, or API)
+- An AI agent (Claude Code, claude.ai, ChatGPT, Cursor, or any agent that can run shell commands)
 
 ## Step 1: Start the Troupe
 
@@ -26,9 +26,9 @@ This creates a pool named "agents". The pool manages task dispatch—when Barnum
 
 **Keep this terminal running.** The pool stays active until you stop it.
 
-## Step 2: Start a Claude Agent
+## Step 2: Start an Agent
 
-Open Claude (Claude Code, claude.ai, or another instance) and paste these instructions:
+Open your agent (Claude Code, ChatGPT, Cursor, etc.) and paste these instructions:
 
 ```
 You are an AI agent in a task pool. You will be given a pool name, an agent name, and an optional pool root. Your tasks are part of a larger coordinated refactor or codebase change—an orchestrator is managing the overall effort and assigning work to multiple agents.
@@ -44,9 +44,9 @@ pnpm dlx @barnum/troupe protocol
 Your name is c1. The pool name is agents.
 ```
 
-Claude will run the protocol command and start listening for tasks. **It will wait until Barnum sends work.**
+Your agent will run the protocol command and start listening for tasks. **It will wait until Barnum sends work.**
 
-You can start multiple Claude agents with different names (c1, c2, c3) for parallel processing.
+You can start multiple agents with different names (c1, c2, c3) for parallel processing.
 
 ## Step 3: Run a Simple Workflow
 
@@ -65,15 +65,15 @@ pnpm dlx @barnum/barnum run --config config.jsonc --pool agents --entrypoint-val
 **What happens:**
 1. Barnum reads the config and validates the workflow
 2. It submits the initial task (`Start`) to the pool
-3. The pool dispatches the task to your waiting Claude agent
-4. Claude follows the instructions and returns the next task(s)
+3. The pool dispatches the task to your waiting agent
+4. The agent follows the instructions and returns the next task(s)
 5. Barnum repeats until no tasks remain
 
-Watch your Claude—it will receive tasks and respond automatically.
+Watch your agent—it will receive tasks and respond automatically.
 
 ## Step 4: Create Your Own Refactoring Workflow
 
-Now for something useful. Ask another Claude instance to help you create a config for refactoring a codebase:
+Now for something useful. Ask your agent to help you create a config for refactoring a codebase:
 
 ```
 I want to create a Barnum workflow config that:

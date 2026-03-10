@@ -11,7 +11,7 @@
 - Step prioritization
 - Runtime workflow graph
 - Temporal integration
-- Claude CLI integration
+- First-party agent CLI integrations
 
 ## Agent Pool Features
 
