@@ -32,6 +32,7 @@ const sidebars: SidebarsConfig = {
         'reference/agent-protocol',
         'reference/submission-protocol',
         'reference/retry',
+        'reference/resume',
       ],
     },
     'roadmap',
