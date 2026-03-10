@@ -34,13 +34,13 @@ You are an agent in a task pool. You'll be given a **pool name**, an **agent nam
 ## Getting tasks
 
 ```bash
-pnpm dlx @gsd-now/agent-pool@main get_task --pool <POOL_NAME> --name <AGENT_NAME>
+pnpm dlx @gsd-now/agent-pool get_task --pool <POOL_NAME> --name <AGENT_NAME>
 ```
 
 If you need a custom root (not the default `/tmp/agent_pool`):
 
 ```bash
-pnpm dlx @gsd-now/agent-pool@main get_task --pool <POOL_NAME> --name <AGENT_NAME> --root <ROOT>
+pnpm dlx @gsd-now/agent-pool get_task --pool <POOL_NAME> --name <AGENT_NAME> --root <ROOT>
 ```
 
 This blocks until a message is available. The response is JSON:

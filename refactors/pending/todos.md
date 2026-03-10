@@ -1107,7 +1107,7 @@ Example:
 
 Add a `--tag` parameter to `agent_pool protocol` command (or the agent instructions) to specify which npm tag to use when running `pnpm dlx @gsd-now/agent-pool`.
 
-Currently agents are manually told to use `@main` in the instructions. This should be a first-class parameter.
+Currently agents use whatever `@latest` resolves to. This should be a first-class parameter so agents can be pinned to a specific version.
 
 ---
 
@@ -1137,13 +1137,11 @@ gsd run --config config.json --root /nonexistent/path --pool mypool --initial '[
 
 ## CLI Invoker Version Checking
 
-**Status: TODO (workaround in place)**
+**Status: TODO**
 
 The `cli_invoker` crate resolves how to invoke CLI tools (binary path, package manager dlx, etc.) but doesn't verify version compatibility.
 
-**Current workaround:** `NPM_PACKAGE` is hardcoded to `@gsd-now/agent-pool@main` in `agent_pool_cli/src/lib.rs`. This is because `@latest` (0.1.0) was published without binaries and is broken. Using `@main` ensures we get a working version.
-
-**The real fix:** GSD and agent-pool should use matched versions. When gsd@X.Y.Z invokes agent-pool, it should request agent-pool@X.Y.Z, not whatever `@latest` or `@main` happens to be.
+**The real fix:** GSD and agent-pool should use matched versions. When gsd@X.Y.Z invokes agent-pool, it should request agent-pool@X.Y.Z, not whatever `@latest` happens to be.
 
 **Issues:**
 
@@ -1157,4 +1155,4 @@ The `cli_invoker` crate resolves how to invoke CLI tools (binary path, package m
 2. For binary invocation: run `<binary> --version`, parse output, warn if mismatch
 3. For package manager invocation: append `@{VERSION}` to the package name in `prefix_args`
 
-**Priority:** Medium - the `@main` workaround works but is fragile. Important for production use.
+**Priority:** Medium - important for production use.

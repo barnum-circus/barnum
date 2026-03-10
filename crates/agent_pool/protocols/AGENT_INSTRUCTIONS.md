@@ -7,7 +7,7 @@ You are an AI agent in a task pool. You will be given a pool name, an agent name
 **Before doing anything else**, run this command to get the complete protocol documentation:
 
 ```bash
-pnpm dlx @gsd-now/agent-pool@main protocol --pool <POOL_NAME> --name <YOUR_NAME>
+pnpm dlx @gsd-now/agent-pool protocol --pool <POOL_NAME> --name <YOUR_NAME>
 ```
 
 This will give you the exact JSON formats, response requirements, and the agent loop structure. **Do not proceed without reading the protocol.**

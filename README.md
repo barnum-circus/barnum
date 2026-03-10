@@ -2,7 +2,7 @@
 
 GSD is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents. There are two interfaces provided: the GSD CLI and the underlying Rust libraries.
 
-> **Note:** Examples use `pnpm dlx` with `@main` tag. You can also use `npx` or install globally with `pnpm add -g @gsd-now/gsd@main @gsd-now/agent-pool@main`.
+> **Note:** Examples use `pnpm dlx`. You can also use `npx` or install globally with `pnpm add -g @gsd-now/gsd @gsd-now/agent-pool`.
 
 ## Why?
 
@@ -32,7 +32,7 @@ For simple "keep trying until it works" loops, `/loop` is fine. For complex, mul
 
 ```bash
 # In one terminal, start the agent pool
-pnpm dlx @gsd-now/agent-pool@main start --pool agents
+pnpm dlx @gsd-now/agent-pool start --pool agents
 ```
 
 Pass this information to a Claude instance:
@@ -44,7 +44,7 @@ You are an AI agent in a task pool. You will be given a pool name, an agent name
 
 Run this to see the full protocol:
 
-pnpm dlx @gsd-now/agent-pool@main protocol
+pnpm dlx @gsd-now/agent-pool protocol
 
 ---
 
@@ -62,7 +62,7 @@ curl -O https://raw.githubusercontent.com/gsd-now/gsd/main/crates/gsd_cli/demos/
 Then run the GSD workflow:
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 ## Creating Config Files
@@ -70,7 +70,7 @@ pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-sta
 To see the JSON schema for config files:
 
 ```bash
-pnpm dlx @gsd-now/gsd@main config schema
+pnpm dlx @gsd-now/gsd config schema
 ```
 
 **Tip for AI agents:** When asking an AI to create a GSD config, tell it to run `gsd config schema` first to see all available fields and their types.
@@ -82,7 +82,7 @@ pnpm dlx @gsd-now/gsd@main config schema
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-pnpm dlx @gsd-now/gsd@main run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+pnpm dlx @gsd-now/gsd run --config config.jsonc --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
 ```
 
 See below for detailed instructions, or [crates/gsd/DESIGN.md](crates/gsd/DESIGN.md) for the config format and protocol.
@@ -102,13 +102,13 @@ A daemon that manages a pool of long-running agents. Tasks are dispatched to ava
 
 ```bash
 # In a terminal, start the daemon
-pnpm dlx @gsd-now/agent-pool@main start --pool agents
+pnpm dlx @gsd-now/agent-pool start --pool agents
 
 # From another terminal, submit a task (GSD calls this internally)
-pnpm dlx @gsd-now/agent-pool@main submit_task --pool agents --data "task input"
+pnpm dlx @gsd-now/agent-pool submit_task --pool agents --data "task input"
 
 # An agent calls get_task to wait for work (writes response to returned file)
-pnpm dlx @gsd-now/agent-pool@main get_task --pool agents --name agent1
+pnpm dlx @gsd-now/agent-pool get_task --pool agents --name agent1
 # Returns JSON with response_file path - agent writes response there, then calls get_task again
 ```
 

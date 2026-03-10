@@ -5,7 +5,7 @@ Agent pool daemon for managing workers with file-based task dispatch.
 ## Installation
 
 ```bash
-npm install -g @gsd-now/agent-pool@main
+npm install -g @gsd-now/agent-pool
 ```
 
 ## Usage
