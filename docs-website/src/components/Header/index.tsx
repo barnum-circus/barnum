@@ -15,7 +15,7 @@ export default function HomepageHeader() {
                 styles.heroSubtitle,
               )}
             >
-              Don't just /loop it.
+              Don't just <span className={styles.loopCommand}>/loop</span> it.
               <br />
               The missing workflow engine for LLM agents.
             </p>

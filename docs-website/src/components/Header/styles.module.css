@@ -27,6 +27,11 @@
   line-height: 1.25;
 }
 
+.loopCommand {
+  font-family: var(--ifm-font-family-monospace);
+  font-weight: 600;
+}
+
 @media screen and (max-width: 996px) {
   .heroBanner {
     padding: 2rem 0 3rem;
