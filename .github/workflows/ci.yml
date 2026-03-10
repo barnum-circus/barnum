@@ -487,30 +487,22 @@ jobs:
     timeout-minutes: 5
     needs: [build-website]
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
       - name: Download build folder
         uses: actions/download-artifact@v4
         with:
           name: docusaurus-build
           path: docs-website/build
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Upload to GitHub Pages
-        run: tar --dereference --hard-dereference --directory "docs-website/build" -cvf "$RUNNER_TEMP/artifact.tar" --exclude=.git --exclude=.github .
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Deploy to gsd-now.github.io
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          name: github-pages
-          path: ${{ runner.temp }}/artifact.tar
-          retention-days: 1
-          if-no-files-found: error
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: gsd-now/gsd-now.github.io
+          publish_branch: main
+          publish_dir: docs-website/build
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy docs from gsd@${{ github.sha }}'
 
   publish:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))

@@ -11,12 +11,12 @@ const config: Config = {
   favicon: 'img/favicon.svg',
 
   url: 'https://gsd-now.github.io/',
-  baseUrl: '/gsd/',
+  baseUrl: '/',
   trailingSlash: true,
 
   organizationName: 'gsd-now',
-  projectName: 'gsd',
-  deploymentBranch: 'gh-pages',
+  projectName: 'gsd-now.github.io',
+  deploymentBranch: 'main',
 
   onBrokenLinks: 'throw',
   onBrokenMarkdownLinks: 'throw',
