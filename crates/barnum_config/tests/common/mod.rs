@@ -28,7 +28,7 @@ use troupe_cli::TroupeCli;
 pub fn test_data_dir(test_file: &str) -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir)
-        .join(".test-data")
+        .join(".td")
         .join(test_file)
 }
 

@@ -4,5 +4,5 @@
 .vscode/
 
 # Test data directories
-.test-data/
+.td/
 .local/
