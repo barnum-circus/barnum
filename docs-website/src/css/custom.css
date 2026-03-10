@@ -49,6 +49,12 @@
   margin-bottom: 3rem !important;
 }
 
+/* Word wrap in all code blocks */
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .alt-background {
   padding-top: 1px;
   background-color: var(--ifm-alt-background);
