@@ -2,7 +2,7 @@
 //!
 //! Troupe communicates with:
 //! - **Submitters** via Unix socket or file-based submission
-//! - **Agents** via filesystem polling (`task.json`, `response.json`)
+//! - **Agents** via filesystem watchers (`task.json`, `response.json`)
 //!
 //! See `protocols/AGENT_PROTOCOL.md` for details on the agent file protocol.
 //!
