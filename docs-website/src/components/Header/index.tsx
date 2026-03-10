@@ -15,9 +15,9 @@ export default function HomepageHeader() {
                 styles.heroSubtitle,
               )}
             >
-              Don't just loop it.
+              Don't just /loop it.
               <br />
-              The build system for LLM agents.
+              The missing workflow engine for LLM agents.
             </p>
             <Buttons />
           </div>

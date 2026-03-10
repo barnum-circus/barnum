@@ -63,8 +63,8 @@ function WhyGSD() {
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="GSD - The build system for LLM agents"
-      description="Don't just loop it. GSD is a workflow engine for LLM agents — define complex trees of work as statically analyzable state machines."
+      title="GSD - The missing workflow engine for LLM agents"
+      description="Don't just /loop it. GSD is the missing workflow engine for LLM agents — define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>
