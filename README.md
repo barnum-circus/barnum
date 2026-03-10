@@ -56,7 +56,7 @@ You can pass this to multiple Claudes; make sure they have distinct names for de
 If you don't have a config, download a demo:
 
 ```bash
-curl -O https://raw.githubusercontent.com/gsd-now/gsd/main/crates/gsd_cli/demos/linear/config.jsonc
+curl -O https://raw.githubusercontent.com/gsd-now/gsd/master/crates/gsd_cli/demos/linear/config.jsonc
 ```
 
 Then run the GSD workflow:
