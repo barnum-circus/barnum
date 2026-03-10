@@ -13,7 +13,7 @@
     75deg,
     var(--ifm-black) 0%,
     var(--ifm-color-primary) 50%,
-    var(--ifm-color-primary) 100%
+    var(--ifm-color-gold) 100%
   );
   text-align: center;
 }

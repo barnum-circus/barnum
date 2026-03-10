@@ -6,16 +6,17 @@
 
 /* You can override the default Infima variables here. */
 :root {
-  --ifm-color-primary: #4e9ebc;
-  --ifm-color-primary-dark: #3d8fad;
-  --ifm-color-primary-darker: #3586a3;
-  --ifm-color-primary-darkest: #2c6f86;
-  --ifm-color-primary-light: #62abca;
-  --ifm-color-primary-lighter: #6eb1ce;
-  --ifm-color-primary-lightest: #8cc2da;
-  --ifm-black: #124659;
-  --ifm-alt-background: #f5fafc;
-  --ifm-alt-background-border: #d6dee1;
+  --ifm-color-primary: #b83232;
+  --ifm-color-primary-dark: #a52d2d;
+  --ifm-color-primary-darker: #9c2a2a;
+  --ifm-color-primary-darkest: #802323;
+  --ifm-color-primary-light: #c44545;
+  --ifm-color-primary-lighter: #ca5050;
+  --ifm-color-primary-lightest: #d87070;
+  --ifm-black: #4a1212;
+  --ifm-color-gold: #c9961a;
+  --ifm-alt-background: #fdf6ed;
+  --ifm-alt-background-border: #e0d2be;
   --ifm-h2-font-size: 2.5rem;
   --ifm-h3-font-size: 1.4rem;
   --ifm-code-font-size: 95%;
@@ -32,17 +33,24 @@
 
 /* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #258fb5;
-  --ifm-color-primary-dark: #2180a3;
-  --ifm-color-primary-darker: #1f799a;
-  --ifm-color-primary-darkest: #1a647f;
-  --ifm-color-primary-light: #2a9ec7;
-  --ifm-color-primary-lighter: #2da5d0;
-  --ifm-color-primary-lightest: #4ab4d8;
-  --ifm-black: #0e3544;
-  --ifm-alt-background: #2f2f32;
-  --ifm-alt-background-border: #424248;
+  --ifm-color-primary: #d44040;
+  --ifm-color-primary-dark: #be3939;
+  --ifm-color-primary-darker: #b33636;
+  --ifm-color-primary-darkest: #932c2c;
+  --ifm-color-primary-light: #da5353;
+  --ifm-color-primary-lighter: #dd5c5c;
+  --ifm-color-primary-lightest: #e57a7a;
+  --ifm-black: #3a0e0e;
+  --ifm-color-gold: #d4a520;
+  --ifm-background-color: #1d1a18;
+  --ifm-background-surface-color: #262220;
+  --ifm-alt-background: #322e2a;
+  --ifm-alt-background-border: #48423c;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}
+
+.footer--dark {
+  --ifm-footer-background-color: #2a1a1a;
 }
 
 .margin-bottom--lg {
