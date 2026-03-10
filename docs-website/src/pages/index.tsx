@@ -84,16 +84,14 @@ function ExampleSection() {
   return (
     <section>
       <div className="container padding-vert--lg">
-        <div className={styles.centeredIntro}>
-          <h2>One config. Complex workflows.</h2>
-          <p>
-            A command lists every <code>.js</code> file. GSD dispatches one
-            agent per file to convert it to TypeScript — in parallel.
-            When all conversions finish, a <code>finally</code> hook
-            triggers an agent that runs <code>tsc</code> and fixes any
-            remaining type errors. One JSON file, no glue code.
-          </p>
-        </div>
+        <h2 className={styles.centeredHeading}>One config. Complex workflows.</h2>
+        <p>
+          A command lists every <code>.js</code> file. GSD dispatches one
+          agent per file to convert it to TypeScript — in parallel.
+          When all conversions finish, a <code>finally</code> hook
+          triggers an agent that runs <code>tsc</code> and fixes any
+          remaining type errors. One JSON file, no glue code.
+        </p>
         <div className="row">
           <div className="col col--6">
             <div className={styles.codeBlockWrap}>
