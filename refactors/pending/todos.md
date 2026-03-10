@@ -1,5 +1,14 @@
 # To-Dos and Future Directions
 
+## State Persistence Polish (Phase 5)
+
+- Handle corrupted/truncated state logs gracefully (partial line at end, invalid JSON mid-file)
+- Add `gsd log inspect <path>` command to view state log contents (pending/waiting/completed tasks)
+- Consider compression for large state logs
+- Documentation for `--state-log` and `--resume-from` flags
+
+---
+
 ## Most Important
 
 0. **Parse Agent/Command Responses as JSONC** - Parse the return value from agents and commands as JSONC (JSON with comments) instead of strict JSON. This allows agents and command scripts to include comments in their responses for debugging purposes (e.g., `// chose this path because...`). Useful during development and when inspecting logs of agent responses. Libraries like `json_comments` or manual comment stripping before `serde_json::from_str` would work.
