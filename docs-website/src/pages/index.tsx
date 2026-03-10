@@ -51,7 +51,7 @@ function Features() {
       <div className="container padding-vert--lg">
         <div className="row">
           <div className="col col--4">
-            <h3>Rigorous workflows</h3>
+            <h3>🦁 Rigorous workflows</h3>
             <p>
               Express workflows as statically analyzable state machines.
               Valid transitions are declared upfront. Invalid ones are
@@ -59,15 +59,16 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>Mix agents and commands</h3>
+            <h3>🐘 Mix agents and commands</h3>
             <p>
               Intersperse LLM steps with local shell commands for
-              deterministic operations. Fan-out with jq, commit with git,
-              validate with your compiler — no agent needed.
+              deterministic operations. Fan-out with <code>jq</code>,
+              commit with <code>git</code>, validate with your
+              compiler — no agent needed.
             </p>
           </div>
           <div className="col col--4">
-            <h3>Context protection</h3>
+            <h3>🐯 Context protection</h3>
             <p>
               Each step gets only the instructions and data it needs.
               Agents never see the full workflow — just their current task.
@@ -200,7 +201,7 @@ function WhyBarnum() {
         </div>
         <p className={styles.closingNote}>
           Each pattern is a JSON config — no framework, no SDK, no
-          custom language. Define the state machine, point it at an agent pool,
+          custom language. Define the state machine, point it at a troupe,
           and let Barnum handle the orchestration.
         </p>
       </div>
@@ -214,27 +215,27 @@ function HowItWorks() {
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>How it works</h2>
         <p>
-          Barnum distributes work across a pool of agents running in parallel.
-          Start a pool, connect your agents, and hand Barnum a workflow —
+          Barnum distributes work across a troupe of agents running in parallel.
+          Assemble a troupe, connect your agents, and hand Barnum a workflow —
           it handles the rest.
         </p>
         <div className="row">
           <div className="col col--4">
-            <h3>1. Define</h3>
+            <h3>📜 1. Write the script</h3>
             <p>
               Write a workflow config with steps, transitions, and schemas.
               Each step is either an agent task or a shell command.
             </p>
           </div>
           <div className="col col--4">
-            <h3>2. Prepare the pool</h3>
+            <h3>🎪 2. Assemble the troupe</h3>
             <p>
-              Start an agent pool and connect agents to it. The more
+              Start a troupe and connect agents to it. The more
               agents you add, the more work runs in parallel.
             </p>
           </div>
           <div className="col col--4">
-            <h3>3. Run</h3>
+            <h3>🎬 3. Showtime</h3>
             <p>
               Pass the workflow to Barnum. It distributes tasks across
               your agents, enforces valid transitions, retries failures,
