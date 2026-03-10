@@ -17,7 +17,13 @@ use std::time::Duration;
 use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
 
 /// Get the path to the test data directory for a given test file.
+///
+/// Uses `TEST_TMPDIR` env var if set (for CI where `CARGO_MANIFEST_DIR` paths
+/// are too long for Unix socket `sun_path` limit of 108 chars).
 pub fn test_data_dir(test_file: &str) -> PathBuf {
+    if let Ok(base) = std::env::var("TEST_TMPDIR") {
+        return PathBuf::from(base).join(test_file);
+    }
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(manifest_dir).join(".td").join(test_file)
 }

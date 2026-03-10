@@ -455,10 +455,10 @@ impl TestAgent {
 /// Find the `troupe` binary.
 ///
 /// Checks in order:
-/// 1. `AGENT_POOL_BIN` environment variable
+/// 1. `TROUPE_BIN` environment variable
 /// 2. `target/debug/troupe` relative to workspace root
 fn find_troupe_binary() -> PathBuf {
-    if let Ok(bin) = std::env::var("AGENT_POOL_BIN") {
+    if let Ok(bin) = std::env::var("TROUPE_BIN") {
         return PathBuf::from(bin);
     }
 

@@ -137,6 +137,9 @@ jobs:
         env:
           TROUPE_BIN: ${{ github.workspace }}/target/debug/troupe
           RUST_LOG: warn
+          # CI runner paths are too long for Unix socket sun_path (108 char limit).
+          # Use a short temp directory for test data instead of CARGO_MANIFEST_DIR.
+          TEST_TMPDIR: /tmp/bt
         run: cargo test --workspace -- --test-threads=1
       - name: Cancel workflow on failure
         if: failure()
