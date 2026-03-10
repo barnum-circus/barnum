@@ -8,14 +8,14 @@ const exampleConfig = `{
   "steps": [
     {
       "name": "ListFiles",
-      // Shell command: one task per .js file
+      // One ConvertToTS task per .js file
       "action": {
         "kind": "Command",
-        "script": "find src -name '*.js' | jq ..."
+        "script": "find src -name '*.js' | jq -R '{kind: \\"ConvertToTS\\", value: {file: .}}' | jq -s '.'"
       },
       "next": ["ConvertToTS"],
-      // After ALL conversions: run tsc, fan out errors
-      "finally": "npx tsc --noEmit 2>&1 | jq ..."
+      // After all conversions: fix any remaining type errors
+      "finally": "echo '[{\\"kind\\": \\"FixErrors\\", \\"value\\": {}}]'"
     },
     {
       "name": "ConvertToTS",
@@ -34,15 +34,10 @@ const exampleConfig = `{
     },
     {
       "name": "FixErrors",
-      "value_schema": {
-        "type": "object",
-        "required": ["file", "errors"],
-        "properties": { "file": { "type": "string" }, "errors": { "type": "string" } }
-      },
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Fix the TypeScript errors in this file. Return []."
+          "inline": "Run npx tsc --noEmit and fix all TypeScript errors. Return []."
         }
       },
       "next": []
@@ -91,11 +86,11 @@ function ExampleSection() {
       <div className="container padding-vert--lg">
         <h2>One config. Complex workflows.</h2>
         <p>
-          A command finds every <code>.js</code> file and fans out to
-          agents that convert each one to TypeScript — in parallel.
+          A command lists every <code>.js</code> file. GSD dispatches one
+          agent per file to convert it to TypeScript — in parallel.
           When all conversions finish, a <code>finally</code> hook
-          runs <code>tsc</code>, finds remaining type errors, and fans
-          those out to agents that fix them. One JSON file, no glue code.
+          triggers an agent that runs <code>tsc</code> and fixes any
+          remaining type errors. One JSON file, no glue code.
         </p>
         <div className="row">
           <div className="col col--6">

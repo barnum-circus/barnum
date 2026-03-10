@@ -52,7 +52,7 @@ const config: Config = {
     ],
 
     navbar: {
-      title: 'GSD',
+      title: '⚡ GSD',
       items: [
         {
           type: 'docSidebar',
