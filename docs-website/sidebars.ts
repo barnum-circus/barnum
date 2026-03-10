@@ -34,6 +34,7 @@ const sidebars: SidebarsConfig = {
         'reference/submission-protocol',
         'reference/retry',
         'reference/resume',
+        'reference/visualization',
       ],
     },
     'roadmap',
