@@ -18,6 +18,7 @@ This directory contains example configurations for common task queue patterns.
 | [Validation](validation.md) | Schema validation for inputs and outputs |
 | [Local Commands](commands.md) | Run shell scripts instead of agents |
 | [Code Review](code-review.md) | Parallel PR review with standards and security checks |
+| [Legal Review](legal-review.md) | Parallel contract analysis with final recommendation |
 
 ## Config Structure
 

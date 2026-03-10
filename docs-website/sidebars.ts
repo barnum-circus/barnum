@@ -16,6 +16,7 @@ const sidebars: SidebarsConfig = {
         'reference/retry',
         'reference/resume',
         'reference/visualization',
+        'reference/file-extraction',
       ],
     },
     {
@@ -35,6 +36,7 @@ const sidebars: SidebarsConfig = {
         'recipes/validation',
         'recipes/commands',
         'recipes/code-review',
+        'recipes/legal-review',
       ],
     },
     'roadmap',
