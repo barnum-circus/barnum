@@ -1,20 +1,25 @@
 import CodeBlock from '@theme/CodeBlock';
 import Layout from '@theme/Layout';
 import HomepageHeader from '../components/Header';
+import styles from './index.module.css';
 
 const exampleConfig = `{
+  // Workflow starts here
   "entrypoint": "ListFiles",
   "steps": [
     {
       "name": "ListFiles",
+      // Shell command — no agent needed
       "action": {
         "kind": "Command",
-        "script": "find src -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(. != \"\")) | map({kind: \"Refactor\", value: {file: .}})'"
+        "script": "find src -name '*.rs' | jq ..."
       },
+      // Each file fans out to a Refactor task
       "next": ["Refactor"]
     },
     {
       "name": "Refactor",
+      // Schema validates every task's data
       "value_schema": {
         "type": "object",
         "required": ["file"],
@@ -22,13 +27,16 @@ const exampleConfig = `{
           "file": { "type": "string" }
         }
       },
+      // Agent gets focused instructions
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Refactor this file for clarity. Return \`[]\`."
+          "inline": "Refactor this file. Return []."
         }
       },
+      // Terminal step — no further transitions
       "next": [],
+      // Runs after all Refactor tasks complete
       "finally": "echo '[]'"
     }
   ]
@@ -82,23 +90,18 @@ function ExampleSection() {
               all agents finish. The entire workflow is a single JSON
               file — no imperative glue code.
             </p>
-            <CodeBlock language="json" title="config.jsonc">
-              {exampleConfig}
-            </CodeBlock>
+            <div className={styles.codeBlockWrap}>
+              <CodeBlock language="json" title="config.jsonc">
+                {exampleConfig}
+              </CodeBlock>
+            </div>
           </div>
-          <div className="col col--6" style={{display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-            <div style={{
-              border: '2px dashed var(--ifm-color-primary-light)',
-              borderRadius: '12px',
-              padding: '3rem 2rem',
-              textAlign: 'center',
-              width: '100%',
-              color: 'var(--ifm-color-primary-dark)',
-            }}>
-              <p style={{fontSize: '1.1rem', marginBottom: '0.5rem', fontWeight: 600}}>
+          <div className={`col col--6 ${styles.demoPlaceholder}`}>
+            <div className={styles.demoPlaceholderInner}>
+              <p className={styles.demoPlaceholderTitle}>
                 asciinema demo coming soon
               </p>
-              <p style={{fontSize: '0.9rem', margin: 0, opacity: 0.7}}>
+              <p className={styles.demoPlaceholderSubtitle}>
                 Watch GSD orchestrate a multi-file refactor in real time
               </p>
             </div>
@@ -113,7 +116,9 @@ function WhyGSD() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2>Why GSD? <span style={{fontWeight: 400, fontSize: '0.6em', opacity: 0.7}}>(Get Sh*** Done)</span></h2>
+        <h2>
+          Why GSD? <span className={styles.gsdSubtitle}>(Get Sh*** Done)</span>
+        </h2>
         <p>
           Looping tools are great for simple tasks: keep trying until it
           works. But they hit a wall fast. Context fills up, the agent forgets
@@ -121,8 +126,14 @@ function WhyGSD() {
           before you run it. For anything beyond a single-file fix, you need
           actual structure.
         </p>
+        <p>
+          GSD is like a build system for agents. You declare the full graph of
+          steps and valid transitions upfront — it's statically analyzable
+          before anything runs. At runtime, agents choose which path through the
+          graph to take, but they can never leave the rails.
+        </p>
         <h3>What GSD gives you</h3>
-        <div className="row" style={{marginTop: '1rem'}}>
+        <div className={`row ${styles.patternList}`}>
           <div className="col col--6">
             <ul>
               <li>
@@ -165,7 +176,7 @@ function WhyGSD() {
             </ul>
           </div>
         </div>
-        <p style={{marginTop: '1rem'}}>
+        <p className={styles.closingNote}>
           Each pattern is a JSON config — no framework, no SDK, no
           custom language. Define the state machine, point it at an agent pool,
           and let GSD handle the orchestration.
