@@ -7,7 +7,7 @@ lightTheme.plain.backgroundColor = 'rgba(0, 0, 0, 0.02)';
 
 const config: Config = {
   title: 'GSD',
-  tagline: 'Get Sh*** Done — Task queues for LLM agents',
+  tagline: 'Don\'t just loop it. The build system for LLM agents.',
   favicon: 'img/favicon.ico',
 
   url: 'https://gsd-now.github.io/',
@@ -93,7 +93,7 @@ const config: Config = {
           ],
         },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Robert Balicki. Built with Docusaurus.`,
+      copyright: undefined,
     },
     prism: {
       theme: lightTheme,

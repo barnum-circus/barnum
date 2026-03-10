@@ -7,24 +7,27 @@ function Features() {
       <div className="container padding-vert--lg">
         <div className="row">
           <div className="col col--4">
-            <h3>Type-Safe State Machines</h3>
+            <h3>Rigorous workflows</h3>
             <p>
-              Define task queues as type-safe state machines with validated
-              transitions. Know exactly what states your agents can be in.
+              Express workflows as statically analyzable state machines.
+              Valid transitions are declared upfront. Invalid ones are
+              rejected and retried. No hoping the agent stays on track.
             </p>
           </div>
           <div className="col col--4">
-            <h3>Context Protection</h3>
+            <h3>Mix agents and commands</h3>
             <p>
-              Agents only see the instructions they need for their current task.
-              Progressive disclosure keeps context focused and prevents confusion.
+              Intersperse LLM steps with local shell commands for
+              deterministic operations. Fan-out with jq, commit with git,
+              validate with your compiler — no agent needed.
             </p>
           </div>
           <div className="col col--4">
-            <h3>Long-Lived Agents</h3>
+            <h3>Context protection</h3>
             <p>
-              Agents persist across tasks, avoiding startup costs. A pool of
-              workers handles tasks as they arrive.
+              Each step gets only the instructions and data it needs.
+              Agents never see the full workflow — just their current task.
+              Focused context means better decisions.
             </p>
           </div>
         </div>
@@ -39,15 +42,18 @@ function WhyGSD() {
       <div className="container padding-vert--lg">
         <h2>Why GSD?</h2>
         <p>
-          LLMs are powerful but struggle with long, complex tasks. As context
-          fills up, they become forgetful and make mistakes. GSD provides
-          structure that enables LLMs to perform dramatically more ambitious
-          tasks.
+          LLMs are powerful but naive looping falls apart on complex tasks.
+          Context fills up, agents forget instructions, and you're left
+          debugging a black box. GSD gives you the structure to orchestrate
+          ambitious, multi-agent work — fan-out, branching, adversarial
+          review, error recovery — with predictable behavior.
         </p>
         <p>
-          With GSD, you define a state machine via JSON config. Each step gets
-          only the context it needs. Agents can handle increasing complexity
-          because they're not overwhelmed with irrelevant information.
+          Define your workflow as a JSON config. Each step declares its valid
+          transitions and schemas. The runtime enforces the rules, retries
+          failures, and keeps each agent focused on exactly one task. Think
+          Buck/Bazel, but the dependency graph is discovered at runtime as
+          agents decide what to spawn.
         </p>
       </div>
     </section>
@@ -57,8 +63,8 @@ function WhyGSD() {
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="GSD - Task Queues for LLM Agents"
-      description="GSD is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents."
+      title="GSD - The build system for LLM agents"
+      description="Don't just loop it. GSD is a workflow engine for LLM agents — define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>
