@@ -27,9 +27,7 @@ use troupe_cli::TroupeCli;
 /// Get the path to the test data directory for a given test file.
 pub fn test_data_dir(test_file: &str) -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir)
-        .join(".td")
-        .join(test_file)
+    PathBuf::from(manifest_dir).join(".td").join(test_file)
 }
 
 /// Clean up and create a fresh test directory.
