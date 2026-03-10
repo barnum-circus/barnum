@@ -17,6 +17,7 @@ This directory contains example configurations for common task queue patterns.
 | [Pre/Post/Finally Hooks](hooks.md) | Transform data, aggregate results, cleanup |
 | [Validation](validation.md) | Schema validation for inputs and outputs |
 | [Local Commands](commands.md) | Run shell scripts instead of agents |
+| [Code Review](code-review.md) | Parallel PR review with standards and security checks |
 
 ## Config Structure
 

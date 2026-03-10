@@ -20,6 +20,7 @@ const sidebars: SidebarsConfig = {
         'recipes/hooks',
         'recipes/validation',
         'recipes/commands',
+        'recipes/code-review',
       ],
     },
     {
