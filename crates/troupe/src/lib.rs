@@ -1,4 +1,4 @@
-//! Agent pool daemon for managing workers.
+//! Troupe - agent pool daemon for managing workers.
 //!
 //! The daemon communicates with:
 //! - **Submitters** via Unix socket or file-based submission
