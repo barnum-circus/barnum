@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -31,38 +31,51 @@ fn test_data_dir(test_file: &str) -> PathBuf {
         .join(test_file)
 }
 
-/// Monotonic counter for unique test directory names within a process.
-static TEST_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
-
 /// Clean up and create a fresh test directory.
 ///
-/// Appends `_{seq}` to the directory name so each test invocation gets
-/// a unique pool path within a single `cargo test` run. The monotonic
-/// counter prevents collisions when rstest's `#[timeout]` abandons
-/// a thread before `TroupeHandle::Drop` fires. Cross-run cleanup is
-/// handled by `remove_dir_all` at setup.
+/// Uses a fixed directory name (no unique suffix) so that the pool
+/// directory tree at `<parent>/pools/<name>/` persists across test runs.
+/// On macOS, `FSEvents` needs several seconds to warm up for newly created
+/// directory trees; reusing existing directories avoids this penalty.
 ///
-/// The suffix is kept short to stay within the 104-byte `sun_path` limit
-/// for Unix domain sockets on macOS.
+/// Any stale daemon from a previous run is stopped before returning.
 pub fn setup_test_dir(test_file: &str) -> PathBuf {
-    let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-    let unique_name = format!("{test_file}_{seq}");
-    let dir = test_data_dir(&unique_name);
+    let dir = test_data_dir(test_file);
+    // Clean test data dir (marker files, etc.) but leave the pool
+    // directory tree intact for FSEvents warmth.
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("Failed to create test directory");
+    // Stop any stale daemon left by a crashed/timed-out previous run.
+    stop_stale_daemon(&dir);
     dir
 }
 
-/// Clean up a test directory and its associated pool directory.
+/// Stop any daemon that may be running for this test's pool.
+///
+/// When rstest's `#[timeout]` fires, the test thread is abandoned without
+/// running `TroupeHandle::Drop`, leaking the daemon process. This sends
+/// a stop signal so the new daemon can acquire the lock.
+fn stop_stale_daemon(root: &Path) {
+    let cli_root = root.parent().unwrap_or(root);
+    let pool_name = root.file_name().unwrap_or_default();
+    let bin = find_troupe_binary();
+    let _ = Command::new(&bin)
+        .arg("stop")
+        .arg("--root")
+        .arg(cli_root)
+        .arg("--pool")
+        .arg(pool_name)
+        .output();
+}
+
+/// Clean up a test directory.
+///
+/// Removes the test data directory but preserves the pool directory
+/// at `<parent>/pools/<name>/`. Keeping the pool directory tree allows
+/// `FSEvents` to stay warm across test runs, avoiding the ~9 second
+/// startup penalty on macOS.
 pub fn cleanup_test_dir(dir: &Path) {
     let _ = fs::remove_dir_all(dir);
-    // Also clean the pools/ directory created by TroupeHandle::start.
-    // The pool path is <parent>/pools/<dir_name>.
-    if let Some(parent) = dir.parent()
-        && let Some(name) = dir.file_name()
-    {
-        let _ = fs::remove_dir_all(parent.join("pools").join(name));
-    }
 }
 
 /// Check if Unix socket IPC is available.
@@ -574,7 +587,9 @@ impl TroupeHandle {
             .arg("--log-level")
             .arg("trace")
             // No heartbeats needed - agents signal ready immediately
-            .arg("--no-heartbeat");
+            .arg("--no-heartbeat")
+            // Preserve directory tree on shutdown so FSEvents stays warm across test runs
+            .arg("--preserve-dirs");
 
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
@@ -603,12 +618,8 @@ impl TroupeHandle {
 
         // Wait for daemon to be ready using a filesystem watcher.
         //
-        // Race condition: The daemon CLI deletes and recreates the pool directory on
-        // startup. If we create the pool directory here, the daemon may delete it while
-        // we're setting up the watcher, causing `watcher.watch()` to fail with PathNotFound.
-        //
-        // Solution: Watch the parent directory (cli_root) instead, which is never deleted.
-        // The watcher will see the status file when the daemon creates it in the subdirectory.
+        // Watch the parent directory (cli_root) rather than the pool directory itself,
+        // because on first run the pool directory may not exist yet (the daemon creates it).
         fs::create_dir_all(cli_root).expect("Failed to create pool root directory");
         let cli_root_buf = cli_root.to_path_buf();
         let mut watcher = VerifiedWatcher::new(cli_root, std::slice::from_ref(&cli_root_buf))

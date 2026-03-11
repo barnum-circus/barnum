@@ -38,53 +38,37 @@ use super::path_category::{self, PathCategory};
 // Pool State Cleanup
 // =============================================================================
 
-/// Clean up pool state files.
+/// Remove all entries inside a directory without removing the directory itself.
+fn clean_dir_contents(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(&path);
+        } else {
+            let _ = fs::remove_file(&path);
+        }
+    }
+}
+
+/// Clean up pool state files (preserving directory tree).
 ///
-/// Removes:
-/// - All files in submissions/ directory
-/// - All directories in agents/ directory
-/// - The status file
-/// - Any canary files
+/// Removes status file, all contents of submissions/agents/scratch directories,
+/// and any canary files. Directory inodes are preserved so that `FSEvents`
+/// watchers remain warm on macOS.
 ///
-/// This is called on startup (to clean up stale state from crashed daemons)
-/// and on graceful shutdown.
+/// Called on startup (to clean up stale state from crashed daemons) and
+/// optionally on shutdown when `preserve_pool_dirs` is enabled.
 fn cleanup_pool_state(root: &Path) {
-    let status_file = root.join(STATUS_FILE);
-    let submissions_dir = root.join(SUBMISSIONS_DIR);
-    let agents_dir = root.join(AGENTS_DIR);
+    let _ = fs::remove_file(root.join(STATUS_FILE));
 
-    // Remove status file
-    if status_file.exists() {
-        let _ = fs::remove_file(&status_file);
+    for dir_name in [SUBMISSIONS_DIR, AGENTS_DIR, SCRATCH_DIR] {
+        clean_dir_contents(&root.join(dir_name));
     }
 
-    // Clean submissions directory (flat files)
-    if submissions_dir.exists()
-        && let Ok(entries) = fs::read_dir(&submissions_dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() {
-                let _ = fs::remove_file(&path);
-            }
-        }
-    }
-
-    // Clean agents directory (subdirectories for legacy, flat files for anonymous workers)
-    if agents_dir.exists()
-        && let Ok(entries) = fs::read_dir(&agents_dir)
-    {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let _ = fs::remove_dir_all(&path);
-            } else if path.is_file() {
-                let _ = fs::remove_file(&path);
-            }
-        }
-    }
-
-    // Clean up any canary files in the root (daemon.canary, client_canary, UUID.canary, etc.)
+    // Clean up canary files (daemon.canary, client_canary, UUID.canary, etc.)
     if let Ok(entries) = fs::read_dir(root) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -97,12 +81,8 @@ fn cleanup_pool_state(root: &Path) {
             }
         }
     }
-    // Also clean up legacy canary files
     for filename in ["canary", "client_canary"] {
-        let canary_path = root.join(filename);
-        if canary_path.exists() {
-            let _ = fs::remove_file(&canary_path);
-        }
+        let _ = fs::remove_file(root.join(filename));
     }
 
     debug!("cleaned up pool state");
@@ -121,6 +101,13 @@ pub struct DaemonConfig {
     pub default_task_timeout: Duration,
     /// Whether to send periodic heartbeats to idle workers.
     pub heartbeat_enabled: bool,
+    /// When true, only removes files on shutdown (preserves directory tree).
+    ///
+    /// On macOS, `FSEvents` needs several seconds to warm up for newly created
+    /// directories. Preserving directories across daemon restarts avoids this
+    /// penalty. Intended for test environments; production should use the
+    /// default (`false`) which removes the entire pool directory on shutdown.
+    pub preserve_pool_dirs: bool,
 }
 
 impl Default for DaemonConfig {
@@ -129,6 +116,7 @@ impl Default for DaemonConfig {
             idle_timeout: Duration::from_secs(180),
             default_task_timeout: Duration::from_secs(300),
             heartbeat_enabled: true,
+            preserve_pool_dirs: false,
         }
     }
 }
@@ -227,7 +215,10 @@ pub fn run_with_config(root: impl AsRef<Path>, config: DaemonConfig) -> io::Resu
     })?;
 
     // Clean up pool state on exit (SIGTERM or panic)
-    let _pool_cleanup = PoolStateCleanup(root.clone());
+    let _pool_cleanup = PoolStateCleanup {
+        root: root.clone(),
+        preserve_dirs: config.preserve_pool_dirs,
+    };
 
     // Use VerifiedWatcher with canary verification for agents/ and submissions/
     let verified_watcher =
@@ -852,12 +843,23 @@ impl Drop for SocketCleanup {
     }
 }
 
-/// Guard that deletes the entire pool folder when dropped.
-struct PoolStateCleanup(PathBuf);
+/// Guard that cleans up the pool on shutdown.
+///
+/// By default, removes the entire directory tree (production behavior).
+/// With `preserve_dirs`, only removes files — keeping directory inodes alive
+/// so `FSEvents` stays warm for faster subsequent daemon startups in tests.
+struct PoolStateCleanup {
+    root: PathBuf,
+    preserve_dirs: bool,
+}
 
 impl Drop for PoolStateCleanup {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if self.preserve_dirs {
+            cleanup_pool_state(&self.root);
+        } else {
+            let _ = fs::remove_dir_all(&self.root);
+        }
     }
 }
 
@@ -881,6 +883,7 @@ mod tests {
             idle_timeout: Duration::from_secs(120),
             default_task_timeout: Duration::from_secs(600),
             heartbeat_enabled: false,
+            preserve_pool_dirs: false,
         };
 
         let io_config: IoConfig = daemon_config.into();

@@ -7,8 +7,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::thread;
 use std::time::Duration;
-use std::{fs, thread};
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use troupe::{
@@ -96,6 +96,13 @@ enum Command {
         /// Without this flag, starting fails if a daemon is already running.
         #[arg(long)]
         stop: bool,
+        /// Preserve directory tree on shutdown (only clean files).
+        ///
+        /// On macOS, `FSEvents` needs several seconds to warm up for newly created
+        /// directories. This flag keeps directories alive across daemon restarts
+        /// so watchers stay warm. Intended for test environments.
+        #[arg(long)]
+        preserve_dirs: bool,
     },
     /// Stop a running agent pool server
     Stop {
@@ -232,6 +239,7 @@ fn main() -> ExitCode {
             no_periodic_heartbeat,
             no_initial_heartbeat,
             stop: stop_flag,
+            preserve_dirs,
         } => {
             // Validate pool ID if provided
             if let Some(ref p) = pool
@@ -279,12 +287,9 @@ fn main() -> ExitCode {
                     }
                 }
 
-                // Always wipe the directory (daemon is now stopped or wasn't running)
-                if let Err(e) = fs::remove_dir_all(&root) {
-                    eprintln!("Failed to clear pool directory: {e}");
-                    return ExitCode::FAILURE;
-                }
-                eprintln!("Cleared pool directory");
+                // Directory exists but no daemon running (or we just stopped it).
+                // The daemon's cleanup_pool_state() handles stale files on startup;
+                // we intentionally preserve the directory tree so FSEvents stays warm.
             }
 
             // Print pool info
@@ -299,6 +304,7 @@ fn main() -> ExitCode {
                 idle_timeout: Duration::from_secs(idle_timeout_secs),
                 default_task_timeout: Duration::from_secs(task_timeout_secs),
                 heartbeat_enabled: !no_heartbeat,
+                preserve_pool_dirs: preserve_dirs,
             };
 
             // run_with_config() returns Result<Infallible, _>, so Ok case never happens
