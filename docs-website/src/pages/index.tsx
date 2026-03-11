@@ -246,7 +246,7 @@ function HowItWorks() {
           <div className="col col--4">
             <h3>🎬 3. Showtime</h3>
             <p>
-              Hand the programme to Barnum and it distributes tasks
+              Hand the programme to Barnum. It distributes tasks
               across your agents, enforces valid transitions, retries
               failures, and respects concurrency limits.
             </p>
