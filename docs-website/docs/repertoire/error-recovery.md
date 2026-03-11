@@ -4,7 +4,7 @@ Use post hooks to catch failures and route them to recovery steps instead of dro
 
 ## Why This Pattern?
 
-By default, failed tasks are retried and eventually dropped. But some failures are recoverable — a compilation error after a refactor can be fixed, a timeout on a flaky API can be retried with different parameters. Post hooks see **every** outcome (success, timeout, error) and can convert failures into new tasks.
+By default, failed tasks are retried and eventually dropped. But some failures are recoverable. A compilation error after a refactor can be fixed, a timeout on a flaky API can be retried with different parameters. Post hooks see **every** outcome (success, timeout, error) and can convert failures into new tasks.
 
 ## The Pattern
 
@@ -74,7 +74,7 @@ barnum run --config config.json --pool agents \
 
 1. **Refactor** agent modifies the file as requested.
 2. The **post hook** runs `cargo check` to verify the build.
-3. If the build passes, the result flows through unchanged — task is done.
+3. If the build passes, the result flows through unchanged. Task is done.
 4. If the build fails, the post hook replaces `next` with a **FixBuild** task containing the error output.
 5. **FixBuild** agent reads the error and fixes the build.
 
@@ -109,7 +109,7 @@ Post hooks are also useful for cleaning up resources. Here's a pattern using a t
 }
 ```
 
-The pre hook creates a temp directory and injects it into the value. The post hook cleans it up — even if the action timed out or errored.
+The pre hook creates a temp directory and injects it into the value. The post hook cleans it up, even if the action timed out or errored.
 
 ## Finally-Based Cleanup
 
@@ -161,7 +161,7 @@ For fan-out workflows, use `finally` to clean up after all children complete:
 
 ## Key Points
 
-- Post hooks run on **every** outcome — Success, Timeout, Error, PreHookError
+- Post hooks run on **every** outcome: Success, Timeout, Error, PreHookError
 - Post hooks can replace the `next` array to route failures to recovery steps
 - Pre hooks can create resources; post hooks can clean them up
 - `finally` hooks clean up after all descendants complete (not just direct children)

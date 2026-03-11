@@ -44,10 +44,10 @@ When a step uses `"kind": "Pool"`, Barnum submits a task to the agent pool. The 
 
 Barnum auto-generates the `instructions` field from the config. It includes:
 
-1. **Isolation preamble** — tells the agent it has no memory of prior tasks
-2. **Step name header** — `# Current Step: AnalyzeFile`
-3. **Your instructions** — the text from the step's `instructions` field
-4. **Valid responses** — lists each valid next step with its schema
+1. **Isolation preamble**: tells the agent it has no memory of prior tasks
+2. **Step name header**: `# Current Step: AnalyzeFile`
+3. **Your instructions**: the text from the step's `instructions` field
+4. **Valid responses**: lists each valid next step with its schema
 
 For a non-terminal step, the generated instructions look like:
 
@@ -175,8 +175,8 @@ The command must print a JSON array of next tasks to stdout:
 
 ### Exit codes
 
-- **exit 0** — success, stdout is parsed as the response
-- **exit non-zero** — error, triggers the retry policy
+- **exit 0**: success, stdout is parsed as the response
+- **exit non-zero**: error, triggers the retry policy
 
 ### Full script example
 

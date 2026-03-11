@@ -1,6 +1,6 @@
 # State persistence and resume
 
-Long-running Barnum workflows can be interrupted — crashes, Ctrl+C, OOM. State persistence lets you pick up where you left off.
+Long-running Barnum workflows can be interrupted by crashes, Ctrl+C, or OOM. State persistence lets you pick up where you left off.
 
 ## How it works
 
@@ -30,7 +30,7 @@ barnum run --resume-from /tmp/myrun.ndjson \
   --state-log /tmp/myrun-resumed.ndjson
 ```
 
-`--resume-from` is incompatible with `--config`, `--initial-state`, and `--entrypoint-value` — the config is stored in the log itself.
+`--resume-from` is incompatible with `--config`, `--initial-state`, and `--entrypoint-value`, since the config is stored in the log itself.
 
 The resume log must be a different file from the original (no in-place mutation).
 
@@ -78,7 +78,7 @@ Every submitted task records how it came to exist:
 
 | Outcome | Fields |
 |---------|--------|
-| `Success` | `spawned_task_ids` — IDs of children this task created |
+| `Success` | `spawned_task_ids`: IDs of children this task created |
 | `Failed` | `reason` (Timeout, AgentLost, InvalidResponse) and optional `retry_task_id` |
 
 ## Reconstruction algorithm
@@ -87,11 +87,11 @@ On resume, Barnum replays the log and classifies every task:
 
 | Log state | Reconstructed as |
 |-----------|-----------------|
-| Submitted, never completed | **Pending** — re-dispatch the action |
-| Completed successfully, some children still pending | **Waiting** — don't re-run, just wait for children |
-| Completed successfully, all children done | **Done** — removed from state |
-| Failed with `retry_task_id` | **Done** — the retry task handles it |
-| Failed without retry | **Done** — task was dropped |
+| Submitted, never completed | **Pending**: re-dispatch the action |
+| Completed successfully, some children still pending | **Waiting**: don't re-run, just wait for children |
+| Completed successfully, all children done | **Done**: removed from state |
+| Failed with `retry_task_id` | **Done**: the retry task handles it |
+| Failed without retry | **Done**: task was dropped |
 
 The algorithm:
 
@@ -105,7 +105,7 @@ The algorithm:
 
 **Completed tasks are never re-executed.** If a task appears in the log as completed, it won't be dispatched again.
 
-**In-flight tasks are re-dispatched.** If the process crashed while a task was running, the task was submitted but never completed — so it gets re-dispatched with its original input. This may cause duplicate work for that specific task, but it's safe.
+**In-flight tasks are re-dispatched.** If the process crashed while a task was running, the task was submitted but never completed, so it gets re-dispatched with its original input. This may cause duplicate work for that specific task, but it's safe.
 
 **Task IDs are preserved.** IDs from the original run are never reused. New tasks get IDs continuing from where the original run left off. This keeps parent-child references valid.
 
@@ -148,9 +148,9 @@ Barnum re-dispatches tasks 2 and 3. When both complete, task 0's finally hook fi
 
 ## Key points
 
-- State log is NDJSON — one JSON object per line, flushed after each write
+- State log is NDJSON, one JSON object per line, flushed after each write
 - Config is stored in the log and frozen for the lifetime of the run
 - Resume reads the old log, reconstructs state, then creates a new log (copies old entries + appends new ones)
 - Completed tasks are skipped; pending and in-flight tasks are re-dispatched
 - Task IDs are monotonic and preserved across resume
-- `--resume-from` replaces `--config` and `--entrypoint-value` — everything comes from the log
+- `--resume-from` replaces `--config` and `--entrypoint-value`, since everything comes from the log

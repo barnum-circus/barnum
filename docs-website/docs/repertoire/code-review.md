@@ -1,6 +1,6 @@
 # Code review
 
-Run a structured code review on every changed file in a PR — in parallel, for under a dollar.
+Run a structured code review on every changed file in a PR, in parallel, for under a dollar.
 
 ## The pattern
 
@@ -17,7 +17,7 @@ finally ──→ CompileReport
 
 ## Why this pattern?
 
-Some tools charge $25 per code review. Barnum runs the same checks — coding standards, security, JIRA compliance — in parallel across every changed file, each with focused context. The reviewing agent only sees its file and the relevant standards doc. No bloated context, no wasted tokens.
+Some tools charge $25 per code review. Barnum runs the same checks (coding standards, security, JIRA compliance) in parallel across every changed file, each with focused context. The reviewing agent only sees its file and the relevant standards doc. No bloated context, no wasted tokens.
 
 ## Example: PR review with standards and security checks
 
@@ -126,7 +126,7 @@ barnum run --config code-review.jsonc --pool agents --entrypoint-value '{}'
 
 ## Key points
 
-- Each reviewer agent sees only one file and one concern — minimal context, maximum focus
-- All checks run in parallel — 20 files with 2 checks each = 40 tasks, all concurrent
+- Each reviewer agent sees only one file and one concern, with minimal context and maximum focus
+- All checks run in parallel. 20 files with 2 checks each = 40 tasks, all concurrent
 - Linked instructions keep the config clean and let you version-control your review rules separately
 - The finally hook guarantees the report only runs after every check completes

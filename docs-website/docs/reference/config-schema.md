@@ -18,7 +18,7 @@ Run `barnum config schema` to get the full JSON Schema for editor validation.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `$schema` | string | No | JSON Schema URL for editor validation |
-| `entrypoint` | string | No | Entry point step name. If set, use `--entrypoint-value` instead of `--initial-state` |
+| `entrypoint` | string | No | The opening act: the first step to run. If set, use `--entrypoint-value` instead of `--initial-state` |
 | `options` | object | No | Global runtime options |
 | `steps` | array | **Yes** | Array of step definitions |
 

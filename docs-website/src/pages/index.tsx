@@ -61,17 +61,17 @@ function Features() {
           <div className="col col--4">
             <h3>🐘 Every act has its performer</h3>
             <p>
-              Some acts are agents, some acts are shell commands — each
+              Some acts are agents, some acts are shell commands, and each
               does what it's best at. Fan-out with <code>jq</code>,
               commit with <code>git</code>, validate with your
-              compiler — no agent needed.
+              compiler, no agent needed.
             </p>
           </div>
           <div className="col col--4">
             <h3>🐯 One act at a time</h3>
             <p>
               Each step gets only the instructions and data it needs.
-              Agents never see the full workflow — just their current task.
+              Agents never see the full workflow, just their current task.
               Focused context means agents can make better decisions.
             </p>
           </div>
@@ -88,7 +88,7 @@ function ExampleSection() {
         <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
           A command lists every <code>.js</code> file. Barnum dispatches one
-          agent per file to convert it to TypeScript — in parallel.
+          agent per file to convert it to TypeScript, in parallel.
           When all conversions finish, a <code>finally</code> hook
           triggers an agent that runs <code>tsc</code> and fixes any
           remaining type errors. One JSON file, no glue code.
@@ -128,7 +128,7 @@ function AgentAuthoring() {
           Point your agent at{' '}
           <code>pnpm dlx @barnum/barnum config schema</code> to get
           the full JSON Schema, show it the{' '}
-          <a href="/docs/recipes">recipes page</a> for common
+          <a href="/docs/repertoire">repertoire</a> for common
           patterns, and tell it what you want. It'll write a working
           programme.
         </p>
@@ -144,14 +144,14 @@ function WhyBarnum() {
         <h2 className={styles.centeredHeading}>Why Barnum?</h2>
         <p>
           A single agent with a markdown plan can handle simple tasks. But
-          real work — migrating 50 files, refactoring across a codebase,
-          running multi-step pipelines — breaks that model fast. Context
+          real work (migrating 50 files, refactoring across a codebase,
+          running multi-step pipelines) breaks that model fast. Context
           fills up, the agent loses track, and you can't predict what it
           will do before you run it.
         </p>
         <p>
           Barnum is the ringmaster for your agents. You declare the full graph of
-          steps and valid transitions upfront — it's statically analyzable
+          steps and valid transitions upfront. It's statically analyzable
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never leave the rails.
         </p>
@@ -160,19 +160,19 @@ function WhyBarnum() {
           <div className="col col--6">
             <ul>
               <li>
-                <strong>Fan-out</strong> — split work into parallel tasks.
+                <strong>Fan-out</strong>: split work into parallel tasks.
                 List 50 files, refactor them all concurrently, commit when done.
               </li>
               <li>
-                <strong>Branching</strong> — route to different agents based
+                <strong>Branching</strong>: route to different agents based
                 on what the code needs. An analyzer decides; a specialist executes.
               </li>
               <li>
-                <strong>Sequential chains</strong> — process items one at a time
+                <strong>Sequential chains</strong>: process items one at a time
                 when order matters, like applying multiple changes to the same file.
               </li>
               <li>
-                <strong>Adversarial review</strong> — implement, then judge, then
+                <strong>Adversarial review</strong>: implement, then judge, then
                 revise. Loop until a critic agent approves the work.
               </li>
             </ul>
@@ -180,19 +180,19 @@ function WhyBarnum() {
           <div className="col col--6">
             <ul>
               <li>
-                <strong>Error recovery</strong> — post hooks catch failures and
+                <strong>Error recovery</strong>: post hooks catch failures and
                 route them to fix-up agents instead of just retrying blindly.
               </li>
               <li>
-                <strong>Hooks</strong> — enrich context before an agent sees it,
+                <strong>Hooks</strong>: enrich context before an agent sees it,
                 validate results after, clean up resources when a subtree completes.
               </li>
               <li>
-                <strong>Schema validation</strong> — every step declares what data
+                <strong>Schema validation</strong>: every step declares what data
                 it accepts. Malformed responses are rejected before they propagate.
               </li>
               <li>
-                <strong>Commands</strong> — deterministic shell scripts for the
+                <strong>Commands</strong>: deterministic shell scripts for the
                 mechanical parts: listing files, calling APIs, running builds.
                 Save the LLM for the thinking.
               </li>
@@ -200,7 +200,7 @@ function WhyBarnum() {
           </div>
         </div>
         <p className={styles.closingNote}>
-          Each pattern is a JSON programme — no framework, no SDK, no
+          Each pattern is a JSON programme. No framework, no SDK, no
           custom language. Define the state machine, point it at a troupe,
           and let Barnum handle the orchestration.
         </p>
@@ -255,7 +255,7 @@ export default function Home(): JSX.Element {
   return (
     <Layout
       title="Barnum - The ringmaster for your agents"
-      description="Don't just /loop it. Barnum is the ringmaster for your agents — define complex trees of work as statically analyzable state machines."
+      description="Don't just /loop it. Barnum is the ringmaster for your agents. Define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>

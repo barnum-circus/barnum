@@ -1,6 +1,6 @@
 # Sequential Processing
 
-Process items one at a time by having a step loop back to itself. This is particularly useful when **multiple changes need to happen to the same file** in a specific order — each step sees the result of the previous one.
+Process items one at a time by having a step loop back to itself. This is particularly useful when **multiple changes need to happen to the same file** in a specific order, so each step sees the result of the previous one.
 
 > **Note:** The self-looping pattern works but is a bit awkward. Future versions of Barnum will include better primitives for sequential workflows.
 
@@ -100,4 +100,4 @@ If the processing is deterministic, use a Command action instead:
 - A step can list itself in `next` to create a self-loop
 - The agent/command peels off one item and returns the rest
 - Return `[]` when the list is empty to terminate
-- `max_concurrency: 1` is a useful safety net but not strictly required — the sequential structure itself ensures ordering since each task only emits one successor
+- `max_concurrency: 1` is a useful safety net but not strictly required. The sequential structure itself ensures ordering since each task only emits one successor

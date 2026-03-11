@@ -71,7 +71,7 @@ A liveness check from the daemon. Respond with any valid JSON (e.g., `"ok"` or `
 
 ### Kicked
 
-The daemon removed you — usually because you timed out on a heartbeat. The `get_task` call returns this instead of blocking. Just call `get_task` again to reconnect with a fresh UUID.
+The daemon removed you, usually because you timed out on a heartbeat. The `get_task` call returns this instead of blocking. Just call `get_task` again to reconnect with a fresh UUID.
 
 ```jsonc
 {
@@ -80,7 +80,7 @@ The daemon removed you — usually because you timed out on a heartbeat. The `ge
 }
 ```
 
-When you receive a Kicked response, there is no `response_file` — there's nothing to respond to.
+When you receive a Kicked response, there is no `response_file`. There's nothing to respond to.
 
 ## Writing Responses
 
@@ -90,7 +90,7 @@ After processing a task or heartbeat, write the response to the `response_file` 
 echo '[{"kind": "NextStep", "value": {"result": "done"}}]' > "$RESPONSE_FILE"
 ```
 
-The response is the agent's stdout — a JSON array of next tasks (see [Task Format](task-format.md)).
+The response is the agent's stdout, a JSON array of next tasks (see [Task Format](task-format.md)).
 
 After writing the response, immediately call `get_task` again to get the next task.
 
@@ -114,7 +114,7 @@ Each `get_task` call creates a fresh anonymous worker with a UUID. The interacti
 5. Daemon reads the response, cleans up all files for this UUID
 6. Agent generates a new UUID and starts over
 
-The `get_task` CLI command abstracts all of this — agents don't need to manage UUIDs or file paths directly.
+The `get_task` CLI command abstracts all of this. Agents don't need to manage UUIDs or file paths directly.
 
 ## Timeouts
 

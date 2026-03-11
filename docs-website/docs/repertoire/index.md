@@ -1,10 +1,10 @@
-# Barnum Recipes
+# Barnum Repertoire
 
-This directory contains example configurations for common task queue patterns.
+Example configurations for common task queue patterns. Each routine below is a self-contained workflow you can copy, adapt, and combine.
 
 ## Quick Reference
 
-| Recipe | Description |
+| Routine | Description |
 |--------|-------------|
 | [Linear Pipeline](linear-pipeline.md) | Step-by-step processing (A → B → C) |
 | [Branching](branching.md) | Conditional paths based on output |

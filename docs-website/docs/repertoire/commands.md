@@ -4,13 +4,13 @@ Use shell commands instead of agents for deterministic or system-level operation
 
 ## When to Use Commands
 
-An agent *can* do anything a command does — list files, call APIs, run builds. But agents are expensive: they consume an LLM call, need time to reason, and can hallucinate. Commands are instant, deterministic, and free.
+An agent *can* do anything a command does (list files, call APIs, run builds). But agents are expensive: they consume an LLM call, need time to reason, and can hallucinate. Commands are instant, deterministic, and free.
 
 Use commands when:
 
-- **The logic is deterministic** — listing files, parsing JSON, calling an API with known parameters. There's no judgment involved, so there's nothing for an LLM to add.
-- **Precision matters more than flexibility** — a `jq` pipeline that reshapes data will get it right every time. An agent doing the same transformation might subtly alter values or miss edge cases.
-- **The operation is a building block, not a decision** — fan-out (splitting a list into tasks), fan-in (aggregating results), and data plumbing are mechanical. Save the agent for the step that requires reasoning.
+- **The logic is deterministic**: listing files, parsing JSON, calling an API with known parameters. There's no judgment involved, so there's nothing for an LLM to add.
+- **Precision matters more than flexibility**: a `jq` pipeline that reshapes data will get it right every time. An agent doing the same transformation might subtly alter values or miss edge cases.
+- **The operation is a building block, not a decision**: fan-out (splitting a list into tasks), fan-in (aggregating results), and data plumbing are mechanical. Save the agent for the step that requires reasoning.
 
 Use agents when the task requires judgment, creativity, or understanding natural language. A good workflow mixes both: commands handle the plumbing, agents handle the thinking.
 

@@ -97,12 +97,12 @@ Running `barnum config graph` on this config produces:
 - **ListFiles** (orange diamond) is a command that fans out to **Analyze** tasks
 - **Analyze** (blue box) is an agent that routes to one of three specialized refactoring steps
 - **ExtractToFile**, **RenameVariables**, **RemoveUnused** (blue boxes, double border) are terminal agent steps
-- **Commit** (orange diamond, double border) is a terminal command — it appears disconnected because it's spawned by ListFiles's `finally` hook, not by a `next` transition
+- **Commit** (orange diamond, double border) is a terminal command. It appears disconnected because it's spawned by ListFiles's `finally` hook, not by a `next` transition
 - The `[finally]` annotation on ListFiles shows it has a finally hook attached
 
 ## What the graph does not show
 
-The graph shows the **static transition structure** — what `next` transitions are declared in the config. It does not show:
+The graph shows the **static transition structure**: what `next` transitions are declared in the config. It does not show:
 
 - **Finally hook targets**: Steps spawned by `finally` hooks appear as disconnected nodes since they're created at runtime, not via `next`
 - **Runtime fan-out**: A single command step might spawn 50 tasks at runtime, but the graph shows one edge
@@ -133,4 +133,4 @@ digraph Barnum {
 }
 ```
 
-You can edit this DOT directly to customize the visualization — add labels to edges, change colors, group nodes into subgraphs, etc.
+You can edit this DOT directly to customize the visualization: add labels to edges, change colors, group nodes into subgraphs, etc.

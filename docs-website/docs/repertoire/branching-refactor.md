@@ -98,7 +98,7 @@ barnum run --config config.json --pool agents --entrypoint-value '{"file": "src/
 ## How It Works
 
 1. **Analyze** reads the file and decides which refactor type is most needed.
-2. The agent returns exactly one task — routing to the appropriate specialized step.
+2. The agent returns exactly one task, routing to the appropriate specialized step.
 3. The specialized step (e.g., **RenameVariables**) receives only the file path and a description of what to rename. Its instructions are focused entirely on how to do *that specific refactor*. It doesn't know about the other refactor types.
 
 ## Why Not One Big Step?

@@ -4,7 +4,7 @@ Fan out a contract review into parallel specialist analyses, then synthesize a f
 
 ## Why This Pattern?
 
-Legal contracts require expertise across multiple domains. Rather than asking one agent to catch everything, fan out to specialists that each focus on a single concern — then aggregate their findings into one report.
+Legal contracts require expertise across multiple domains. Rather than asking one agent to catch everything, fan out to specialists that each focus on a single concern, then aggregate their findings into one report.
 
 ## The Pattern
 
@@ -136,7 +136,7 @@ barnum run \
 
 ## Key points
 
-- Each analyst writes to a file — the shared `output_dir` acts as a coordination mechanism between steps
+- Each analyst writes to a file. The shared `output_dir` acts as a coordination mechanism between steps
 - The `finally` hook ensures synthesis only happens after all analyses complete
-- Adding a new concern (e.g., intellectual property review) means adding one step and one entry in the `next` array and command script — the rest of the workflow stays unchanged
+- Adding a new concern (e.g., intellectual property review) means adding one step and one entry in the `next` array and command script. The rest of the workflow stays unchanged
 - Each agent's instructions are self-contained: they know exactly what to look for and where to write

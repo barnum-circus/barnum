@@ -61,7 +61,7 @@ barnum run --config config.json --pool agents --entrypoint-value '{"file": "src/
 - **exit 0**: Continue with modified value
 - **exit non-zero**: Skip action, run post hook with `PreHookError`, then apply retry policy
 
-> **Note:** Pre hook output is **not** re-validated against the step's `value_schema`. Adding fields is safe (JSON Schema allows extra properties by default), but removing required fields or changing types will pass silently. Keep pre hooks additive — enrich the value, don't reshape it.
+> **Note:** Pre hook output is **not** re-validated against the step's `value_schema`. Adding fields is safe (JSON Schema allows extra properties by default), but removing required fields or changing types will pass silently. Keep pre hooks additive: enrich the value, don't reshape it.
 
 ## Post Hooks
 

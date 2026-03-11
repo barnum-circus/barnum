@@ -60,7 +60,7 @@ See [Task Format](task-format.md) for full details.
 
 The CLI outputs the daemon's response as JSON:
 
-**Success** — agent processed the task:
+**Success**: agent processed the task:
 ```jsonc
 {
   "kind": "Processed",
@@ -70,7 +70,7 @@ The CLI outputs the daemon's response as JSON:
 
 The `stdout` field contains the agent's response (a JSON array of next tasks, as a string).
 
-**Not processed** — agent timed out or pool stopped:
+**Not processed**: agent timed out or pool stopped:
 ```jsonc
 {
   "kind": "NotProcessed",
@@ -84,11 +84,11 @@ Possible reasons: `"timeout"`, `"stopped"`.
 
 Barnum wraps the submission protocol to add workflow semantics. For each task:
 
-1. **Build payload** — Generates instructions from the step config (schemas, valid transitions, isolation preamble)
-2. **Submit** — Calls `troupe submit_task` via CLI
-3. **Parse response** — Extracts `stdout` from `Processed` response
-4. **Validate** — Checks that returned tasks are valid transitions with valid schemas
-5. **Retry** — On timeout, error, or invalid response, applies the step's retry policy
+1. **Build payload**: generates instructions from the step config (schemas, valid transitions, isolation preamble)
+2. **Submit**: calls `troupe submit_task` via CLI
+3. **Parse response**: extracts `stdout` from `Processed` response
+4. **Validate**: checks that returned tasks are valid transitions with valid schemas
+5. **Retry**: on timeout, error, or invalid response, applies the step's retry policy
 
 ```
 Barnum Runner             Troupe Daemon                  Agent

@@ -1,6 +1,6 @@
 # Introduction
 
-Barnum is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents.
+Barnum is a ringmaster for AI agents. It orchestrates complex multi-step workflows while keeping each agent focused on exactly one task at a time.
 
 ## Why Barnum?
 
@@ -21,7 +21,7 @@ Tools like Claude's `/loop` command (and similar features in other agents) are g
 
 - **Predictability**: With Barnum, you know exactly what states your workflow can be in and what transitions are valid. You can reason about the decision tree before running it.
 - **Guaranteed Structure**: The state machine enforces that agents follow the defined workflow. Invalid transitions are rejected and retried.
-- **Separation of Concerns**: Each step has its own instructions, schema, and retry policy. Agents don't need to remember the entire workflow—they just handle their current task.
+- **Separation of Concerns**: Each step has its own instructions, schema, and retry policy. Agents don't need to remember the entire workflow. They just handle their current task.
 - **Parallelism**: Barnum naturally supports fan-out patterns where multiple tasks run concurrently, then aggregate results.
 - **Auditability**: Every state transition is explicit and logged. You can trace exactly how the workflow progressed.
 
@@ -51,15 +51,18 @@ A Rust library for defining task queues as type-safe state machines with compile
 
 ## Getting Started
 
-Check out the [Quickstart guide](./quickstart) to get up and running, or browse the [recipes](./recipes/) for common workflow patterns:
+Check out the [Quickstart guide](./quickstart) to get up and running, or browse the [repertoire](./repertoire/) for common routines:
 
-- **[Linear Pipeline](./recipes/linear-pipeline.md)** — Step-by-step processing
-- **[Fan-Out](./recipes/fan-out.md)** — Split one task into many parallel tasks
-- **[Fan-Out with Finally](./recipes/fan-out-finally.md)** — Parallel work with aggregation on completion
-- **[Sequential Processing](./recipes/sequential.md)** — Ordered, one-at-a-time execution
-- **[Branching](./recipes/branching.md)** — Conditional paths based on output
-- **[Branching Refactor](./recipes/branching-refactor.md)** — Route to specialized agents based on analysis
-- **[Adversarial Review](./recipes/adversarial-review.md)** — Implement → judge → revise loop
-- **[Error Recovery](./recipes/error-recovery.md)** — Catch failures and route to recovery steps
-- **[Hooks](./recipes/hooks.md)** — Pre/post/finally hooks for data transformation and cleanup
-- **[Commands](./recipes/commands.md)** — Run shell scripts instead of agents
+- **[Linear Pipeline](./repertoire/linear-pipeline.md)**: step-by-step processing
+- **[Fan-Out](./repertoire/fan-out.md)**: split one task into many parallel tasks
+- **[Fan-Out with Finally](./repertoire/fan-out-finally.md)**: parallel work with aggregation on completion
+- **[Sequential Processing](./repertoire/sequential.md)**: ordered, one-at-a-time execution
+- **[Branching](./repertoire/branching.md)**: conditional paths based on output
+- **[Branching Refactor](./repertoire/branching-refactor.md)**: route to specialized agents based on analysis
+- **[Adversarial Review](./repertoire/adversarial-review.md)**: implement, judge, revise loop
+- **[Error Recovery](./repertoire/error-recovery.md)**: catch failures and route to recovery steps
+- **[Hooks](./repertoire/hooks.md)**: pre/post/finally hooks for data transformation and cleanup
+- **[Commands](./repertoire/commands.md)**: run shell scripts instead of agents
+- **[Code Review](./repertoire/code-review.md)**: parallel PR review with standards and security checks
+- **[Legal Review](./repertoire/legal-review.md)**: parallel contract analysis with final recommendation
+- **[Validation](./repertoire/validation.md)**: schema validation for inputs and outputs

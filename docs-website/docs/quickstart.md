@@ -16,12 +16,12 @@ pnpm dlx @barnum/troupe start --pool agents
 
 You can also use `npx`, `bunx`, or `yarn dlx` instead of `pnpm dlx`. Or install the package first with `pnpm add -g @barnum/troupe`.
 
-This creates a pool named "agents". The pool manages task dispatch—when Barnum submits a task, the pool routes it to an available agent.
+This creates a pool named "agents". The troupe manages task dispatch, routing each submitted task to an available agent.
 
 **Keep this terminal running.** The pool stays active until you stop it.
 
 :::info[tmux launcher script]
-Want a one-command setup? Download [`barnum-dev.sh`](https://raw.githubusercontent.com/barnum-circus/barnum/master/docs-website/static/barnum-dev.sh) — it creates a tmux session with the troupe pool, an orchestrator, and configurable agent windows. Currently set up for Claude Code. Customize it for your setup.
+Want a one-command setup? Download [`barnum-dev.sh`](https://raw.githubusercontent.com/barnum-circus/barnum/master/docs-website/static/barnum-dev.sh) that creates a tmux session with the troupe pool, an orchestrator, and configurable agent windows. Currently set up for Claude Code. Customize it for your setup.
 
 ```bash
 curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/docs-website/static/barnum-dev.sh
@@ -52,7 +52,7 @@ Your agent will run the protocol command and start listening for tasks. **It wil
 
 You can start multiple agents with different names (c1, c2, c3) for parallel processing.
 
-## Step 3: Run a Simple Workflow
+## Step 3: Showtime
 
 Download a demo config:
 
@@ -68,14 +68,14 @@ pnpm dlx @barnum/barnum run --config config.jsonc --pool agents --entrypoint-val
 
 **What happens:**
 1. Barnum reads the config and validates the workflow
-2. It submits the initial task (`Start`) to the pool
+2. It dispatches the opening act (`Start`) to the troupe
 3. The pool dispatches the task to your waiting agent
 4. The agent follows the instructions and returns the next task(s)
 5. Barnum repeats until no tasks remain
 
 Watch your agent—it will receive tasks and respond automatically.
 
-## Step 4: Create Your Own Refactoring Workflow
+## Step 4: Write Your Own Programme
 
 Now for something useful. Ask your agent to help you create a config for refactoring a codebase:
 
@@ -92,7 +92,7 @@ Then look at this example for reference:
 https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos/refactor-workflow
 
 For more complex patterns (branching, fan-out with finally, hooks, etc.),
-see the recipes: https://barnum-circus.github.io/docs/recipes
+see the repertoire: https://barnum-circus.github.io/docs/repertoire
 ```
 
 A simple refactoring workflow might look like:
@@ -170,7 +170,7 @@ For a more complete example, see the [refactor-workflow demo](https://github.com
 
 ## Next Steps
 
-- [Recipes](/docs/recipes) — Common patterns like fan-out, branching, and hooks
-- [CLI Reference](/docs/reference/cli) — All Barnum and troupe commands
-- [Config Schema](/docs/reference/config-schema) — Full configuration options
-- [Demo Configs](https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos) — Working examples to learn from
+- [Repertoire](/docs/repertoire): common routines like fan-out, branching, and hooks
+- [CLI Reference](/docs/reference/cli): all Barnum and troupe commands
+- [Config Schema](/docs/reference/config-schema): full configuration options
+- [Demo Configs](https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos): working examples to learn from

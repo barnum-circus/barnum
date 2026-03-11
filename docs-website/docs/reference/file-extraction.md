@@ -35,7 +35,7 @@ Pool action instructions can be inline strings or linked files:
 
 When using `{"link": "..."}`, the path resolves relative to the config file's directory. So if your config is at `project/config.json` and the link is `instructions/analyze.md`, Barnum reads `project/instructions/analyze.md`.
 
-The linked file contains raw instruction text — no JSON wrapping needed:
+The linked file contains raw instruction text, no JSON wrapping needed:
 
 ```markdown
 <!-- instructions/analyze.md -->
@@ -146,4 +146,4 @@ And the config stays clean:
 
 - **Extract instructions** when they're more than a few sentences. Markdown files get syntax highlighting in your editor and are easier to review in PRs.
 - **Extract schemas** when they're reused across steps or are complex enough to benefit from their own file.
-- **Keep inline** for one-liners like `"Read the file. Return \`[]\`."` — linking would add ceremony without improving readability.
+- **Keep inline** for one-liners like `"Read the file. Return \`[]\`."`. Linking would add ceremony without improving readability.
