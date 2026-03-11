@@ -26,6 +26,8 @@
 
 - [ ] **Deploy website should not depend on Rust jobs.** The `deploy-website` job currently depends on `gate-docs` and `build-website` but the overall CI workflow structure means it can be blocked by unrelated Rust job failures. It should be fully independent of fmt, clippy, test, etc.
 
+- [ ] **Binary cache key should exclude test files.** The build jobs cache binaries with `key: <platform>-${{ hashFiles('Cargo.lock', 'crates/**') }}`. This includes test files (`crates/*/tests/**`), so changing a test file invalidates the cache and triggers a full rebuild even though the binary is identical. The cache key should hash only source files that affect the binary output (e.g., `crates/*/src/**`, `Cargo.lock`, `Cargo.toml`).
+
 ## Troupe
 
 - [ ] Kicked message should not include a response_file (it's not needed)
