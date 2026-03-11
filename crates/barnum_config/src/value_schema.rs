@@ -244,23 +244,27 @@ mod tests {
     use crate::config::ConfigFile;
     use std::path::Path;
 
+    const POOL: &str = r#"{"kind": "Pool", "instructions": {"inline": ""}}"#;
+
     fn test_config() -> Config {
-        let config_file: ConfigFile = serde_json::from_str(
-            r#"{
+        let json = format!(
+            r#"{{
             "steps": [
-                {
+                {{
                     "name": "Start",
-                    "value_schema": {"type": "object", "properties": {"x": {"type": "number"}}},
+                    "action": {POOL},
+                    "value_schema": {{"type": "object", "properties": {{"x": {{"type": "number"}}}}}},
                     "next": ["End"]
-                },
-                {
+                }},
+                {{
                     "name": "End",
+                    "action": {POOL},
                     "next": []
-                }
+                }}
             ]
-        }"#,
-        )
-        .expect("parse config");
+        }}"#
+        );
+        let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
         config_file.resolve(Path::new(".")).expect("resolve config")
     }
 
