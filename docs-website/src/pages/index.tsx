@@ -54,7 +54,7 @@ function Features() {
           <div className="col col--4">
             <h3>🦁 No one leaves the ring</h3>
             <p>
-              Rigorous workflows expressed as statically analyzable state machines.
+              Rigorous workflows are expressed as statically analyzable state machines.
               Transitions are declared upfront and validated when the
               workflow is run. Invalid ones are rejected and retried.
               No hoping the agent stays on track.
