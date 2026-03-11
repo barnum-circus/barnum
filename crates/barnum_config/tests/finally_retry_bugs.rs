@@ -42,7 +42,7 @@ fn finally_runs_too_early_on_retry() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -160,7 +160,7 @@ echo "finally_ran" > "{}"
         "Finally hook should have run and created marker file"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Simpler test: track timing via atomic counters instead of files.
@@ -176,7 +176,7 @@ fn finally_timing_via_counters() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -302,7 +302,7 @@ echo "finally_executed" > "{}"
     // We can't directly check timing from the file, but we can verify
     // the run completed successfully, which means the retry succeeded.
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test with nested finally hooks: both Parent and Child have finally hooks.
@@ -328,7 +328,7 @@ fn nested_finally_with_retry_ordering() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -454,7 +454,7 @@ echo "child_finally" >> "{}"
         "Finally hooks ran in wrong order. Expected child then parent, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that finally hook runs when all retries are exhausted (task dropped).
@@ -469,7 +469,7 @@ fn finally_runs_when_retries_exhausted() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -565,7 +565,7 @@ echo "finally_executed" > "{}"
         "Parent's finally hook should run even when child is dropped"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that A's finally waits for B's entire subtree, including grandchildren.
@@ -593,7 +593,7 @@ fn subtree_finally_waits_for_grandchildren() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -724,7 +724,7 @@ cat  # pass through stdin to stdout
         "Finally hooks ran in wrong order. Expected C_done, B_finally, A_finally, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that A's finally waits for tasks spawned by B's finally hook.
@@ -753,7 +753,7 @@ fn finally_waits_for_finally_spawned_tasks() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -885,7 +885,7 @@ cat  # pass through stdin to stdout
         "Finally hooks ran in wrong order. Expected B_finally, C_done, A_finally, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test deeply nested finally chain: A→B→C→D all with finally hooks.
@@ -902,7 +902,7 @@ fn deeply_nested_finally_chain() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1028,7 +1028,7 @@ fn deeply_nested_finally_chain() {
         "Finally hooks ran in wrong order. Expected D_done, C_finally, B_finally, A_finally, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test multiple children where one has a grandchild.
@@ -1046,7 +1046,7 @@ fn multiple_children_with_finally() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1188,7 +1188,7 @@ fn multiple_children_with_finally() {
         "Finally hooks ran in wrong order. A_finally must be last, D_done before B_finally, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that finally hook spawning multiple tasks works correctly.
@@ -1206,7 +1206,7 @@ fn finally_spawns_multiple_tasks() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1344,7 +1344,7 @@ fn finally_spawns_multiple_tasks() {
         "Finally hooks ran in wrong order. B_finally first, C_done and D_done before A_finally, A_finally last, got: {lines:?}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that finally hooks retry on failure.
@@ -1363,7 +1363,7 @@ fn finally_retries_on_failure() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1444,7 +1444,7 @@ exit 0
         "finally did not retry: expected 3 calls, got {call_count}"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that finally failure propagates after retries are exhausted.
@@ -1463,7 +1463,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1523,7 +1523,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
         "finally failure not propagated: run() should return error when finally fails"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }
 
 /// Test that failure of a task spawned by finally propagates.
@@ -1542,7 +1542,7 @@ fn finally_child_failure_propagates() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -1627,5 +1627,5 @@ echo '[{"kind": "Cleanup", "value": {}}]'
         "finally child failure not propagated: run() should return error when finally's child fails"
     );
 
-    cleanup_test_dir(test_name);
+    cleanup_test_dir(&root);
 }

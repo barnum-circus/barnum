@@ -84,7 +84,7 @@ fn ordered_agent_single_task() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_single"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -112,7 +112,7 @@ fn ordered_agent_single_task() {
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_single"));
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -122,7 +122,7 @@ fn ordered_agent_wait_for_multiple() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_multiple"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -169,7 +169,7 @@ fn ordered_agent_wait_for_multiple() {
     // 1 Distribute + 3 Workers = 4 tasks
     assert_eq!(processed.len(), 4);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_multiple"));
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -179,7 +179,7 @@ fn ordered_agent_complete_out_of_order() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_out_of_order"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -219,7 +219,7 @@ fn ordered_agent_complete_out_of_order() {
     let processed = agent.stop();
     assert_eq!(processed.len(), 4);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_out_of_order"));
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -229,7 +229,7 @@ fn ordered_agent_waiting_tasks_query() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_query"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -296,5 +296,5 @@ fn ordered_agent_waiting_tasks_query() {
     handle.join().expect("thread panicked").expect("run failed");
     agent.stop();
 
-    cleanup_test_dir(&format!("{TEST_DIR}_query"));
+    cleanup_test_dir(&root);
 }

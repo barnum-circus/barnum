@@ -55,7 +55,7 @@ fn invalid_transition_causes_retry() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -87,7 +87,7 @@ fn invalid_transition_causes_retry() {
     // Original + 1 retry = 2 attempts
     assert_eq!(processed.len(), 2);
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -97,7 +97,7 @@ fn unknown_step_causes_retry() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_unknown"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -129,7 +129,7 @@ fn unknown_step_causes_retry() {
     // Original + 1 retry = 2 attempts
     assert_eq!(processed.len(), 2);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_unknown"));
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -139,7 +139,7 @@ fn recovery_after_invalid_then_valid() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_recovery"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -188,5 +188,5 @@ fn recovery_after_invalid_then_valid() {
     // Start (fail) + Start (success) + Middle + End = 4
     assert_eq!(processed.len(), 4);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_recovery"));
+    cleanup_test_dir(&root);
 }

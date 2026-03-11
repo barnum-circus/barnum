@@ -30,7 +30,7 @@ fn retry_on_invalid_response_false_drops_task() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -92,7 +92,7 @@ fn retry_on_invalid_response_false_drops_task() {
         "Should only attempt once when retry_on_invalid_response=false"
     );
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 /// Test that retry_on_invalid_response=true retries up to max_retries.
@@ -103,7 +103,7 @@ fn retry_on_invalid_response_true_retries() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_retry_true"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -164,7 +164,7 @@ fn retry_on_invalid_response_true_retries() {
         "Should attempt 4 times (1 original + 3 retries)"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_retry_true"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that agent returning malformed JSON triggers retry.
@@ -175,7 +175,7 @@ fn malformed_json_triggers_retry() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_malformed"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -231,7 +231,7 @@ fn malformed_json_triggers_retry() {
         "Should attempt 3 times for malformed JSON"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_malformed"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that per-step options override global options.
@@ -242,7 +242,7 @@ fn per_step_options_override_global() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_per_step"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -311,7 +311,7 @@ fn per_step_options_override_global() {
         "Per-step retry_on_invalid_response=false should override global"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_per_step"));
+    cleanup_test_dir(&root);
 }
 
 /// Test successful recovery after initial failures.
@@ -322,7 +322,7 @@ fn recovery_on_nth_attempt() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_recovery"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -382,7 +382,7 @@ fn recovery_on_nth_attempt() {
         "Should succeed on third attempt after two failures"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_recovery"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that max_retries=0 means no retries at all.
@@ -393,7 +393,7 @@ fn max_retries_zero_no_retries() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_zero_retries"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -448,5 +448,5 @@ fn max_retries_zero_no_retries() {
         "max_retries=0 should only allow original attempt"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_zero_retries"));
+    cleanup_test_dir(&root);
 }

@@ -31,7 +31,7 @@ fn single_step_terminates() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -71,7 +71,7 @@ fn single_step_terminates() {
         "Start step should have executed"
     );
 
-    cleanup_test_dir(&test_name);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -83,7 +83,7 @@ fn multi_stage_linear() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -135,7 +135,7 @@ fn multi_stage_linear() {
         "End step should have executed"
     );
 
-    cleanup_test_dir(&test_name);
+    cleanup_test_dir(&root);
 }
 
 // =============================================================================
@@ -165,7 +165,7 @@ fn empty_initial_tasks_succeeds() {
         "Barnum should succeed with empty tasks"
     );
 
-    cleanup_test_dir(&test_name);
+    cleanup_test_dir(&root);
 }
 
 // =============================================================================
@@ -254,7 +254,7 @@ fn config_from_file() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&test_name);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -308,5 +308,5 @@ fn config_from_file() {
         "FileStep should have executed"
     );
 
-    cleanup_test_dir(&test_name);
+    cleanup_test_dir(&root);
 }

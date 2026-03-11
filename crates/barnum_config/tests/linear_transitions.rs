@@ -50,7 +50,7 @@ fn three_step_linear_machine() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -90,7 +90,7 @@ fn three_step_linear_machine() {
         .collect();
     assert_eq!(kinds, vec!["Start", "Middle", "End"]);
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -100,7 +100,7 @@ fn instructions_included_in_payload() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_instructions"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -134,5 +134,5 @@ fn instructions_included_in_payload() {
     // Should contain info about valid responses
     assert!(instructions.contains("Middle"));
 
-    cleanup_test_dir(&format!("{TEST_DIR}_instructions"));
+    cleanup_test_dir(&root);
 }

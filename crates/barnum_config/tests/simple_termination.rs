@@ -39,7 +39,7 @@ fn single_step_terminates() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -69,7 +69,7 @@ fn single_step_terminates() {
     let payload: serde_json::Value = serde_json::from_str(&processed[0]).expect("parse payload");
     assert_eq!(payload["task"]["kind"], "Start");
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -94,5 +94,5 @@ fn empty_initial_tasks_does_nothing() {
     // Should complete immediately without error
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_empty"));
+    cleanup_test_dir(&root);
 }

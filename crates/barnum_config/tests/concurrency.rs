@@ -52,7 +52,7 @@ fn tasks_execute_in_parallel() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -93,7 +93,7 @@ fn tasks_execute_in_parallel() {
         "Tasks took {elapsed:?}, expected < 400ms for parallel execution"
     );
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 /// Test that work is distributed across multiple agents.
@@ -104,7 +104,7 @@ fn work_distributed_across_agents() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_distribution"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -169,7 +169,7 @@ fn work_distributed_across_agents() {
         "Expected at least 2 agents to receive work, but only {agents_with_work} did"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_distribution"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that max_concurrency limits concurrent task submission.
@@ -180,7 +180,7 @@ fn max_concurrency_limits_parallel_tasks() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_max_concurrency"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -259,7 +259,7 @@ fn max_concurrency_limits_parallel_tasks() {
         "Max concurrent tasks should not exceed 2"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_max_concurrency"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that nested fan-out works correctly (A -> B1,B2 -> each spawns C).
@@ -270,7 +270,7 @@ fn nested_fan_out() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_nested"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -344,5 +344,5 @@ fn nested_fan_out() {
         drop(kinds);
     }
 
-    cleanup_test_dir(&format!("{TEST_DIR}_nested"));
+    cleanup_test_dir(&root);
 }

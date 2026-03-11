@@ -27,7 +27,7 @@ fn empty_initial_tasks_completes() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -58,7 +58,7 @@ fn empty_initial_tasks_completes() {
     // Should complete immediately without error
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 /// Test that large fan-out works correctly.
@@ -69,7 +69,7 @@ fn large_fan_out() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_large_fanout"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -130,7 +130,7 @@ fn large_fan_out() {
         "Should process 21 tasks (1 distribute + 20 workers)"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_large_fanout"));
+    cleanup_test_dir(&root);
 }
 
 /// Test Command action executes script correctly.
@@ -176,7 +176,7 @@ fn command_action_executes() {
     // Should complete without error
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_command"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that runner handles rapid task completion.
@@ -187,7 +187,7 @@ fn rapid_task_completion() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_rapid"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -225,7 +225,7 @@ fn rapid_task_completion() {
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
 
-    cleanup_test_dir(&format!("{TEST_DIR}_rapid"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that unknown step in initial tasks returns an error.
@@ -265,7 +265,7 @@ fn unknown_step_in_initial_tasks_returns_error() {
         "error should mention unknown step: {err}"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_unknown_step"));
+    cleanup_test_dir(&root);
 }
 
 /// Test that invalid value schema in initial tasks returns an error.
@@ -315,5 +315,5 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
         "error should mention validation failure: {err}"
     );
 
-    cleanup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
+    cleanup_test_dir(&root);
 }

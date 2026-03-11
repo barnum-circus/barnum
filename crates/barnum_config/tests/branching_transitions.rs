@@ -57,7 +57,7 @@ fn branch_to_path_a() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -94,7 +94,7 @@ fn branch_to_path_a() {
 
     assert_eq!(kinds, vec!["Decide", "PathA", "Done"]);
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -104,7 +104,7 @@ fn branch_to_path_b() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_path_b"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -141,7 +141,7 @@ fn branch_to_path_b() {
 
     assert_eq!(kinds, vec!["Decide", "PathB", "Done"]);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_path_b"));
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -151,7 +151,7 @@ fn fan_out_multiple_tasks() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_fan_out"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -196,5 +196,5 @@ fn fan_out_multiple_tasks() {
     // Should process: Decide, PathA, PathB, Done, Done = 5 tasks
     assert_eq!(call_count.load(Ordering::SeqCst), 5);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_fan_out"));
+    cleanup_test_dir(&root);
 }

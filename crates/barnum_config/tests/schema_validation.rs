@@ -59,7 +59,7 @@ fn valid_schema_passes() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(TEST_DIR);
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -97,7 +97,7 @@ fn valid_schema_passes() {
     // Input and Output
     assert_eq!(processed.len(), 2);
 
-    cleanup_test_dir(TEST_DIR);
+    cleanup_test_dir(&root);
 }
 
 #[rstest]
@@ -107,7 +107,7 @@ fn invalid_response_causes_retry() {
 
     if !is_ipc_available(&root) {
         eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&format!("{TEST_DIR}_invalid_response"));
+        cleanup_test_dir(&root);
         return;
     }
 
@@ -165,5 +165,5 @@ fn invalid_response_causes_retry() {
     // Initial + 2 retries = 3 attempts
     assert_eq!(processed.len(), 3);
 
-    cleanup_test_dir(&format!("{TEST_DIR}_invalid_response"));
+    cleanup_test_dir(&root);
 }

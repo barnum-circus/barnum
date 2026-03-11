@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -25,29 +25,44 @@ use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_
 use troupe_cli::TroupeCli;
 
 /// Get the path to the test data directory for a given test file.
-///
-/// Uses `TEST_TMPDIR` env var if set (for CI where `CARGO_MANIFEST_DIR` paths
-/// are too long for Unix socket `sun_path` limit of 108 chars).
-pub fn test_data_dir(test_file: &str) -> PathBuf {
-    if let Ok(base) = std::env::var("TEST_TMPDIR") {
-        return PathBuf::from(base).join(test_file);
-    }
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    PathBuf::from(manifest_dir).join(".td").join(test_file)
+fn test_data_dir(test_file: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(".td")
+        .join(test_file)
 }
 
+/// Monotonic counter for unique test directory names within a process.
+static TEST_DIR_SEQ: AtomicU32 = AtomicU32::new(0);
+
 /// Clean up and create a fresh test directory.
+///
+/// Appends `_{seq}` to the directory name so each test invocation gets
+/// a unique pool path within a single `cargo test` run. The monotonic
+/// counter prevents collisions when rstest's `#[timeout]` abandons
+/// a thread before `TroupeHandle::Drop` fires. Cross-run cleanup is
+/// handled by `remove_dir_all` at setup.
+///
+/// The suffix is kept short to stay within the 104-byte `sun_path` limit
+/// for Unix domain sockets on macOS.
 pub fn setup_test_dir(test_file: &str) -> PathBuf {
-    let dir = test_data_dir(test_file);
+    let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let unique_name = format!("{test_file}_{seq}");
+    let dir = test_data_dir(&unique_name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("Failed to create test directory");
     dir
 }
 
-/// Clean up a test directory.
-pub fn cleanup_test_dir(test_file: &str) {
-    let dir = test_data_dir(test_file);
-    let _ = fs::remove_dir_all(&dir);
+/// Clean up a test directory and its associated pool directory.
+pub fn cleanup_test_dir(dir: &Path) {
+    let _ = fs::remove_dir_all(dir);
+    // Also clean the pools/ directory created by TroupeHandle::start.
+    // The pool path is <parent>/pools/<dir_name>.
+    if let Some(parent) = dir.parent()
+        && let Some(name) = dir.file_name()
+    {
+        let _ = fs::remove_dir_all(parent.join("pools").join(name));
+    }
 }
 
 /// Check if Unix socket IPC is available.
@@ -177,15 +192,12 @@ impl BarnumTestAgent {
             };
 
             while running_clone.load(Ordering::SeqCst) {
-                // Use timeout so we can check running flag periodically.
-                // CLI stop may not reliably cause the watcher to error.
-                let Ok(assignment) = wait_for_task(
-                    &mut watcher,
-                    &pool_path_for_thread,
-                    None,
-                    Some(Duration::from_millis(500)),
-                ) else {
-                    // Timeout or error - check running flag and retry
+                // Block until assigned or pool stops (Kicked/Stopped).
+                // No timeout — avoids UUID flooding from generating a new
+                // UUID per retry. Shutdown comes via the daemon stop protocol.
+                let Ok(assignment) = wait_for_task(&mut watcher, &pool_path_for_thread, None, None)
+                else {
+                    // Pool stopped or I/O error - check running flag and retry
                     continue;
                 };
 
@@ -353,13 +365,8 @@ impl BarnumTestAgent {
             let mut processed_tasks = Vec::new();
 
             while running_clone.load(Ordering::SeqCst) {
-                // Use timeout so we can check running flag periodically
-                let task_result = wait_for_task(
-                    &mut watcher,
-                    &pool_path,
-                    None,
-                    Some(Duration::from_millis(100)),
-                );
+                // Block until assigned or pool stops (Kicked/Stopped).
+                let task_result = wait_for_task(&mut watcher, &pool_path, None, None);
 
                 let Ok(assignment) = task_result else {
                     continue; // Timeout or stop - check running flag
