@@ -60,7 +60,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐘 Every act has its performer</h3>
+            <h3>🐘 The right performer for every act</h3>
             <p>
               Some acts are agents, some acts are shell commands, and each
               does what it's best at. Fan-out with <code>jq</code>,
@@ -225,7 +225,7 @@ function HowItWorks() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>How it works</h2>
+        <h2 className={styles.centeredHeading}>Ladies and gentlemen, the show is about to begin!</h2>
         <p>
           Write a programme. Corral a troupe and hand the programme to Barnum.
           The ringmaster handles the rest.
@@ -247,10 +247,6 @@ function HowItWorks() {
           </div>
           <div className="col col--4">
             <h3>🎬 3. Showtime</h3>
-            <p>
-              Ladies and gentlemen, children of all ages — the show
-              is about to begin.
-            </p>
             <p>
               Hand the programme to Barnum and it distributes tasks
               across your agents, enforces valid transitions, retries
