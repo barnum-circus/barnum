@@ -12,31 +12,17 @@
   word-break: break-word;
 }
 
-.demoPlaceholder {
+.videoWrapper {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-.demoPlaceholderInner {
-  border: 2px dashed var(--ifm-color-primary-light);
-  border-radius: 12px;
-  padding: 3rem 2rem;
-  text-align: center;
+.videoWrapper iframe {
   width: 100%;
-  color: var(--ifm-color-primary-dark);
-}
-
-.demoPlaceholderTitle {
-  font-size: 1.1rem;
-  margin-bottom: 0.5rem;
-  font-weight: 600;
-}
-
-.demoPlaceholderSubtitle {
-  font-size: 0.9rem;
-  margin: 0;
-  opacity: 0.7;
+  aspect-ratio: 16 / 9;
+  border: none;
+  border-radius: 12px;
 }
 
 .ctaContainer {

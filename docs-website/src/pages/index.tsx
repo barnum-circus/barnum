@@ -133,15 +133,13 @@ function ExampleSection() {
               </CodeBlock>
             </div>
           </div>
-          <div className={`col col--6 ${styles.demoPlaceholder}`}>
-            <div className={styles.demoPlaceholderInner}>
-              <p className={styles.demoPlaceholderTitle}>
-                asciinema demo coming soon
-              </p>
-              <p className={styles.demoPlaceholderSubtitle}>
-                Watch Barnum orchestrate a multi-file refactor in real time
-              </p>
-            </div>
+          <div className={`col col--6 ${styles.videoWrapper}`}>
+            <iframe
+              src="https://www.youtube.com/embed/HjVMgBIiwBM?si=xTqJaJa7ZMz5oU5P"
+              title="Barnum demo"
+              allow="encrypted-media; picture-in-picture; web-share"
+              allowFullScreen
+            />
           </div>
         </div>
       </div>
