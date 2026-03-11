@@ -45,7 +45,9 @@ pub use constants::{
 };
 pub use daemon::{DaemonConfig, run_with_config};
 pub use lock::is_daemon_running;
-pub use pool::{default_root, generate_id, id_to_path, list_pools, pools_dir, resolve_pool};
+pub use pool::{
+    DEFAULT_POOL_ID, default_root, generate_id, id_to_path, list_pools, pools_dir, resolve_pool,
+};
 pub use response::Response;
 pub use stop::stop;
 pub use submit::{Payload, submit, submit_file, submit_file_with_timeout};

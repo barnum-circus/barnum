@@ -50,7 +50,8 @@ enum Command {
         #[arg(long, conflicts_with = "resume_from")]
         entrypoint_value: Option<String>,
 
-        /// Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`)
+        /// Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`).
+        /// Defaults to `default`.
         #[arg(long)]
         pool: Option<String>,
 
@@ -336,7 +337,7 @@ fn resolve_pool_path(pool: Option<&str>, root: &std::path::Path) -> io::Result<P
     match pool {
         None => {
             // Default pool lives in <root>/pools/default
-            let path = troupe::pools_dir(root).join("default");
+            let path = troupe::pools_dir(root).join(troupe::DEFAULT_POOL_ID);
             std::fs::create_dir_all(&path).ok();
             Ok(path)
         }
