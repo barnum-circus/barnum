@@ -51,7 +51,7 @@ Use agents when the task requires judgment, creativity, or understanding natural
 ## Running
 
 ```bash
-barnum run --config config.json --pool agents
+barnum run --config config.json
 ```
 
 ## Command Contract
@@ -141,7 +141,7 @@ Commands and agents work together naturally:
 ## Running
 
 ```bash
-barnum run --config config.json --pool agents --entrypoint-value '{"task": "Add logging"}'
+barnum run --config config.json --entrypoint-value '{"task": "Add logging"}'
 ```
 
 ## Key Points

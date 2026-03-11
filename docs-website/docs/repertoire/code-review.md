@@ -108,7 +108,7 @@ Return `[]`.
 ## Running
 
 ```bash
-barnum run --config code-review.jsonc --pool agents --entrypoint-value '{}'
+barnum run --config code-review.jsonc --entrypoint-value '{}'
 ```
 
 ## How it works

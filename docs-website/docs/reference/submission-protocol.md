@@ -20,19 +20,16 @@ Submitters (like the `barnum` CLI) send tasks to the daemon, which dispatches th
 ```bash
 # Inline payload
 troupe submit_task \
-  --pool my-pool \
   --data '{"kind":"Task","task":{"instructions":"Do something","data":{"file":"main.rs"}}}' \
   --notify socket
 
 # Payload from file (avoids shell escaping issues)
 troupe submit_task \
-  --pool my-pool \
   --file /path/to/payload.json \
   --notify file
 
 # With timeout
 troupe submit_task \
-  --pool my-pool \
   --data '...' \
   --timeout-secs 300
 ```

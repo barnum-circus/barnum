@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm barnum run --pool <POOL> --initial-state '[{"kind": "Distribute", "value": {}}]' fan-out.jsonc
+// pnpm barnum run --initial-state '[{"kind": "Distribute", "value": {}}]' fan-out.jsonc
 {
   "steps": [
     {

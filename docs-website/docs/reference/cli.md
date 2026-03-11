@@ -41,7 +41,8 @@ Options:
       Defaults to `{}` if not provided
 
   --pool <POOL>
-      Agent pool ID (e.g., `agents` resolves to `<root>/pools/agents/`)
+      Agent pool ID (e.g., `my-pool` resolves to `<root>/pools/my-pool/`)
+      Defaults to `default`
 
   --wake <WAKE>
       Wake script to call before starting
@@ -60,16 +61,19 @@ Options:
 
 ```bash
 # Run with entrypoint (config defines entrypoint step)
-barnum run config.json --pool agents --entrypoint-value '{"file": "main.rs"}'
+barnum run config.json --entrypoint-value '{"file": "main.rs"}'
 
 # Run with entrypoint, default value ({})
-barnum run config.json --pool agents
+barnum run config.json
 
 # Run with logging
-barnum run config.json --pool agents --log-file /tmp/barnum.log
+barnum run config.json --log-file /tmp/barnum.log
 
 # Run without entrypoint (manual initial state)
-barnum run config.json --pool agents --initial-state '[{"kind": "Start", "value": {}}]'
+barnum run config.json --initial-state '[{"kind": "Start", "value": {}}]'
+
+# Run with a specific pool (default: "default")
+barnum run config.json --pool my-pool --entrypoint-value '{}'
 ```
 
 ### barnum config
@@ -131,11 +135,14 @@ Options:
 Start the pool daemon.
 
 ```bash
-# Start a pool named "agents"
-troupe start --pool agents
+# Start the default pool
+troupe start
+
+# Start a named pool
+troupe start --pool my-pool
 
 # Start with custom root directory
-troupe start --pool agents --root /var/barnum
+troupe start --pool my-pool --root /var/barnum
 ```
 
 ### troupe stop
@@ -143,7 +150,7 @@ troupe start --pool agents --root /var/barnum
 Stop a running pool.
 
 ```bash
-troupe stop --pool agents
+troupe stop
 ```
 
 ### troupe submit_task
@@ -151,7 +158,7 @@ troupe stop --pool agents
 Submit a task and wait for a response (used by Barnum internally).
 
 ```bash
-troupe submit_task --pool agents --data '{"task": "data"}'
+troupe submit_task --data '{"task": "data"}'
 ```
 
 ### troupe get_task
@@ -160,7 +167,7 @@ Wait for the next available task (used by agents).
 
 ```bash
 # Agent waits for a task
-troupe get_task --pool agents --name agent1
+troupe get_task --name agent1
 ```
 
 ### troupe protocol

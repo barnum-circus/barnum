@@ -23,7 +23,7 @@ Each iteration uses a fresh anonymous worker UUID. Agents have no persistent ide
 Agents call the `get_task` CLI command to request work:
 
 ```bash
-troupe get_task --pool my-pool
+troupe get_task
 ```
 
 This blocks until the daemon assigns work. The response is JSON on stdout:
@@ -37,7 +37,7 @@ This blocks until the daemon assigns work. The response is JSON on stdout:
   "kind": "Task",
 
   // Where to write the response when done
-  "response_file": "/tmp/troupe/pools/my-pool/agents/550e8400.response.json",
+  "response_file": "/tmp/troupe/pools/default/agents/550e8400.response.json",
 
   // The task payload (see Task Format doc for details)
   "content": {
@@ -132,11 +132,9 @@ Agents that get kicked can reconnect immediately by calling `get_task` again.
 #!/bin/bash
 # A simple agent that processes tasks in a loop
 
-POOL="my-pool"
-
 while true; do
   # Get next task (blocks until work available)
-  RESPONSE=$(troupe get_task --pool "$POOL")
+  RESPONSE=$(troupe get_task)
 
   KIND=$(echo "$RESPONSE" | jq -r '.kind')
   RESPONSE_FILE=$(echo "$RESPONSE" | jq -r '.response_file')

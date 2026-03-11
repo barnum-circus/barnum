@@ -34,7 +34,7 @@ For simple "keep trying until it works" loops, `/loop` is fine. For complex, mul
 The main command-line tool for running task queues:
 
 ```bash
-barnum run --config config.jsonc --pool agents --entrypoint-value '{}'
+barnum run --config config.jsonc --entrypoint-value '{}'
 ```
 
 ### Troupe
@@ -42,7 +42,7 @@ barnum run --config config.jsonc --pool agents --entrypoint-value '{}'
 A daemon that manages a pool of long-running agents:
 
 ```bash
-troupe start --pool agents
+troupe start
 ```
 
 ### Task Queue Library

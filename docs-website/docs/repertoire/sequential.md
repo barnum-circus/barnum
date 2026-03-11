@@ -54,7 +54,7 @@ Migrate database schema files one at a time, in order, so each migration builds 
 ## Running
 
 ```bash
-barnum run --config config.json --pool agents \
+barnum run --config config.json \
   --entrypoint-value '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}'
 ```
 
