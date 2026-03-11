@@ -1,6 +1,6 @@
 {
   "name": "@barnum/barnum",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Barnum CLI - workflow engine for agents.",
   "main": "index.js",
   "bin": {
