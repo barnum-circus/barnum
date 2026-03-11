@@ -1,6 +1,6 @@
 # Barnum Repertoire
 
-Example configurations for common task queue patterns. Each routine below is a self-contained workflow you can copy, adapt, and combine.
+Each routine below is a self-contained workflow you can copy, adapt, and combine.
 
 ## Quick Reference
 
@@ -19,44 +19,6 @@ Example configurations for common task queue patterns. Each routine below is a s
 | [Local Commands](commands.md) | Run shell scripts instead of agents |
 | [Code Review](code-review.md) | Parallel PR review with standards and security checks |
 | [Legal Review](legal-review.md) | Parallel contract analysis with final recommendation |
-
-## Config Structure
-
-Every Barnum config has this structure:
-
-```jsonc
-{
-  "entrypoint": "StepName",
-  "options": {
-    "timeout": 60,
-    "max_retries": 3,
-    "max_concurrency": 5
-  },
-  "steps": [
-    {
-      "name": "StepName",
-      "value_schema": { "type": "object" },
-      "pre": { "kind": "Command", "script": "./optional-pre-hook.sh" },
-      "action": { "kind": "Pool", "instructions": { "inline": "Do something. Return `[]`." } },
-      "post": { "kind": "Command", "script": "./optional-post-hook.sh" },
-      "finally": { "kind": "Command", "script": "./optional-finally-hook.sh" },
-      "next": ["NextStep1", "NextStep2"]
-    },
-    {
-      "name": "NextStep1",
-      "value_schema": { "type": "object" },
-      "action": { "kind": "Pool", "instructions": { "inline": "Continue. Return `[]`." } },
-      "next": []
-    },
-    {
-      "name": "NextStep2",
-      "value_schema": { "type": "object" },
-      "action": { "kind": "Pool", "instructions": { "inline": "Alternative path. Return `[]`." } },
-      "next": []
-    }
-  ]
-}
-```
 
 ## Terminology
 
