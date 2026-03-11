@@ -58,7 +58,7 @@ Validate the value payload for each step:
 ## Running
 
 ```bash
-barnum run --config config.json --pool agents --entrypoint-value '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}'
+barnum run --config config.json --entrypoint-value '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}'
 ```
 
 ## External Schema Files

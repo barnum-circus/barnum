@@ -66,7 +66,7 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
 ## Running
 
 ```bash
-barnum run --config config.json --pool agents \
+barnum run --config config.json \
   --entrypoint-value '{"file": "src/lib.rs", "task": "Extract the Config struct into its own module"}'
 ```
 

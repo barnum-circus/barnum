@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm barnum run --pool <POOL> --initial-state '[{"kind": "Decide", "value": {}}]' branching.jsonc
+// pnpm barnum run --initial-state '[{"kind": "Decide", "value": {}}]' branching.jsonc
 {
   "options": {
     "max_retries": 2

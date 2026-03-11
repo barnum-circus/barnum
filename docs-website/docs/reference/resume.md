@@ -21,7 +21,7 @@ Completed tasks are never re-executed. Only pending and in-flight tasks are re-d
 
 ```bash
 # Normal run with state logging
-barnum run --config config.jsonc --pool agents \
+barnum run --config config.jsonc \
   --entrypoint-value '{"files": ["src/main.rs"]}' \
   --state-log /tmp/myrun.ndjson
 

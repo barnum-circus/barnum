@@ -113,8 +113,8 @@ the comments below (JSONC) are for explanation only.
 
 ```bash
 # With entrypoint (config has "entrypoint" set):
-barnum run --config config.json --pool my-pool
-barnum run --config config.json --pool my-pool --entrypoint-value '{"files": ["src/main.rs"]}'
+barnum run --config config.json
+barnum run --config config.json --entrypoint-value '{"files": ["src/main.rs"]}'
 ```
 
 ## Writing command scripts

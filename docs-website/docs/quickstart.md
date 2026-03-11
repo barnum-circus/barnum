@@ -17,12 +17,12 @@ Barnum orchestrates AI agents through type-safe workflows. You define a state ma
 The troupe is a daemon that coordinates work between your agents. In a terminal:
 
 ```bash
-pnpm dlx @barnum/troupe start --pool agents
+pnpm dlx @barnum/troupe start
 ```
 
 You can also use `npx`, `bunx`, or `yarn dlx` instead of `pnpm dlx`. Or install the package first with `pnpm add -g @barnum/troupe`.
 
-This creates a pool named "agents". The pool manages task dispatch—when Barnum submits a task, the pool routes it to an available agent.
+This starts the default pool. The pool manages task dispatch—when Barnum submits a task, the pool routes it to an available agent.
 
 **Keep this terminal running.** The pool stays active until you stop it.
 
@@ -41,7 +41,7 @@ pnpm dlx @barnum/troupe protocol
 
 ---
 
-Your name is c1. The pool name is agents.
+Your name is c1.
 ```
 
 Your agent will run the protocol command and start listening for tasks. **It will wait until Barnum sends work.**
@@ -59,7 +59,7 @@ curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/bar
 Now run it:
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc --pool agents --entrypoint-value '{}'
+pnpm dlx @barnum/barnum run --config config.jsonc --entrypoint-value '{}'
 ```
 
 **What happens:**
@@ -158,7 +158,7 @@ Here's what a basic refactor config looks like:
 Save this as `refactor.jsonc` and run:
 
 ```bash
-pnpm dlx @barnum/barnum run --config refactor.jsonc --pool agents \
+pnpm dlx @barnum/barnum run --config refactor.jsonc \
   --entrypoint-value '{"folder": "./src"}'
 ```
 

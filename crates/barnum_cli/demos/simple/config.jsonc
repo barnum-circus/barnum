@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm barnum run --pool <POOL> --initial-state '[{"kind": "Start", "value": {}}]' simple.jsonc
+// pnpm barnum run --initial-state '[{"kind": "Start", "value": {}}]' simple.jsonc
 {
   "$schema": "../schemas/config.schema.json",
   "steps": [
