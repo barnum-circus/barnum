@@ -19,11 +19,3 @@ Each routine below is a self-contained workflow you can copy, adapt, and combine
 | [Local Commands](commands.md) | Run shell scripts instead of agents |
 | [Code Review](code-review.md) | Parallel PR review with standards and security checks |
 | [Legal Review](legal-review.md) | Parallel contract analysis with final recommendation |
-
-## Terminology
-
-- **Step**: A named stage in your workflow (e.g., "Analyze", "Implement", "Review")
-- **Task**: An instance of a step with a specific value (e.g., `{step: "Analyze", value: {file: "main.rs"}}`)
-- **Action**: What happens when a task runs (Pool = send to agent, Command = run locally)
-- **Transition**: Moving from one step to another via the `next` field
-- **Hook**: A shell command that runs before (pre), after (post), or when descendants complete (finally)
