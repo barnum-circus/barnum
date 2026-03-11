@@ -88,10 +88,19 @@ function ExampleSection() {
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
-          A command lists every <code>.js</code> file. Barnum dispatches one
-          agent per file to convert it to TypeScript, in parallel.
-          When all conversions finish, a <code>finally</code> hook
-          triggers an agent that runs <code>tsc</code> and fixes any
+          With Barnum, you specify your workflow upfront in a configuration
+          file. You can express ordering constraints (A before B), fan-out
+          (one task per file), and aggregation (do X after everything
+          finishes) in plain, readable JSON that can be validated before
+          anything runs. Agents only handle the parts that require judgment.
+          They never see the full workflow, so their context stays small and
+          they don't drift off course as the work scales up.
+        </p>
+        <p>
+          In this programme, a command lists every <code>.js</code> file.
+          Barnum dispatches one agent per file to convert it to TypeScript,
+          in parallel. When all conversions finish, a <code>finally</code>{' '}
+          hook triggers an agent that runs <code>tsc</code> and fixes any
           remaining type errors. One JSON file, no glue code.
         </p>
         <div className="row">
