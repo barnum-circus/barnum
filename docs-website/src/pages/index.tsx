@@ -12,7 +12,7 @@ const exampleConfig = `{
       // One ConvertToTS task per .js file
       "action": {
         "kind": "Command",
-        "script": "find src -name '*.js' | jq -R '{kind: \\"ConvertToTS\\", value: {file: .}}' | jq -s '.'"
+        "script": "find \\"$(pwd)/src\\" -name '*.js' | jq -R '{kind: \\"ConvertToTS\\", value: {file: .}}' | jq -s '.'"
       },
       "next": ["ConvertToTS"],
       // After all conversions: fix any remaining type errors

@@ -373,7 +373,18 @@ fn parse_config(input: &str) -> io::Result<(ConfigFile, PathBuf)> {
                 format!("[E055] invalid config in {}: {e}", path.display()),
             )
         })?;
-        let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let canonical = path.canonicalize().map_err(|e| {
+            io::Error::new(
+                e.kind(),
+                format!(
+                    "[E054] failed to resolve config path {}: {e}",
+                    path.display()
+                ),
+            )
+        })?;
+        let dir = canonical
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         Ok((cfg, dir.to_path_buf()))
     } else {
         // Assume inline JSON/JSONC
