@@ -5,4 +5,5 @@
 
 # Test data directories
 .td/
+.test-data/
 .local/

@@ -11,29 +11,33 @@ use std::collections::HashMap;
 
 /// Top-level Barnum configuration file format.
 ///
-/// This is the raw parsed format. Call `resolve()` to get the runtime `Config`.
+/// Defines a workflow as a directed graph of steps. Each step processes tasks
+/// and can spawn follow-up tasks on other steps.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
-    /// JSON Schema reference for editor validation (ignored at runtime).
+    /// Optional JSON Schema URL for editor validation (e.g.,
+    /// `"./node_modules/@barnum/barnum/barnum-config-schema.json"`). Ignored at runtime.
     #[serde(rename = "$schema", default, skip_serializing)]
     pub schema_ref: Option<String>,
 
-    /// Runtime options.
+    /// Global runtime options (timeout, retries, concurrency). Individual steps
+    /// can override these via their own `options` field.
     #[serde(default)]
     pub options: Options,
 
-    /// Entry point step name. If specified, the workflow starts with this step
-    /// and `--entrypoint-value` can be used to provide the initial value (defaults to `{}`).
-    /// If not specified, `--initial-state` must be provided on the command line.
+    /// Name of the step that starts the workflow. When set, the CLI accepts
+    /// `--entrypoint-value` to provide the initial task value (defaults to `{}`).
+    /// When omitted, `--initial-state` must provide explicit `[{"kind": "StepName", "value": ...}]` tasks.
     #[serde(default)]
     pub entrypoint: Option<StepName>,
 
-    /// Step definitions forming the task queue.
+    /// The steps that make up this workflow. Each step defines how to process
+    /// a task and which steps it can spawn follow-up tasks on.
     pub steps: Vec<StepFile>,
 }
 
-/// Runtime options for task execution.
+/// Global runtime options for task execution. All fields have sensible defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Options {
@@ -74,72 +78,91 @@ const fn default_true() -> bool {
     true
 }
 
-/// A step in the config file (may have unresolved references).
+/// A named step in the workflow. Steps are the nodes of the task graph.
+///
+/// Execution order for each task: `pre` hook → `action` → `post` hook.
+/// The `finally` hook runs after the task **and all of its descendant tasks** complete.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepFile {
-    /// Step name (e.g., `Analyze`, `Implement`).
+    /// Unique name for this step (e.g., `"Analyze"`, `"Implement"`, `"Review"`).
+    /// This is the string used as `kind` when creating tasks:
+    /// `{"kind": "ThisStepName", "value": {...}}`.
     pub name: StepName,
 
-    /// JSON Schema for validating the step's value payload.
-    /// None means any JSON value is accepted.
+    /// JSON Schema that validates the `value` payload for tasks on this step.
+    /// When set, tasks whose `value` doesn't conform are rejected.
+    /// When omitted, any JSON value is accepted.
     #[serde(default)]
     pub value_schema: Option<SchemaRef>,
 
-    /// Pre-execution hook script.
+    /// Shell script that runs **before** the action. Receives the task JSON on
+    /// stdin (`{"kind": "StepName", "value": <payload>}`). Must output the
+    /// (possibly modified) task JSON on stdout. Use this to enrich or transform
+    /// the task before the action sees it.
     #[serde(default)]
     pub pre: Option<MaybeLinked<HookScript>>,
 
-    /// How to execute the step.
-    #[serde(default)]
+    /// How this step processes tasks — either send to the agent pool (`Pool`)
+    /// or run a local shell command (`Command`).
     pub action: ActionFile,
 
-    /// Post-execution hook script.
+    /// Shell script that runs **after** the action. Receives the array of
+    /// next tasks (the action's output) on stdin. Must output the (possibly
+    /// modified) array of next tasks on stdout. Use this to filter, transform,
+    /// or add follow-up tasks.
     #[serde(default)]
     pub post: Option<MaybeLinked<HookScript>>,
 
-    /// Valid next steps.
+    /// Step names this step is allowed to spawn follow-up tasks on.
+    /// Each string must match the `name` of another step in this config.
+    /// An empty array means this is a terminal step (no follow-ups).
     #[serde(default)]
     pub next: Vec<StepName>,
 
-    /// Finally hook (runs after all children complete).
+    /// Shell script that runs after this task **and all tasks it spawned
+    /// (recursively)** have completed. Receives the original task JSON on stdin.
+    /// Must output a JSON array of follow-up tasks on stdout (same format as
+    /// `Command` scripts: `[{"kind": "StepName", "value": {...}}, ...]`).
+    /// Return `[]` to spawn no follow-ups. Use this for cleanup, aggregation,
+    /// or spawning a final summarization step.
     #[serde(default, rename = "finally")]
     pub finally_hook: Option<MaybeLinked<HookScript>>,
 
-    /// Per-step options that override global options.
+    /// Per-step options that override the global `options`. Only the fields
+    /// you set here take effect; everything else falls through to the global defaults.
     #[serde(default)]
     pub options: StepOptions,
 }
 
-/// How a step processes tasks (config file format).
+/// How a step processes tasks. Set `"kind": "Pool"` to send tasks to AI agents,
+/// or `"kind": "Command"` to run a local shell script.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum ActionFile {
-    /// Send to the agent pool for processing.
+    /// Send the task to the agent pool. An AI agent receives the task's `value`
+    /// along with the `instructions` (markdown prompt) and produces a JSON array
+    /// of follow-up tasks.
     Pool {
-        /// Markdown instructions shown to agents.
-        #[serde(default)]
+        /// Markdown prompt shown to the agent processing this task. This is
+        /// the core of what tells the agent what to do. Use `{"inline": "..."}` to
+        /// write the markdown directly, or `{"link": "path/to/file.md"}` to
+        /// reference an external file.
         instructions: crate::maybe_linked::MaybeLinked<Instructions>,
     },
-    /// Run a local command.
+    /// Run a local shell command instead of sending to an agent. Use this for
+    /// deterministic transformations, fan-out, or glue logic.
     Command {
         /// Shell script to execute.
         ///
-        /// **Input (stdin):** JSON object with the structure `{"kind": "<step name>", "value": <parameters>}`.
-        /// Use `jq '.value'` to extract parameters or `jq -r '.value.fieldName'` for specific fields.
+        /// **Input (stdin):** JSON object: `{"kind": "<step name>", "value": <payload>}`.
+        /// Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.
         ///
-        /// **Output (stdout):** JSON array of next tasks, e.g. `[{"kind": "NextStep", "value": {...}}]`.
-        /// Return `[]` to spawn no follow-up tasks.
+        /// **Output (stdout):** JSON array of follow-up tasks to spawn:
+        /// `[{"kind": "NextStep", "value": {...}}, ...]`. Each `kind` must be a step name
+        /// listed in this step's `next` array. Return `[]` to spawn no follow-ups.
         script: String,
     },
-}
-
-impl Default for ActionFile {
-    fn default() -> Self {
-        Self::Pool {
-            instructions: crate::maybe_linked::MaybeLinked::default(),
-        }
-    }
 }
 
 impl ActionFile {
@@ -153,23 +176,25 @@ impl ActionFile {
     }
 }
 
-/// Per-step options that override global defaults.
+/// Per-step option overrides. Only set the fields you want to override;
+/// omitted fields inherit from the global `options`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepOptions {
-    /// Timeout in seconds for this step (overrides global).
+    /// Timeout in seconds for tasks on this step (overrides global `timeout`).
     #[serde(default)]
     pub timeout: Option<u64>,
 
-    /// Maximum retries for this step (overrides global).
+    /// Maximum retries for tasks on this step (overrides global `max_retries`).
     #[serde(default)]
     pub max_retries: Option<u32>,
 
-    /// Whether to retry on timeout for this step (overrides global).
+    /// Whether to retry when an agent times out on this step (overrides global `retry_on_timeout`).
     #[serde(default)]
     pub retry_on_timeout: Option<bool>,
 
-    /// Whether to retry on invalid response for this step (overrides global).
+    /// Whether to retry when an agent returns an invalid response on this step
+    /// (overrides global `retry_on_invalid_response`).
     #[serde(default)]
     pub retry_on_invalid_response: Option<bool>,
 }
@@ -202,24 +227,26 @@ impl EffectiveOptions {
     }
 }
 
-/// Reference to a JSON Schema (inline or external file).
+/// A JSON Schema for validating task payloads. Can be provided inline or
+/// loaded from a file.
 ///
-/// In config files:
-/// - `{"link": "path"}` → link to schema file
-/// - Object → inline JSON Schema
+/// - Inline: write the JSON Schema object directly, e.g. `{"type": "object", "properties": {...}}`
+/// - Linked: `{"link": "path/to/schema.json"}` to reference an external file (path relative to config file)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SchemaRef {
-    /// Link to a JSON Schema file.
+    /// Reference to an external JSON Schema file. The path is relative to
+    /// the config file's directory.
     Link {
-        /// Path to the schema file.
+        /// Relative path to the JSON Schema file (e.g., `"schemas/task.json"`).
         link: String,
     },
-    /// Inline JSON Schema.
+    /// Inline JSON Schema object (any valid JSON Schema).
     Inline(serde_json::Value),
 }
 
-/// Markdown instructions content.
+/// Markdown text that tells agents how to process tasks on this step.
+/// This is the prompt/instructions the agent receives alongside the task payload.
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct Instructions(pub String);
@@ -448,42 +475,52 @@ mod tests {
     use super::*;
     use crate::maybe_linked::MaybeLinked;
 
+    const POOL: &str = r#"{"kind": "Pool", "instructions": {"inline": ""}}"#;
+
+    /// Helper to build a step JSON with required action field.
+    fn step(name: &str, next: &[&str]) -> String {
+        let next_json: Vec<String> = next.iter().map(|n| format!("\"{n}\"")).collect();
+        format!(
+            r#"{{"name": "{name}", "action": {POOL}, "next": [{}]}}"#,
+            next_json.join(", ")
+        )
+    }
+
     #[test]
     fn parse_minimal_config() {
-        let json = r#"{
-            "steps": [
-                {"name": "Start", "next": ["End"]},
-                {"name": "End", "next": []}
-            ]
-        }"#;
+        let json = format!(
+            r#"{{"steps": [{}, {}]}}"#,
+            step("Start", &["End"]),
+            step("End", &[])
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert_eq!(config.steps.len(), 2);
         assert!(config.options.timeout.is_none());
     }
 
     #[test]
     fn parse_full_config() {
-        let json = r#"{
-            "options": {
+        let json = format!(
+            r#"{{
+            "options": {{
                 "timeout": 120,
                 "max_retries": 3
-            },
+            }},
             "steps": [
-                {
+                {{
                     "name": "Analyze",
-                    "value_schema": {"type": "object"},
-                    "action": {"kind": "Pool", "instructions": {"inline": "Analyze the input."}},
+                    "value_schema": {{"type": "object"}},
+                    "action": {{"kind": "Pool", "instructions": {{"inline": "Analyze the input."}}}},
                     "next": ["Done"]
-                },
-                {
-                    "name": "Done",
-                    "next": []
-                }
+                }},
+                {}
             ]
-        }"#;
+        }}"#,
+            step("Done", &[])
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert_eq!(config.options.timeout, Some(120));
         assert_eq!(config.options.max_retries, 3);
         assert!(config.validate().is_ok());
@@ -491,13 +528,9 @@ mod tests {
 
     #[test]
     fn validate_catches_invalid_next() {
-        let json = r#"{
-            "steps": [
-                {"name": "Start", "next": ["NonExistent"]}
-            ]
-        }"#;
+        let json = format!(r#"{{"steps": [{}]}}"#, step("Start", &["NonExistent"]));
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert!(config.validate().is_err());
     }
 
@@ -512,14 +545,13 @@ mod tests {
 
     #[test]
     fn validate_catches_duplicate_step_names() {
-        let json = r#"{
-            "steps": [
-                {"name": "Start", "next": []},
-                {"name": "Start", "next": []}
-            ]
-        }"#;
+        let json = format!(
+            r#"{{"steps": [{}, {}]}}"#,
+            step("Start", &[]),
+            step("Start", &[])
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         let result = config.validate();
         assert!(result.is_err());
         assert!(matches!(
@@ -554,24 +586,27 @@ mod tests {
 
     #[test]
     fn per_step_options_override_global() {
-        let json = r#"{
-            "options": {
+        let json = format!(
+            r#"{{
+            "options": {{
                 "timeout": 60,
                 "max_retries": 3,
                 "retry_on_timeout": true
-            },
-            "steps": [{
+            }},
+            "steps": [{{
                 "name": "ExpensiveStep",
+                "action": {POOL},
                 "next": [],
-                "options": {
+                "options": {{
                     "timeout": 300,
                     "max_retries": 1,
                     "retry_on_timeout": false
-                }
-            }]
-        }"#;
+                }}
+            }}]
+        }}"#
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         let step = &config.steps[0];
         let effective = EffectiveOptions::resolve(&config.options, &step.options);
 
@@ -584,18 +619,18 @@ mod tests {
 
     #[test]
     fn effective_options_uses_global_when_step_not_set() {
-        let json = r#"{
-            "options": {
+        let json = format!(
+            r#"{{
+            "options": {{
                 "timeout": 60,
                 "max_retries": 5
-            },
-            "steps": [{
-                "name": "BasicStep",
-                "next": []
-            }]
-        }"#;
+            }},
+            "steps": [{}]
+        }}"#,
+            step("BasicStep", &[])
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         let step = &config.steps[0];
         let effective = EffectiveOptions::resolve(&config.options, &step.options);
 
@@ -657,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn action_defaults_to_pool() {
+    fn action_is_required() {
         let json = r#"{
             "steps": [{
                 "name": "Test",
@@ -665,21 +700,24 @@ mod tests {
             }]
         }"#;
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
-        assert!(matches!(&config.steps[0].action, ActionFile::Pool { .. }));
+        let result = serde_json::from_str::<ConfigFile>(json);
+        assert!(result.is_err(), "Omitting action should fail to parse");
     }
 
     #[test]
     fn schema_inline_object() {
-        let json = r#"{
-            "steps": [{
+        let json = format!(
+            r#"{{
+            "steps": [{{
                 "name": "Test",
-                "value_schema": {"type": "object"},
+                "action": {POOL},
+                "value_schema": {{"type": "object"}},
                 "next": []
-            }]
-        }"#;
+            }}]
+        }}"#
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].value_schema,
             Some(SchemaRef::Inline(_))
@@ -688,15 +726,18 @@ mod tests {
 
     #[test]
     fn schema_link_object() {
-        let json = r#"{
-            "steps": [{
+        let json = format!(
+            r#"{{
+            "steps": [{{
                 "name": "Test",
-                "value_schema": {"link": "schemas/test.json"},
+                "action": {POOL},
+                "value_schema": {{"link": "schemas/test.json"}},
                 "next": []
-            }]
-        }"#;
+            }}]
+        }}"#
+        );
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].value_schema,
             Some(SchemaRef::Link { link }) if link == "schemas/test.json"

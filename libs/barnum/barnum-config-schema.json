@@ -1,14 +1,14 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ConfigFile",
-  "description": "Top-level Barnum configuration file format.\n\nThis is the raw parsed format. Call `resolve()` to get the runtime `Config`.",
+  "description": "Top-level Barnum configuration file format.\n\nDefines a workflow as a directed graph of steps. Each step processes tasks and can spawn follow-up tasks on other steps.",
   "type": "object",
   "required": [
     "steps"
   ],
   "properties": {
     "$schema": {
-      "description": "JSON Schema reference for editor validation (ignored at runtime).",
+      "description": "Optional JSON Schema URL for editor validation (e.g., `\"./node_modules/@barnum/barnum/barnum-config-schema.json\"`). Ignored at runtime.",
       "writeOnly": true,
       "type": [
         "string",
@@ -16,7 +16,7 @@
       ]
     },
     "entrypoint": {
-      "description": "Entry point step name. If specified, the workflow starts with this step and `--entrypoint-value` can be used to provide the initial value (defaults to `{}`). If not specified, `--initial-state` must be provided on the command line.",
+      "description": "Name of the step that starts the workflow. When set, the CLI accepts `--entrypoint-value` to provide the initial task value (defaults to `{}`). When omitted, `--initial-state` must provide explicit `[{\"kind\": \"StepName\", \"value\": ...}]` tasks.",
       "default": null,
       "type": [
         "string",
@@ -24,7 +24,7 @@
       ]
     },
     "options": {
-      "description": "Runtime options.",
+      "description": "Global runtime options (timeout, retries, concurrency). Individual steps can override these via their own `options` field.",
       "default": {
         "max_concurrency": null,
         "max_retries": 0,
@@ -39,7 +39,7 @@
       ]
     },
     "steps": {
-      "description": "Step definitions forming the task queue.",
+      "description": "The steps that make up this workflow. Each step defines how to process a task and which steps it can spawn follow-up tasks on.",
       "type": "array",
       "items": {
         "$ref": "#/definitions/StepFile"
@@ -49,20 +49,18 @@
   "additionalProperties": false,
   "definitions": {
     "ActionFile": {
-      "description": "How a step processes tasks (config file format).",
+      "description": "How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.",
       "oneOf": [
         {
-          "description": "Send to the agent pool for processing.",
+          "description": "Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.",
           "type": "object",
           "required": [
+            "instructions",
             "kind"
           ],
           "properties": {
             "instructions": {
-              "description": "Markdown instructions shown to agents.",
-              "default": {
-                "inline": ""
-              },
+              "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"inline\": \"...\"}` to write the markdown directly, or `{\"link\": \"path/to/file.md\"}` to reference an external file.",
               "allOf": [
                 {
                   "$ref": "#/definitions/MaybeLinked_for_String"
@@ -78,7 +76,7 @@
           }
         },
         {
-          "description": "Run a local command.",
+          "description": "Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.",
           "type": "object",
           "required": [
             "kind",
@@ -92,7 +90,7 @@
               ]
             },
             "script": {
-              "description": "Shell script to execute.\n\n**Input (stdin):** JSON object with the structure `{\"kind\": \"<step name>\", \"value\": <parameters>}`. Use `jq '.value'` to extract parameters or `jq -r '.value.fieldName'` for specific fields.\n\n**Output (stdout):** JSON array of next tasks, e.g. `[{\"kind\": \"NextStep\", \"value\": {...}}]`. Return `[]` to spawn no follow-up tasks.",
+              "description": "Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups.",
               "type": "string"
             }
           }
@@ -100,7 +98,7 @@
       ]
     },
     "MaybeLinked_for_String": {
-      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"inline\": <value>}` → inline content - `{\"link\": \"path\"}` → link to file",
+      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"inline\": <value>}` → content provided directly in the config - `{\"link\": \"path\"}` → content loaded from a file (path relative to the config file)",
       "anyOf": [
         {
           "description": "Inline content.",
@@ -110,20 +108,20 @@
           ],
           "properties": {
             "inline": {
-              "description": "The inline content.",
+              "description": "The content value, provided directly in the config file.",
               "type": "string"
             }
           }
         },
         {
-          "description": "Link to a file.",
+          "description": "Link to a file whose contents will be loaded at runtime.",
           "type": "object",
           "required": [
             "link"
           ],
           "properties": {
             "link": {
-              "description": "Path to the file.",
+              "description": "Relative path to the file (resolved relative to the config file's directory).",
               "type": "string"
             }
           }
@@ -131,7 +129,7 @@
       ]
     },
     "Options": {
-      "description": "Runtime options for task execution.",
+      "description": "Global runtime options for task execution. All fields have sensible defaults.",
       "type": "object",
       "properties": {
         "max_concurrency": {
@@ -175,41 +173,36 @@
       "additionalProperties": false
     },
     "SchemaRef": {
-      "description": "Reference to a JSON Schema (inline or external file).\n\nIn config files: - `{\"link\": \"path\"}` → link to schema file - Object → inline JSON Schema",
+      "description": "A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to reference an external file (path relative to config file)",
       "anyOf": [
         {
-          "description": "Link to a JSON Schema file.",
+          "description": "Reference to an external JSON Schema file. The path is relative to the config file's directory.",
           "type": "object",
           "required": [
             "link"
           ],
           "properties": {
             "link": {
-              "description": "Path to the schema file.",
+              "description": "Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`).",
               "type": "string"
             }
           }
         },
         {
-          "description": "Inline JSON Schema."
+          "description": "Inline JSON Schema object (any valid JSON Schema)."
         }
       ]
     },
     "StepFile": {
-      "description": "A step in the config file (may have unresolved references).",
+      "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nExecution order for each task: `pre` hook → `action` → `post` hook. The `finally` hook runs after the task **and all of its descendant tasks** complete.",
       "type": "object",
       "required": [
+        "action",
         "name"
       ],
       "properties": {
         "action": {
-          "description": "How to execute the step.",
-          "default": {
-            "instructions": {
-              "inline": ""
-            },
-            "kind": "Pool"
-          },
+          "description": "How this step processes tasks — either send to the agent pool (`Pool`) or run a local shell command (`Command`).",
           "allOf": [
             {
               "$ref": "#/definitions/ActionFile"
@@ -217,7 +210,7 @@
           ]
         },
         "finally": {
-          "description": "Finally hook (runs after all children complete).",
+          "description": "Shell script that runs after this task **and all tasks it spawned (recursively)** have completed. Receives the original task JSON on stdin. Must output a JSON array of follow-up tasks on stdout (same format as `Command` scripts: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`). Return `[]` to spawn no follow-ups. Use this for cleanup, aggregation, or spawning a final summarization step.",
           "default": null,
           "anyOf": [
             {
@@ -229,11 +222,11 @@
           ]
         },
         "name": {
-          "description": "Step name (e.g., `Analyze`, `Implement`).",
+          "description": "Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`.",
           "type": "string"
         },
         "next": {
-          "description": "Valid next steps.",
+          "description": "Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups).",
           "default": [],
           "type": "array",
           "items": {
@@ -241,7 +234,7 @@
           }
         },
         "options": {
-          "description": "Per-step options that override global options.",
+          "description": "Per-step options that override the global `options`. Only the fields you set here take effect; everything else falls through to the global defaults.",
           "default": {
             "max_retries": null,
             "retry_on_invalid_response": null,
@@ -255,7 +248,7 @@
           ]
         },
         "post": {
-          "description": "Post-execution hook script.",
+          "description": "Shell script that runs **after** the action. Receives the array of next tasks (the action's output) on stdin. Must output the (possibly modified) array of next tasks on stdout. Use this to filter, transform, or add follow-up tasks.",
           "default": null,
           "anyOf": [
             {
@@ -267,7 +260,7 @@
           ]
         },
         "pre": {
-          "description": "Pre-execution hook script.",
+          "description": "Shell script that runs **before** the action. Receives the task JSON on stdin (`{\"kind\": \"StepName\", \"value\": <payload>}`). Must output the (possibly modified) task JSON on stdout. Use this to enrich or transform the task before the action sees it.",
           "default": null,
           "anyOf": [
             {
@@ -279,7 +272,7 @@
           ]
         },
         "value_schema": {
-          "description": "JSON Schema for validating the step's value payload. None means any JSON value is accepted.",
+          "description": "JSON Schema that validates the `value` payload for tasks on this step. When set, tasks whose `value` doesn't conform are rejected. When omitted, any JSON value is accepted.",
           "default": null,
           "anyOf": [
             {
@@ -294,11 +287,11 @@
       "additionalProperties": false
     },
     "StepOptions": {
-      "description": "Per-step options that override global defaults.",
+      "description": "Per-step option overrides. Only set the fields you want to override; omitted fields inherit from the global `options`.",
       "type": "object",
       "properties": {
         "max_retries": {
-          "description": "Maximum retries for this step (overrides global).",
+          "description": "Maximum retries for tasks on this step (overrides global `max_retries`).",
           "default": null,
           "type": [
             "integer",
@@ -308,7 +301,7 @@
           "minimum": 0.0
         },
         "retry_on_invalid_response": {
-          "description": "Whether to retry on invalid response for this step (overrides global).",
+          "description": "Whether to retry when an agent returns an invalid response on this step (overrides global `retry_on_invalid_response`).",
           "default": null,
           "type": [
             "boolean",
@@ -316,7 +309,7 @@
           ]
         },
         "retry_on_timeout": {
-          "description": "Whether to retry on timeout for this step (overrides global).",
+          "description": "Whether to retry when an agent times out on this step (overrides global `retry_on_timeout`).",
           "default": null,
           "type": [
             "boolean",
@@ -324,7 +317,7 @@
           ]
         },
         "timeout": {
-          "description": "Timeout in seconds for this step (overrides global).",
+          "description": "Timeout in seconds for tasks on this step (overrides global `timeout`).",
           "default": null,
           "type": [
             "integer",

@@ -116,7 +116,7 @@ echo "finally_ran" > "{}"
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": "Step A"}}}},
                 "next": ["StepB"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "StepB",
@@ -249,7 +249,7 @@ echo "finally_executed" > "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "Child",
@@ -405,13 +405,13 @@ echo "child_finally" >> "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "Child",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }}
         ]
     }}"#,
@@ -521,7 +521,7 @@ echo "finally_executed" > "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "Child",
@@ -668,19 +668,19 @@ cat  # pass through stdin to stdout
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepB"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "StepB",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepC"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "StepC",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "post": "{}"
+                "post": {{"link": "{}"}}
             }}
         ]
     }}"#,
@@ -829,19 +829,19 @@ cat  # pass through stdin to stdout
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepB"],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "StepB",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": "{}"
+                "finally": {{"link": "{}"}}
             }},
             {{
                 "name": "Cleanup",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "post": "{}"
+                "post": {{"link": "{}"}}
             }}
         ]
     }}"#,
@@ -983,10 +983,10 @@ fn deeply_nested_finally_chain() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": "{}"}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepC"], "finally": "{}"}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": "{}"}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepC"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1129,10 +1129,10 @@ fn multiple_children_with_finally() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB", "StepC"], "finally": "{}"}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": "{}"}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": "{}"}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB", "StepC"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"link": "{}"}}}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1285,10 +1285,10 @@ fn finally_spawns_multiple_tasks() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": "{}"}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": "{}"}},
-            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}},
-            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": "{}"}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"link": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"link": "{}"}}}},
+            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}},
+            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1404,7 +1404,7 @@ exit 0
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": "{}",
+                "finally": {{"link": "{}"}},
                 "options": {{"max_retries": 3}}
             }}
         ]
@@ -1490,7 +1490,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": "{}",
+                "finally": {{"link": "{}"}},
                 "options": {{"max_retries": 2}}
             }}
         ]
@@ -1588,7 +1588,7 @@ echo '[{"kind": "Cleanup", "value": {}}]'
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": "{}",
+                "finally": {{"link": "{}"}},
                 "options": {{"max_retries": 0}}
             }},
             {{

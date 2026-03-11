@@ -15,12 +15,18 @@ use string_id::define_string_id;
 pub struct LogTaskId(pub u32);
 
 define_string_id! {
-    /// Step name identifier (the `name` field in configs, `kind` in tasks).
+    /// A step's unique name (e.g., `"Analyze"`, `"Implement"`). This string
+    /// appears as the `name` field in config files and as the `kind` field
+    /// when creating follow-up tasks: `{"kind": "StepName", "value": {...}}`.
     pub struct StepName;
 }
 
 define_string_id! {
-    /// Shell command for hooks (pre, post, finally).
+    /// A shell script for lifecycle hooks (`pre`, `post`, `finally`).
+    ///
+    /// The script is executed via the system shell. It receives JSON on stdin
+    /// and must produce JSON on stdout (see each hook's documentation for the
+    /// specific input/output contract).
     pub struct HookScript;
 }
 

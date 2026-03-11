@@ -16,6 +16,12 @@
 
   See troupe's architecture: `DaemonCore` handles pure logic, `Daemon` handles IO.
 
+## Config / Schema
+
+- [ ] **Support Pool actions for hooks (pre, post, finally).** Currently all hooks are shell scripts (`HookScript`). Allow hooks to use `ActionFile` (Pool or Command) so they can be sent to the agent pool for AI-driven processing (e.g., finally hooks that summarize results via an agent).
+
+- [ ] **Wrap hooks in `{"kind": "Command", "script": "..."}` format.** Currently hooks are bare strings (via `MaybeLinked<HookScript>`), which is ambiguous — agents might confuse a hook script with a step name or other string. Wrapping in the same `ActionFile` discriminated union makes the format self-documenting and unambiguous.
+
 ## Troupe
 
 - [ ] Kicked message should not include a response_file (it's not needed)

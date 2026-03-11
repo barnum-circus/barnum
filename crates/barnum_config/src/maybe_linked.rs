@@ -8,19 +8,19 @@ use std::path::Path;
 /// Content that can be inline or linked to a file.
 ///
 /// In config files:
-/// - `{"inline": <value>}` → inline content
-/// - `{"link": "path"}` → link to file
+/// - `{"inline": <value>}` → content provided directly in the config
+/// - `{"link": "path"}` → content loaded from a file (path relative to the config file)
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum MaybeLinked<T> {
     /// Inline content.
     Inline {
-        /// The inline content.
+        /// The content value, provided directly in the config file.
         inline: T,
     },
-    /// Link to a file.
+    /// Link to a file whose contents will be loaded at runtime.
     Link {
-        /// Path to the file.
+        /// Relative path to the file (resolved relative to the config file's directory).
         link: String,
     },
 }

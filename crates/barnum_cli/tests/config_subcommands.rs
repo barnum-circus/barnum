@@ -11,6 +11,17 @@ use common::BarnumRunner;
 use rstest::rstest;
 use std::time::Duration;
 
+const POOL: &str = r#"{"kind": "Pool", "instructions": {"inline": ""}}"#;
+
+/// Build a step JSON string with the required action field.
+fn step(name: &str, next: &[&str]) -> String {
+    let next_json: Vec<String> = next.iter().map(|n| format!("\"{n}\"")).collect();
+    format!(
+        r#"{{"name": "{name}", "action": {POOL}, "next": [{}]}}"#,
+        next_json.join(", ")
+    )
+}
+
 // =============================================================================
 // barnum config schema
 // =============================================================================
@@ -122,12 +133,10 @@ fn validate_minimal_config() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_single_terminal_step() {
-    let config = r#"{
-        "steps": [{"name": "Start", "next": []}]
-    }"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("Start", &[]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -138,16 +147,15 @@ fn validate_single_terminal_step() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_linear_chain() {
-    let config = r#"{
-        "steps": [
-            {"name": "A", "next": ["B"]},
-            {"name": "B", "next": ["C"]},
-            {"name": "C", "next": []}
-        ]
-    }"#;
+    let config = format!(
+        r#"{{"steps": [{}, {}, {}]}}"#,
+        step("A", &["B"]),
+        step("B", &["C"]),
+        step("C", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -159,17 +167,16 @@ fn validate_linear_chain() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_branching_config() {
-    let config = r#"{
-        "steps": [
-            {"name": "Start", "next": ["PathA", "PathB"]},
-            {"name": "PathA", "next": ["End"]},
-            {"name": "PathB", "next": ["End"]},
-            {"name": "End", "next": []}
-        ]
-    }"#;
+    let config = format!(
+        r#"{{"steps": [{}, {}, {}, {}]}}"#,
+        step("Start", &["PathA", "PathB"]),
+        step("PathA", &["End"]),
+        step("PathB", &["End"]),
+        step("End", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -179,17 +186,13 @@ fn validate_branching_config() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_config_with_options() {
-    let config = r#"{
-        "options": {
-            "timeout": 60,
-            "max_retries": 3,
-            "max_concurrency": 5
-        },
-        "steps": [{"name": "Task", "next": []}]
-    }"#;
+    let config = format!(
+        r#"{{"options": {{"timeout": 60, "max_retries": 3, "max_concurrency": 5}}, "steps": [{}]}}"#,
+        step("Task", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success());
 }
@@ -197,13 +200,13 @@ fn validate_config_with_options() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_config_with_schema_field() {
-    let config = r#"{
-        "$schema": "https://example.com/barnum-config-schema.json",
-        "steps": [{"name": "Task", "next": []}]
-    }"#;
+    let config = format!(
+        r#"{{"$schema": "https://example.com/barnum-config-schema.json", "steps": [{}]}}"#,
+        step("Task", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success(), "$schema field should be allowed");
 }
@@ -215,12 +218,10 @@ fn validate_config_with_schema_field() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_fails_missing_next_step() {
-    let config = r#"{
-        "steps": [{"name": "A", "next": ["NonExistent"]}]
-    }"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("A", &["NonExistent"]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(!result.status.success(), "Should fail for missing step");
     let stderr = String::from_utf8_lossy(&result.stderr);
@@ -230,15 +231,14 @@ fn validate_fails_missing_next_step() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_fails_duplicate_step_names() {
-    let config = r#"{
-        "steps": [
-            {"name": "Duplicate", "next": []},
-            {"name": "Duplicate", "next": []}
-        ]
-    }"#;
+    let config = format!(
+        r#"{{"steps": [{}, {}]}}"#,
+        step("Duplicate", &[]),
+        step("Duplicate", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(!result.status.success(), "Should fail for duplicate names");
     let stderr = String::from_utf8_lossy(&result.stderr);
@@ -291,12 +291,10 @@ fn validate_fails_unknown_field() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn docs_generates_markdown_header() {
-    let config = r#"{
-        "steps": [{"name": "Task", "next": []}]
-    }"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("Task", &[]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.docs(config).expect("docs");
+    let result = barnum.docs(&config).expect("docs");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -350,10 +348,10 @@ fn docs_includes_instructions() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn docs_fails_invalid_config() {
-    let config = r#"{"steps": [{"name": "A", "next": ["Missing"]}]}"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("A", &["Missing"]));
 
     let barnum = BarnumRunner::new();
-    let _result = barnum.docs(config).expect("docs");
+    let _result = barnum.docs(&config).expect("docs");
 
     // Docs doesn't validate transitions, so invalid next refs still work
     // But completely broken JSON should fail
@@ -369,15 +367,14 @@ fn docs_fails_invalid_config() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn graph_outputs_dot_format() {
-    let config = r#"{
-        "steps": [
-            {"name": "A", "next": ["B"]},
-            {"name": "B", "next": []}
-        ]
-    }"#;
+    let config = format!(
+        r#"{{"steps": [{}, {}]}}"#,
+        step("A", &["B"]),
+        step("B", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.graph(config).expect("graph");
+    let result = barnum.graph(&config).expect("graph");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -391,12 +388,10 @@ fn graph_outputs_dot_format() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn graph_marks_terminal_steps() {
-    let config = r#"{
-        "steps": [{"name": "End", "next": []}]
-    }"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("End", &[]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.graph(config).expect("graph");
+    let result = barnum.graph(&config).expect("graph");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -432,10 +427,10 @@ fn graph_distinguishes_pool_and_command() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn graph_fails_invalid_config() {
-    let config = r#"{"steps": [{"name": "A", "next": ["Missing"]}]}"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("A", &["Missing"]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.graph(config).expect("graph");
+    let result = barnum.graph(&config).expect("graph");
 
     assert!(
         !result.status.success(),
@@ -446,18 +441,19 @@ fn graph_fails_invalid_config() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn graph_shows_hooks() {
-    let config = r#"{
-        "steps": [{
+    let config = format!(
+        r#"{{"steps": [{{
             "name": "WithHooks",
-            "pre": "echo pre",
-            "post": "echo post",
-            "finally": "echo finally",
+            "action": {POOL},
+            "pre": {{"inline": "echo pre"}},
+            "post": {{"inline": "echo post"}},
+            "finally": {{"inline": "echo finally"}},
             "next": []
-        }]
-    }"#;
+        }}]}}"#
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.graph(config).expect("graph");
+    let result = barnum.graph(&config).expect("graph");
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -486,14 +482,10 @@ fn all_commands_handle_empty_steps() {
 #[timeout(Duration::from_secs(5))]
 fn validate_cycle_is_allowed() {
     // Cycles are valid - a step can transition back to an earlier step
-    let config = r#"{
-        "steps": [
-            {"name": "Loop", "next": ["Loop"]}
-        ]
-    }"#;
+    let config = format!(r#"{{"steps": [{}]}}"#, step("Loop", &["Loop"]));
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success(), "Self-loop should be valid");
 }
@@ -505,13 +497,13 @@ fn validate_cycle_is_allowed() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_valid_entrypoint() {
-    let config = r#"{
-        "entrypoint": "Start",
-        "steps": [{"name": "Start", "next": []}]
-    }"#;
+    let config = format!(
+        r#"{{"entrypoint": "Start", "steps": [{}]}}"#,
+        step("Start", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(result.status.success(), "Valid entrypoint should pass");
 }
@@ -519,13 +511,13 @@ fn validate_valid_entrypoint() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_invalid_entrypoint_fails() {
-    let config = r#"{
-        "entrypoint": "NonExistent",
-        "steps": [{"name": "Start", "next": []}]
-    }"#;
+    let config = format!(
+        r#"{{"entrypoint": "NonExistent", "steps": [{}]}}"#,
+        step("Start", &[])
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(
         !result.status.success(),
@@ -541,20 +533,23 @@ fn validate_invalid_entrypoint_fails() {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 fn validate_entrypoint_with_schema() {
-    let config = r#"{
+    let config = format!(
+        r#"{{
         "entrypoint": "Start",
-        "steps": [{
+        "steps": [{{
             "name": "Start",
-            "value_schema": {
+            "action": {POOL},
+            "value_schema": {{
                 "type": "object",
-                "properties": {"path": {"type": "string"}}
-            },
+                "properties": {{"path": {{"type": "string"}}}}
+            }},
             "next": []
-        }]
-    }"#;
+        }}]
+    }}"#
+    );
 
     let barnum = BarnumRunner::new();
-    let result = barnum.validate(config).expect("validate");
+    let result = barnum.validate(&config).expect("validate");
 
     assert!(
         result.status.success(),

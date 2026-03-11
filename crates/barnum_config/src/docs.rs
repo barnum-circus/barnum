@@ -149,7 +149,7 @@ mod tests {
             r#"{
             "steps": [
                 {"name": "Start", "action": {"kind": "Pool", "instructions": {"inline": "Begin here."}}, "next": ["End"]},
-                {"name": "End", "next": []}
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
             ]
         }"#,
         )
@@ -167,7 +167,7 @@ mod tests {
         let config_file: ConfigFile = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "End", "next": []}
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
             ]
         }"#,
         )
@@ -185,7 +185,7 @@ mod tests {
             r#"{
             "steps": [
                 {"name": "Start", "action": {"kind": "Pool", "instructions": {"inline": "Begin."}}, "next": ["End"]},
-                {"name": "End", "next": []}
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
             ]
         }"#,
         )
