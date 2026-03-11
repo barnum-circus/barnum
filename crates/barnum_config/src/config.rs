@@ -3,6 +3,7 @@
 //! Defines the task queue with steps, schemas, and transitions.
 //! These types are serialization-format agnostic (use serde).
 
+use crate::maybe_linked::MaybeLinked;
 use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -103,7 +104,7 @@ pub struct StepFile {
 
     /// Finally hook (runs after all children complete).
     #[serde(default, rename = "finally")]
-    pub finally_hook: Option<HookScript>,
+    pub finally_hook: Option<MaybeLinked<HookScript>>,
 
     /// Per-step options that override global options.
     #[serde(default)]
@@ -333,7 +334,15 @@ impl StepFile {
             action,
             post: self.post,
             next: self.next,
-            finally_hook: self.finally_hook,
+            finally_hook: self
+                .finally_hook
+                .map(|ml| {
+                    ml.resolve(base_path, |path| {
+                        let content = std::fs::read_to_string(path)?;
+                        Ok(HookScript::new(content))
+                    })
+                })
+                .transpose()?,
             options: crate::resolved::Options {
                 timeout: options.timeout,
                 max_retries: options.max_retries,
