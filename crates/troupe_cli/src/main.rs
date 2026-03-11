@@ -12,9 +12,10 @@ use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use troupe::{
-    AGENTS_DIR, DaemonConfig, Payload, STATUS_FILE, TaskAssignment, VerifiedWatcher, default_root,
-    generate_id, id_to_path, is_daemon_running, list_pools, resolve_pool, response_path,
-    run_with_config, stop, submit, submit_file, submit_file_with_timeout, wait_for_task,
+    AGENTS_DIR, DEFAULT_POOL_ID, DaemonConfig, Payload, STATUS_FILE, TaskAssignment,
+    VerifiedWatcher, default_root, id_to_path, is_daemon_running, list_pools, resolve_pool,
+    response_path, run_with_config, stop, submit, submit_file, submit_file_with_timeout,
+    wait_for_task,
 };
 
 const AGENT_PROTOCOL: &str = include_str!("../../troupe/protocols/AGENT_PROTOCOL.md");
@@ -70,8 +71,7 @@ struct Cli {
 enum Command {
     /// Start the agent pool server
     Start {
-        /// Pool ID. If omitted, generates a new ID.
-        /// IDs resolve to `<root>/pools/<id>/` (default: `/tmp/troupe/pools/<id>/`)
+        /// Pool ID. IDs resolve to `<root>/pools/<id>/` (default: `default`)
         #[arg(long)]
         pool: Option<String>,
         /// Output pool info as JSON (for scripts)
@@ -106,15 +106,15 @@ enum Command {
     },
     /// Stop a running agent pool server
     Stop {
-        /// Pool ID (not a path)
-        #[arg(long)]
+        /// Pool ID (not a path). Defaults to `default`.
+        #[arg(long, default_value = DEFAULT_POOL_ID)]
         pool: String,
     },
     /// Submit a task and wait for the result
     #[command(name = "submit_task")]
     SubmitTask {
-        /// Pool ID (not a path)
-        #[arg(long)]
+        /// Pool ID (not a path). Defaults to `default`.
+        #[arg(long, default_value = DEFAULT_POOL_ID)]
         pool: String,
         /// Task content as inline string
         #[arg(long, conflicts_with = "file")]
@@ -146,8 +146,8 @@ enum Command {
     /// Wait for and return the next task (for agents)
     #[command(name = "get_task")]
     GetTask {
-        /// Pool ID (not a path)
-        #[arg(long)]
+        /// Pool ID (not a path). Defaults to `default`.
+        #[arg(long, default_value = DEFAULT_POOL_ID)]
         pool: String,
         /// Agent name (optional, for debugging)
         #[arg(long)]
@@ -249,8 +249,8 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
 
-            // Resolve pool ID or generate new one
-            let id = pool.unwrap_or_else(generate_id);
+            // Resolve pool ID (default: "default")
+            let id = pool.unwrap_or_else(|| DEFAULT_POOL_ID.to_string());
             let root = id_to_path(&root, &id);
 
             // TODO: Pass periodic/initial heartbeat flags to DaemonConfig when supported

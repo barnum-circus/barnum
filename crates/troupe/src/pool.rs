@@ -14,6 +14,9 @@ const DEFAULT_ROOT_DIR: &str = "troupe";
 /// Subdirectory within root where pools live.
 const POOLS_DIR: &str = "pools";
 
+/// Default pool ID used when `--pool` is not specified.
+pub const DEFAULT_POOL_ID: &str = "default";
+
 /// Get the default root directory.
 ///
 /// Uses /tmp explicitly on Unix to ensure atomic writes (which also use /tmp)
