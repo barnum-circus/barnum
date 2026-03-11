@@ -55,8 +55,8 @@ function Features() {
           perform increasingly complicated tasks. However, a markdown file
           with instructions falls apart as the workflow grows more
           complicated. Agents lose track, skip steps, and make the wrong
-          call when their context fills up. They start acting like
-          unpredictable wild animals.
+          call when their context fills up. They act like unpredictable,
+          wild animals.
         </p>
         <p>
           That's why we created Barnum. With Barnum, you define structured
