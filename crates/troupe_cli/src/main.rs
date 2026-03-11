@@ -420,6 +420,7 @@ fn main() -> ExitCode {
             if let Some(id) = &pool {
                 let path = id_to_path(&root, id);
                 output = output
+                    .replace("<POOL_NAME>", id)
                     .replace("<POOL_ID>", id)
                     .replace("abc12345", id)
                     .replace("/tmp/troupe/<POOL_ID>", &path.display().to_string());

@@ -16,7 +16,7 @@ const exampleConfig = `{
       },
       "next": ["ConvertToTS"],
       // After all conversions: fix any remaining type errors
-      "finally": "echo '[{\\"kind\\": \\"FixErrors\\", \\"value\\": {}}]'"
+      "finally": { "kind": "Command", "script": "echo '[{\\"kind\\": \\"FixErrors\\", \\"value\\": {}}]'" }
     },
     {
       "name": "ConvertToTS",

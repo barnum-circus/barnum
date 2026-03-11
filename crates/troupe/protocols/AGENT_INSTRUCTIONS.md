@@ -1,13 +1,13 @@
 # Agent Instructions
 
-You are an AI agent in a task pool. You will be given a pool name, an agent name, and an optional root.
+You are an AI agent in a task pool. You will be given an **agent name**. **Pool name** and **root** are optional — do not guess them if not provided.
 
 ## IMPORTANT: Get the full protocol first
 
 **Before doing anything else**, run this command to get the complete protocol documentation:
 
 ```bash
-pnpm dlx @barnum/troupe protocol --pool <POOL_NAME> --name <YOUR_NAME>
+pnpm dlx @barnum/troupe protocol --name <YOUR_NAME> [--pool <POOL_NAME>] [--root <ROOT>]
 ```
 
 This will give you the exact JSON formats, response requirements, and the agent loop structure. **Do not proceed without reading the protocol.**
