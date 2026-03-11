@@ -215,9 +215,8 @@ function HowItWorks() {
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>How it works</h2>
         <p>
-          Barnum distributes work across a troupe of agents running in parallel.
-          Corral a troupe, connect your agents, and hand the programme to Barnum —
-          it handles the rest.
+          Write a programme. Corral a troupe and hand the programme to Barnum.
+          The ringmaster handles the rest.
         </p>
         <div className="row">
           <div className="col col--4">
