@@ -226,10 +226,6 @@ function HowItWorks() {
     <section className="alt-background">
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>Ladies and gentlemen, the show is about to begin!</h2>
-        <p>
-          Write a programme. Corral a troupe and hand the programme to Barnum.
-          The ringmaster handles the rest.
-        </p>
         <div className="row">
           <div className="col col--4">
             <h3>📜 1. Write the programme</h3>
