@@ -52,7 +52,7 @@ function Features() {
         <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
         <div className="row">
           <div className="col col--4">
-            <h3>🦁 No improvising</h3>
+            <h3>🦁 No one goes off script</h3>
             <p>
               Rigorous workflows are expressed as statically analyzable state machines.
               Transitions are declared upfront and validated when the
