@@ -216,7 +216,7 @@ function HowItWorks() {
         <h2 className={styles.centeredHeading}>How it works</h2>
         <p>
           Barnum distributes work across a troupe of agents running in parallel.
-          Assemble a troupe, connect your agents, and hand Barnum a workflow —
+          Corral a troupe, connect your agents, and hand Barnum a workflow —
           it handles the rest.
         </p>
         <div className="row">
@@ -228,7 +228,7 @@ function HowItWorks() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>🎪 2. Assemble the troupe</h3>
+            <h3>🎪 2. Corral the troupe</h3>
             <p>
               Start a troupe and connect agents to it. The more
               agents you add, the more work runs in parallel.
@@ -237,7 +237,9 @@ function HowItWorks() {
           <div className="col col--4">
             <h3>🎬 3. Showtime</h3>
             <p>
-              Pass the workflow to Barnum. It distributes tasks across
+              <strong>Ladies and gentlemen, children of all ages</strong>
+              <br />
+              Your workflow is about to begin. Barnum distributes tasks across
               your agents, enforces valid transitions, retries failures,
               and respects concurrency limits.
             </p>

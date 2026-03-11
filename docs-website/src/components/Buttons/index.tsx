@@ -8,7 +8,7 @@ export default function Buttons() {
         className="button button--secondary button--lg"
         to="/docs/quickstart"
       >
-        Quick Start
+        Quickstart
       </Link>
       <Link
         className="button button--secondary button--lg"

@@ -83,7 +83,7 @@ const config: Config = {
               to: '/docs/',
             },
             {
-              label: 'Quick Start',
+              label: 'Quickstart',
               to: '/docs/quickstart',
             },
           ],

@@ -51,7 +51,7 @@ A Rust library for defining task queues as type-safe state machines with compile
 
 ## Getting Started
 
-Check out the [Quick Start guide](./quickstart) to get up and running, or browse the [recipes](./recipes/) for common workflow patterns:
+Check out the [Quickstart guide](./quickstart) to get up and running, or browse the [recipes](./recipes/) for common workflow patterns:
 
 - **[Linear Pipeline](./recipes/linear-pipeline.md)** — Step-by-step processing
 - **[Fan-Out](./recipes/fan-out.md)** — Split one task into many parallel tasks

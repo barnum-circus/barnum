@@ -1,12 +1,6 @@
-# Quick Start
+# Quickstart
 
 This guide walks you through running your first Barnum workflow. We use Claude in this example, but Barnum works with any AI agent that can follow instructions and write to a file.
-
-## What is Barnum?
-
-Barnum orchestrates AI agents through type-safe workflows. You define a state machine in JSON, and Barnum dispatches tasks to long-lived agents. Each agent only sees the instructions for its current task—no context overload, no confusion about what to do next.
-
-**The key insight:** By breaking complex work into discrete steps with clear instructions, agents can reliably tackle ambitious refactoring and codebase changes.
 
 ## Prerequisites
 
