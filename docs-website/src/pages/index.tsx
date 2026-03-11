@@ -53,11 +53,11 @@ function Features() {
         <p>
           LLMs are extremely powerful tools, and they are being asked to
           perform increasingly complicated tasks. However, a markdown file
-          with instructions falls apart as the work grows. Agents lose track,
-          skip steps, and make the wrong call when their context fills up.
-          Barnum lets you define structured workflows that you can analyze
-          before anything runs and that your agents are guaranteed to follow
-          to the letter.
+          with instructions falls apart as the workflow grows more
+          complicated. Agents lose track, skip steps, and make the wrong
+          call when their context fills up. With Barnum, you define
+          structured workflows that you can analyze before anything runs,
+          and your agents are guaranteed to follow them to the letter.
         </p>
         <div className="row">
           <div className="col col--4">
