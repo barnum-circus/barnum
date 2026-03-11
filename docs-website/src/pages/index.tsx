@@ -50,11 +50,20 @@ function Features() {
     <section className="alt-background">
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
+        <p>
+          LLMs are extremely powerful tools, and they are being asked to
+          perform increasingly complicated tasks. However, a markdown file
+          with instructions falls apart as the work grows. Agents lose track,
+          skip steps, and make the wrong call when their context fills up.
+          Barnum lets you define structured workflows that you can analyze
+          before anything runs and that your agents are guaranteed to follow
+          to the letter.
+        </p>
         <div className="row">
           <div className="col col--4">
-            <h3>🦁 No one goes off script</h3>
+            <h3>🦁 A choreographed show</h3>
             <p>
-              Rigorous workflows are expressed as statically analyzable state machines.
+              Workflows are expressed as statically analyzable state machines.
               Transitions are declared upfront and validated when the
               workflow is run. Invalid ones are rejected and retried.
               No hoping the agent stays on track.
@@ -70,7 +79,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐯 Disciplined performers</h3>
+            <h3>🐯 No one goes off script</h3>
             <p>
               An agent performing a step never sees the full workflow,
               just the instructions for performing their current task.
