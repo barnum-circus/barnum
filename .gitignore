@@ -1,9 +1,7 @@
-/target
-.claude/settings.local.json
-.claude/claude.local.md
-.vscode/
-
-# Test data directories
-.td/
-.test-data/
-.local/
+**/target/**
+**/.claude/settings.local.json
+**/.claude/claude.local.md
+**/.vscode/**
+**/.td/**
+**/.test-data/**
+**/.local/**
