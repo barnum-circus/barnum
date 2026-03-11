@@ -60,7 +60,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐘 The right performer for every act</h3>
+            <h3>🐘 The right performer for each act</h3>
             <p>
               Some acts are agents, some acts are shell commands, and each
               does what it's best at. Fan-out with <code>jq</code>,
@@ -94,12 +94,12 @@ function ExampleSection() {
           finishes) in plain, readable JSON that can be validated before
           anything runs. Agents only handle the parts that require judgment.
           They never see the full workflow, so their context stays small and
-          they don't drift off course as the work scales up. Every agent
+          they don't drift off course as the work scales up. Each agent
           response is validated against a schema you define, so the workflow
           executes exactly as you specified.
         </p>
         <p>
-          In this programme, a command lists every <code>.js</code> file.
+          In this programme, a command lists each <code>.js</code> file.
           Barnum dispatches one agent per file to convert it to TypeScript,
           in parallel. When all conversions finish, a <code>finally</code>{' '}
           hook triggers an agent that runs <code>tsc</code> and fixes any
@@ -200,7 +200,7 @@ function WhyBarnum() {
                 validate results after, clean up resources when a subtree completes.
               </li>
               <li>
-                <strong>Schema validation</strong>: every step declares what data
+                <strong>Schema validation</strong>: each step declares what data
                 it accepts. Malformed responses are rejected before they propagate.
               </li>
               <li>
