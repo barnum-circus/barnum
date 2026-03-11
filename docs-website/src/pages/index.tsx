@@ -64,8 +64,8 @@ function Features() {
           workflows. You define your workflow using a configuration file
           that is analyzable in advance. When it runs, transitions are
           validated, giving you certainty that the workflow will execute
-          exactly as you designed it. Barnum lets you build more powerful
-          tools on top of agents.
+          exactly as you designed it. And that certainty is what lets you
+          build more powerful tools on top of agents.
         </p>
         <div className="row">
           <div className="col col--4">
