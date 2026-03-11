@@ -85,7 +85,7 @@ function ExampleSection() {
   return (
     <section>
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>One program. Greatest show on earth.</h2>
+        <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
           A command lists every <code>.js</code> file. Barnum dispatches one
           agent per file to convert it to TypeScript — in parallel.
@@ -121,16 +121,16 @@ function AgentAuthoring() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>Looks complicated? Let the performers write the program.</h2>
+        <h2 className={styles.centeredHeading}>Looks complicated? Let the performers write the programme.</h2>
         <p>
-          Barnum programs are just JSON with a{' '}
+          Barnum programmes are just JSON with a{' '}
           <a href="/docs/reference/config-schema">published schema</a>.
           Point your agent at{' '}
           <code>pnpm dlx @barnum/barnum config schema</code> to get
           the full JSON Schema, show it the{' '}
           <a href="/docs/recipes">recipes page</a> for common
           patterns, and tell it what you want. It'll write a working
-          program.
+          programme.
         </p>
       </div>
     </section>
@@ -200,7 +200,7 @@ function WhyBarnum() {
           </div>
         </div>
         <p className={styles.closingNote}>
-          Each pattern is a JSON program — no framework, no SDK, no
+          Each pattern is a JSON programme — no framework, no SDK, no
           custom language. Define the state machine, point it at a troupe,
           and let Barnum handle the orchestration.
         </p>
@@ -216,14 +216,14 @@ function HowItWorks() {
         <h2 className={styles.centeredHeading}>How it works</h2>
         <p>
           Barnum distributes work across a troupe of agents running in parallel.
-          Corral a troupe, connect your agents, and hand the program to Barnum —
+          Corral a troupe, connect your agents, and hand the programme to Barnum —
           it handles the rest.
         </p>
         <div className="row">
           <div className="col col--4">
-            <h3>📜 1. Write the program</h3>
+            <h3>📜 1. Write the programme</h3>
             <p>
-              Write a program with steps, transitions, and schemas.
+              Write a programme with steps, transitions, and schemas.
               Each step is either an agent task or a shell command.
             </p>
           </div>
@@ -239,7 +239,7 @@ function HowItWorks() {
             <p>
               <strong>Ladies and gentlemen, children of all ages</strong>
               <br />
-              Your workflow is about to begin. Hand the program to Barnum. It distributes tasks across
+              Your workflow is about to begin. Hand the programme to Barnum. It distributes tasks across
               your agents, enforces valid transitions, retries failures,
               and respects concurrency limits.
             </p>
