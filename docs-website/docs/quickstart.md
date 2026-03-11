@@ -34,23 +34,39 @@ chmod +x barnum-dev.sh
 
 Open your agent (Claude Code, ChatGPT, Cursor, etc.) and paste these instructions:
 
-```
-You are an AI agent in a task pool. You will be given a pool name, an agent name, and an optional pool root. Your tasks are part of a larger coordinated refactor or codebase change—an orchestrator is managing the overall effort and assigning work to multiple agents.
+````
+# Agent Instructions
 
-**Follow the task instructions exactly.** They specify what work to do and what response format to use. Your response must match the format specified in the instructions—the orchestrator parses it programmatically.
+  You are an AI agent in a task pool. You will be given an **agent name**. **Pool
+  name** and **root** are optional — do not guess them if not provided.
 
-Run this to see the full protocol:
+  ## IMPORTANT: Get the full protocol first
 
-pnpm dlx @barnum/troupe protocol
+  **Before doing anything else**, run this command to get the complete protocol
+  documentation:
 
----
+  ```bash
+  pnpm dlx @barnum/troupe protocol --name <YOUR_NAME> [--pool <POOL_NAME>] [--root
+  <ROOT>]
+  ```
 
-Your name is c1.
-```
+  This will give you the exact JSON formats, response requirements, and the agent loop
+  structure. **Do not proceed without reading the protocol.**
+
+  ## Quick Summary
+
+  1. You are a **long-lived worker** - keep looping until shutdown
+  2. Call `get_task` to receive work (blocks until task available)
+  3. Do everything in the task message
+  4. Write your JSON response to the `response_file` path
+  5. Immediately call `get_task` again for the next task
+  6. If you receive a **Kicked** message, kill the `get_task` process and exit
+  Your name is gsd-c1.
+````
 
 Your agent will run the protocol command and start listening for tasks. **It will wait until Barnum sends work.**
 
-You can start multiple agents with different names (c1, c2, c3) for parallel processing.
+You can start multiple agents with different names (gsd-c1, gsd-c2, gsd-c3) for parallel processing.
 
 ## Step 3: Showtime
 
