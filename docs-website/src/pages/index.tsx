@@ -72,10 +72,10 @@ function Features() {
           <div className="col col--4">
             <h3>🐯 One act at a time</h3>
             <p>
-              Each step gets only the instructions and data it needs.
-              Agents never see the full workflow, just the instructions
-              for performing their current task. Focused context means
-              agents don't get confused and can make better decisions.
+              An agent performing a step never sees the full workflow,
+              just the instructions for performing their current task.
+              Focused context means agents don't get confused and can
+              make better decisions.
             </p>
           </div>
         </div>
