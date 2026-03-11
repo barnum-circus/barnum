@@ -54,8 +54,9 @@ function Features() {
           <div className="col col--4">
             <h3>🦁 No one leaves the ring</h3>
             <p>
-              Transitions are declared up front and validated when the
-              workflow is run. No hoping the agent stays on track.
+              Transitions are declared upfront and validated when the
+              workflow is run. Invalid ones are rejected and retried.
+              No hoping the agent stays on track.
             </p>
           </div>
           <div className="col col--4">
