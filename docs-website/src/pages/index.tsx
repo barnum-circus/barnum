@@ -94,7 +94,9 @@ function ExampleSection() {
           finishes) in plain, readable JSON that can be validated before
           anything runs. Agents only handle the parts that require judgment.
           They never see the full workflow, so their context stays small and
-          they don't drift off course as the work scales up.
+          they don't drift off course as the work scales up. Every agent
+          response is validated against a schema you define, so the workflow
+          executes exactly as you specified.
         </p>
         <p>
           In this programme, a command lists every <code>.js</code> file.
