@@ -445,9 +445,9 @@ fn graph_shows_hooks() {
         r#"{{"steps": [{{
             "name": "WithHooks",
             "action": {POOL},
-            "pre": {{"inline": "echo pre"}},
-            "post": {{"inline": "echo post"}},
-            "finally": {{"inline": "echo finally"}},
+            "pre": {{"kind": "Command", "script": "echo pre"}},
+            "post": {{"kind": "Command", "script": "echo post"}},
+            "finally": {{"kind": "Command", "script": "echo finally"}},
             "next": []
         }}]}}"#
     );

@@ -3,7 +3,6 @@
 //! Defines the task queue with steps, schemas, and transitions.
 //! These types are serialization-format agnostic (use serde).
 
-use crate::maybe_linked::MaybeLinked;
 use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -96,23 +95,39 @@ pub struct StepFile {
     #[serde(default)]
     pub value_schema: Option<SchemaRef>,
 
-    /// Shell script that runs **before** the action. Receives the task JSON on
-    /// stdin (`{"kind": "StepName", "value": <payload>}`). Must output the
-    /// (possibly modified) task JSON on stdout. Use this to enrich or transform
-    /// the task before the action sees it.
+    /// Shell script that runs **before** the action.
+    ///
+    /// **stdin:** The task's `value` payload as JSON (e.g., `{"path": "/src"}`).
+    /// This is just the value — not the full `{"kind": ..., "value": ...}` wrapper.
+    ///
+    /// **stdout:** The (possibly modified) value payload as JSON. Must be the
+    /// same shape. The modified value is what the action receives.
+    ///
+    /// Use this to enrich or transform the task before the action sees it
+    /// (e.g., adding timestamps, resolving paths, fetching metadata).
     #[serde(default)]
-    pub pre: Option<MaybeLinked<HookScript>>,
+    pub pre: Option<PreHook>,
 
     /// How this step processes tasks — either send to the agent pool (`Pool`)
     /// or run a local shell command (`Command`).
     pub action: ActionFile,
 
-    /// Shell script that runs **after** the action. Receives the array of
-    /// next tasks (the action's output) on stdin. Must output the (possibly
-    /// modified) array of next tasks on stdout. Use this to filter, transform,
-    /// or add follow-up tasks.
+    /// Shell script that runs **after** the action completes (or fails).
+    ///
+    /// **stdin:** A tagged JSON object describing the outcome. The `kind` field
+    /// indicates what happened:
+    ///
+    /// - `{"kind": "Success", "input": <value>, "output": <agent_output>, "next": [<tasks>]}`
+    ///   — Action succeeded. `next` contains the follow-up tasks to spawn.
+    /// - `{"kind": "Timeout", "input": <value>}` — Action timed out.
+    /// - `{"kind": "Error", "input": <value>, "error": "<message>"}` — Action failed.
+    /// - `{"kind": "PreHookError", "input": <value>, "error": "<message>"}` — Pre hook failed.
+    ///
+    /// **stdout:** The same tagged JSON object, possibly modified. Typically
+    /// you modify the `next` array in `Success` to filter, rewrite, or add
+    /// follow-up tasks.
     #[serde(default)]
-    pub post: Option<MaybeLinked<HookScript>>,
+    pub post: Option<PostHook>,
 
     /// Step names this step is allowed to spawn follow-up tasks on.
     /// Each string must match the `name` of another step in this config.
@@ -121,13 +136,19 @@ pub struct StepFile {
     pub next: Vec<StepName>,
 
     /// Shell script that runs after this task **and all tasks it spawned
-    /// (recursively)** have completed. Receives the original task JSON on stdin.
-    /// Must output a JSON array of follow-up tasks on stdout (same format as
-    /// `Command` scripts: `[{"kind": "StepName", "value": {...}}, ...]`).
-    /// Return `[]` to spawn no follow-ups. Use this for cleanup, aggregation,
-    /// or spawning a final summarization step.
+    /// (recursively)** have completed.
+    ///
+    /// **stdin:** The task's original `value` payload as JSON (same as what
+    /// the pre hook received — just the value, not the full task wrapper).
+    ///
+    /// **stdout:** A JSON array of follow-up tasks to spawn:
+    /// `[{"kind": "StepName", "value": {...}}, ...]`. Each `kind` must be a
+    /// valid step name. Return `[]` to spawn no follow-ups.
+    ///
+    /// Use this for cleanup, aggregation, or spawning a final summarization
+    /// step after an entire subtree of work completes.
     #[serde(default, rename = "finally")]
-    pub finally_hook: Option<MaybeLinked<HookScript>>,
+    pub finally_hook: Option<FinallyHook>,
 
     /// Per-step options that override the global `options`. Only the fields
     /// you set here take effect; everything else falls through to the global defaults.
@@ -161,6 +182,60 @@ pub enum ActionFile {
         /// **Output (stdout):** JSON array of follow-up tasks to spawn:
         /// `[{"kind": "NextStep", "value": {...}}, ...]`. Each `kind` must be a step name
         /// listed in this step's `next` array. Return `[]` to spawn no follow-ups.
+        script: String,
+    },
+}
+
+/// Pre-action hook. Transforms the task value before the action runs.
+///
+/// In JSON: `{"kind": "Command", "script": "./pre-hook.sh"}`
+///
+/// **stdin:** Task value payload (e.g., `{"path": "/src"}`).
+/// **stdout:** Modified value payload (same shape).
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum PreHook {
+    /// Run a shell command as the pre hook.
+    Command {
+        /// Shell script to execute. Receives the task's value as JSON on stdin,
+        /// must write the (possibly modified) value as JSON on stdout.
+        script: String,
+    },
+}
+
+/// Post-action hook. Inspects or modifies the action's outcome.
+///
+/// In JSON: `{"kind": "Command", "script": "./post-hook.sh"}`
+///
+/// **stdin:** Tagged JSON describing the outcome (`"kind": "Success"`,
+/// `"Timeout"`, `"Error"`, or `"PreHookError"`). On success, includes an
+/// `input`, `output`, and `next` (follow-up tasks) field.
+/// **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum PostHook {
+    /// Run a shell command as the post hook.
+    Command {
+        /// Shell script to execute. Receives the action outcome as JSON on stdin,
+        /// must write the (possibly modified) outcome as JSON on stdout.
+        script: String,
+    },
+}
+
+/// Finally hook. Runs after a task and all its descendants complete.
+///
+/// In JSON: `{"kind": "Command", "script": "./finally-hook.sh"}`
+///
+/// **stdin:** The task's original value payload as JSON.
+/// **stdout:** JSON array of follow-up tasks: `[{"kind": "StepName", "value": {...}}, ...]`.
+/// Return `[]` for no follow-ups.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum FinallyHook {
+    /// Run a shell command as the finally hook.
+    Command {
+        /// Shell script to execute. Receives the task's original value as JSON
+        /// on stdin, must write a JSON array of follow-up tasks on stdout.
         script: String,
     },
 }
@@ -354,21 +429,23 @@ impl StepFile {
             .transpose()?;
         let options = EffectiveOptions::resolve(global_options, &self.options);
 
-        let resolve_hook = |ml: MaybeLinked<HookScript>| {
-            ml.resolve(base_path, |path| {
-                let content = std::fs::read_to_string(path)?;
-                Ok(HookScript::new(content))
-            })
-        };
-
         Ok(crate::resolved::Step {
             name: self.name,
             value_schema,
-            pre: self.pre.map(resolve_hook).transpose()?,
+            pre: self.pre.map(|h| {
+                let PreHook::Command { script } = h;
+                HookScript::new(script)
+            }),
             action,
-            post: self.post.map(resolve_hook).transpose()?,
+            post: self.post.map(|h| {
+                let PostHook::Command { script } = h;
+                HookScript::new(script)
+            }),
             next: self.next,
-            finally_hook: self.finally_hook.map(resolve_hook).transpose()?,
+            finally_hook: self.finally_hook.map(|h| {
+                let FinallyHook::Command { script } = h;
+                HookScript::new(script)
+            }),
             options: crate::resolved::Options {
                 timeout: options.timeout,
                 max_retries: options.max_retries,

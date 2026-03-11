@@ -40,7 +40,7 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
         "instructions": { "inline": "Refactor the file as described in `task`. If `previous_error` is present, a prior attempt broke the build — use the error to guide your approach.\n\nReturn `[]` when done." }
       },
       // Post hook checks if the build still passes.
-      "post": { "inline": "INPUT=$(cat) && KIND=$(echo \"$INPUT\" | jq -r '.kind') && if [ \"$KIND\" != \"Success\" ]; then echo \"$INPUT\"; exit 0; fi && FILE=$(echo \"$INPUT\" | jq -r '.input.file') && if cargo check 2>/tmp/build_err.txt; then echo \"$INPUT\"; else ERROR=$(cat /tmp/build_err.txt) && echo \"$INPUT\" | jq --arg err \"$ERROR\" --arg file \"$FILE\" '.next = [{kind: \"FixBuild\", value: {file: $file, error: $err}}]'; fi" },
+      "post": { "kind": "Command", "script": "INPUT=$(cat) && KIND=$(echo \"$INPUT\" | jq -r '.kind') && if [ \"$KIND\" != \"Success\" ]; then echo \"$INPUT\"; exit 0; fi && FILE=$(echo \"$INPUT\" | jq -r '.input.file') && if cargo check 2>/tmp/build_err.txt; then echo \"$INPUT\"; else ERROR=$(cat /tmp/build_err.txt) && echo \"$INPUT\" | jq --arg err \"$ERROR\" --arg file \"$FILE\" '.next = [{kind: \"FixBuild\", value: {file: $file, error: $err}}]'; fi" },
       "next": ["FixBuild"]
     },
     {
@@ -96,13 +96,13 @@ Post hooks are also useful for cleaning up resources. Here's a pattern using a t
         }
       },
       // Pre hook creates a temp directory and adds it to the value.
-      "pre": { "inline": "INPUT=$(cat) && TMPDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$TMPDIR\" '. + {tmpdir: $dir}'" },
+      "pre": { "kind": "Command", "script": "INPUT=$(cat) && TMPDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$TMPDIR\" '. + {tmpdir: $dir}'" },
       "action": {
         "kind": "Pool",
         "instructions": { "inline": "Download and process the file at `url`. Use the `tmpdir` directory for any intermediate files.\n\nReturn `[]` when done." }
       },
       // Post hook cleans up the temp directory regardless of outcome.
-      "post": { "inline": "INPUT=$(cat) && TMPDIR=$(echo \"$INPUT\" | jq -r '.input.tmpdir // empty') && [ -n \"$TMPDIR\" ] && rm -rf \"$TMPDIR\"; echo \"$INPUT\"" },
+      "post": { "kind": "Command", "script": "INPUT=$(cat) && TMPDIR=$(echo \"$INPUT\" | jq -r '.input.tmpdir // empty') && [ -n \"$TMPDIR\" ] && rm -rf \"$TMPDIR\"; echo \"$INPUT\"" },
       "next": []
     }
   ]
@@ -130,14 +130,14 @@ For fan-out workflows, use `finally` to clean up after all children complete:
         }
       },
       // Pre hook creates a shared workspace.
-      "pre": { "inline": "INPUT=$(cat) && WORKDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$WORKDIR\" '. + {workdir: $dir}'" },
+      "pre": { "kind": "Command", "script": "INPUT=$(cat) && WORKDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$WORKDIR\" '. + {workdir: $dir}'" },
       "action": {
         "kind": "Pool",
         "instructions": { "inline": "Fan out: return one ProcessFile task per file, passing the workdir to each.\n\n```json\n[{\"kind\": \"ProcessFile\", \"value\": {\"file\": \"src/main.rs\", \"workdir\": \"/tmp/abc123\"}}]\n```" }
       },
       "next": ["ProcessFile"],
       // Finally cleans up the shared workspace after ALL files are processed.
-      "finally": { "inline": "INPUT=$(cat) && WORKDIR=$(echo \"$INPUT\" | jq -r '.workdir // empty') && [ -n \"$WORKDIR\" ] && rm -rf \"$WORKDIR\"; echo '[]'" }
+      "finally": { "kind": "Command", "script": "INPUT=$(cat) && WORKDIR=$(echo \"$INPUT\" | jq -r '.workdir // empty') && [ -n \"$WORKDIR\" ] && rm -rf \"$WORKDIR\"; echo '[]'" }
     },
     {
       "name": "ProcessFile",

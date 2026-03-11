@@ -45,7 +45,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
         "script": "CONTRACT=$(jq -r '.value.contract_path') && OUT=$(jq -r '.value.output_dir') && mkdir -p \"$OUT\" && echo \"[{\\\"kind\\\": \\\"CourtCaseReferences\\\", \\\"value\\\": {\\\"contract_path\\\": \\\"$CONTRACT\\\", \\\"output_dir\\\": \\\"$OUT\\\"}}, {\\\"kind\\\": \\\"FinancialClaims\\\", \\\"value\\\": {\\\"contract_path\\\": \\\"$CONTRACT\\\", \\\"output_dir\\\": \\\"$OUT\\\"}}, {\\\"kind\\\": \\\"LiabilityAnalysis\\\", \\\"value\\\": {\\\"contract_path\\\": \\\"$CONTRACT\\\", \\\"output_dir\\\": \\\"$OUT\\\"}}]\""
       },
       // After all three analyses complete, synthesize the findings.
-      "finally": { "inline": "jq -r '.value | \"[{\\\"kind\\\": \\\"SynthesizeReview\\\", \\\"value\\\": {\\\"output_dir\\\": \\\"\" + .output_dir + \"\\\"}}]\"'" },
+      "finally": { "kind": "Command", "script": "jq -r '.value | \"[{\\\"kind\\\": \\\"SynthesizeReview\\\", \\\"value\\\": {\\\"output_dir\\\": \\\"\" + .output_dir + \"\\\"}}]\"'" },
       "next": ["CourtCaseReferences", "FinancialClaims", "LiabilityAnalysis"]
     },
     {

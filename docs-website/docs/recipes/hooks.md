@@ -38,7 +38,7 @@ Pre hooks transform the input before it reaches the agent.
         }
       },
       // Add git context to the task value before the agent sees it.
-      "pre": { "inline": "jq '. + {git_branch: env.BRANCH, git_sha: env.SHA}'" },
+      "pre": { "kind": "Command", "script": "jq '. + {git_branch: env.BRANCH, git_sha: env.SHA}'" },
       "action": {
         "kind": "Pool",
         "instructions": { "inline": "Analyze this code with the enriched context. Return `[]`." }
@@ -85,7 +85,7 @@ Post hooks run after the action completes and can modify the results.
         "instructions": { "inline": "Deploy the application. Return `[]`." }
       },
       // Log the deployment result to an external endpoint.
-      "post": { "inline": "INPUT=$(cat) && curl -s -X POST \"$LOG_ENDPOINT\" -d \"$INPUT\" > /dev/null && echo \"$INPUT\"" },
+      "post": { "kind": "Command", "script": "INPUT=$(cat) && curl -s -X POST \"$LOG_ENDPOINT\" -d \"$INPUT\" > /dev/null && echo \"$INPUT\"" },
       "next": []
     }
   ]
@@ -215,7 +215,7 @@ The `finally` hook runs after ALL descendants of a task complete (not just direc
       },
       "next": ["AnalyzeFile"],
       // After all analyses complete, emit a summary task.
-      "finally": { "inline": "echo '[{\"kind\": \"Summarize\", \"value\": {\"status\": \"all files analyzed\"}}]'" }
+      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"Summarize\", \"value\": {\"status\": \"all files analyzed\"}}]'" }
     },
     {
       "name": "AnalyzeFile",

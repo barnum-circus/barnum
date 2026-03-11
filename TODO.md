@@ -18,9 +18,9 @@
 
 ## Config / Schema
 
-- [ ] **Support Pool actions for hooks (pre, post, finally).** Currently all hooks are shell scripts (`HookScript`). Allow hooks to use `ActionFile` (Pool or Command) so they can be sent to the agent pool for AI-driven processing (e.g., finally hooks that summarize results via an agent).
+- [ ] **Support Pool actions for hooks.** Currently `PreHook`, `PostHook`, and `FinallyHook` are each one-variant enums with only `Command`. Add a `Pool` variant to each so hooks can delegate to AI agents (e.g., a finally hook that summarizes results via an agent).
 
-- [ ] **Wrap hooks in `{"kind": "Command", "script": "..."}` format.** Currently hooks are bare strings (via `MaybeLinked<HookScript>`), which is ambiguous — agents might confuse a hook script with a step name or other string. Wrapping in the same `ActionFile` discriminated union makes the format self-documenting and unambiguous.
+- [ ] **Add `MaybeLinked` wrapping to hook scripts.** Allow hook scripts to be specified as `{"link": "path/to/script.sh"}` in addition to inline `{"kind": "Command", "script": "..."}`, matching how `instructions` works for Pool actions.
 
 ## Troupe
 

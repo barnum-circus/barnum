@@ -116,7 +116,7 @@ echo "finally_ran" > "{}"
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": "Step A"}}}},
                 "next": ["StepB"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
@@ -249,7 +249,7 @@ echo "finally_executed" > "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "Child",
@@ -405,13 +405,13 @@ echo "child_finally" >> "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "Child",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }}
         ]
     }}"#,
@@ -521,7 +521,7 @@ echo "finally_executed" > "{}"
                 "name": "Parent",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["Child"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "Child",
@@ -668,19 +668,19 @@ cat  # pass through stdin to stdout
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepB"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepC"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "StepC",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "post": {{"link": "{}"}}
+                "post": {{"kind": "Command", "script": "{}"}}
             }}
         ]
     }}"#,
@@ -829,19 +829,19 @@ cat  # pass through stdin to stdout
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": ["StepB"],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": {{"link": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }},
             {{
                 "name": "Cleanup",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "post": {{"link": "{}"}}
+                "post": {{"kind": "Command", "script": "{}"}}
             }}
         ]
     }}"#,
@@ -983,10 +983,10 @@ fn deeply_nested_finally_chain() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepC"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1129,10 +1129,10 @@ fn multiple_children_with_finally() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB", "StepC"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"link": "{}"}}}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1285,10 +1285,10 @@ fn finally_spawns_multiple_tasks() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"link": "{}"}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"link": "{}"}}}},
-            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}},
-            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"link": "{}"}}}}
+            {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
@@ -1404,7 +1404,7 @@ exit 0
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": {{"link": "{}"}},
+                "finally": {{"kind": "Command", "script": "{}"}},
                 "options": {{"max_retries": 3}}
             }}
         ]
@@ -1490,7 +1490,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": {{"link": "{}"}},
+                "finally": {{"kind": "Command", "script": "{}"}},
                 "options": {{"max_retries": 2}}
             }}
         ]
@@ -1588,7 +1588,7 @@ echo '[{"kind": "Cleanup", "value": {}}]'
                 "name": "StepA",
                 "action": {{"kind": "Pool", "instructions": {{"inline": ""}}}},
                 "next": [],
-                "finally": {{"link": "{}"}},
+                "finally": {{"kind": "Command", "script": "{}"}},
                 "options": {{"max_retries": 0}}
             }},
             {{
