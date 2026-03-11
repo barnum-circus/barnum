@@ -55,9 +55,17 @@ function Features() {
           perform increasingly complicated tasks. However, a markdown file
           with instructions falls apart as the workflow grows more
           complicated. Agents lose track, skip steps, and make the wrong
-          call when their context fills up. With Barnum, you define
-          structured workflows that you can analyze before anything runs,
-          and your agents are guaranteed to follow them to the letter.
+          call when their context fills up. They start acting like
+          unpredictable wild animals.
+        </p>
+        <p>
+          That's why we created Barnum. With Barnum, you define structured
+          workflows that you can analyze before anything runs, and your
+          agents are guaranteed to follow them to the letter. Barnum lets
+          you express patterns like fan-out parallelism, adversarial review,
+          error recovery, and sequential pipelines, and build more powerful
+          tools on top of LLMs while feeling confident that the workflow
+          will execute exactly as you designed it.
         </p>
         <div className="row">
           <div className="col col--4">
