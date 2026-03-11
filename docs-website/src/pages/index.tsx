@@ -49,7 +49,7 @@ function Features() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>Disciplined Performers.</h2>
+        <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
         <div className="row">
           <div className="col col--4">
             <h3>🦁 No one goes off script</h3>
@@ -70,7 +70,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐯 One act at a time</h3>
+            <h3>🐯 Disciplined performers</h3>
             <p>
               An agent performing a step never sees the full workflow,
               just the instructions for performing their current task.
