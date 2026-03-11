@@ -8,12 +8,11 @@
   position: relative;
   overflow: hidden;
 
-  background: rgb(2, 0, 36);
   background: linear-gradient(
     75deg,
     var(--ifm-black) 0%,
     var(--ifm-color-primary) 50%,
-    var(--ifm-color-gold) 100%
+    var(--ifm-color-primary-light) 100%
   );
   text-align: center;
 }
@@ -21,10 +20,12 @@
 .heroTitle {
   font-size: 5em;
   letter-spacing: 4px;
+  text-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
 }
 
 .heroSubtitle {
   line-height: 1.25;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
 }
 
 .loopCommand {

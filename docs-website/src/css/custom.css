@@ -104,6 +104,11 @@ main h2 {
   margin-bottom: 2rem;
 }
 
+main > section > .container {
+  padding-top: 3.5rem;
+  padding-bottom: 3.5rem;
+}
+
 .alt-background {
   padding-top: 1px;
   background-color: var(--ifm-alt-background);
