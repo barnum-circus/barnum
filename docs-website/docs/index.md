@@ -29,12 +29,16 @@ For simple "keep trying until it works" loops, `/loop` is fine. For complex, mul
 
 ## Components
 
+:::note
+These examples use `pnpm dlx` to run Barnum without installing it. You can use any package runner (`npx`, `yarn dlx`, etc.) or install it directly with `pnpm add -g @barnum/barnum`.
+:::
+
 ### Barnum CLI
 
 The main command-line tool for running task queues:
 
 ```bash
-barnum run --config config.jsonc --entrypoint-value '{}'
+pnpm dlx @barnum/barnum run --config config.jsonc --entrypoint-value '{}'
 ```
 
 ### Troupe
@@ -42,7 +46,7 @@ barnum run --config config.jsonc --entrypoint-value '{}'
 A daemon that manages a pool of long-running agents:
 
 ```bash
-troupe start
+pnpm dlx @barnum/barnum troupe start
 ```
 
 ### Task Queue Library
