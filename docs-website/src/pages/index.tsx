@@ -1,3 +1,4 @@
+import Link from '@docusaurus/Link';
 import CodeBlock from '@theme/CodeBlock';
 import Layout from '@theme/Layout';
 import HomepageHeader from '../components/Header';
@@ -184,7 +185,7 @@ function WhyBarnum() {
           Barnum is the ringmaster for your agents. You declare the full graph of
           steps and valid transitions upfront. It's statically analyzable
           before anything runs. At runtime, agents choose which path through the
-          graph to take, but they can never leave the rails.
+          graph to take, but they can never go off script.
         </p>
         <h3>What Barnum gives you</h3>
         <div className={`row ${styles.patternList}`}>
@@ -268,6 +269,14 @@ function HowItWorks() {
               failures, and respects concurrency limits.
             </p>
           </div>
+        </div>
+        <div className={styles.ctaContainer}>
+          <Link
+            className="button button--primary button--lg"
+            to="/docs/quickstart"
+          >
+            Start the show
+          </Link>
         </div>
       </div>
     </section>

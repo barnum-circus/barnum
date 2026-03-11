@@ -39,7 +39,11 @@ const sidebars: SidebarsConfig = {
         'repertoire/legal-review',
       ],
     },
-    'roadmap',
+    {
+      type: 'doc',
+      id: 'coming-attractions',
+      label: 'Coming Attractions',
+    },
   ],
 };
 
