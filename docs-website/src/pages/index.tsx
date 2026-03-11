@@ -175,7 +175,7 @@ function AgentAuthoring() {
 
 function WhyBarnum() {
   return (
-    <section>
+    <section className="alt-background">
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>Why Barnum?</h2>
         <p>
@@ -242,7 +242,7 @@ function WhyBarnum() {
 
 function HowItWorks() {
   return (
-    <section className="alt-background">
+    <section>
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>Ladies and gentlemen, the show is about to begin!</h2>
         <div className="row">
