@@ -63,6 +63,10 @@ pre {
   word-break: break-word;
 }
 
+main h2 {
+  margin-bottom: 1.5rem;
+}
+
 .alt-background {
   padding-top: 1px;
   background-color: var(--ifm-alt-background);
