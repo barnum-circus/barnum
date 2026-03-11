@@ -22,6 +22,10 @@
 
 - [ ] **Add `MaybeLinked` wrapping to hook scripts.** Allow hook scripts to be specified as `{"link": "path/to/script.sh"}` in addition to inline `{"kind": "Command", "script": "..."}`, matching how `instructions` works for Pool actions.
 
+## CI
+
+- [ ] **Deploy website should not depend on Rust jobs.** The `deploy-website` job currently depends on `gate-docs` and `build-website` but the overall CI workflow structure means it can be blocked by unrelated Rust job failures. It should be fully independent of fmt, clippy, test, etc.
+
 ## Troupe
 
 - [ ] Kicked message should not include a response_file (it's not needed)

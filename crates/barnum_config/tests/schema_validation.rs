@@ -25,6 +25,7 @@ fn config_with_schema() -> Config {
             "steps": [
                 {
                     "name": "Input",
+                    "action": {"kind": "Pool", "instructions": {"inline": "Process input."}},
                     "value_schema": {
                         "type": "object",
                         "properties": {
@@ -36,6 +37,7 @@ fn config_with_schema() -> Config {
                 },
                 {
                     "name": "Output",
+                    "action": {"kind": "Pool", "instructions": {"inline": "Produce output."}},
                     "value_schema": {
                         "type": "object",
                         "properties": {
@@ -129,11 +131,13 @@ fn invalid_response_causes_retry() {
             "steps": [
                 {
                     "name": "Input",
+                    "action": {"kind": "Pool", "instructions": {"inline": "Process."}},
                     "value_schema": {"type": "object"},
                     "next": ["Output"]
                 },
                 {
                     "name": "Output",
+                    "action": {"kind": "Pool", "instructions": {"inline": "Produce."}},
                     "value_schema": {
                         "type": "object",
                         "properties": {"result": {"type": "string"}},
