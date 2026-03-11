@@ -253,8 +253,8 @@ function HowItWorks() {
 export default function Home(): JSX.Element {
   return (
     <Layout
-      title="Barnum - The missing workflow engine for agents"
-      description="Don't just /loop it. Barnum is the missing workflow engine for agents — define complex trees of work as statically analyzable state machines."
+      title="Barnum - The ringmaster for your agents"
+      description="Don't just /loop it. Barnum is the ringmaster for your agents — define complex trees of work as statically analyzable state machines."
     >
       <HomepageHeader />
       <main>

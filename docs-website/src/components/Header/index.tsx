@@ -17,7 +17,7 @@ export default function HomepageHeader() {
             >
               Don't just <span className={styles.loopCommand}>/loop</span> it.
               <br />
-              The missing workflow engine for agents.
+              The ringmaster for your agents.
             </p>
             <Buttons />
           </div>

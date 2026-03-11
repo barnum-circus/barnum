@@ -7,7 +7,7 @@ lightTheme.plain.backgroundColor = 'rgba(0, 0, 0, 0.02)';
 
 const config: Config = {
   title: 'Barnum',
-  tagline: 'Don\'t just /loop it. The missing workflow engine for agents.',
+  tagline: 'Don\'t just /loop it. The ringmaster for your agents.',
   favicon: 'img/favicon.svg',
 
   url: 'https://barnum-circus.github.io/',
