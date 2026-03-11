@@ -211,7 +211,7 @@ function WhyBarnum() {
           <div className="col col--6">
             <ul>
               <li>
-                <strong>Error recovery</strong>: post hooks catch failures and
+                <strong>Safety net</strong>: post hooks catch failures and
                 route them to fix-up agents instead of just retrying blindly.
               </li>
               <li>
