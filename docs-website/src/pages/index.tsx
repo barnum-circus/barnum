@@ -49,6 +49,7 @@ function Features() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
+        <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
         <div className="row">
           <div className="col col--4">
             <h3>🦁 No one leaves the ring</h3>
