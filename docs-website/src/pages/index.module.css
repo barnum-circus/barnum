@@ -12,13 +12,12 @@
   word-break: break-word;
 }
 
-.videoWrapper {
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.demoVideoWrapper {
+  max-width: 800px;
+  margin: 0 auto;
 }
 
-.videoWrapper iframe {
+.demoVideoWrapper iframe {
   width: 100%;
   aspect-ratio: 16 / 9;
   border: none;

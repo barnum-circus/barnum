@@ -68,7 +68,7 @@ function Features() {
           exactly as you designed it. And that certainty is what lets you
           build more powerful tools on top of agents.
         </p>
-        <div className="row" style={{ paddingTop: '0.5rem' }}>
+        <div className="row" style={{ paddingTop: '1.5rem' }}>
           <div className="col col--4">
             <h3>🦁 A choreographed show</h3>
             <p>
@@ -102,9 +102,27 @@ function Features() {
   );
 }
 
-function ExampleSection() {
+function DemoSection() {
   return (
     <section>
+      <div className="container padding-vert--lg">
+        <h2 className={styles.centeredHeading}>See it in action.</h2>
+        <div className={styles.demoVideoWrapper}>
+          <iframe
+            src="https://www.youtube.com/embed/HjVMgBIiwBM?si=xTqJaJa7ZMz5oU5P"
+            title="Barnum demo"
+            allow="encrypted-media; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ExampleSection() {
+  return (
+    <section className="alt-background">
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
@@ -125,22 +143,10 @@ function ExampleSection() {
           hook triggers an agent that runs <code>tsc</code> and fixes any
           remaining type errors. One JSON file, no glue code.
         </p>
-        <div className="row">
-          <div className="col col--6">
-            <div className={styles.codeBlockWrap}>
-              <CodeBlock language="json" title="config.jsonc">
-                {exampleConfig}
-              </CodeBlock>
-            </div>
-          </div>
-          <div className={`col col--6 ${styles.videoWrapper}`}>
-            <iframe
-              src="https://www.youtube.com/embed/HjVMgBIiwBM?si=xTqJaJa7ZMz5oU5P"
-              title="Barnum demo"
-              allow="encrypted-media; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          </div>
+        <div className={styles.codeBlockWrap}>
+          <CodeBlock language="json" title="config.jsonc">
+            {exampleConfig}
+          </CodeBlock>
         </div>
       </div>
     </section>
@@ -149,7 +155,7 @@ function ExampleSection() {
 
 function AgentAuthoring() {
   return (
-    <section className="alt-background">
+    <section>
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>Looks complicated? Let the performers write the programme.</h2>
         <p>
@@ -185,7 +191,7 @@ function WhyBarnum() {
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never go off script.
         </p>
-        <h3 style={{ paddingTop: '0.5rem' }}>What Barnum gives you</h3>
+        <h3 style={{ paddingTop: '1.5rem' }}>What Barnum gives you</h3>
         <div className={`row ${styles.patternList}`}>
           <div className="col col--6">
             <ul>
@@ -285,6 +291,7 @@ export default function Home(): JSX.Element {
       <HomepageHeader />
       <main>
         <Features />
+        <DemoSection />
         <ExampleSection />
         <AgentAuthoring />
         <WhyBarnum />

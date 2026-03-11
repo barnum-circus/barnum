@@ -4,8 +4,38 @@
  * work well for content-centric websites.
  */
 
+@font-face {
+  font-family: GTEesti;
+  src: url('/fonts/GTEestiDisplay-Bold.woff2');
+}
+
+@font-face {
+  font-family: Maison;
+  src: url('/fonts/MaisonNeue-Book.woff2');
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: Maison;
+  src: url('/fonts/MaisonNeue-Medium.woff2');
+  font-weight: 500;
+}
+
+@font-face {
+  font-family: Maison;
+  src: url('/fonts/MaisonNeue-Demi.woff2');
+  font-weight: 600;
+}
+
+@font-face {
+  font-family: Maison;
+  src: url('/fonts/MaisonNeue-Bold.woff2');
+  font-weight: 700;
+}
+
 /* You can override the default Infima variables here. */
 :root {
+  --ifm-font-family-base: Maison, system-ui, -apple-system, sans-serif;
   --ifm-color-primary: #b83232;
   --ifm-color-primary-dark: #a52d2d;
   --ifm-color-primary-darker: #9c2a2a;
@@ -61,6 +91,13 @@
 pre {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: GTEesti;
 }
 
 main h2 {
