@@ -26,7 +26,17 @@ This creates a pool named "agents". The pool manages task dispatch—when Barnum
 
 **Keep this terminal running.** The pool stays active until you stop it.
 
-## Step 2: Start an Agent
+:::info[tmux launcher script]
+Want a one-command setup? Download [`barnum-dev.sh`](https://raw.githubusercontent.com/barnum-circus/barnum/master/docs-website/static/barnum-dev.sh) — it creates a tmux session with the troupe pool, an orchestrator, and configurable agent windows. Currently set up for Claude Code. Customize it for your setup.
+
+```bash
+curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/docs-website/static/barnum-dev.sh
+chmod +x barnum-dev.sh
+./barnum-dev.sh 3  # start with 3 agents
+```
+:::
+
+## Step 2: Instruct Your Agent to Join the Troupe
 
 Open your agent (Claude Code, ChatGPT, Cursor, etc.) and paste these instructions:
 
