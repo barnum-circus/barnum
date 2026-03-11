@@ -237,11 +237,13 @@ function HowItWorks() {
           <div className="col col--4">
             <h3>🎬 3. Showtime</h3>
             <p>
-              <strong>Ladies and gentlemen, children of all ages</strong>
-              <br />
-              Your workflow is about to begin. Hand the programme to Barnum. It distributes tasks across
-              your agents, enforces valid transitions, retries failures,
-              and respects concurrency limits.
+              Ladies and gentlemen, children of all ages — the show
+              is about to begin.
+            </p>
+            <p>
+              Hand the programme to Barnum and it distributes tasks
+              across your agents, enforces valid transitions, retries
+              failures, and respects concurrency limits.
             </p>
           </div>
         </div>
