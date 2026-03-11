@@ -217,7 +217,7 @@ jobs:
           path: |
             target/x86_64-apple-darwin/release/troupe
             target/x86_64-apple-darwin/release/barnum
-          key: macos-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
+          key: macos-x64-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'crates/*/src/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
@@ -260,7 +260,7 @@ jobs:
           path: |
             target/aarch64-apple-darwin/release/troupe
             target/aarch64-apple-darwin/release/barnum
-          key: macos-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
+          key: macos-arm64-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'crates/*/src/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
@@ -303,7 +303,7 @@ jobs:
           path: |
             target/x86_64-unknown-linux-musl/release/troupe
             target/x86_64-unknown-linux-musl/release/barnum
-          key: linux-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
+          key: linux-x64-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'crates/*/src/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
@@ -349,7 +349,7 @@ jobs:
           path: |
             target/aarch64-unknown-linux-musl/release/troupe
             target/aarch64-unknown-linux-musl/release/barnum
-          key: linux-arm64-${{ hashFiles('Cargo.lock', 'crates/**') }}
+          key: linux-arm64-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'crates/*/src/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
@@ -395,7 +395,7 @@ jobs:
           path: |
             target/x86_64-pc-windows-msvc/release/troupe.exe
             target/x86_64-pc-windows-msvc/release/barnum.exe
-          key: windows-x64-${{ hashFiles('Cargo.lock', 'crates/**') }}
+          key: windows-x64-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'crates/*/Cargo.toml', 'crates/*/src/**') }}
       - uses: dtolnay/rust-toolchain@1.93.1
         if: steps.cache-binaries.outputs.cache-hit != 'true'
         with:
@@ -481,8 +481,18 @@ jobs:
   deploy-website:
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [gate-docs, build-website]
-    if: needs.gate-docs.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    needs: [gate-docs, build-website, test, demos]
+    # Deploy only on master push when docs changed. Block on test/demos if they ran,
+    # but allow deploy when they're skipped (no Rust changes). always() is needed
+    # because GitHub Actions skips jobs when any dependency is skipped.
+    if: >-
+      always() &&
+      needs.gate-docs.outputs.skip != 'true' &&
+      needs.build-website.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (needs.demos.result == 'success' || needs.demos.result == 'skipped') &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     steps:
       - name: Download build folder
         uses: actions/download-artifact@v4
