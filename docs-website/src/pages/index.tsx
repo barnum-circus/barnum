@@ -51,10 +51,10 @@ function Features() {
       <div className="container padding-vert--lg">
         <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
         <p>
-          LLMs are extremely powerful tools, and they are being asked to
-          perform increasingly complicated tasks. However, a markdown file
-          with instructions falls apart as the workflow grows more
-          complicated. Agents lose track, skip steps, and make the wrong
+          LLMs are extremely powerful tools, and we're using them to
+          perform increasingly complicated tasks. However, a markdown plan
+          file doesn't scale as the workflow grows more complicated. Agents
+          lose track, skip steps, and make the wrong
           call when their context fills up. They act like unpredictable,
           wild animals.
         </p>
