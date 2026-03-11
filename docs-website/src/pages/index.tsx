@@ -68,7 +68,7 @@ function Features() {
           exactly as you designed it. And that certainty is what lets you
           build more powerful tools on top of agents.
         </p>
-        <div className="row">
+        <div className="row" style={{ paddingTop: '0.5rem' }}>
           <div className="col col--4">
             <h3>🦁 A choreographed show</h3>
             <p>
@@ -187,7 +187,7 @@ function WhyBarnum() {
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never go off script.
         </p>
-        <h3>What Barnum gives you</h3>
+        <h3 style={{ paddingTop: '0.5rem' }}>What Barnum gives you</h3>
         <div className={`row ${styles.patternList}`}>
           <div className="col col--6">
             <ul>
@@ -231,11 +231,6 @@ function WhyBarnum() {
             </ul>
           </div>
         </div>
-        <p className={styles.closingNote}>
-          Each pattern is a JSON programme. No framework, no SDK, no
-          custom language. Define the state machine, point it at a troupe,
-          and let Barnum handle the orchestration.
-        </p>
       </div>
     </section>
   );
