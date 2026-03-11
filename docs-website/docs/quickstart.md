@@ -61,12 +61,12 @@ Open your agent (Claude Code, ChatGPT, Cursor, etc.) and paste these instruction
   4. Write your JSON response to the `response_file` path
   5. Immediately call `get_task` again for the next task
   6. If you receive a **Kicked** message, kill the `get_task` process and exit
-  Your name is gsd-c1.
+  Your name is c1.
 ````
 
 Your agent will run the protocol command and start listening for tasks. **It will wait until Barnum sends work.**
 
-You can start multiple agents with different names (gsd-c1, gsd-c2, gsd-c3) for parallel processing.
+You can start multiple agents with different names (c1, c2, c3) for parallel processing.
 
 ## Step 3: Showtime
 
