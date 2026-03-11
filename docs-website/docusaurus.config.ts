@@ -44,6 +44,7 @@ const config: Config = {
   ],
 
   themeConfig: {
+    image: 'img/og-image.png',
     metadata: [
       {
         name: 'keywords',
