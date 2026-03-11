@@ -57,9 +57,9 @@ Each step defines a stage in your workflow.
       "name": "Analyze",
       "value_schema": { "type": "object" },
       "action": { "kind": "Pool", "instructions": "..." },
-      "pre": "scripts/pre.sh",
-      "post": "scripts/post.sh",
-      "finally": "scripts/finally.sh",
+      "pre": { "link": "scripts/pre.sh" },
+      "post": { "link": "scripts/post.sh" },
+      "finally": { "link": "scripts/finally.sh" },
       "next": ["Review", "Implement"],
       "options": { "timeout": 300 }
     }
@@ -72,9 +72,9 @@ Each step defines a stage in your workflow.
 | `name` | string | **Yes** | Unique step identifier |
 | `value_schema` | object | No | JSON Schema to validate task values |
 | `action` | object | No | How to execute the step (Pool or Command) |
-| `pre` | string | No | Pre-execution hook script path |
-| `post` | string | No | Post-execution hook script path |
-| `finally` | string | No | Finally hook (runs after all descendants complete) |
+| `pre` | object | No | Pre-execution hook (`{"inline": "..."}` or `{"link": "path"}`) |
+| `post` | object | No | Post-execution hook (`{"inline": "..."}` or `{"link": "path"}`) |
+| `finally` | object | No | Finally hook (`{"inline": "..."}` or `{"link": "path"}`) |
 | `next` | array | No | Valid next step names (empty = terminal step) |
 | `options` | object | No | Per-step options override |
 
@@ -229,12 +229,12 @@ Runs after ALL descendants complete.
           "file": { "type": "string" }
         }
       },
-      "pre": "scripts/read-file.sh",
+      "pre": { "link": "scripts/read-file.sh" },
       "action": {
         "kind": "Pool",
         "instructions": "Analyze this code. Return `[{\"kind\": \"Implement\", \"value\": {\"changes\": []}}]`"
       },
-      "post": "scripts/validate-response.sh",
+      "post": { "link": "scripts/validate-response.sh" },
       "next": ["Implement"]
     },
     {

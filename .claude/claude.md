@@ -53,6 +53,17 @@ Your singular mission is creating S-tier libraries where:
 
 5. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts.
 
+## Generated artifacts
+
+**Generated files that are checked in must always be kept in sync.** When you modify code that affects a generated artifact:
+
+1. **Regenerate it immediately** after making the change.
+2. **CI must verify** that the checked-in version matches the generated output. If it doesn't, CI fails.
+3. **Pre-commit hooks must regenerate** these artifacts automatically.
+
+Current generated artifacts:
+- `libs/barnum/barnum-config-schema.json` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
+
 ## Backward compatibility
 
 **Don't care about it.** No one is using this yet. Break things freely. No hidden aliases, no deprecation periods, no migration paths. No dead code.

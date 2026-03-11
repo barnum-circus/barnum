@@ -50,7 +50,7 @@ This config defines a branching refactor workflow: list files, analyze each one,
         "script": "find src -name '*.rs' | jq -R '{kind: \"Analyze\", value: {file: .}}' | jq -s '.'"
       },
       "next": ["Analyze"],
-      "finally": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'"
+      "finally": { "inline": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'" }
     },
     {
       "name": "Analyze",

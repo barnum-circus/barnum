@@ -15,7 +15,11 @@ fi
 
 echo "Running cargo fmt..."
 cargo fmt --all
-git add -u  # Re-stage any files that were reformatted
+
+echo "Regenerating config schema..."
+cargo run -p barnum_config --bin build_barnum_schema 2>/dev/null
+
+git add -u  # Re-stage any files that were reformatted/regenerated
 
 # Create temp directory for output files
 TEMP_DIR=$(mktemp -d)

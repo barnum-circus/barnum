@@ -36,10 +36,10 @@ Every Barnum config has this structure:
     {
       "name": "StepName",
       "value_schema": { "type": "object" },
-      "pre": "./optional-pre-hook.sh",
+      "pre": { "link": "./optional-pre-hook.sh" },
       "action": { "kind": "Pool", "instructions": { "inline": "Do something. Return `[]`." } },
-      "post": "./optional-post-hook.sh",
-      "finally": "./optional-finally-hook.sh",
+      "post": { "link": "./optional-post-hook.sh" },
+      "finally": { "link": "./optional-finally-hook.sh" },
       "next": ["NextStep1", "NextStep2"]
     },
     {

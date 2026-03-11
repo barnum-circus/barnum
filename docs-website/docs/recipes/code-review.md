@@ -34,7 +34,7 @@ Some tools charge $25 per code review. Barnum runs the same checks — coding st
       },
       "next": ["CheckStandards", "CheckSecurity"],
       // After all checks: compile a summary
-      "finally": "echo '[{\"kind\": \"CompileReport\", \"value\": {}}]'"
+      "finally": { "inline": "echo '[{\"kind\": \"CompileReport\", \"value\": {}}]'" }
     },
     {
       "name": "CheckStandards",

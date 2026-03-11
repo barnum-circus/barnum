@@ -42,7 +42,7 @@ List files, refactor them all in parallel, then commit the changes.
         "script": "jq -r '.value.directory' | xargs -I{} find {} -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map({kind: \"Refactor\", value: {file: .}})'"
       },
       // After all Refactor tasks finish, transition to Commit.
-      "finally": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'",
+      "finally": { "inline": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'" },
       "next": ["Refactor"]
     },
     {

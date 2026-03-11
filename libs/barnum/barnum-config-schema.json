@@ -1,0 +1,340 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ConfigFile",
+  "description": "Top-level Barnum configuration file format.\n\nThis is the raw parsed format. Call `resolve()` to get the runtime `Config`.",
+  "type": "object",
+  "required": [
+    "steps"
+  ],
+  "properties": {
+    "$schema": {
+      "description": "JSON Schema reference for editor validation (ignored at runtime).",
+      "writeOnly": true,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "entrypoint": {
+      "description": "Entry point step name. If specified, the workflow starts with this step and `--entrypoint-value` can be used to provide the initial value (defaults to `{}`). If not specified, `--initial-state` must be provided on the command line.",
+      "default": null,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "options": {
+      "description": "Runtime options.",
+      "default": {
+        "max_concurrency": null,
+        "max_retries": 0,
+        "retry_on_invalid_response": true,
+        "retry_on_timeout": true,
+        "timeout": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/Options"
+        }
+      ]
+    },
+    "steps": {
+      "description": "Step definitions forming the task queue.",
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/StepFile"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ActionFile": {
+      "description": "How a step processes tasks (config file format).",
+      "oneOf": [
+        {
+          "description": "Send to the agent pool for processing.",
+          "type": "object",
+          "required": [
+            "kind"
+          ],
+          "properties": {
+            "instructions": {
+              "description": "Markdown instructions shown to agents.",
+              "default": {
+                "inline": ""
+              },
+              "allOf": [
+                {
+                  "$ref": "#/definitions/MaybeLinked_for_String"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Pool"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Run a local command.",
+          "type": "object",
+          "required": [
+            "kind",
+            "script"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Command"
+              ]
+            },
+            "script": {
+              "description": "Shell script to execute.\n\n**Input (stdin):** JSON object with the structure `{\"kind\": \"<step name>\", \"value\": <parameters>}`. Use `jq '.value'` to extract parameters or `jq -r '.value.fieldName'` for specific fields.\n\n**Output (stdout):** JSON array of next tasks, e.g. `[{\"kind\": \"NextStep\", \"value\": {...}}]`. Return `[]` to spawn no follow-up tasks.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "MaybeLinked_for_String": {
+      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"inline\": <value>}` → inline content - `{\"link\": \"path\"}` → link to file",
+      "anyOf": [
+        {
+          "description": "Inline content.",
+          "type": "object",
+          "required": [
+            "inline"
+          ],
+          "properties": {
+            "inline": {
+              "description": "The inline content.",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Link to a file.",
+          "type": "object",
+          "required": [
+            "link"
+          ],
+          "properties": {
+            "link": {
+              "description": "Path to the file.",
+              "type": "string"
+            }
+          }
+        }
+      ]
+    },
+    "Options": {
+      "description": "Runtime options for task execution.",
+      "type": "object",
+      "properties": {
+        "max_concurrency": {
+          "description": "Maximum concurrent tasks (None = unlimited).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0.0
+        },
+        "max_retries": {
+          "description": "Maximum retries per task (default: 0).",
+          "default": 0,
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "retry_on_invalid_response": {
+          "description": "Whether to retry when agent returns invalid response (default: true).",
+          "default": true,
+          "type": "boolean"
+        },
+        "retry_on_timeout": {
+          "description": "Whether to retry when agent times out (default: true).",
+          "default": true,
+          "type": "boolean"
+        },
+        "timeout": {
+          "description": "Timeout in seconds for each task (None = no timeout).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "SchemaRef": {
+      "description": "Reference to a JSON Schema (inline or external file).\n\nIn config files: - `{\"link\": \"path\"}` → link to schema file - Object → inline JSON Schema",
+      "anyOf": [
+        {
+          "description": "Link to a JSON Schema file.",
+          "type": "object",
+          "required": [
+            "link"
+          ],
+          "properties": {
+            "link": {
+              "description": "Path to the schema file.",
+              "type": "string"
+            }
+          }
+        },
+        {
+          "description": "Inline JSON Schema."
+        }
+      ]
+    },
+    "StepFile": {
+      "description": "A step in the config file (may have unresolved references).",
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "action": {
+          "description": "How to execute the step.",
+          "default": {
+            "instructions": {
+              "inline": ""
+            },
+            "kind": "Pool"
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/ActionFile"
+            }
+          ]
+        },
+        "finally": {
+          "description": "Finally hook (runs after all children complete).",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MaybeLinked_for_String"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "Step name (e.g., `Analyze`, `Implement`).",
+          "type": "string"
+        },
+        "next": {
+          "description": "Valid next steps.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "description": "Per-step options that override global options.",
+          "default": {
+            "max_retries": null,
+            "retry_on_invalid_response": null,
+            "retry_on_timeout": null,
+            "timeout": null
+          },
+          "allOf": [
+            {
+              "$ref": "#/definitions/StepOptions"
+            }
+          ]
+        },
+        "post": {
+          "description": "Post-execution hook script.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MaybeLinked_for_String"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pre": {
+          "description": "Pre-execution hook script.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MaybeLinked_for_String"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "value_schema": {
+          "description": "JSON Schema for validating the step's value payload. None means any JSON value is accepted.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SchemaRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "StepOptions": {
+      "description": "Per-step options that override global defaults.",
+      "type": "object",
+      "properties": {
+        "max_retries": {
+          "description": "Maximum retries for this step (overrides global).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "retry_on_invalid_response": {
+          "description": "Whether to retry on invalid response for this step (overrides global).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "retry_on_timeout": {
+          "description": "Whether to retry on timeout for this step (overrides global).",
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Timeout in seconds for this step (overrides global).",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

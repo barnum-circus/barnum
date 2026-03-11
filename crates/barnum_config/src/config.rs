@@ -88,7 +88,7 @@ pub struct StepFile {
 
     /// Pre-execution hook script.
     #[serde(default)]
-    pub pre: Option<HookScript>,
+    pub pre: Option<MaybeLinked<HookScript>>,
 
     /// How to execute the step.
     #[serde(default)]
@@ -96,7 +96,7 @@ pub struct StepFile {
 
     /// Post-execution hook script.
     #[serde(default)]
-    pub post: Option<HookScript>,
+    pub post: Option<MaybeLinked<HookScript>>,
 
     /// Valid next steps.
     #[serde(default)]
@@ -327,22 +327,21 @@ impl StepFile {
             .transpose()?;
         let options = EffectiveOptions::resolve(global_options, &self.options);
 
+        let resolve_hook = |ml: MaybeLinked<HookScript>| {
+            ml.resolve(base_path, |path| {
+                let content = std::fs::read_to_string(path)?;
+                Ok(HookScript::new(content))
+            })
+        };
+
         Ok(crate::resolved::Step {
             name: self.name,
             value_schema,
-            pre: self.pre,
+            pre: self.pre.map(resolve_hook).transpose()?,
             action,
-            post: self.post,
+            post: self.post.map(resolve_hook).transpose()?,
             next: self.next,
-            finally_hook: self
-                .finally_hook
-                .map(|ml| {
-                    ml.resolve(base_path, |path| {
-                        let content = std::fs::read_to_string(path)?;
-                        Ok(HookScript::new(content))
-                    })
-                })
-                .transpose()?,
+            finally_hook: self.finally_hook.map(resolve_hook).transpose()?,
             options: crate::resolved::Options {
                 timeout: options.timeout,
                 max_retries: options.max_retries,

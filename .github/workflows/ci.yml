@@ -436,6 +436,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate Barnum config schema
         run: cargo run -p barnum_config --bin build_barnum_schema
+      - name: Check schema is up to date
+        run: |
+          if ! git diff --exit-code libs/barnum/barnum-config-schema.json; then
+            echo "::error::Generated schema differs from checked-in version. Run 'cargo run -p barnum_config --bin build_barnum_schema' and commit."
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: barnum-config-schema

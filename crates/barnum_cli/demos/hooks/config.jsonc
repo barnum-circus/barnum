@@ -21,15 +21,15 @@
         "additionalProperties": false
       },
       // Pre-hook: adds a timestamp to the input
-      "pre": "./pre-hook.sh",
+      "pre": { "link": "./pre-hook.sh" },
       "action": {
         "kind": "Command",
         "script": "./process.sh"
       },
       // Post-hook: logs output and can filter/modify next tasks
-      "post": "./post-hook.sh",
+      "post": { "link": "./post-hook.sh" },
       // Finally: runs after task and all its children complete
-      "finally": "./finally-hook.sh",
+      "finally": { "link": "./finally-hook.sh" },
       "next": ["Cleanup"]
     },
     {
