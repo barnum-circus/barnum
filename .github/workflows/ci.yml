@@ -24,7 +24,7 @@ env:
 jobs:
   # Gate for Rust jobs - skips if no changes to crates/, libs/, etc.
   gate-rust:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 2
     outputs:
       skip: ${{ steps.check.outputs.skip }}
@@ -70,7 +70,7 @@ jobs:
 
   # Gate for docs website - skips if no changes to docs-website/
   gate-docs:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 2
     outputs:
       skip: ${{ steps.check.outputs.skip }}
@@ -117,7 +117,7 @@ jobs:
   fmt:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +130,7 @@ jobs:
   clippy:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +144,7 @@ jobs:
   test:
     needs: [gate-rust, build-linux-x64]
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -174,7 +174,7 @@ jobs:
   demos:
     needs: [gate-rust, build-linux-x64]
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -292,7 +292,7 @@ jobs:
   build-linux-x64:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -338,7 +338,7 @@ jobs:
   build-linux-arm64:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -384,7 +384,7 @@ jobs:
   build-windows-x64:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -428,7 +428,7 @@ jobs:
   build-schema:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
@@ -450,7 +450,7 @@ jobs:
   build-website:
     needs: gate-docs
     if: needs.gate-docs.outputs.skip != 'true'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     defaults:
       run:
@@ -479,7 +479,7 @@ jobs:
           if-no-files-found: error
 
   deploy-website:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     needs: [gate-docs, build-website]
     if: needs.gate-docs.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
@@ -503,7 +503,7 @@ jobs:
   publish:
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     needs: [gate-rust, fmt, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64, build-schema]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     permissions:
       contents: read
