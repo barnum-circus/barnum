@@ -51,28 +51,28 @@ function Features() {
       <div className="container padding-vert--lg">
         <div className="row">
           <div className="col col--4">
-            <h3>🦁 Rigorous workflows</h3>
+            <h3>🦁 No one leaves the ring</h3>
             <p>
-              Express workflows as statically analyzable state machines.
+              Rigorous workflows expressed as statically analyzable state machines.
               Valid transitions are declared upfront. Invalid ones are
               rejected and retried. No hoping the agent stays on track.
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐘 Mix agents and commands</h3>
+            <h3>🐘 Every act has its performer</h3>
             <p>
-              Intersperse LLM steps with local shell commands for
-              deterministic operations. Fan-out with <code>jq</code>,
+              Some acts are agents, some acts are shell commands — each
+              does what it's best at. Fan-out with <code>jq</code>,
               commit with <code>git</code>, validate with your
               compiler — no agent needed.
             </p>
           </div>
           <div className="col col--4">
-            <h3>🐯 Context protection</h3>
+            <h3>🐯 One act at a time</h3>
             <p>
               Each step gets only the instructions and data it needs.
               Agents never see the full workflow — just their current task.
-              Focused context means better decisions.
+              Focused context means agents can make better decisions.
             </p>
           </div>
         </div>
@@ -85,7 +85,7 @@ function ExampleSection() {
   return (
     <section>
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>One config. Complex workflows.</h2>
+        <h2 className={styles.centeredHeading}>One program. Greatest show on earth.</h2>
         <p>
           A command lists every <code>.js</code> file. Barnum dispatches one
           agent per file to convert it to TypeScript — in parallel.
@@ -121,16 +121,16 @@ function AgentAuthoring() {
   return (
     <section className="alt-background">
       <div className="container padding-vert--lg">
-        <h2 className={styles.centeredHeading}>Looks complicated? Let agents write it.</h2>
+        <h2 className={styles.centeredHeading}>Looks complicated? Let the performers write the program.</h2>
         <p>
-          Barnum configs are just JSON with a{' '}
+          Barnum programs are just JSON with a{' '}
           <a href="/docs/reference/config-schema">published schema</a>.
           Point your agent at{' '}
           <code>pnpm dlx @barnum/barnum config schema</code> to get
           the full JSON Schema, show it the{' '}
           <a href="/docs/recipes">recipes page</a> for common
           patterns, and tell it what you want. It'll write a working
-          config.
+          program.
         </p>
       </div>
     </section>
@@ -150,7 +150,7 @@ function WhyBarnum() {
           will do before you run it.
         </p>
         <p>
-          Barnum is like a build system for agents. You declare the full graph of
+          Barnum is the ringmaster for your agents. You declare the full graph of
           steps and valid transitions upfront — it's statically analyzable
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never leave the rails.
@@ -200,7 +200,7 @@ function WhyBarnum() {
           </div>
         </div>
         <p className={styles.closingNote}>
-          Each pattern is a JSON config — no framework, no SDK, no
+          Each pattern is a JSON program — no framework, no SDK, no
           custom language. Define the state machine, point it at a troupe,
           and let Barnum handle the orchestration.
         </p>
@@ -216,14 +216,14 @@ function HowItWorks() {
         <h2 className={styles.centeredHeading}>How it works</h2>
         <p>
           Barnum distributes work across a troupe of agents running in parallel.
-          Corral a troupe, connect your agents, and hand Barnum a workflow —
+          Corral a troupe, connect your agents, and hand the program to Barnum —
           it handles the rest.
         </p>
         <div className="row">
           <div className="col col--4">
-            <h3>📜 1. Write the script</h3>
+            <h3>📜 1. Write the program</h3>
             <p>
-              Write a workflow config with steps, transitions, and schemas.
+              Write a program with steps, transitions, and schemas.
               Each step is either an agent task or a shell command.
             </p>
           </div>
@@ -239,7 +239,7 @@ function HowItWorks() {
             <p>
               <strong>Ladies and gentlemen, children of all ages</strong>
               <br />
-              Your workflow is about to begin. Barnum distributes tasks across
+              Your workflow is about to begin. Hand the program to Barnum. It distributes tasks across
               your agents, enforces valid transitions, retries failures,
               and respects concurrency limits.
             </p>
