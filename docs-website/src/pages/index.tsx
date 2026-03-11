@@ -59,18 +59,20 @@ function Features() {
           wild animals.
         </p>
         <p>
-          That's why we created Barnum. With Barnum, you define structured
-          workflows that you can analyze before anything runs, and your
-          agents are guaranteed to follow them to the letter. Barnum lets
-          you build more powerful tools on top of LLMs while feeling
-          confident that the workflow will execute exactly as you designed it.
+          That's why we created Barnum. Barnum provides the missing
+          structure, rigor, and predictability for these complicated
+          workflows. You define your workflow using a configuration file
+          that is analyzable in advance. When it runs, transitions are
+          validated, giving you certainty that the workflow will execute
+          exactly as you designed it. Barnum lets you build more powerful
+          tools on top of agents.
         </p>
         <div className="row">
           <div className="col col--4">
             <h3>🦁 A choreographed show</h3>
             <p>
               Workflows are expressed as statically analyzable state machines.
-              Transitions are declared upfront and validated when the
+              Transitions are declared up front and validated when the
               workflow is run. Invalid ones are rejected and retried.
               No hoping the agent stays on track.
             </p>
