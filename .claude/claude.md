@@ -86,6 +86,8 @@ When GitHub CI runs show as "cancelled", that means they **timed out** - not tha
 
 ## Commit discipline
 
+**Commit immediately after every change.** Do not wait. Do not explain what you did and then forget to commit. The moment a file is saved and the change is complete, `git add` and `git commit` it. Then push. This is non-negotiable.
+
 **Commits should be small, always.** Don't wait until the end of a task to commit. After completing a logical unit of work, commit it. This applies to documentation changes, code changes, refactor documents - everything.
 
 ### Landing on master
