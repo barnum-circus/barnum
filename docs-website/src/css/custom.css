@@ -105,8 +105,8 @@ main h2 {
 }
 
 main > section > .container {
-  padding-top: 6rem;
-  padding-bottom: 6rem;
+  padding-top: 4.5rem;
+  padding-bottom: 4.5rem;
 }
 
 .alt-background {
