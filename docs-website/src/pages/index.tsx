@@ -49,7 +49,7 @@ const exampleConfig = `{
 function Features() {
   return (
     <section className="alt-background">
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>The missing workflow engine for AI agents.</h2>
         <p>
           LLMs are extremely powerful tools, and we're using them to
@@ -105,7 +105,7 @@ function Features() {
 function DemoSection() {
   return (
     <section>
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>See it in action.</h2>
         <div className={styles.demoVideoWrapper}>
           <iframe
@@ -123,7 +123,7 @@ function DemoSection() {
 function ExampleSection() {
   return (
     <section className="alt-background">
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
           With Barnum, you specify your workflow upfront in a configuration
@@ -156,7 +156,7 @@ function ExampleSection() {
 function AgentAuthoring() {
   return (
     <section>
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>Looks complicated? Let the performers write the programme.</h2>
         <p>
           Barnum programmes are just JSON with a{' '}
@@ -176,7 +176,7 @@ function AgentAuthoring() {
 function WhyBarnum() {
   return (
     <section className="alt-background">
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>Why Barnum?</h2>
         <p>
           A single agent with a markdown plan can handle simple tasks. But
@@ -243,7 +243,7 @@ function WhyBarnum() {
 function HowItWorks() {
   return (
     <section>
-      <div className="container padding-vert--lg">
+      <div className="container">
         <h2 className={styles.centeredHeading}>Ladies and gentlemen, the show is about to begin!</h2>
         <div className="row">
           <div className="col col--4">
