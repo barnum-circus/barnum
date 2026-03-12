@@ -6,7 +6,8 @@
 set -e
 
 # Check if any Rust-related files are staged
-RUST_FILES=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(rs|toml)$' || true)
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
+RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
 
 if [ -z "$RUST_FILES" ]; then
     echo "No Rust files changed, skipping cargo checks."
@@ -19,7 +20,8 @@ cargo fmt --all
 echo "Regenerating config schema..."
 cargo run -p barnum_config --bin build_barnum_schema 2>/dev/null
 
-git add -u  # Re-stage any files that were reformatted/regenerated
+# Re-stage only files that were already staged (not unrelated unstaged changes)
+echo "$STAGED_FILES" | xargs git add
 
 # Create temp directory for output files
 TEMP_DIR=$(mktemp -d)
