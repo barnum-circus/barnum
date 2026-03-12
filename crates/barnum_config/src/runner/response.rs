@@ -137,7 +137,7 @@ fn process_finally_response(
 ) -> (TaskOutcome, PostHookInput) {
     debug!(stdout = %stdout, "finally hook output");
 
-    match serde_json::from_str::<Vec<Task>>(stdout) {
+    match json5::from_str::<Vec<Task>>(stdout) {
         Ok(tasks) => {
             info!(step = %task.step, count = tasks.len(), "finally hook completed");
             let post_input = PostHookInput::Success {
@@ -153,7 +153,7 @@ fn process_finally_response(
         }
         Err(e) => {
             // If output can't be parsed as task array, treat as empty (backwards compatible)
-            warn!(step = %task.step, error = %e, "finally hook output is not valid JSON task array");
+            warn!(step = %task.step, error = %e, "finally hook output is not valid JSONC task array");
             let post_input = PostHookInput::Success {
                 input: value.clone(),
                 output: serde_json::json!([]),
@@ -212,7 +212,7 @@ fn process_stdout(
     step: &Step,
     schemas: &CompiledSchemas,
 ) -> (TaskOutcome, PostHookInput) {
-    match serde_json::from_str::<serde_json::Value>(stdout) {
+    match json5::from_str::<serde_json::Value>(stdout) {
         Ok(output_value) => match validate_response(&output_value, step, schemas) {
             Ok(new_tasks) => {
                 info!(from = %task.step, new_tasks = new_tasks.len(), "task completed");
@@ -238,11 +238,11 @@ fn process_stdout(
             }
         },
         Err(e) => {
-            warn!(step = %task.step, error = %e, stdout = %stdout, "failed to parse response JSON");
+            warn!(step = %task.step, error = %e, stdout = %stdout, "failed to parse response JSONC");
             let outcome = process_retry(task, &step.options, FailureKind::InvalidResponse);
             let post_input = PostHookInput::Error {
                 input: value.clone(),
-                error: format!("failed to parse response JSON: {e}"),
+                error: format!("failed to parse response JSONC: {e}"),
             };
             (outcome, post_input)
         }

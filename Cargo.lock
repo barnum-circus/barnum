@@ -117,6 +117,7 @@ dependencies = [
  "barnum_types",
  "cli_invoker",
  "interprocess",
+ "json5",
  "jsonschema",
  "rstest",
  "schemars",

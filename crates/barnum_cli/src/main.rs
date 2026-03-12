@@ -9,13 +9,31 @@ use barnum_config::{
     Action, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
     generate_full_docs, resume, run,
 };
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use cli_invoker::Invoker;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use troupe_cli::TroupeCli;
+
+/// Log level for barnum output.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum LogLevel {
+    /// No logging
+    Off,
+    /// Error messages only
+    Error,
+    /// Warnings and errors
+    Warn,
+    /// Informational messages (default)
+    #[default]
+    Info,
+    /// Debug messages (includes task return values)
+    Debug,
+    /// Trace messages (very verbose)
+    Trace,
+}
 
 const VERSION: &str = env!("BARNUM_VERSION");
 
@@ -27,6 +45,10 @@ struct Cli {
     /// Defaults to `/tmp/troupe` on Unix.
     #[arg(long, global = true)]
     root: Option<PathBuf>,
+
+    /// Log level (debug shows task return values)
+    #[arg(short, long, global = true, default_value = "info")]
+    log_level: LogLevel,
 
     #[command(subcommand)]
     command: Command,
@@ -119,6 +141,7 @@ fn main() -> io::Result<()> {
 
     // Extract root for commands that need it
     let root = cli.root.unwrap_or_else(troupe::default_root);
+    let log_level = cli.log_level;
 
     match cli.command {
         Command::Run {
@@ -138,6 +161,7 @@ fn main() -> io::Result<()> {
                 log_file.as_ref(),
                 state_log.as_ref(),
                 &root,
+                log_level,
             )?,
             (None, Some(config)) => run_command(
                 &config,
@@ -148,6 +172,7 @@ fn main() -> io::Result<()> {
                 log_file.as_ref(),
                 state_log.as_ref(),
                 &root,
+                log_level,
             )?,
             (None, None) => {
                 // Unreachable: clap's required_unless_present prevents this
@@ -243,9 +268,10 @@ fn run_command(
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
     root: &std::path::Path,
+    log_level: LogLevel,
 ) -> io::Result<()> {
     // Initialize tracing with optional log file
-    init_tracing(log_file)?;
+    init_tracing(log_file, log_level)?;
 
     // Detect how to invoke the troupe CLI (returns helpful error if not found)
     let invoker = Invoker::<TroupeCli>::detect()?;
@@ -294,8 +320,9 @@ fn resume_command(
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
     root: &std::path::Path,
+    log_level: LogLevel,
 ) -> io::Result<()> {
-    init_tracing(log_file)?;
+    init_tracing(log_file, log_level)?;
 
     let invoker = Invoker::<TroupeCli>::detect()?;
 
@@ -478,9 +505,16 @@ fn parse_initial_tasks(initial: &str) -> io::Result<Vec<Task>> {
     })
 }
 
-fn init_tracing(log_file: Option<&PathBuf>) -> io::Result<()> {
-    let filter =
-        EnvFilter::from_default_env().add_directive("barnum=info".parse().unwrap_or_default());
+fn init_tracing(log_file: Option<&PathBuf>, log_level: LogLevel) -> io::Result<()> {
+    let directive = match log_level {
+        LogLevel::Off => "barnum=off",
+        LogLevel::Error => "barnum=error",
+        LogLevel::Warn => "barnum=warn",
+        LogLevel::Info => "barnum=info",
+        LogLevel::Debug => "barnum=debug",
+        LogLevel::Trace => "barnum=trace",
+    };
+    let filter = EnvFilter::from_default_env().add_directive(directive.parse().unwrap_or_default());
 
     let stderr_layer = fmt::layer().with_target(false);
 
