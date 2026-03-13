@@ -61,7 +61,7 @@ A linear pipeline processes data through a sequence of steps.
 ## Running
 
 ```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs", "contents": "fn main() { println!(\"hello\"); }"}'
+barnum run config.json --entrypoint-value '{"file": "src/main.rs", "contents": "fn main() { println!(\"hello\"); }"}'
 ```
 
 ## Flow

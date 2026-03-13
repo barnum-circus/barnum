@@ -79,7 +79,7 @@ curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/bar
 Now run it:
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc --entrypoint-value '{}'
+pnpm dlx @barnum/barnum run config.jsonc
 ```
 
 **What happens:**
@@ -178,7 +178,7 @@ Here's what a basic refactor config looks like:
 Save this as `refactor.jsonc` and run:
 
 ```bash
-pnpm dlx @barnum/barnum run --config refactor.jsonc \
+pnpm dlx @barnum/barnum run refactor.jsonc \
   --entrypoint-value '{"folder": "./src"}'
 ```
 

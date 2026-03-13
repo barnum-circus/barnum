@@ -118,8 +118,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
 ## Running
 
 ```bash
-barnum run \
-  --config config.json \
+barnum run config.json \
   --entrypoint-value '{"contract_path": "contracts/vendor-agreement.pdf", "output_dir": "review-output"}'
 ```
 

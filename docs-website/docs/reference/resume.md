@@ -21,7 +21,7 @@ Completed tasks are never re-executed. Only pending and in-flight tasks are re-d
 
 ```bash
 # Normal run with state logging
-barnum run --config config.jsonc \
+barnum run config.jsonc \
   --entrypoint-value '{"files": ["src/main.rs"]}' \
   --state-log /tmp/myrun.ndjson
 
@@ -30,7 +30,7 @@ barnum run --resume-from /tmp/myrun.ndjson \
   --state-log /tmp/myrun-resumed.ndjson
 ```
 
-`--resume-from` is incompatible with `--config`, `--initial-state`, and `--entrypoint-value`, since the config is stored in the log itself.
+`--resume-from` is incompatible with `<CONFIG>`, `--initial-state`, and `--entrypoint-value`, since the config is stored in the log itself.
 
 The resume log must be a different file from the original (no in-place mutation).
 
@@ -153,4 +153,4 @@ Barnum re-dispatches tasks 2 and 3. When both complete, task 0's finally hook fi
 - Resume reads the old log, reconstructs state, then creates a new log (copies old entries + appends new ones)
 - Completed tasks are skipped; pending and in-flight tasks are re-dispatched
 - Task IDs are monotonic and preserved across resume
-- `--resume-from` replaces `--config` and `--entrypoint-value`, since everything comes from the log
+- `--resume-from` replaces `<CONFIG>` and `--entrypoint-value`, since everything comes from the log

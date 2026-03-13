@@ -38,7 +38,7 @@ These examples use `pnpm dlx` to run Barnum without installing it. You can use a
 The main command-line tool for running task queues:
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc --entrypoint-value '{}'
+pnpm dlx @barnum/barnum run config.jsonc
 ```
 
 ### Troupe

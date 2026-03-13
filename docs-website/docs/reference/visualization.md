@@ -5,20 +5,20 @@ Barnum can generate a graph of your workflow config before anything runs. This i
 ## Usage
 
 ```bash
-barnum config graph --config config.jsonc
+barnum config graph config.jsonc
 ```
 
 This outputs [DOT format](https://graphviz.org/doc/info/lang.html) (GraphViz) to stdout. Pipe it to `dot` to render an image:
 
 ```bash
 # SVG (best for docs and web)
-barnum config graph --config config.jsonc | dot -Tsvg -o workflow.svg
+barnum config graph config.jsonc | dot -Tsvg -o workflow.svg
 
 # PNG
-barnum config graph --config config.jsonc | dot -Tpng -o workflow.png
+barnum config graph config.jsonc | dot -Tpng -o workflow.png
 
 # PDF
-barnum config graph --config config.jsonc | dot -Tpdf -o workflow.pdf
+barnum config graph config.jsonc | dot -Tpdf -o workflow.pdf
 ```
 
 You need [GraphViz](https://graphviz.org/download/) installed for rendering. On macOS: `brew install graphviz`.

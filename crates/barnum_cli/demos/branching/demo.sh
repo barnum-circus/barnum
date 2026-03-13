@@ -49,7 +49,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run Barnum against existing pool
     echo "Running Barnum with branching config..."
-    $BARNUM run --config "$SCRIPT_DIR/config.jsonc" \
+    $BARNUM run "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         $WAKE_ARG
 
@@ -92,7 +92,7 @@ else
     # Run Barnum
     echo ""
     echo "Running Barnum with branching config..."
-    $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
+    $BARNUM --root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
         --pool "$POOL_ID"
 
     echo ""

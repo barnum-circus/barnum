@@ -52,7 +52,7 @@ Pre hooks transform the input before it reaches the agent.
 ## Running
 
 ```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs"}'
+barnum run config.json --entrypoint-value '{"file": "src/main.rs"}'
 ```
 
 **Pre hook contract:**

@@ -108,7 +108,7 @@ Return `[]`.
 ## Running
 
 ```bash
-barnum run --config code-review.jsonc --entrypoint-value '{}'
+barnum run code-review.jsonc
 ```
 
 ## How it works

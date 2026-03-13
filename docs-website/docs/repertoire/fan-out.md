@@ -44,7 +44,7 @@ Fan-out splits one task into multiple parallel tasks.
 ## Running
 
 ```bash
-barnum run --config config.json
+barnum run config.json
 ```
 
 ## Flow
@@ -102,7 +102,7 @@ Agents can also fan out by returning multiple tasks:
 ## Running
 
 ```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs"}'
+barnum run config.json --entrypoint-value '{"file": "src/main.rs"}'
 ```
 
 ## Key Points
