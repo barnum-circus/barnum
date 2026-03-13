@@ -1,4 +1,5 @@
 {
+  "entrypoint": "ListFiles",
   "options": {
     "max_retries": 1
   },

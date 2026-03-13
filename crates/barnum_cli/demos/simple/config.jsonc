@@ -1,7 +1,8 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "Start", "value": {}}]' simple.jsonc
+// pnpm dlx barnum run simple.jsonc
 {
   "$schema": "../schemas/config.schema.json",
+  "entrypoint": "Start",
   "steps": [
     {
       "name": "Start",

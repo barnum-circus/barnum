@@ -39,7 +39,7 @@ echo ""
 
 $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
-    --initial-state "[{\"kind\": \"ListFiles\", \"value\": {\"folder\": \"$SCRIPT_DIR\"}}]"
+    --entrypoint-value "{\"folder\": \"$SCRIPT_DIR\"}"
 
 echo ""
 echo "=== Success! ==="

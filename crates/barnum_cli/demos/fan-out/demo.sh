@@ -55,7 +55,6 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running Barnum with fan-out config..."
     $BARNUM run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial-state '[{"kind": "Distribute", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -117,8 +116,7 @@ else
     START_TIME=$(date +%s.%N)
 
     $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
-        --pool "$POOL_ID" \
-        --initial-state '[{"kind": "Distribute", "value": {}}]'
+        --pool "$POOL_ID"
 
     END_TIME=$(date +%s.%N)
     ELAPSED=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "?")

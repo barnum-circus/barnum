@@ -1,9 +1,10 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "ListFiles", "value": {"folder": "./src"}}]' config.jsonc
+// pnpm dlx barnum run --entrypoint-value '{"folder": "./src"}' config.jsonc
 //
 // NOTE: This workflow is not included in run-all-demos.sh because it requires
 // a real codebase and Claude agents to function.
 {
+  "entrypoint": "ListFiles",
   "options": {
     "max_retries": 2
   },

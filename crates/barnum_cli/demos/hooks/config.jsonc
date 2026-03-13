@@ -1,4 +1,5 @@
 {
+  "entrypoint": "Process",
   "options": {
     "max_retries": 0
   },

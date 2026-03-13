@@ -51,7 +51,6 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running Barnum with branching config..."
     $BARNUM run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial-state '[{"kind": "Decide", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -94,8 +93,7 @@ else
     echo ""
     echo "Running Barnum with branching config..."
     $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
-        --pool "$POOL_ID" \
-        --initial-state '[{"kind": "Decide", "value": {}}]'
+        --pool "$POOL_ID"
 
     echo ""
     echo "=== Success! ==="

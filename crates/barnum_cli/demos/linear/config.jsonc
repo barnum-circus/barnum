@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm barnum run linear.jsonc
+// pnpm dlx barnum run linear.jsonc
 {
   "entrypoint": "Start",
   "steps": [

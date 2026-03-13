@@ -1,7 +1,8 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]' command-demo.jsonc
+// pnpm dlx barnum run --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}' command-demo.jsonc
 {
   "$schema": "../schemas/config.schema.json",
+  "entrypoint": "Split",
   "steps": [
     {
       "name": "Split",

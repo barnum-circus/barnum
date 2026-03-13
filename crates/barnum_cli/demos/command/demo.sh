@@ -46,7 +46,7 @@ echo ""
 
 $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
-    --initial-state '[{"kind": "Split", "value": {"items": [{"n": 1}, {"n": 2}, {"n": 3}]}}]'
+    --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}'
 
 echo ""
 echo "=== Success! ==="

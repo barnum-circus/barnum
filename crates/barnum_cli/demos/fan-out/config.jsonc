@@ -1,6 +1,7 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "Distribute", "value": {}}]' fan-out.jsonc
+// pnpm dlx barnum run fan-out.jsonc
 {
+  "entrypoint": "Distribute",
   "steps": [
     {
       "name": "Distribute",

@@ -1,6 +1,7 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "Decide", "value": {}}]' branching.jsonc
+// pnpm dlx barnum run branching.jsonc
 {
+  "entrypoint": "Decide",
   "options": {
     "max_retries": 2
   },
