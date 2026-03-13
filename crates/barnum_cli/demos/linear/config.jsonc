@@ -1,6 +1,7 @@
 // Example invocation:
-// pnpm barnum run --initial-state '[{"kind": "Start", "value": {}}]' linear.jsonc
+// pnpm barnum run linear.jsonc
 {
+  "entrypoint": "Start",
   "steps": [
     {
       "name": "Start",

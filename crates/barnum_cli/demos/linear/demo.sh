@@ -50,7 +50,6 @@ if [ -n "$EXISTING_POOL" ]; then
     echo "Running Barnum with linear config..."
     $BARNUM run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
-        --initial-state '[{"kind": "Start", "value": {}}]' \
         $WAKE_ARG
 
     echo ""
@@ -93,8 +92,7 @@ else
     echo ""
     echo "Running Barnum with linear config..."
     $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
-        --pool "$POOL_ID" \
-        --initial-state '[{"kind": "Start", "value": {}}]'
+        --pool "$POOL_ID"
 
     echo ""
     echo "=== Success! ==="
