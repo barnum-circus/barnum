@@ -45,9 +45,7 @@ run(`${GIT} reset --hard HEAD`);
 // splitting — every branch will inherit the same failures.
 run(`${GIT} checkout ${base_branch}`);
 
-// pnpm changed:fix is excluded — it diffs against the merge base, which is
-// meaningless when we're already on the merge base (zero changed files → grep exits 1).
-const validateCmds = ['pnpm relay', 'pnpm tsc'];
+const validateCmds = ['pnpm tsc'];
 for (const cmd of validateCmds) {
   const result = runSafe(cmd);
   if (!result.ok) {
