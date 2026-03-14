@@ -72,7 +72,7 @@ Override global settings for specific steps:
 ## Running
 
 ```bash
-barnum run config.json
+barnum run --config config.json
 ```
 
 ## Retry Triggers

@@ -25,12 +25,13 @@ Options:
 Execute a workflow defined in a config file.
 
 ```
-barnum run [OPTIONS] <CONFIG>
-
-Arguments:
-  <CONFIG>  Config file path or inline JSON
+barnum run [OPTIONS]
 
 Options:
+  --config <CONFIG>
+      Config file path or inline JSON
+      Required unless --resume-from is used
+
   --initial-state <INITIAL_STATE>
       Initial tasks (JSON array or path to file)
       Required if config has no `entrypoint`
@@ -61,19 +62,19 @@ Options:
 
 ```bash
 # Run with entrypoint (config defines entrypoint step)
-barnum run config.json --entrypoint-value '{"file": "main.rs"}'
+barnum run --config config.json --entrypoint-value '{"file": "main.rs"}'
 
 # Run with entrypoint, default value ({})
-barnum run config.json
+barnum run --config config.json
 
 # Run with logging
-barnum run config.json --log-file /tmp/barnum.log
+barnum run --config config.json --log-file /tmp/barnum.log
 
 # Run without entrypoint (manual initial state)
-barnum run config.json --initial-state '[{"kind": "Start", "value": {}}]'
+barnum run --config config.json --initial-state '[{"kind": "Start", "value": {}}]'
 
 # Run with a specific pool (default: "default")
-barnum run config.json --pool my-pool --entrypoint-value '{}'
+barnum run --config config.json --pool my-pool --entrypoint-value '{}'
 ```
 
 ### barnum config
@@ -94,13 +95,13 @@ Commands:
 
 ```bash
 # Validate a config
-barnum config validate config.json
+barnum config validate --config config.json
 
 # Generate documentation
-barnum config docs config.json > WORKFLOW.md
+barnum config docs --config config.json > WORKFLOW.md
 
 # Generate graph visualization
-barnum config graph config.json > workflow.dot
+barnum config graph --config config.json > workflow.dot
 dot -Tpng workflow.dot -o workflow.png
 
 # Get the JSON schema

@@ -22,20 +22,20 @@ echo "=== Demo: Barnum Config Docs and Validate ==="
 echo ""
 
 echo "--- Validating simple.jsonc ---"
-$BARNUM config validate "$SCRIPT_DIR/../simple/config.jsonc"
+$BARNUM config validate --config "$SCRIPT_DIR/../simple/config.jsonc"
 echo ""
 
 echo "--- Validating linear.jsonc ---"
-$BARNUM config validate "$SCRIPT_DIR/../linear/config.jsonc"
+$BARNUM config validate --config "$SCRIPT_DIR/../linear/config.jsonc"
 echo ""
 
 echo "--- Validating branching.jsonc ---"
-$BARNUM config validate "$SCRIPT_DIR/../branching/config.jsonc"
+$BARNUM config validate --config "$SCRIPT_DIR/../branching/config.jsonc"
 echo ""
 
 echo "--- Generating docs for linear.jsonc ---"
 echo ""
-$BARNUM config docs "$SCRIPT_DIR/../linear/config.jsonc"
+$BARNUM config docs --config "$SCRIPT_DIR/../linear/config.jsonc"
 
 echo ""
 echo "=== Success! ==="

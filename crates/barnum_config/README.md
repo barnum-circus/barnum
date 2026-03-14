@@ -123,22 +123,22 @@ Agent responses are arrays of tasks:
 
 ```bash
 # Run with config file
-barnum run config.json
+barnum run --config config.json
 
 # Run with inline config (from script)
-barnum run '{"steps": [...]}' --initial-state tasks.json
+barnum run --config '{"steps": [...]}' --initial-state tasks.json
 
 # With troupe root and wake script
-barnum run config.json --root /tmp/pool --wake ./wake.sh
+barnum run --config config.json --root /tmp/pool --wake ./wake.sh
 
 # Log to file for later analysis
-barnum run config.json --log-file run.log
+barnum run --config config.json --log-file run.log
 
 # Generate docs
-barnum config docs config.json
+barnum config docs --config config.json
 
 # Validate config
-barnum config validate config.json
+barnum config validate --config config.json
 ```
 
 ## Timeout Behavior

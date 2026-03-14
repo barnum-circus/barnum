@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm dlx barnum run fan-out.jsonc
+// pnpm dlx barnum run --config fan-out.jsonc
 {
   "entrypoint": "Distribute",
   "steps": [

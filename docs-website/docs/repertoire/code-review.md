@@ -108,7 +108,7 @@ Return `[]`.
 ## Running
 
 ```bash
-barnum run code-review.jsonc
+barnum run --config code-review.jsonc
 ```
 
 ## How it works

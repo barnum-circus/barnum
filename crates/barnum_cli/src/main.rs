@@ -59,7 +59,7 @@ enum Command {
     /// Run the task queue
     Run {
         /// Config (JSON string or path to file). Required unless `--resume-from` is used.
-        #[arg(required_unless_present = "resume_from")]
+        #[arg(long, required_unless_present = "resume_from")]
         config: Option<String>,
 
         /// Initial tasks (JSON string or path to file).
@@ -90,7 +90,7 @@ enum Command {
         state_log: Option<PathBuf>,
 
         /// Resume from a previous state log file.
-        /// Incompatible with `<CONFIG>`, `--initial-state`, and `--entrypoint-value`.
+        /// Incompatible with `--config`, `--initial-state`, and `--entrypoint-value`.
         #[arg(long, conflicts_with = "config")]
         resume_from: Option<PathBuf>,
     },
@@ -114,18 +114,21 @@ enum ConfigCommand {
     /// Generate markdown documentation from config
     Docs {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 
     /// Validate a config file
     Validate {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 
     /// Generate DOT visualization of config (for `GraphViz`)
     Graph {
         /// Config (JSON string or path to file)
+        #[arg(long)]
         config: String,
     },
 
@@ -175,7 +178,7 @@ fn main() -> io::Result<()> {
                 // Unreachable: clap's required_unless_present prevents this
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "[E073] <CONFIG> is required when not using --resume-from",
+                    "[E073] --config is required when not using --resume-from",
                 ));
             }
         },

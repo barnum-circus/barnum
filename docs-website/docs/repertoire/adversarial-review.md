@@ -78,7 +78,7 @@ Analyze a file, implement a refactor, then have a separate agent judge the resul
 ## Running
 
 ```bash
-barnum run config.json --entrypoint-value '{"file": "src/main.rs"}'
+barnum run --config config.json --entrypoint-value '{"file": "src/main.rs"}'
 ```
 
 ## How It Works

@@ -454,6 +454,7 @@ impl BarnumRunner {
             .arg("--root")
             .arg(cli_root)
             .arg("run")
+            .arg("--config")
             .arg(config)
             .arg("--initial-state")
             .arg(initial_tasks)
@@ -465,7 +466,7 @@ impl BarnumRunner {
     /// Run `barnum config validate` with the given config.
     pub fn validate(&self, config: &str) -> std::io::Result<std::process::Output> {
         Command::new(&self.bin)
-            .args(["config", "validate"])
+            .args(["config", "validate", "--config"])
             .arg(config)
             .output()
     }
@@ -473,7 +474,7 @@ impl BarnumRunner {
     /// Run `barnum config docs` with the given config.
     pub fn docs(&self, config: &str) -> std::io::Result<std::process::Output> {
         Command::new(&self.bin)
-            .args(["config", "docs"])
+            .args(["config", "docs", "--config"])
             .arg(config)
             .output()
     }
@@ -481,7 +482,7 @@ impl BarnumRunner {
     /// Run `barnum config graph` with the given config.
     pub fn graph(&self, config: &str) -> std::io::Result<std::process::Output> {
         Command::new(&self.bin)
-            .args(["config", "graph"])
+            .args(["config", "graph", "--config"])
             .arg(config)
             .output()
     }

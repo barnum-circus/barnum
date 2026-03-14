@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm dlx barnum run branching.jsonc
+// pnpm dlx barnum run --config branching.jsonc
 {
   "entrypoint": "Decide",
   "options": {
