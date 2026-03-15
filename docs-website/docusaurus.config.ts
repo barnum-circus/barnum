@@ -54,6 +54,22 @@ const config: Config = {
         name: 'twitter:card',
         content: 'summary_large_image',
       },
+      {
+        name: 'twitter:title',
+        content: 'Barnum - The ringmaster for your agents',
+      },
+      {
+        name: 'twitter:description',
+        content: "Don't just /loop it. The missing workflow engine for AI agents.",
+      },
+      {
+        name: 'twitter:image',
+        content: 'https://barnum-circus.github.io/img/og-image.png',
+      },
+      {
+        property: 'og:type',
+        content: 'website',
+      },
     ],
 
     navbar: {
