@@ -50,6 +50,10 @@ const config: Config = {
         name: 'keywords',
         content: 'Barnum, LLM, agents, task queue, state machine, Rust, CLI',
       },
+      {
+        name: 'twitter:card',
+        content: 'summary_large_image',
+      },
     ],
 
     navbar: {
