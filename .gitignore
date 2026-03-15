@@ -1,6 +1,7 @@
 **/target/**
 **/.claude/settings.local.json
 **/.claude/claude.local.md
+**/.local/**
 **/.vscode/**
 **/.td/**
 **/.test-data/**
