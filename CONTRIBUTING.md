@@ -1,11 +1,23 @@
 # Contributing
 
-Bug reports are welcome. Please open an issue describing the problem you encountered.
+Thanks for your interest in Barnum! We'd love to hear from you.
 
-Product suggestions are also welcome. Feel free to open an issue describing the feature or improvement you'd like to see.
+## Join the Discord
 
-However, pull requests that modify code are not accepted. I use a local AI agent to make changes to this codebase, and dealing with merge conflicts from external PRs is not worth the overhead when it's just as easy to ask my agent to implement the suggested changes directly.
+The best way to get involved is to join our [Discord](https://discord.gg/eBjM5XX6nk). It's where we discuss feature ideas, share what we're building, and help each other out. If you have a suggestion, question, or just want to say hi, that's the place to do it.
+
+## Bug reports
+
+Bug reports are welcome. Please [open an issue](https://github.com/barnum-circus/barnum/issues) describing the problem you encountered, including steps to reproduce it if possible.
+
+## Feature suggestions
+
+Have an idea for Barnum? Drop it in the Discord or open a GitHub issue. We're genuinely interested in how people want to use this and what's missing.
+
+## Pull requests
+
+Pull requests that modify code are not accepted at this time. This codebase is maintained with a local AI agent, and dealing with merge conflicts from external PRs isn't worth the overhead when it's just as easy to implement suggested changes directly.
 
 Pull requests that add additional pending refactors (in `refactors/pending/`) will be considered.
 
-If you have a bug fix or feature in mind, please describe it in an issue and I'll have my agent implement it.
+If you have a bug fix or feature in mind, describe it in an issue or on Discord and we'll get it implemented.
