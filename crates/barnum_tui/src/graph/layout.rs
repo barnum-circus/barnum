@@ -18,16 +18,22 @@ pub fn assign_layers(graph: &mut StepGraph) {
         return;
     }
 
-    // Compute in-degree for each node.
+    // Compute in-degree for each node, ignoring self-loops (they don't
+    // affect topological order and would prevent the node from ever
+    // reaching in-degree 0).
     let mut in_degree = vec![0u32; n];
-    for &(_, to) in &graph.edges {
-        in_degree[to] += 1;
+    for &(from, to) in &graph.edges {
+        if from != to {
+            in_degree[to] += 1;
+        }
     }
 
-    // Build adjacency list (forward edges).
+    // Build adjacency list (forward edges, excluding self-loops).
     let mut adjacency: Vec<Vec<usize>> = vec![Vec::new(); n];
     for &(from, to) in &graph.edges {
-        adjacency[from].push(to);
+        if from != to {
+            adjacency[from].push(to);
+        }
     }
 
     // Initialize: sources get layer 0, seed the queue.

@@ -171,4 +171,22 @@ mod tests {
         assert_eq!(graph.layers().len(), 1);
         assert_eq!(graph.layers()[0], vec![0]);
     }
+
+    #[test]
+    fn self_loop_does_not_block_layering() {
+        // Mirrors refactor-workflow: ProcessRefactorList references itself
+        // and also feeds into CommitFile.
+        let config = make_config(&[
+            ("List", &["Analyze"]),
+            ("Analyze", &["Process"]),
+            ("Process", &["Process", "Commit"]),
+            ("Commit", &[]),
+        ]);
+        let graph = StepGraph::from_config(&config);
+
+        assert_eq!(graph.get(&StepName::new("List")).map(|n| n.layer), Some(0));
+        assert_eq!(graph.get(&StepName::new("Analyze")).map(|n| n.layer), Some(1));
+        assert_eq!(graph.get(&StepName::new("Process")).map(|n| n.layer), Some(2));
+        assert_eq!(graph.get(&StepName::new("Commit")).map(|n| n.layer), Some(3));
+    }
 }
