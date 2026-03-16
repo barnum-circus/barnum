@@ -266,3 +266,4 @@ The adversarial structure forces thorough research on both sides. A single evalu
 - The `DebateFact` coordinator with `finally` ensures the judge only runs after both advocates finish — not before, not after all facts globally
 - Verdict is encoded in the filename (`*.true.txt`, `*.false.txt`, `*.unknown.txt`), so you can count results with `ls *.true.txt | wc -l`
 - The output directory is created on demand — no setup required
+- In the adversarial variant, the advocates communicate their findings to the judge via the filesystem — each writes an argument file that the judge reads. A future version of Barnum will provide a direct mechanism for passing data between sibling tasks, eliminating this workaround
