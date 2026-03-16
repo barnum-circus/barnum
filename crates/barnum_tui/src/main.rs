@@ -1,5 +1,6 @@
 mod app;
 mod detail;
+mod event;
 mod footer;
 mod graph;
 mod header;
