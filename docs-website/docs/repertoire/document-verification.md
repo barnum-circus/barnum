@@ -5,13 +5,13 @@ Extract verifiable facts from a document, then research and evaluate each one in
 ## The Pattern
 
 ```
-                        ┌──→ EvaluateFact (001-revenue-growth) ──→ WriteFact
+                        ┌──→ EvaluateFact (001-revenue-growth) ──→ WriteFile
                         │
-IdentifyFacts ──────────┼──→ EvaluateFact (002-market-share) ──→ WriteFact
+IdentifyFacts ──────────┼──→ EvaluateFact (002-market-share) ──→ WriteFile
                         │
-                        └──→ EvaluateFact (003-patent-filing-date) ──→ WriteFact
+                        └──→ EvaluateFact (003-patent-filing-date) ──→ WriteFile
 
-Each WriteFact writes:
+Each WriteFile writes:
   output_dir/001-revenue-growth.true.txt
   output_dir/002-market-share.false.txt
   output_dir/003-patent-filing-date.unknown.txt
@@ -53,26 +53,24 @@ Each WriteFact writes:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a fact-checker. Your job is to evaluate whether the following claim is true, false, or unknown.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim thoroughly:\n1. Look for primary sources, official records, or authoritative references that confirm or deny the claim.\n2. Check for common misquotations, outdated figures, or misleading framings.\n3. Consider whether the claim is technically true but misleading.\n\nReach a verdict: true, false, or unknown (if evidence is insufficient or contradictory).\n\nReturn a WriteFact task with your findings. Example: [{\"kind\": \"WriteFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled...\", \"verdict\": \"true\", \"reasoning\": \"SEC filings confirm revenue grew from $50M to $100M in FY2024.\", \"output_dir\": \"output/\"}}]" }
+        "instructions": { "inline": "You are a fact-checker. Evaluate whether the following claim is true, false, or unknown.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim thoroughly:\n1. Look for primary sources, official records, or authoritative references that confirm or deny the claim.\n2. Check for common misquotations, outdated figures, or misleading framings.\n3. Consider whether the claim is technically true but misleading.\n\nReach a verdict: exactly one of \"true\", \"false\", or \"unknown\" (if evidence is insufficient or contradictory).\n\nReturn a WriteFile task. The path must be `{output_dir}/{id}.{verdict}.txt` where verdict is one of true, false, unknown. The content should include the original claim, your verdict, a summary of evidence for and against, and references consulted.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.true.txt\", \"content\": \"Claim: The company's revenue doubled...\\n\\nVerdict: true\\n\\nEvidence: SEC filings confirm...\"}}]" }
       },
-      "next": ["WriteFact"]
+      "next": ["WriteFile"]
     },
     {
-      "name": "WriteFact",
+      "name": "WriteFile",
+      // Generic file-writing step. Agents return data; this step handles I/O.
       "value_schema": {
         "type": "object",
-        "required": ["id", "claim", "verdict", "reasoning", "output_dir"],
+        "required": ["path", "content"],
         "properties": {
-          "id": { "type": "string" },
-          "claim": { "type": "string" },
-          "verdict": { "type": "string" },
-          "reasoning": { "type": "string" },
-          "output_dir": { "type": "string" }
+          "path": { "type": "string" },
+          "content": { "type": "string" }
         }
       },
       "action": {
         "kind": "Command",
-        "script": "INPUT=$(cat) && ID=$(echo \"$INPUT\" | jq -r '.value.id') && VERDICT=$(echo \"$INPUT\" | jq -r '.value.verdict') && CLAIM=$(echo \"$INPUT\" | jq -r '.value.claim') && REASONING=$(echo \"$INPUT\" | jq -r '.value.reasoning') && OUT=$(echo \"$INPUT\" | jq -r '.value.output_dir') && mkdir -p \"$OUT\" && printf 'Claim: %s\\n\\nVerdict: %s\\n\\nReasoning:\\n%s\\n' \"$CLAIM\" \"$VERDICT\" \"$REASONING\" > \"$OUT/$ID.$VERDICT.txt\" && echo '[]'"
+        "script": "INPUT=$(cat) && FILEPATH=$(echo \"$INPUT\" | jq -r '.value.path') && CONTENT=$(echo \"$INPUT\" | jq -r '.value.content') && mkdir -p \"$(dirname \"$FILEPATH\")\" && printf '%s\\n' \"$CONTENT\" > \"$FILEPATH\" && echo '[]'"
       },
       "next": []
     }
@@ -90,9 +88,9 @@ barnum run --config config.json \
 ## How it works
 
 1. **IdentifyFacts** reads the document and extracts every verifiable factual claim. Each gets a unique ID like `001-revenue-doubled-in-2024`. Returns one `EvaluateFact` task per claim.
-2. **EvaluateFact** runs in parallel for each claim. The agent researches the claim, reaches a verdict, and returns a `WriteFact` task with the verdict and reasoning.
-3. **WriteFact** is a deterministic Command step that writes the verdict file (e.g., `001-revenue-doubled-in-2024.true.txt`) to the output directory, creating it if needed.
-4. When all evaluations complete, the output directory contains one file per claim. The filename encodes the verdict, making it trivial to scan results at a glance.
+2. **EvaluateFact** runs in parallel for each claim. The agent researches the claim, reaches a verdict, and returns a `WriteFile` task with the path (encoding the verdict in the filename) and the full evaluation as content.
+3. **WriteFile** is a generic Command step that writes any `{path, content}` pair to disk, creating directories as needed.
+4. When all evaluations complete, the output directory contains one file per claim. The filename encodes the verdict (`*.true.txt`, `*.false.txt`, `*.unknown.txt`), making it trivial to scan results at a glance.
 
 ## Variant: Adversarial verification
 
@@ -111,13 +109,13 @@ Per fact:
 ┌──────────────────────────────────────────────────────────────┐
 │  DebateFact (with finally)                                   │
 │                                                              │
-│  DebateFact ──┬──→ ArgueTrue                                 │
-│               └──→ ArgueFalse                                │
+│  DebateFact ──┬──→ ArgueTrue ──→ WriteFile                   │
+│               └──→ ArgueFalse ──→ WriteFile                  │
 │                                                              │
 │  ════════════════════════════════════════════════════════════ │
 │  After BOTH advocates complete:                              │
 │                                                              │
-│  finally ──→ JudgeFact ──→ WriteFact                         │
+│  finally ──→ JudgeFact ──→ WriteFile                         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -178,9 +176,9 @@ Per fact:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are an advocate arguing that the following claim is TRUE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is true:\n1. Find primary sources, official records, or authoritative references that support the claim.\n2. Address obvious counterarguments preemptively.\n3. If the claim is partially true, argue for the interpretation that makes it most accurate.\n\nWrite your argument to `{output_dir}/{id}.argue-true.txt`. Create the output directory if it doesn't exist.\n\nThe file should contain:\n- The original claim\n- Your best evidence supporting it\n- Sources consulted\n- Preemptive rebuttals to likely counterarguments\n\nReturn `[]` when done." }
+        "instructions": { "inline": "You are an advocate arguing that the following claim is TRUE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is true:\n1. Find primary sources, official records, or authoritative references that support the claim.\n2. Address obvious counterarguments preemptively.\n3. If the claim is partially true, argue for the interpretation that makes it most accurate.\n\nReturn a WriteFile task with your argument. The path must be `{output_dir}/{id}.argue-true.txt`. The content should include: the original claim, your best evidence supporting it, sources consulted, and preemptive rebuttals to likely counterarguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.argue-true.txt\", \"content\": \"Claim: ...\\n\\nEvidence: ...\\n\\nSources: ...\"}}]" }
       },
-      "next": []
+      "next": ["WriteFile"]
     },
     {
       "name": "ArgueFalse",
@@ -196,9 +194,9 @@ Per fact:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are an advocate arguing that the following claim is FALSE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is false or misleading:\n1. Find primary sources, official records, or authoritative references that contradict the claim.\n2. Identify misleading framings, outdated figures, or missing context that make the claim deceptive even if technically true.\n3. Address obvious counterarguments preemptively.\n\nWrite your argument to `{output_dir}/{id}.argue-false.txt`. Create the output directory if it doesn't exist.\n\nThe file should contain:\n- The original claim\n- Your best evidence against it\n- Sources consulted\n- Preemptive rebuttals to likely counterarguments\n\nReturn `[]` when done." }
+        "instructions": { "inline": "You are an advocate arguing that the following claim is FALSE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is false or misleading:\n1. Find primary sources, official records, or authoritative references that contradict the claim.\n2. Identify misleading framings, outdated figures, or missing context that make the claim deceptive even if technically true.\n3. Address obvious counterarguments preemptively.\n\nReturn a WriteFile task with your argument. The path must be `{output_dir}/{id}.argue-false.txt`. The content should include: the original claim, your best evidence against it, sources consulted, and preemptive rebuttals to likely counterarguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.argue-false.txt\", \"content\": \"Claim: ...\\n\\nEvidence: ...\\n\\nSources: ...\"}}]" }
       },
-      "next": []
+      "next": ["WriteFile"]
     },
     {
       "name": "JudgeFact",
@@ -214,26 +212,24 @@ Per fact:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are an impartial judge evaluating a factual claim.\n\nThe claim: see `claim` in the input.\n\nTwo advocates have already researched this claim and written their arguments:\n- `{output_dir}/{id}.argue-true.txt` — the case that the claim is true\n- `{output_dir}/{id}.argue-false.txt` — the case that the claim is false\n\nRead both arguments carefully. Evaluate the quality of evidence on each side:\n1. Which side cites stronger, more authoritative sources?\n2. Which side's reasoning is more rigorous?\n3. Are there logical fallacies or unsupported leaps on either side?\n4. Is one side's evidence clearly more current and relevant?\n\nReach a verdict: true, false, or unknown (if both sides present compelling evidence and you cannot determine the answer with confidence).\n\nReturn one WriteFact task. Example: [{\"kind\": \"WriteFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"...\", \"verdict\": \"true\", \"reasoning\": \"The true-side cited SEC filings showing...\", \"output_dir\": \"output/\"}}]" }
+        "instructions": { "inline": "You are an impartial judge evaluating a factual claim.\n\nThe claim: see `claim` in the input.\n\nTwo advocates have already researched this claim and written their arguments:\n- `{output_dir}/{id}.argue-true.txt` — the case that the claim is true\n- `{output_dir}/{id}.argue-false.txt` — the case that the claim is false\n\nRead both arguments carefully. Evaluate the quality of evidence on each side:\n1. Which side cites stronger, more authoritative sources?\n2. Which side's reasoning is more rigorous?\n3. Are there logical fallacies or unsupported leaps on either side?\n4. Is one side's evidence clearly more current and relevant?\n\nReach a verdict: exactly one of \"true\", \"false\", or \"unknown\" (if both sides present compelling evidence and you cannot determine the answer with confidence).\n\nReturn a WriteFile task. The path must be `{output_dir}/{id}.{verdict}.txt` where verdict is the one you chose. The content should include the original claim, your verdict, and your reasoning citing specific evidence from both arguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.true.txt\", \"content\": \"Claim: ...\\n\\nVerdict: true\\n\\nReasoning: The true-side cited SEC filings...\"}}]" }
       },
-      "next": ["WriteFact"]
+      "next": ["WriteFile"]
     },
     {
-      "name": "WriteFact",
+      "name": "WriteFile",
+      // Generic file-writing step. Agents return data; this step handles I/O.
       "value_schema": {
         "type": "object",
-        "required": ["id", "claim", "verdict", "reasoning", "output_dir"],
+        "required": ["path", "content"],
         "properties": {
-          "id": { "type": "string" },
-          "claim": { "type": "string" },
-          "verdict": { "type": "string" },
-          "reasoning": { "type": "string" },
-          "output_dir": { "type": "string" }
+          "path": { "type": "string" },
+          "content": { "type": "string" }
         }
       },
       "action": {
         "kind": "Command",
-        "script": "INPUT=$(cat) && ID=$(echo \"$INPUT\" | jq -r '.value.id') && VERDICT=$(echo \"$INPUT\" | jq -r '.value.verdict') && CLAIM=$(echo \"$INPUT\" | jq -r '.value.claim') && REASONING=$(echo \"$INPUT\" | jq -r '.value.reasoning') && OUT=$(echo \"$INPUT\" | jq -r '.value.output_dir') && mkdir -p \"$OUT\" && printf 'Claim: %s\\n\\nVerdict: %s\\n\\nReasoning:\\n%s\\n' \"$CLAIM\" \"$VERDICT\" \"$REASONING\" > \"$OUT/$ID.$VERDICT.txt\" && echo '[]'"
+        "script": "INPUT=$(cat) && FILEPATH=$(echo \"$INPUT\" | jq -r '.value.path') && CONTENT=$(echo \"$INPUT\" | jq -r '.value.content') && mkdir -p \"$(dirname \"$FILEPATH\")\" && printf '%s\\n' \"$CONTENT\" > \"$FILEPATH\" && echo '[]'"
       },
       "next": []
     }
@@ -252,10 +248,12 @@ barnum run --config config.json \
 
 1. **IdentifyFacts** extracts claims and emits one `DebateFact` task per claim.
 2. **DebateFact** is a coordinator. It fans out to `ArgueTrue` and `ArgueFalse` in parallel. Its `finally` hook fires only after both advocates complete, dispatching `JudgeFact`.
-3. **ArgueTrue** builds the strongest case that the claim is true and writes to `{id}.argue-true.txt`.
-4. **ArgueFalse** builds the strongest case that the claim is false and writes to `{id}.argue-false.txt`.
-5. **JudgeFact** reads both argument files, weighs the evidence, and returns a `WriteFact` task with a verdict.
-6. **WriteFact** writes the final verdict file (e.g., `001-revenue-doubled-in-2024.true.txt`).
+3. **ArgueTrue** researches the claim and returns a `WriteFile` task with its argument as data.
+4. **ArgueFalse** researches the claim and returns a `WriteFile` task with its argument as data.
+5. **WriteFile** is a generic Command step that writes any `{path, content}` pair to disk, creating directories as needed.
+6. **JudgeFact** reads both argument files (written by the advocates via `WriteFile`), weighs the evidence, and returns a `WriteFile` task with the final verdict. The verdict (`true`, `false`, or `unknown`) is encoded in the filename.
+
+No agent writes to the filesystem directly. All file I/O flows through the `WriteFile` Command step.
 
 The adversarial structure forces thorough research on both sides. A single evaluator might confirm its first impression; two opposing advocates are forced to find the strongest evidence for their assigned position, giving the judge better raw material.
 
@@ -265,5 +263,5 @@ The adversarial structure forces thorough research on both sides. A single evalu
 - The simple variant uses one agent per fact; the adversarial variant uses three (argue true, argue false, judge) for higher confidence
 - The `DebateFact` coordinator with `finally` ensures the judge only runs after both advocates finish — not before, not after all facts globally
 - Verdict is encoded in the filename (`*.true.txt`, `*.false.txt`, `*.unknown.txt`), so you can count results with `ls *.true.txt | wc -l`
-- The output directory is created on demand — no setup required
-- In the adversarial variant, the advocates communicate their findings to the judge via the filesystem — each writes an argument file that the judge reads. A future version of Barnum will provide a direct mechanism for passing data between sibling tasks, eliminating this workaround
+- No agent writes to disk directly — all file I/O flows through the generic `WriteFile` Command step. Agents return data; infrastructure handles I/O
+- In the adversarial variant, advocates communicate findings to the judge via the filesystem. `WriteFile` writes argument files, and `JudgeFact` reads them. A future version of Barnum will provide a direct mechanism for passing data between sibling tasks, eliminating this workaround
