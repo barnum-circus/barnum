@@ -5,13 +5,13 @@ Extract verifiable facts from a document, then research and evaluate each one in
 ## The Pattern
 
 ```
-                        ┌──→ EvaluateFact (001-revenue-growth)
+                        ┌──→ EvaluateFact (001-revenue-growth) ──→ WriteFact
                         │
-IdentifyFacts ──────────┼──→ EvaluateFact (002-market-share)
+IdentifyFacts ──────────┼──→ EvaluateFact (002-market-share) ──→ WriteFact
                         │
-                        └──→ EvaluateFact (003-patent-filing-date)
+                        └──→ EvaluateFact (003-patent-filing-date) ──→ WriteFact
 
-Each EvaluateFact writes:
+Each WriteFact writes:
   output_dir/001-revenue-growth.true.txt
   output_dir/002-market-share.false.txt
   output_dir/003-patent-filing-date.unknown.txt
@@ -35,7 +35,7 @@ Each EvaluateFact writes:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one EvaluateFact task per claim:\n```json\n[{\"kind\": \"EvaluateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}, ...]\n```\n\nIf the document contains no verifiable claims, return `[]`." }
+        "instructions": { "inline": "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one EvaluateFact task per claim. Example: [{\"kind\": \"EvaluateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}]\n\nIf the document contains no verifiable claims, return []." }
       },
       "next": ["EvaluateFact"]
     },
@@ -53,7 +53,26 @@ Each EvaluateFact writes:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a fact-checker. Your job is to evaluate whether the following claim is true, false, or unknown.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim thoroughly:\n1. Look for primary sources, official records, or authoritative references that confirm or deny the claim.\n2. Check for common misquotations, outdated figures, or misleading framings.\n3. Consider whether the claim is technically true but misleading.\n\nReach a verdict: **true**, **false**, or **unknown** (if evidence is insufficient or contradictory).\n\nWrite your findings to `{output_dir}/{id}.{verdict}.txt` where `{verdict}` is one of `true`, `false`, or `unknown`. Create the output directory if it doesn't exist.\n\nThe file should contain:\n- The original claim\n- Your verdict\n- A summary of the evidence for and against\n- Links or references to sources consulted\n\nReturn `[]` when done." }
+        "instructions": { "inline": "You are a fact-checker. Your job is to evaluate whether the following claim is true, false, or unknown.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim thoroughly:\n1. Look for primary sources, official records, or authoritative references that confirm or deny the claim.\n2. Check for common misquotations, outdated figures, or misleading framings.\n3. Consider whether the claim is technically true but misleading.\n\nReach a verdict: true, false, or unknown (if evidence is insufficient or contradictory).\n\nReturn a WriteFact task with your findings. Example: [{\"kind\": \"WriteFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled...\", \"verdict\": \"true\", \"reasoning\": \"SEC filings confirm revenue grew from $50M to $100M in FY2024.\", \"output_dir\": \"output/\"}}]" }
+      },
+      "next": ["WriteFact"]
+    },
+    {
+      "name": "WriteFact",
+      "value_schema": {
+        "type": "object",
+        "required": ["id", "claim", "verdict", "reasoning", "output_dir"],
+        "properties": {
+          "id": { "type": "string" },
+          "claim": { "type": "string" },
+          "verdict": { "type": "string" },
+          "reasoning": { "type": "string" },
+          "output_dir": { "type": "string" }
+        }
+      },
+      "action": {
+        "kind": "Command",
+        "script": "INPUT=$(cat) && ID=$(echo \"$INPUT\" | jq -r '.value.id') && VERDICT=$(echo \"$INPUT\" | jq -r '.value.verdict') && CLAIM=$(echo \"$INPUT\" | jq -r '.value.claim') && REASONING=$(echo \"$INPUT\" | jq -r '.value.reasoning') && OUT=$(echo \"$INPUT\" | jq -r '.value.output_dir') && mkdir -p \"$OUT\" && printf 'Claim: %s\\n\\nVerdict: %s\\n\\nReasoning:\\n%s\\n' \"$CLAIM\" \"$VERDICT\" \"$REASONING\" > \"$OUT/$ID.$VERDICT.txt\" && echo '[]'"
       },
       "next": []
     }
@@ -71,8 +90,9 @@ barnum run --config config.json \
 ## How it works
 
 1. **IdentifyFacts** reads the document and extracts every verifiable factual claim. Each gets a unique ID like `001-revenue-doubled-in-2024`. Returns one `EvaluateFact` task per claim.
-2. **EvaluateFact** runs in parallel for each claim. The agent researches the claim, reaches a verdict, and writes a file like `001-revenue-doubled-in-2024.true.txt` to the output directory.
-3. When all evaluations complete, the output directory contains one file per claim. The filename encodes the verdict, making it trivial to scan results at a glance.
+2. **EvaluateFact** runs in parallel for each claim. The agent researches the claim, reaches a verdict, and returns a `WriteFact` task with the verdict and reasoning.
+3. **WriteFact** is a deterministic Command step that writes the verdict file (e.g., `001-revenue-doubled-in-2024.true.txt`) to the output directory, creating it if needed.
+4. When all evaluations complete, the output directory contains one file per claim. The filename encodes the verdict, making it trivial to scan results at a glance.
 
 ## Variant: Adversarial verification
 
@@ -117,7 +137,7 @@ Per fact:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one DebateFact task per claim:\n```json\n[{\"kind\": \"DebateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}, ...]\n```\n\nIf the document contains no verifiable claims, return `[]`." }
+        "instructions": { "inline": "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one DebateFact task per claim. Example: [{\"kind\": \"DebateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}]\n\nIf the document contains no verifiable claims, return []." }
       },
       "next": ["DebateFact"]
     },
@@ -140,7 +160,7 @@ Per fact:
       },
       "finally": {
         "kind": "Command",
-        "script": "INPUT=$(cat) && echo \"$INPUT\" | jq -c '[{kind: \"JudgeFact\", value: .value}]'"
+        "script": "INPUT=$(cat) && echo \"$INPUT\" | jq -c '[{kind: \"JudgeFact\", value: .}]'"
       },
       "next": ["ArgueTrue", "ArgueFalse"]
     },
@@ -194,7 +214,7 @@ Per fact:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are an impartial judge evaluating a factual claim.\n\nThe claim: see `claim` in the input.\n\nTwo advocates have already researched this claim and written their arguments:\n- `{output_dir}/{id}.argue-true.txt` — the case that the claim is true\n- `{output_dir}/{id}.argue-false.txt` — the case that the claim is false\n\nRead both arguments carefully. Evaluate the quality of evidence on each side:\n1. Which side cites stronger, more authoritative sources?\n2. Which side's reasoning is more rigorous?\n3. Are there logical fallacies or unsupported leaps on either side?\n4. Is one side's evidence clearly more current and relevant?\n\nReach a verdict: **true**, **false**, or **unknown** (if both sides present compelling evidence and you cannot determine the answer with confidence).\n\nReturn one WriteFact task:\n```json\n[{\"kind\": \"WriteFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"...\", \"verdict\": \"true\", \"reasoning\": \"The true-side cited SEC filings showing...\", \"output_dir\": \"output/\"}}]\n```" }
+        "instructions": { "inline": "You are an impartial judge evaluating a factual claim.\n\nThe claim: see `claim` in the input.\n\nTwo advocates have already researched this claim and written their arguments:\n- `{output_dir}/{id}.argue-true.txt` — the case that the claim is true\n- `{output_dir}/{id}.argue-false.txt` — the case that the claim is false\n\nRead both arguments carefully. Evaluate the quality of evidence on each side:\n1. Which side cites stronger, more authoritative sources?\n2. Which side's reasoning is more rigorous?\n3. Are there logical fallacies or unsupported leaps on either side?\n4. Is one side's evidence clearly more current and relevant?\n\nReach a verdict: true, false, or unknown (if both sides present compelling evidence and you cannot determine the answer with confidence).\n\nReturn one WriteFact task. Example: [{\"kind\": \"WriteFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"...\", \"verdict\": \"true\", \"reasoning\": \"The true-side cited SEC filings showing...\", \"output_dir\": \"output/\"}}]" }
       },
       "next": ["WriteFact"]
     },
