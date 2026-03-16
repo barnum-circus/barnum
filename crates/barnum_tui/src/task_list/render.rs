@@ -73,7 +73,7 @@ impl<'a> TaskListWidget<'a> {
                     .unwrap_or_else(std::time::Instant::now)
                     .duration_since(record.submitted_at);
 
-                let value_str = truncate_value(&record.value.0, 40);
+                let value_str = format_value(&record.value.0);
 
                 let mut cells = vec![
                     Cell::from(format!("t-{:02}", record.id.0)),
@@ -147,16 +147,9 @@ fn format_duration(d: std::time::Duration) -> String {
     }
 }
 
-fn truncate_value(value: &serde_json::Value, max_len: usize) -> String {
-    let raw = match value {
+fn format_value(value: &serde_json::Value) -> String {
+    match value {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
-    };
-    if raw.len() <= max_len {
-        raw
-    } else {
-        let mut truncated = raw[..max_len].to_string();
-        truncated.push_str("...");
-        truncated
     }
 }
