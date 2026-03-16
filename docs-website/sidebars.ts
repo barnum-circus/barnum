@@ -37,6 +37,7 @@ const sidebars: SidebarsConfig = {
         'repertoire/commands',
         'repertoire/code-review',
         'repertoire/legal-review',
+        'repertoire/document-verification',
       ],
     },
     {

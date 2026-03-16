@@ -19,3 +19,4 @@ Each routine below is a self-contained workflow you can copy, adapt, and combine
 | [Local Commands](commands.md) | Run shell scripts instead of agents |
 | [Code Review](code-review.md) | Parallel PR review with standards and security checks |
 | [Legal Review](legal-review.md) | Parallel contract analysis with final recommendation |
+| [Document Verification](document-verification.md) | Extract and fact-check claims from a document |
