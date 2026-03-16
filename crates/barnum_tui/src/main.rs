@@ -1,3 +1,6 @@
+mod app;
+mod theme;
+
 use clap::Parser;
 use std::path::PathBuf;
 
