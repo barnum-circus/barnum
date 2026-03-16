@@ -12,17 +12,17 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::Widget;
 
 use super::StepGraph;
-use crate::app::{StatusCounts, Viewport};
+use crate::app::{StatusCounts, Viewport, ZoomLevel};
 use crate::theme;
 
-/// Node box dimensions.
-const NODE_WIDTH: u16 = 14;
-const NODE_HEIGHT: u16 = 3;
-
-/// Horizontal gap between layers.
-const LAYER_GAP_X: u16 = 4;
-/// Vertical gap between nodes in the same layer.
-const NODE_GAP_Y: u16 = 2;
+/// Node box dimensions per zoom level: (width, height, gap_x, gap_y).
+const fn zoom_metrics(zoom: ZoomLevel) -> (u16, u16, u16, u16) {
+    match zoom {
+        ZoomLevel::Full    => (14, 3, 4, 2),
+        ZoomLevel::Compact => (10, 1, 2, 1),
+        ZoomLevel::Dot     => ( 3, 1, 1, 0),
+    }
+}
 
 /// Edge drawing characters.
 const EDGE_HORIZONTAL: &str = "\u{2500}"; // ─
@@ -42,10 +42,15 @@ pub struct GraphWidget<'a> {
 }
 
 impl<'a> GraphWidget<'a> {
+    fn metrics(&self) -> (u16, u16, u16, u16) {
+        zoom_metrics(self.viewport.zoom)
+    }
+
     /// Compute the (x, y) position for a node given its layer and order.
     fn node_position(&self, layer: u16, order: u16) -> (i32, i32) {
-        let x = i32::from(layer) * i32::from(NODE_WIDTH + LAYER_GAP_X);
-        let y = i32::from(order) * i32::from(NODE_HEIGHT + NODE_GAP_Y);
+        let (nw, nh, gap_x, gap_y) = self.metrics();
+        let x = i32::from(layer) * i32::from(nw + gap_x);
+        let y = i32::from(order) * i32::from(nh + gap_y);
         (x, y)
     }
 
@@ -61,6 +66,7 @@ impl<'a> GraphWidget<'a> {
         area: Rect,
         node_idx: usize,
     ) {
+        let (nw, nh, _, _) = self.metrics();
         let node = &self.graph.steps[node_idx];
         let (world_x, world_y) = self.node_position(node.layer, node.order);
         let (sx, sy) = self.to_screen(world_x, world_y);
@@ -71,8 +77,8 @@ impl<'a> GraphWidget<'a> {
         let aw = i32::from(area.width);
         let ah = i32::from(area.height);
 
-        if sx + i32::from(NODE_WIDTH) <= ax
-            || sy + i32::from(NODE_HEIGHT) <= ay
+        if sx + i32::from(nw) <= ax
+            || sy + i32::from(nh) <= ay
             || sx >= ax + aw
             || sy >= ay + ah
         {
@@ -80,18 +86,120 @@ impl<'a> GraphWidget<'a> {
         }
 
         let is_selected = self.selected.is_some_and(|s| *s == node.name);
+
+        match self.viewport.zoom {
+            ZoomLevel::Dot => self.render_node_dot(buf, area, node, sx, sy, is_selected),
+            ZoomLevel::Compact => self.render_node_compact(buf, area, node, sx, sy, nw, is_selected),
+            ZoomLevel::Full => self.render_node_full(buf, area, node, sx, sy, nw, nh, is_selected),
+        }
+    }
+
+    /// Dot zoom: single character per node.
+    fn render_node_dot(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        node: &super::StepNode,
+        sx: i32,
+        sy: i32,
+        is_selected: bool,
+    ) {
+        let ax = i32::from(area.x);
+        let ay = i32::from(area.y);
+        let aw = i32::from(area.width);
+        let ah = i32::from(area.height);
+
+        let style = if is_selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        // Render up to 3 chars: first letter bracketed, e.g. [L]
+        let initial = node.name.as_str().chars().next().unwrap_or('?');
+        let chars = ['[', initial, ']'];
+        for (i, ch) in chars.iter().enumerate() {
+            let px = sx + i as i32;
+            let py = sy;
+            if px >= ax && py >= ay && px < ax + aw && py < ay + ah {
+                if let Some(cell) = buf.cell_mut((px as u16, py as u16)) {
+                    cell.set_char(*ch);
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    /// Compact zoom: single row with abbreviated name, no box borders.
+    fn render_node_compact(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        node: &super::StepNode,
+        sx: i32,
+        sy: i32,
+        nw: u16,
+        is_selected: bool,
+    ) {
+        let ax = i32::from(area.x);
+        let ay = i32::from(area.y);
+        let aw = i32::from(area.width);
+        let ah = i32::from(area.height);
+
+        let style = if is_selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let name = node.name.as_str();
+        let max_len = nw as usize;
+        let display = if name.len() > max_len {
+            &name[..max_len]
+        } else {
+            name
+        };
+
+        for (i, ch) in display.chars().enumerate() {
+            let px = sx + i as i32;
+            if px >= ax && sy >= ay && px < ax + aw && sy < ay + ah {
+                if let Some(cell) = buf.cell_mut((px as u16, sy as u16)) {
+                    cell.set_char(ch);
+                    cell.set_style(style);
+                }
+            }
+        }
+    }
+
+    /// Full zoom: 14×3 bordered box with centered name and status badges.
+    fn render_node_full(
+        &self,
+        buf: &mut Buffer,
+        area: Rect,
+        node: &super::StepNode,
+        sx: i32,
+        sy: i32,
+        nw: u16,
+        nh: u16,
+        is_selected: bool,
+    ) {
+        let ax = i32::from(area.x);
+        let ay = i32::from(area.y);
+        let aw = i32::from(area.width);
+        let ah = i32::from(area.height);
+
         let border_style = if is_selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::DarkGray)
         };
 
-        // Draw the 14x3 box.
+        // Draw the box.
         // Row 0: top border    ┌────────────┐
         // Row 1: name (center) │  StepName  │
         // Row 2: bottom border └────────────┘
-        for row in 0..NODE_HEIGHT {
-            for col in 0..NODE_WIDTH {
+        for row in 0..nh {
+            for col in 0..nw {
                 let px = sx + i32::from(col);
                 let py = sy + i32::from(row);
 
@@ -104,15 +212,15 @@ impl<'a> GraphWidget<'a> {
 
                 let ch = match (row, col) {
                     // Corners
-                    (0, 0) => "\u{250C}",                          // ┌
-                    (0, c) if c == NODE_WIDTH - 1 => "\u{2510}",   // ┐
-                    (2, 0) => "\u{2514}",                          // └
-                    (2, c) if c == NODE_WIDTH - 1 => "\u{2518}",   // ┘
+                    (0, 0) => "\u{250C}",                      // ┌
+                    (0, c) if c == nw - 1 => "\u{2510}",       // ┐
+                    (2, 0) => "\u{2514}",                      // └
+                    (2, c) if c == nw - 1 => "\u{2518}",       // ┘
                     // Horizontal borders
-                    (0 | 2, _) => "\u{2500}",                      // ─
+                    (0 | 2, _) => "\u{2500}",                  // ─
                     // Vertical borders
-                    (1, 0) => "\u{2502}",                          // │
-                    (1, c) if c == NODE_WIDTH - 1 => "\u{2502}",   // │
+                    (1, 0) => "\u{2502}",                      // │
+                    (1, c) if c == nw - 1 => "\u{2502}",       // │
                     // Interior
                     _ => " ",
                 };
@@ -124,7 +232,7 @@ impl<'a> GraphWidget<'a> {
 
         // Write the step name centered in row 1.
         let name = node.name.as_str();
-        let max_name_len = (NODE_WIDTH - 2) as usize; // minus borders
+        let max_name_len = (nw - 2) as usize; // minus borders
         let display_name = if name.len() > max_name_len {
             &name[..max_name_len]
         } else {
@@ -149,9 +257,9 @@ impl<'a> GraphWidget<'a> {
             }
         }
 
-        // Render status badges below the box (row 3) if we have counts.
+        // Render status badges below the box if we have counts.
         if let Some(counts) = self.step_counts.get(&node.name) {
-            let badge_y = sy + i32::from(NODE_HEIGHT);
+            let badge_y = sy + i32::from(nh);
             if badge_y >= ay && badge_y < ay + ah {
                 self.render_status_badge(buf, area, sx + 1, badge_y, counts);
             }
@@ -207,6 +315,7 @@ impl<'a> GraphWidget<'a> {
         from_idx: usize,
         to_idx: usize,
     ) {
+        let (nw, nh, _, _) = self.metrics();
         let from = &self.graph.steps[from_idx];
         let to = &self.graph.steps[to_idx];
 
@@ -214,10 +323,10 @@ impl<'a> GraphWidget<'a> {
         let (to_x, to_y) = self.node_position(to.layer, to.order);
 
         // Edge starts at right side of source, ends at left side of target.
-        let start_x = from_x + i32::from(NODE_WIDTH);
-        let start_y = from_y + 1; // middle row
-        let end_x = to_x - 1;    // one cell before target left border
-        let end_y = to_y + 1;     // middle row
+        let start_x = from_x + i32::from(nw);
+        let start_y = from_y + i32::from(nh / 2); // middle row
+        let end_x = to_x - 1;                      // one cell before target left border
+        let end_y = to_y + i32::from(nh / 2);      // middle row
 
         let ax = i32::from(area.x);
         let ay = i32::from(area.y);
