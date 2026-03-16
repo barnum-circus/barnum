@@ -352,12 +352,18 @@ impl AppState {
                 if !self.status_filters.is_empty() && !self.status_filters.contains(&t.status) {
                     return false;
                 }
-                // Search filter
+                // Search filter — matches against all visible columns.
                 if !self.search_query.is_empty() {
-                    let query = &self.search_query;
-                    let id_str = t.id.0.to_string();
-                    let step_str = t.step.as_str();
-                    if !id_str.contains(query) && !step_str.contains(query.as_str()) {
+                    let q = self.search_query.to_lowercase();
+                    let id_str = format!("t-{:02}", t.id.0);
+                    let step_str = t.step.as_str().to_lowercase();
+                    let status_str = t.status.label().to_lowercase();
+                    let value_str = t.value.0.to_string().to_lowercase();
+                    if !id_str.contains(&q)
+                        && !step_str.contains(&q)
+                        && !status_str.contains(&q)
+                        && !value_str.contains(&q)
+                    {
                         return false;
                     }
                 }
