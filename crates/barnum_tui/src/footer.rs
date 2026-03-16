@@ -40,10 +40,11 @@ impl FooterWidget {
             ],
             PanelFocus::TaskList => vec![
                 ("j/k", "navigate"),
-                ("Enter", "select"),
-                ("s", "sort"),
-                ("f", "filter"),
+                ("Enter", "detail"),
+                ("s/S", "sort/reverse"),
+                ("f", "filter by step"),
                 ("/", "search"),
+                ("1-5", "status filter"),
             ],
             PanelFocus::Detail => vec![
                 ("j/k", "scroll"),
