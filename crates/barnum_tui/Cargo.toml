@@ -19,3 +19,4 @@ serde_json = { workspace = true }
 clap = { workspace = true }
 anyhow = "1"
 base64 = "0.22"
+json5 = "0.4"

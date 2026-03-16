@@ -156,6 +156,7 @@ dependencies = [
  "base64",
  "clap",
  "crossterm 0.27.0",
+ "json5",
  "notify",
  "ratatui",
  "serde",

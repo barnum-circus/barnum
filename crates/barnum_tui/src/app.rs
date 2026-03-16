@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use barnum_state::{TaskOrigin, TaskOutcome};
 use barnum_types::{LogTaskId, StepName};
-use ratatui::widgets::ListState;
+use ratatui::widgets::TableState;
 
 use crate::theme::TaskStatus;
 
@@ -172,7 +172,7 @@ pub struct AppState {
     pub focus: PanelFocus,
     pub selected_step: Option<StepName>,
     pub selected_task: Option<LogTaskId>,
-    pub task_list_state: ListState,
+    pub task_list_state: TableState,
     pub graph_viewport: Viewport,
     pub status_filters: HashSet<TaskStatus>,
     pub search_query: Option<String>,
@@ -192,7 +192,7 @@ impl AppState {
             focus: PanelFocus::default(),
             selected_step: None,
             selected_task: None,
-            task_list_state: ListState::default(),
+            task_list_state: TableState::default(),
             graph_viewport: Viewport::default(),
             status_filters: HashSet::new(),
             search_query: None,
