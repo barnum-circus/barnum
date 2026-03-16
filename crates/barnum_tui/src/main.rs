@@ -1,5 +1,8 @@
 //! Terminal dashboard for barnum workflows.
 
+mod app;
+mod theme;
+
 use clap::Parser;
 use std::path::PathBuf;
 
