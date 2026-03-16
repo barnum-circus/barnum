@@ -68,10 +68,15 @@ impl<'a> TaskListWidget<'a> {
                 let status = record.status;
                 let row_style = Style::default().fg(status.color());
 
-                let duration = record
-                    .completed_at
-                    .unwrap_or_else(std::time::Instant::now)
-                    .duration_since(record.submitted_at);
+                let duration_str = match record.status {
+                    theme::TaskStatus::Pending => String::new(),
+                    _ => {
+                        let end = record
+                            .completed_at
+                            .unwrap_or_else(std::time::Instant::now);
+                        format_duration(end.duration_since(record.submitted_at))
+                    }
+                };
 
                 let value_str = format_value(&record.value.0);
 
@@ -88,7 +93,7 @@ impl<'a> TaskListWidget<'a> {
                     cells.push(Cell::from(record.step.as_str().to_string()));
                 }
 
-                cells.push(Cell::from(format_duration(duration)));
+                cells.push(Cell::from(duration_str));
                 cells.push(Cell::from(value_str));
 
                 Row::new(cells).style(row_style)
