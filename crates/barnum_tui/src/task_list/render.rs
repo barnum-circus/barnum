@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Borders, Cell, Row, StatefulWidget, Table, TableSt
 
 use barnum_types::LogTaskId;
 
-use crate::app::AppState;
+use crate::app::{AppState, InputMode};
 use crate::theme;
 
 /// Renders the task list as a styled `ratatui::Table`.
@@ -29,9 +29,15 @@ impl<'a> TaskListWidget<'a> {
     pub fn render_with_state(self, area: Rect, buf: &mut Buffer, state: &mut TableState) {
         let show_step_column = self.app.selected_step.is_none();
 
-        let title = match &self.app.selected_step {
-            Some(step) => format!("Tasks: {step}"),
-            None => "Tasks: All".to_string(),
+        let title = if self.app.input_mode == InputMode::Search {
+            format!("Search: {}\u{2588}", self.app.search_query) // █ cursor
+        } else if !self.app.search_query.is_empty() {
+            format!("Tasks [/{}]", self.app.search_query)
+        } else {
+            match &self.app.selected_step {
+                Some(step) => format!("Tasks: {step}"),
+                None => "Tasks: All".to_string(),
+            }
         };
 
         let border_style = if self.focused {

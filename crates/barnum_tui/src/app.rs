@@ -98,6 +98,19 @@ impl PanelFocus {
 }
 
 // ---------------------------------------------------------------------------
+// InputMode
+// ---------------------------------------------------------------------------
+
+/// Whether the user is typing into a text field or using normal keybindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InputMode {
+    /// Normal keybinding mode.
+    Normal,
+    /// Typing into the search bar.
+    Search,
+}
+
+// ---------------------------------------------------------------------------
 // RunStatus
 // ---------------------------------------------------------------------------
 
@@ -189,6 +202,7 @@ pub struct AppState {
     pub task_list_state: ListState,
     pub graph_viewport: Viewport,
     pub status_filters: HashSet<TaskStatus>,
+    pub input_mode: InputMode,
     pub search_query: String,
     pub sort_column: SortColumn,
     pub sort_reversed: bool,
@@ -209,6 +223,7 @@ impl AppState {
             task_list_state: ListState::default(),
             graph_viewport: Viewport::default(),
             status_filters: HashSet::new(),
+            input_mode: InputMode::Normal,
             search_query: String::new(),
             sort_column: SortColumn::Id,
             sort_reversed: false,

@@ -4,11 +4,12 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use crate::app::PanelFocus;
+use crate::app::{InputMode, PanelFocus};
 
 /// Single-line footer bar showing context-sensitive keybindings.
 pub struct FooterWidget {
     pub focus: PanelFocus,
+    pub input_mode: InputMode,
 }
 
 impl FooterWidget {
@@ -62,7 +63,15 @@ impl FooterWidget {
 
 impl Widget for FooterWidget {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let panel = Self::panel_bindings(self.focus);
+        let panel = if self.input_mode == InputMode::Search {
+            vec![
+                ("Enter", "confirm"),
+                ("Esc", "cancel"),
+                ("Backspace", "delete"),
+            ]
+        } else {
+            Self::panel_bindings(self.focus)
+        };
         let common = Self::common_bindings();
 
         let mut spans: Vec<Span<'_>> = Vec::new();

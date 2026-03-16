@@ -200,7 +200,7 @@ fn run_loop(
             frame.render_widget(detail_widget, body[1]);
 
             // Footer.
-            frame.render_widget(FooterWidget { focus: app.focus }, outer[2]);
+            frame.render_widget(FooterWidget { focus: app.focus, input_mode: app.input_mode }, outer[2]);
         })?;
 
         // Sync table state back to app.

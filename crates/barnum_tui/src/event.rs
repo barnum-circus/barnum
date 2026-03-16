@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{AppState, PanelFocus, ZoomLevel};
+use crate::app::{AppState, InputMode, PanelFocus, ZoomLevel};
 use crate::theme::TaskStatus;
 
 /// Result of handling a key event.
@@ -32,10 +32,20 @@ pub fn poll_event(timeout: Duration) -> Option<Event> {
 
 /// Dispatch a key event to the appropriate handler based on focus.
 pub fn handle_key(key: KeyEvent, app: &mut AppState) -> EventResult {
-    // Global keys first.
+    // Ctrl-C always quits.
+    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c') {
+        return EventResult::Quit;
+    }
+
+    // While in search mode, route everything to the search handler.
+    if app.input_mode == InputMode::Search {
+        handle_search_input(key, app);
+        return EventResult::Continue;
+    }
+
+    // Normal mode: global keys first.
     match (key.modifiers, key.code) {
-        (KeyModifiers::CONTROL, KeyCode::Char('c')) => return EventResult::Quit,
-        (_, KeyCode::Char('q')) if app.focus != PanelFocus::TaskList || app.search_query.is_empty() => {
+        (_, KeyCode::Char('q')) => {
             return EventResult::Quit;
         }
         (_, KeyCode::Tab) => {
@@ -148,6 +158,9 @@ fn handle_task_list_key(key: KeyEvent, app: &mut AppState) {
         KeyCode::Char('3') => toggle_status_filter(app, TaskStatus::Completed),
         KeyCode::Char('4') => toggle_status_filter(app, TaskStatus::Failed),
         KeyCode::Char('5') => toggle_status_filter(app, TaskStatus::Retried),
+        KeyCode::Char('/') => {
+            app.input_mode = InputMode::Search;
+        }
         KeyCode::Enter => {
             // Select current task and switch to detail panel.
             if let Some(idx) = app.task_list_state.selected() {
@@ -159,6 +172,36 @@ fn handle_task_list_key(key: KeyEvent, app: &mut AppState) {
         }
         _ => {}
     }
+}
+
+// ---------------------------------------------------------------------------
+// Search input
+// ---------------------------------------------------------------------------
+
+fn handle_search_input(key: KeyEvent, app: &mut AppState) {
+    match key.code {
+        KeyCode::Esc => {
+            app.search_query.clear();
+            app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Enter => {
+            // Confirm search and return to normal mode (query stays active).
+            app.input_mode = InputMode::Normal;
+        }
+        KeyCode::Backspace => {
+            app.search_query.pop();
+            if app.search_query.is_empty() {
+                app.input_mode = InputMode::Normal;
+            }
+        }
+        KeyCode::Char(c) => {
+            app.search_query.push(c);
+        }
+        _ => {}
+    }
+    // Reset selection when query changes so it doesn't point at a stale index.
+    app.task_list_state.select(None);
+    app.selected_task = None;
 }
 
 fn toggle_status_filter(app: &mut AppState, status: TaskStatus) {
