@@ -1,4 +1,5 @@
 mod app;
+mod detail;
 mod footer;
 mod graph;
 mod header;
