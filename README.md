@@ -138,5 +138,5 @@ A self-healing linter that finds and fixes violations:
 
 ## Documentation
 
-- [Recipes](docs/recipes/README.md) - Common patterns and workflows
+- [Repertoire](docs-website/docs/repertoire/index.md) - Common patterns and workflows
 - [TODOs and Future Work](refactors/pending/todos.md) - Planned improvements and ideas
