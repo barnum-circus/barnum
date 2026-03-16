@@ -1,5 +1,8 @@
 mod app;
+mod footer;
+mod header;
 mod log_watcher;
+mod task_list;
 mod theme;
 
 use clap::Parser;
