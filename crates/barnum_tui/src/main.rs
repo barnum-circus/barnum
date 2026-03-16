@@ -1,5 +1,6 @@
 mod app;
 mod footer;
+mod graph;
 mod header;
 mod log_watcher;
 mod task_list;
