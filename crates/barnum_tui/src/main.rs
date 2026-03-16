@@ -1,4 +1,5 @@
 mod app;
+mod log_watcher;
 mod theme;
 
 use clap::Parser;
