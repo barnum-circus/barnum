@@ -94,7 +94,7 @@ impl<'a> TaskListWidget<'a> {
         let table = Table::new(rows, &widths)
             .header(header)
             .block(block)
-            .highlight_style(theme::selected_style());
+            .row_highlight_style(theme::selected_style());
 
         StatefulWidget::render(table, area, buf, state);
     }

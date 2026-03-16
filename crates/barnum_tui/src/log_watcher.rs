@@ -19,6 +19,7 @@ pub enum LogEvent {
     /// A successfully parsed state log entry.
     Entry(StateLogEntry),
     /// A line that failed to parse.
+    #[expect(dead_code, reason = "string captured for future error display in log panel")]
     Error(String),
 }
 
