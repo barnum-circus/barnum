@@ -155,6 +155,7 @@ dependencies = [
  "barnum_types",
  "clap",
  "crossterm",
+ "json5",
  "notify",
  "ratatui",
  "serde",
