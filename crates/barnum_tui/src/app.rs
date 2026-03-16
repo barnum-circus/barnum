@@ -114,6 +114,24 @@ pub enum ZoomLevel {
     Dot,
 }
 
+impl ZoomLevel {
+    pub fn zoom_in(self) -> Self {
+        match self {
+            ZoomLevel::Dot => ZoomLevel::Compact,
+            ZoomLevel::Compact => ZoomLevel::Full,
+            ZoomLevel::Full => ZoomLevel::Full,
+        }
+    }
+
+    pub fn zoom_out(self) -> Self {
+        match self {
+            ZoomLevel::Full => ZoomLevel::Compact,
+            ZoomLevel::Compact => ZoomLevel::Dot,
+            ZoomLevel::Dot => ZoomLevel::Dot,
+        }
+    }
+}
+
 /// Column to sort task list by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortColumn {
