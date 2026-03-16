@@ -81,10 +81,10 @@ pub fn handle_key(key: KeyEvent, app: &mut AppState) -> EventResult {
 
 fn handle_graph_key(key: KeyEvent, app: &mut AppState) {
     match key.code {
-        KeyCode::Left => app.graph_viewport.scroll_x -= 2,
-        KeyCode::Right => app.graph_viewport.scroll_x += 2,
-        KeyCode::Up => app.graph_viewport.scroll_y -= 1,
-        KeyCode::Down => app.graph_viewport.scroll_y += 1,
+        KeyCode::Left | KeyCode::Char('h') => app.graph_viewport.scroll_x -= 2,
+        KeyCode::Right | KeyCode::Char('l') => app.graph_viewport.scroll_x += 2,
+        KeyCode::Up | KeyCode::Char('k') => app.graph_viewport.scroll_y -= 1,
+        KeyCode::Down | KeyCode::Char('j') => app.graph_viewport.scroll_y += 1,
         KeyCode::Char('+') | KeyCode::Char('=') => {
             app.graph_viewport.zoom = match app.graph_viewport.zoom {
                 ZoomLevel::Dot => ZoomLevel::Compact,
