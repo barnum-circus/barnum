@@ -107,6 +107,13 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+
+    /// Launch the TUI dashboard (requires barnum-tui binary)
+    Tui {
+        /// Arguments passed through to barnum-tui
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -191,6 +198,21 @@ fn main() -> io::Result<()> {
             } else {
                 println!("{VERSION}");
             }
+        }
+
+        Command::Tui { args } => {
+            let status = std::process::Command::new("barnum-tui")
+                .args(&args)
+                .status()
+                .map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!(
+                            "[E074] Failed to run barnum-tui: {e}. Is it installed? Try: cargo install --path crates/barnum_tui"
+                        ),
+                    )
+                })?;
+            std::process::exit(status.code().unwrap_or(1));
         }
     }
 
