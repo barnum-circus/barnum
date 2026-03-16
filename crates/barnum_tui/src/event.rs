@@ -147,6 +147,19 @@ fn handle_task_list_key(key: KeyEvent, app: &mut AppState) {
                 app.selected_task = visible.last().copied();
             }
         }
+        KeyCode::Char('f') => {
+            // Toggle step filter: if a task is selected, filter to its step.
+            // If already filtering, clear the filter.
+            if app.selected_step.is_some() {
+                app.selected_step = None;
+            } else if let Some(task_id) = app.selected_task {
+                if let Some(record) = app.tasks.get(&task_id) {
+                    app.selected_step = Some(record.step.clone());
+                }
+            }
+            app.task_list_state.select(None);
+            app.selected_task = None;
+        }
         KeyCode::Char('s') => {
             app.sort_column = app.sort_column.next();
         }
