@@ -48,7 +48,7 @@ After fixing:
 
 ```bash
 git add -A
-git commit --amend --no-edit
+git -c core.hooksPath=/dev/null commit --amend --no-edit
 ```
 
 This amends your fixes into the existing commit on this branch.

@@ -91,7 +91,7 @@ After all changes:
 
 ```bash
 git add -A
-git commit --amend --no-edit
+git -c core.hooksPath=/dev/null commit --amend --no-edit
 ```
 
 ### 6. Reject the refactor

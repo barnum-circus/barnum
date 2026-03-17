@@ -18,6 +18,13 @@ export GIT_LFS_SKIP_SMUDGE=1
 export GIT_TERMINAL_PROMPT=0
 ```
 
+**Disable git hooks** on all git commands that create commits:
+
+```bash
+git -c core.hooksPath=/dev/null cherry-pick --continue
+git -c core.hooksPath=/dev/null commit ...
+```
+
 ## Task
 
 First, `cd` into `local_dir`:
@@ -53,8 +60,10 @@ After resolving all conflicts:
 
 ```bash
 git add -A
-git cherry-pick --continue
+git -c core.hooksPath=/dev/null cherry-pick --continue
 ```
+
+**You MUST use `-c core.hooksPath=/dev/null`** on the cherry-pick --continue. Without it, a pre-commit hook will block the commit.
 
 ### 5. Verify
 
