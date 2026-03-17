@@ -27,9 +27,12 @@ git -c core.hooksPath=/dev/null commit ...
 
 ## Critical: Why Conflicts Happen
 
-**Conflicts do NOT mean the change is already applied.** The cherry-picked commit makes a specific, targeted change (described in the commit message). The conflict happens because the **surrounding code** on `parent_branch` has changed since the commit was originally authored. The cherry-picked change itself is almost certainly NOT on the parent branch.
+Conflicts happen for one of two reasons:
 
-**You MUST apply the branch's intended change to the updated code.** If after your resolution the diff between `parent_branch` and `branch_name` is empty, you resolved it wrong — you accidentally dropped the change instead of applying it.
+1. **Surrounding code changed** — the cherry-picked change is NOT on the parent yet, but context shifted. You must apply the change to the updated code.
+2. **The change is already on the parent** — the parent already has the same logical change (merged via a different PR). In this case, keeping the parent's version is correct and the cherry-pick will be empty.
+
+Read the commit message, examine the conflict, and determine which case applies. Check whether the parent's code already reflects the commit's intended change before deciding.
 
 ## Task
 
@@ -61,7 +64,7 @@ Run `git status` to see which files have conflicts. For each conflicted file:
    - Apply the specific modification described in the commit message to that updated code
    - The result should reflect BOTH the parent's updated context AND the commit's intended change
 
-**Do NOT resolve conflicts by simply accepting the parent version.** That drops the change entirely. The whole point of this step is to preserve the change.
+**Do NOT blindly accept the parent version.** If the change is NOT already on the parent, accepting the parent version drops it. But if the parent already has the change (merged via another PR), then keeping the parent version is correct.
 
 ### 4. Complete the cherry-pick
 
@@ -74,19 +77,9 @@ git -c core.hooksPath=/dev/null cherry-pick --continue
 
 **You MUST use `-c core.hooksPath=/dev/null`** on the cherry-pick --continue. Without it, a pre-commit hook will block the commit.
 
-### 5. Verify the change was preserved
+If `cherry-pick --continue` says the cherry-pick is now empty (because the change is already on the parent), use `git cherry-pick --skip` to proceed. This is expected for branches whose changes were already merged upstream.
 
-Run:
-
-```bash
-git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- :/webapp/
-```
-
-**This diff MUST NOT be empty.** If it is empty, you dropped the change during conflict resolution. Go back and fix it — the commit's intended change was lost.
-
-The diff should show the logical change described in the commit message, applied to the current state of the code.
-
-### 6. Verify commit history
+### 5. Verify
 
 Run `git log --oneline -3` to confirm the branch looks correct.
 
