@@ -28,9 +28,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null rebase --abort >/dev/null 2>&1; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null reset --hard \"$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; BEFORE=$(git -c core.hooksPath=/dev/null rev-parse HEAD); if git -c core.hooksPath=/dev/null merge-base --is-ancestor 45d32565bc7d \"$BRANCH\" 2>/dev/null; then REBASE_OUT=$(git -c core.hooksPath=/dev/null rebase --onto \"$PARENT\" 45d32565bc7d \"$BRANCH\" 2>&1); REBASE_EXIT=$?; else REBASE_OUT=$(git -c core.hooksPath=/dev/null rebase \"$PARENT\" 2>&1); REBASE_EXIT=$?; fi; if [ $REBASE_EXIT -ne 0 ]; then echo \"$INPUT\" | jq -c --arg out \"$REBASE_OUT\" '[{kind: \"RebaseFix\", value: (.value + {conflict_output: $out})}]'; else git -c core.hooksPath=/dev/null reset --hard HEAD >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; AFTER=$(git -c core.hooksPath=/dev/null rev-parse HEAD); if [ \"$BEFORE\" = \"$AFTER\" ]; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"CompleteRefactor\", value: .value}]'; fi; fi"
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null rebase --abort >/dev/null 2>&1; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null reset --hard \"$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; BEFORE=$(git -c core.hooksPath=/dev/null rev-parse HEAD); if git -c core.hooksPath=/dev/null merge-base --is-ancestor 45d32565bc7d \"$BRANCH\" 2>/dev/null; then REBASE_OUT=$(git -c core.hooksPath=/dev/null rebase --onto \"$PARENT\" 45d32565bc7d \"$BRANCH\" 2>&1); REBASE_EXIT=$?; else REBASE_OUT=$(git -c core.hooksPath=/dev/null rebase \"$PARENT\" 2>&1); REBASE_EXIT=$?; fi; if [ $REBASE_EXIT -ne 0 ]; then echo \"$INPUT\" | jq -c --arg out \"$REBASE_OUT\" '[{kind: \"RebaseFix\", value: (.value + {conflict_output: $out})}]'; else git -c core.hooksPath=/dev/null reset --hard HEAD >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; AFTER=$(git -c core.hooksPath=/dev/null rev-parse HEAD); if [ \"$BEFORE\" = \"$AFTER\" ]; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"CheckDiff\", value: .value}]'; fi; fi"
       },
-      "next": ["CompleteRefactor", "RebaseFix"]
+      "next": ["CheckDiff", "RebaseFix"]
     },
     {
       "name": "RebaseFix",
@@ -48,6 +48,24 @@
       "action": {
         "kind": "Pool",
         "instructions": {"link": "rebase-fix.md"}
+      },
+      "next": ["CheckDiff"]
+    },
+    {
+      "name": "CheckDiff",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"CompleteRefactor\", value: .value}]'; fi"
       },
       "next": ["CompleteRefactor"]
     },
