@@ -31,12 +31,27 @@ impl<'a> TaskListWidget<'a> {
 
         let title = if self.app.input_mode == InputMode::Search {
             format!("Search: {}\u{2588}", self.app.search_query) // █ cursor
-        } else if !self.app.search_query.is_empty() {
-            format!("Tasks [/{}]", self.app.search_query)
         } else {
-            match &self.app.selected_step {
-                Some(step) => format!("Tasks: {step}"),
-                None => "Tasks: All".to_string(),
+            let base = if !self.app.search_query.is_empty() {
+                format!("Tasks [/{}]", self.app.search_query)
+            } else {
+                match &self.app.selected_step {
+                    Some(step) => format!("Tasks: {step}"),
+                    None => "Tasks: All".to_string(),
+                }
+            };
+
+            if self.app.status_filters.is_empty() {
+                base
+            } else {
+                let mut labels: Vec<&str> = self
+                    .app
+                    .status_filters
+                    .iter()
+                    .map(|s| s.label())
+                    .collect();
+                labels.sort_unstable();
+                format!("{base} [{}", labels.join(", ") + "]")
             }
         };
 
