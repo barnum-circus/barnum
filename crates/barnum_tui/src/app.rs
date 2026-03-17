@@ -400,3 +400,479 @@ impl AppState {
         tasks.into_iter().map(|t| t.id).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use barnum_state::{FailureReason, TaskFailed, TaskOrigin, TaskOutcome, TaskSuccess};
+    use barnum_types::{LogTaskId, StepInputValue, StepName};
+    use std::path::PathBuf;
+
+    fn state() -> AppState {
+        AppState::new(PathBuf::from("/tmp/test.json"))
+    }
+
+    fn val(s: &str) -> StepInputValue {
+        StepInputValue(serde_json::json!(s))
+    }
+
+    fn success() -> TaskOutcome {
+        TaskOutcome::Success(TaskSuccess {
+            spawned_task_ids: vec![],
+            finally_value: StepInputValue(serde_json::json!(null)),
+        })
+    }
+
+    fn failed() -> TaskOutcome {
+        TaskOutcome::Failed(TaskFailed {
+            reason: FailureReason::Timeout,
+            retry_task_id: None,
+        })
+    }
+
+    fn retried(retry_id: u32) -> TaskOutcome {
+        TaskOutcome::Failed(TaskFailed {
+            reason: FailureReason::Timeout,
+            retry_task_id: Some(LogTaskId(retry_id)),
+        })
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_submitted
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_submitted_creates_record() {
+        let mut app = state();
+        app.apply_submitted(
+            LogTaskId(1),
+            StepName::new("Analyze"),
+            val("hello"),
+            None,
+            TaskOrigin::Initial,
+        );
+
+        assert_eq!(app.tasks.len(), 1);
+        let rec = &app.tasks[&LogTaskId(1)];
+        assert_eq!(rec.id, LogTaskId(1));
+        assert_eq!(rec.step.as_str(), "Analyze");
+        assert_eq!(rec.status, TaskStatus::InFlight);
+        assert_eq!(rec.parent_id, None);
+        assert!(rec.children.is_empty());
+        assert!(rec.completed_at.is_none());
+        assert!(rec.outcome.is_none());
+    }
+
+    #[test]
+    fn apply_submitted_increments_step_counts() {
+        let mut app = state();
+        let step = StepName::new("Build");
+        app.apply_submitted(LogTaskId(1), step.clone(), val("a"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), step.clone(), val("b"), None, TaskOrigin::Initial);
+
+        let counts = &app.step_counts[&step];
+        assert_eq!(counts.in_flight, 2);
+        assert_eq!(counts.total(), 2);
+    }
+
+    #[test]
+    fn apply_submitted_updates_run_status_to_running() {
+        let mut app = state();
+        assert_eq!(app.run_status, RunStatus::Waiting);
+
+        app.apply_submitted(
+            LogTaskId(1),
+            StepName::new("X"),
+            val("v"),
+            None,
+            TaskOrigin::Initial,
+        );
+        assert_eq!(app.run_status, RunStatus::Running);
+    }
+
+    #[test]
+    fn apply_submitted_registers_child_on_parent() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("A"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(
+            LogTaskId(2),
+            StepName::new("B"),
+            val("v"),
+            Some(LogTaskId(1)),
+            TaskOrigin::Spawned,
+        );
+
+        assert_eq!(app.tasks[&LogTaskId(1)].children, vec![LogTaskId(2)]);
+    }
+
+    #[test]
+    fn apply_submitted_increments_total_events() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("A"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), StepName::new("A"), val("v"), None, TaskOrigin::Initial);
+        assert_eq!(app.total_events, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_completed
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_completed_success_transitions_status() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), success());
+
+        let rec = &app.tasks[&LogTaskId(1)];
+        assert_eq!(rec.status, TaskStatus::Completed);
+        assert!(rec.completed_at.is_some());
+        assert!(rec.outcome.is_some());
+    }
+
+    #[test]
+    fn apply_completed_failure_transitions_status() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), failed());
+
+        assert_eq!(app.tasks[&LogTaskId(1)].status, TaskStatus::Failed);
+    }
+
+    #[test]
+    fn apply_completed_retry_transitions_to_retried() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), retried(2));
+
+        assert_eq!(app.tasks[&LogTaskId(1)].status, TaskStatus::Retried);
+    }
+
+    #[test]
+    fn apply_completed_adjusts_step_counts() {
+        let mut app = state();
+        let step = StepName::new("S");
+        app.apply_submitted(LogTaskId(1), step.clone(), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), step.clone(), val("v"), None, TaskOrigin::Initial);
+
+        // Before: 2 in_flight
+        assert_eq!(app.step_counts[&step].in_flight, 2);
+
+        app.apply_completed(LogTaskId(1), success());
+        assert_eq!(app.step_counts[&step].in_flight, 1);
+        assert_eq!(app.step_counts[&step].completed, 1);
+
+        app.apply_completed(LogTaskId(2), failed());
+        assert_eq!(app.step_counts[&step].in_flight, 0);
+        assert_eq!(app.step_counts[&step].failed, 1);
+    }
+
+    #[test]
+    fn apply_completed_unknown_task_is_noop() {
+        let mut app = state();
+        // Should not panic
+        app.apply_completed(LogTaskId(999), success());
+        assert_eq!(app.tasks.len(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // update_run_status derivation
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn run_status_empty_is_waiting() {
+        let app = state();
+        assert_eq!(app.run_status, RunStatus::Waiting);
+    }
+
+    #[test]
+    fn run_status_with_in_flight_is_running() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        assert_eq!(app.run_status, RunStatus::Running);
+    }
+
+    #[test]
+    fn run_status_all_completed_is_completed() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), success());
+        app.apply_completed(LogTaskId(2), success());
+        assert_eq!(app.run_status, RunStatus::Completed);
+    }
+
+    #[test]
+    fn run_status_all_terminal_with_failure_is_failed() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), success());
+        app.apply_completed(LogTaskId(2), failed());
+        assert_eq!(app.run_status, RunStatus::Failed);
+    }
+
+    #[test]
+    fn run_status_retried_only_is_completed() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), retried(2));
+        app.apply_submitted(LogTaskId(2), StepName::new("S"), val("v"), None, TaskOrigin::Retry { replaces: LogTaskId(1) });
+        app.apply_completed(LogTaskId(2), success());
+        // Task 1 = Retried (terminal), Task 2 = Completed (terminal), no failures
+        assert_eq!(app.run_status, RunStatus::Completed);
+    }
+
+    #[test]
+    fn run_status_mixed_in_flight_and_failed_is_running() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(LogTaskId(2), StepName::new("S"), val("v"), None, TaskOrigin::Initial);
+        app.apply_completed(LogTaskId(1), failed());
+        // Task 2 still in-flight
+        assert_eq!(app.run_status, RunStatus::Running);
+    }
+
+    // -----------------------------------------------------------------------
+    // visible_tasks — filtering
+    // -----------------------------------------------------------------------
+
+    fn populated_state() -> AppState {
+        let mut app = state();
+        app.apply_submitted(
+            LogTaskId(1),
+            StepName::new("Analyze"),
+            val("alpha"),
+            None,
+            TaskOrigin::Initial,
+        );
+        app.apply_submitted(
+            LogTaskId(2),
+            StepName::new("Build"),
+            val("beta"),
+            None,
+            TaskOrigin::Initial,
+        );
+        app.apply_submitted(
+            LogTaskId(3),
+            StepName::new("Analyze"),
+            val("gamma"),
+            None,
+            TaskOrigin::Initial,
+        );
+        app.apply_completed(LogTaskId(2), success());
+        app.apply_completed(LogTaskId(3), failed());
+        // Task 1: Analyze, InFlight
+        // Task 2: Build, Completed
+        // Task 3: Analyze, Failed
+        app
+    }
+
+    #[test]
+    fn visible_tasks_no_filters_returns_all() {
+        let app = populated_state();
+        let ids = app.visible_tasks();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn visible_tasks_step_filter() {
+        let mut app = populated_state();
+        app.selected_step = Some(StepName::new("Analyze"));
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1), LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_status_filter() {
+        let mut app = populated_state();
+        app.status_filters.insert(TaskStatus::Completed);
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(2)]);
+    }
+
+    #[test]
+    fn visible_tasks_status_filter_multiple() {
+        let mut app = populated_state();
+        app.status_filters.insert(TaskStatus::InFlight);
+        app.status_filters.insert(TaskStatus::Failed);
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1), LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_search_by_id() {
+        let mut app = populated_state();
+        app.search_query = "t-01".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1)]);
+    }
+
+    #[test]
+    fn visible_tasks_search_by_step_name() {
+        let mut app = populated_state();
+        app.search_query = "build".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(2)]);
+    }
+
+    #[test]
+    fn visible_tasks_search_by_status_label() {
+        let mut app = populated_state();
+        app.search_query = "in-flight".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1)]);
+    }
+
+    #[test]
+    fn visible_tasks_search_by_value() {
+        let mut app = populated_state();
+        app.search_query = "gamma".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_search_case_insensitive() {
+        let mut app = populated_state();
+        app.search_query = "ANALYZE".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1), LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_combined_step_and_status_filter() {
+        let mut app = populated_state();
+        app.selected_step = Some(StepName::new("Analyze"));
+        app.status_filters.insert(TaskStatus::Failed);
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_combined_step_and_search() {
+        let mut app = populated_state();
+        app.selected_step = Some(StepName::new("Analyze"));
+        app.search_query = "alpha".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1)]);
+    }
+
+    #[test]
+    fn visible_tasks_combined_all_filters() {
+        let mut app = populated_state();
+        app.selected_step = Some(StepName::new("Analyze"));
+        app.status_filters.insert(TaskStatus::InFlight);
+        app.search_query = "alpha".to_string();
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1)]);
+    }
+
+    // -----------------------------------------------------------------------
+    // visible_tasks — sorting
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn visible_tasks_sort_by_id() {
+        let app = populated_state();
+        // Default sort is by Id ascending
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(1), LogTaskId(2), LogTaskId(3)]);
+    }
+
+    #[test]
+    fn visible_tasks_sort_by_id_reversed() {
+        let mut app = populated_state();
+        app.sort_reversed = true;
+        let ids = app.visible_tasks();
+        assert_eq!(ids, vec![LogTaskId(3), LogTaskId(2), LogTaskId(1)]);
+    }
+
+    #[test]
+    fn visible_tasks_sort_by_status() {
+        let mut app = populated_state();
+        app.sort_column = SortColumn::Status;
+        let ids = app.visible_tasks();
+        // Priorities: InFlight=0, Failed=2, Completed=4
+        assert_eq!(ids, vec![LogTaskId(1), LogTaskId(3), LogTaskId(2)]);
+    }
+
+    #[test]
+    fn visible_tasks_sort_by_step() {
+        let mut app = populated_state();
+        app.sort_column = SortColumn::Step;
+        let ids = app.visible_tasks();
+        // "Analyze" < "Build", tasks 1 and 3 are Analyze, 2 is Build
+        assert_eq!(ids[0], LogTaskId(1));
+        assert_eq!(ids[2], LogTaskId(2));
+    }
+
+    #[test]
+    fn visible_tasks_sort_by_parent() {
+        let mut app = state();
+        app.apply_submitted(LogTaskId(1), StepName::new("A"), val("v"), None, TaskOrigin::Initial);
+        app.apply_submitted(
+            LogTaskId(2),
+            StepName::new("B"),
+            val("v"),
+            Some(LogTaskId(1)),
+            TaskOrigin::Spawned,
+        );
+        app.apply_submitted(LogTaskId(3), StepName::new("C"), val("v"), None, TaskOrigin::Initial);
+
+        app.sort_column = SortColumn::Parent;
+        let ids = app.visible_tasks();
+        // None < Some(1): tasks 1,3 have None, task 2 has Some(1)
+        assert_eq!(*ids.last().unwrap(), LogTaskId(2));
+    }
+
+    #[test]
+    fn visible_tasks_sort_by_duration() {
+        let mut app = populated_state();
+        app.sort_column = SortColumn::Duration;
+        // All tasks submitted roughly at the same time; completed ones have short durations.
+        // Just verify it doesn't panic and returns all tasks.
+        let ids = app.visible_tasks();
+        assert_eq!(ids.len(), 3);
+    }
+
+    #[test]
+    fn visible_tasks_sort_reversed_by_status() {
+        let mut app = populated_state();
+        app.sort_column = SortColumn::Status;
+        app.sort_reversed = true;
+        let ids = app.visible_tasks();
+        // Reversed: Completed=4, Failed=2, InFlight=0
+        assert_eq!(ids, vec![LogTaskId(2), LogTaskId(3), LogTaskId(1)]);
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn visible_tasks_empty_state() {
+        let app = state();
+        assert!(app.visible_tasks().is_empty());
+    }
+
+    #[test]
+    fn visible_tasks_no_matches() {
+        let mut app = populated_state();
+        app.search_query = "nonexistent_xyz".to_string();
+        assert!(app.visible_tasks().is_empty());
+    }
+
+    #[test]
+    fn visible_tasks_step_filter_no_matches() {
+        let mut app = populated_state();
+        app.selected_step = Some(StepName::new("NoSuchStep"));
+        assert!(app.visible_tasks().is_empty());
+    }
+
+    #[test]
+    fn status_counts_decrement_saturates_at_zero() {
+        let mut counts = StatusCounts::default();
+        counts.decrement(TaskStatus::InFlight);
+        assert_eq!(counts.in_flight, 0);
+    }
+}
