@@ -1,8 +1,10 @@
 #!/bin/bash
-# Reset all rb/r9/* branches to their known-good SHAs from original-shas.json.
-# Usage: bash .local/refactor-barnum/r1-3/reset-branches.sh
+# Reset rb/r9/* branches to their known-good SHAs from original-shas.json.
+# Usage: bash reset-branches.sh [start]
+#   start: branch number to begin at (default: 1). Branches before start are left untouched.
 set -euo pipefail
 
+START=${1:-1}
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SHAS="$SCRIPT_DIR/original-shas.json"
 WEBAPP="${WEBAPP:-$HOME/code/pinboard/webapp}"
@@ -14,12 +16,13 @@ fi
 
 cd "$WEBAPP"
 
-# Abort any in-progress rebase
+# Abort any in-progress rebase or cherry-pick
 git -c core.hooksPath=/dev/null rebase --abort >/dev/null 2>&1 || true
+git -c core.hooksPath=/dev/null cherry-pick --abort >/dev/null 2>&1 || true
 
 COUNT=0
 FIXED=0
-for i in $(seq 1 174); do
+for i in $(seq "$START" 174); do
   BRANCH="rb/r9/$i"
   ORIGINAL_SHA=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(sys.argv[2],''))" "$SHAS" "$BRANCH")
 
