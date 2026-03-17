@@ -97,3 +97,63 @@ impl Widget for HeaderWidget<'_> {
         line.render(area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::AppState;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+    use std::path::PathBuf;
+
+    fn render_header(app: &AppState) -> String {
+        let area = Rect::new(0, 0, 120, 1);
+        let mut buf = Buffer::empty(area);
+        let widget = HeaderWidget { app };
+        widget.render(area, &mut buf);
+        (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn header_shows_barnum_tui() {
+        let app = AppState::new(PathBuf::from("/tmp/test.json"));
+        let text = render_header(&app);
+        assert!(
+            text.contains("barnum-tui"),
+            "should show 'barnum-tui': {text}"
+        );
+    }
+
+    #[test]
+    fn header_shows_config_path() {
+        let app = AppState::new(PathBuf::from("/tmp/test.json"));
+        let text = render_header(&app);
+        assert!(
+            text.contains("/tmp/test.json"),
+            "should show config path: {text}"
+        );
+    }
+
+    #[test]
+    fn header_shows_waiting_status_for_fresh_app() {
+        let app = AppState::new(PathBuf::from("/tmp/test.json"));
+        let text = render_header(&app);
+        assert!(
+            text.contains("waiting"),
+            "should show 'waiting' for fresh app: {text}"
+        );
+    }
+
+    #[test]
+    fn header_shows_zero_tasks_for_fresh_app() {
+        let app = AppState::new(PathBuf::from("/tmp/test.json"));
+        let text = render_header(&app);
+        assert!(
+            text.contains("0 tasks"),
+            "should show '0 tasks' for fresh app: {text}"
+        );
+    }
+}

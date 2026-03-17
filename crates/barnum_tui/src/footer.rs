@@ -103,3 +103,76 @@ impl Widget for FooterWidget {
         line.render(area, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::{InputMode, PanelFocus};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Widget;
+
+    fn render_footer(focus: PanelFocus, input_mode: InputMode) -> String {
+        let area = Rect::new(0, 0, 200, 1);
+        let mut buf = Buffer::empty(area);
+        let widget = FooterWidget { focus, input_mode };
+        widget.render(area, &mut buf);
+        (0..area.width)
+            .map(|x| buf.cell((x, 0)).unwrap().symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn graph_normal_shows_pan_zoom_select() {
+        let text = render_footer(PanelFocus::Graph, InputMode::Normal);
+        assert!(text.contains("pan"), "should show 'pan': {text}");
+        assert!(text.contains("zoom"), "should show 'zoom': {text}");
+        assert!(text.contains("select"), "should show 'select': {text}");
+    }
+
+    #[test]
+    fn task_list_normal_shows_navigate_detail_sort_filter_search_status_filter() {
+        let text = render_footer(PanelFocus::TaskList, InputMode::Normal);
+        assert!(text.contains("navigate"), "should show 'navigate': {text}");
+        assert!(text.contains("detail"), "should show 'detail': {text}");
+        assert!(text.contains("sort"), "should show 'sort': {text}");
+        assert!(text.contains("filter"), "should show 'filter': {text}");
+        assert!(text.contains("search"), "should show 'search': {text}");
+        assert!(
+            text.contains("status filter"),
+            "should show 'status filter': {text}"
+        );
+    }
+
+    #[test]
+    fn detail_normal_shows_scroll_copy() {
+        let text = render_footer(PanelFocus::Detail, InputMode::Normal);
+        assert!(text.contains("scroll"), "should show 'scroll': {text}");
+        assert!(text.contains("copy"), "should show 'copy': {text}");
+    }
+
+    #[test]
+    fn search_mode_shows_confirm_cancel_delete() {
+        let text = render_footer(PanelFocus::TaskList, InputMode::Search);
+        assert!(text.contains("confirm"), "should show 'confirm': {text}");
+        assert!(text.contains("cancel"), "should show 'cancel': {text}");
+        assert!(text.contains("delete"), "should show 'delete': {text}");
+    }
+
+    #[test]
+    fn all_modes_show_quit_and_switch_panel() {
+        for focus in [PanelFocus::Graph, PanelFocus::TaskList, PanelFocus::Detail] {
+            for mode in [InputMode::Normal, InputMode::Search] {
+                let text = render_footer(focus, mode);
+                assert!(
+                    text.contains("quit"),
+                    "should show 'quit' for {focus:?}/{mode:?}: {text}"
+                );
+                assert!(
+                    text.contains("switch panel"),
+                    "should show 'switch panel' for {focus:?}/{mode:?}: {text}"
+                );
+            }
+        }
+    }
+}
