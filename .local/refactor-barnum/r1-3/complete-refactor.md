@@ -27,7 +27,7 @@ git -c remote.origin.promisor=false log ...
 Limit diffs to the `webapp/` directory to avoid partial clone issues:
 
 ```bash
-git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- webapp/
+git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- :/webapp/
 ```
 
 ## Task
@@ -43,7 +43,7 @@ You are on branch `branch_name`. The rebase is complete. Before running validati
 ### 1. Read the diff
 
 ```bash
-git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- webapp/
+git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- :/webapp/
 ```
 
 **Always use the `parent_branch` value from the input -- never substitute commit SHAs.**

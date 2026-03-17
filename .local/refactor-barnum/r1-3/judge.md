@@ -27,7 +27,7 @@ git -c remote.origin.promisor=false log ...
 Limit diffs to the `webapp/` directory to avoid partial clone issues:
 
 ```bash
-git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- webapp/
+git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- :/webapp/
 ```
 
 ## Task
@@ -40,7 +40,7 @@ cd <local_dir>
 
 You are on branch `branch_name`. Lint, relay, and tsc all pass. Now review the actual change.
 
-Run `git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- webapp/` to see the full diff for this branch. **Always use the `parent_branch` value from the input — never substitute commit SHAs.**
+Run `git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- :/webapp/` to see the full diff for this branch. **Always use the `parent_branch` value from the input — never substitute commit SHAs.**
 
 ### 1. Classification: safe refactor vs. bug fix
 
