@@ -72,7 +72,7 @@ impl StepGraph {
     }
 
     /// Look up a step node by name.
-    #[expect(dead_code, reason = "used in tests; will be used for click-to-select")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "will be used for click-to-select"))]
     pub fn get(&self, name: &StepName) -> Option<&StepNode> {
         self.index_by_name.get(name).map(|&idx| &self.steps[idx])
     }
@@ -100,7 +100,7 @@ impl StepGraph {
     }
 
     /// Total number of steps in the graph.
-    #[expect(dead_code, reason = "used in tests; useful diagnostic method")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "useful diagnostic method"))]
     pub fn step_count(&self) -> usize {
         self.steps.len()
     }
