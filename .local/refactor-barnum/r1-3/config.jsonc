@@ -1,0 +1,128 @@
+/*
+ * Process a single branch: rebase, complete refactor, validate, fix, judge.
+ * Takes {branch_name, parent_branch, local_dir} as entrypoint value.
+ *
+ * Usage:
+ *   cd ~/code/pinboard/webapp && pnpm dlx @barnum/barnum run \
+ *     --config ~/code/gsd/.local/refactor-barnum/r1-3/config.jsonc \
+ *     --entrypoint-value '{"branch_name":"rb/r9/42","parent_branch":"master","local_dir":"~/code/pinboard/webapp"}'
+ */
+{
+  "entrypoint": "Rebase",
+  "options": {
+    "max_retries": 3,
+    "max_concurrency": 1
+  },
+  "steps": [
+    {
+      "name": "Rebase",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null reset --hard \"origin/$BRANCH\" >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; REBASE_OUT=$(git -c core.hooksPath=/dev/null rebase \"$PARENT\" 2>&1); REBASE_EXIT=$?; git -c core.hooksPath=/dev/null reset --hard HEAD >/dev/null 2>&1; git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1; if [ $REBASE_EXIT -eq 0 ]; then echo \"$INPUT\" | jq -c '[{kind: \"CompleteRefactor\", value: .value}]'; else echo \"$INPUT\" | jq -c --arg out \"$REBASE_OUT\" '[{kind: \"RebaseFix\", value: (.value + {conflict_output: $out})}]'; fi"
+      },
+      "next": ["CompleteRefactor", "RebaseFix"]
+    },
+    {
+      "name": "RebaseFix",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir", "conflict_output"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" },
+          "conflict_output": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "rebase-fix.md"}
+      },
+      "next": ["CompleteRefactor"]
+    },
+    {
+      "name": "CompleteRefactor",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "complete-refactor.md"}
+      },
+      "next": ["Validate"]
+    },
+    {
+      "name": "Validate",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "INPUT=$(cat) && BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name') && VALUE=$(echo \"$INPUT\" | jq -c '.value') && git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1 && git -c core.hooksPath=/dev/null reset --hard HEAD >/dev/null 2>&1 && git -c core.hooksPath=/dev/null clean -fd >/dev/null 2>&1 && ERRORS=\"\" && RELAY_OUT=$(pnpm relay 2>&1); RELAY_EXIT=$?; git add -A && (git diff --cached --quiet || git commit --amend --no-edit) >/dev/null 2>&1; [ $RELAY_EXIT -ne 0 ] && ERRORS=\"${ERRORS}pnpm relay failed (exit ${RELAY_EXIT}):\\n${RELAY_OUT}\\n\\n\"; CHANGED_OUT=$(pnpm changed:fix 2>&1); CHANGED_EXIT=$?; git add -A && (git diff --cached --quiet || git commit --amend --no-edit) >/dev/null 2>&1; [ $CHANGED_EXIT -ne 0 ] && ERRORS=\"${ERRORS}pnpm changed:fix failed (exit ${CHANGED_EXIT}):\\n${CHANGED_OUT}\\n\\n\"; TSC_OUT=$(pnpm tsc 2>&1); TSC_EXIT=$?; if [ $TSC_EXIT -ne 0 ]; then TSC_FILTERED=$(echo \"$TSC_OUT\" | grep -v 'euCountries2020CookiePolicy' | grep -v 'tsconfig\\.app\\.json'); if echo \"$TSC_FILTERED\" | grep -q 'error TS'; then ERRORS=\"${ERRORS}pnpm tsc failed (exit ${TSC_EXIT}):\\n${TSC_FILTERED}\\n\\n\"; fi; fi; if [ -z \"$ERRORS\" ]; then echo \"$VALUE\" | jq -c '[{kind: \"Judge\", value: .}]'; else echo \"$VALUE\" | jq -c --arg errors \"$ERRORS\" '[{kind: \"Fix\", value: (. + {errors: $errors})}]'; fi"
+      },
+      "next": ["Judge", "Fix"]
+    },
+    {
+      "name": "Fix",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir", "errors"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" },
+          "errors": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "fix.md"}
+      },
+      "next": ["Validate"]
+    },
+    {
+      "name": "Judge",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "judge.md"}
+      },
+      "next": ["Validate"]
+    }
+  ]
+}
