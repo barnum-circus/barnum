@@ -173,3 +173,98 @@ fn format_value(value: &serde_json::Value) -> String {
         other => other.to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    // ── format_duration ──────────────────────────────────────────
+
+    #[test]
+    fn format_duration_zero() {
+        assert_eq!(format_duration(Duration::from_secs(0)), "0s");
+    }
+
+    #[test]
+    fn format_duration_seconds_only() {
+        assert_eq!(format_duration(Duration::from_secs(42)), "42s");
+    }
+
+    #[test]
+    fn format_duration_just_under_a_minute() {
+        assert_eq!(format_duration(Duration::from_secs(59)), "59s");
+    }
+
+    #[test]
+    fn format_duration_exactly_60s() {
+        assert_eq!(format_duration(Duration::from_secs(60)), "1m00s");
+    }
+
+    #[test]
+    fn format_duration_minutes_and_seconds() {
+        assert_eq!(format_duration(Duration::from_secs(65)), "1m05s");
+    }
+
+    #[test]
+    fn format_duration_max_minutes() {
+        assert_eq!(format_duration(Duration::from_secs(3599)), "59m59s");
+    }
+
+    #[test]
+    fn format_duration_exactly_3600s() {
+        assert_eq!(format_duration(Duration::from_secs(3600)), "1h00m");
+    }
+
+    #[test]
+    fn format_duration_hours_and_minutes() {
+        assert_eq!(format_duration(Duration::from_secs(9000)), "2h30m");
+    }
+
+    #[test]
+    fn format_duration_ignores_sub_second() {
+        // 42.999s should still display as "42s"
+        assert_eq!(format_duration(Duration::from_millis(42_999)), "42s");
+    }
+
+    // ── format_value ─────────────────────────────────────────────
+
+    #[test]
+    fn format_value_string() {
+        let v = serde_json::Value::String("hello".into());
+        assert_eq!(format_value(&v), "hello");
+    }
+
+    #[test]
+    fn format_value_number() {
+        let v = serde_json::json!(42);
+        assert_eq!(format_value(&v), "42");
+    }
+
+    #[test]
+    fn format_value_bool_true() {
+        let v = serde_json::json!(true);
+        assert_eq!(format_value(&v), "true");
+    }
+
+    #[test]
+    fn format_value_bool_false() {
+        let v = serde_json::json!(false);
+        assert_eq!(format_value(&v), "false");
+    }
+
+    #[test]
+    fn format_value_null() {
+        let v = serde_json::Value::Null;
+        assert_eq!(format_value(&v), "null");
+    }
+
+    #[test]
+    fn format_value_object() {
+        let v = serde_json::json!({"key": "val"});
+        let result = format_value(&v);
+        // serde_json::Value::to_string produces compact JSON
+        assert!(result.contains("key"));
+        assert!(result.contains("val"));
+    }
+}

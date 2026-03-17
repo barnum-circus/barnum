@@ -78,3 +78,98 @@ impl TaskStatus {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::style::Color;
+    use std::collections::HashSet;
+
+    const ALL_STATUSES: [TaskStatus; 5] = [
+        TaskStatus::Pending,
+        TaskStatus::InFlight,
+        TaskStatus::Completed,
+        TaskStatus::Failed,
+        TaskStatus::Retried,
+    ];
+
+    // ── color ────────────────────────────────────────────────────
+
+    #[test]
+    fn color_completed_is_green() {
+        assert_eq!(TaskStatus::Completed.color(), Color::Green);
+    }
+
+    #[test]
+    fn color_in_flight_is_yellow() {
+        assert_eq!(TaskStatus::InFlight.color(), Color::Yellow);
+    }
+
+    #[test]
+    fn color_pending_is_dark_gray() {
+        assert_eq!(TaskStatus::Pending.color(), Color::DarkGray);
+    }
+
+    #[test]
+    fn color_failed_is_red() {
+        assert_eq!(TaskStatus::Failed.color(), Color::Red);
+    }
+
+    #[test]
+    fn color_retried_is_magenta() {
+        assert_eq!(TaskStatus::Retried.color(), Color::Magenta);
+    }
+
+    // ── icon ─────────────────────────────────────────────────────
+
+    #[test]
+    fn icon_is_non_empty_for_all_statuses() {
+        for status in ALL_STATUSES {
+            assert!(
+                !status.icon().is_empty(),
+                "{:?} should have a non-empty icon",
+                status
+            );
+        }
+    }
+
+    // ── label ────────────────────────────────────────────────────
+
+    #[test]
+    fn label_is_lowercase_for_all_statuses() {
+        for status in ALL_STATUSES {
+            let label = status.label();
+            assert_eq!(
+                label,
+                label.to_lowercase(),
+                "{:?} label should be lowercase",
+                status
+            );
+        }
+    }
+
+    #[test]
+    fn label_matches_expected() {
+        assert_eq!(TaskStatus::Pending.label(), "pending");
+        assert_eq!(TaskStatus::InFlight.label(), "in-flight");
+        assert_eq!(TaskStatus::Completed.label(), "completed");
+        assert_eq!(TaskStatus::Failed.label(), "failed");
+        assert_eq!(TaskStatus::Retried.label(), "retried");
+    }
+
+    // ── sort_priority ────────────────────────────────────────────
+
+    #[test]
+    fn sort_priorities_are_distinct() {
+        let priorities: HashSet<u8> = ALL_STATUSES.iter().map(|s| s.sort_priority()).collect();
+        assert_eq!(priorities.len(), ALL_STATUSES.len());
+    }
+
+    #[test]
+    fn sort_priority_ordering() {
+        assert!(TaskStatus::InFlight.sort_priority() < TaskStatus::Pending.sort_priority());
+        assert!(TaskStatus::Pending.sort_priority() < TaskStatus::Failed.sort_priority());
+        assert!(TaskStatus::Failed.sort_priority() < TaskStatus::Retried.sort_priority());
+        assert!(TaskStatus::Retried.sort_priority() < TaskStatus::Completed.sort_priority());
+    }
+}
