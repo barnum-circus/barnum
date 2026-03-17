@@ -18,8 +18,6 @@ export GIT_LFS_SKIP_SMUDGE=1
 export GIT_TERMINAL_PROMPT=0
 ```
 
-Some files in the repo are marked with `git update-index --assume-unchanged`. These include config files like `tsconfig.app.json` and unrelated files like `euCountries2020CookiePolicy.ts`. **Ignore these files entirely.** Do not mention them, do not modify them, do not include them in your analysis. They are not part of any branch's refactor.
-
 ## Task
 
 First, `cd` into `local_dir`:

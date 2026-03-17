@@ -30,8 +30,6 @@ Limit diffs to the `webapp/` directory to avoid partial clone issues:
 git -c remote.origin.promisor=false diff <parent_branch>..HEAD -- webapp/
 ```
 
-Some files in the repo are marked with `git update-index --assume-unchanged`. These include config files like `tsconfig.app.json` and unrelated files like `euCountries2020CookiePolicy.ts`. **Ignore these files entirely.** Do not mention them, do not modify them, do not include them in your analysis. They are not part of any branch's refactor.
-
 ## Task
 
 First, `cd` into `local_dir`:
