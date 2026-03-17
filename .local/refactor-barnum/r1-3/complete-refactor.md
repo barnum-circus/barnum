@@ -94,6 +94,17 @@ git add -A
 git commit --amend --no-edit
 ```
 
+### 6. Reject the refactor
+
+If the refactor is incorrect, harmful, or not worth keeping (e.g., the change introduces worse behavior, the original code was actually correct, or the diff is empty/trivial), **reject it** by resetting the branch to the parent:
+
+```bash
+git -c core.hooksPath=/dev/null reset --hard <parent_branch>
+git -c core.hooksPath=/dev/null checkout -B <branch_name>
+```
+
+This makes the branch identical to the parent, producing an empty diff. The pipeline will detect this and skip the branch.
+
 ## Output
 
 Emit Validate to run lint/tsc/relay:

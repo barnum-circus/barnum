@@ -85,6 +85,24 @@
         "kind": "Pool",
         "instructions": {"link": "complete-refactor.md"}
       },
+      "next": ["CheckRefactor"]
+    },
+    {
+      "name": "CheckRefactor",
+      "value_schema": {
+        "type": "object",
+        "required": ["branch_name", "parent_branch", "local_dir"],
+        "properties": {
+          "branch_name": { "type": "string" },
+          "parent_branch": { "type": "string" },
+          "local_dir": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"Validate\", value: .value}]'; fi"
+      },
       "next": ["Validate"]
     },
     {
