@@ -35,23 +35,25 @@ cd <local_dir>
 
 A cherry-pick onto `parent_branch` failed with merge conflicts. The cherry-pick is still in progress (not aborted).
 
-### 1. Read the original commit message
+### 1. Understand the original change
 
-The commit message is preserved at `.git/MERGE_MSG`. Read it — this describes the change that MUST be preserved through conflict resolution.
+Read the commit message from `.git/MERGE_MSG`. Then view the **exact diff** of the original commit:
 
-### 2. Understand the intended change
+```bash
+git -c remote.origin.promisor=false show $(cat .git/CHERRY_PICK_HEAD) -- ':(exclude)*.snap'
+```
 
-Before looking at conflicts, understand what this commit is trying to do. The commit message describes a specific refactor or fix — for example, "Extract useSlideWidth hook" or "Remove redundant optional chaining."
+This shows you precisely what the commit changed. This is the change you need to apply to the parent's updated code.
 
-### 3. Check if the change is already on the parent
+### 2. Check if the change is already on the parent
 
-Search the parent branch's code for the **specific artifact** described in the commit message. For example:
-- If the commit says "Extract useSlideWidth hook" — does a `useSlideWidth` function already exist?
-- If the commit says "Remove redundant optional chaining on `pin`" — is the optional chaining already removed?
+For each file the commit modifies, check whether the parent branch's current code already has the specific change applied. For example:
+- If the diff adds a `useSlideWidth` function — does that function already exist on the parent?
+- If the diff changes `||` to `??` on a specific line — does the parent already have `??` there?
 
-**Look for the exact thing the commit describes, not whether the surrounding code looks "updated" or "newer."** The parent may have other refactors to the same file that are unrelated to this commit's change.
+**Compare the diff from step 1 against the parent's current code. Do not just look at whether the parent's code seems "newer" or "refactored" — different refactors may have changed the same area without applying THIS specific change.**
 
-### 4. Resolve conflicts
+### 3. Resolve conflicts
 
 Run `git status` to see which files have conflicts. For each conflicted file:
 
@@ -59,11 +61,11 @@ Run `git status` to see which files have conflicts. For each conflicted file:
 2. The section between `<<<<<<<` and `=======` is the **parent branch's version**
 3. The section between `=======` and `>>>>>>>` is the **cherry-picked commit's version**
 
-**If the change is NOT already on the parent (step 3):** Resolve by applying the commit's intended change to the parent's updated code. Start with the parent's version, then apply the specific modification. Do NOT simply accept the parent version — that drops the change.
+**If the change is NOT already on the parent:** Apply the original commit's change (from step 1) to the parent's updated code. Start with the parent's version, then apply the specific modifications from the diff. Do NOT simply accept the parent version — that drops the change.
 
-**If the change IS already on the parent (step 3):** Keep the parent's version. The cherry-pick will be empty after resolution.
+**If the change IS verifiably already on the parent:** Keep the parent's version. The cherry-pick will be empty after resolution.
 
-### 5. Complete the cherry-pick
+### 4. Complete the cherry-pick
 
 After resolving all conflicts:
 
@@ -76,7 +78,7 @@ git -c core.hooksPath=/dev/null cherry-pick --continue
 
 If `cherry-pick --continue` says the cherry-pick is now empty, use `git cherry-pick --skip`.
 
-### 6. Verify
+### 5. Verify
 
 Run `git log --oneline -3` to confirm the branch looks correct.
 
