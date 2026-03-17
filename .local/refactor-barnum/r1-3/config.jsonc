@@ -65,7 +65,7 @@
       },
       "action": {
         "kind": "Command",
-        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"CompleteRefactor\", value: .value}]'; fi"
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- :/webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"CompleteRefactor\", value: .value}]'; fi"
       },
       "next": ["CompleteRefactor"]
     },
@@ -101,7 +101,7 @@
       },
       "action": {
         "kind": "Command",
-        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"Validate\", value: .value}]'; fi"
+        "script": "INPUT=$(cat); BRANCH=$(echo \"$INPUT\" | jq -r '.value.branch_name'); PARENT=$(echo \"$INPUT\" | jq -r '.value.parent_branch'); cd ~/code/pinboard/webapp; git -c core.hooksPath=/dev/null checkout -f \"$BRANCH\" >/dev/null 2>&1; if git -c core.hooksPath=/dev/null diff --quiet \"$PARENT\"..HEAD -- :/webapp/; then echo '[]'; else echo \"$INPUT\" | jq -c '[{kind: \"Validate\", value: .value}]'; fi"
       },
       "next": ["Validate"]
     },
