@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-legal-review.png
+---
+
 # Legal review
 
 Fan out a contract review into parallel specialist analyses, then synthesize a final recommendation.

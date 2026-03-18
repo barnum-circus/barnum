@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-visualization.png
+---
+
 # Visualization
 
 Barnum can generate a graph of your workflow config before anything runs. This is useful for understanding the shape of complex workflows, verifying transitions, and sharing with teammates.

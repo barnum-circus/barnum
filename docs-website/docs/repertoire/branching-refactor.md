@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-branching-refactor.png
+---
+
 # Branching Refactor
 
 Use branching to route a file to a specialized refactoring agent based on what it needs.

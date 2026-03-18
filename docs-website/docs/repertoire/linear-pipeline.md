@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-linear-pipeline.png
+---
+
 # Linear Pipeline
 
 A linear pipeline processes data through a sequence of steps.

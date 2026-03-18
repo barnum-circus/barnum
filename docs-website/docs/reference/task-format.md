@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-task-format.png
+---
+
 # Task Format
 
 Barnum steps have two action types: **Pool** (dispatched to an agent) and **Command** (executed locally as a shell script). This document describes the JSON each receives and what it must return.

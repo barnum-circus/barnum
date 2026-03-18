@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-editing-assistant.png
+---
+
 # Editing Assistant
 
 Fan out a writing analysis into parallel checks — thesis clarity, logical rigor, and structural flow — each writing results to a separate file.

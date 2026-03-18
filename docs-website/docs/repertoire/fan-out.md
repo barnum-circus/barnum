@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-fan-out.png
+---
+
 # Fan-Out
 
 Fan-out splits one task into multiple parallel tasks.

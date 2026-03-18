@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-sequential.png
+---
+
 # Sequential Processing
 
 Process items one at a time by having a step loop back to itself. This is particularly useful when **multiple changes need to happen to the same file** in a specific order, so each step sees the result of the previous one.

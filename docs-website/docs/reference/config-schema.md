@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-config-schema.png
+---
+
 # Config Schema Reference
 
 Barnum workflows are defined in JSON (or JSONC) config files. This page documents all available fields.

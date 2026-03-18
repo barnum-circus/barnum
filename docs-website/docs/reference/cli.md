@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-cli.png
+---
+
 # CLI Reference
 
 Barnum provides two command-line tools: `barnum` for running workflows and `troupe` for managing worker agents.

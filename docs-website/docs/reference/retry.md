@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-retry.png
+---
+
 # Retry Policies
 
 Configure how Barnum handles failures and retries.

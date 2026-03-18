@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-file-extraction.png
+---
+
 # Extracting to separate files
 
 As configs grow, inline instructions and schemas can make the config hard to read. Barnum supports extracting both into separate files using `{"link": "path"}`.

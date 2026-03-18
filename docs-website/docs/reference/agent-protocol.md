@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-agent-protocol.png
+---
+
 # Agent Protocol
 
 How agents interact with the pool to receive tasks, send heartbeats, and write responses.

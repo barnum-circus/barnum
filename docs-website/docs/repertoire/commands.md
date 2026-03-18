@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-commands.png
+---
+
 # Local Commands
 
 Use shell commands instead of agents for deterministic or system-level operations.

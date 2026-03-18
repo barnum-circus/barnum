@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-code-review.png
+---
+
 # Code review
 
 Run a structured code review on every changed file in a PR, in parallel, for under a dollar.

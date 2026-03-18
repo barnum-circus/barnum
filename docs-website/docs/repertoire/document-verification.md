@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-document-verification.png
+---
+
 # Document Verification
 
 Extract verifiable facts from a document, then research and evaluate each one independently. Results are written as individual verdict files to an output directory.

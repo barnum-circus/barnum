@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-fan-out-finally.png
+---
+
 # Fan-Out with Finally
 
 Use `finally` to run a follow-up step after all parallel work completes.

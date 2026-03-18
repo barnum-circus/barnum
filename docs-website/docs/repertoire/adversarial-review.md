@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-adversarial-review.png
+---
+
 # Adversarial Review
 
 Use a feedback loop where one agent implements changes and another judges them, iterating until the result passes review.

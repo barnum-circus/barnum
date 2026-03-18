@@ -1,3 +1,7 @@
+---
+image: /img/og/index.png
+---
+
 # Introduction
 
 Barnum is a ringmaster for AI agents. It orchestrates complex multi-step workflows while keeping each agent focused on exactly one task at a time.

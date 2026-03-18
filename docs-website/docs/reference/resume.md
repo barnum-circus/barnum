@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-resume.png
+---
+
 # State persistence and resume
 
 Long-running Barnum workflows can be interrupted by crashes, Ctrl+C, or OOM. State persistence lets you pick up where you left off.

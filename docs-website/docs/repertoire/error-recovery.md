@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-error-recovery.png
+---
+
 # Error Recovery
 
 Use post hooks to catch failures and route them to recovery steps instead of dropping tasks.

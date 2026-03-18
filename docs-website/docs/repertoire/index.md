@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire.png
+---
+
 # Barnum Repertoire
 
 Each routine below is a self-contained workflow you can copy, adapt, and combine.

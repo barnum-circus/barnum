@@ -1,3 +1,7 @@
+---
+image: /img/og/coming-attractions.png
+---
+
 # Coming Attractions
 
 ## User-Facing Features

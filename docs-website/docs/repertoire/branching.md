@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-branching.png
+---
+
 # Branching
 
 Branching allows agents to choose different paths based on their analysis.

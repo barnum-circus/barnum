@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-validation.png
+---
+
 # Schema Validation
 
 Use JSON Schema to validate task inputs and ensure agents return valid transitions.

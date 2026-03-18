@@ -1,3 +1,7 @@
+---
+image: /img/og/repertoire-hooks.png
+---
+
 # Pre/Post Hooks
 
 Hooks are shell commands that run before and after each task's action.

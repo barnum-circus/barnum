@@ -1,3 +1,7 @@
+---
+image: /img/og/reference-submission-protocol.png
+---
+
 # Submission Protocol
 
 How tasks get submitted to the agent pool and how responses come back.
