@@ -20,3 +20,4 @@ Each routine below is a self-contained workflow you can copy, adapt, and combine
 | [Code Review](code-review.md) | Parallel PR review with standards and security checks |
 | [Legal Review](legal-review.md) | Parallel contract analysis with final recommendation |
 | [Document Verification](document-verification.md) | Extract and fact-check claims from a document |
+| [Editing Assistant](editing-assistant.md) | Parallel writing analysis: thesis, logic, structure |
