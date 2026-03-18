@@ -21,11 +21,13 @@
   font-size: 5em;
   letter-spacing: 4px;
   text-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  color: white;
 }
 
 .heroSubtitle {
   line-height: 1.25;
   text-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  color: white;
 }
 
 .loopCommand {
