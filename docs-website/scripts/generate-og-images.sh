@@ -11,12 +11,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOCS_DIR="$SCRIPT_DIR/../docs"
 OUT_DIR="$SCRIPT_DIR/../static/img/og"
+TENT="$SCRIPT_DIR/../static/img/tent.png"
 mkdir -p "$OUT_DIR"
 
 BG_COLOR="#1A1A2E"
 TITLE_COLOR="white"
 SUBTITLE_COLOR="#9999AA"
 BRAND_COLOR="#9999AA"
+TENT_HEIGHT=150
 
 # Extract the title from a markdown file.
 # Tries YAML frontmatter `title:` first, then first `# Heading`.
@@ -41,12 +43,13 @@ generate_image() {
   local output="$3"
 
   magick -size 1200x630 "xc:$BG_COLOR" \
-    -font "Helvetica-Neue-Bold" -pointsize 52 -fill "$TITLE_COLOR" \
-    -gravity North -annotate +0+200 "$title" \
-    -font "Helvetica-Neue" -pointsize 28 -fill "$SUBTITLE_COLOR" \
-    -gravity North -annotate +0+280 "$subtitle" \
-    -font "Helvetica-Neue-Bold" -pointsize 36 -fill "$BRAND_COLOR" \
-    -gravity South -annotate +0+60 "Barnum" \
+    \( "$TENT" -resize "x${TENT_HEIGHT}" \) -gravity North -geometry +0+40 -composite \
+    -font "Helvetica-Neue-Bold" -pointsize 48 -fill "$TITLE_COLOR" \
+    -gravity North -annotate +0+220 "$title" \
+    -font "Helvetica-Neue" -pointsize 26 -fill "$SUBTITLE_COLOR" \
+    -gravity North -annotate +0+290 "$subtitle" \
+    -font "Helvetica-Neue-Bold" -pointsize 28 -fill "$BRAND_COLOR" \
+    -gravity South -annotate +0+50 "Barnum" \
     "$output"
 }
 
