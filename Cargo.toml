@@ -28,6 +28,8 @@ tokio = { version = "1.35", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.0", features = ["v4"] }
+ratatui = "0.28"
+crossterm = "0.27"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

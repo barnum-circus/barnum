@@ -1,0 +1,22 @@
+[package]
+name = "barnum_tui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "barnum-tui"
+path = "src/main.rs"
+
+[dependencies]
+barnum_config = { path = "../barnum_config" }
+barnum_state = { path = "../barnum_state" }
+barnum_types = { path = "../barnum_types" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+notify = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+anyhow = "1"
+base64 = "0.22"
+json5 = "0.4"

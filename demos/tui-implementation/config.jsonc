@@ -1,0 +1,193 @@
+// Barnum workflow that implements the barnum TUI — dogfooding exercise.
+//
+// This workflow models the same implementation plan as docs/plans/2026-03-16-barnum-tui-implementation.md
+// but executed by barnum agents instead of Claude Code agents.
+//
+// Invocation:
+// barnum run --config demos/tui-implementation/config.jsonc \
+//   --entrypoint-value '{"workspace_root": "/path/to/barnum-tui-worktree"}' \
+//   --state-log /tmp/tui-impl.log
+{
+  "entrypoint": "SetupCrate",
+  "options": {
+    "timeout": 300,
+    "max_retries": 2,
+    "max_concurrency": 5
+  },
+  "steps": [
+    {
+      "name": "SetupCrate",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {
+            "type": "string",
+            "description": "Absolute path to the barnum git worktree where code should be written"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "setup-crate.md"}
+      },
+      "next": ["SharedTypes"]
+    },
+    {
+      "name": "SharedTypes",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "shared-types.md"}
+      },
+      "next": ["LogWatcher", "StepGraph", "TaskList", "DetailPane", "HeaderFooter"]
+    },
+    {
+      "name": "LogWatcher",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "log-watcher.md"}
+      },
+      "next": ["EventHandling"]
+    },
+    {
+      "name": "StepGraph",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "step-graph.md"}
+      },
+      "next": ["EventHandling"],
+      "options": {
+        "timeout": 600
+      }
+    },
+    {
+      "name": "TaskList",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "task-list.md"}
+      },
+      "next": ["EventHandling"]
+    },
+    {
+      "name": "DetailPane",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "detail-pane.md"}
+      },
+      "next": ["EventHandling"]
+    },
+    {
+      "name": "HeaderFooter",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "header-footer.md"}
+      },
+      "next": ["EventHandling"]
+    },
+    {
+      "name": "EventHandling",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "event-handling.md"}
+      },
+      "next": ["MainLoop"],
+      "options": {
+        "timeout": 600
+      }
+    },
+    {
+      "name": "MainLoop",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "main-loop.md"}
+      },
+      "next": ["CLIShim"],
+      "options": {
+        "timeout": 600
+      }
+    },
+    {
+      "name": "CLIShim",
+      "value_schema": {
+        "type": "object",
+        "required": ["workspace_root"],
+        "properties": {
+          "workspace_root": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"link": "cli-shim.md"}
+      },
+      "next": []
+    }
+  ]
+}
