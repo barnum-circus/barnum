@@ -44,12 +44,12 @@ generate_image() {
 
   magick -size 1200x630 "xc:$BG_COLOR" \
     \( "$TENT" -resize "x${TENT_HEIGHT}" \) -gravity North -geometry +0+20 -composite \
-    -font "Helvetica-Neue-Bold" -pointsize 48 -fill "$TITLE_COLOR" \
-    -gravity North -annotate +0+270 "$title" \
-    -font "Helvetica-Neue" -pointsize 26 -fill "$SUBTITLE_COLOR" \
-    -gravity North -annotate +0+340 "$subtitle" \
-    -font "Helvetica-Neue-Bold" -pointsize 28 -fill "$BRAND_COLOR" \
-    -gravity South -annotate +0+50 "Barnum" \
+    -font "Helvetica-Neue-Bold" -pointsize 64 -fill "$TITLE_COLOR" \
+    -gravity North -annotate +0+255 "Barnum" \
+    -font "Helvetica-Neue-Bold" -pointsize 40 -fill "$SUBTITLE_COLOR" \
+    -gravity North -annotate +0+370 "$title" \
+    -font "Helvetica-Neue" -pointsize 24 -fill "$SUBTITLE_COLOR" \
+    -gravity North -annotate +0+430 "$subtitle" \
     "$output"
 }
 
