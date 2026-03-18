@@ -18,7 +18,7 @@ BG_COLOR="#1A1A2E"
 TITLE_COLOR="white"
 SUBTITLE_COLOR="#9999AA"
 BRAND_COLOR="#9999AA"
-TENT_HEIGHT=220
+TENT_HEIGHT=200
 
 # Extract the title from a markdown file.
 # Tries YAML frontmatter `title:` first, then first `# Heading`.
@@ -43,13 +43,13 @@ generate_image() {
   local output="$3"
 
   magick -size 1200x630 "xc:$BG_COLOR" \
-    \( "$TENT" -resize "x${TENT_HEIGHT}" \) -gravity North -geometry +0+20 -composite \
-    -font "Helvetica-Neue-Bold" -pointsize 64 -fill "$TITLE_COLOR" \
-    -gravity North -annotate +0+255 "Barnum" \
     -font "Helvetica-Neue-Bold" -pointsize 40 -fill "$SUBTITLE_COLOR" \
-    -gravity North -annotate +0+370 "$title" \
+    -gravity North -annotate +0+40 "$title" \
     -font "Helvetica-Neue" -pointsize 24 -fill "$SUBTITLE_COLOR" \
-    -gravity North -annotate +0+430 "$subtitle" \
+    -gravity North -annotate +0+95 "$subtitle" \
+    \( "$TENT" -resize "x${TENT_HEIGHT}" \) -gravity Center -geometry +0+20 -composite \
+    -font "Helvetica-Neue-Bold" -pointsize 72 -fill "$TITLE_COLOR" \
+    -gravity South -annotate +0+50 "Barnum" \
     "$output"
 }
 
