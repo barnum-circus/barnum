@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm dlx barnum run --config config.jsonc --entrypoint-value '{"folder": "./src"}'
+// pnpm dlx @barnum/barnum run --config config.jsonc --entrypoint-value '{"folder": "./src"}'
 //
 // NOTE: This workflow is not included in run-all-demos.sh because it requires
 // a real codebase and Claude agents to function.

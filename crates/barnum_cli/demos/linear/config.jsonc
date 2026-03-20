@@ -1,5 +1,5 @@
 // Example invocation:
-// pnpm dlx barnum run --config linear.jsonc
+// pnpm dlx @barnum/barnum run --config linear.jsonc
 {
   "entrypoint": "Start",
   "steps": [
