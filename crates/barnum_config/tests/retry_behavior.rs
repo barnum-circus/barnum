@@ -12,7 +12,7 @@ mod common;
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir,
+    setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -73,12 +73,13 @@ fn retry_on_invalid_response_false_drops_task() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run should return error because task is dropped
@@ -145,12 +146,13 @@ fn retry_on_invalid_response_true_retries() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run should return error because task is dropped after all retries
@@ -212,12 +214,13 @@ fn malformed_json_triggers_retry() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run should return error because task is dropped after all retries
@@ -292,12 +295,13 @@ fn per_step_options_override_global() {
         "NoRetryStep",
         StepInputValue(serde_json::json!({})),
     )];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run should return error because task is dropped
@@ -365,12 +369,13 @@ fn recovery_on_nth_attempt() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
@@ -429,12 +434,13 @@ fn max_retries_zero_no_retries() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run should return error because task is dropped

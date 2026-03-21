@@ -9,7 +9,7 @@ mod common;
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir,
+    setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -67,12 +67,13 @@ fn three_step_linear_machine() {
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
@@ -113,12 +114,13 @@ fn instructions_included_in_payload() {
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");

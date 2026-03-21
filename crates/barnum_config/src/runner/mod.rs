@@ -49,8 +49,8 @@ pub struct RunnerConfig<'a> {
     pub wake_script: Option<&'a str>,
     /// Invoker for the `troupe` CLI.
     pub invoker: &'a Invoker<TroupeCli>,
-    /// Optional path for state log (NDJSON file for persistence/resume).
-    pub state_log_path: Option<&'a Path>,
+    /// Path for state log (NDJSON file for persistence/resume).
+    pub state_log_path: &'a Path,
 }
 
 // ==================== Internal Types ====================
@@ -164,8 +164,8 @@ struct TaskRunner<'a> {
     rx: mpsc::Receiver<InFlightResult>,
     /// Counter for assigning unique task IDs.
     next_task_id: u32,
-    /// Optional state log writer for persistence/resume.
-    state_log: Option<io::BufWriter<std::fs::File>>,
+    /// State log writer for persistence/resume.
+    state_log: io::BufWriter<std::fs::File>,
 }
 
 impl<'a> TaskRunner<'a> {
@@ -198,14 +198,13 @@ impl<'a> TaskRunner<'a> {
             invoker: Clone::clone(runner_config.invoker),
         };
 
-        // Open state log file if path is provided
-        let state_log = runner_config
-            .state_log_path
-            .map(|path| -> io::Result<io::BufWriter<std::fs::File>> {
-                let file = std::fs::File::create(path)?;
-                Ok(io::BufWriter::new(file))
-            })
-            .transpose()?;
+        // Open state log file
+        let state_log = {
+            let file = std::fs::File::create(runner_config.state_log_path)?;
+            io::BufWriter::new(file)
+        };
+
+        info!(state_log = %runner_config.state_log_path.display(), "state log");
 
         let mut runner = Self {
             config,
@@ -267,7 +266,7 @@ impl<'a> TaskRunner<'a> {
         schemas: &'a CompiledSchemas,
         runner_config: &RunnerConfig<'a>,
         state: ReconstructedState,
-        state_log: Option<io::BufWriter<std::fs::File>>,
+        state_log: io::BufWriter<std::fs::File>,
     ) -> io::Result<Self> {
         if let Some(script) = runner_config.wake_script {
             call_wake_script(script)?;
@@ -388,9 +387,7 @@ impl<'a> TaskRunner<'a> {
 
     /// Write an entry to the state log (no-op if logging is disabled).
     fn write_log(&mut self, entry: &StateLogEntry) {
-        if let Some(ref mut writer) = self.state_log
-            && let Err(e) = barnum_state::write_entry(writer, entry)
-        {
+        if let Err(e) = barnum_state::write_entry(&mut self.state_log, entry) {
             error!(error = %e, "failed to write state log entry");
         }
     }
@@ -938,17 +935,15 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     })?;
     let schemas = CompiledSchemas::compile(&config)?;
 
-    // 3. Open new state log and copy old entries (if state_log_path is set)
-    let state_log = runner_config
-        .state_log_path
-        .map(|path| -> io::Result<io::BufWriter<std::fs::File>> {
-            let mut writer = io::BufWriter::new(std::fs::File::create(path)?);
-            let old_content = std::fs::read(old_log_path)?;
-            writer.write_all(&old_content)?;
-            writer.flush()?;
-            Ok(writer)
-        })
-        .transpose()?;
+    // 3. Open new state log and copy old entries
+    info!(state_log = %runner_config.state_log_path.display(), "state log");
+    let state_log = {
+        let mut writer = io::BufWriter::new(std::fs::File::create(runner_config.state_log_path)?);
+        let old_content = std::fs::read(old_log_path)?;
+        writer.write_all(&old_content)?;
+        writer.flush()?;
+        writer
+    };
 
     // 4. Create runner with reconstructed state and continue
     let mut runner = TaskRunner::new_resumed(&config, &schemas, runner_config, state, state_log)?;

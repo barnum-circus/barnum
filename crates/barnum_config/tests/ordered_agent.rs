@@ -8,7 +8,7 @@ mod common;
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir,
+    setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::io;
@@ -60,9 +60,11 @@ fn run_barnum_background(
     config: Config,
     initial_tasks: Vec<Task>,
     pool: &TroupeHandle,
+    root: &Path,
 ) -> thread::JoinHandle<io::Result<()>> {
     let invoker = create_test_invoker();
     let pool_path = pool.pool_path().to_path_buf();
+    let state_log = test_state_log_path(root);
 
     thread::spawn(move || {
         let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -71,7 +73,7 @@ fn run_barnum_background(
             working_dir: Path::new("."),
             wake_script: None,
             invoker: &invoker,
-            state_log_path: None,
+            state_log_path: &state_log,
         };
         barnum_config::run(&config, &schemas, &runner_config, initial_tasks)
     })
@@ -93,7 +95,7 @@ fn ordered_agent_single_task() {
 
     let config = simple_config();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
-    let handle = run_barnum_background(config, initial_tasks, &pool);
+    let handle = run_barnum_background(config, initial_tasks, &pool, &root);
 
     // Wait for task to arrive
     ctrl.wait_for_tasks(1);
@@ -134,7 +136,7 @@ fn ordered_agent_wait_for_multiple() {
         "Distribute",
         StepInputValue(serde_json::json!({})),
     )];
-    let handle = run_barnum_background(config, initial_tasks, &pool);
+    let handle = run_barnum_background(config, initial_tasks, &pool, &root);
 
     // Wait for Distribute task
     ctrl.wait_for_tasks(1);
@@ -191,7 +193,7 @@ fn ordered_agent_complete_out_of_order() {
         "Distribute",
         StepInputValue(serde_json::json!({})),
     )];
-    let handle = run_barnum_background(config, initial_tasks, &pool);
+    let handle = run_barnum_background(config, initial_tasks, &pool, &root);
 
     // Wait for Distribute and complete it
     ctrl.wait_for_tasks(1);
@@ -241,7 +243,7 @@ fn ordered_agent_waiting_tasks_query() {
         "Distribute",
         StepInputValue(serde_json::json!({})),
     )];
-    let handle = run_barnum_background(config, initial_tasks, &pool);
+    let handle = run_barnum_background(config, initial_tasks, &pool, &root);
 
     // Initially no tasks
     assert_eq!(ctrl.waiting_tasks().len(), 0);
