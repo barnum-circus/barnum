@@ -2,21 +2,19 @@
 
 ## Motivation
 
-Today, non-agent work in Barnum is done via `Command` actions — opaque bash strings that receive JSON on stdin and emit JSON on stdout. This works, but it has problems:
+Barnum's runner is tightly coupled to the two action kinds it knows about: `Pool` and `Command`. The dispatch logic, response processing, and config types all have hardcoded `match` arms for each kind. This means:
 
-1. **No structure.** A git commit is expressed as `"script": "jq -r '.value.message' | xargs git commit -m"`. There's no validation that the message field exists, no type safety, and the bash string is fragile.
+1. **Adding a new action kind requires touching 5+ files.** Config enum, resolved enum, dispatch function, `SubmitResult` variant, response processing logic. Every new kind is a cross-cutting change.
 
-2. **No reuse.** Every workflow that needs git operations reinvents the same bash incantations. There's no way to share or standardize common operations.
+2. **The runner knows how to execute things.** It shouldn't. The runner's job is task scheduling, concurrency control, retry logic, state logging, and finally-hook tracking. *How* a task gets executed is a separate concern.
 
-3. **No discoverability.** Users can't browse available operations or get editor completion for what a `Git` action accepts.
+3. **Pool and Command are privileged.** They're compiled into the binary. But there's nothing fundamentally special about them — Pool shells out to `troupe submit_task`, Command shells out to `bash`. Both are "run a subprocess, get JSON back." They should be pluggable like anything else.
 
-4. **No validation.** The bash script can do anything. A typo in a jq expression silently produces empty output. There's no way to validate the action's parameters at config-parse time.
+The goal: **Barnum's runner should know nothing about how to execute actions.** It dispatches tasks to an executor, gets results back, and manages the workflow graph. Pool, Command, Claude, Git, TypeScript — they're all just executors registered under a name.
 
-The idea: make the action kind extensible. Instead of just `Pool` and `Command`, allow pluggable action kinds like `Git`, `Http`, `FileSystem`, `TypeScript`, etc. Each kind defines a parameter schema, and Barnum validates the parameters at config load time.
+## Current Coupling Points
 
-## Current State
-
-### Action enum (closed)
+### 1. Config enum (closed)
 
 `crates/barnum_config/src/config.rs:161-187`:
 ```rust
@@ -27,288 +25,323 @@ pub enum ActionFile {
 }
 ```
 
-This is a closed enum — adding a new action kind requires modifying the Rust source code, recompiling, and releasing.
+### 2. Resolved action enum (closed)
 
-### Dispatch (hardcoded match)
-
-`crates/barnum_config/src/runner/mod.rs` (in `TaskRunner::dispatch()`):
+`crates/barnum_config/src/resolved.rs`:
 ```rust
-match &step.action {
-    Action::Pool { .. } => { /* submit to troupe pool */ }
-    Action::Command { script } => { /* run shell command */ }
+pub enum Action {
+    Pool { instructions: String },
+    Command { script: String },
 }
 ```
 
-Adding a new action kind requires adding a new match arm here, plus a new dispatch function, a new `SubmitResult` variant, and new response processing logic.
+### 3. Dispatch (hardcoded match)
+
+`crates/barnum_config/src/runner/mod.rs:489-521`:
+```rust
+match &step.action {
+    Action::Pool { .. } => {
+        // 8 lines of pool-specific setup
+        thread::spawn(move || dispatch_pool_task(ctx, &docs, timeout, ...));
+    }
+    Action::Command { script } => {
+        // 3 lines of command-specific setup
+        thread::spawn(move || dispatch_command_task(ctx, &script, ...));
+    }
+}
+```
+
+### 4. Submit result (per-kind variants)
+
+`crates/barnum_config/src/runner/dispatch.rs:33-48`:
+```rust
+pub enum SubmitResult {
+    Pool { value: StepInputValue, response: io::Result<Response> },
+    Command { value: StepInputValue, output: io::Result<String> },
+    Finally { value: StepInputValue, output: Result<String, String> },
+    PreHookError(String),
+}
+```
+
+### 5. Response processing (per-kind match)
+
+`crates/barnum_config/src/runner/response.rs:52-127`:
+```rust
+match result {
+    SubmitResult::Pool { value, response } => { /* pool-specific response handling */ }
+    SubmitResult::Command { value, output } => { /* command-specific response handling */ }
+    SubmitResult::Finally { value, output } => { /* finally-specific handling */ }
+    SubmitResult::PreHookError(e) => { /* pre-hook error handling */ }
+}
+```
+
+Note: `Pool` response handling unwraps a `troupe::Response` enum (which has `Processed` and `NotProcessed` variants), while `Command` response handling just processes stdout directly. But both ultimately call the same `process_stdout()` function for the success case. The difference is just the error/timeout wrapping.
 
 ## Proposed Design
 
-### Core concept: Action kinds as plugins
+### The executor trait
 
-An action kind is defined by:
-1. **A name** (e.g., `"Git"`, `"Http"`, `"Transform"`)
-2. **A parameter schema** (JSON Schema that validates the action's config)
-3. **An executor** (something that takes the task + parameters and returns follow-up tasks)
+Every action kind is an executor. The runner doesn't know what executors exist — it just calls them.
 
-### What this looks like in config
+```rust
+/// What the runner sends to an executor.
+pub struct ExecutorInput {
+    pub task: Task,
+    pub task_id: LogTaskId,
+    /// Pre-hook has already been applied. This is the post-pre-hook value.
+    pub value: StepInputValue,
+    /// Working directory for the executor.
+    pub working_dir: PathBuf,
+}
 
-**Before (opaque Command):**
-```jsonc
-{
-  "name": "CommitChanges",
-  "action": {
-    "kind": "Command",
-    "script": "MSG=$(jq -r '.value.message'); git add -A && git commit -m \"$MSG\""
-  },
-  "next": ["Push"]
+/// What the runner gets back.
+pub enum ExecutorOutput {
+    /// Stdout from the executor (JSON array of follow-up tasks).
+    Success { value: StepInputValue, stdout: String },
+    /// Executor-level timeout (e.g., agent didn't respond).
+    Timeout { value: StepInputValue },
+    /// Executor failed to run at all.
+    Error { value: StepInputValue, error: String },
 }
 ```
 
-**After (structured Git action):**
-```jsonc
-{
-  "name": "CommitChanges",
-  "action": {
-    "kind": "Git",
-    "operation": "commit",
-    "params": {
-      "message": "{{value.message}}",
-      "add_all": true
+The key insight: **every executor returns the same thing** — a `StepInputValue` and either stdout (JSON to parse as follow-up tasks) or an error. The runner handles retry logic, schema validation, post-hooks, and state logging uniformly. The executor just runs the action and returns text.
+
+This is already almost true today. Both `Pool` and `Command` ultimately feed into `process_stdout()`. The only divergence is that `Pool` has a `NotProcessed` variant (timeout from troupe), which maps to `ExecutorOutput::Timeout`.
+
+### Executor registration
+
+```rust
+/// An action kind executor.
+pub trait Executor: Send + Sync {
+    /// The action kind name (e.g., "Pool", "Command", "Claude").
+    fn kind(&self) -> &str;
+
+    /// Execute a task. Called from a worker thread.
+    fn execute(&self, input: ExecutorInput) -> ExecutorOutput;
+
+    /// Validate action parameters at config load time.
+    /// Returns an error message if the parameters are invalid.
+    fn validate_params(&self, params: &serde_json::Value) -> Result<(), String> {
+        let _ = params;
+        Ok(()) // Default: no validation
     }
-  },
-  "next": ["Push"]
 }
 ```
 
-Or even more declaratively:
-```jsonc
-{
-  "name": "CommitChanges",
-  "action": {
-    "kind": "Git",
-    "commit": {
-      "message": "{{value.message}}",
-      "paths": ["{{value.file}}"]
+The runner holds a `HashMap<String, Box<dyn Executor>>`:
+
+```rust
+struct TaskRunner<'a> {
+    executors: HashMap<String, Box<dyn Executor>>,
+    // ... existing fields, minus pool-specific ones
+}
+```
+
+### Pool becomes an executor
+
+```rust
+pub struct PoolExecutor {
+    root: PathBuf,
+    invoker: Invoker<TroupeCli>,
+}
+
+impl Executor for PoolExecutor {
+    fn kind(&self) -> &str { "Pool" }
+
+    fn execute(&self, input: ExecutorInput) -> ExecutorOutput {
+        let payload = build_agent_payload(&input.task.step, &input.value.0, ...);
+        match submit_via_cli(&self.root, &payload, &self.invoker) {
+            Ok(Response::Processed { stdout, .. }) => {
+                ExecutorOutput::Success { value: input.value, stdout }
+            }
+            Ok(Response::NotProcessed { .. }) => {
+                ExecutorOutput::Timeout { value: input.value }
+            }
+            Err(e) => {
+                ExecutorOutput::Error { value: input.value, error: e.to_string() }
+            }
+        }
     }
-  },
-  "next": ["Push"]
 }
 ```
 
-### How action kinds get registered
+### Command becomes an executor
 
-Three possible registration mechanisms, from simple to complex:
+```rust
+pub struct CommandExecutor;
 
-#### Option 1: Built-in action kinds (curated set)
+impl Executor for CommandExecutor {
+    fn kind(&self) -> &str { "Command" }
 
-Barnum ships with a fixed set of action kinds beyond `Pool` and `Command`. These are compiled into the binary:
+    fn execute(&self, input: ExecutorInput) -> ExecutorOutput {
+        let task_json = serde_json::json!({
+            "kind": &input.task.step,
+            "value": &input.value.0,
+        }).to_string();
 
-- `Pool` — send to AI agents (exists)
-- `Command` — run bash (exists)
-- `Git` — git operations (commit, push, branch, etc.)
-- `Http` — HTTP requests
-- `FileSystem` — read/write/copy files
-- `Transform` — JSON transformations (jq-like but structured)
-- `Typescript` — run a TypeScript function (see TYPESCRIPT_API.md)
+        match run_command_action(&input.script, &task_json, &input.working_dir) {
+            Ok(stdout) => ExecutorOutput::Success { value: input.value, stdout },
+            Err(e) => ExecutorOutput::Error { value: input.value, error: e.to_string() },
+        }
+    }
+}
+```
 
-**Pros:** Simple. No plugin system needed. Schema validation is built in.
-**Cons:** Barnum must add and maintain every action kind. Can't extend without recompiling.
+### The runner dispatch becomes generic
 
-#### Option 2: External action kind definitions (JSON Schema + Command executor)
+```rust
+fn dispatch(&self, task_id: LogTaskId, task: Task) {
+    let step = self.step_map.get(&task.step).expect("unknown step");
+    let kind = &step.action_kind; // e.g., "Pool", "Command", "Claude"
+    let executor = self.executors.get(kind).expect("unknown action kind");
 
-Users define custom action kinds in a `kinds/` directory or a `"kinds"` section of the config. Each kind has a JSON Schema for its parameters and a command that executes it:
+    // Pre-hook runs here (same for all kinds)
+    let value = run_pre_hook_if_present(...);
+
+    let input = ExecutorInput { task, task_id, value, working_dir };
+    let executor = Arc::clone(executor);
+    let tx = self.tx.clone();
+
+    thread::spawn(move || {
+        let output = executor.execute(input);
+        tx.send(InFlightResult { identity, result: output });
+    });
+}
+```
+
+### Response processing becomes uniform
+
+```rust
+fn process_result(&self, output: ExecutorOutput, task: &Task, step: &Step) -> ProcessedSubmit {
+    match output {
+        ExecutorOutput::Success { value, stdout } => {
+            // Parse stdout as JSON, validate against schema, build post-hook input
+            // This is the existing process_stdout() logic — works for ALL kinds
+            process_stdout(&stdout, task, &value, step, schemas)
+        }
+        ExecutorOutput::Timeout { value } => {
+            process_retry(task, &step.options, FailureKind::Timeout)
+        }
+        ExecutorOutput::Error { value, error } => {
+            process_retry(task, &step.options, FailureKind::SubmitError)
+        }
+    }
+}
+```
+
+No more `match` on action kind in response processing. The runner doesn't care what ran — it just processes the output.
+
+### Config becomes open
+
+The action in config is now just a `kind` string plus opaque parameters:
+
+```rust
+// config.rs — the action is no longer a closed enum
+pub struct ActionFile {
+    pub kind: String,
+    #[serde(flatten)]
+    pub params: serde_json::Value,
+}
+```
+
+Or, to preserve editor support for known kinds while allowing unknown ones:
+
+```rust
+#[serde(tag = "kind")]
+pub enum ActionFile {
+    Pool { instructions: MaybeLinked<Instructions> },
+    Command { script: String },
+    Claude { prompt: MaybeLinked<String>, model: Option<String>, ... },
+    #[serde(untagged)]
+    Custom { kind: String, #[serde(flatten)] params: serde_json::Value },
+}
+```
+
+The `Custom` variant catches anything not matched by the known variants. At runtime, all variants are normalized to `(kind_name: String, params: Value)` and dispatched through the executor registry.
+
+### Resolved config becomes uniform
+
+```rust
+// resolved.rs
+pub struct Action {
+    pub kind: String,
+    pub params: serde_json::Value,
+}
+```
+
+No more per-kind variants in the resolved config. The executor trait handles interpretation of params.
+
+## What this means for hooks
+
+Hooks (pre, post, finally) are currently Command-only: `{"kind": "Command", "script": "..."}`. With pluggable kinds, hooks could also be pluggable:
 
 ```jsonc
 {
-  "kinds": {
+  "pre": {"kind": "Typescript", "module": "./hooks/enrich.ts"},
+  "action": {"kind": "Pool", "instructions": {"link": "analyze.md"}},
+  "post": {"kind": "Command", "script": "jq '.next'"}
+}
+```
+
+But this is a stretch goal. The immediate value is making *actions* pluggable. Hooks can stay Command-only for now and get the same treatment later.
+
+## How executors get registered
+
+### Default executors (built-in)
+
+Barnum ships with executors for `Pool` and `Command`. They're registered automatically:
+
+```rust
+fn default_executors(pool_config: Option<PoolConfig>) -> HashMap<String, Box<dyn Executor>> {
+    let mut map = HashMap::new();
+    map.insert("Command".into(), Box::new(CommandExecutor));
+    if let Some(pc) = pool_config {
+        map.insert("Pool".into(), Box::new(PoolExecutor::new(pc)));
+    }
+    map
+}
+```
+
+Note: `Pool` executor is only registered when a pool root is configured. If your workflow is all `Command` and `Claude` steps, no troupe daemon is needed.
+
+### User-registered executors
+
+Users declare custom executors in config:
+
+```jsonc
+{
+  "executors": {
+    "Claude": {
+      "command": "claude -p --model {{params.model}} --output-format json",
+      "schema": {"link": "schemas/claude-action.json"}
+    },
     "Git": {
-      "schema": {"link": "kinds/git-schema.json"},
-      "executor": "node kinds/git-executor.js"
-    },
-    "Slack": {
-      "schema": {"link": "kinds/slack-schema.json"},
-      "executor": "node kinds/slack-executor.js"
+      "command": "node executors/git.js",
+      "schema": {"link": "schemas/git-action.json"}
     }
   },
   "steps": [...]
 }
 ```
 
-The executor receives the task + validated parameters on stdin and returns follow-up tasks on stdout — same contract as `Command`, but with schema-validated parameters.
+Each custom executor is a command that receives `ExecutorInput` as JSON on stdin and writes `ExecutorOutput`-compatible JSON on stdout. This is the same subprocess model as `Command`, but with:
+- A parameter schema validated at config load time
+- A named kind for config clarity
+- Separation of the executor definition from its invocation
 
-**Pros:** Extensible without recompiling Barnum. Users can create and share action kinds.
-**Cons:** Executor is still a subprocess with stdin/stdout JSON. Adds config complexity.
-
-#### Option 3: Plugin registry (npm packages)
-
-Action kinds are npm packages that export a schema and an executor:
+### npm packages (future)
 
 ```jsonc
 {
-  "plugins": ["@barnum/plugin-git", "@barnum/plugin-slack"],
+  "plugins": ["@barnum/executor-claude", "@barnum/executor-git"],
   "steps": [...]
 }
 ```
 
-Each plugin package contains:
-- `schema.json` — parameter schema for the action kind
-- `executor.js` — the execution logic
-- Optionally, TypeScript types for the builder API
-
-**Pros:** Ecosystem play. Share and discover action kinds via npm.
-**Cons:** Complex. Requires plugin loading, version management, security considerations.
-
-### Recommended approach: Option 1 first, Option 2 as escape hatch
-
-Start with a curated set of built-in action kinds (Option 1). Add the external-definition mechanism (Option 2) as the escape hatch for custom kinds. Skip Option 3 until there's actual demand for a plugin ecosystem.
-
-## How a built-in action kind works
-
-Taking `Git` as a concrete example:
-
-### Parameter schema
-
-```json
-{
-  "type": "object",
-  "oneOf": [
-    {
-      "properties": {
-        "commit": {
-          "type": "object",
-          "properties": {
-            "message": {"type": "string"},
-            "paths": {"type": "array", "items": {"type": "string"}},
-            "add_all": {"type": "boolean", "default": false}
-          },
-          "required": ["message"]
-        }
-      },
-      "required": ["commit"]
-    },
-    {
-      "properties": {
-        "push": {
-          "type": "object",
-          "properties": {
-            "remote": {"type": "string", "default": "origin"},
-            "branch": {"type": "string"}
-          }
-        }
-      },
-      "required": ["push"]
-    }
-  ]
-}
-```
-
-### Execution
-
-When Barnum encounters `{"kind": "Git", "commit": {"message": "...", "paths": [...]}}`:
-
-1. Validate parameters against the Git schema at config load time
-2. At runtime, resolve any template expressions (like `{{value.message}}`) against the task value
-3. Execute the git operation directly (no shell, no subprocess — just `std::process::Command` with the right args)
-4. Return follow-up tasks based on the result
-
-### Template expressions
-
-The `{{value.message}}` syntax lets parameters reference the task's input value. This is resolved at runtime, not at config parse time. It's essentially string interpolation from the task payload into the action parameters.
-
-Alternative: skip templates entirely. The task value IS the parameters. If the step's `value_schema` matches what Git needs, the action kind reads directly from the value:
-
-```jsonc
-{
-  "name": "CommitChanges",
-  "value_schema": {
-    "type": "object",
-    "properties": {
-      "message": {"type": "string"},
-      "paths": {"type": "array", "items": {"type": "string"}}
-    },
-    "required": ["message"]
-  },
-  "action": {
-    "kind": "Git",
-    "operation": "commit"
-  },
-  "next": ["Push"]
-}
-```
-
-Here the action kind knows that for `"operation": "commit"`, it reads `message` and `paths` from the task value. The `value_schema` provides the validation. No templates needed.
-
-This is cleaner but constrains the task value to match the action's expectations exactly. The pre-hook can bridge the gap if the incoming shape differs.
-
-## Rust implementation sketch
-
-### Open the action enum
-
-```rust
-// config.rs
-#[serde(tag = "kind")]
-pub enum ActionFile {
-    Pool { instructions: MaybeLinked<Instructions> },
-    Command { script: String },
-    // New built-in kinds:
-    Git { operation: String, #[serde(flatten)] params: serde_json::Value },
-    // Or more structured:
-    Git(GitAction),
-    // ...
-    // Escape hatch for user-defined kinds:
-    Custom { kind_name: String, executor: String, params: serde_json::Value },
-}
-```
-
-### Or: keep the enum closed, use serde's content tag
-
-```rust
-#[serde(tag = "kind", content = "params")]
-pub enum ActionFile {
-    Pool { instructions: MaybeLinked<Instructions> },
-    Command { script: String },
-    Git(GitParams),
-    Http(HttpParams),
-    // ...
-}
-```
-
-### Or: hybrid approach
-
-```rust
-// Built-in kinds are enum variants. Unknown kinds fall through to Custom.
-#[serde(tag = "kind")]
-pub enum ActionFile {
-    Pool { ... },
-    Command { ... },
-    Git { ... },
-    #[serde(other)]
-    Custom,  // Catch-all for user-defined kinds
-}
-```
-
-The `#[serde(other)]` approach is clean for deserialization but loses the parameters. A custom deserializer could capture them.
-
-## Relationship to TypeScript API
-
-The TypeScript API (see `TYPESCRIPT_API.md`) and pluggable action kinds are complementary:
-
-- **TypeScript API** = write step handlers in TypeScript with type safety
-- **Pluggable action kinds** = built-in structured commands with schema validation
-
-They intersect at: "TypeScript" could be a pluggable action kind, and the TypeScript builder API could expose all action kinds as typed methods.
-
-```typescript
-// Builder API with pluggable kinds
-const commit = step("CommitChanges")
-  .value<{ message: string; paths: string[] }>()
-  .git({ operation: "commit" })  // typed Git action
-  .next("Push");
-```
+Each package exports an executor command and schema. Barnum resolves them from `node_modules`. This is the ecosystem play — deferred until there's demand.
 
 ## Config schema generation (`barnum-config-schema.json`)
-
-This is a concrete problem that needs a concrete answer. Today the schema is generated from Rust types:
 
 ### Current pipeline
 
@@ -320,89 +353,65 @@ Rust ActionFile enum (schemars derive)
       → CI verifies it matches committed version
 ```
 
-The `ActionFile` enum uses `#[serde(tag = "kind")]`, so the schema emits a `oneOf` with one variant per enum arm. Each variant has `"kind": {"enum": ["Pool"]}` or `"kind": {"enum": ["Command"]}` as a discriminator, plus the variant-specific fields.
+The `ActionFile` enum uses `#[serde(tag = "kind")]`, so the schema emits a `oneOf` with one variant per enum arm.
 
-### What happens when we add built-in kinds
+### With pluggable kinds
 
-Adding `Claude`, `Git`, etc. as enum variants: schemars picks them up automatically. The `oneOf` grows:
+**Built-in kinds** (Pool, Command, and any first-party kinds like Claude) remain as enum variants in Rust. They get automatic `schemars` schema generation and full editor support.
 
-```json
-"ActionFile": {
-  "oneOf": [
-    { "properties": { "kind": {"enum": ["Pool"]}, "instructions": {...} } },
-    { "properties": { "kind": {"enum": ["Command"]}, "script": {...} } },
-    { "properties": { "kind": {"enum": ["Claude"]}, "prompt": {...}, "model": {...} } },
-    { "properties": { "kind": {"enum": ["Git"]}, "operation": {...}, "params": {...} } }
-  ]
-}
-```
+**User-defined kinds** use the `Custom` catch-all variant. The generated schema allows any object with a `kind` string, but provides no field-level validation for custom kinds. Users get:
+- Editor completion for built-in kinds (Pool, Command, Claude, etc.)
+- No editor completion for custom kinds (but runtime validation via the executor's schema)
 
-This is the simplest path and the one we should take first. Every built-in kind = one Rust variant = automatic schema generation = editor support.
-
-### What happens with user-defined kinds (Option 2)
-
-User-defined kinds declared in config can't appear in the compile-time schema. Three strategies:
-
-**Strategy A: Runtime-only validation (recommended)**
-
-Built-in kinds get schema validation in the editor. User-defined kinds are validated at runtime (barnum validates the action parameters against the kind's declared schema when loading the config). Editors see unknown `kind` values as errors against the JSON schema, but users can suppress this with `"$schema"` or editor-specific overrides.
-
-This is the pragmatic choice. The escape hatch is for power users who can live without editor completion.
-
-**Strategy B: Schema composition**
-
-Generate a base schema for built-in kinds. Users extend it via JSON Schema `$ref` or `allOf`:
-
-```jsonc
-// user's config references extended schema
-{ "$schema": "./my-extended-schema.json", ... }
-```
-
-Where `my-extended-schema.json` extends the base:
-```json
-{
-  "allOf": [
-    {"$ref": "node_modules/@barnum/barnum/barnum-config-schema.json"},
-    {
-      "definitions": {
-        "ActionFile": {
-          "oneOf": [
-            {"$ref": "#/base/ActionFile"},
-            {"properties": {"kind": {"enum": ["MyCustomKind"]}, ...}}
-          ]
-        }
-      }
-    }
-  ]
-}
-```
-
-This is technically possible but awkward. JSON Schema composition for extending discriminated unions is ugly.
-
-**Strategy C: Config-driven schema generation**
-
-`barnum build-schema --config my-config.jsonc` reads the config's `"kinds"` section and generates a complete schema including custom kinds. This produces a per-project schema file:
+**Config-driven schema generation** (future): `barnum build-schema --config workflow.jsonc` reads the config's `"executors"` section, merges their schemas into the base schema, and outputs a project-specific schema file:
 
 ```bash
 barnum build-schema --config workflow.jsonc > .barnum-schema.json
 ```
 
-The config then references it: `"$schema": "./.barnum-schema.json"`.
+This gives editor support for custom kinds at the cost of a build step.
 
-This is clean but introduces a build step and a chicken-and-egg issue (you need the schema to validate the config, but you need the config to generate the schema).
+### Phased approach
 
-### Recommendation
+- **Phase 1:** Introduce the executor trait. Refactor Pool and Command into executors. No config changes yet — the closed enum still works, but the runner dispatches through the trait instead of hardcoded `match` arms.
+- **Phase 2:** Open the config to accept custom kind strings. Add the `"executors"` config section. Add `Custom` catch-all variant.
+- **Phase 3:** Add first-party executors (Claude, etc.) as named enum variants with full schema support.
+- **Phase 4 (if needed):** `barnum build-schema` for projects that need editor support for custom kinds.
 
-- **Phase 1:** Built-in kinds only. Enum variants in Rust, automatic schema generation. No user-defined kinds.
-- **Phase 2:** Add the `"kinds"` escape hatch with runtime-only validation (Strategy A). Document that custom kinds don't get editor completion.
-- **Phase 3 (if needed):** Strategy C — `barnum build-schema` for projects that need editor support for custom kinds.
+## Finally tasks
+
+Finally tasks are currently dispatched differently from regular tasks — they bypass the pre-hook and use a separate `dispatch_finally_task` function. In the pluggable model, finally tasks should also go through an executor:
+
+```rust
+pub struct FinallyExecutor;
+
+impl Executor for FinallyExecutor {
+    fn kind(&self) -> &str { "Finally" }
+
+    fn execute(&self, input: ExecutorInput) -> ExecutorOutput {
+        let input_json = serde_json::to_string(&input.value.0).unwrap_or_default();
+        match run_shell_command(&input.script, &input_json, Some(&input.working_dir)) {
+            Ok(stdout) => ExecutorOutput::Success { value: input.value, stdout },
+            Err(e) => ExecutorOutput::Error { value: input.value, error: e },
+        }
+    }
+}
+```
+
+This removes the special-case `dispatch_finally_task` path and the `SubmitResult::Finally` variant. Finally tasks are just tasks dispatched to the `Finally` executor.
+
+## Relationship to other refactor docs
+
+- **`TYPESCRIPT_API.md`** — TypeScript becomes an executor: `TypescriptExecutor` that runs `.ts` modules via `tsx`.
+- **`CLAUDE_CLI_ACTION_KIND.md`** — Claude becomes an executor: `ClaudeExecutor` that spawns `claude` subprocesses.
+- **`EXTERNAL_VISUALIZATION.md`** — Executors don't affect visualization. The state log captures task submission/completion regardless of which executor ran.
 
 ## Open Questions
 
-1. **How many built-in kinds?** Starting with `Claude` (see `CLAUDE_CLI_ACTION_KIND.md`) as the first new built-in kind makes sense — it's the highest-value addition. `Git`, `Http`, `FileSystem` are candidates for later. Draw the line at "operations that are common in Barnum's target domain (code workflows)."
+1. **Should the executor trait be sync or async?** Currently dispatch uses `thread::spawn`. The `Executor::execute` method is synchronous, called from a worker thread. This is simple and matches the current model. An async trait would add complexity for no clear benefit since barnum already manages concurrency via `max_concurrency`.
 
-2. **Template expressions or direct value mapping?** Templates (`{{value.field}}`) are flexible but add a new expression language. Direct value mapping is simpler but requires the task value to match the action's expected shape exactly.
+2. **How do executor-specific config fields get passed?** In the current model, `Pool` needs `instructions` and `Command` needs `script`. In the pluggable model, these become opaque params (`serde_json::Value`). The executor interprets them. The question is whether the runner should do any preprocessing (like resolving `MaybeLinked` references) or if that's the executor's job.
 
-3. **Should built-in kinds be implemented in Rust or as bundled executors?** Rust is faster and has no runtime dependency, but every new kind requires a Rust change and recompile. Bundled JS/TS executors are slower but can be updated independently.
+3. **Should executors be stateful?** `PoolExecutor` holds a troupe root path and invoker. `CommandExecutor` is stateless. The trait allows both. But stateful executors complicate the registration model — you need to construct them with runtime config.
 
-4. **Do we need parameter validation at config load time, or is runtime validation sufficient?** Config-time validation catches errors early (before any work starts). Runtime validation is simpler to implement. The `value_schema` system already does runtime validation for task values.
+4. **How does this interact with the instruction generation?** Today the runner calls `generate_step_docs(step, config)` to build the agent instructions for Pool tasks. This is runner logic that's Pool-specific. In the pluggable model, this moves into `PoolExecutor::execute`, which would need access to the full step config and the overall workflow config. The `ExecutorInput` would need to carry this.
