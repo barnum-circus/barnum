@@ -117,9 +117,11 @@ impl Applier for RunState {
 
 `self.log.apply` serializes each entry to NDJSON.
 
-The current loop already has the same shape: receive, process. `process_result` interprets the result, then calls `task_succeeded`/`task_failed` which manually write the log and mutate state as separate operations. The refactor replaces that with `step()` (produce entries) and `apply()` (process them).
+The current loop already has the same shape: receive, process. The refactor has two separate stages:
 
-The refactor happens in two steps. First, restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. This is a mechanical change to the return type. Second, route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
+1. **Event loop restructure** (Phase 1): Convert the Iterator to an explicit recv loop. `process_result` still handles everything internally. This is a purely structural change — same behavior, different shape.
+
+2. **Apply pattern** (Phase 2): Restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. Route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
 
 Resume uses the same code path. Replay the NDJSON log through `apply()`. A TaskSubmitted adds a task to the dispatch queue. A TaskCompleted for the same task removes it. After the full log is applied, only tasks that were in-flight at crash time remain in the queue and get dispatched.
 
@@ -547,17 +549,23 @@ Independent refactors that can land in any order.
 
 **0d.** Make parent removal derived. When the last child completes, remove the parent inside `apply()` and capture the removed parent's info in `removed_parents: Vec<RemovedParent>`. The runner drains this to check config for finally scripts.
 
-### Phase 1: apply() as entry point
+### Phase 1: Event loop restructure
 
-**Depends on: 0a.**
+**Depends on: None (can run in parallel with Phase 0).**
 
-Introduce the `Applier` trait. RunState and LogApplier both implement it. Add `apply()` on Runner that delegates to both, tracks `pending_dispatches`, handles finally tasks, and flushes dispatches. Extract `step()` as a free function that interprets results and returns entries. Rewrite the main loop: receive result, step, apply.
+Convert the Iterator-based loop to an explicit `run()` method with a recv loop. `process_result` still handles everything internally — no new types, no Applier trait. Just the loop shape changes: `while let Ok(result) = self.rx.recv() { self.process_result(result); }`. This is a purely structural change.
 
-### Phase 2: Seeding through apply
+### Phase 2: Apply pattern
 
-**Depends on: Phase 1.**
+**Depends on: Phase 0a, Phase 1.**
 
-Restructure `run()` so seed entries go through `Runner::apply()`. `build_seed_entries` produces entries. The caller applies them to the Runner (which updates state, writes the log, and queues dispatches). `run()` starts by flushing those queued dispatches.
+Introduce the `Applier` trait. RunState and LogApplier both implement it. Make `process_result`/`task_succeeded`/`task_failed` produce `StateLogEntry` values instead of directly mutating state and writing the log. Add `apply()` on Runner that delegates to both appliers, tracks `pending_dispatches`, handles finally tasks, and flushes dispatches. Extract `step()` as a free function. The main loop becomes: receive result, step, apply.
+
+### Phase 3: Seeding through apply
+
+**Depends on: Phase 2.**
+
+Restructure `run()` so seed entries go through `Runner::apply()`. `build_seed_entries` produces entries. The caller applies them to the Runner (which updates state, writes the log, and queues dispatches).
 
 ## Before/After
 
