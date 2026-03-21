@@ -59,44 +59,28 @@ This separation means:
 - The log writer doesn't need to understand state transitions
 - The state mutator doesn't need to know about logging
 - You can add new appliers without touching existing ones (e.g., a metrics applier, a webhook notifier)
-- During replay (resume), you skip the log applier and only run the state applier
 
 ### Replay
 
+Replay is just reading an old NDJSON file, parsing each entry, and feeding it through `apply()` — the same `apply()` that runs during normal operation. **All appliers run, including the log applier.** The log applier writes to a *new* log file (the CLI already enforces `--resume-from` and `--state-log` are different files), so the new log gets a clean copy of the old entries followed by any new events from the resumed run.
+
 ```rust
-fn resume_from_log(&mut self, entries: impl Iterator<Item = StateLogEntry>) {
-    // During replay, only run the state applier — don't re-write to log
-    for entry in entries {
-        for applier in &mut self.appliers {
-            if !applier.is_log_writer() {
-                applier.apply(&entry);
-            }
-        }
+fn resume(old_log: &Path, runner: &mut TaskRunner) {
+    // Read old log, feed through ALL appliers (including log writer to new file)
+    for entry in read_ndjson(old_log) {
+        runner.apply(entry);
     }
+    // State is reconstructed. New log has a copy of old entries.
+    // Now dispatch all Pending tasks and continue normal execution.
 }
 ```
 
-Or more cleanly, tag appliers:
-
-```rust
-trait Applier {
-    fn apply(&mut self, entry: &StateLogEntry);
-    /// Whether this applier should be skipped during replay.
-    fn skip_on_replay(&self) -> bool { false }
-}
-
-impl Applier for StateLogApplier {
-    fn apply(&mut self, entry: &StateLogEntry) {
-        self.log_writer.write(entry);
-    }
-    fn skip_on_replay(&self) -> bool { true }
-}
-```
+No special replay mode. No `skip_on_replay`. No conditional logic. The trait is just `fn apply(&mut self, entry: &StateLogEntry)` — nothing else.
 
 ## Benefits
 
 1. **Impossible to forget logging** — state only changes through `apply()`, which always dispatches to all appliers
-2. **Resume uses same code path** — replay log entries through `apply()` (skipping the log writer) to reconstruct state
+2. **Resume uses the exact same code path** — replay feeds old entries through `apply()`, all appliers run, new log gets a copy
 3. **Single source of truth** — log entries define what state changes are possible
 4. **Testable** — can unit test each applier in isolation
 5. **Extensible** — add a metrics applier, a visualization applier, etc. without touching the core
@@ -178,21 +162,22 @@ impl Applier for InternalStateApplier {
 
 ### Replay is straightforward
 
-Because derived state is computed from log entries, replay is just:
+Because derived state is computed from log entries and all appliers always run, replay is just reading the old NDJSON and calling `apply()` for each entry:
 
 ```rust
-fn resume(log_path: &Path) -> InternalStateApplier {
-    let mut applier = InternalStateApplier::new();
-    for entry in read_ndjson(log_path) {
-        applier.apply(&entry);
+fn resume(old_log: &Path, runner: &mut TaskRunner) {
+    for entry in read_ndjson(old_log) {
+        runner.apply(entry);
+        // StateLogApplier writes entry to new log file
+        // InternalStateApplier rebuilds in-memory state
     }
     // All derived state (in_flight, pending_children, etc.) is now correct
+    // New log file has a copy of all old entries
     // All tasks in Pending state get re-dispatched
-    applier
 }
 ```
 
-No special replay logic. No "rebuild derived state" pass. The same `apply()` code that handles live events also handles replay. The state after replaying N entries is identical to the state after processing N live events.
+No special replay logic. No "rebuild derived state" pass. No conditional skipping. The same `apply()` code that handles live events also handles replay. The state after replaying N entries is identical to the state after processing N live events.
 
 ## Dispatch is Not Logged
 
@@ -308,8 +293,8 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
 #[test] fn state_applier_task_completed_failed_with_retry_removes()
 #[test] fn state_applier_task_completed_failed_no_retry_notifies_parent()
 #[test] fn replay_log_reconstructs_identical_state()
+#[test] fn replay_copies_entries_to_new_log()
 #[test] fn log_applier_writes_all_entries()
-#[test] fn log_applier_skipped_on_replay()
 ```
 
 ## Migration Path
