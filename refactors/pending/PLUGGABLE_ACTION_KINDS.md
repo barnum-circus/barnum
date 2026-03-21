@@ -306,14 +306,103 @@ const commit = step("CommitChanges")
   .next("Push");
 ```
 
+## Config schema generation (`barnum-config-schema.json`)
+
+This is a concrete problem that needs a concrete answer. Today the schema is generated from Rust types:
+
+### Current pipeline
+
+```
+Rust ActionFile enum (schemars derive)
+  → cargo run --bin build_barnum_schema
+    → libs/barnum/barnum-config-schema.json
+      → editors use for validation/completion
+      → CI verifies it matches committed version
+```
+
+The `ActionFile` enum uses `#[serde(tag = "kind")]`, so the schema emits a `oneOf` with one variant per enum arm. Each variant has `"kind": {"enum": ["Pool"]}` or `"kind": {"enum": ["Command"]}` as a discriminator, plus the variant-specific fields.
+
+### What happens when we add built-in kinds
+
+Adding `Claude`, `Git`, etc. as enum variants: schemars picks them up automatically. The `oneOf` grows:
+
+```json
+"ActionFile": {
+  "oneOf": [
+    { "properties": { "kind": {"enum": ["Pool"]}, "instructions": {...} } },
+    { "properties": { "kind": {"enum": ["Command"]}, "script": {...} } },
+    { "properties": { "kind": {"enum": ["Claude"]}, "prompt": {...}, "model": {...} } },
+    { "properties": { "kind": {"enum": ["Git"]}, "operation": {...}, "params": {...} } }
+  ]
+}
+```
+
+This is the simplest path and the one we should take first. Every built-in kind = one Rust variant = automatic schema generation = editor support.
+
+### What happens with user-defined kinds (Option 2)
+
+User-defined kinds declared in config can't appear in the compile-time schema. Three strategies:
+
+**Strategy A: Runtime-only validation (recommended)**
+
+Built-in kinds get schema validation in the editor. User-defined kinds are validated at runtime (barnum validates the action parameters against the kind's declared schema when loading the config). Editors see unknown `kind` values as errors against the JSON schema, but users can suppress this with `"$schema"` or editor-specific overrides.
+
+This is the pragmatic choice. The escape hatch is for power users who can live without editor completion.
+
+**Strategy B: Schema composition**
+
+Generate a base schema for built-in kinds. Users extend it via JSON Schema `$ref` or `allOf`:
+
+```jsonc
+// user's config references extended schema
+{ "$schema": "./my-extended-schema.json", ... }
+```
+
+Where `my-extended-schema.json` extends the base:
+```json
+{
+  "allOf": [
+    {"$ref": "node_modules/@barnum/barnum/barnum-config-schema.json"},
+    {
+      "definitions": {
+        "ActionFile": {
+          "oneOf": [
+            {"$ref": "#/base/ActionFile"},
+            {"properties": {"kind": {"enum": ["MyCustomKind"]}, ...}}
+          ]
+        }
+      }
+    }
+  ]
+}
+```
+
+This is technically possible but awkward. JSON Schema composition for extending discriminated unions is ugly.
+
+**Strategy C: Config-driven schema generation**
+
+`barnum build-schema --config my-config.jsonc` reads the config's `"kinds"` section and generates a complete schema including custom kinds. This produces a per-project schema file:
+
+```bash
+barnum build-schema --config workflow.jsonc > .barnum-schema.json
+```
+
+The config then references it: `"$schema": "./.barnum-schema.json"`.
+
+This is clean but introduces a build step and a chicken-and-egg issue (you need the schema to validate the config, but you need the config to generate the schema).
+
+### Recommendation
+
+- **Phase 1:** Built-in kinds only. Enum variants in Rust, automatic schema generation. No user-defined kinds.
+- **Phase 2:** Add the `"kinds"` escape hatch with runtime-only validation (Strategy A). Document that custom kinds don't get editor completion.
+- **Phase 3 (if needed):** Strategy C — `barnum build-schema` for projects that need editor support for custom kinds.
+
 ## Open Questions
 
-1. **How many built-in kinds?** Starting with Git makes sense given the codebase's focus on code-related workflows. But where do we draw the line? Git, Http, FileSystem feels reasonable. Slack, Email, Database feels like scope creep.
+1. **How many built-in kinds?** Starting with `Claude` (see `CLAUDE_CLI_ACTION_KIND.md`) as the first new built-in kind makes sense — it's the highest-value addition. `Git`, `Http`, `FileSystem` are candidates for later. Draw the line at "operations that are common in Barnum's target domain (code workflows)."
 
 2. **Template expressions or direct value mapping?** Templates (`{{value.field}}`) are flexible but add a new expression language. Direct value mapping is simpler but requires the task value to match the action's expected shape exactly.
 
 3. **Should built-in kinds be implemented in Rust or as bundled executors?** Rust is faster and has no runtime dependency, but every new kind requires a Rust change and recompile. Bundled JS/TS executors are slower but can be updated independently.
 
-4. **How does this interact with the JSON Schema generation?** Today `barnum-config-schema.json` is generated from the Rust types via `schemars`. Adding a `Git` variant to `ActionFile` automatically adds it to the schema. But user-defined kinds (Option 2) can't be in the schema at compile time.
-
-5. **Do we need parameter validation at config load time, or is runtime validation sufficient?** Config-time validation catches errors early (before any work starts). Runtime validation is simpler to implement. The `value_schema` system already does runtime validation for task values.
+4. **Do we need parameter validation at config load time, or is runtime validation sufficient?** Config-time validation catches errors early (before any work starts). Runtime validation is simpler to implement. The `value_schema` system already does runtime validation for task values.
