@@ -1,6 +1,6 @@
 {
   "name": "@barnum/troupe",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Troupe - agent pool daemon for managing workers with file-based task dispatch.",
   "main": "index.js",
   "bin": {
