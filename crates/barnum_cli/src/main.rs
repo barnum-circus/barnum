@@ -302,7 +302,7 @@ fn run_command(
 
     // Resolve pool ID
     let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
-    let pool_path = resolve_pool_path(Some(pool_id), root)?;
+    let pool_path = resolve_pool_path(pool_id, root)?;
 
     // State log: use explicit path or generate default under <root>/logs/
     let state_log_path = match state_log {
@@ -335,7 +335,7 @@ fn resume_command(
     let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
     let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
-    let pool_path = resolve_pool_path(Some(pool_id), root)?;
+    let pool_path = resolve_pool_path(pool_id, root)?;
 
     // State log: use explicit path or generate default under <root>/logs/
     let state_log_path = match state_log {
@@ -373,26 +373,16 @@ fn resume_command(
 /// Resolve pool ID to full path.
 ///
 /// Pool IDs cannot contain `/` - use `--root` to specify the base directory.
-fn resolve_pool_path(pool: Option<&str>, root: &std::path::Path) -> io::Result<PathBuf> {
-    match pool {
-        None => {
-            // Default pool lives in <root>/pools/default
-            let path = troupe::pools_dir(root).join(troupe::DEFAULT_POOL_ID);
-            std::fs::create_dir_all(&path).ok();
-            Ok(path)
-        }
-        Some(p) => {
-            if p.contains('/') {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "[E058] pool ID '{p}' cannot contain '/'. Use --root to specify the base directory."
-                    ),
-                ));
-            }
-            Ok(troupe::resolve_pool(root, p))
-        }
+fn resolve_pool_path(pool_id: &str, root: &std::path::Path) -> io::Result<PathBuf> {
+    if pool_id.contains('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "[E058] pool ID '{pool_id}' cannot contain '/'. Use --root to specify the base directory."
+            ),
+        ));
     }
+    Ok(troupe::resolve_pool(root, pool_id))
 }
 
 /// Generate a default state log path under `<root>/logs/<pool_id>.<run_id>.ndjson`.
