@@ -75,6 +75,14 @@ fn stop_stale_daemon(root: &Path) {
         .output();
 }
 
+/// Get a state log path for a test.
+///
+/// Returns `<test_dir>/state.ndjson`. The file doesn't need to exist yet —
+/// the runner creates it.
+pub fn test_state_log_path(test_dir: &Path) -> PathBuf {
+    test_dir.join("state.ndjson")
+}
+
 /// Clean up a test directory.
 ///
 /// Removes the test data directory but preserves the pool directory

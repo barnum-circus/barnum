@@ -9,7 +9,7 @@ mod common;
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir,
+    setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -47,12 +47,13 @@ fn empty_initial_tasks_completes() {
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![]; // Empty!
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Should complete immediately without error
@@ -113,12 +114,13 @@ fn large_fan_out() {
         "Distribute",
         StepInputValue(serde_json::json!({})),
     )];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
@@ -165,12 +167,13 @@ fn command_action_executes() {
         "Echo",
         StepInputValue(serde_json::json!({"message": "hello"})),
     )];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Should complete without error
@@ -215,12 +218,13 @@ fn rapid_task_completion() {
         .map(|i| Task::new("Fast", StepInputValue(serde_json::json!({"id": i}))))
         .collect();
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
@@ -248,12 +252,13 @@ fn unknown_step_in_initial_tasks_returns_error() {
     let initial_tasks = vec![
         Task::new("Unknown", StepInputValue(serde_json::json!({}))), // Unknown step - should error
     ];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Should return an error for unknown step
@@ -298,12 +303,13 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
     let initial_tasks = vec![
         Task::new("Validated", StepInputValue(serde_json::json!({}))), // Missing required "name" - should error
     ];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Should return an error for invalid value schema

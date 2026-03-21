@@ -11,7 +11,7 @@ mod common;
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir,
+    setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::fs;
@@ -133,12 +133,13 @@ echo "finally_ran" > "{}"
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let initial_tasks = vec![Task::new("StepA", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // Run the task queue
@@ -265,12 +266,13 @@ echo "finally_executed" > "{}"
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -423,12 +425,13 @@ echo "child_finally" >> "{}"
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -537,12 +540,13 @@ echo "finally_executed" > "{}"
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     // This should fail because Child is dropped after max retries
@@ -693,12 +697,13 @@ cat  # pass through stdin to stdout
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -854,12 +859,13 @@ cat  # pass through stdin to stdout
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -999,12 +1005,13 @@ fn deeply_nested_finally_chain() {
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -1145,12 +1152,13 @@ fn multiple_children_with_finally() {
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -1301,12 +1309,13 @@ fn finally_spawns_multiple_tasks() {
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -1416,12 +1425,13 @@ exit 0
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -1502,12 +1512,13 @@ fn finally_failure_propagates_after_retries_exhausted() {
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(
@@ -1606,12 +1617,13 @@ echo '[{"kind": "Cleanup", "value": {}}]'
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
+    let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
-        state_log_path: None,
+        state_log_path: &state_log,
     };
 
     let result = barnum_config::run(

@@ -301,14 +301,21 @@ fn run_command(
     )?;
 
     // Resolve pool ID
-    let pool_path = resolve_pool_path(pool, root)?;
+    let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
+    let pool_path = resolve_pool_path(pool_id, root)?;
+
+    // State log: use explicit path or generate default under <root>/logs/
+    let state_log_path = match state_log {
+        Some(p) => p.clone(),
+        None => default_state_log_path(root, pool_id)?,
+    };
 
     let runner_config = RunnerConfig {
         troupe_root: &pool_path,
         working_dir: &config_dir,
         wake_script: wake,
         invoker: &invoker,
-        state_log_path: state_log.map(PathBuf::as_path),
+        state_log_path: &state_log_path,
     };
 
     run(&cfg, &schemas, &runner_config, initial_tasks)
@@ -327,21 +334,26 @@ fn resume_command(
 
     let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
+    let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
+    let pool_path = resolve_pool_path(pool_id, root)?;
+
+    // State log: use explicit path or generate default under <root>/logs/
+    let state_log_path = match state_log {
+        Some(p) => p.clone(),
+        None => default_state_log_path(root, pool_id)?,
+    };
+
     // Validate: resume-from and state-log must not be the same path
-    if let Some(state_log_path) = state_log {
-        let resume_canonical = std::fs::canonicalize(resume_from)?;
-        if state_log_path.exists() {
-            let state_canonical = std::fs::canonicalize(state_log_path)?;
-            if resume_canonical == state_canonical {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "[E072] --resume-from and --state-log must be different files",
-                ));
-            }
+    let resume_canonical = std::fs::canonicalize(resume_from)?;
+    if state_log_path.exists() {
+        let state_canonical = std::fs::canonicalize(&state_log_path)?;
+        if resume_canonical == state_canonical {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "[E072] --resume-from and --state-log must be different files",
+            ));
         }
     }
-
-    let pool_path = resolve_pool_path(pool, root)?;
 
     // For resume, working_dir defaults to current directory
     // (the original working dir is not stored in the log)
@@ -352,7 +364,7 @@ fn resume_command(
         working_dir: &working_dir,
         wake_script: wake,
         invoker: &invoker,
-        state_log_path: state_log.map(PathBuf::as_path),
+        state_log_path: &state_log_path,
     };
 
     resume(resume_from, &runner_config)
@@ -361,26 +373,26 @@ fn resume_command(
 /// Resolve pool ID to full path.
 ///
 /// Pool IDs cannot contain `/` - use `--root` to specify the base directory.
-fn resolve_pool_path(pool: Option<&str>, root: &std::path::Path) -> io::Result<PathBuf> {
-    match pool {
-        None => {
-            // Default pool lives in <root>/pools/default
-            let path = troupe::pools_dir(root).join(troupe::DEFAULT_POOL_ID);
-            std::fs::create_dir_all(&path).ok();
-            Ok(path)
-        }
-        Some(p) => {
-            if p.contains('/') {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "[E058] pool ID '{p}' cannot contain '/'. Use --root to specify the base directory."
-                    ),
-                ));
-            }
-            Ok(troupe::resolve_pool(root, p))
-        }
+fn resolve_pool_path(pool_id: &str, root: &std::path::Path) -> io::Result<PathBuf> {
+    if pool_id.contains('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "[E058] pool ID '{pool_id}' cannot contain '/'. Use --root to specify the base directory."
+            ),
+        ));
     }
+    Ok(troupe::resolve_pool(root, pool_id))
+}
+
+/// Generate a default state log path under `<root>/logs/<pool_id>.<run_id>.ndjson`.
+///
+/// Creates the `<root>/logs/` directory if it doesn't exist.
+fn default_state_log_path(root: &Path, pool_id: &str) -> io::Result<PathBuf> {
+    let logs_dir = root.join("logs");
+    std::fs::create_dir_all(&logs_dir)?;
+    let run_id = troupe::generate_id();
+    Ok(logs_dir.join(format!("{pool_id}.{run_id}.ndjson")))
 }
 
 /// Parse config from either inline JSON/JSONC or a file path.
