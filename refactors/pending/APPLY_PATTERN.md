@@ -21,119 +21,196 @@ This creates risk of:
 
 ## Core Idea
 
-All state changes go through a single `apply()` method that atomically writes to log AND updates internal state:
+All state changes go through a single `apply()` method. But instead of `apply()` doing everything itself, it dispatches to a **registered vector of appliers** — each one handling its own concern independently.
 
 ```rust
-impl TaskRunner {
-    /// All state changes go through this. Writes to log, then updates internal state.
-    fn apply(&mut self, entry: StateLogEntry) {
-        // 1. Write to log (guaranteed to happen)
-        self.log_writer.write(&entry);
+/// A handler that reacts to state log entries.
+trait Applier {
+    fn apply(&mut self, entry: &StateLogEntry);
+}
 
-        // 2. Update internal state based on entry
-        match entry {
-            StateLogEntry::TaskSubmitted(submitted) => {
-                self.apply_task_submitted(submitted);
-            }
-            StateLogEntry::TaskCompleted(completed) => {
-                self.apply_task_completed(completed);
-            }
-            StateLogEntry::Config(_) => {
-                // Config is only written once at start, no state update needed
+impl TaskRunner {
+    /// All state changes go through this. Dispatches to registered appliers.
+    fn apply(&mut self, entry: StateLogEntry) {
+        for applier in &mut self.appliers {
+            applier.apply(&entry);
+        }
+    }
+}
+```
+
+### Applier Registration
+
+The runner holds a `Vec<Box<dyn Applier>>`. Two appliers ship by default:
+
+```rust
+fn build_appliers(log_writer: LogWriter, /* ... */) -> Vec<Box<dyn Applier>> {
+    vec![
+        Box::new(StateLogApplier { log_writer }),
+        Box::new(InternalStateApplier { tasks: HashMap::new(), /* ... */ }),
+    ]
+}
+```
+
+1. **`StateLogApplier`** — writes the entry to the NDJSON state log file. Append-only, no logic.
+2. **`InternalStateApplier`** — mutates the in-memory state (task map, pending counts, etc.).
+
+This separation means:
+- The log writer doesn't need to understand state transitions
+- The state mutator doesn't need to know about logging
+- You can add new appliers without touching existing ones (e.g., a metrics applier, a webhook notifier)
+- During replay (resume), you skip the log applier and only run the state applier
+
+### Replay
+
+```rust
+fn resume_from_log(&mut self, entries: impl Iterator<Item = StateLogEntry>) {
+    // During replay, only run the state applier — don't re-write to log
+    for entry in entries {
+        for applier in &mut self.appliers {
+            if !applier.is_log_writer() {
+                applier.apply(&entry);
             }
         }
     }
+}
+```
+
+Or more cleanly, tag appliers:
+
+```rust
+trait Applier {
+    fn apply(&mut self, entry: &StateLogEntry);
+    /// Whether this applier should be skipped during replay.
+    fn skip_on_replay(&self) -> bool { false }
+}
+
+impl Applier for StateLogApplier {
+    fn apply(&mut self, entry: &StateLogEntry) {
+        self.log_writer.write(entry);
+    }
+    fn skip_on_replay(&self) -> bool { true }
 }
 ```
 
 ## Benefits
 
-1. **Impossible to forget logging** - state only changes through `apply()`, which always logs
-2. **Resume uses same code path** - replay log entries through `apply()` to reconstruct state
-3. **Single source of truth** - log entries define what state changes are possible
-4. **Testable** - can unit test `apply()` in isolation with fake log writer
+1. **Impossible to forget logging** — state only changes through `apply()`, which always dispatches to all appliers
+2. **Resume uses same code path** — replay log entries through `apply()` (skipping the log writer) to reconstruct state
+3. **Single source of truth** — log entries define what state changes are possible
+4. **Testable** — can unit test each applier in isolation
+5. **Extensible** — add a metrics applier, a visualization applier, etc. without touching the core
 
-## Design Challenges
+## Derived State: Compute From Log
 
-### Challenge 1: Derived State
+The log should be minimal — only facts that can't be derived. Everything else is computed.
 
-Some state doesn't map cleanly to log entries:
-- `in_flight` counter (number of tasks currently executing)
-- `next_task_id` (monotonic counter)
+### What goes in the log
 
-**Options:**
+Only raw events:
+- `TaskSubmitted` — a task was created with this step, value, parent, origin
+- `TaskCompleted` — a task finished with this outcome
 
-A. **Track in log entry** - Add fields like `dispatched: bool` to TaskSubmitted
-B. **Derive from state** - Recompute `in_flight` by counting InFlight states
-C. **Separate from apply** - Only use apply for logged state, keep counters separate
+### What does NOT go in the log
 
-**Recommendation:** Option B (derive from state) for `in_flight`, Option C for `next_task_id` (it's derived from max task_id in log).
+- `in_flight` count — derived by counting tasks that have been submitted but not completed
+- `next_task_id` — derived from `max(task_id) + 1` across all entries
+- `pending_children_count` — derived by counting submitted children minus completed children for each parent
+- `TaskDispatched` — dispatch (Pending → InFlight) is transient; on resume, re-dispatch all pending tasks
 
-### Challenge 2: TaskState Transitions
-
-Current code has complex state transitions:
-- `Pending` → `InFlight` (on dispatch)
-- `InFlight` → `WaitingForChildren` (on success with children)
-- `InFlight` → removed (on success without children)
-- `WaitingForChildren` → removed (when all children complete)
-
-The log only captures:
-- `TaskSubmitted` (creates Pending)
-- `TaskCompleted` (removes task or transitions to WaitingForChildren)
-
-**Solution:** `apply_task_completed` handles the complex logic:
+### How `InternalStateApplier` computes derived state
 
 ```rust
-fn apply_task_completed(&mut self, completed: TaskCompleted) {
-    match completed.outcome {
-        TaskOutcome::Success(success) => {
-            if success.spawned_task_ids.is_empty() {
-                // No children - task is done
-                self.tasks.remove(&completed.task_id);
-                self.notify_parent(completed.task_id);
-            } else {
-                // Has children - transition to WaitingForChildren
-                let entry = self.tasks.get_mut(&completed.task_id).expect("task exists");
-                entry.state = TaskState::WaitingForChildren {
-                    pending_children_count: NonZeroU16::new(success.spawned_task_ids.len() as u16).unwrap(),
-                    finally_data: /* ... */,
-                };
+struct InternalStateApplier {
+    tasks: HashMap<LogTaskId, TaskEntry>,
+}
+
+impl Applier for InternalStateApplier {
+    fn apply(&mut self, entry: &StateLogEntry) {
+        match entry {
+            StateLogEntry::TaskSubmitted(submitted) => {
+                self.tasks.insert(submitted.task_id, TaskEntry {
+                    step: submitted.step.clone(),
+                    parent_id: submitted.parent_id,
+                    state: TaskState::Pending {
+                        value: StepInputValue(submitted.value.clone()),
+                    },
+                    retries_remaining: 0, // resolved later from step config
+                });
+
+                // Derived: increment parent's child count
+                if let Some(parent_id) = submitted.parent_id {
+                    if let Some(parent) = self.tasks.get_mut(&parent_id) {
+                        parent.increment_pending_children();
+                    }
+                }
             }
-        }
-        TaskOutcome::Failed(failed) => {
-            if failed.retry_task_id.is_some() {
-                // Retry will be logged separately as TaskSubmitted
-                self.tasks.remove(&completed.task_id);
-            } else {
-                // Permanent failure
-                self.tasks.remove(&completed.task_id);
-                // Handle finally, notify parent, etc.
+            StateLogEntry::TaskCompleted(completed) => {
+                match &completed.outcome {
+                    TaskOutcome::Success(success) => {
+                        if success.spawned_task_ids.is_empty() {
+                            self.tasks.remove(&completed.task_id);
+                            // Derived: decrement parent's child count
+                            self.maybe_notify_parent(completed.task_id);
+                        } else {
+                            // Transition to WaitingForChildren
+                            // pending_children_count is derived from how many
+                            // TaskSubmitted entries reference this task as parent
+                            let entry = self.tasks.get_mut(&completed.task_id).unwrap();
+                            entry.state = TaskState::WaitingForChildren {
+                                // Count is already tracked from TaskSubmitted events
+                            };
+                        }
+                    }
+                    TaskOutcome::Failed(failed) => {
+                        self.tasks.remove(&completed.task_id);
+                        if failed.retry_task_id.is_none() {
+                            self.maybe_notify_parent(completed.task_id);
+                        }
+                    }
+                }
             }
+            StateLogEntry::Config(_) => {}
         }
     }
 }
 ```
 
-### Challenge 3: Dispatch is Not Logged
+### Replay is straightforward
 
-Dispatching a task (Pending → InFlight) is not a logged event. Options:
+Because derived state is computed from log entries, replay is just:
 
-A. **Log dispatch** - Add `TaskDispatched { task_id }` entry
-B. **Don't track InFlight in state** - Only track Pending and WaitingForChildren
-C. **Keep dispatch outside apply** - Only logged events go through apply
+```rust
+fn resume(log_path: &Path) -> InternalStateApplier {
+    let mut applier = InternalStateApplier::new();
+    for entry in read_ndjson(log_path) {
+        applier.apply(&entry);
+    }
+    // All derived state (in_flight, pending_children, etc.) is now correct
+    // All tasks in Pending state get re-dispatched
+    applier
+}
+```
 
-**Recommendation:** Option C. The InFlight state is transient and doesn't need to survive resume (we re-dispatch pending tasks on resume anyway).
+No special replay logic. No "rebuild derived state" pass. The same `apply()` code that handles live events also handles replay. The state after replaying N entries is identical to the state after processing N live events.
+
+## Dispatch is Not Logged
+
+Dispatching a task (Pending → InFlight) is not a logged event. It's transient state:
+- On resume, all Pending tasks get re-dispatched
+- The InFlight state doesn't survive resume anyway
+- Logging dispatch would bloat the log with no recovery value
 
 ```rust
 // dispatch() is separate from apply() - it only changes InFlight status
 fn dispatch(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.get_mut(&task_id).expect("task exists");
+    let entry = self.state.tasks.get_mut(&task_id).expect("task exists");
     let value = match &entry.state {
         TaskState::Pending { value } => value.clone(),
         _ => panic!("can only dispatch pending tasks"),
     };
     entry.state = TaskState::InFlight(/* ... */);
-    self.spawn_task_thread(task_id, value);
+    self.spawn_task_future(task_id, value);
 }
 ```
 
@@ -165,7 +242,7 @@ fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>, origin: TaskO
 fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>, origin: TaskOrigin) {
     let id = self.next_task_id();
 
-    // Single call handles both logging AND state update
+    // Single call handles logging AND state update via registered appliers
     self.apply(StateLogEntry::TaskSubmitted(TaskSubmitted {
         task_id: id,
         step: task.step.clone(),
@@ -174,7 +251,7 @@ fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>, origin: TaskO
         origin,
     }));
 
-    // Dispatch is separate (not logged)
+    // Dispatch is separate (not logged, not applied)
     if self.in_flight() < self.max_concurrency {
         self.dispatch(id);
     }
@@ -200,7 +277,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
 
 // AFTER
 fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: StepInputValue) {
-    // Queue children first (each gets its own TaskSubmitted)
+    // Queue children first (each gets its own TaskSubmitted through apply)
     let spawned_task_ids: Vec<LogTaskId> = spawned.iter().map(|task| {
         let id = self.next_task_id();
         self.apply(StateLogEntry::TaskSubmitted(TaskSubmitted {
@@ -213,7 +290,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
         id
     }).collect();
 
-    // Then complete the parent (apply handles WaitingForChildren transition)
+    // Then complete the parent (appliers handle WaitingForChildren transition)
     self.apply(StateLogEntry::TaskCompleted(TaskCompleted {
         task_id,
         outcome: TaskOutcome::Success(TaskSuccess { spawned_task_ids }),
@@ -221,138 +298,25 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
 }
 ```
 
-### New: apply_task_submitted
-
-```rust
-fn apply_task_submitted(&mut self, submitted: TaskSubmitted) {
-    let step = self.step_map.get(&submitted.step).expect("step exists");
-    let retries_remaining = step.options.max_retries;
-
-    let finally_script = if matches!(submitted.origin, TaskOrigin::Finally { .. }) {
-        step.finally.clone()
-    } else {
-        None
-    };
-
-    self.tasks.insert(submitted.task_id, TaskEntry {
-        step: submitted.step,
-        parent_id: submitted.parent_id,
-        finally_script,
-        state: TaskState::Pending { value: StepInputValue(submitted.value) },
-        retries_remaining,
-    });
-
-    // Update parent's pending_children_count if needed
-    if let Some(parent_id) = submitted.parent_id {
-        self.increment_pending_children(parent_id);
-    }
-}
-```
-
-### New: apply_task_completed
-
-```rust
-fn apply_task_completed(&mut self, completed: TaskCompleted) {
-    let entry = self.tasks.get(&completed.task_id).expect("task exists");
-    let parent_id = entry.parent_id;
-    let finally_hook = self.lookup_finally_hook(entry);
-
-    match completed.outcome {
-        TaskOutcome::Success(success) => {
-            if success.spawned_task_ids.is_empty() {
-                // No children - schedule finally if needed, then remove
-                if let Some(hook) = finally_hook {
-                    let value = entry.get_value().clone();
-                    // Note: schedule_finally will call apply() for the finally task
-                    self.schedule_finally(completed.task_id, hook, value);
-                }
-                self.tasks.remove(&completed.task_id);
-                if let Some(parent_id) = parent_id {
-                    self.decrement_pending_children(parent_id);
-                }
-            } else {
-                // Has children - transition to WaitingForChildren
-                let entry = self.tasks.get_mut(&completed.task_id).unwrap();
-                let finally_data = finally_hook.map(|hook| (hook, entry.get_value().clone()));
-                entry.state = TaskState::WaitingForChildren {
-                    pending_children_count: NonZeroU16::new(success.spawned_task_ids.len() as u16).unwrap(),
-                    finally_data,
-                };
-            }
-        }
-        TaskOutcome::Failed(failed) => {
-            self.tasks.remove(&completed.task_id);
-            if failed.retry_task_id.is_none() {
-                // Permanent failure - notify parent
-                if let Some(parent_id) = parent_id {
-                    self.decrement_pending_children(parent_id);
-                }
-            }
-            // If retry_task_id is Some, the retry TaskSubmitted handles parent relationship
-        }
-    }
-}
-```
-
-## Resume Integration
-
-With apply pattern, resume becomes trivial:
-
-```rust
-fn resume_from_log(&mut self, entries: impl Iterator<Item = StateLogEntry>) {
-    for entry in entries {
-        match entry {
-            StateLogEntry::Config(_) => {
-                // Already handled during initialization
-            }
-            _ => {
-                // Don't write to log (we're replaying), just apply state change
-                self.apply_without_logging(entry);
-            }
-        }
-    }
-}
-
-fn apply_without_logging(&mut self, entry: StateLogEntry) {
-    match entry {
-        StateLogEntry::TaskSubmitted(submitted) => {
-            self.apply_task_submitted(submitted);
-        }
-        StateLogEntry::TaskCompleted(completed) => {
-            self.apply_task_completed(completed);
-        }
-        StateLogEntry::Config(_) => {}
-    }
-}
-```
-
-Or refactor `apply()` to take a flag:
-
-```rust
-fn apply(&mut self, entry: StateLogEntry, write_to_log: bool) {
-    if write_to_log {
-        self.log_writer.write(&entry);
-    }
-    // ... same state update logic ...
-}
-```
-
 ## Testing
 
 ```rust
-#[test] fn apply_task_submitted_creates_pending_entry()
-#[test] fn apply_task_submitted_increments_parent_children()
-#[test] fn apply_task_completed_success_no_children_removes()
-#[test] fn apply_task_completed_success_with_children_waits()
-#[test] fn apply_task_completed_failed_with_retry_removes()
-#[test] fn apply_task_completed_failed_no_retry_notifies_parent()
-#[test] fn apply_sequence_matches_manual_state_changes()
+#[test] fn state_applier_task_submitted_creates_pending_entry()
+#[test] fn state_applier_task_submitted_increments_parent_children()
+#[test] fn state_applier_task_completed_success_no_children_removes()
+#[test] fn state_applier_task_completed_success_with_children_waits()
+#[test] fn state_applier_task_completed_failed_with_retry_removes()
+#[test] fn state_applier_task_completed_failed_no_retry_notifies_parent()
 #[test] fn replay_log_reconstructs_identical_state()
+#[test] fn log_applier_writes_all_entries()
+#[test] fn log_applier_skipped_on_replay()
 ```
 
 ## Migration Path
 
-1. Implement `apply_task_submitted` and `apply_task_completed` as new methods
-2. Refactor existing code to call `apply()` instead of direct mutations
-3. Verify all tests pass
-4. Remove dead code paths that did direct mutations
+1. Define `Applier` trait
+2. Implement `StateLogApplier` (wraps existing log writer)
+3. Implement `InternalStateApplier` (extracts existing state mutation logic)
+4. Refactor `TaskRunner` to hold `Vec<Box<dyn Applier>>` and dispatch through `apply()`
+5. Verify all tests pass
+6. Remove dead code paths that did direct mutations or direct log writes
