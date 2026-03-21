@@ -4,6 +4,8 @@
 
 Make `barnum_config` use `task_queue`'s execution engine. Barnum will have a single dynamic task type that implements `QueueItem`.
 
+**Design principle:** The `QueueItem` trait is minimal. Pre-hooks, post-hooks, finally-hooks, retry logic — all of that is Barnum's business. Barnum "compiles" its rich config-driven behavior into simple queue operations. The trait knows nothing about hooks or finalization.
+
 ## Current State
 
 ### task_queue
@@ -70,10 +72,13 @@ pub enum TaskOutput<T> {
 }
 ```
 
+That's the entire trait. Two methods. No `finally()`, no `has_finally()`. task_queue is a dumb execution engine that runs tasks, collects results, and feeds them back.
+
 **Why this works:**
 - Barnum can return a future that submits to troupe, waits for response file, parses JSON
 - Typed task_queue users can return a future that spawns a local command
 - Both use the same `TaskRunner` execution engine
+- task_queue doesn't need to know about hooks, retries, or finalization
 
 ### Change 2: Keep `Command` helper for simple cases
 
@@ -118,6 +123,8 @@ impl QueueItem<Ctx> for AnalyzeFile {
 ```
 
 ### Change 3: Barnum implements `QueueItem` dynamically
+
+Barnum compiles all its complexity (pre-hooks, post-hooks, finally tracking, retries) into plain `QueueItem` operations. The trait sees none of it.
 
 ```rust
 // barnum_config/src/queue_item.rs
@@ -223,7 +230,7 @@ impl QueueItem<BarnumContext> for Task {
         };
 
         // Run post-hook if configured
-        let final_tasks = match &ip.step.post {
+        let mut final_tasks = match &ip.step.post {
             Some(post) => match run_post_hook(post, &post_input) {
                 Ok(modified) => extract_next_tasks(&modified),
                 Err(_) => raw_tasks, // Post hook failed, use original tasks
@@ -231,154 +238,153 @@ impl QueueItem<BarnumContext> for Task {
             None => raw_tasks,
         };
 
+        // Finally tracking: register descendants if this step has a finally hook
+        if let Some(finally_hook) = &ip.step.finally_hook {
+            if !final_tasks.is_empty() {
+                ctx.finally_tracker.register(
+                    ip.task.id,
+                    final_tasks.len(),
+                    finally_hook.clone(),
+                    ip.effective_value.clone(),
+                );
+                // Tag children so we can track when they complete
+                for task in &mut final_tasks {
+                    task.finally_origin = Some(ip.task.id);
+                }
+            }
+        }
+
+        // Check if any ancestor's finally is now ready to fire
+        if let Some(origin_id) = ip.task.finally_origin {
+            if let Some(finally_tasks) = ctx.finally_tracker.descendant_completed(origin_id) {
+                final_tasks.extend(finally_tasks);
+            }
+        }
+
         final_tasks
     }
 }
 ```
 
-## Hooks
+## Hooks: All User Land
 
 | Hook | Where it runs | Responsibility |
 |------|---------------|----------------|
 | **pre** | In `start()`, before returning future | Barnum only |
 | **post** | In `process()`, after getting result | Barnum only |
-| **finally** | After all descendants complete | **task_queue** (native support) |
+| **finally** | In `process()`, via `FinallyTracker` in context | Barnum only |
 
-Pre and post hooks are Barnum-specific implementation details inside `QueueItem` impl.
+**All three hooks are Barnum-specific implementation details inside the `QueueItem` impl.** task_queue knows nothing about any of them.
 
-Finally is native to task_queue because it's a general concept: "run something after all spawned tasks complete."
+## Finally: Compiled Into User Land
 
-## Finally: Native task_queue Support
+### The Problem
 
-### The Concept
+When a task spawns children, sometimes you want to run cleanup/aggregation after *all* descendants complete. This is `finally`. It's a Barnum workflow concept, not a generic queue concept.
 
-When a task spawns children, sometimes you want to run cleanup/aggregation after *all* descendants complete. This is `finally`.
+### Why it doesn't belong in the trait
 
-Example: A "Distribute" task fans out to 20 "Worker" tasks. After all workers finish, run an aggregation script.
+Previous design had `finally()` as a method on `QueueItem`. This is wrong because:
 
-### Proposed trait extension
+1. **It infects the trait with domain logic.** `finally` is a Barnum concept — "run a shell script after all descendants finish." A generic task queue shouldn't know about this.
+2. **It forces task_queue to track parent-child relationships.** That's Barnum's concern. task_queue should be a flat list of tasks, each executing independently.
+3. **It makes the trait harder to implement.** Every `QueueItem` implementor has to think about `finally` even if they don't use it.
 
-Add a `finally()` method to `QueueItem` that returns `Option<Self::NextTasks>`:
+### How Barnum handles it instead
+
+Barnum tracks finally state in `BarnumContext`, not in the trait:
 
 ```rust
-pub trait QueueItem<Context>: Sized {
-    type InProgress;
-    type Response: DeserializeOwned;
-    type NextTasks;
+/// Lives in BarnumContext — invisible to task_queue.
+pub struct FinallyTracker {
+    /// Tasks waiting for all descendants to complete.
+    pending: HashMap<TaskId, FinallyState>,
+}
 
-    fn start(self, ctx: &mut Context) -> (Self::InProgress, BoxFuture<'static, TaskOutput<Self::Response>>);
+struct FinallyState {
+    /// Number of direct children still pending.
+    remaining_children: usize,
+    /// The finally hook command to run.
+    hook: FinallyHook,
+    /// The original task's value (input to finally hook).
+    original_value: StepInputValue,
+}
 
-    fn process(
-        in_progress: Self::InProgress,
-        result: TaskOutput<Self::Response>,
-        ctx: &mut Context,
-    ) -> Self::NextTasks;
-
-    /// Called after all tasks returned by `process()` (and their descendants) have completed.
-    ///
-    /// Returns `Some(tasks)` to run cleanup/aggregation, or `None` if no finally behavior.
-    /// Returning `None` means task_queue skips tracking descendants for this task.
-    ///
-    /// The `in_progress` state is preserved from when `process()` ran, allowing access
-    /// to the original task's context.
-    ///
-    /// Default: `None` (no finally).
-    fn finally(in_progress: &Self::InProgress, ctx: &Context) -> Option<Self::NextTasks> {
-        None
+impl FinallyTracker {
+    /// Register a task that has a finally hook and spawned children.
+    fn register(&mut self, task_id: TaskId, child_count: usize, hook: FinallyHook, value: StepInputValue) {
+        self.pending.insert(task_id, FinallyState {
+            remaining_children: child_count,
+            hook,
+            original_value: value,
+        });
     }
-}
-```
 
-Note: `finally()` takes `&Context` (immutable) and `&Self::InProgress` (immutable). The call should be cheap - it just checks if there's a finally handler and returns tasks if so. No mutation needed.
+    /// Called when a descendant of a tracked task completes.
+    /// Returns Some(tasks) if the finally hook should fire now.
+    fn descendant_completed(&mut self, origin_id: TaskId) -> Option<Vec<Task>> {
+        let state = self.pending.get_mut(&origin_id)?;
+        state.remaining_children -= 1;
 
-### TaskRunner changes
-
-task_queue's `TaskRunner` needs to track parent-child relationships:
-
-```rust
-pub struct TaskRunner<T, InProgress, Ctx> {
-    queue: VecDeque<QueuedTask<T>>,
-    in_flight: Vec<InFlightTask<InProgress>>,
-    ctx: &mut Ctx,
-    max_concurrency: Option<usize>,
-
-    // NEW: Finally tracking
-    next_task_id: u64,
-    /// Tasks waiting for their descendants to complete before running finally.
-    finally_pending: HashMap<u64, FinallyState<InProgress>>,
-}
-
-struct QueuedTask<T> {
-    task: T,
-    id: u64,
-    /// If this task descended from a task with finally, tracks that origin.
-    origin_id: Option<u64>,
-}
-
-struct FinallyState<InProgress> {
-    /// Number of descendants still pending.
-    pending_count: usize,
-    /// The in_progress state from when process() ran.
-    in_progress: InProgress,
-}
-```
-
-### Execution flow
-
-1. Task completes, `process()` returns `next_tasks`
-2. Call `finally(&in_progress, &ctx)`:
-   - If returns `Some(_)` and `next_tasks` is non-empty:
-     - Store `in_progress` in `finally_pending[task_id]`
-     - Set `pending_count = next_tasks.len()`
-     - Spawned tasks get `origin_id = task_id`
-   - If returns `None`, no tracking needed
-3. When any task completes:
-   - If it has an `origin_id`, decrement `finally_pending[origin_id].pending_count`
-   - If count reaches 0, call `finally()` again and queue the returned `Some(tasks)`
-4. Tasks spawned by `finally()` do NOT inherit `origin_id` (prevents infinite tracking)
-
-The key insight: `finally()` is called twice - once after `process()` to check if tracking is needed, and again when all descendants complete to get the actual tasks. Both calls should be cheap (just checking config and building task list).
-
-### Barnum implementation
-
-```rust
-impl QueueItem<BarnumContext> for Task {
-    // ... start() and process() as before ...
-
-    fn finally(ip: &Self::InProgress, ctx: &BarnumContext) -> Option<Vec<Task>> {
-        let finally_cmd = ip.step.finally_hook.as_ref()?;
-
-        // Run the finally command with original value on stdin
-        match run_finally_hook(finally_cmd, &ip.effective_value) {
-            Ok(tasks) => Some(tasks),
-            Err(e) => {
-                warn!(error = %e, "finally hook failed (ignored)");
-                Some(vec![])  // Still return Some to indicate finally was attempted
+        if state.remaining_children == 0 {
+            let state = self.pending.remove(&origin_id).unwrap();
+            match run_finally_hook(&state.hook, &state.original_value) {
+                Ok(tasks) => Some(tasks),
+                Err(e) => {
+                    warn!(error = %e, "finally hook failed");
+                    Some(vec![])
+                }
             }
+        } else {
+            None
         }
     }
 }
 ```
 
-### Typed task_queue usage
+The flow:
 
-For typed workflows, finally enables patterns like map-reduce:
+1. Task completes, `process()` returns child tasks
+2. If step has `finally` hook AND children were spawned → register in `ctx.finally_tracker`
+3. Tag each child task with `finally_origin = Some(parent_id)`
+4. When any child completes, `process()` checks `ctx.finally_tracker.descendant_completed()`
+5. When count reaches 0, finally hook fires, returned tasks are appended to `process()`'s output
+6. Finally-spawned tasks do NOT inherit `finally_origin` (prevents infinite tracking)
+
+**task_queue sees none of this.** It just sees tasks going in and tasks coming out. The finally logic is entirely within Barnum's `process()` implementation and its `BarnumContext`.
+
+### What about typed task_queue users who want finally?
+
+They implement the same pattern in their own `process()` + context:
 
 ```rust
-impl QueueItem<Ctx> for DistributeTask {
-    type NextTasks = Vec<Task>;
+struct MyContext {
+    finally_tracker: FinallyTracker<MyTask>,
+    // ...
+}
 
-    fn process(ip: Self::InProgress, result: TaskOutput<Value>, ctx: &mut Ctx) -> Vec<Task> {
-        // Fan out to workers
-        ip.items.iter().map(|item| Task::Worker(WorkerTask { item })).collect()
-    }
+impl QueueItem<MyContext> for MyTask {
+    fn process(ip: Self::InProgress, result: TaskOutput<Value>, ctx: &mut MyContext) -> Vec<MyTask> {
+        let children = compute_children(&result);
 
-    fn finally(ip: &Self::InProgress, ctx: &Ctx) -> Option<Vec<Task>> {
-        // All workers done - aggregate results
-        Some(vec![Task::Aggregate(AggregateTask { source: ip.id })])
+        // Register for aggregation after all children complete
+        if !children.is_empty() {
+            ctx.finally_tracker.register(ip.id, children.len(), AggregateTask { source: ip.id });
+        }
+
+        // Check if a parent's finally is ready
+        if let Some(origin) = ip.finally_origin {
+            if let Some(tasks) = ctx.finally_tracker.descendant_completed(origin) {
+                children.extend(tasks);
+            }
+        }
+
+        children
     }
 }
 ```
+
+If this pattern proves common, we could publish `FinallyTracker` as a utility in task_queue, but it's not part of the trait.
 
 ## BarnumContext
 
@@ -390,6 +396,7 @@ pub struct BarnumContext {
     pub schemas: CompiledSchemas,
     pub pool_path: PathBuf,
     pub config_base_path: PathBuf,
+    pub finally_tracker: FinallyTracker,
 }
 
 impl BarnumContext {
@@ -410,25 +417,21 @@ impl BarnumContext {
 - Change `start()` to return `BoxFuture` instead of `Command`
 - Add `TaskOutput` enum with `Success`, `Timeout`, `InvalidResponse`, `Error` variants
 - Add `run_command()` helper for backward compatibility
-- Add `finally()` and `has_finally()` methods with default impls
+- **No `finally()` method.** The trait stays at two methods.
 
 ### Task 2: Update task_queue's TaskRunner
 
 - Modify execution loop to `.await` the future instead of spawning a `Command`
-- Add `QueuedTask` wrapper with `id` and `origin_id`
-- Add `finally_pending: HashMap<u64, FinallyState<InProgress>>`
-- Track parent-child relationships and run `finally()` when descendants complete
+- **No parent-child tracking in TaskRunner.** It's a flat queue that runs tasks and collects results.
 
 ### Task 3: Create BarnumContext
 
-Consolidate config, schemas, paths into single struct.
+Consolidate config, schemas, paths, and `FinallyTracker` into single struct.
 
 ### Task 4: Implement QueueItem for Task in barnum_config
 
 - `start()`: run pre-hook, return future for either pool submission or local command
-- `process()`: validate response, run post-hook, return next tasks
-- `finally()`: run finally hook if configured
-- `has_finally()`: check if step has finally_hook
+- `process()`: validate response, run post-hook, track finally via `FinallyTracker`, return next tasks
 
 ### Task 5: Replace barnum_config's TaskRunner
 
@@ -437,12 +440,6 @@ Delete the current `runner/` module, use task_queue's runner directly.
 ### Task 6: Make barnum_config async
 
 Add tokio dependency, make `run()` async.
-
-## TODOs
-
-- [ ] **Add tests for `finally` hooks** - Currently no tests or demos exercise this feature
-- [ ] **Add demo for `finally`** - Show a fan-out that aggregates results
-- [ ] **Document `finally` behavior** - When it runs, what input it receives, error handling
 
 ## Current `finally` Implementation (for reference)
 
@@ -472,12 +469,16 @@ When a task completes:
 - Finally failures are logged but ignored
 - Finally-spawned tasks don't inherit origin (prevents infinite tracking)
 
+This logic moves from Barnum's runner into `FinallyTracker` in `BarnumContext`. Same algorithm, different home.
+
 ## Summary
 
 | Component | Responsibility |
 |-----------|----------------|
-| **task_queue** | Queue execution, concurrency, async futures |
-| **barnum_config** | Config parsing, validation, hooks, finally tracking |
-| **QueueItem impl** | Bridge between them - Barnum's Task implements task_queue's trait |
+| **task_queue** | Queue execution, concurrency, async futures. **Nothing else.** |
+| **QueueItem trait** | Two methods: `start()` and `process()`. No hooks, no finally. |
+| **barnum_config** | Config parsing, validation, hooks (pre/post/finally), retry logic, state logging |
+| **BarnumContext** | Barnum's runtime state including `FinallyTracker` |
+| **QueueItem impl** | Bridge — compiles Barnum's rich behavior into simple queue operations |
 
-The key insight: task_queue provides the execution engine, Barnum provides the dynamic/config-driven behavior. They compose via the `QueueItem` trait, with Barnum returning futures that do whatever Barnum needs (pool submission, hooks, etc.).
+The key insight: task_queue provides the execution engine, Barnum provides the dynamic/config-driven behavior. They compose via the `QueueItem` trait, with Barnum returning futures that do whatever Barnum needs (pool submission, hooks, etc.). Pre, post, and finally are all "user land" — they live in Barnum's `QueueItem` implementation and `BarnumContext`, invisible to the trait.
