@@ -20,20 +20,35 @@ This creates risk of:
 3. Bugs where state is updated but log isn't (or vice versa)
 4. Resume logic diverging from live logic
 
-## Primitives
+## Core Idea
 
-### StateLogEntry
+One method — `emit()` — updates state AND notifies all observers. Every state change goes through it. No exceptions.
 
-Everything in the system is a `StateLogEntry`. The log is the complete record — it captures both facts (what agents returned) and interpretations (what we decided to do about it).
+```rust
+fn emit(&mut self, entry: StateLogEntry) {
+    self.state.apply(&entry);
+    for applier in &mut self.appliers {
+        applier.apply(&entry);
+    }
+}
+```
+
+The log is a record of what happened. `StateLogEntry` variants are facts:
+- A config was loaded
+- A task was submitted
+- An agent returned a response
+- A task completed
+
+## StateLogEntry
 
 ```rust
 enum StateLogEntry {
     Config(StateLogConfig),
     TaskSubmitted(TaskSubmitted),
     TaskCompleted(TaskCompleted),
-    /// Raw agent response. Logged for completeness and auditability.
-    /// RunState ignores this variant — the derived events that follow
-    /// (TaskCompleted, TaskSubmitted) handle state changes.
+    /// Raw agent response. RunState ignores this — it's logged for
+    /// completeness and auditability. The derived TaskCompleted and
+    /// TaskSubmitted entries that follow handle state changes.
     Completion(CompletionData),
 }
 
@@ -43,142 +58,194 @@ struct CompletionData {
 }
 ```
 
-No wrapper type. No `Event` enum. One currency everywhere.
+## Applier
 
-### Applier
-
-Reacts to log entries. Optionally produces follow-up entries that cascade through all appliers.
+An observer. Gets told what happened. Does not produce events, does not return anything, does not influence control flow. Pure side effect.
 
 ```rust
 trait Applier {
-    /// React to a log entry. Returns follow-up entries that will cascade
-    /// through all appliers until quiescence.
-    fn apply(&mut self, entry: &StateLogEntry) -> Vec<StateLogEntry>;
+    fn apply(&mut self, entry: &StateLogEntry);
 }
 ```
 
-One method. That's the whole trait.
+### LogApplier
 
-### EventLoop
-
-Drives the cascade: an entry produces follow-up entries, which produce more entries, until quiescence. FIFO ordering ensures entries are processed in the order they were produced.
+Writes every entry to the NDJSON state log. Zero logic.
 
 ```rust
-struct EventLoop {
-    appliers: Vec<Box<dyn Applier>>,
-    rx: Receiver<CompletionData>,
+struct LogApplier {
+    writer: io::BufWriter<File>,
 }
 
-impl EventLoop {
-    /// Cascade an entry through all appliers until quiescence.
-    fn apply_all(&mut self, entry: StateLogEntry) {
-        let mut queue = VecDeque::from([entry]);
-        while let Some(e) = queue.pop_front() {
-            for applier in &mut self.appliers {
-                queue.extend(applier.apply(&e));
-            }
-        }
+impl LogApplier {
+    fn new(path: &Path) -> io::Result<Self> {
+        let file = File::create(path)?;
+        Ok(Self { writer: io::BufWriter::new(file) })
     }
 
-    /// Receive completions and cascade them until the run is done.
-    fn run(&mut self) {
-        while let Ok(completion) = self.rx.recv() {
-            self.apply_all(StateLogEntry::Completion(completion));
-        }
+    /// For resume: copy old log to new file, then append.
+    fn from_existing(old_log: &Path, new_path: &Path) -> io::Result<Self> {
+        std::fs::copy(old_log, new_path)?;
+        let file = OpenOptions::new().append(true).open(new_path)?;
+        Ok(Self { writer: io::BufWriter::new(file) })
+    }
+}
+
+impl Applier for LogApplier {
+    fn apply(&mut self, entry: &StateLogEntry) {
+        barnum_state::write_entry(&mut self.writer, entry)
+            .expect("failed to write state log entry");
     }
 }
 ```
 
-The channel carries `CompletionData` (not `StateLogEntry` — worker threads only produce completions). The EventLoop wraps it in `StateLogEntry::Completion` before cascading.
+## Runner
 
-Termination: when the Dispatcher has no pending tasks and `in_flight == 0`, it drops its `Sender`. Worker threads hold `Sender` clones — as the last one finishes and drops its clone, all senders are gone, `rx.recv()` returns `Err`, and the loop exits.
-
-**Example cascade** for a completion that spawns children:
-
-1. `StateLogEntry::Completion(raw)` enters cascade
-2. Dispatcher returns `[TaskCompleted, TaskSubmitted(child1), TaskSubmitted(child2)]`
-3. LogApplier writes `Completion` to disk, returns `[]`
-4. Queue now: `[TaskCompleted, TaskSubmitted(child1), TaskSubmitted(child2)]`
-5. `TaskCompleted` processed: Dispatcher updates RunState, LogApplier writes to disk
-6. `TaskSubmitted(child1)` processed: Dispatcher adds to RunState and dispatches, LogApplier writes
-7. `TaskSubmitted(child2)` processed: same
-8. Queue empty — quiescence
-
-Log on disk after this cascade:
-```
-Completion { task_id: 0, response: "[{\"kind\": \"Child\", ...}]" }
-TaskCompleted { task_id: 0, outcome: Success { spawned: [1, 2] } }
-TaskSubmitted { task_id: 1, step: "Child", ... }
-TaskSubmitted { task_id: 2, step: "Child", ... }
-```
-
-During replay, RunState ignores the `Completion` line and processes the rest.
-
-## Appliers
-
-### Dispatcher
-
-Owns `RunState` plus all runtime machinery. Dispatches pending tasks in its constructor — no `start()` method, no mode transitions. By the time the event loop calls `run()`, tasks are already in flight.
+This is TaskRunner refactored. It owns RunState, config, pool, channels, and the applier vec. It interprets completions. It dispatches tasks. The applier vec is notified of every state change via `emit()`.
 
 ```rust
-struct Dispatcher {
+struct Runner {
     state: RunState,
     config: Config,
     schemas: CompiledSchemas,
     step_map: HashMap<StepName, Step>,
     pool: PoolConnection,
     tx: Option<Sender<CompletionData>>,
+    rx: Receiver<CompletionData>,
     in_flight: usize,
     max_concurrency: usize,
+    appliers: Vec<Box<dyn Applier>>,
 }
+```
 
-impl Dispatcher {
-    fn new(
-        state: RunState,
-        config: Config,
-        schemas: CompiledSchemas,
-        pool: PoolConnection,
-        tx: Sender<CompletionData>,
-        max_concurrency: usize,
-    ) -> Self {
-        let step_map = config.steps.iter()
-            .map(|s| (s.name.clone(), s.clone()))
-            .collect();
-        let mut d = Dispatcher {
-            state, config, schemas, step_map, pool,
-            tx: Some(tx), in_flight: 0, max_concurrency,
-        };
-        d.dispatch_pending();
-        d
-    }
-}
+### emit
 
-impl Applier for Dispatcher {
-    fn apply(&mut self, entry: &StateLogEntry) -> Vec<StateLogEntry> {
-        match entry {
-            StateLogEntry::Completion(raw) => {
-                self.in_flight -= 1;
-                self.build_completion_events(raw)
-            }
-            _ => {
-                self.state.apply(entry);
-                let events = self.drain_ready_parents();
-                self.dispatch_pending();
-                events
-            }
+The single point of state mutation. Every state change goes through here.
+
+```rust
+impl Runner {
+    fn emit(&mut self, entry: StateLogEntry) {
+        self.state.apply(&entry);
+        for applier in &mut self.appliers {
+            applier.apply(&entry);
         }
     }
 }
 ```
 
-For `Completion`: the Dispatcher decrements `in_flight` and interprets the raw response — parsing JSON, validating against schemas, deciding success/failure/retry. Returns the derived events (`TaskCompleted`, `TaskSubmitted` for children/retries/finally). These cascade through all appliers.
+### Processing completions
 
-For everything else: the Dispatcher forwards to RunState, drains any parents ready for finally, and dispatches pending tasks.
-
-#### Dispatching
+The Runner interprets raw completions and emits facts. No cascading, no events-producing-events. Just straightforward imperative code.
 
 ```rust
-impl Dispatcher {
+impl Runner {
+    fn process_completion(&mut self, completion: CompletionData) {
+        self.in_flight -= 1;
+        let task_id = completion.task_id;
+
+        // Fact: the agent returned a response.
+        self.emit(StateLogEntry::Completion(completion));
+
+        // Interpret the response.
+        let result = self.interpret_response(&completion);
+
+        match result {
+            Ok(parsed) => {
+                // Allocate child IDs before emitting TaskCompleted
+                // (TaskCompleted.spawned_task_ids references them).
+                let children: Vec<_> = parsed.next_tasks.iter()
+                    .map(|t| (self.state.next_id(), t.clone()))
+                    .collect();
+                let child_ids: Vec<_> = children.iter().map(|(id, _)| *id).collect();
+
+                // Fact: the task completed successfully.
+                self.emit(StateLogEntry::TaskCompleted(TaskCompleted {
+                    task_id,
+                    outcome: TaskOutcome::Success(TaskSuccess {
+                        spawned_task_ids: child_ids,
+                        finally_value: parsed.finally_value,
+                    }),
+                }));
+
+                // Fact: child tasks were submitted.
+                for (id, task) in children {
+                    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
+                        task_id: id,
+                        step: task.step,
+                        value: task.value,
+                        parent_id: Some(task_id),
+                        origin: TaskOrigin::Spawned,
+                    }));
+                }
+            }
+            Err(reason) => {
+                // Maybe submit a retry.
+                let retry_id = if self.should_retry(task_id) {
+                    let id = self.state.next_id();
+                    Some(id)
+                } else {
+                    None
+                };
+
+                // Fact: the task failed.
+                self.emit(StateLogEntry::TaskCompleted(TaskCompleted {
+                    task_id,
+                    outcome: TaskOutcome::Failed(TaskFailed {
+                        reason,
+                        retry_task_id: retry_id,
+                    }),
+                }));
+
+                // Fact: a retry was submitted.
+                if let Some(retry_id) = retry_id {
+                    let entry = self.state.tasks.get(&task_id).expect("task must exist");
+                    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
+                        task_id: retry_id,
+                        step: entry.step.clone(),
+                        value: /* original value */,
+                        parent_id: entry.parent_id,
+                        origin: TaskOrigin::Retry,
+                    }));
+                }
+            }
+        }
+
+        // Handle finally for parents whose children all completed.
+        for parent_id in self.state.drain_ready_for_finally() {
+            let entry = self.state.tasks.get(&parent_id).expect("parent must exist");
+            let TaskState::ChildrenComplete { finally_value } = &entry.state else {
+                unreachable!();
+            };
+            let finally_script = self.step_map[&entry.step].finally.as_ref();
+            if let Some(script) = finally_script {
+                let id = self.state.next_id();
+                self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
+                    task_id: id,
+                    step: script.step.clone(),
+                    value: finally_value.clone(),
+                    parent_id: Some(parent_id),
+                    origin: TaskOrigin::Finally,
+                }));
+            }
+            self.state.tasks.remove(&parent_id);
+        }
+
+        self.dispatch_pending();
+    }
+
+    fn run(&mut self) {
+        self.dispatch_pending();
+        while let Ok(completion) = self.rx.recv() {
+            self.process_completion(completion);
+        }
+    }
+}
+```
+
+### Dispatching
+
+```rust
+impl Runner {
     fn dispatch_pending(&mut self) {
         let Some(tx) = &self.tx else { return };
 
@@ -201,86 +268,16 @@ impl Dispatcher {
 }
 ```
 
-#### Finally handling
-
-When a `TaskCompleted` for the last child cascades through `apply`, RunState transitions the parent to `ChildrenComplete` and pushes its ID onto `ready_for_finally`. The Dispatcher drains this queue:
-
-```rust
-impl Dispatcher {
-    fn drain_ready_parents(&mut self) -> Vec<StateLogEntry> {
-        let mut events = Vec::new();
-        for parent_id in self.state.drain_ready_for_finally() {
-            let entry = self.state.tasks.get(&parent_id).expect("parent must exist");
-            let TaskState::ChildrenComplete { finally_value } = &entry.state else {
-                unreachable!("ready_for_finally contained non-ChildrenComplete task");
-            };
-            let finally_script = self.step_map[&entry.step].finally.as_ref();
-            if let Some(script) = finally_script {
-                let id = self.state.next_id();
-                events.push(StateLogEntry::TaskSubmitted(TaskSubmitted {
-                    task_id: id,
-                    step: script.step.clone(),
-                    value: finally_value.clone(),
-                    parent_id: Some(parent_id),
-                    origin: TaskOrigin::Finally,
-                }));
-            }
-            self.state.tasks.remove(&parent_id);
-        }
-        events
-    }
-}
-```
-
-The returned `TaskSubmitted` events cascade through all appliers — LogApplier writes them, Dispatcher's `apply` adds them to RunState and dispatches.
-
-### LogApplier
-
-Writes every entry to the NDJSON state log. Including `Completion` entries — the log is the complete record. Zero logic.
-
-```rust
-struct LogApplier {
-    writer: io::BufWriter<File>,
-}
-
-impl LogApplier {
-    fn new(path: &Path) -> io::Result<Self> {
-        let file = File::create(path)?;
-        Ok(LogApplier { writer: io::BufWriter::new(file) })
-    }
-
-    /// For resume: copy old log to new file, then append.
-    fn from_existing(old_log: &Path, new_path: &Path) -> io::Result<Self> {
-        std::fs::copy(old_log, new_path)?;
-        let file = OpenOptions::new().append(true).open(new_path)?;
-        Ok(LogApplier { writer: io::BufWriter::new(file) })
-    }
-}
-
-impl Applier for LogApplier {
-    fn apply(&mut self, entry: &StateLogEntry) -> Vec<StateLogEntry> {
-        barnum_state::write_entry(&mut self.writer, entry)
-            .expect("failed to write state log entry");
-        vec![]
-    }
-}
-```
-
 ## State
 
 ### RunState
 
-Pure state machine owned by the Dispatcher. No I/O, no side effects. Ignores `Completion` entries — those are interpreted by the Dispatcher, not the state machine.
+Pure state machine. No I/O, no side effects. Ignores `Completion` entries.
 
 ```rust
 struct RunState {
-    /// All active tasks. Removed when fully complete.
-    /// BTreeMap ordering = FIFO dispatch order (task IDs are monotonic).
     tasks: BTreeMap<LogTaskId, TaskEntry>,
-    /// Monotonic counter for assigning task IDs.
     next_task_id: u32,
-    /// Parents whose children all completed, ready for finally.
-    /// Drained by Dispatcher after each apply.
     ready_for_finally: Vec<LogTaskId>,
 }
 
@@ -389,62 +386,44 @@ enum TaskState {
         pending_children_count: NonZeroU16,
         finally_value: StepInputValue,
     },
-    /// All children complete. Dispatcher will submit the finally task
+    /// All children complete. Runner will submit the finally task
     /// and then remove this entry.
     ChildrenComplete { finally_value: StepInputValue },
 }
 ```
 
-Compared to the current code:
-
-- **`InFlight` removed.** Dispatch is transient — tracked by `Dispatcher.in_flight`. RunState sees dispatched tasks as `Pending` until `TaskCompleted` arrives. On resume, pending-but-dispatched tasks get re-dispatched. Correct by design.
-- **`ChildrenComplete` added.** Explicit state for "children done, finally pending." Previously the parent was removed immediately, losing the finally context.
-- **`finally_script`, `retries_remaining` removed.** Config concerns, looked up from `step_map` at dispatch time.
+- **`InFlight` removed.** Dispatch is transient — `in_flight` counter on Runner. RunState sees dispatched tasks as `Pending` until `TaskCompleted` arrives. On resume, they get re-dispatched.
+- **`ChildrenComplete` added.** Explicit state for "children done, finally pending."
+- **`finally_script`, `retries_remaining` removed.** Config concerns, looked up at dispatch time.
 
 ## Usage
-
-Seeding is construction. Build RunState and write initial log entries before the EventLoop exists. The Dispatcher constructor dispatches pending tasks. The event loop just receives completions and cascades them.
 
 ### Fresh run
 
 ```rust
 pub fn run(config: Config, initial_tasks: Vec<Task>, runner_config: &RunnerConfig) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
-
     let mut state = RunState::new();
-    let mut log_applier = LogApplier::new(&runner_config.state_log_path)?;
+    let log_applier = LogApplier::new(&runner_config.state_log_path)?;
 
-    // Seed: build state and write log entries.
-    let config_entry = StateLogEntry::Config(StateLogConfig {
-        config: serde_json::to_value(&config)?,
-    });
-    state.apply(&config_entry);
-    log_applier.apply(&config_entry);
+    let mut runner = Runner::new(state, config, runner_config, tx, rx, vec![
+        Box::new(log_applier),
+    ]);
 
+    // Seed.
+    runner.emit(StateLogEntry::Config(StateLogConfig { ... }));
     for task in initial_tasks {
-        let id = state.next_id();
-        let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+        let id = runner.state.next_id();
+        runner.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
             task_id: id,
             step: task.step,
             value: task.value,
             parent_id: None,
             origin: TaskOrigin::Initial,
-        });
-        state.apply(&entry);
-        log_applier.apply(&entry);
+        }));
     }
 
-    // Dispatcher dispatches pending tasks in constructor.
-    let schemas = CompiledSchemas::compile(&config)?;
-    let pool = PoolConnection::connect(&runner_config.troupe_root)?;
-    let dispatcher = Dispatcher::new(state, config, schemas, pool, tx, runner_config.max_concurrency);
-
-    let mut event_loop = EventLoop {
-        appliers: vec![Box::new(dispatcher), Box::new(log_applier)],
-        rx,
-    };
-
-    event_loop.run();
+    runner.run();
     Ok(())
 }
 ```
@@ -457,44 +436,127 @@ pub fn resume(old_log: &Path, runner_config: &RunnerConfig) -> io::Result<()> {
     let config = extract_config_from_log(old_log)?;
 
     // Rebuild RunState from the old log.
-    // Completion entries are no-ops — the derived events handle state.
     let mut state = RunState::new();
     for entry in barnum_state::read_entries(File::open(old_log)?) {
         state.apply(&entry);
     }
 
-    // Copy old log to new file, then append new entries.
+    // Copy old log, then append new entries.
     let log_applier = LogApplier::from_existing(old_log, &runner_config.state_log_path)?;
 
-    // Dispatcher dispatches pending tasks (those that were in-flight when the old run stopped).
-    let schemas = CompiledSchemas::compile(&config)?;
-    let pool = PoolConnection::connect(&runner_config.troupe_root)?;
-    let dispatcher = Dispatcher::new(state, config, schemas, pool, tx, runner_config.max_concurrency);
+    let mut runner = Runner::new(state, config, runner_config, tx, rx, vec![
+        Box::new(log_applier),
+    ]);
 
-    let mut event_loop = EventLoop {
-        appliers: vec![Box::new(dispatcher), Box::new(log_applier)],
-        rx,
-    };
-
-    event_loop.run();
+    // No seeding — state was rebuilt from the log.
+    // run() dispatches pending tasks and enters the completion loop.
+    runner.run();
     Ok(())
 }
 ```
 
-Same shape: build state → construct dispatcher → run. Fresh run seeds from arguments. Resume seeds from a log file.
+## Phasing
+
+These phases are ordered by dependency. Each phase is a separate branch that passes CI and merges independently.
+
+### Phase 0: Data structure cleanup
+
+Independent refactors that can land in any order. Each is its own branch.
+
+**0a. Extract RunState from TaskRunner.**
+Move `tasks: BTreeMap<LogTaskId, TaskEntry>` and `next_task_id: u32` into a `RunState` struct. Give it its own `apply()` method. TaskRunner holds `state: RunState`. Pure structural refactor — all behavior stays in TaskRunner, RunState is just a data container with an apply method.
+
+**0b. Remove InFlight from TaskState.**
+Dispatched tasks stay as `Pending`. Track dispatch transiently with the `in_flight: usize` counter already on TaskRunner. On resume, pending-but-dispatched tasks get re-dispatched. This removes a variant from `TaskState` and simplifies the state machine.
+
+**0c. Remove config fields from TaskEntry.**
+Drop `finally_script` and `retries_remaining` from `TaskEntry`. Look them up from `step_map` at dispatch time. Config data doesn't belong in per-task state — it's the same every time and can be derived from the step name.
+
+**0d. Add ChildrenComplete to TaskState.**
+When the last child completes, transition the parent to `ChildrenComplete { finally_value }` instead of immediately removing it. Add `ready_for_finally: Vec<LogTaskId>` to RunState (or TaskRunner). The runner drains this to submit finally tasks. This makes the "children done, ready for finally" state explicit and visible.
+
+**0e. Add Completion variant to StateLogEntry.**
+Add `Completion(CompletionData)` to `StateLogEntry` in `barnum_state`. Log raw agent responses. `RunState::apply` ignores `Completion`. Update serialization. This makes the log a complete record of what happened.
+
+### Phase 1: Introduce emit()
+
+**Depends on: 0a (RunState exists as a field).**
+
+Add an `emit()` method to TaskRunner that calls `self.state.apply(&entry)` AND `write_log(&mut self.state_log, &entry)`. Rewrite all state-mutating code paths (`queue_task`, `task_succeeded`, `task_failed`, etc.) to go through `emit()`.
+
+No trait. No applier vec. Just a method on TaskRunner that ensures state and log stay in sync. This is the core behavioral change — from "manually update state AND manually write log" to "emit a fact and let emit() handle both."
+
+Before:
+```rust
+fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+    let id = self.next_task_id();
+    self.write_log(TaskSubmitted { task_id: id, ... });
+    self.tasks.insert(id, TaskEntry { ... });
+}
+```
+
+After:
+```rust
+fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
+    let id = self.state.next_id();
+    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
+        task_id: id,
+        step: task.step,
+        value: task.value,
+        parent_id,
+        origin: TaskOrigin::Spawned,
+    }));
+}
+```
+
+### Phase 2: Extract Applier trait
+
+**Depends on: Phase 1 (emit() exists).**
+
+Define the `Applier` trait. Add `appliers: Vec<Box<dyn Applier>>` to TaskRunner. Move the `BufWriter` out into `LogApplier`. Change `emit()` from calling `write_log` directly to iterating over appliers.
+
+Before (Phase 1):
+```rust
+fn emit(&mut self, entry: StateLogEntry) {
+    self.state.apply(&entry);
+    write_log(&mut self.state_log, &entry);
+}
+```
+
+After (Phase 2):
+```rust
+fn emit(&mut self, entry: StateLogEntry) {
+    self.state.apply(&entry);
+    for applier in &mut self.appliers {
+        applier.apply(&entry);
+    }
+}
+```
+
+LogApplier is the only implementation. The trait is introduced with a single impl. Future appliers (metrics, visualization, GSD state sync) can be added later without touching the runner.
+
+### Phase 3: Seeding as construction
+
+**Depends on: Phase 2 (applier vec exists).**
+
+Restructure `run()` and `resume()` so RunState is built before the Runner exists. The Runner constructor takes a pre-built RunState. `run()` dispatches pending tasks and enters the completion loop — no seeding phase, no mode transitions.
+
+For resume: build RunState from old log → copy old log to new file → construct Runner → `run()`.
+For fresh run: build RunState from initial tasks (emitting seed entries to state + log) → construct Runner → `run()`.
+
+This may require pulling seeding logic out of the Runner. Seeding writes to state and log before the Runner exists, so the caller needs direct access to RunState and LogApplier. The Runner is then constructed from the pre-seeded state.
 
 ## Before/After Summary
 
-| Before (`TaskRunner`) | After |
+| Before (`TaskRunner`) | After (`Runner`) |
 |---|---|
-| One monolith struct with 12 fields | `EventLoop` + `Dispatcher` + `LogApplier` + `RunState` |
-| `queue_task` manually writes log AND updates state | `apply_all` cascades through all appliers uniformly |
-| `task_succeeded`/`task_failed` manually writes log AND updates state | `build_completion_events` returns entries; cascade handles the rest |
-| `tx: Sender` (always valid) | `tx: Option<Sender>` (None = terminated, triggers loop exit) |
-| `InFlight` variant in `TaskState` (transient state in persistent model) | `in_flight: usize` on Dispatcher only |
-| `finally_script` on `TaskEntry` (config in state) | Looked up from `step_map` at dispatch time |
-| Resume requires separate code path | Same build → construct → run shape, different seed source |
-| Raw completions not logged | `Completion` variant in `StateLogEntry` — log is complete |
+| `queue_task` manually writes log AND updates state | `emit()` does both atomically |
+| `task_succeeded`/`task_failed` manually writes log AND updates state | `process_completion` calls `emit()` for each fact |
+| `BufWriter` as a field, inline log writes | `LogApplier` in the applier vec |
+| `InFlight` variant in `TaskState` | `in_flight: usize` on Runner only |
+| `finally_script` on `TaskEntry` | Looked up from `step_map` at dispatch time |
+| Raw completions not logged | `Completion` variant — log is a complete record |
+| Resume requires separate code path | Same shape: build state → construct → run |
 
 ## Testing
 
@@ -514,36 +576,19 @@ Same shape: build state → construct dispatcher → run. Fresh run seeds from a
 #[test] fn writes_all_entry_variants_including_completion()
 #[test] fn from_existing_copies_old_log_then_appends()
 
-// Dispatcher in isolation (with mock tx/rx)
-#[test] fn constructor_dispatches_pending_tasks()
-#[test] fn constructor_with_empty_state_drops_tx()
-#[test] fn apply_completion_returns_task_completed_events()
-#[test] fn apply_completion_returns_child_submitted_events()
-#[test] fn apply_completion_returns_retry_submitted_events()
+// Runner: emit guarantees
+#[test] fn emit_updates_state_and_notifies_appliers()
+#[test] fn process_completion_emits_completion_then_task_completed()
+#[test] fn process_completion_emits_child_submitted_entries()
+#[test] fn process_completion_emits_retry_on_failure()
+#[test] fn process_completion_handles_finally_for_ready_parents()
+
+// Runner: dispatch
 #[test] fn dispatches_up_to_max_concurrency()
 #[test] fn drops_tx_when_empty_and_no_in_flight()
-#[test] fn drain_ready_parents_submits_finally_tasks()
-
-// EventLoop: cascade behavior
-#[test] fn apply_all_cascades_until_quiescence()
-#[test] fn apply_all_processes_entries_in_fifo_order()
 
 // Integration: replay
 #[test] fn replay_reconstructs_identical_run_state()
 #[test] fn replay_copies_entries_to_new_log()
 #[test] fn resumed_run_dispatches_incomplete_tasks()
 ```
-
-## Migration Path
-
-1. Add `Completion` variant to `StateLogEntry` in `barnum_state`
-2. Define `Applier` trait
-3. Extract `RunState` from `TaskRunner` (pure state machine)
-4. Add `ChildrenComplete` to `TaskState`, `ready_for_finally` to `RunState`
-5. Build `Dispatcher` (owns RunState, dispatches in constructor, implements `Applier`)
-6. Build `LogApplier` with `from_existing` (implements `Applier`)
-7. Build `EventLoop` (owns applier vec + rx, drives the cascade)
-8. Rewrite `run()` and `resume()` as: build state → construct → run
-9. Delete old `TaskRunner`
-10. Remove `InFlight` from `TaskState`, config fields from `TaskEntry`
-11. Verify all tests pass
