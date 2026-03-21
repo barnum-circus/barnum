@@ -17,7 +17,7 @@ This creates bugs: missed log writes when state changes, missed state updates wh
 
 ## Architecture
 
-Same pattern as Troupe's daemon event loop (`crates/troupe/src/daemon/wiring.rs:342`):
+Troupe's daemon event loop (`crates/troupe/src/daemon/wiring.rs:342`):
 
 ```rust
 fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> PoolState {
@@ -35,7 +35,25 @@ fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> Pool
 }
 ```
 
-Receive event, step, dispatch effects. Barnum adapts this: receive completion, step (produce entries), apply entries (update state + log + dispatch queue), flush dispatches. `apply()` is the single entry point that keeps state and log in sync.
+Barnum's current loop (`crates/barnum_config/src/runner/mod.rs:870`):
+
+```rust
+impl Iterator for TaskRunner<'_> {
+    type Item = TaskResult;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.dispatch_all_pending();
+        if self.in_flight == 0 { return None; }
+        let result = self.rx.recv().ok()?;
+        Some(self.process_result(result))
+    }
+}
+```
+
+The structure is already there: receive a result, process it. `process_result` interprets the completion (runs post hooks, determines success/failure/retry), then calls `task_succeeded` or `task_failed` which manually write the log and mutate state as separate operations.
+
+The refactor happens in two steps. First, restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. This is a mechanical change to the return type. Second, route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
+
+`apply()` takes a slice of entries. For each entry, it updates RunState, writes to the log, and tracks which tasks need dispatching. After the batch, it handles finally tasks for any removed parents. Once apply returns, the caller flushes the dispatch queue to spawn threads.
 
 Resume uses the same code path. Replay the NDJSON log through `apply()`. A TaskSubmitted adds a task to the dispatch queue. A TaskCompleted for the same task removes it. After the full log is applied, only tasks that were in-flight at crash time remain in the queue and get dispatched.
 
