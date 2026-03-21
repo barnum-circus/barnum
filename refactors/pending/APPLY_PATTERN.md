@@ -6,38 +6,37 @@
 
 ## Motivation
 
-Currently, state changes and log writes are separate operations scattered throughout `TaskRunner`:
+State changes and log writes are separate operations scattered throughout `TaskRunner`. Nothing enforces that they stay in sync:
 
 ```rust
-// BEFORE: Two operations that must stay in sync — but nothing enforces it
 self.state_log.write(TaskSubmitted { ... });
 self.tasks.insert(id, entry);
 ```
 
-This creates risk of:
-1. Forgetting to write to log when changing state
-2. Log/state getting out of sync
-3. Bugs where state is updated but log isn't (or vice versa)
-4. Resume logic diverging from live logic
+This creates bugs: missed log writes when state changes, missed state updates when logs are written, and resume logic that silently diverges from live logic.
 
-## Core Idea
+## Architecture
 
-One method — `emit()` — updates state AND notifies all observers. Every state change goes through it. No exceptions.
+This follows the event loop pattern from Troupe's daemon (`crates/troupe/src/daemon`).
+
+Worker threads send `CompletionData` on a channel. The main loop receives completions, calls `step()` to interpret them and update `RunState`, then forwards the resulting entries to appliers via a for loop:
 
 ```rust
-fn emit(&mut self, entry: StateLogEntry) {
-    self.state.apply(&entry);
-    for applier in &mut self.appliers {
-        applier.apply(&entry);
+while let Ok(completion) = rx.recv() {
+    in_flight -= 1;
+    let entries = step(&mut state, &config, &step_map, completion);
+    for entry in &entries {
+        for applier in &mut appliers {
+            applier.apply(entry);
+        }
     }
+    dispatch_pending(&mut state, ...);
 }
 ```
 
-The log is a record of what happened. `StateLogEntry` variants are facts:
-- A config was loaded
-- A task was submitted
-- An agent returned a response
-- A task completed
+`step()` updates state internally via `RunState::apply()`. By the time entries reach appliers, state is already consistent. The inner for loop is the entire notification mechanism.
+
+In Troupe, `step(state, event) -> (state, Vec<Effect>)` is a pure function. Barnum's `step()` fills the same role: receives input, updates state, returns entries for observers. It mutates `RunState` in place and has access to config.
 
 ## StateLogEntry
 
@@ -46,21 +45,12 @@ enum StateLogEntry {
     Config(StateLogConfig),
     TaskSubmitted(TaskSubmitted),
     TaskCompleted(TaskCompleted),
-    /// Raw agent response. RunState ignores this — it's logged for
-    /// completeness and auditability. The derived TaskCompleted and
-    /// TaskSubmitted entries that follow handle state changes.
-    Completion(CompletionData),
-}
-
-struct CompletionData {
-    task_id: LogTaskId,
-    response: String,  // raw agent output
 }
 ```
 
-## Applier
+Each variant is a fact. Task removal is derived inside `RunState::apply()` when all children complete.
 
-An observer. Gets told what happened. Does not produce events, does not return anything, does not influence control flow. Pure side effect.
+## Applier
 
 ```rust
 trait Applier {
@@ -68,27 +58,13 @@ trait Applier {
 }
 ```
 
-### LogApplier
+Appliers receive entries after state has been updated. They do not return values or influence control flow.
 
-Writes every entry to the NDJSON state log. Zero logic.
+### LogApplier
 
 ```rust
 struct LogApplier {
     writer: io::BufWriter<File>,
-}
-
-impl LogApplier {
-    fn new(path: &Path) -> io::Result<Self> {
-        let file = File::create(path)?;
-        Ok(Self { writer: io::BufWriter::new(file) })
-    }
-
-    /// For resume: copy old log to new file, then append.
-    fn from_existing(old_log: &Path, new_path: &Path) -> io::Result<Self> {
-        std::fs::copy(old_log, new_path)?;
-        let file = OpenOptions::new().append(true).open(new_path)?;
-        Ok(Self { writer: io::BufWriter::new(file) })
-    }
 }
 
 impl Applier for LogApplier {
@@ -99,186 +75,23 @@ impl Applier for LogApplier {
 }
 ```
 
-## Runner
+## RunState
 
-This is TaskRunner refactored. It owns RunState, config, pool, channels, and the applier vec. It interprets completions. It dispatches tasks. The applier vec is notified of every state change via `emit()`.
+Pure dependency tracker. No I/O, no config awareness, no knowledge of "finally." Tracks tasks and parent-child relationships. When a task completes with no children, it's removed and its parent's child count is decremented. When a parent's count reaches zero, the parent is removed too (recursively).
 
-```rust
-struct Runner {
-    state: RunState,
-    config: Config,
-    schemas: CompiledSchemas,
-    step_map: HashMap<StepName, Step>,
-    pool: PoolConnection,
-    tx: Option<Sender<CompletionData>>,
-    rx: Receiver<CompletionData>,
-    in_flight: usize,
-    max_concurrency: usize,
-    appliers: Vec<Box<dyn Applier>>,
-}
-```
-
-### emit
-
-The single point of state mutation. Every state change goes through here.
-
-```rust
-impl Runner {
-    fn emit(&mut self, entry: StateLogEntry) {
-        self.state.apply(&entry);
-        for applier in &mut self.appliers {
-            applier.apply(&entry);
-        }
-    }
-}
-```
-
-### Processing completions
-
-The Runner interprets raw completions and emits facts. No cascading, no events-producing-events. Just straightforward imperative code.
-
-```rust
-impl Runner {
-    fn process_completion(&mut self, completion: CompletionData) {
-        self.in_flight -= 1;
-        let task_id = completion.task_id;
-
-        // Fact: the agent returned a response.
-        self.emit(StateLogEntry::Completion(completion));
-
-        // Interpret the response.
-        let result = self.interpret_response(&completion);
-
-        match result {
-            Ok(parsed) => {
-                // Allocate child IDs before emitting TaskCompleted
-                // (TaskCompleted.spawned_task_ids references them).
-                let children: Vec<_> = parsed.next_tasks.iter()
-                    .map(|t| (self.state.next_id(), t.clone()))
-                    .collect();
-                let child_ids: Vec<_> = children.iter().map(|(id, _)| *id).collect();
-
-                // Fact: the task completed successfully.
-                self.emit(StateLogEntry::TaskCompleted(TaskCompleted {
-                    task_id,
-                    outcome: TaskOutcome::Success(TaskSuccess {
-                        spawned_task_ids: child_ids,
-                        finally_value: parsed.finally_value,
-                    }),
-                }));
-
-                // Fact: child tasks were submitted.
-                for (id, task) in children {
-                    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
-                        task_id: id,
-                        step: task.step,
-                        value: task.value,
-                        parent_id: Some(task_id),
-                        origin: TaskOrigin::Spawned,
-                    }));
-                }
-            }
-            Err(reason) => {
-                // Maybe submit a retry.
-                let retry_id = if self.should_retry(task_id) {
-                    let id = self.state.next_id();
-                    Some(id)
-                } else {
-                    None
-                };
-
-                // Fact: the task failed.
-                self.emit(StateLogEntry::TaskCompleted(TaskCompleted {
-                    task_id,
-                    outcome: TaskOutcome::Failed(TaskFailed {
-                        reason,
-                        retry_task_id: retry_id,
-                    }),
-                }));
-
-                // Fact: a retry was submitted.
-                if let Some(retry_id) = retry_id {
-                    let entry = self.state.tasks.get(&task_id).expect("task must exist");
-                    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
-                        task_id: retry_id,
-                        step: entry.step.clone(),
-                        value: /* original value */,
-                        parent_id: entry.parent_id,
-                        origin: TaskOrigin::Retry,
-                    }));
-                }
-            }
-        }
-
-        // Handle finally for parents whose children all completed.
-        for parent_id in self.state.drain_ready_for_finally() {
-            let entry = self.state.tasks.get(&parent_id).expect("parent must exist");
-            let TaskState::ChildrenComplete { finally_value } = &entry.state else {
-                unreachable!();
-            };
-            let finally_script = self.step_map[&entry.step].finally.as_ref();
-            if let Some(script) = finally_script {
-                let id = self.state.next_id();
-                self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
-                    task_id: id,
-                    step: script.step.clone(),
-                    value: finally_value.clone(),
-                    parent_id: Some(parent_id),
-                    origin: TaskOrigin::Finally,
-                }));
-            }
-            self.state.tasks.remove(&parent_id);
-        }
-
-        self.dispatch_pending();
-    }
-
-    fn run(&mut self) {
-        self.dispatch_pending();
-        while let Ok(completion) = self.rx.recv() {
-            self.process_completion(completion);
-        }
-    }
-}
-```
-
-### Dispatching
-
-```rust
-impl Runner {
-    fn dispatch_pending(&mut self) {
-        let Some(tx) = &self.tx else { return };
-
-        while self.in_flight < self.max_concurrency {
-            let Some(task_id) = self.state.next_pending() else { break };
-            let entry = self.state.tasks.get(&task_id).expect("task must exist");
-            let value = match &entry.state {
-                TaskState::Pending { value } => value.clone(),
-                _ => unreachable!("next_pending returned non-Pending task"),
-            };
-            self.in_flight += 1;
-            let tx = tx.clone();
-            // spawn worker thread with tx clone
-        }
-
-        if self.state.is_empty() && self.in_flight == 0 {
-            self.tx = None;
-        }
-    }
-}
-```
-
-## State
-
-### RunState
-
-Pure state machine. No I/O, no side effects. Ignores `Completion` entries.
+Removed parents are accumulated in a vec. `step()` drains this after each batch of `apply()` calls to check whether removed parents need finally tasks (a business-logic decision that belongs in `step()`, not in the state machine).
 
 ```rust
 struct RunState {
     tasks: BTreeMap<LogTaskId, TaskEntry>,
     next_task_id: u32,
-    ready_for_finally: Vec<LogTaskId>,
+    removed_parents: Vec<RemovedParent>,
+}
+
+struct RemovedParent {
+    task_id: LogTaskId,
+    step: StepName,
+    finally_value: StepInputValue,
 }
 
 impl RunState {
@@ -290,7 +103,7 @@ impl RunState {
 
     fn apply(&mut self, entry: &StateLogEntry) {
         match entry {
-            StateLogEntry::Config(_) | StateLogEntry::Completion(_) => {}
+            StateLogEntry::Config(_) => {}
             StateLogEntry::TaskSubmitted(s) => self.apply_submitted(s),
             StateLogEntry::TaskCompleted(c) => self.apply_completed(c),
         }
@@ -333,28 +146,31 @@ impl RunState {
         let parent_id = self.tasks.get(&task_id).and_then(|e| e.parent_id);
         self.tasks.remove(&task_id);
 
-        if let Some(pid) = parent_id {
-            if let Some(parent) = self.tasks.get_mut(&pid) {
-                if let TaskState::WaitingForChildren {
-                    pending_children_count, finally_value
-                } = &mut parent.state {
-                    match NonZeroU16::new(pending_children_count.get() - 1) {
-                        Some(n) => *pending_children_count = n,
-                        None => {
-                            let fv = finally_value.clone();
-                            parent.state = TaskState::ChildrenComplete {
-                                finally_value: fv,
-                            };
-                            self.ready_for_finally.push(pid);
-                        }
-                    }
-                }
+        let Some(pid) = parent_id else { return };
+        let Some(parent) = self.tasks.get_mut(&pid) else { return };
+        let TaskState::WaitingForChildren {
+            pending_children_count, finally_value
+        } = &mut parent.state else { return };
+
+        match NonZeroU16::new(pending_children_count.get() - 1) {
+            Some(n) => *pending_children_count = n,
+            None => {
+                // All children done. Capture parent info before removal.
+                let step = parent.step.clone();
+                let fv = finally_value.clone();
+                self.removed_parents.push(RemovedParent {
+                    task_id: pid,
+                    step,
+                    finally_value: fv,
+                });
+                // Remove parent and recurse up the tree.
+                self.remove_and_notify_parent(pid);
             }
         }
     }
 
-    fn drain_ready_for_finally(&mut self) -> Vec<LogTaskId> {
-        std::mem::take(&mut self.ready_for_finally)
+    fn drain_removed_parents(&mut self) -> Vec<RemovedParent> {
+        std::mem::take(&mut self.removed_parents)
     }
 
     fn next_pending(&self) -> Option<LogTaskId> {
@@ -379,216 +195,301 @@ struct TaskEntry {
 }
 
 enum TaskState {
-    /// Waiting to be dispatched (or dispatched, waiting for completion).
     Pending { value: StepInputValue },
-    /// Children are running. Count is always non-zero.
     WaitingForChildren {
         pending_children_count: NonZeroU16,
         finally_value: StepInputValue,
     },
-    /// All children complete. Runner will submit the finally task
-    /// and then remove this entry.
-    ChildrenComplete { finally_value: StepInputValue },
 }
 ```
 
-- **`InFlight` removed.** Dispatch is transient — `in_flight` counter on Runner. RunState sees dispatched tasks as `Pending` until `TaskCompleted` arrives. On resume, they get re-dispatched.
-- **`ChildrenComplete` added.** Explicit state for "children done, finally pending."
-- **`finally_script`, `retries_remaining` removed.** Config concerns, looked up at dispatch time.
+Two variants. `InFlight` is gone (dispatch tracked by `in_flight: usize` on Runner). Config fields (`finally_script`, `retries_remaining`) are gone (looked up from `step_map` at dispatch time).
+
+## step()
+
+Interprets a completion, updates `RunState`, handles finally for any removed parents, and returns entries for appliers.
+
+```rust
+fn step(
+    state: &mut RunState,
+    config: &Config,
+    step_map: &HashMap<StepName, Step>,
+    completion: CompletionData,
+) -> Vec<StateLogEntry> {
+    let mut entries = Vec::new();
+    let task_id = completion.task_id;
+    let result = interpret_response(config, &completion);
+
+    match result {
+        Ok(parsed) => {
+            let children: Vec<_> = parsed.next_tasks.iter()
+                .map(|t| (state.next_id(), t.clone()))
+                .collect();
+            let child_ids: Vec<_> = children.iter().map(|(id, _)| *id).collect();
+
+            let completed = StateLogEntry::TaskCompleted(TaskCompleted {
+                task_id,
+                outcome: TaskOutcome::Success(TaskSuccess {
+                    spawned_task_ids: child_ids,
+                    finally_value: parsed.finally_value,
+                }),
+            });
+            state.apply(&completed);
+            entries.push(completed);
+
+            for (id, task) in children {
+                let submitted = StateLogEntry::TaskSubmitted(TaskSubmitted {
+                    task_id: id,
+                    step: task.step,
+                    value: task.value,
+                    parent_id: Some(task_id),
+                    origin: TaskOrigin::Spawned,
+                });
+                state.apply(&submitted);
+                entries.push(submitted);
+            }
+        }
+        Err(reason) => {
+            // Extract retry info before applying (apply removes the task).
+            let retry_submitted = if should_retry(config, task_id) {
+                let retry_id = state.next_id();
+                let task = state.tasks.get(&task_id)
+                    .expect("task must exist");
+                Some((retry_id, TaskSubmitted {
+                    task_id: retry_id,
+                    step: task.step.clone(),
+                    value: task.pending_value(),
+                    parent_id: task.parent_id,
+                    origin: TaskOrigin::Retry,
+                }))
+            } else {
+                None
+            };
+
+            let failed = StateLogEntry::TaskCompleted(TaskCompleted {
+                task_id,
+                outcome: TaskOutcome::Failed(TaskFailed {
+                    reason,
+                    retry_task_id: retry_submitted.as_ref().map(|(id, _)| *id),
+                }),
+            });
+            state.apply(&failed);
+            entries.push(failed);
+
+            if let Some((_, submitted)) = retry_submitted {
+                let entry = StateLogEntry::TaskSubmitted(submitted);
+                state.apply(&entry);
+                entries.push(entry);
+            }
+        }
+    }
+
+    // Handle finally for parents whose children all completed.
+    // This is business logic (config lookup), not state tracking.
+    for parent in state.drain_removed_parents() {
+        if let Some(script) = step_map.get(&parent.step)
+            .and_then(|s| s.finally.as_ref())
+        {
+            let id = state.next_id();
+            let submitted = StateLogEntry::TaskSubmitted(TaskSubmitted {
+                task_id: id,
+                step: script.step.clone(),
+                value: parent.finally_value,
+                parent_id: None, // parent is already removed
+                origin: TaskOrigin::Finally,
+            });
+            state.apply(&submitted);
+            entries.push(submitted);
+        }
+    }
+
+    entries
+}
+```
+
+## Runner
+
+```rust
+struct Runner {
+    state: RunState,
+    config: Config,
+    schemas: CompiledSchemas,
+    step_map: HashMap<StepName, Step>,
+    pool: PoolConnection,
+    tx: Option<Sender<CompletionData>>,
+    rx: Receiver<CompletionData>,
+    in_flight: usize,
+    max_concurrency: usize,
+    appliers: Vec<Box<dyn Applier>>,
+}
+
+impl Runner {
+    fn run(&mut self) {
+        self.dispatch_pending();
+        while let Ok(completion) = self.rx.recv() {
+            self.in_flight -= 1;
+            let entries = step(
+                &mut self.state, &self.config,
+                &self.step_map, completion,
+            );
+            for entry in &entries {
+                for applier in &mut self.appliers {
+                    applier.apply(entry);
+                }
+            }
+            self.dispatch_pending();
+        }
+    }
+
+    fn dispatch_pending(&mut self) {
+        let Some(tx) = &self.tx else { return };
+
+        while self.in_flight < self.max_concurrency {
+            let Some(task_id) = self.state.next_pending() else { break };
+            let entry = self.state.tasks.get(&task_id).expect("task must exist");
+            let value = match &entry.state {
+                TaskState::Pending { value } => value.clone(),
+                _ => unreachable!("next_pending returned non-Pending task"),
+            };
+            self.in_flight += 1;
+            let tx = tx.clone();
+            // spawn worker thread with tx clone
+        }
+
+        if self.state.is_empty() && self.in_flight == 0 {
+            self.tx = None;
+        }
+    }
+}
+```
+
+### Termination
+
+Worker threads hold `Sender<CompletionData>` clones. They drop them after sending their completion. Runner drops its sender when state is empty and `in_flight` is 0. With all senders dropped, `rx.recv()` returns `Err` and the loop exits.
 
 ## Usage
 
-### Fresh run
-
 ```rust
-pub fn run(config: Config, initial_tasks: Vec<Task>, runner_config: &RunnerConfig) -> io::Result<()> {
+pub fn run(
+    config: Config,
+    initial_tasks: Vec<Task>,
+    runner_config: &RunnerConfig,
+) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
+
     let mut state = RunState::new();
-    let log_applier = LogApplier::new(&runner_config.state_log_path)?;
+    let seed_entries = build_seed_entries(&mut state, &config, &initial_tasks);
 
-    let mut runner = Runner::new(state, config, runner_config, tx, rx, vec![
-        Box::new(log_applier),
-    ]);
+    let file = File::create(&runner_config.state_log_path)?;
+    let mut log_applier = LogApplier { writer: io::BufWriter::new(file) };
+    for entry in &seed_entries {
+        state.apply(entry);
+        log_applier.apply(entry);
+    }
 
-    // Seed.
-    runner.emit(StateLogEntry::Config(StateLogConfig { ... }));
-    for task in initial_tasks {
-        let id = runner.state.next_id();
-        runner.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
+    let mut runner = Runner {
+        state,
+        config,
+        schemas: CompiledSchemas::compile(&config)?,
+        step_map: build_step_map(&config),
+        pool: PoolConnection::new(runner_config)?,
+        tx: Some(tx),
+        rx,
+        in_flight: 0,
+        max_concurrency: runner_config.max_concurrency,
+        appliers: vec![Box::new(log_applier)],
+    };
+
+    runner.run();
+    Ok(())
+}
+
+fn build_seed_entries(
+    state: &mut RunState,
+    config: &Config,
+    tasks: &[Task],
+) -> Vec<StateLogEntry> {
+    let mut entries = vec![StateLogEntry::Config(StateLogConfig { ... })];
+    for task in tasks {
+        let id = state.next_id();
+        entries.push(StateLogEntry::TaskSubmitted(TaskSubmitted {
             task_id: id,
-            step: task.step,
-            value: task.value,
+            step: task.step.clone(),
+            value: task.value.clone(),
             parent_id: None,
             origin: TaskOrigin::Initial,
         }));
     }
-
-    runner.run();
-    Ok(())
-}
-```
-
-### Resume
-
-```rust
-pub fn resume(old_log: &Path, runner_config: &RunnerConfig) -> io::Result<()> {
-    let (tx, rx) = mpsc::channel();
-    let config = extract_config_from_log(old_log)?;
-
-    // Rebuild RunState from the old log.
-    let mut state = RunState::new();
-    for entry in barnum_state::read_entries(File::open(old_log)?) {
-        state.apply(&entry);
-    }
-
-    // Copy old log, then append new entries.
-    let log_applier = LogApplier::from_existing(old_log, &runner_config.state_log_path)?;
-
-    let mut runner = Runner::new(state, config, runner_config, tx, rx, vec![
-        Box::new(log_applier),
-    ]);
-
-    // No seeding — state was rebuilt from the log.
-    // run() dispatches pending tasks and enters the completion loop.
-    runner.run();
-    Ok(())
+    entries
 }
 ```
 
 ## Phasing
 
-These phases are ordered by dependency. Each phase is a separate branch that passes CI and merges independently.
+Each phase is a separate branch that passes CI and merges independently.
 
 ### Phase 0: Data structure cleanup
 
-Independent refactors that can land in any order. Each is its own branch.
+Independent refactors that can land in any order.
 
-**0a. Extract RunState from TaskRunner.**
-Move `tasks: BTreeMap<LogTaskId, TaskEntry>` and `next_task_id: u32` into a `RunState` struct. Give it its own `apply()` method. TaskRunner holds `state: RunState`. Pure structural refactor — all behavior stays in TaskRunner, RunState is just a data container with an apply method.
+**0a.** Extract `RunState` from `TaskRunner`. Move `tasks: BTreeMap<LogTaskId, TaskEntry>` and `next_task_id: u32` into a `RunState` struct with its own `apply()` method. `TaskRunner` holds `state: RunState`. Pure structural move.
 
-**0b. Remove InFlight from TaskState.**
-Dispatched tasks stay as `Pending`. Track dispatch transiently with the `in_flight: usize` counter already on TaskRunner. On resume, pending-but-dispatched tasks get re-dispatched. This removes a variant from `TaskState` and simplifies the state machine.
+**0b.** Remove `InFlight` from `TaskState`. Dispatched tasks stay `Pending`. Track dispatch count with `in_flight: usize` on TaskRunner.
 
-**0c. Remove config fields from TaskEntry.**
-Drop `finally_script` and `retries_remaining` from `TaskEntry`. Look them up from `step_map` at dispatch time. Config data doesn't belong in per-task state — it's the same every time and can be derived from the step name.
+**0c.** Remove config fields from `TaskEntry`. Drop `finally_script` and `retries_remaining`. Look them up from `step_map` at dispatch time.
 
-**0d. Add ChildrenComplete to TaskState.**
-When the last child completes, transition the parent to `ChildrenComplete { finally_value }` instead of immediately removing it. Add `ready_for_finally: Vec<LogTaskId>` to RunState (or TaskRunner). The runner drains this to submit finally tasks. This makes the "children done, ready for finally" state explicit and visible.
+**0d.** Make parent removal derived. When the last child completes, remove the parent inside `apply()` and capture the removed parent's info in `removed_parents: Vec<RemovedParent>`. The runner drains this to check config for finally scripts. This replaces the current inline finally handling with a clean interface: RunState reports what happened, the runner decides what to do about it.
 
-**0e. Add Completion variant to StateLogEntry.**
-Add `Completion(CompletionData)` to `StateLogEntry` in `barnum_state`. Log raw agent responses. `RunState::apply` ignores `Completion`. Update serialization. This makes the log a complete record of what happened.
+### Phase 1: step() and applier for loop
 
-### Phase 1: Introduce emit()
+**Depends on: 0a.**
 
-**Depends on: 0a (RunState exists as a field).**
+Extract a `step()` function that interprets completions, calls `state.apply()` for each resulting entry, and returns the entries. Introduce the `Applier` trait and `LogApplier`. Rewrite the main loop to call `step()` and dispatch entries to appliers via the inner for loop.
 
-Add an `emit()` method to TaskRunner that calls `self.state.apply(&entry)` AND `write_log(&mut self.state_log, &entry)`. Rewrite all state-mutating code paths (`queue_task`, `task_succeeded`, `task_failed`, etc.) to go through `emit()`.
+### Phase 2: Seeding as construction
 
-No trait. No applier vec. Just a method on TaskRunner that ensures state and log stay in sync. This is the core behavioral change — from "manually update state AND manually write log" to "emit a fact and let emit() handle both."
+**Depends on: Phase 1.**
 
-Before:
-```rust
-fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
-    let id = self.next_task_id();
-    self.write_log(TaskSubmitted { task_id: id, ... });
-    self.tasks.insert(id, TaskEntry { ... });
-}
-```
+Restructure `run()` so state is built and seeded before Runner exists. `build_seed_entries` produces entries. The caller applies them to state and writes them to the log. Runner takes the pre-seeded state.
 
-After:
-```rust
-fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>) {
-    let id = self.state.next_id();
-    self.emit(StateLogEntry::TaskSubmitted(TaskSubmitted {
-        task_id: id,
-        step: task.step,
-        value: task.value,
-        parent_id,
-        origin: TaskOrigin::Spawned,
-    }));
-}
-```
-
-### Phase 2: Extract Applier trait
-
-**Depends on: Phase 1 (emit() exists).**
-
-Define the `Applier` trait. Add `appliers: Vec<Box<dyn Applier>>` to TaskRunner. Move the `BufWriter` out into `LogApplier`. Change `emit()` from calling `write_log` directly to iterating over appliers.
-
-Before (Phase 1):
-```rust
-fn emit(&mut self, entry: StateLogEntry) {
-    self.state.apply(&entry);
-    write_log(&mut self.state_log, &entry);
-}
-```
-
-After (Phase 2):
-```rust
-fn emit(&mut self, entry: StateLogEntry) {
-    self.state.apply(&entry);
-    for applier in &mut self.appliers {
-        applier.apply(&entry);
-    }
-}
-```
-
-LogApplier is the only implementation. The trait is introduced with a single impl. Future appliers (metrics, visualization, GSD state sync) can be added later without touching the runner.
-
-### Phase 3: Seeding as construction
-
-**Depends on: Phase 2 (applier vec exists).**
-
-Restructure `run()` and `resume()` so RunState is built before the Runner exists. The Runner constructor takes a pre-built RunState. `run()` dispatches pending tasks and enters the completion loop — no seeding phase, no mode transitions.
-
-For resume: build RunState from old log → copy old log to new file → construct Runner → `run()`.
-For fresh run: build RunState from initial tasks (emitting seed entries to state + log) → construct Runner → `run()`.
-
-This may require pulling seeding logic out of the Runner. Seeding writes to state and log before the Runner exists, so the caller needs direct access to RunState and LogApplier. The Runner is then constructed from the pre-seeded state.
-
-## Before/After Summary
+## Before/After
 
 | Before (`TaskRunner`) | After (`Runner`) |
 |---|---|
-| `queue_task` manually writes log AND updates state | `emit()` does both atomically |
-| `task_succeeded`/`task_failed` manually writes log AND updates state | `process_completion` calls `emit()` for each fact |
-| `BufWriter` as a field, inline log writes | `LogApplier` in the applier vec |
-| `InFlight` variant in `TaskState` | `in_flight: usize` on Runner only |
+| `queue_task` manually writes log AND updates state | `step()` updates state and returns entries; for loop writes via appliers |
+| `task_succeeded`/`task_failed` manually writes log AND updates state | Same: all state changes go through `step()` |
+| `BufWriter` as a field, inline log writes | `LogApplier` behind the `Applier` trait |
+| `InFlight` variant in `TaskState` | `in_flight: usize` on Runner |
 | `finally_script` on `TaskEntry` | Looked up from `step_map` at dispatch time |
-| Raw completions not logged | `Completion` variant — log is a complete record |
-| Resume requires separate code path | Same shape: build state → construct → run |
+| `ChildrenComplete`, `has_finally`, `ready_for_finally` | `removed_parents` vec; RunState has no config awareness |
 
 ## Testing
 
 ```rust
-// RunState in isolation (pure state machine, no I/O)
+// RunState (pure dependency tracker, no I/O)
 #[test] fn apply_submitted_creates_pending_entry()
 #[test] fn apply_submitted_advances_next_task_id()
-#[test] fn apply_completion_is_no_op()
 #[test] fn apply_completed_success_no_children_removes_task()
 #[test] fn apply_completed_success_with_children_transitions_to_waiting()
 #[test] fn apply_completed_child_decrements_parent_count()
-#[test] fn apply_completed_last_child_transitions_to_children_complete()
-#[test] fn apply_completed_last_child_pushes_to_ready_for_finally()
+#[test] fn apply_completed_last_child_removes_parent()
+#[test] fn apply_completed_last_child_captures_removed_parent()
+#[test] fn apply_completed_recursive_removal_up_tree()
 #[test] fn apply_completed_failed_removes_task()
 
-// LogApplier in isolation
-#[test] fn writes_all_entry_variants_including_completion()
-#[test] fn from_existing_copies_old_log_then_appends()
+// LogApplier
+#[test] fn writes_all_entry_variants()
 
-// Runner: emit guarantees
-#[test] fn emit_updates_state_and_notifies_appliers()
-#[test] fn process_completion_emits_completion_then_task_completed()
-#[test] fn process_completion_emits_child_submitted_entries()
-#[test] fn process_completion_emits_retry_on_failure()
-#[test] fn process_completion_handles_finally_for_ready_parents()
+// step()
+#[test] fn step_success_produces_completed_then_children()
+#[test] fn step_drains_removed_parents_and_submits_finally()
+#[test] fn step_no_finally_script_skips_removed_parent()
+#[test] fn step_failure_produces_completed()
+#[test] fn step_failure_with_retry_produces_completed_then_submitted()
 
-// Runner: dispatch
-#[test] fn dispatches_up_to_max_concurrency()
-#[test] fn drops_tx_when_empty_and_no_in_flight()
-
-// Integration: replay
-#[test] fn replay_reconstructs_identical_run_state()
-#[test] fn replay_copies_entries_to_new_log()
-#[test] fn resumed_run_dispatches_incomplete_tasks()
+// Runner
+#[test] fn run_dispatches_up_to_max_concurrency()
+#[test] fn run_drops_tx_when_empty_and_no_in_flight()
+#[test] fn seed_entries_applied_before_run()
+#[test] fn replay_log_reconstructs_identical_run_state()
 ```

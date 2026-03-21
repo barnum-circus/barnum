@@ -49,7 +49,7 @@ Replacing simple "is" or "are" with pompous alternatives like "serves as", "stan
 
 ### Negative Parallelism
 
-The "It's not X -- it's Y" pattern, often with an em dash. The single most commonly identified AI writing tell. Man I f*cking hate it. AI uses this to create false profundity by framing everything as a surprising reframe. One in a piece can be effective; ten in a blog post is a genuine insult to the reader. Before LLMs, people simply did not write like this at scale. Includes the causal variant "not because X, but because Y" where every explanation is framed as a surprise reveal.
+The "It's not X -- it's Y" pattern, often with an em dash. The single most commonly identified AI writing tell. Man I f*cking hate it. AI uses this to create false profundity by framing everything as a surprising reframe. One in a piece can be effective; ten in a blog post is a genuine insult to the reader. Before LLMs, people simply did not write like this at scale. Includes the causal variant "not because X, but because Y" where every explanation is framed as a surprise reveal, the em-dash dismissal "X -- not Y", and the cross-sentence reframe where the same noun is negated then repositioned: "The question isn't X. The question is Y."
 
 **Avoid patterns like:**
 - "It's not bold. It's backwards."
@@ -119,15 +119,6 @@ Using "from X to Y" constructions where X and Y aren't on any real scale. In leg
 - "From the singularity of the Big Bang to the grand cosmic web."
 - "From problem-solving and tool-making to scientific discovery, artistic expression, and technological innovation."
 
-### Gerund Fragment Litany
-
-After making a claim, AI illustrates it with a stream of verbless gerund fragments — standalone sentences with no grammatical subject. "Fixing small bugs. Writing straightforward features. Implementing well-defined tickets." The first sentence already said everything. The fragments add nothing except word count and that familiar AI cadence. Humans don't write first drafts this way. It's a pure structural tic.
-
-**Avoid patterns like:**
-- "Fixing small bugs. Writing straightforward features. Implementing well-defined tickets."
-- "Reviewing pull requests. Debugging edge cases. Attending architecture meetings."
-- "Shipping faster. Moving quicker. Delivering more."
-
 ---
 
 ## Paragraph Structure
@@ -155,7 +146,7 @@ Numbered or labeled points dressed up as continuous prose. The model writes what
 
 ### "Here's the Kicker"
 
-False suspense transitions that promise a revelation but deliver a point that did NOT need the buildup. The model uses these phrases to manufacture drama before an otherwise unremarkable observation LOL. Also includes: "Here's the thing", "Here's where it gets interesting", "Here's what most people miss".
+False suspense transitions that promise a revelation but deliver a point that did NOT need the buildup. The model uses these phrases to manufacture drama before an otherwise unremarkable observation LOL. Also includes: "Here's the thing", "Here's where it gets interesting", "Here's what most people miss", "Here's the starting point", "Here's the deal".
 
 **Avoid patterns like:**
 - "Here's the kicker."
@@ -190,7 +181,7 @@ Simulated self-awareness or honesty that reads as performative. The model preten
 
 ### "The Truth Is Simple"
 
-Asserting that something is obvious, clear or simple instead of actually proving it. If you have to tell the reader your point is clear, it very likely isn't.
+Asserting that something is obvious, clear or simple instead of actually proving it. If you have to tell the reader your point is clear, it very likely isn't. Also includes the dramatic reveal variant: "but none of them is the real story. The real story is..." -- claiming privileged insight while waving away everything before it.
 
 **Avoid patterns like:**
 - "The reality is simpler and less flattering"
