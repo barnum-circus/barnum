@@ -428,15 +428,157 @@ Restructure `run()` so seed entries go through `Runner::apply()`. `build_seed_en
 
 ## Before/After
 
-| Before (`TaskRunner`) | After (`Runner`) |
-|---|---|
-| `queue_task` manually writes log AND updates state | `apply()` does both through Applier trait |
-| `task_succeeded`/`task_failed` manually writes log AND updates state | `step()` returns entries; `apply()` processes them |
-| `BufWriter` as a field, inline log writes | `LogApplier` behind the `Applier` trait |
-| `InFlight` variant in `TaskState` | `in_flight: usize` on Runner |
-| `finally_script` on `TaskEntry` | Looked up from `step_map` in `apply()` |
-| `ChildrenComplete`, `has_finally`, `ready_for_finally` | `removed_parents` vec; RunState has no config awareness |
-| Separate resume code path | Same `apply()` for both live and resume |
+### Task success: log and state are separate operations
+
+Before (`runner/mod.rs:695`): `task_succeeded` manually writes the log, then separately mutates state. Miss either one and they diverge.
+
+```rust
+fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: StepInputValue) {
+    self.in_flight -= 1;
+    let entry = self.tasks.get(&task_id).expect("task must exist");
+    let finally_hook = self.lookup_finally_hook(entry);
+
+    if spawned.is_empty() {
+        self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {  // 1. write log
+            task_id,
+            outcome: TaskOutcome::Success(TaskSuccess {
+                spawned_task_ids: vec![],
+                finally_value: value.clone(),
+            }),
+        }));
+        if let Some(hook) = finally_hook {
+            self.schedule_finally(task_id, hook, value);               // 2. mutate state (finally)
+        }
+        self.remove_and_notify_parent(task_id);                        // 3. mutate state (remove)
+    } else {
+        // ... compute child IDs, write log, mutate state, queue children ...
+    }
+}
+```
+
+After: `step()` produces entries. `apply()` processes them all through the same path.
+
+```rust
+// step() just returns entries:
+entries.push(StateLogEntry::TaskCompleted(TaskCompleted { task_id, outcome: ... }));
+for (id, task) in children {
+    entries.push(StateLogEntry::TaskSubmitted(TaskSubmitted { task_id: id, ... }));
+}
+
+// Runner::apply() does everything:
+fn apply(&mut self, entries: &[StateLogEntry]) {
+    for entry in entries {
+        self.state.apply(entry);   // update state
+        self.log.apply(entry);     // write log
+        // ... track pending_dispatches ...
+    }
+    // ... handle removed parents / finally ...
+}
+```
+
+### Finally handling: config baked into state
+
+Before (`runner/mod.rs:580`): `schedule_finally` stores `HookScript` on the task entry and increments the parent's child count. RunState knows about config.
+
+```rust
+fn schedule_finally(&mut self, task_id: LogTaskId, hook: HookScript, value: StepInputValue) {
+    let entry = self.tasks.get(&task_id).expect("task must exist");
+    let parent_id = entry.parent_id;
+    if let Some(parent_id) = parent_id {
+        self.increment_pending_children(parent_id);  // mutate parent in-place
+    }
+    let id = self.next_task_id();
+    self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
+        task_id: id, step: step.clone(), value: value.clone(),
+        parent_id,
+        origin: TaskOrigin::Finally { finally_for: task_id },
+    }));
+    self.tasks.insert(id, TaskEntry {
+        finally_script: Some(hook),  // config stored on entry
+        retries_remaining,           // config stored on entry
+        ..
+    });
+}
+```
+
+After: RunState has no config awareness. When a parent's children all complete, it's removed and captured in `removed_parents`. The Runner checks `step_map` for a finally script and produces a TaskSubmitted entry through `apply()`.
+
+```rust
+// Inside Runner::apply(), after processing entries:
+for parent in self.state.drain_removed_parents() {
+    if let Some(script) = self.step_map.get(&parent.step)
+        .and_then(|s| s.finally.as_ref())
+    {
+        let id = self.state.next_id();
+        let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+            task_id: id,
+            step: script.step.clone(),
+            value: parent.finally_value,
+            parent_id: None,
+            origin: TaskOrigin::Finally,
+        });
+        self.state.apply(&entry);
+        self.log.apply(&entry);
+        self.pending_dispatches.push(id);
+    }
+}
+```
+
+### Main loop: scattered responsibilities
+
+Before (`runner/mod.rs:870`): Iterator trait with dispatch and processing mixed together.
+
+```rust
+impl Iterator for TaskRunner<'_> {
+    type Item = TaskResult;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.dispatch_all_pending();
+        if self.in_flight == 0 { return None; }
+        let result = self.rx.recv().ok()?;
+        Some(self.process_result(result))  // calls task_succeeded/task_failed internally
+    }
+}
+```
+
+After: receive, step, apply, flush.
+
+```rust
+fn run(&mut self) {
+    self.flush_dispatches();
+    while let Ok(completion) = self.rx.recv() {
+        self.in_flight -= 1;
+        let entries = step(&mut self.state, &self.config, completion);
+        self.apply(&entries);
+        self.flush_dispatches();
+    }
+}
+```
+
+### TaskEntry: config fields on every entry
+
+Before (`runner/mod.rs:77`):
+
+```rust
+struct TaskEntry {
+    step: StepName,
+    parent_id: Option<LogTaskId>,
+    finally_script: Option<HookScript>,  // config
+    state: TaskState,
+    retries_remaining: u32,              // config
+}
+```
+
+After:
+
+```rust
+struct TaskEntry {
+    step: StepName,
+    parent_id: Option<LogTaskId>,
+    state: TaskState,
+}
+```
+
+`finally_script` and `retries_remaining` are looked up from `step_map` when needed.
 
 ## Testing
 
