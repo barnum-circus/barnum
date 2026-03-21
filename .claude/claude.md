@@ -59,7 +59,9 @@ Your singular mission is creating S-tier libraries where:
 
 4. **Impossible states are unrepresentable.**
 
-5. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts.
+5. **Function signatures are maximally narrow.** Parameters should accept only what callers actually pass — if every call site passes `Some(x)`, the parameter should be `T`, not `Option<T>`. Return types should be maximally narrow too — a function should only return `Result` if it can actually fail, only return `Option` if it can actually be `None`, and only return enum variants that are actually produced. Unnecessarily wide signatures are lies about the function's contract.
+
+6. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts.
 
 ## Generated artifacts
 
