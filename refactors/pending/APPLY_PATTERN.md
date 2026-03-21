@@ -51,6 +51,22 @@ impl Iterator for TaskRunner<'_> {
 
 The structure is already there: receive a result, process it. `process_result` interprets the completion (runs post hooks, determines success/failure/retry), then calls `task_succeeded` or `task_failed` which manually write the log and mutate state as separate operations.
 
+Target Barnum event loop:
+
+```rust
+fn run(&mut self) {
+    self.flush_dispatches();
+    while let Ok(completion) = self.rx.recv() {
+        self.in_flight -= 1;
+        let entries = step(&mut self.state, &self.config, completion);
+        self.apply(&entries);
+        self.flush_dispatches();
+    }
+}
+```
+
+The current loop already has the same shape: receive, process. `process_result` interprets the completion, then calls `task_succeeded`/`task_failed` which manually write the log and mutate state as separate operations. The refactor replaces that with `step()` (produce entries) and `apply()` (process them).
+
 The refactor happens in two steps. First, restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. This is a mechanical change to the return type. Second, route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
 
 `apply()` takes a slice of entries. For each entry, it updates RunState, writes to the log, and tracks which tasks need dispatching. After the batch, it handles finally tasks for any removed parents. Once apply returns, the caller flushes the dispatch queue to spawn threads.
