@@ -49,23 +49,23 @@ impl Iterator for TaskRunner<'_> {
 }
 ```
 
-The structure is already there: receive a result, process it. `process_result` interprets the completion (runs post hooks, determines success/failure/retry), then calls `task_succeeded` or `task_failed` which manually write the log and mutate state as separate operations.
+The structure is already there: receive a result, process it. `process_result` interprets the result (runs post hooks, determines success/failure/retry), then calls `task_succeeded` or `task_failed` which manually write the log and mutate state as separate operations.
 
 Target Barnum event loop:
 
 ```rust
 fn run(&mut self) {
     self.flush_dispatches();
-    while let Ok(completion) = self.rx.recv() {
+    while let Ok(result) = self.rx.recv() {
         self.in_flight -= 1;
-        let entries = step(&mut self.state, &self.config, completion);
+        let entries = step(&mut self.state, &self.config, result);
         self.apply(&entries);
         self.flush_dispatches();
     }
 }
 ```
 
-The current loop already has the same shape: receive, process. `process_result` interprets the completion, then calls `task_succeeded`/`task_failed` which manually write the log and mutate state as separate operations. The refactor replaces that with `step()` (produce entries) and `apply()` (process them).
+The current loop already has the same shape: receive, process. `process_result` interprets the result, then calls `task_succeeded`/`task_failed` which manually write the log and mutate state as separate operations. The refactor replaces that with `step()` (produce entries) and `apply()` (process them).
 
 The refactor happens in two steps. First, restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. This is a mechanical change to the return type. Second, route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
 
@@ -236,19 +236,19 @@ Two variants. `InFlight` is gone (dispatch tracked by `in_flight: usize` on Runn
 
 ## step()
 
-Interprets a completion and produces entries. Does not update state. Reads from state for retry info and allocates IDs via `next_id()`.
+Interprets a result and produces entries. Does not update state. Reads from state for retry info and allocates IDs via `next_id()`.
 
 ```rust
 fn step(
     state: &mut RunState,
     config: &Config,
-    completion: CompletionData,
+    result: InFlightResult,
 ) -> Vec<StateLogEntry> {
     let mut entries = Vec::new();
-    let task_id = completion.task_id;
-    let result = interpret_response(config, &completion);
+    let task_id = result.task_id;
+    let parsed = interpret_response(config, &result);
 
-    match result {
+    match parsed {
         Ok(parsed) => {
             let children: Vec<_> = parsed.next_tasks.iter()
                 .map(|t| (state.next_id(), t.clone()))
@@ -316,8 +316,8 @@ struct Runner {
     step_map: HashMap<StepName, Step>,
     log: LogApplier,
     pool: PoolConnection,
-    tx: Option<Sender<CompletionData>>,
-    rx: Receiver<CompletionData>,
+    tx: Option<Sender<InFlightResult>>,
+    rx: Receiver<InFlightResult>,
     in_flight: usize,
     max_concurrency: usize,
     pending_dispatches: Vec<LogTaskId>,
@@ -383,9 +383,9 @@ impl Runner {
 
     fn run(&mut self) {
         self.flush_dispatches();
-        while let Ok(completion) = self.rx.recv() {
+        while let Ok(result) = self.rx.recv() {
             self.in_flight -= 1;
-            let entries = step(&mut self.state, &self.config, completion);
+            let entries = step(&mut self.state, &self.config, result);
             self.apply(&entries);
             self.flush_dispatches();
         }
@@ -395,7 +395,7 @@ impl Runner {
 
 ### Termination
 
-Worker threads hold `Sender<CompletionData>` clones. They drop them after sending their completion. Runner drops its sender when state is empty and `in_flight` is 0. With all senders dropped, `rx.recv()` returns `Err` and the loop exits.
+Worker threads hold `Sender<InFlightResult>` clones. They drop them after sending their result. Runner drops its sender when state is empty and `in_flight` is 0. With all senders dropped, `rx.recv()` returns `Err` and the loop exits.
 
 ## Usage
 
@@ -468,7 +468,7 @@ Independent refactors that can land in any order.
 
 **Depends on: 0a.**
 
-Introduce the `Applier` trait. RunState and LogApplier both implement it. Add `apply()` on Runner that delegates to both, tracks `pending_dispatches`, and handles finally tasks. Add `flush_dispatches()` to spawn threads from the queue. Extract `step()` as a free function that interprets completions and returns entries. Rewrite the main loop: receive completion, step, apply, flush.
+Introduce the `Applier` trait. RunState and LogApplier both implement it. Add `apply()` on Runner that delegates to both, tracks `pending_dispatches`, and handles finally tasks. Add `flush_dispatches()` to spawn threads from the queue. Extract `step()` as a free function that interprets results and returns entries. Rewrite the main loop: receive result, step, apply, flush.
 
 ### Phase 2: Seeding through apply
 
@@ -595,9 +595,9 @@ After: receive, step, apply, flush.
 ```rust
 fn run(&mut self) {
     self.flush_dispatches();
-    while let Ok(completion) = self.rx.recv() {
+    while let Ok(result) = self.rx.recv() {
         self.in_flight -= 1;
-        let entries = step(&mut self.state, &self.config, completion);
+        let entries = step(&mut self.state, &self.config, result);
         self.apply(&entries);
         self.flush_dispatches();
     }
