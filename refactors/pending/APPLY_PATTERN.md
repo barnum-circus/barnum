@@ -17,9 +17,25 @@ This creates bugs: missed log writes when state changes, missed state updates wh
 
 ## Architecture
 
-Same pattern as Troupe's daemon (`crates/troupe/src/daemon`).
+Same pattern as Troupe's daemon event loop (`crates/troupe/src/daemon/wiring.rs:342`):
 
-Runner has an `apply()` method that takes a slice of entries. For each entry, it updates RunState, writes to the log, and tracks which tasks need dispatching. After the batch, it handles finally tasks for any removed parents. Once apply returns, the caller flushes the dispatch queue to spawn threads.
+```rust
+fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> PoolState {
+    let mut state = PoolState::new();
+    while let Ok(event) = events_rx.recv() {
+        let (new_state, effects) = step(state, event);
+        state = new_state;
+        for effect in effects {
+            if effect_tx.send(effect).is_err() {
+                break;
+            }
+        }
+    }
+    state
+}
+```
+
+Receive event, step, dispatch effects. Barnum adapts this: receive completion, step (produce entries), apply entries (update state + log + dispatch queue), flush dispatches. `apply()` is the single entry point that keeps state and log in sync.
 
 Resume uses the same code path. Replay the NDJSON log through `apply()`. A TaskSubmitted adds a task to the dispatch queue. A TaskCompleted for the same task removes it. After the full log is applied, only tasks that were in-flight at crash time remain in the queue and get dispatched.
 
