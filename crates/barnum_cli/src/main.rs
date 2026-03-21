@@ -273,8 +273,9 @@ fn run_command(
     // Initialize tracing with optional log file
     init_tracing(log_file, log_level)?;
 
-    // Detect how to invoke the troupe CLI (returns helpful error if not found)
-    let invoker = Invoker::<TroupeCli>::detect()?;
+    // Detect how to invoke the troupe CLI (returns helpful error if not found).
+    // Pin to our version so dlx fetches the matching troupe release.
+    let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
     let (config_file, config_dir) = parse_config(config)?;
     config_file.validate().map_err(|e| {
@@ -324,7 +325,7 @@ fn resume_command(
 ) -> io::Result<()> {
     init_tracing(log_file, log_level)?;
 
-    let invoker = Invoker::<TroupeCli>::detect()?;
+    let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
     // Validate: resume-from and state-log must not be the same path
     if let Some(state_log_path) = state_log {

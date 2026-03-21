@@ -20,7 +20,7 @@
 //!     const ENV_VAR_COMMAND: &'static str = "MY_CLI_COMMAND";
 //! }
 //!
-//! let invoker = Invoker::<MyCli>::detect()?;
+//! let invoker = Invoker::<MyCli>::detect(Some("1.0.0"))?;
 //! let output = invoker.run(["--version"])?;
 //! ```
 
@@ -90,6 +90,11 @@ impl<T: InvokableCli> Invoker<T> {
 
     /// Detect how to invoke the CLI.
     ///
+    /// When `version` is provided and the CLI is resolved via a package manager
+    /// (dlx), the npm package specifier is pinned to that exact version
+    /// (e.g., `@barnum/troupe@0.2.3`). This ensures the invoked binary matches
+    /// the caller's version.
+    ///
     /// Resolution order:
     /// 1. `{ENV_VAR_BINARY}` env var (binary path) - CI uses this
     /// 2. `{ENV_VAR_COMMAND}` env var (full command)
@@ -101,7 +106,9 @@ impl<T: InvokableCli> Invoker<T> {
     /// # Errors
     ///
     /// Returns an error with a helpful message if no invocation method is found.
-    pub fn detect() -> io::Result<Self> {
+    pub fn detect(version: Option<&str>) -> io::Result<Self> {
+        let npm_package = version_pinned_package(T::NPM_PACKAGE, version);
+
         // 1. Explicit binary path (CI sets this)
         if let Ok(path) = std::env::var(T::ENV_VAR_BINARY) {
             return Ok(Self::binary(PathBuf::from(path)));
@@ -126,11 +133,11 @@ impl<T: InvokableCli> Invoker<T> {
 
         // 5. packageManager field in package.json
         if let Some(pm) = find_package_manager_field() {
-            return Ok(Self::from_package_manager(&pm, T::NPM_PACKAGE));
+            return Ok(Self::from_package_manager(&pm, &npm_package));
         }
 
         // 6. Global package manager in PATH
-        if let Some(invoker) = Self::try_global_package_manager(T::NPM_PACKAGE) {
+        if let Some(invoker) = Self::try_global_package_manager(&npm_package) {
             return Ok(invoker);
         }
 
@@ -275,6 +282,15 @@ To fix this, either:
     }
 }
 
+/// Returns `"@pkg/name@1.2.3"` when version is a real semver string,
+/// or `"@pkg/name"` when version is `None` or `"unknown"` (dev builds).
+fn version_pinned_package(npm_package: &str, version: Option<&str>) -> String {
+    match version {
+        Some(v) if v != "unknown" => format!("{npm_package}@{v}"),
+        _ => npm_package.to_string(),
+    }
+}
+
 fn is_in_path(binary: &str) -> bool {
     let cmd = if cfg!(windows) { "where" } else { "which" };
     Command::new(cmd)
@@ -397,6 +413,21 @@ mod tests {
     }
 
     #[test]
+    fn from_package_manager_pnpm_with_version() {
+        let invoker = Invoker::<TestCli>::from_package_manager("pnpm@10.0.0", "@test/pkg@1.2.3");
+        match &invoker.kind {
+            InvokerKind::PackageManager {
+                program,
+                prefix_args,
+            } => {
+                assert_eq!(program, "pnpm");
+                assert_eq!(prefix_args, &["dlx", "@test/pkg@1.2.3"]);
+            }
+            InvokerKind::Binary(_) => panic!("Expected PackageManager"),
+        }
+    }
+
+    #[test]
     fn from_package_manager_yarn() {
         let invoker = Invoker::<TestCli>::from_package_manager("yarn@4.0.0", "@test/pkg");
         match &invoker.kind {
@@ -450,5 +481,29 @@ mod tests {
         assert!(msg.contains("TEST_CLI_COMMAND"));
         assert!(msg.contains("@test/test-cli"));
         assert!(msg.contains("cargo build -p test_cli"));
+    }
+
+    #[test]
+    fn version_pinned_package_with_version() {
+        assert_eq!(
+            version_pinned_package("@barnum/troupe", Some("0.2.3")),
+            "@barnum/troupe@0.2.3"
+        );
+    }
+
+    #[test]
+    fn version_pinned_package_unknown_skips_pin() {
+        assert_eq!(
+            version_pinned_package("@barnum/troupe", Some("unknown")),
+            "@barnum/troupe"
+        );
+    }
+
+    #[test]
+    fn version_pinned_package_none_skips_pin() {
+        assert_eq!(
+            version_pinned_package("@barnum/troupe", None),
+            "@barnum/troupe"
+        );
     }
 }
