@@ -17,26 +17,7 @@ This creates bugs: missed log writes when state changes, missed state updates wh
 
 ## Architecture
 
-This follows the event loop pattern from Troupe's daemon (`crates/troupe/src/daemon`).
-
-Worker threads send `CompletionData` on a channel. The main loop receives completions, calls `step()` to interpret them and update `RunState`, then forwards the resulting entries to appliers via a for loop:
-
-```rust
-while let Ok(completion) = rx.recv() {
-    in_flight -= 1;
-    let entries = step(&mut state, &config, &step_map, completion);
-    for entry in &entries {
-        for applier in &mut appliers {
-            applier.apply(entry);
-        }
-    }
-    dispatch_pending(&mut state, ...);
-}
-```
-
-`step()` updates state internally via `RunState::apply()`. By the time entries reach appliers, state is already consistent. The inner for loop is the entire notification mechanism.
-
-In Troupe, `step(state, event) -> (state, Vec<Effect>)` is a pure function. Barnum's `step()` fills the same role: receives input, updates state, returns entries for observers. It mutates `RunState` in place and has access to config.
+Same pattern as Troupe's daemon (`crates/troupe/src/daemon`). `step()` updates state and produces entries. A for loop dispatches each entry to appliers. State and log stay in sync because every state change produces the entry that the log applier writes.
 
 ## StateLogEntry
 
@@ -77,9 +58,9 @@ impl Applier for LogApplier {
 
 ## RunState
 
-Pure dependency tracker. No I/O, no config awareness, no knowledge of "finally." Tracks tasks and parent-child relationships. When a task completes with no children, it's removed and its parent's child count is decremented. When a parent's count reaches zero, the parent is removed too (recursively).
+Pure dependency tracker. No I/O, no config awareness, no knowledge of "finally." Tracks tasks and parent-child relationships. When a task completes with no children, it's removed and its parent's child count is decremented. If the count reaches zero, the parent is removed and its own parent's count is decremented, continuing up the tree.
 
-Removed parents are accumulated in a vec. `step()` drains this after each batch of `apply()` calls to check whether removed parents need finally tasks (a business-logic decision that belongs in `step()`, not in the state machine).
+Parents whose count reaches zero are accumulated in `removed_parents`. `step()` drains this after each `apply()` call to check whether they need finally tasks (a business-logic decision that belongs in `step()`, not in the state machine).
 
 ```rust
 struct RunState {
