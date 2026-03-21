@@ -55,21 +55,71 @@ Target Barnum event loop:
 
 ```rust
 fn run(&mut self) {
-    self.flush_dispatches();
     while let Ok(result) = self.rx.recv() {
         self.in_flight -= 1;
         let entries = step(&mut self.state, &self.config, result);
         self.apply(&entries);
-        self.flush_dispatches();
+    }
+}
+
+fn apply(&mut self, entries: &[StateLogEntry]) {
+    self.state.apply(entries);
+    self.log.apply(entries);
+    for entry in entries {
+        match entry {
+            StateLogEntry::TaskSubmitted(s) => {
+                self.pending_dispatches.push(s.task_id);
+            }
+            StateLogEntry::TaskCompleted(c) => {
+                self.pending_dispatches.retain(|id| *id != c.task_id);
+            }
+            StateLogEntry::Config(_) => {}
+        }
+    }
+
+    for parent in self.state.drain_removed_parents() {
+        if let Some(script) = self.step_map.get(&parent.step)
+            .and_then(|s| s.finally.as_ref())
+        {
+            let id = self.state.next_id();
+            let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
+                task_id: id,
+                step: script.step.clone(),
+                value: parent.finally_value,
+                parent_id: None,
+                origin: TaskOrigin::Finally,
+            })];
+            self.state.apply(&finally_entry);
+            self.log.apply(&finally_entry);
+            self.pending_dispatches.push(id);
+        }
+    }
+
+    self.flush_dispatches();
+}
+```
+
+`self.state` and `self.log` both implement the `Applier` trait. `self.state.apply` is:
+
+```rust
+impl Applier for RunState {
+    fn apply(&mut self, entries: &[StateLogEntry]) {
+        for entry in entries {
+            match entry {
+                StateLogEntry::Config(_) => {}
+                StateLogEntry::TaskSubmitted(s) => self.apply_submitted(s),
+                StateLogEntry::TaskCompleted(c) => self.apply_completed(c),
+            }
+        }
     }
 }
 ```
 
+`self.log.apply` serializes each entry to NDJSON.
+
 The current loop already has the same shape: receive, process. `process_result` interprets the result, then calls `task_succeeded`/`task_failed` which manually write the log and mutate state as separate operations. The refactor replaces that with `step()` (produce entries) and `apply()` (process them).
 
 The refactor happens in two steps. First, restructure `process_result`/`task_succeeded`/`task_failed` so they produce `StateLogEntry` values instead of directly mutating state and writing the log. This is a mechanical change to the return type. Second, route those entries through `apply()`, which handles state, log, and dispatch tracking in one place.
-
-`apply()` takes a slice of entries. For each entry, it updates RunState, writes to the log, and tracks which tasks need dispatching. After the batch, it handles finally tasks for any removed parents. Once apply returns, the caller flushes the dispatch queue to spawn threads.
 
 Resume uses the same code path. Replay the NDJSON log through `apply()`. A TaskSubmitted adds a task to the dispatch queue. A TaskCompleted for the same task removes it. After the full log is applied, only tasks that were in-flight at crash time remain in the queue and get dispatched.
 
@@ -81,6 +131,26 @@ enum StateLogEntry {
     TaskSubmitted(TaskSubmitted),
     TaskCompleted(TaskCompleted),
 }
+
+struct TaskCompleted {
+    task_id: LogTaskId,
+    outcome: TaskOutcome,
+}
+
+enum TaskOutcome {
+    Success(TaskSuccess),
+    Failed(TaskFailed),
+}
+
+struct TaskSuccess {
+    spawned_task_ids: Vec<LogTaskId>,
+    finally_value: StepInputValue,
+}
+
+struct TaskFailed {
+    reason: FailureReason,
+    retry_task_id: Option<LogTaskId>,
+}
 ```
 
 Each variant is a fact. Task removal is derived inside RunState when all children complete.
@@ -89,7 +159,7 @@ Each variant is a fact. Task removal is derived inside RunState when all childre
 
 ```rust
 trait Applier {
-    fn apply(&mut self, entry: &StateLogEntry);
+    fn apply(&mut self, entries: &[StateLogEntry]);
 }
 ```
 
@@ -103,9 +173,11 @@ struct LogApplier {
 }
 
 impl Applier for LogApplier {
-    fn apply(&mut self, entry: &StateLogEntry) {
-        barnum_state::write_entry(&mut self.writer, entry)
-            .expect("failed to write state log entry");
+    fn apply(&mut self, entries: &[StateLogEntry]) {
+        for entry in entries {
+            barnum_state::write_entry(&mut self.writer, entry)
+                .expect("failed to write state log entry");
+        }
     }
 }
 ```
@@ -130,11 +202,13 @@ struct RemovedParent {
 }
 
 impl Applier for RunState {
-    fn apply(&mut self, entry: &StateLogEntry) {
-        match entry {
-            StateLogEntry::Config(_) => {}
-            StateLogEntry::TaskSubmitted(s) => self.apply_submitted(s),
-            StateLogEntry::TaskCompleted(c) => self.apply_completed(c),
+    fn apply(&mut self, entries: &[StateLogEntry]) {
+        for entry in entries {
+            match entry {
+                StateLogEntry::Config(_) => {}
+                StateLogEntry::TaskSubmitted(s) => self.apply_submitted(s),
+                StateLogEntry::TaskCompleted(c) => self.apply_completed(c),
+            }
         }
     }
 }
@@ -173,8 +247,14 @@ impl RunState {
                     };
                 }
             }
-            TaskOutcome::Failed(_) => {
-                self.remove_and_notify_parent(completed.task_id);
+            TaskOutcome::Failed(failed) => {
+                if failed.retry_task_id.is_some() {
+                    // Retry replaces this task in the parent's child count.
+                    // Just remove the failed task without decrementing the parent.
+                    self.tasks.remove(&completed.task_id);
+                } else {
+                    self.remove_and_notify_parent(completed.task_id);
+                }
             }
         }
     }
@@ -232,11 +312,11 @@ enum TaskState {
 }
 ```
 
-Two variants. `InFlight` is gone (dispatch tracked by `in_flight: usize` on Runner). Config fields (`finally_script`, `retries_remaining`) are gone (looked up from `step_map` when needed).
+Two variants. `InFlight` is gone (dispatch tracked by `in_flight: usize` on Runner). `finally_script` is gone (looked up from `step_map` when needed). `retries_remaining` is replaced by counting: step() counts Retry-origin siblings for the same parent+step in the task tree to determine if retries are exhausted.
 
 ## step()
 
-Interprets a result and produces entries. Does not update state. Reads from state for retry info and allocates IDs via `next_id()`.
+Interprets a result and produces entries. Does not update state (except allocating IDs via `next_id()`). `interpret_response` runs post hooks and determines success/failure — this is the one place step() does I/O.
 
 ```rust
 fn step(
@@ -278,10 +358,13 @@ fn step(
                 let retry_id = state.next_id();
                 let task = state.tasks.get(&task_id)
                     .expect("task must exist");
+                let TaskState::Pending { value } = &task.state else {
+                    panic!("retried task must be Pending");
+                };
                 Some((retry_id, TaskSubmitted {
                     task_id: retry_id,
                     step: task.step.clone(),
-                    value: task.pending_value(),
+                    value: value.clone(),
                     parent_id: task.parent_id,
                     origin: TaskOrigin::Retry,
                 }))
@@ -325,9 +408,9 @@ struct Runner {
 
 impl Runner {
     fn apply(&mut self, entries: &[StateLogEntry]) {
+        self.state.apply(entries);
+        self.log.apply(entries);
         for entry in entries {
-            self.state.apply(entry);
-            self.log.apply(entry);
             match entry {
                 StateLogEntry::TaskSubmitted(s) => {
                     self.pending_dispatches.push(s.task_id);
@@ -344,18 +427,20 @@ impl Runner {
                 .and_then(|s| s.finally.as_ref())
             {
                 let id = self.state.next_id();
-                let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+                let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
                     task_id: id,
                     step: script.step.clone(),
                     value: parent.finally_value,
                     parent_id: None,
                     origin: TaskOrigin::Finally,
-                });
-                self.state.apply(&entry);
-                self.log.apply(&entry);
+                })];
+                self.state.apply(&finally_entry);
+                self.log.apply(&finally_entry);
                 self.pending_dispatches.push(id);
             }
         }
+
+        self.flush_dispatches();
     }
 
     fn flush_dispatches(&mut self) {
@@ -382,12 +467,10 @@ impl Runner {
     }
 
     fn run(&mut self) {
-        self.flush_dispatches();
         while let Ok(result) = self.rx.recv() {
             self.in_flight -= 1;
             let entries = step(&mut self.state, &self.config, result);
             self.apply(&entries);
-            self.flush_dispatches();
         }
     }
 }
@@ -468,7 +551,7 @@ Independent refactors that can land in any order.
 
 **Depends on: 0a.**
 
-Introduce the `Applier` trait. RunState and LogApplier both implement it. Add `apply()` on Runner that delegates to both, tracks `pending_dispatches`, and handles finally tasks. Add `flush_dispatches()` to spawn threads from the queue. Extract `step()` as a free function that interprets results and returns entries. Rewrite the main loop: receive result, step, apply, flush.
+Introduce the `Applier` trait. RunState and LogApplier both implement it. Add `apply()` on Runner that delegates to both, tracks `pending_dispatches`, handles finally tasks, and flushes dispatches. Extract `step()` as a free function that interprets results and returns entries. Rewrite the main loop: receive result, step, apply.
 
 ### Phase 2: Seeding through apply
 
@@ -517,11 +600,9 @@ for (id, task) in children {
 
 // Runner::apply() does everything:
 fn apply(&mut self, entries: &[StateLogEntry]) {
-    for entry in entries {
-        self.state.apply(entry);   // update state
-        self.log.apply(entry);     // write log
-        // ... track pending_dispatches ...
-    }
+    self.state.apply(entries);   // update state (batch)
+    self.log.apply(entries);     // write log (batch)
+    // ... track pending_dispatches ...
     // ... handle removed parents / finally ...
 }
 ```
@@ -560,15 +641,15 @@ for parent in self.state.drain_removed_parents() {
         .and_then(|s| s.finally.as_ref())
     {
         let id = self.state.next_id();
-        let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+        let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
             task_id: id,
             step: script.step.clone(),
             value: parent.finally_value,
             parent_id: None,
             origin: TaskOrigin::Finally,
-        });
-        self.state.apply(&entry);
-        self.log.apply(&entry);
+        })];
+        self.state.apply(&finally_entry);
+        self.log.apply(&finally_entry);
         self.pending_dispatches.push(id);
     }
 }
@@ -590,16 +671,14 @@ impl Iterator for TaskRunner<'_> {
 }
 ```
 
-After: receive, step, apply, flush.
+After: receive, step, apply. Dispatch flushing is inside apply.
 
 ```rust
 fn run(&mut self) {
-    self.flush_dispatches();
     while let Ok(result) = self.rx.recv() {
         self.in_flight -= 1;
         let entries = step(&mut self.state, &self.config, result);
         self.apply(&entries);
-        self.flush_dispatches();
     }
 }
 ```
