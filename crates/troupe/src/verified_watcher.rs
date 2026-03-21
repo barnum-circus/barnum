@@ -380,6 +380,11 @@ impl VerifiedWatcher {
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
+                    // The FSEvents stream may have died, but the target file could
+                    // already exist. Check before giving up.
+                    if target.exists() {
+                        return Ok(());
+                    }
                     return Err(WaitError::Io(io::Error::new(
                         io::ErrorKind::BrokenPipe,
                         format!(
