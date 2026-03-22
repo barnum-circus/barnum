@@ -127,6 +127,26 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  lockfiles:
+    needs: gate-rust
+    if: needs.gate-rust.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - name: Verify Cargo.lock is up to date
+        run: cargo check --locked --workspace
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify pnpm lockfile is up to date
+        run: pnpm install --frozen-lockfile
+        working-directory: libs/barnum
+
   clippy:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
@@ -139,7 +159,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
   test:
     needs: [gate-rust, build-linux-x64]
@@ -169,7 +189,7 @@ jobs:
           # CI runner paths are too long for Unix socket sun_path (108 char limit).
           # Use a short temp directory for test data instead of CARGO_MANIFEST_DIR.
           TEST_TMPDIR: /tmp/bt
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --locked --workspace -- --test-threads=1
 
   demos:
     needs: [gate-rust, build-linux-x64]
@@ -236,7 +256,7 @@ jobs:
           echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-apple-darwin -p troupe_cli -p barnum_cli
+        run: cargo build --locked --release --target x86_64-apple-darwin -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
           name: troupe-macos-x64
@@ -279,7 +299,7 @@ jobs:
           echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target aarch64-apple-darwin -p troupe_cli -p barnum_cli
+        run: cargo build --locked --release --target aarch64-apple-darwin -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
           name: troupe-macos-arm64
@@ -325,7 +345,7 @@ jobs:
           echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-unknown-linux-musl -p troupe_cli -p barnum_cli
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
           name: troupe-linux-x64
@@ -371,7 +391,7 @@ jobs:
           echo "$VERSION" > libs/barnum/version.txt
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cross build --release --target aarch64-unknown-linux-musl -p troupe_cli -p barnum_cli
+        run: cross build --locked --release --target aarch64-unknown-linux-musl -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
           name: troupe-linux-arm64
@@ -415,7 +435,7 @@ jobs:
           $VERSION | Out-File -FilePath libs/barnum/version.txt -Encoding utf8 -NoNewline
       - name: Build
         if: steps.cache-binaries.outputs.cache-hit != 'true'
-        run: cargo build --release --target x86_64-pc-windows-msvc -p troupe_cli -p barnum_cli
+        run: cargo build --locked --release --target x86_64-pc-windows-msvc -p troupe_cli -p barnum_cli
       - uses: actions/upload-artifact@v4
         with:
           name: troupe-win-x64
@@ -435,7 +455,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93.1
       - uses: Swatinem/rust-cache@v2
       - name: Generate Barnum config schemas
-        run: cargo run -p barnum_config --bin build_barnum_schema
+        run: cargo run --locked -p barnum_config --bin build_barnum_schema
       - name: Check schemas are up to date
         run: |
           if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts; then
