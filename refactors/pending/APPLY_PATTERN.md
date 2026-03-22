@@ -212,8 +212,10 @@ struct Engine {
     in_flight: usize,
     max_concurrency: usize,
     pending_dispatches: VecDeque<PendingTask>,
+    /// Tracks all in-flight workers by their key: task_id for task
+    /// workers, finally_for for finally workers. Used to distinguish
+    /// live dispatches (decrement in_flight) from replay (don't).
     dispatched: HashSet<LogTaskId>,
-    dispatched_finallys: HashSet<LogTaskId>,
 }
 
 impl Engine {
@@ -321,7 +323,7 @@ impl Applier for Engine {
                             parents_needing_finally.push(pf);
                         }
                     }
-                    if self.dispatched_finallys.remove(&f.finally_for) {
+                    if self.dispatched.remove(&f.finally_for) {
                         self.in_flight -= 1;
                     }
                 }
@@ -348,7 +350,7 @@ impl Applier for Engine {
 fn dispatch_finallys(&mut self, parents: Vec<PendingFinally>) {
     for pf in parents {
         self.in_flight += 1;
-        self.dispatched_finallys.insert(pf.parent_id);
+        self.dispatched.insert(pf.parent_id);
         let tx = self.tx.clone();
         let id_counter = self.id_counter.clone();
         // spawn finally worker thread with pf, finally script config,
