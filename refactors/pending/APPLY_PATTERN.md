@@ -35,13 +35,13 @@ The structure is already there: receive a result, process it. `process_result` i
 
 ### Design invariant: IDs come from entries
 
-Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs independently. A shared `Arc<AtomicU32>` counter provides unique IDs to both workers (who allocate IDs for children/retries) and the Engine (who allocates IDs for finally tasks).
+Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs independently. RunState owns the ID counter (`next_task_id: u32`) and advances it past any ID it sees in an entry via `max(current, entry.task_id + 1)`. Only the Engine allocates new IDs — for children, retries, and finally tasks.
 
-During replay, the counter is advanced to `max(current, entry.task_id + 1)` for each replayed entry, so live-mode allocations pick up where the log left off.
+Workers produce only `TaskCompleted` entries, which reference an existing task ID (no allocation needed). The Engine processes completions, allocates IDs for any resulting children/retries, and produces `TaskSubmitted` entries.
 
 ### Target event loop
 
-The coordinator owns a `Receiver<Vec<StateLogEntry>>` and a `Vec<Box<dyn Applier>>`. It receives entries from the channel and passes them to every applier. That's it — the coordinator has no knowledge of RunState, config, channels, or any other internal detail.
+The coordinator owns a `Receiver<Vec<StateLogEntry>>` and a `Vec<Box<dyn Applier>>`. It receives entries from the channel and passes them to every applier via `process_entries`. That's it — the coordinator has no knowledge of RunState, config, or any other internal detail.
 
 ```rust
 pub fn run(
@@ -51,32 +51,51 @@ pub fn run(
 ) -> io::Result<()> {
     let (tx, rx) = mpsc::channel();
 
-    // Replay (if resuming)
-    let id_counter = Arc::new(AtomicU32::new(0));
-    let run_state = replay_log(&runner_config.state_log_path, &id_counter);
-
     let mut appliers: Vec<Box<dyn Applier>> = vec![
-        Box::new(Engine::new(config, run_state, runner_config, tx.clone(), Arc::clone(&id_counter))),
+        Box::new(Engine::new(config, RunState::new(), runner_config, tx)),
         Box::new(LogApplier::new(&runner_config.state_log_path)?),
     ];
 
-    // Seed (empty for resume, Config + TaskSubmitted entries for fresh run)
-    let seed = build_seed_entries(config, &initial_tasks, &id_counter);
-    tx.send(seed).expect("[P030] channel open");
-    drop(tx); // coordinator doesn't hold a sender
+    // Seed
+    let seed = build_seed_entries(config, &initial_tasks);
+    process_entries(&mut appliers, &seed);
 
     // Event loop (follows Troupe pattern: receive → apply)
     while let Ok(entries) = rx.recv() {
-        for applier in &mut appliers {
-            applier.apply(&entries);
-        }
+        process_entries(&mut appliers, &entries);
     }
 
     Ok(())
 }
+
+pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig) -> io::Result<()> {
+    let (config, run_state) = replay_log(old_log_path)?;
+    let (tx, rx) = mpsc::channel();
+
+    let mut appliers: Vec<Box<dyn Applier>> = vec![
+        Box::new(Engine::new(&config, run_state, runner_config, tx)),
+        Box::new(LogApplier::new(&runner_config.state_log_path)?),
+    ];
+
+    // Kick — flushes pending dispatches from replay
+    process_entries(&mut appliers, &[]);
+
+    // Event loop
+    while let Ok(entries) = rx.recv() {
+        process_entries(&mut appliers, &entries);
+    }
+
+    Ok(())
+}
+
+fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry]) {
+    for applier in appliers {
+        applier.apply(entries);
+    }
+}
 ```
 
-Workers and the Engine both send entries on `tx`. Workers send task completion entries (with children/retries). The Engine sends finally entries produced during the finally cascade. When all senders are dropped, `rx.recv()` returns `Err` and the loop exits.
+`tx` moves into the Engine — no clone, no coordinator-side sender. Workers hold `tx` clones (given by the Engine when it spawns them). The Engine sends finally/children/retry entries on `tx`. When all senders are dropped, `rx.recv()` returns `Err` and the loop exits.
 
 The current loop already has the same shape: receive, process. The refactor converts it in two stages:
 
@@ -104,15 +123,22 @@ enum TaskOutcome {
 }
 
 struct TaskSuccess {
-    spawned_task_ids: Vec<LogTaskId>,
+    spawned: Vec<TaskSpec>,
     finally_value: StepInputValue,
 }
 
 struct TaskFailed {
     reason: FailureReason,
-    retry_task_id: Option<LogTaskId>,
+    retry: Option<TaskSpec>,
+}
+
+struct TaskSpec {
+    step: StepName,
+    value: StepInputValue,
 }
 ```
+
+`TaskSuccess` and `TaskFailed` carry task specs, not allocated IDs. IDs don't exist yet when the worker produces the entry — the Engine allocates them when processing the completion. The subsequent `TaskSubmitted` entries (produced by the Engine) carry the allocated IDs.
 
 Each variant records a fact. The Engine derives task removal internally when all children of a parent complete.
 
@@ -124,7 +150,7 @@ trait Applier {
 }
 ```
 
-The coordinator receives entries from the channel and passes them to `apply()` on each applier. No other methods on the trait.
+The coordinator calls `process_entries` which passes entries to `apply()` on each applier. No other methods on the trait.
 
 ### Engine
 
@@ -135,7 +161,6 @@ struct Engine<'a> {
     state: RunState,
     config: &'a Config,
     tx: Option<Sender<Vec<StateLogEntry>>>,
-    id_counter: Arc<AtomicU32>,
     pool: PoolConnection,
     in_flight: usize,
     max_concurrency: usize,
@@ -145,6 +170,7 @@ struct Engine<'a> {
 
 struct RunState {
     tasks: BTreeMap<LogTaskId, TaskEntry>,
+    next_task_id: u32,
     removed_parents: Vec<RemovedParent>,
 }
 
@@ -162,17 +188,17 @@ struct PendingTask {
 }
 ```
 
-No `next_task_id` on RunState — ID allocation uses the shared `Arc<AtomicU32>`.
-
-**`apply()`**: Updates state, runs the finally cascade, sends produced entries on `tx`, and flushes dispatches.
+**`apply()`**: Updates state, produces entries for children/retries/finally, sends them on `tx`, and flushes dispatches.
 
 ```rust
 fn apply(&mut self, entries: &[StateLogEntry]) {
+    let mut produced = Vec::new();
+
     for entry in entries {
         match entry {
             StateLogEntry::TaskSubmitted(s) => {
                 if self.state.tasks.contains_key(&s.task_id) {
-                    continue; // already applied (finally entry feedback)
+                    continue; // already applied (feedback from own production)
                 }
                 self.state.apply_submitted(s);
                 self.pending_dispatches.push_back(PendingTask {
@@ -182,7 +208,7 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
                 });
             }
             StateLogEntry::TaskCompleted(c) => {
-                self.state.apply_completed(c);
+                produced.extend(self.process_completion(c));
                 self.pending_dispatches.retain(|p| p.task_id != c.task_id);
                 if self.dispatched.remove(&c.task_id) {
                     self.in_flight -= 1;
@@ -192,11 +218,13 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
         }
     }
 
-    // Finally cascade: produce entries, apply internally, send on tx
-    let finally_entries = self.process_removed_parents();
-    if !finally_entries.is_empty() {
+    // Finally cascade
+    produced.extend(self.process_removed_parents());
+
+    // Send produced entries and flush
+    if !produced.is_empty() {
         if let Some(tx) = &self.tx {
-            tx.send(finally_entries).expect("[P031] channel open");
+            tx.send(produced).expect("[P031] channel open");
         }
     }
 
@@ -204,9 +232,57 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
 }
 ```
 
-The `contains_key` check in `TaskSubmitted` prevents double-processing when the Engine's own finally entries loop back through the channel. During replay (which bypasses the Engine entirely), this never triggers.
+The `contains_key` check in `TaskSubmitted` prevents double-processing when the Engine's own entries loop back through the channel. During replay (which bypasses the Engine entirely), this never triggers.
 
-**`process_removed_parents()`**: Runs the finally cascade. For each removed parent: look up the finally script from config, allocate an ID, apply the entry internally (which increments the grandparent's child count), then remove the parent from the map. Returns produced entries to send on `tx`.
+**`process_completion()`**: Handles the result interpretation that today lives in `process_result`. Captures the task's parent_id before calling `apply_completed` (which may remove the task), then allocates IDs and produces `TaskSubmitted` entries for children/retries. Applies them internally.
+
+```rust
+fn process_completion(&mut self, completed: &TaskCompleted) -> Vec<StateLogEntry> {
+    let parent_id = self.state.tasks.get(&completed.task_id)
+        .and_then(|e| e.parent_id);
+
+    self.state.apply_completed(completed);
+
+    match &completed.outcome {
+        TaskOutcome::Success(success) if !success.spawned.is_empty() => {
+            success.spawned.iter().map(|spec| {
+                let id = self.state.next_id();
+                let submitted = TaskSubmitted {
+                    task_id: id,
+                    step: spec.step.clone(),
+                    value: spec.value.clone(),
+                    parent_id: Some(completed.task_id),
+                    origin: TaskOrigin::Spawned,
+                };
+                self.state.apply_submitted(&submitted);
+                self.pending_dispatches.push_back(PendingTask {
+                    task_id: id, step: spec.step.clone(), value: spec.value.clone(),
+                });
+                StateLogEntry::TaskSubmitted(submitted)
+            }).collect()
+        }
+        TaskOutcome::Failed(failed) if failed.retry.is_some() => {
+            let spec = failed.retry.as_ref().unwrap();
+            let id = self.state.next_id();
+            let submitted = TaskSubmitted {
+                task_id: id,
+                step: spec.step.clone(),
+                value: spec.value.clone(),
+                parent_id,
+                origin: TaskOrigin::Retry { replaces: completed.task_id },
+            };
+            self.state.apply_submitted(&submitted);
+            self.pending_dispatches.push_back(PendingTask {
+                task_id: id, step: spec.step.clone(), value: spec.value.clone(),
+            });
+            vec![StateLogEntry::TaskSubmitted(submitted)]
+        }
+        _ => vec![],
+    }
+}
+```
+
+**`process_removed_parents()`**: Runs the finally cascade. For each removed parent: look up the finally script from config, allocate an ID, apply the entry internally (which increments the grandparent's child count), then remove the parent from the map.
 
 ```rust
 fn process_removed_parents(&mut self) -> Vec<StateLogEntry> {
@@ -215,7 +291,7 @@ fn process_removed_parents(&mut self) -> Vec<StateLogEntry> {
         let script = self.config.step_map.get(&removed.step)
             .and_then(|s| s.finally.as_ref());
         if let Some(script) = script {
-            let id = next_id(&self.id_counter);
+            let id = self.state.next_id();
             let submitted = TaskSubmitted {
                 task_id: id,
                 step: script.step.clone(),
@@ -223,14 +299,12 @@ fn process_removed_parents(&mut self) -> Vec<StateLogEntry> {
                 parent_id: removed.parent_id,
                 origin: TaskOrigin::Finally { finally_for: removed.task_id },
             };
-            // Apply internally — increments grandparent's count
             self.state.apply_submitted(&submitted);
             self.pending_dispatches.push_back(PendingTask {
                 task_id: id, step: script.step.clone(), value: submitted.value.clone(),
             });
             entries.push(StateLogEntry::TaskSubmitted(submitted));
         }
-        // Remove the parent (grandparent count already incremented above)
         self.state.remove_and_notify_parent(removed.task_id);
     }
     entries
@@ -239,7 +313,7 @@ fn process_removed_parents(&mut self) -> Vec<StateLogEntry> {
 
 The ordering — apply finally entry then remove parent — ensures the grandparent's child count is incremented before it could hit zero from the parent's removal. This matches the current `schedule_removed_finally` logic.
 
-**`flush_dispatches()`**: Spawns worker threads. Each worker gets a `tx` clone, step config, and a shared `id_counter` clone.
+**`flush_dispatches()`**: Spawns worker threads. Each worker gets a `tx` clone and the step config.
 
 ```rust
 fn flush_dispatches(&mut self) {
@@ -250,8 +324,7 @@ fn flush_dispatches(&mut self) {
         self.in_flight += 1;
         self.dispatched.insert(task.task_id);
         let tx = tx.clone();
-        let id_counter = Arc::clone(&self.id_counter);
-        // spawn worker thread with task, step config, tx, id_counter
+        // spawn worker thread with task, step config, tx
     }
 
     if self.pending_dispatches.is_empty() && self.in_flight == 0 {
@@ -260,19 +333,25 @@ fn flush_dispatches(&mut self) {
 }
 ```
 
-**Workers**: Each worker thread runs the same logic as today's `process_result`, moved into the worker closure:
+**Workers**: Each worker thread:
 
 1. Runs the task via the pool
 2. Interprets the result (`process_submit_result`, post hooks) — step config captured in closure
-3. Allocates IDs for children/retries from `id_counter`
-4. Produces `Vec<StateLogEntry>` (TaskCompleted + TaskSubmitted entries)
-5. Sends on `tx`, drops `tx` clone
+3. Produces a single `TaskCompleted` entry (no ID allocation)
+4. Sends on `tx`, drops `tx` clone
 
 **RunState internals**:
 
 ```rust
 impl RunState {
+    fn next_id(&mut self) -> LogTaskId {
+        let id = LogTaskId(self.next_task_id);
+        self.next_task_id += 1;
+        id
+    }
+
     fn apply_submitted(&mut self, submitted: &TaskSubmitted) {
+        self.next_task_id = self.next_task_id.max(submitted.task_id.0 + 1);
         self.tasks.insert(submitted.task_id, TaskEntry {
             step: submitted.step.clone(),
             parent_id: submitted.parent_id,
@@ -291,21 +370,21 @@ impl RunState {
     fn apply_completed(&mut self, completed: &TaskCompleted) {
         match &completed.outcome {
             TaskOutcome::Success(success) => {
-                if success.spawned_task_ids.is_empty() {
+                if success.spawned.is_empty() {
                     self.remove_and_notify_parent(completed.task_id);
                 } else {
-                    let count = success.spawned_task_ids.len();
+                    let count = success.spawned.len();
                     let entry = self.tasks.get_mut(&completed.task_id)
                         .expect("[P033] completed task must exist");
                     entry.state = TaskState::WaitingForChildren {
                         pending_children_count: NonZeroU16::new(count as u16)
-                            .expect("[P034] spawned_task_ids is non-empty"),
+                            .expect("[P034] spawned is non-empty"),
                         finally_value: success.finally_value.clone(),
                     };
                 }
             }
             TaskOutcome::Failed(failed) => {
-                if failed.retry_task_id.is_some() {
+                if failed.retry.is_some() {
                     self.tasks.remove(&completed.task_id);
                 } else {
                     self.remove_and_notify_parent(completed.task_id);
@@ -366,29 +445,28 @@ TaskState has two variants. The current `InFlight` variant is replaced by `in_fl
 Replay runs before the event loop and constructs RunState directly, bypassing the Applier trait:
 
 ```rust
-fn replay_log(path: &Path, id_counter: &AtomicU32) -> RunState {
+fn replay_log(path: &Path) -> io::Result<(Config, RunState)> {
     let entries = barnum_state::read_entries(path);
     let mut state = RunState::new();
+    let mut config_json = None;
     for entry in entries {
         match &entry {
-            StateLogEntry::TaskSubmitted(s) => {
-                id_counter.fetch_max(s.task_id.0 + 1, Ordering::Relaxed);
-                state.apply_submitted(s);
-            }
+            StateLogEntry::Config(c) => config_json = Some(c.config.clone()),
+            StateLogEntry::TaskSubmitted(s) => state.apply_submitted(s),
             StateLogEntry::TaskCompleted(c) => state.apply_completed(c),
-            StateLogEntry::Config(_) => {}
         }
     }
-    state
+    let config = /* deserialize config_json */;
+    Ok((config, state))
 }
 ```
 
 After replay:
 - `RunState` contains only active tasks (pending + waiting-for-children)
-- `id_counter` is past all replayed IDs
+- `next_task_id` is past all replayed IDs (advanced by `apply_submitted`)
 - `Engine::new()` initializes `pending_dispatches` from RunState's pending tasks
 - `LogApplier` is created at the current log position (appending)
-- Seed entries (empty for resume) kick-start the event loop; `Engine::apply(&[])` flushes dispatches for the remaining pending tasks
+- The kick (`process_entries(&mut appliers, &[])`) flushes dispatches for remaining pending tasks
 
 ## Phasing
 
@@ -419,7 +497,7 @@ Introduce the `Applier` trait. Engine and LogApplier implement it. Build a `Vec<
 
 **Depends on: Phase 2.**
 
-Restructure `run()` so seed entries go through the channel. `build_seed_entries` produces entries, sends on `tx`. The event loop processes them like any other entries.
+Restructure `run()` so seed entries go through `process_entries` directly (not through the channel). `build_seed_entries` produces entries, `process_entries` feeds them through all appliers.
 
 ## Before/After
 
@@ -437,7 +515,7 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
 }
 ```
 
-After: Workers produce entries. Those entries flow through all appliers — Engine updates its task tree and dispatches, LogApplier writes to disk. All see the same entries. State and log can never diverge.
+After: Workers produce `TaskCompleted` entries. Those entries flow through all appliers — Engine allocates IDs for children and sends `TaskSubmitted` entries on tx, LogApplier writes to disk. State and log see the same entries and can never diverge.
 
 ### Main loop: scattered responsibilities
 
@@ -459,9 +537,7 @@ After: the coordinator is a dumb loop.
 
 ```rust
 while let Ok(entries) = rx.recv() {
-    for applier in &mut appliers {
-        applier.apply(&entries);
-    }
+    process_entries(&mut appliers, &entries);
 }
 ```
 
@@ -496,6 +572,7 @@ struct TaskEntry {
 ```rust
 // RunState
 #[test] fn apply_submitted_creates_pending_entry()
+#[test] fn apply_submitted_advances_next_task_id()
 #[test] fn apply_submitted_increments_parent_count_for_finally()
 #[test] fn apply_completed_success_no_children_removes_task()
 #[test] fn apply_completed_success_with_children_transitions_to_waiting()
@@ -508,6 +585,9 @@ struct TaskEntry {
 #[test] fn apply_updates_state_and_queues_dispatches()
 #[test] fn apply_dequeues_completed_tasks()
 #[test] fn apply_skips_already_known_tasks()
+#[test] fn process_completion_allocates_child_ids()
+#[test] fn process_completion_allocates_retry_id()
+#[test] fn process_completion_preserves_parent_id_for_retry()
 #[test] fn flush_dispatches_up_to_max_concurrency()
 #[test] fn flush_drops_tx_when_empty_and_no_in_flight()
 #[test] fn completed_only_decrements_in_flight_for_dispatched_tasks()
@@ -519,17 +599,16 @@ struct TaskEntry {
 #[test] fn writes_all_entry_variants()
 
 // Coordinator
-#[test] fn event_loop_processes_entries_through_all_appliers()
+#[test] fn process_entries_feeds_all_appliers()
 #[test] fn event_loop_exits_when_channel_closes()
 
 // Replay
 #[test] fn replay_reconstructs_state_from_log()
-#[test] fn replay_advances_id_counter()
+#[test] fn replay_advances_next_task_id()
 #[test] fn engine_dispatches_remaining_tasks_after_replay()
 
 // Workers
-#[test] fn worker_produces_completion_entries()
-#[test] fn worker_produces_child_entries_on_success()
-#[test] fn worker_produces_retry_entries_on_failure()
-#[test] fn worker_allocates_unique_ids()
+#[test] fn worker_produces_completion_entry()
+#[test] fn worker_determines_success_with_spawned_specs()
+#[test] fn worker_determines_retry_with_spec()
 ```
