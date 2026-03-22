@@ -182,7 +182,7 @@ Each `TaskOutcome` variant is self-contained. `Succeeded` carries the finally va
 
 `apply_completed` matches on the outcome. For `Succeeded` with non-empty children, the parent transitions to `WaitingForChildren(N)`. For `Succeeded` with empty children or `Failed` with no retry, the task is removed and the Engine walks up the parent chain for finally detection. For `Failed` with a retry, the task is marked `Failed` and the retry's `apply_submitted` replaces it.
 
-`FinallyRun` is produced by a finally worker thread. When a parent's children all complete and the parent has a finally script, the Engine dispatches a finally worker post-batch. The worker runs the script, allocates IDs for children, and sends `FinallyRun` on `tx`. It flows through all appliers like any other entry. During replay, `FinallyRun` entries are in the batch — the Engine marks them as handled and skips re-dispatching. On resume, if a parent's children are all done but no `FinallyRun` is in the log, the Engine re-dispatches the finally worker.
+`FinallyRun` is produced by a finally worker thread. When a parent's children all complete and the parent has a finally script, the Engine queues a `PendingFinally` in `pending_dispatches`. `flush_dispatches` spawns a finally worker, same as it spawns task workers — both respect `max_concurrency`. The worker runs the script, allocates IDs for children, and sends `FinallyRun` on `tx`. It flows through all appliers like any other entry. During replay, `FinallyRun` entries in the batch cause `apply_finally_run` to remove the parent from the map — so `flush_dispatches` skips the stale `PendingFinally`. On resume, if a parent's children are all done but no `FinallyRun` is in the log, the `PendingFinally` stays valid and `flush_dispatches` dispatches a new finally worker.
 
 Each `TaskOrigin` variant carries only non-derivable information. `Spawned { parent_id }` needs the parent explicitly (no other way to know it). `Retry { replaces }` references a task that's still in the map — `apply_submitted` derives `parent_id` from the referenced task's entry. `Seed` has no relationships.
 
@@ -211,17 +211,24 @@ struct Engine {
     pool: PoolConnection,
     in_flight: usize,
     max_concurrency: usize,
-    pending_dispatches: VecDeque<PendingTask>,
-    /// Tracks all in-flight workers by their key: task_id for task
-    /// workers, finally_for for finally workers. Used to distinguish
-    /// live dispatches (decrement in_flight) from replay (don't).
-    dispatched: HashSet<LogTaskId>,
+    pending_dispatches: VecDeque<PendingDispatch>,
 }
 
 impl Engine {
     fn config(&self) -> &Config {
         self.config.as_ref().expect("[P051] config not set")
     }
+}
+
+enum PendingDispatch {
+    Task(PendingTask),
+    Finally(PendingFinally),
+}
+
+struct PendingTask {
+    task_id: LogTaskId,
+    step: StepName,
+    value: StepInputValue,
 }
 
 struct PendingFinally {
@@ -233,23 +240,16 @@ struct PendingFinally {
 struct RunState {
     tasks: BTreeMap<LogTaskId, TaskEntry>,
 }
-
-struct PendingTask {
-    task_id: LogTaskId,
-    step: StepName,
-    value: StepInputValue,
-}
 ```
 
 `id_counter` is shared between Engine and workers (via `Arc<AtomicU32>`). Workers allocate IDs atomically for children and retries. During `apply()`, a local `max_seen_id` tracks the highest task ID seen in `TaskSubmitted` entries — the only place new IDs are introduced. After the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max` — this initializes the counter correctly after the seed batch (replay). During live execution the counter is already past all seen IDs, so `fetch_max` is a no-op.
 
-**`apply()`**: Processes a batch of entries, then dispatches pending tasks and finally workers. All entries in the batch are processed before any dispatch happens — this is critical for replay, where the entire old log is applied as one batch.
+**`apply()`**: Processes a batch of entries, then dispatches via `flush_dispatches`. All entries in the batch are processed before any dispatch happens — this is critical for replay, where the entire old log is applied as one batch.
 
 ```rust
 impl Applier for Engine {
     fn apply(&mut self, entries: &[StateLogEntry]) {
         let mut max_seen_id: u32 = 0;
-        let mut parents_needing_finally: Vec<PendingFinally> = Vec::new();
 
         for entry in entries {
             match entry {
@@ -258,61 +258,62 @@ impl Applier for Engine {
                     assert!(!self.state.tasks.contains_key(&s.task_id),
                         "[P035] duplicate TaskSubmitted for {:?}", s.task_id);
                     self.state.apply_submitted(s);
-                    self.pending_dispatches.push_back(PendingTask {
-                        task_id: s.task_id,
-                        step: s.step.clone(),
-                        value: s.value.clone(),
-                    });
+                    self.pending_dispatches.push_back(
+                        PendingDispatch::Task(PendingTask {
+                            task_id: s.task_id,
+                            step: s.step.clone(),
+                            value: s.value.clone(),
+                        }));
                 }
                 StateLogEntry::TaskCompleted(c) => {
                     assert!(self.state.tasks.contains_key(&c.task_id),
                         "[P036] TaskCompleted for unknown task {:?}", c.task_id);
-                    if self.dispatched.remove(&c.task_id) {
-                        self.in_flight -= 1;
-                    }
+                    self.in_flight = self.in_flight.saturating_sub(1);
                     let parent_id = self.state.apply_completed(c);
                     // For leaf/permanent-failure: walk up the parent chain.
                     if let Some(pid) = parent_id {
                         if let Some(pf) = self.state.walk_up_for_finally(
                             pid, self.config()
                         ) {
-                            parents_needing_finally.push(pf);
+                            self.pending_dispatches.push_back(
+                                PendingDispatch::Finally(pf));
                         }
                     }
                     // Queue children/retry for dispatch.
                     match &c.outcome {
                         TaskOutcome::Succeeded(success) => {
                             for s in &success.children {
-                                self.pending_dispatches.push_back(PendingTask {
-                                    task_id: s.task_id,
-                                    step: s.step.clone(),
-                                    value: s.value.clone(),
-                                });
+                                self.pending_dispatches.push_back(
+                                    PendingDispatch::Task(PendingTask {
+                                        task_id: s.task_id,
+                                        step: s.step.clone(),
+                                        value: s.value.clone(),
+                                    }));
                             }
                         }
                         TaskOutcome::Failed(failure) => {
                             if let Some(retry) = &failure.retry {
-                                self.pending_dispatches.push_back(PendingTask {
-                                    task_id: retry.task_id,
-                                    step: retry.step.clone(),
-                                    value: retry.value.clone(),
-                                });
+                                self.pending_dispatches.push_back(
+                                    PendingDispatch::Task(PendingTask {
+                                        task_id: retry.task_id,
+                                        step: retry.step.clone(),
+                                        value: retry.value.clone(),
+                                    }));
                             }
                         }
                     }
                 }
                 StateLogEntry::FinallyRun(f) => {
+                    self.in_flight = self.in_flight.saturating_sub(1);
                     let grandparent_id = self.state.apply_finally_run(f);
-                    // Mark this parent as handled — don't re-dispatch.
-                    parents_needing_finally
-                        .retain(|pf| pf.parent_id != f.finally_for);
                     // Queue children for dispatch.
                     for s in &f.children {
-                        self.pending_dispatches.push_back(PendingTask {
-                            task_id: s.task_id,
-                            step: s.step.clone(),
-                            value: s.value.clone(),
-                        });
+                        self.pending_dispatches.push_back(
+                            PendingDispatch::Task(PendingTask {
+                                task_id: s.task_id,
+                                step: s.step.clone(),
+                                value: s.value.clone(),
+                            }));
                     }
                     // FinallyRun with no children may trigger another
                     // finally up the chain (grandparent reached zero).
@@ -320,11 +321,9 @@ impl Applier for Engine {
                         if let Some(pf) = self.state.walk_up_for_finally(
                             gp_id, self.config()
                         ) {
-                            parents_needing_finally.push(pf);
+                            self.pending_dispatches.push_back(
+                                PendingDispatch::Finally(pf));
                         }
-                    }
-                    if self.dispatched.remove(&f.finally_for) {
-                        self.in_flight -= 1;
                     }
                 }
                 StateLogEntry::Config(c) => {
@@ -338,43 +337,42 @@ impl Applier for Engine {
         }
 
         self.id_counter.fetch_max(max_seen_id + 1, Ordering::SeqCst);
-        self.dispatch_finallys(parents_needing_finally);
         self.flush_dispatches();
     }
 }
 ```
 
-**`dispatch_finallys()`**: Spawns finally worker threads. Each finally worker gets a `tx` clone, an `id_counter` clone, the finally script config, and the `PendingFinally` info. Finally workers count toward `in_flight` — this naturally prevents premature shutdown.
-
-```rust
-fn dispatch_finallys(&mut self, parents: Vec<PendingFinally>) {
-    for pf in parents {
-        self.in_flight += 1;
-        self.dispatched.insert(pf.parent_id);
-        let tx = self.tx.clone();
-        let id_counter = self.id_counter.clone();
-        // spawn finally worker thread with pf, finally script config,
-        // tx, id_counter
-    }
-}
-```
-
-**`flush_dispatches()`**: Spawns task worker threads. Each worker gets a `tx` clone, an `id_counter` clone, and the step config.
+**`flush_dispatches()`**: Dispatches both task workers and finally workers from a single queue, respecting `max_concurrency` for both. Each worker gets a `tx` clone, an `id_counter` clone, and the relevant config.
 
 ```rust
 fn flush_dispatches(&mut self) {
     while self.in_flight < self.max_concurrency {
-        let Some(task) = self.pending_dispatches.pop_front() else { break };
-        // Skip tasks no longer in Pending state (completed during replay).
-        if !self.state.tasks.get(&task.task_id)
-            .map_or(false, |e| matches!(&e.state, TaskState::Pending(..))) {
-            continue;
+        let Some(dispatch) = self.pending_dispatches.pop_front() else { break };
+        match dispatch {
+            PendingDispatch::Task(task) => {
+                // Skip tasks no longer in Pending state (completed during replay).
+                if !self.state.tasks.get(&task.task_id)
+                    .map_or(false, |e| matches!(&e.state, TaskState::Pending(..))) {
+                    continue;
+                }
+                self.in_flight += 1;
+                let tx = self.tx.clone();
+                let id_counter = self.id_counter.clone();
+                // spawn task worker thread with task, step config, tx, id_counter
+            }
+            PendingDispatch::Finally(pf) => {
+                // Skip finallys already handled (parent removed by apply_finally_run
+                // during replay — FinallyRun was in the same batch).
+                if !self.state.tasks.contains_key(&pf.parent_id) {
+                    continue;
+                }
+                self.in_flight += 1;
+                let tx = self.tx.clone();
+                let id_counter = self.id_counter.clone();
+                // spawn finally worker thread with pf, finally script config,
+                // tx, id_counter
+            }
         }
-        self.in_flight += 1;
-        self.dispatched.insert(task.task_id);
-        let tx = self.tx.clone();
-        let id_counter = self.id_counter.clone();
-        // spawn worker thread with task, step config, tx, id_counter
     }
 
     if self.pending_dispatches.is_empty() && self.in_flight == 0 {
@@ -400,7 +398,7 @@ fn flush_dispatches(&mut self) {
 3. Produces a `FinallyRun` with the children
 4. Sends `Continue(StateLogEntry::FinallyRun(...))` on `tx`, drops `tx` clone
 
-Both worker types are in-flight — the Engine tracks them and won't shut down until all complete.
+Both worker types are dispatched through `flush_dispatches`, count toward `in_flight`, and respect `max_concurrency`.
 
 **RunState internals**:
 
@@ -580,7 +578,7 @@ impl RunState {
 }
 ```
 
-`walk_up_for_finally` replaces `remove_and_notify_parent`. Instead of accumulating into a deferred queue, it walks up the parent chain synchronously: decrement count, if zero and no finally → remove and continue, if zero and has finally → return `PendingFinally`. At most one `PendingFinally` per call. The Engine accumulates these during the batch and runs finally scripts post-batch.
+`walk_up_for_finally` replaces `remove_and_notify_parent`. It walks up the parent chain synchronously: decrement count, if zero and no finally → remove and continue, if zero and has finally → return `PendingFinally`. At most one `PendingFinally` per call. The Engine pushes these into `pending_dispatches` and dispatches them via `flush_dispatches` post-batch, respecting `max_concurrency` like any other dispatch.
 
 ### LogApplier
 
@@ -603,7 +601,7 @@ Writes every entry it receives — `Config`, `TaskSubmitted`, `TaskCompleted`, a
 
 ### Termination
 
-Engine sends `ControlFlow::Break(result)` on `tx` when `pending_dispatches` is empty and `in_flight == 0` (checked in `flush_dispatches`). Finally workers count toward `in_flight`, so shutdown naturally waits for all workers — both task workers and finally workers — to complete. The result is `Ok(())` if the workflow completed successfully, `Err(..)` if a task permanently failed (retries exhausted). The Engine derives this from state — it's not a separate log entry. The coordinator matches on `Break`, logs the result, and exits the loop. All appliers are dropped, including Engine (which drops `tx`). Worker threads hold `Sender` clones — they've already completed and dropped theirs by the time shutdown fires (in_flight is 0).
+Engine sends `ControlFlow::Break(result)` on `tx` when `pending_dispatches` is empty and `in_flight == 0` (checked in `flush_dispatches`). Both task workers and finally workers go through `flush_dispatches` and count toward `in_flight`, so shutdown naturally waits for all workers to complete. The result is `Ok(())` if the workflow completed successfully, `Err(..)` if a task permanently failed (retries exhausted). The Engine derives this from state — it's not a separate log entry. The coordinator matches on `Break`, logs the result, and exits the loop. All appliers are dropped, including Engine (which drops `tx`). Worker threads hold `Sender` clones — they've already completed and dropped theirs by the time shutdown fires (in_flight is 0).
 
 ### TaskEntry and TaskState
 
@@ -635,7 +633,7 @@ struct WaitingState {
 
 TaskState has three variants. `Pending` and `WaitingForChildren` are the stable live states. `Failed` is transient: it exists only when a retry follows (`failure.retry.is_some()`), and the retry's `apply_submitted` removes the task within the same `apply_completed` call. There is no `Succeeded` variant — `apply_completed` transitions directly to `WaitingForChildren` for tasks with children, or removes leaf tasks and permanent failures immediately.
 
-The current `InFlight` variant is replaced by `in_flight: usize` + `dispatched: HashSet<LogTaskId>` on the Engine. `finally_script` and `retries_remaining` are removed from TaskEntry — the Engine looks up the finally script from config when running finally scripts post-batch, and workers determine whether to retry based on step config captured in their closures.
+The current `InFlight` variant is replaced by `in_flight: usize` on the Engine. `finally_script` and `retries_remaining` are removed from TaskEntry — the Engine looks up the finally script from config when needed, and workers determine whether to retry based on step config captured in their closures.
 
 ## Replay
 
@@ -647,15 +645,14 @@ RunMode::Resume { old_log_path } => {
 }
 ```
 
-The old entries flow through `process_entries` like any other batch. The first entry is `Config` — Engine deserializes and stores it. Subsequent entries (`TaskSubmitted`, `TaskCompleted`, `FinallyRun`) build up RunState. After the batch:
+The old entries flow through `process_entries` like any other batch. The first entry is `Config` — Engine deserializes and stores it. Subsequent entries (`TaskSubmitted`, `TaskCompleted`, `FinallyRun`) build up RunState. `in_flight` stays at 0 throughout the seed batch via `saturating_sub` — nothing was actually dispatched. After the batch:
 
-1. `parents_needing_finally` is checked — during replay, `FinallyRun` entries in the batch already cleared these, so no finally workers are dispatched.
-2. `id_counter` is initialized to `max_seen_id + 1` via `fetch_max`.
-3. `flush_dispatches` dispatches any remaining Pending tasks. Tasks that completed during replay are skipped (state check).
+1. `id_counter` is initialized to `max_seen_id + 1` via `fetch_max`.
+2. `flush_dispatches` dispatches any remaining Pending tasks and finally workers. Tasks that completed during replay are skipped (state check). Finallys whose `FinallyRun` was already in the batch are skipped (parent removed from map by `apply_finally_run`).
 
-If the old log ended mid-workflow (e.g. a parent's children all completed but no `FinallyRun` was logged — crash before the finally worker completed), the replay accumulates the `PendingFinally` and the post-batch step dispatches a new finally worker.
+If the old log ended mid-workflow (e.g. a parent's children all completed but no `FinallyRun` was logged — crash before the finally worker completed), `walk_up_for_finally` pushed a `PendingFinally` into `pending_dispatches` during the batch and no `FinallyRun` cleared it — so `flush_dispatches` dispatches a new finally worker.
 
-No separate cleanup phases are needed. `apply_completed` handles everything atomically via `subsequent`: leaf successes and permanent failures are removed immediately, children transition the parent to `WaitingForChildren`, and retries replace the failed task. The same code path handles both live execution and replay.
+No separate cleanup phases are needed. `apply_completed` handles everything atomically: leaf successes and permanent failures are removed immediately, children transition the parent to `WaitingForChildren`, and retries replace the failed task. The same code path handles both live execution and replay.
 
 `LogApplier` writes all replayed entries to the new log file, producing a complete record. New entries from live execution are appended after.
 
@@ -796,14 +793,13 @@ struct TaskEntry {
 #[test] fn apply_completed_panics_on_unknown_task()
 #[test] fn apply_completed_walks_up_for_finally()
 #[test] fn apply_finally_run_queues_children_for_dispatch()
-#[test] fn apply_finally_run_clears_pending_finally()
-#[test] fn apply_finally_run_empty_triggers_walk_up()
+#[test] fn apply_finally_run_queues_walk_up_finally()
 #[test] fn apply_initializes_counter_from_max_seen_id()
-#[test] fn apply_post_batch_dispatches_finally_workers()
 #[test] fn flush_dispatches_up_to_max_concurrency()
 #[test] fn flush_dispatches_skips_completed_tasks()
+#[test] fn flush_dispatches_skips_handled_finallys()
 #[test] fn flush_sends_shutdown_when_empty_and_no_in_flight()
-#[test] fn flush_waits_for_finally_workers_before_shutdown()
+#[test] fn flush_respects_max_concurrency_for_finallys()
 
 // Engine — replay via seed batch
 #[test] fn replay_seed_reconstructs_state()
