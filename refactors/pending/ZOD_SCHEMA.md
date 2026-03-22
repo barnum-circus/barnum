@@ -120,9 +120,6 @@ Untagged enums (`#[serde(untagged)]`) produce `anyOf` without a discriminator. T
 For the current config types:
 
 ```typescript
-// Generated from Rust types — do not edit manually.
-// Regenerate with: cargo run -p barnum_config --bin build_barnum_schema
-
 import { z } from "zod";
 
 const MaybeLinked_for_String = z.discriminatedUnion("kind", [
@@ -246,8 +243,6 @@ use std::fmt::Write;
 
 pub fn emit_zod(root: &RootSchema) -> String {
     let mut out = String::new();
-    writeln!(out, "// Generated from Rust types — do not edit manually.").unwrap();
-    writeln!(out, "// Regenerate with: cargo run -p barnum_config --bin build_barnum_schema\n").unwrap();
     writeln!(out, "import {{ z }} from \"zod\";\n").unwrap();
 
     let ordered = topological_sort(&root.definitions);
