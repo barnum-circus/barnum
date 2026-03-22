@@ -87,12 +87,6 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 
 `tx` moves into the Engine — no clone, no coordinator-side sender. Workers hold `tx` clones (given by the Engine when it spawns them). The Engine sends each produced entry individually on `tx`. When all senders are dropped, `rx.recv()` returns `Err` and the loop exits.
 
-The current loop already has the same shape: receive, process. The refactor converts it in two stages:
-
-1. **Event loop restructure** (Phase 1): Convert the Iterator to an explicit recv loop where `process_result` still handles everything internally.
-
-2. **Apply pattern** (Phase 2): Introduce the Applier trait. Engine and LogApplier implement it. The coordinator becomes the loop above.
-
 ## StateLogEntry
 
 ```rust
