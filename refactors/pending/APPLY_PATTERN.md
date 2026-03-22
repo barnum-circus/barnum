@@ -656,8 +656,8 @@ Each phase is a separate branch that passes CI and merges independently.
 Independent sub-refactors, each in its own file. Can land in any order.
 
 - **0a.** `EXTRACT_RUN_STATE.md` — **Done.** Moved `tasks` and `next_task_id` into RunState. Also moved `remove_and_notify_parent` onto RunState with deferred parent removal via non-recursive cascade (absorbs 0d).
-- **0b.** Remove InFlight variant — Replace `TaskState::InFlight(InFlight)` (zero-sized marker) with `in_flight: usize` counter on TaskRunner. TaskState becomes `Pending { value }` and `WaitingForChildren { ... }` only. Dispatch sets `in_flight += 1` and transitions directly from Pending to InFlight-equivalent (task is in the map but not in any TaskState — or add a small marker). Completion decrements `in_flight`.
-- **0c.** Remove config from TaskEntry — Drop `finally_script: Option<HookScript>` and `retries_remaining: u32` from TaskEntry. `finally_script` is used to distinguish "am I a finally task?" — replace with a bool or look up from step config. `retries_remaining` is already `#[expect(dead_code)]` — just delete it. The `finally_data: Option<(HookScript, StepInputValue)>` on WaitingForChildren becomes `finally_value: StepInputValue` — the HookScript is looked up from config when scheduling the finally.
+- **0b.** Remove InFlight variant — **Done.** Replaced `TaskState::InFlight` with `in_flight: usize` counter + `pending_queue: VecDeque<LogTaskId>`. TaskState is now `Pending { value }` and `WaitingForChildren { ... }` only.
+- **0c.** Remove config from TaskEntry — **Done.** Replaced `finally_script: Option<HookScript>` with `is_finally: bool`, deleted dead `retries_remaining`, changed `finally_data: Option<(HookScript, StepInputValue)>` to `finally_value: Option<StepInputValue>`. HookScript looked up from step config at point of use.
 - **0d.** Absorbed into 0a.
 
 ### Phase 1: Event loop restructure
