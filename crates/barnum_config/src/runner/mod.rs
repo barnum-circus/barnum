@@ -62,13 +62,11 @@ struct PoolConnection {
     invoker: Invoker<TroupeCli>,
 }
 
-/// Result of task processing (for iterator).
+/// Whether a task was permanently dropped (retries exhausted).
 #[derive(Debug)]
 enum TaskResult {
-    /// Task completed successfully.
-    Completed,
-    /// Task will be retried.
-    Requeued,
+    /// Task completed or will be retried.
+    Handled,
     /// Task was dropped after exhausting retries.
     Dropped,
 }
@@ -420,10 +418,6 @@ impl<'a> TaskRunner<'a> {
             );
             self.pending_queue.push_back(pending.task_id);
         }
-    }
-
-    fn pending(&self) -> usize {
-        self.pending_queue.len()
     }
 
     // ==================== State Log ====================
@@ -870,12 +864,12 @@ impl<'a> TaskRunner<'a> {
                 finally_value,
             } => {
                 self.task_succeeded(task_id, spawned, finally_value);
-                TaskResult::Completed
+                TaskResult::Handled
             }
 
             TaskOutcome::Retry(retry_task, failure_kind) => {
                 self.task_failed(task_id, Some(retry_task), failure_kind);
-                TaskResult::Requeued
+                TaskResult::Handled
             }
 
             TaskOutcome::Dropped(failure_kind) => {
@@ -886,24 +880,56 @@ impl<'a> TaskRunner<'a> {
     }
 }
 
-impl Iterator for TaskRunner<'_> {
-    type Item = TaskResult;
-
-    /// Get the next completed task outcome.
+impl TaskRunner<'_> {
+    /// Run the task queue to completion.
     ///
-    /// Submits pending tasks concurrently and returns results as they complete.
-    /// Returns `None` when all tasks are done (nothing pending, nothing in flight).
-    fn next(&mut self) -> Option<Self::Item> {
-        self.dispatch_all_pending();
+    /// Dispatches pending tasks, receives results, and processes them until
+    /// all tasks are done. Returns an error if any tasks were permanently dropped.
+    #[expect(clippy::expect_used)] // Channel closing while tasks in flight is a bug
+    fn run(&mut self) -> io::Result<()> {
+        let mut completed_count = 0u32;
+        let mut dropped_count = 0u32;
 
-        if self.in_flight == 0 {
-            return None;
+        loop {
+            self.dispatch_all_pending();
+            if self.in_flight == 0 {
+                break;
+            }
+            let result = self
+                .rx
+                .recv()
+                .expect("[P062] channel closed while tasks in flight");
+            let task_result = self.process_result(result);
+            completed_count += 1;
+            if matches!(task_result, TaskResult::Dropped) {
+                dropped_count += 1;
+            }
+
+            info!(
+                "{} {} completed, {} {} remaining",
+                completed_count,
+                if completed_count == 1 {
+                    "task"
+                } else {
+                    "tasks"
+                },
+                self.pending_queue.len(),
+                if self.pending_queue.len() == 1 {
+                    "task"
+                } else {
+                    "tasks"
+                }
+            );
         }
 
-        let result = self.rx.recv().ok()?;
-        // Note: in_flight is decremented inside process_result
-
-        Some(self.process_result(result))
+        if dropped_count > 0 {
+            error!(dropped_count, "task queue completed with dropped tasks");
+            return Err(io::Error::other(format!(
+                "[E018] {dropped_count} task(s) were dropped (retries exhausted)"
+            )));
+        }
+        info!(total = completed_count, "task queue complete");
+        Ok(())
     }
 }
 
@@ -929,7 +955,7 @@ pub fn run(
     initial_tasks: Vec<Task>,
 ) -> io::Result<()> {
     let mut runner = TaskRunner::new(config, schemas, runner_config, initial_tasks)?;
-    run_to_completion(&mut runner)
+    runner.run()
 }
 
 /// Resume a run from a state log file.
@@ -966,42 +992,7 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
 
     // 4. Create runner with reconstructed state and continue
     let mut runner = TaskRunner::new_resumed(&config, &schemas, runner_config, state, state_log)?;
-    run_to_completion(&mut runner)
-}
-
-/// Drive a `TaskRunner` to completion.
-fn run_to_completion(runner: &mut TaskRunner<'_>) -> io::Result<()> {
-    let mut completed_count = 0u32;
-    let mut dropped_count = 0u32;
-
-    while let Some(result) = runner.next() {
-        completed_count += 1;
-        if matches!(result, TaskResult::Dropped) {
-            dropped_count += 1;
-        }
-
-        let remaining = runner.pending();
-        info!(
-            "{} {} completed, {} {} remaining",
-            completed_count,
-            if completed_count == 1 {
-                "task"
-            } else {
-                "tasks"
-            },
-            remaining,
-            if remaining == 1 { "task" } else { "tasks" }
-        );
-    }
-
-    if dropped_count > 0 {
-        error!(dropped_count, "task queue completed with dropped tasks");
-        return Err(io::Error::other(format!(
-            "[E018] {dropped_count} task(s) were dropped (retries exhausted)"
-        )));
-    }
-    info!(total = completed_count, "task queue complete");
-    Ok(())
+    runner.run()
 }
 
 #[cfg(test)]
