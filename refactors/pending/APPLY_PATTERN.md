@@ -66,15 +66,14 @@ for applier in &mut appliers {
 }
 
 // event loop
-while let Ok(result) = rx.recv() {
-    let entries = step(result);
+while let Ok(entries) = rx.recv() {
     for applier in &mut appliers {
         applier.apply(&entries);
     }
 }
 ```
 
-The main loop doesn't know what's in the vector. It receives entries and calls apply on each applier. That's it.
+The event loop receives entries and iterates appliers. It doesn't know what's in the vector, doesn't call step, doesn't track in_flight. It just receives and applies.
 
 StateRunner implements Applier. Its apply iterates entries, matches, updates state, tracks pending dispatches. At the end, it flushes dispatches (spawns threads). If a TaskSubmitted and TaskCompleted for the same task appear in the same batch, the completed removes it from the dispatch queue before flush — no thread is created.
 
@@ -447,8 +446,7 @@ pub fn run(
         applier.apply(&seed_entries);
     }
 
-    while let Ok(result) = rx.recv() {
-        let entries = step(result);
+    while let Ok(entries) = rx.recv() {
         for applier in &mut appliers {
             applier.apply(&entries);
         }
@@ -486,7 +484,7 @@ Convert the Iterator-based loop to an explicit `run()` method with a recv loop. 
 
 **Depends on: Phase 0a, Phase 1.**
 
-Introduce the `Applier` trait. StateRunner and LogApplier both implement it. Build a `Vec<Box<dyn Applier>>`. Make `process_result`/`task_succeeded`/`task_failed` produce `StateLogEntry` values instead of directly mutating state and writing the log. The main loop iterates the vector and calls apply on each. Extract `step()` as a free function. The main loop becomes: receive result, step, iterate appliers.
+Introduce the `Applier` trait. StateRunner and LogApplier both implement it. Build a `Vec<Box<dyn Applier>>`. The main loop receives entries from the channel and iterates the vector calling apply on each. step() produces entries before they hit the channel — the event loop doesn't know about it.
 
 ### Phase 3: Seeding through apply
 
@@ -582,11 +580,10 @@ impl Iterator for TaskRunner<'_> {
 }
 ```
 
-After: receive, step, iterate appliers.
+After: receive entries, iterate appliers.
 
 ```rust
-while let Ok(result) = rx.recv() {
-    let entries = step(result);
+while let Ok(entries) = rx.recv() {
     for applier in &mut appliers {
         applier.apply(&entries);
     }
