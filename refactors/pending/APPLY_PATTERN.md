@@ -156,6 +156,7 @@ struct Engine<'a> {
     max_concurrency: usize,
     pending_dispatches: VecDeque<PendingTask>,
     dispatched: HashSet<LogTaskId>,
+    pending_removals: Vec<LogTaskId>,
 }
 
 struct RunState {
@@ -178,18 +179,18 @@ struct PendingTask {
 }
 ```
 
-**`apply()`**: Updates state, produces entries for children/retries/finally, sends them on `tx`, and flushes dispatches.
+**`apply()`**: The Engine receives ALL state updates through entries — it never mutates its own state outside of `apply()`. Produced entries (children, retries, finally tasks) go on `tx`, come back through the channel, and are applied in a future call to `apply()`. Duplicate `TaskSubmitted` or unknown `TaskCompleted` entries are logic bugs that panic.
 
 ```rust
 fn apply(&mut self, entries: &[StateLogEntry]) {
     let mut produced = Vec::new();
 
+    // 1. Process incoming entries
     for entry in entries {
         match entry {
             StateLogEntry::TaskSubmitted(s) => {
-                if self.state.tasks.contains_key(&s.task_id) {
-                    continue; // already applied (feedback from own production)
-                }
+                assert!(!self.state.tasks.contains_key(&s.task_id),
+                    "[P035] duplicate TaskSubmitted for {:?}", s.task_id);
                 self.state.apply_submitted(s);
                 self.pending_dispatches.push_back(PendingTask {
                     task_id: s.task_id,
@@ -198,6 +199,8 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
                 });
             }
             StateLogEntry::TaskCompleted(c) => {
+                assert!(self.state.tasks.contains_key(&c.task_id),
+                    "[P036] TaskCompleted for unknown task {:?}", c.task_id);
                 produced.extend(self.process_completion(c));
                 self.pending_dispatches.retain(|p| p.task_id != c.task_id);
                 if self.dispatched.remove(&c.task_id) {
@@ -208,23 +211,33 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
         }
     }
 
-    // Finally cascade
-    produced.extend(self.process_removed_parents());
+    // 2. Process deferred parent removals from previous cycle.
+    //    These were deferred because the finally entries they produced
+    //    needed to be applied first (to increment grandparent counts).
+    for parent_id in self.pending_removals.drain(..) {
+        self.state.remove_and_notify_parent(parent_id);
+    }
 
-    // Send produced entries and flush
+    // 3. Produce finally entries for all newly removed parents
+    //    (from completions in step 1 and removals in step 2).
+    //    Parents with finally scripts get deferred removal (pending_removals).
+    //    Parents without finally scripts are removed immediately (may cascade).
+    produced.extend(self.produce_finally_entries());
+
+    // 4. Send produced entries on tx — they come back through the channel
+    //    and are applied in a future call to apply()
     if let Some(tx) = &self.tx {
         for entry in produced {
             tx.send(entry).expect("[P031] channel open");
         }
     }
 
+    // 5. Flush dispatches
     self.flush_dispatches();
 }
 ```
 
-The `contains_key` check in `TaskSubmitted` prevents double-processing when the Engine's own entries loop back through the channel. During replay (which bypasses the Engine entirely), this never triggers.
-
-**`process_completion()`**: Handles the result interpretation that today lives in `process_result`. Captures the task's parent_id before calling `apply_completed` (which may remove the task), then allocates IDs and produces `TaskSubmitted` entries for children/retries. Applies them internally.
+**`process_completion()`**: Handles the result interpretation that today lives in `process_result`. Captures the task's parent_id before calling `apply_completed` (which may remove the task), then allocates IDs and produces `TaskSubmitted` entries for children/retries. Does NOT apply the produced entries — they go on `tx`, come back through the channel, and are applied in a future `apply()` call.
 
 ```rust
 fn process_completion(&mut self, completed: &TaskCompleted) -> Vec<StateLogEntry> {
@@ -237,71 +250,61 @@ fn process_completion(&mut self, completed: &TaskCompleted) -> Vec<StateLogEntry
         TaskOutcome::Success(success) if !success.spawned.is_empty() => {
             success.spawned.iter().map(|spec| {
                 let id = self.state.next_id();
-                let submitted = TaskSubmitted {
+                StateLogEntry::TaskSubmitted(TaskSubmitted {
                     task_id: id,
                     step: spec.step.clone(),
                     value: spec.value.clone(),
                     parent_id: Some(completed.task_id),
                     origin: TaskOrigin::Spawned,
-                };
-                self.state.apply_submitted(&submitted);
-                self.pending_dispatches.push_back(PendingTask {
-                    task_id: id, step: spec.step.clone(), value: spec.value.clone(),
-                });
-                StateLogEntry::TaskSubmitted(submitted)
+                })
             }).collect()
         }
         TaskOutcome::Failed(failed) if failed.retry.is_some() => {
             let spec = failed.retry.as_ref().unwrap();
             let id = self.state.next_id();
-            let submitted = TaskSubmitted {
+            vec![StateLogEntry::TaskSubmitted(TaskSubmitted {
                 task_id: id,
                 step: spec.step.clone(),
                 value: spec.value.clone(),
                 parent_id,
                 origin: TaskOrigin::Retry { replaces: completed.task_id },
-            };
-            self.state.apply_submitted(&submitted);
-            self.pending_dispatches.push_back(PendingTask {
-                task_id: id, step: spec.step.clone(), value: spec.value.clone(),
-            });
-            vec![StateLogEntry::TaskSubmitted(submitted)]
+            })]
         }
         _ => vec![],
     }
 }
 ```
 
-**`process_removed_parents()`**: Runs the finally cascade. For each removed parent: look up the finally script from config, allocate an ID, apply the entry internally (which increments the grandparent's child count), then remove the parent from the map.
+**`produce_finally_entries()`**: Drains `removed_parents` and produces finally entries. Does NOT apply the produced entries — they go on `tx`, come back, and are applied in a future `apply()` call.
+
+For parents **with** a finally script: produce the `TaskSubmitted` entry and **defer** the parent removal by pushing to `pending_removals`. The removal must wait until the finally entry has been applied (next cycle), because `apply_submitted` increments the grandparent's child count. If we removed the parent now, the grandparent's count could hit zero prematurely.
+
+For parents **without** a finally script: remove immediately via `remove_and_notify_parent`. This may cascade (adding more entries to `removed_parents`), which the while loop picks up.
 
 ```rust
-fn process_removed_parents(&mut self) -> Vec<StateLogEntry> {
+fn produce_finally_entries(&mut self) -> Vec<StateLogEntry> {
     let mut entries = Vec::new();
     while let Some(removed) = self.state.removed_parents.pop() {
         let script = self.config.step_map.get(&removed.step)
             .and_then(|s| s.finally.as_ref());
         if let Some(script) = script {
             let id = self.state.next_id();
-            let submitted = TaskSubmitted {
+            entries.push(StateLogEntry::TaskSubmitted(TaskSubmitted {
                 task_id: id,
                 step: script.step.clone(),
                 value: removed.finally_value,
                 parent_id: removed.parent_id,
                 origin: TaskOrigin::Finally { finally_for: removed.task_id },
-            };
-            self.state.apply_submitted(&submitted);
-            self.pending_dispatches.push_back(PendingTask {
-                task_id: id, step: script.step.clone(), value: submitted.value.clone(),
-            });
-            entries.push(StateLogEntry::TaskSubmitted(submitted));
+            }));
+            self.pending_removals.push(removed.task_id);
+        } else {
+            // No finally script — remove immediately, may cascade
+            self.state.remove_and_notify_parent(removed.task_id);
         }
-        self.state.remove_and_notify_parent(removed.task_id);
     }
     entries
 }
 ```
-
-The ordering — apply finally entry then remove parent — ensures the grandparent's child count is incremented before it could hit zero from the parent's removal. This matches the current `schedule_removed_finally` logic.
 
 **`flush_dispatches()`**: Spawns worker threads. Each worker gets a `tx` clone and the step config.
 
@@ -446,6 +449,17 @@ fn replay_log(path: &Path) -> io::Result<(Config, RunState)> {
             StateLogEntry::TaskCompleted(c) => state.apply_completed(c),
         }
     }
+
+    // Cleanup cascade: drain removed_parents accumulated during replay.
+    // During the original run, these parents were removed via pending_removals
+    // after their finally entries were applied. During replay, the finally entries
+    // are already in the log (applied above), so we just need to do the removals.
+    // This may cascade — removing a parent can trigger its grandparent to be
+    // removed if all its children are done.
+    while let Some(removed) = state.removed_parents.pop() {
+        state.remove_and_notify_parent(removed.task_id);
+    }
+
     let config = /* deserialize config_json */;
     Ok((config, state))
 }
@@ -454,6 +468,7 @@ fn replay_log(path: &Path) -> io::Result<(Config, RunState)> {
 After replay:
 - `RunState` contains only active tasks (pending + waiting-for-children)
 - `next_task_id` is past all replayed IDs (advanced by `apply_submitted`)
+- `removed_parents` is empty (drained by the cleanup cascade)
 - `RunMode::Resume` returns empty seed — `Engine::new()` initializes `pending_dispatches` from RunState's pending tasks, and `process_entries(&[])` flushes them
 - `LogApplier` is created at the current log position (appending)
 
@@ -571,18 +586,20 @@ struct TaskEntry {
 #[test] fn apply_completed_failed_removes_task()
 
 // Engine
-#[test] fn apply_updates_state_and_queues_dispatches()
-#[test] fn apply_dequeues_completed_tasks()
-#[test] fn apply_skips_already_known_tasks()
-#[test] fn process_completion_allocates_child_ids()
-#[test] fn process_completion_allocates_retry_id()
-#[test] fn process_completion_preserves_parent_id_for_retry()
+#[test] fn apply_submitted_updates_state_and_queues_dispatch()
+#[test] fn apply_submitted_panics_on_duplicate_id()
+#[test] fn apply_completed_produces_child_entries_on_tx()
+#[test] fn apply_completed_produces_retry_entry_on_tx()
+#[test] fn apply_completed_panics_on_unknown_task()
+#[test] fn apply_completed_dequeues_pending_dispatch()
+#[test] fn apply_completed_decrements_in_flight_for_dispatched()
+#[test] fn produced_entries_not_applied_until_received_from_channel()
+#[test] fn pending_removals_processed_after_incoming_entries()
+#[test] fn finally_entry_defers_parent_removal()
+#[test] fn no_finally_script_removes_parent_immediately()
+#[test] fn deferred_removal_cascades_after_finally_applied()
 #[test] fn flush_dispatches_up_to_max_concurrency()
 #[test] fn flush_drops_tx_when_empty_and_no_in_flight()
-#[test] fn completed_only_decrements_in_flight_for_dispatched_tasks()
-#[test] fn process_removed_parents_produces_finally_entries()
-#[test] fn process_removed_parents_increments_grandparent_before_removal()
-#[test] fn finally_cascade_handles_multi_level_tree()
 
 // LogApplier
 #[test] fn writes_all_entry_variants()
@@ -594,6 +611,8 @@ struct TaskEntry {
 // Replay
 #[test] fn replay_reconstructs_state_from_log()
 #[test] fn replay_advances_next_task_id()
+#[test] fn replay_drains_removed_parents()
+#[test] fn replay_cleanup_cascades_multi_level()
 #[test] fn engine_dispatches_remaining_tasks_after_replay()
 
 // Workers
