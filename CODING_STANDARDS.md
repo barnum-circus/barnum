@@ -12,6 +12,8 @@
 
 - **Pure core, impure shell.** Business logic in pure functions; I/O in thin wrappers.
 
+- **Unclear ownership is unacceptable.** Every piece of data should have one obvious owner. If two structs both hold references to the same data and it's ambiguous who's responsible for it, the design is wrong. If a method mutates state that "belongs" to a different abstraction, the boundaries are wrong. Ownership should be legible from the type signatures alone — you shouldn't need to read the implementation to understand who owns what.
+
 - **Large data structures are a smell.** Prefer small structs; group related fields into sub-structs.
 
 - **Extract testable inner functions.** Loop bodies become methods.
