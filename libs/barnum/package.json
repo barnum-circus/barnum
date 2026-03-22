@@ -29,7 +29,6 @@
     "cli"
   ],
   "files": [
-    "index.js",
     "cli.js",
     "artifacts/**/*",
     "barnum-config-schema.json",
