@@ -73,7 +73,7 @@ while let Ok(entries) = rx.recv() {
 }
 ```
 
-The event loop receives entries and iterates appliers. It doesn't know what's in the vector, doesn't call step, doesn't track in_flight. It just receives and applies.
+The event loop receives entries from the channel and calls apply on each applier in the vector.
 
 StateRunner implements Applier. Its apply iterates entries, matches, updates state, tracks pending dispatches. At the end, it flushes dispatches (spawns threads). If a TaskSubmitted and TaskCompleted for the same task appear in the same batch, the completed removes it from the dispatch queue before flush — no thread is created.
 
@@ -81,9 +81,9 @@ LogApplier implements Applier. Its apply writes each entry to NDJSON.
 
 The current loop already has the same shape: receive, process. The refactor has two separate stages:
 
-1. **Event loop restructure** (Phase 1): Convert the Iterator to an explicit recv loop. `process_result` still handles everything internally. Purely structural.
+1. **Event loop restructure** (Phase 1): Convert the Iterator to an explicit recv loop where `process_result` still handles everything internally. A structural change only.
 
-2. **Apply pattern** (Phase 2): Introduce the Applier trait. Build a vector of appliers. Make the main loop iterate the vector and call apply. Extract step() to produce entries from results.
+2. **Apply pattern** (Phase 2): Introduce the Applier trait, build a `Vec<Box<dyn Applier>>`, and have the main loop iterate the vector calling apply on each. Extract step() to produce entries from results.
 
 Resume: construct the applier vector, replay the NDJSON log through apply on each applier, then enter the event loop. Submitted+completed pairs cancel out in the state runner's dispatch queue. Only incomplete tasks get dispatched.
 
@@ -117,7 +117,7 @@ struct TaskFailed {
 }
 ```
 
-Each variant is a fact. Task removal is derived inside RunState when all children complete.
+Each variant records a fact. RunState derives task removal internally when all children of a parent complete.
 
 ## Applier
 
@@ -127,7 +127,7 @@ trait Applier {
 }
 ```
 
-The main loop holds a `Vec<Box<dyn Applier>>`. It doesn't know what's in the vector. It iterates and calls apply on each. StateRunner and LogApplier both implement this trait.
+The main loop holds a `Vec<Box<dyn Applier>>` and iterates it, calling apply on each element. StateRunner and LogApplier both implement this trait.
 
 ### LogApplier
 
@@ -148,7 +148,7 @@ impl Applier for LogApplier {
 
 ## RunState
 
-Internal to StateRunner. Pure dependency tracker. No I/O, no config awareness, no knowledge of "finally." Tracks tasks and parent-child relationships. When a task completes with no children, it's removed and its parent's child count is decremented. If the count reaches zero, the parent is removed and its own parent's count is decremented, continuing up the tree.
+A dependency tracker internal to StateRunner. Tracks tasks and parent-child relationships. StateRunner handles I/O, config lookups, and finally logic; RunState only manages the task tree. When a task completes with no children, it's removed and its parent's child count is decremented. If the count reaches zero, the parent is removed and its own parent's count is decremented, continuing up the tree.
 
 Parents whose count reaches zero are accumulated in `removed_parents`. StateRunner drains this after processing a batch of entries to produce finally tasks.
 
@@ -264,11 +264,11 @@ enum TaskState {
 }
 ```
 
-Two variants. `InFlight` is gone (dispatch tracked by `in_flight: usize` on StateRunner). `finally_script` is gone (looked up from `step_map` when needed). `retries_remaining` is replaced by counting: step() counts Retry-origin siblings for the same parent+step in the task tree to determine if retries are exhausted.
+TaskState has two variants. The current `InFlight` variant is replaced by `in_flight: usize` on StateRunner. `finally_script` and `retries_remaining` are removed from TaskEntry — StateRunner looks up the finally script from `step_map` when needed, and step() determines retry exhaustion by counting Retry-origin siblings for the same parent+step in the task tree.
 
 ## step()
 
-Interprets a result and produces entries. Does not update state (except allocating IDs via `next_id()`). `interpret_response` runs post hooks and determines success/failure — this is the one place step() does I/O.
+Interprets a result and produces `StateLogEntry` values without updating state (except allocating IDs via `next_id()`). The only I/O is `interpret_response`, which runs post hooks and determines success/failure.
 
 ```rust
 fn step(
@@ -344,7 +344,7 @@ fn step(
 
 ## StateRunner
 
-Implements `Applier`. Owns state, dispatch queue, pool connection. Its apply does everything: update state, track dispatches, handle finally, flush threads.
+Implements `Applier` and owns the `RunState`, dispatch queue (`pending_dispatches`), and pool connection. Its `apply` method updates state based on the entries, generates any finally entries in a loop, and then flushes pending dispatches as threads.
 
 ```rust
 struct StateRunner {
@@ -478,13 +478,13 @@ Independent refactors that can land in any order.
 
 **Depends on: None (can run in parallel with Phase 0).**
 
-Convert the Iterator-based loop to an explicit `run()` method with a recv loop. `process_result` still handles everything internally — no new types, no Applier trait. Just the loop shape changes: `while let Ok(result) = self.rx.recv() { self.process_result(result); }`. This is a purely structural change.
+Convert the Iterator-based loop to an explicit `run()` method with a recv loop. `process_result` still handles everything internally, and the Applier trait isn't introduced yet. The only change is the loop shape: `while let Ok(result) = self.rx.recv() { self.process_result(result); }`.
 
 ### Phase 2: Apply pattern
 
 **Depends on: Phase 0a, Phase 1.**
 
-Introduce the `Applier` trait. StateRunner and LogApplier both implement it. Build a `Vec<Box<dyn Applier>>`. The main loop receives entries from the channel and iterates the vector calling apply on each. step() produces entries before they hit the channel — the event loop doesn't know about it.
+Introduce the `Applier` trait. StateRunner and LogApplier both implement it. Build a `Vec<Box<dyn Applier>>`. The main loop receives entries from the channel and iterates the vector calling apply on each. step() produces entries before they reach the channel, outside the event loop.
 
 ### Phase 3: Seeding through apply
 
@@ -562,7 +562,7 @@ fn schedule_finally(&mut self, task_id: LogTaskId, hook: HookScript, value: Step
 }
 ```
 
-After: RunState has no config awareness. When a parent's children all complete, it's removed and captured in `removed_parents`. StateRunner drains these inside its Applier::apply, creates TaskSubmitted entries, and feeds them back through the same loop — no bypassing. See the StateRunner section for the full implementation.
+After: RunState has no config awareness. When a parent's children all complete, it's removed and captured in `removed_parents`. StateRunner drains these inside its Applier::apply, creates TaskSubmitted entries, and feeds them back through the same apply loop so they're handled identically to any other entries. See the StateRunner section for the full implementation.
 
 ### Main loop: scattered responsibilities
 
