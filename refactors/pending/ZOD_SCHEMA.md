@@ -197,6 +197,7 @@ const StepFile = z.object({
 }).strict();
 
 export const configFileSchema = z.object({
+  "$schema": z.string().optional().describe("JSON Schema URL for editor validation of JSONC configs. Not used with Zod."),
   options: Options.optional().default({}),
   entrypoint: z.string().nullable().optional().default(null),
   steps: z.array(StepFile),
@@ -461,8 +462,8 @@ The generated artifacts section currently lists only the JSON schema. Add the Zo
 
 ```markdown
 Current generated artifacts:
-- `libs/barnum/barnum-config-schema.json` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema -- --type all`
-- `libs/barnum/barnum-config-schema.zod.ts` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema -- --type all`
+- `libs/barnum/barnum-config-schema.json` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
+- `libs/barnum/barnum-config-schema.zod.ts` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
 ```
 
 ## What breaks
