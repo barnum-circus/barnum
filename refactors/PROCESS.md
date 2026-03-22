@@ -69,40 +69,34 @@ Your response should be something like: "Created the refactor document at `refac
 
 Then STOP. Do not do anything else until the user explicitly approves.
 
-## Document quality standards
+## Document rigor
 
-Refactor documents are technical specifications. They describe what will be built and how it works. Every sentence must earn its place.
+A refactor document is a technical specification. If the document has a bug, the implementation will have the same bug. Every design choice, code block, and prose description must survive adversarial review before the document is presented.
 
-### Follow `.claude/writing.md`
+### Self-review before presenting
 
-Read `.claude/writing.md` before writing any prose in a refactor document. After finishing a draft, re-read the document against that file and fix violations before presenting it. Common failures in refactor docs specifically:
+After finishing a draft, do a full verification pass. This is not optional and not a skim. For each of the following, trace through the document and confirm it holds:
 
-- **Negative parallelism to describe boundaries**: "RunState has no I/O, no config awareness, no knowledge of finally" should instead state what RunState does and where those other responsibilities live. "A dependency tracker internal to StateRunner. StateRunner handles I/O, config lookups, and finally logic; RunState only manages the task tree."
-- **Short punchy fragments for drama**: "Implements Applier. Owns state, dispatch queue, pool connection." is a staccato list posing as prose. Write a sentence: "Implements Applier and owns the RunState, dispatch queue, and pool connection."
-- **"Not X. Not Y. Just Z." countdown**: "No new types, no Applier trait. Just the loop shape changes." Rewrite as a direct statement of what changes.
+1. **Every design choice must follow from a stated goal.** If the motivation says "state and log must stay in sync", and the design introduces an Applier trait with a batch API, the document must connect these: batching enables submitted+completed cancellation during resume. If a design choice exists without a reason traceable to the motivation, either the motivation is incomplete or the choice is wrong.
 
-### Code blocks are the specification
+2. **Every code block must be internally consistent with every other code block.** If the Applier trait takes `&[StateLogEntry]` in the trait definition, every impl block must also take `&[StateLogEntry]`. If a struct has a field called `pending_dispatches`, every method that references it must use that name. Cross-reference every code block against every other code block that touches the same types.
 
-Every code block in the document is a commitment. The implementation should match it. This means:
+3. **Every prose claim must agree with the code.** If the prose says "the event loop receives entries and calls apply on each applier", there must be a code block showing exactly that loop. If the prose says "flush_dispatches is an implementation detail inside apply", then flush_dispatches must not appear in the event loop code. Read each prose paragraph, then find the code block it describes and verify they match.
 
-- Trait signatures must reflect the actual API (if apply takes `&[StateLogEntry]`, write that, not `&StateLogEntry`)
-- Struct fields must be complete and accurate
-- Method bodies should show the real logic, not pseudocode with hand-waving
-- If a code block references a type or function, that type or function must be defined somewhere in the document
+4. **Architectural boundaries must be consistent throughout.** If the design says the main loop holds a `Vec<Box<dyn Applier>>` and iterates it generically, then no code block should show the main loop accessing a specific applier by type. If a component is described as having no I/O, none of its methods should do I/O. Check every boundary claim against every code block for that component.
 
-When reviewing a draft, check each code block against every prose claim about it. If the prose says "apply takes a batch" but the trait signature shows a single entry, one of them is wrong.
+5. **Control flow must be complete and traceable.** A reader should be able to start at the entry point and follow execution through every branch. If apply generates finally entries, show where those entries go. If termination depends on channel senders being dropped, show the exact sequence. If step() produces entries before they reach the channel, show where step() is called and how entries get to the channel. No gaps.
 
-### Architecture descriptions must show the full loop
+6. **Every type and function referenced must be defined.** If a code block calls `interpret_response`, the document must either define it or state that it's existing code with a file reference. If a struct uses `NonZeroU16`, the import context must be clear. Undefined references are bugs.
 
-The reader should be able to reconstruct the entire control flow from the document. If the main event loop calls apply on a vector of appliers, show that loop. If apply internally generates finally entries and feeds them back through itself, show that code. If termination depends on senders being dropped, describe the exact sequence.
+### Writing quality
 
-Descriptions like "the main loop processes entries" are insufficient. Show the `while let Ok(entries) = rx.recv()` loop, show the `for applier in &mut appliers` iteration, show what apply does inside each applier.
+Read `.claude/writing.md` before writing prose in a refactor document. After the self-review pass above, do a second pass for writing quality. Common failures in refactor docs:
 
-### Describe what things do, not what they don't do
-
-"The event loop doesn't know about step, doesn't track in_flight, doesn't handle finally" tells the reader six things the event loop isn't. Instead, state what the event loop does: "The event loop receives entries from the channel and calls apply on each applier in the vector." One sentence, complete picture.
-
-This applies at every level. If RunState is a dependency tracker, say what it tracks and how. If the main loop holds a `Vec<Box<dyn Applier>>`, say that it iterates and calls apply on each element. Let the reader infer boundaries from the positive description.
+- Negative parallelism to describe boundaries ("No I/O, no config awareness, no knowledge of finally") — instead, state what the component does and where those responsibilities live.
+- Short punchy fragments for drama ("Implements Applier. Owns state, dispatch queue, pool connection.") — write a sentence.
+- "Not X. Not Y. Just Z." countdown — rewrite as a direct statement of what changes.
+- Describing what things don't do instead of what they do ("The event loop doesn't know about step, doesn't track in_flight") — state the positive: "The event loop receives entries from the channel and calls apply on each applier in the vector."
 
 ## Phase 2: Practical task list
 
