@@ -6,7 +6,8 @@
   "types": "barnum-config-schema.zod.ts",
   "exports": {
     ".": "./barnum-config-schema.zod.ts",
-    "./schema": "./barnum-config-schema.zod.ts"
+    "./schema": "./barnum-config-schema.zod.ts",
+    "./binary": "./index.js"
   },
   "bin": {
     "barnum": "cli.js"
@@ -29,6 +30,7 @@
     "cli"
   ],
   "files": [
+    "index.js",
     "cli.js",
     "artifacts/**/*",
     "barnum-config-schema.json",
