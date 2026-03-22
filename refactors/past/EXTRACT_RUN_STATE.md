@@ -1,6 +1,6 @@
 # Extract RunState from TaskRunner
 
-**Status:** Not started
+**Status:** Completed
 
 **Depends on:** None
 
@@ -148,22 +148,11 @@ struct RemovedParent {
 }
 ```
 
-`RemovedParent` carries the same `finally_data` that's currently on `WaitingForChildren`. No data structure changes to TaskEntry or TaskState — `finally_data: Option<(HookScript, StepInputValue)>` stays as-is.
+`RemovedParent` carries the same `finally_data` that's currently on `WaitingForChildren`. It also carries `step` and `parent_id` because the task will already be removed from the map by the time `schedule_finally` runs, so these must be captured eagerly.
 
-### 2.2: Move remove_and_notify_parent onto RunState
+### 2.2: Move remove_and_notify_parent onto RunState (non-recursive)
 
-Before (on TaskRunner, line 636):
-
-```rust
-fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
-    if let Some(parent_id) = entry.parent_id {
-        self.decrement_pending_children(parent_id);
-    }
-}
-```
-
-After (on RunState):
+The method is **non-recursive**. When a parent's child count hits zero, it pushes to `removed_parents` but does NOT remove the parent or recurse. The caller drives the cascade.
 
 ```rust
 fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
@@ -190,76 +179,52 @@ fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
             parent_id: parent.parent_id,
             finally_data: fd,
         });
-        self.remove_and_notify_parent(parent_id);
+        // NOT recursive — caller drives cascade via schedule_removed_finally
     }
 }
 ```
 
-This is the same logic as `decrement_pending_children` today, except instead of calling `schedule_finally` it pushes to `removed_parents`. The recursive call to `remove_and_notify_parent` handles cascading removals up the tree, same as today.
+**Why non-recursive?** `schedule_finally` calls `increment_pending_children` on the grandparent. If we recursively remove all ancestors first, the grandparent is gone by the time we try to increment it. The cascade must interleave removal with finally scheduling: remove child -> schedule finally (increments grandparent) -> remove parent -> schedule finally -> ...
 
-### 2.3: Add drain method
+### 2.3: Update schedule_finally signature
+
+`schedule_finally` now takes explicit `parent_id` and `step` parameters instead of looking them up from the task map, since the task may already be removed when called from the drain loop:
 
 ```rust
-impl RunState {
-    fn drain_removed_parents(&mut self) -> Vec<RemovedParent> {
-        std::mem::take(&mut self.removed_parents)
-    }
-}
+fn schedule_finally(
+    &mut self,
+    task_id: LogTaskId,
+    parent_id: Option<LogTaskId>,
+    step: &StepName,
+    hook: HookScript,
+    value: StepInputValue,
+) { ... }
 ```
 
-### 2.4: Update TaskRunner callers
+### 2.4: Add schedule_removed_finally on TaskRunner
 
-TaskRunner methods that currently call `self.remove_and_notify_parent(id)` change to `self.state.remove_and_notify_parent(id)`. After the call, TaskRunner drains `removed_parents` and handles finally scheduling.
-
-Before (`decrement_pending_children` on TaskRunner, line 646):
+This method drives the cascade loop, interleaving finally scheduling with parent removal:
 
 ```rust
-fn decrement_pending_children(&mut self, task_id: LogTaskId) {
-    let (hit_zero, finally_data) = {
-        let entry = self.tasks.get_mut(&task_id).expect("[P022] task must exist");
-        let TaskState::WaitingForChildren {
-            pending_children_count,
-            finally_data,
-        } = &mut entry.state
-        else {
-            panic!("[P023] task not in WaitingForChildren state");
-        };
-        let new_count = pending_children_count.get() - 1;
-        if new_count == 0 {
-            (true, finally_data.take())
-        } else {
-            *pending_children_count = NonZeroU16::new(new_count).unwrap();
-            (false, None)
+fn schedule_removed_finally(&mut self) {
+    while let Some(removed) = self.state.removed_parents.pop() {
+        if let Some((hook, value)) = removed.finally_data {
+            self.schedule_finally(
+                removed.task_id, removed.parent_id, &removed.step, hook, value,
+            );
         }
-    };
-    if hit_zero {
-        if let Some((hook, value)) = finally_data {
-            self.schedule_finally(task_id, hook, value);
-        }
-        self.remove_and_notify_parent(task_id);
+        self.state.remove_and_notify_parent(removed.task_id);
     }
 }
 ```
 
-After: `decrement_pending_children` is deleted from TaskRunner. Its logic is now inside `RunState::remove_and_notify_parent`. The callers of `remove_and_notify_parent` on TaskRunner (`task_succeeded` and `task_failed`) call through to RunState and then drain:
-
-```rust
-// In task_succeeded, after the state-mutation part:
-self.state.remove_and_notify_parent(task_id);
-for parent in self.state.drain_removed_parents() {
-    if let Some((hook, value)) = parent.finally_data {
-        self.schedule_finally(parent.task_id, hook, value);
-    }
-}
-```
-
-`schedule_finally` stays on TaskRunner unchanged — it still does I/O (log writes, task insertion). The only change is where it's called from: previously inline inside `decrement_pending_children`, now after draining `removed_parents`.
+Callers (`task_succeeded`, `task_failed`) call `self.state.remove_and_notify_parent(task_id)` then `self.schedule_removed_finally()`.
 
 ### 2.5: Delete decrement_pending_children and increment_pending_children
 
 `decrement_pending_children` is replaced by `RunState::remove_and_notify_parent`.
 
-`increment_pending_children` (line 620) is only called by `schedule_finally`. It stays on TaskRunner since its only caller stays on TaskRunner.
+`increment_pending_children` stays on TaskRunner since its only caller (`schedule_finally`) stays on TaskRunner.
 
 ## Testing
 
@@ -277,7 +242,6 @@ RunState can now be tested in isolation:
 #[test] fn remove_and_notify_parent_captures_removed_parent_when_count_hits_zero()
 #[test] fn remove_and_notify_parent_cascades_up_tree()
 #[test] fn removed_parent_carries_finally_data()
-#[test] fn drain_removed_parents_empties_vector()
 ```
 
 All existing integration tests should pass unchanged — the behavior is identical, just the call path is different.
