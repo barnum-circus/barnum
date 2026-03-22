@@ -200,7 +200,6 @@ const StepFile = z.object({
 }).strict();
 
 export const configFileSchema = z.object({
-  $schema: z.string().nullable().optional(),
   options: Options.optional().default({}),
   entrypoint: z.string().nullable().optional().default(null),
   steps: z.array(StepFile),
@@ -274,62 +273,100 @@ The full implementation is ~250 lines handling each schemars pattern from the ma
 
 ### Task 2: Update binary to generate both files
 
-**Goal:** `build_barnum_schema` generates the Zod schema by default. `--type json|zod|all` selects the output format.
+**Goal:** `build_barnum_schema` generates both `barnum-config-schema.json` and `barnum-config-schema.zod.ts`. No flags.
 
 **File:** `crates/barnum_config/src/bin/build_barnum_schema.rs`
 
 ```rust
 use barnum_config::{config_schema, zod::emit_zod};
 
-enum OutputType { Json, Zod, All }
-
-fn parse_args() -> OutputType {
-    let args: Vec<String> = std::env::args().collect();
-    match args.iter().position(|a| a == "--type") {
-        Some(i) => match args.get(i + 1).map(String::as_str) {
-            Some("json") => OutputType::Json,
-            Some("zod") => OutputType::Zod,
-            Some("all") => OutputType::All,
-            Some(other) => {
-                eprintln!("Unknown type: {other}. Expected 'json', 'zod', or 'all'.");
-                std::process::exit(1);
-            }
-            None => {
-                eprintln!("--type requires a value: 'json', 'zod', or 'all'");
-                std::process::exit(1);
-            }
-        },
-        None => OutputType::Zod,
-    }
-}
-
 fn main() {
-    let output_type = parse_args();
     let root = config_schema();
     let libs = workspace_root().join("libs/barnum");
 
-    if matches!(output_type, OutputType::All | OutputType::Json) {
-        let json = serde_json::to_string_pretty(&root).unwrap_or_else(|e| {
-            eprintln!("Failed to serialize JSON schema: {e}");
-            std::process::exit(1);
-        });
-        write_file(&libs.join("barnum-config-schema.json"), &json);
-    }
+    let json = serde_json::to_string_pretty(&root).unwrap_or_else(|e| {
+        eprintln!("Failed to serialize JSON schema: {e}");
+        std::process::exit(1);
+    });
+    write_file(&libs.join("barnum-config-schema.json"), &json);
 
-    if matches!(output_type, OutputType::All | OutputType::Zod) {
-        let zod = emit_zod(&root);
-        write_file(&libs.join("barnum-config-schema.zod.ts"), &zod);
+    let zod = emit_zod(&root);
+    write_file(&libs.join("barnum-config-schema.zod.ts"), &zod);
+}
+```
+
+### Task 3: Update `barnum config schema` to default to Zod
+
+**Goal:** The `barnum config schema` CLI command outputs the Zod schema by default. `--type json` switches to JSON Schema.
+
+**File:** `crates/barnum_cli/src/main.rs`
+
+Before (`main.rs:112-137`):
+```rust
+#[derive(Subcommand)]
+enum ConfigCommand {
+    // ...
+    /// Print the JSON schema for config files
+    Schema,
+}
+```
+
+After:
+```rust
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum SchemaType {
+    #[default]
+    Zod,
+    Json,
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    // ...
+    /// Print the config schema (Zod by default, JSON with --type json)
+    Schema {
+        /// Output format: zod (default) or json
+        #[arg(long, default_value = "zod")]
+        r#type: SchemaType,
+    },
+}
+```
+
+Before (`main.rs:251-256`):
+```rust
+ConfigCommand::Schema => {
+    let schema = config_schema();
+    let json = serde_json::to_string_pretty(&schema)
+        .map_err(|e| io::Error::other(format!("[E059] failed to serialize schema: {e}")))?;
+    println!("{json}");
+}
+```
+
+After:
+```rust
+ConfigCommand::Schema { r#type } => {
+    let root = config_schema();
+    match r#type {
+        SchemaType::Zod => {
+            let zod = barnum_config::zod::emit_zod(&root);
+            print!("{zod}");
+        }
+        SchemaType::Json => {
+            let json = serde_json::to_string_pretty(&root)
+                .map_err(|e| io::Error::other(format!("[E059] failed to serialize schema: {e}")))?;
+            println!("{json}");
+        }
     }
 }
 ```
 
-### Task 3: Register the `zod` module
+### Task 4: Register the `zod` module
 
 **File:** `crates/barnum_config/src/lib.rs`
 
 Add `pub mod zod;`.
 
-### Task 4: Update CI to verify both files
+### Task 5: Update CI to verify both files
 
 **File:** `.github/workflows/ci.yml`
 
@@ -348,16 +385,16 @@ Before:
 After:
 ```yaml
 - name: Generate Barnum config schemas
-  run: cargo run -p barnum_config --bin build_barnum_schema -- --type all
+  run: cargo run -p barnum_config --bin build_barnum_schema
 - name: Check schemas are up to date
   run: |
     if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts; then
-      echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_config --bin build_barnum_schema -- --type all' and commit."
+      echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_config --bin build_barnum_schema' and commit."
       exit 1
     fi
 ```
 
-### Task 5: Update pre-commit hook
+### Task 6: Update pre-commit hook
 
 **File:** `.githooks/pre-commit`
 
@@ -370,7 +407,7 @@ cargo run -p barnum_config --bin build_barnum_schema 2>/dev/null
 After:
 ```bash
 echo "Regenerating config schemas..."
-cargo run -p barnum_config --bin build_barnum_schema -- --type all 2>/dev/null
+cargo run -p barnum_config --bin build_barnum_schema 2>/dev/null
 ```
 
 The re-stage step also needs to include the new file:
@@ -380,7 +417,7 @@ echo "$STAGED_FILES" | xargs git add
 git add libs/barnum/barnum-config-schema.zod.ts
 ```
 
-### Task 6: Update npm package
+### Task 7: Update npm package
 
 **File:** `libs/barnum/package.json`
 
@@ -409,7 +446,7 @@ Add `barnum-config-schema.zod.ts` to `files`, add `types` pointing to it, and ad
 
 With `"types"` set, `import { ConfigFile } from "@barnum/barnum"` resolves the Zod schema's type exports directly.
 
-### Task 7: Update docs-website
+### Task 8: Update docs-website
 
 **Goal:** The schema reference page should indicate that Barnum provides a Zod schema as the primary TypeScript API, with JSON Schema available for JSONC editor validation.
 
@@ -421,7 +458,7 @@ The docs should cover:
 - `configFileSchema` is the raw Zod schema for custom composition
 - JSON Schema (`barnum-config-schema.json`) still exists for `$schema` references in JSONC configs
 
-### Task 8: Update `CLAUDE.md` generated artifacts list
+### Task 9: Update `CLAUDE.md` generated artifacts list
 
 **File:** `.claude/CLAUDE.md`
 
