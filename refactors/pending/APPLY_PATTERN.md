@@ -269,6 +269,12 @@ impl Applier for Engine {
                     assert!(self.state.tasks.contains_key(&c.task_id),
                         "[P036] TaskCompleted for unknown task {:?}", c.task_id);
                     self.in_flight = self.in_flight.saturating_sub(1);
+                    // Remove the matching PendingTask — during replay, it
+                    // was queued by a prior TaskSubmitted/TaskCompleted in
+                    // this batch. During live execution, it was already
+                    // dispatched (nothing to remove).
+                    self.pending_dispatches.retain(|d| !matches!(d,
+                        PendingDispatch::Task(pt) if pt.task_id == c.task_id));
                     let parent_id = self.state.apply_completed(c);
                     // For leaf/permanent-failure: walk up the parent chain.
                     if let Some(pid) = parent_id {
@@ -350,7 +356,7 @@ impl Applier for Engine {
 }
 ```
 
-**`flush_dispatches()`**: Dispatches both task workers and finally workers from a single queue, respecting `max_concurrency` for both. Each worker gets a `tx` clone, an `id_counter` clone, and the relevant config.
+**`flush_dispatches()`**: Dispatches both task workers and finally workers from a single queue, respecting `max_concurrency` for both. Every entry in the queue is expected to be valid — stale entries are removed during entry processing (TaskCompleted removes PendingTask, FinallyRun removes PendingFinally). Panics if an entry is stale.
 
 ```rust
 fn flush_dispatches(&mut self) {
@@ -358,11 +364,11 @@ fn flush_dispatches(&mut self) {
         let Some(dispatch) = self.pending_dispatches.pop_front() else { break };
         match dispatch {
             PendingDispatch::Task(task) => {
-                // Skip tasks no longer in Pending state (completed during replay).
-                if !self.state.tasks.get(&task.task_id)
-                    .map_or(false, |e| matches!(&e.state, TaskState::Pending(..))) {
-                    continue;
-                }
+                let entry = self.state.tasks.get(&task.task_id)
+                    .expect("[P064] PendingTask but task not in map");
+                assert!(matches!(&entry.state, TaskState::Pending(..)),
+                    "[P065] PendingTask for {:?} not in Pending state",
+                    task.task_id);
                 self.in_flight += 1;
                 let tx = self.tx.clone();
                 let id_counter = self.id_counter.clone();
@@ -654,7 +660,7 @@ RunMode::Resume { old_log_path } => {
 The old entries flow through `process_entries` like any other batch. The first entry is `Config` — Engine deserializes and stores it. Subsequent entries (`TaskSubmitted`, `TaskCompleted`, `FinallyRun`) build up RunState. `in_flight` stays at 0 throughout the seed batch via `saturating_sub` — nothing was actually dispatched. After the batch:
 
 1. `id_counter` is initialized to `max_seen_id + 1` via `fetch_max`.
-2. `flush_dispatches` dispatches any remaining Pending tasks and finally workers. Tasks that completed during replay are skipped (state check). Finallys whose `FinallyRun` was already in the batch were removed from `pending_dispatches` when `apply()` processed the `FinallyRun` entry.
+2. `flush_dispatches` dispatches any remaining Pending tasks and finally workers. Tasks that completed during replay were removed from `pending_dispatches` when `apply()` processed their `TaskCompleted`. Finallys whose `FinallyRun` was in the batch were removed when `apply()` processed the `FinallyRun`. Everything left in the queue is valid.
 
 If the old log ended mid-workflow (e.g. a parent's children all completed but no `FinallyRun` was logged — crash before the finally worker completed), `walk_up_for_finally` pushed a `PendingFinally` into `pending_dispatches` during the batch and no `FinallyRun` cleared it — so `flush_dispatches` dispatches a new finally worker.
 
@@ -802,9 +808,10 @@ struct TaskEntry {
 #[test] fn apply_finally_run_queues_walk_up_finally()
 #[test] fn apply_finally_run_removes_pending_finally_from_queue()
 #[test] fn apply_initializes_counter_from_max_seen_id()
+#[test] fn apply_completed_removes_pending_task_from_queue()
 #[test] fn flush_dispatches_up_to_max_concurrency()
-#[test] fn flush_dispatches_skips_completed_tasks()
-#[test] fn flush_panics_on_finally_with_missing_parent()
+#[test] fn flush_panics_on_stale_task()
+#[test] fn flush_panics_on_stale_finally()
 #[test] fn flush_sends_shutdown_when_empty_and_no_in_flight()
 #[test] fn flush_respects_max_concurrency_for_finallys()
 
