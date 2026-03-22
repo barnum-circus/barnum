@@ -69,6 +69,41 @@ Your response should be something like: "Created the refactor document at `refac
 
 Then STOP. Do not do anything else until the user explicitly approves.
 
+## Document quality standards
+
+Refactor documents are technical specifications. They describe what will be built and how it works. Every sentence must earn its place.
+
+### Follow `.claude/writing.md`
+
+Read `.claude/writing.md` before writing any prose in a refactor document. After finishing a draft, re-read the document against that file and fix violations before presenting it. Common failures in refactor docs specifically:
+
+- **Negative parallelism to describe boundaries**: "RunState has no I/O, no config awareness, no knowledge of finally" should instead state what RunState does and where those other responsibilities live. "A dependency tracker internal to StateRunner. StateRunner handles I/O, config lookups, and finally logic; RunState only manages the task tree."
+- **Short punchy fragments for drama**: "Implements Applier. Owns state, dispatch queue, pool connection." is a staccato list posing as prose. Write a sentence: "Implements Applier and owns the RunState, dispatch queue, and pool connection."
+- **"Not X. Not Y. Just Z." countdown**: "No new types, no Applier trait. Just the loop shape changes." Rewrite as a direct statement of what changes.
+
+### Code blocks are the specification
+
+Every code block in the document is a commitment. The implementation should match it. This means:
+
+- Trait signatures must reflect the actual API (if apply takes `&[StateLogEntry]`, write that, not `&StateLogEntry`)
+- Struct fields must be complete and accurate
+- Method bodies should show the real logic, not pseudocode with hand-waving
+- If a code block references a type or function, that type or function must be defined somewhere in the document
+
+When reviewing a draft, check each code block against every prose claim about it. If the prose says "apply takes a batch" but the trait signature shows a single entry, one of them is wrong.
+
+### Architecture descriptions must show the full loop
+
+The reader should be able to reconstruct the entire control flow from the document. If the main event loop calls apply on a vector of appliers, show that loop. If apply internally generates finally entries and feeds them back through itself, show that code. If termination depends on senders being dropped, describe the exact sequence.
+
+Descriptions like "the main loop processes entries" are insufficient. Show the `while let Ok(entries) = rx.recv()` loop, show the `for applier in &mut appliers` iteration, show what apply does inside each applier.
+
+### Describe what things do, not what they don't do
+
+"The event loop doesn't know about step, doesn't track in_flight, doesn't handle finally" tells the reader six things the event loop isn't. Instead, state what the event loop does: "The event loop receives entries from the channel and calls apply on each applier in the vector." One sentence, complete picture.
+
+This applies at every level. If RunState is a dependency tracker, say what it tracks and how. If the main loop holds a `Vec<Box<dyn Applier>>`, say that it iterates and calls apply on each element. Let the reader infer boundaries from the positive description.
+
 ## Phase 2: Practical task list
 
 Convert the architecture document into concrete, **independently deployable tasks**. Each task should be:
