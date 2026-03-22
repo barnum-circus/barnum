@@ -41,7 +41,7 @@ During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter.
 
 ### Target event loop
 
-The channel carries `ControlFlow<(), StateLogEntry>`. `Continue(entry)` is a normal entry — workers send one `TaskCompleted`, Engine sends `FinallyRun` entries. `Break(())` is the shutdown signal — Engine sends it when the workflow is done (no pending dispatches, no in-flight workers, no finally entries sent). The coordinator matches on the message: `Continue` entries flow through `process_entries`, `Break` exits the loop.
+The channel carries `ControlFlow<WorkflowResult, StateLogEntry>`. `Continue(entry)` is a normal entry — workers send one `TaskCompleted`, Engine sends `FinallyRun` entries. `Break(result)` is the shutdown signal — Engine sends `Break(Ok(()))` when the workflow completes successfully, `Break(Err(..))` when a task permanently fails (retries exhausted, `Subsequent::None` on a failure). The coordinator matches on the message: `Continue` entries flow through `process_entries`, `Break` exits the loop and logs the result. The workflow result is NOT written to the state log — it's derivable from the entries.
 
 ```rust
 enum RunMode {
@@ -49,7 +49,7 @@ enum RunMode {
     Resume { old_log_path: PathBuf },
 }
 
-pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
+pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> WorkflowResult {
     let seed = match mode {
         RunMode::Fresh { initial_tasks } => {
             let config = /* loaded by caller or passed separately */;
@@ -60,7 +60,8 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
         }
     };
 
-    let (tx, rx) = mpsc::channel::<ControlFlow<(), StateLogEntry>>();
+    type ChannelMsg = ControlFlow<WorkflowResult, StateLogEntry>;
+    let (tx, rx) = mpsc::channel::<ChannelMsg>();
 
     let mut appliers: Vec<Box<dyn Applier>> = vec![
         Box::new(Engine::new(runner_config, tx)),
@@ -71,16 +72,19 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
     // Applied as one batch — Engine processes all entries before dispatching.
     process_entries(&mut appliers, &seed);
 
-    while let Ok(msg) = rx.recv() {
-        match msg {
+    let result = loop {
+        match rx.recv().expect("[P062] channel closed unexpectedly") {
             ControlFlow::Continue(entry) => {
                 process_entries(&mut appliers, &[entry]);
             }
-            ControlFlow::Break(()) => break,
+            ControlFlow::Break(result) => break result,
         }
-    }
+    };
 
-    Ok(())
+    // Log the workflow result. Not written to the state log —
+    // it's derivable from the entries.
+    log_workflow_result(&result);
+    result
 }
 
 fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry]) {
@@ -92,7 +96,7 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 
 `tx` moves into the Engine — workers get clones when spawned. Each worker produces a single `TaskCompleted` (with children/retry in `subsequent`) and sends it on `tx`. When all senders are dropped (workers done, Engine drops its copy), `rx.recv()` returns `Err` and the loop exits.
 
-Every source sends `ControlFlow<(), StateLogEntry>` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(FinallyRun(...))` for finally entries, and `Break(())` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop.
+Every source sends `ControlFlow<WorkflowResult, StateLogEntry>` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(FinallyRun(...))` for finally entries, and `Break(Ok(()))` or `Break(Err(..))` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop and returns the result.
 
 ## StateLogEntry
 
@@ -185,7 +189,7 @@ Both Engine and LogApplier implement this trait. One method. The coordinator cal
 
 ### Engine
 
-Owns the full execution lifecycle: task state, dispatch, finally execution, and shutdown. Holds a `Sender<ControlFlow<(), StateLogEntry>>` — workers get clones (they send their `TaskCompleted`), and the Engine sends `FinallyRun` entries and `Break(())` for shutdown.
+Owns the full execution lifecycle: task state, dispatch, finally execution, and shutdown. Holds a `Sender<ControlFlow<WorkflowResult, StateLogEntry>>` — workers get clones (they send their `TaskCompleted`), and the Engine sends `FinallyRun` entries and `Break(result)` for shutdown.
 
 Config is not passed to the constructor — it arrives as the first `StateLogEntry::Config` entry in the seed batch. Engine validates that Config is the first entry it receives and that there are no duplicates.
 
@@ -193,7 +197,7 @@ Config is not passed to the constructor — it arrives as the first `StateLogEnt
 struct Engine {
     state: RunState,
     config: Option<Config>,
-    tx: Sender<ControlFlow<(), StateLogEntry>>,
+    tx: Sender<ControlFlow<WorkflowResult, StateLogEntry>>,
     id_counter: Arc<AtomicU32>,
     max_seen_id: u32,
     pool: PoolConnection,
@@ -365,7 +369,8 @@ fn flush_dispatches(&mut self, sent_finally: bool) {
     }
 
     if !sent_finally && self.pending_dispatches.is_empty() && self.in_flight == 0 {
-        self.tx.send(ControlFlow::Break(()))
+        let result = self.compute_workflow_result();
+        self.tx.send(ControlFlow::Break(result))
             .expect("[P055] shutdown send failed");
     }
 }
@@ -590,7 +595,7 @@ Writes every entry it receives — `Config`, `TaskSubmitted`, `TaskCompleted`, a
 
 ### Termination
 
-Engine sends `ControlFlow::Break(())` on `tx` when `pending_dispatches` is empty, `in_flight == 0`, and no finally entries were sent this batch (checked in `flush_dispatches`). The coordinator matches on `Break` and exits the loop. All appliers are dropped, including Engine (which drops `tx`). Worker threads hold `Sender` clones — they've already completed and dropped theirs by the time shutdown fires (in_flight is 0).
+Engine sends `ControlFlow::Break(result)` on `tx` when `pending_dispatches` is empty, `in_flight == 0`, and no finally entries were sent this batch (checked in `flush_dispatches`). The result is `Ok(())` if the workflow completed successfully, `Err(..)` if a task permanently failed (retries exhausted, `Subsequent::None` on a failure). The Engine derives this from state — it's not a separate log entry. The coordinator matches on `Break`, logs the result, and exits the loop. All appliers are dropped, including Engine (which drops `tx`). Worker threads hold `Sender` clones — they've already completed and dropped theirs by the time shutdown fires (in_flight is 0).
 
 ### TaskEntry and TaskState
 
@@ -702,12 +707,12 @@ impl Iterator for TaskRunner<'_> {
 After: the coordinator is a dumb loop over `Vec<Box<dyn Applier>>`.
 
 ```rust
-while let Ok(msg) = rx.recv() {
-    match msg {
+let result = loop {
+    match rx.recv().expect("[P062]") {
         ControlFlow::Continue(entry) => process_entries(&mut appliers, &[entry]),
-        ControlFlow::Break(()) => break,
+        ControlFlow::Break(result) => break result,
     }
-}
+};
 ```
 
 ### TaskEntry: config fields on every entry
