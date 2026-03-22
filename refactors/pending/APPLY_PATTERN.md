@@ -37,7 +37,7 @@ The structure is already there: receive a result, process it. `process_result` i
 
 Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs independently.
 
-During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter. Workers allocate IDs for children and retries. The counter guarantees uniqueness across concurrent allocators. Engine tracks `max_seen_id` during `apply()` and initializes the counter to `max_seen_id + 1` after the seed batch via `fetch_max`.
+During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter. Workers allocate IDs for children and retries. The counter guarantees uniqueness across concurrent allocators. During `apply()`, a local `max_seen_id` tracks the highest ID in the batch; after the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max`.
 
 ### Target event loop
 
@@ -94,7 +94,7 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 }
 ```
 
-`tx` moves into the Engine — workers get clones when spawned. Each worker produces a single `TaskCompleted` (with children/retry in `subsequent`) and sends it on `tx`. When all senders are dropped (workers done, Engine drops its copy), `rx.recv()` returns `Err` and the loop exits.
+`tx` moves into the Engine — workers get clones when spawned. Each worker produces a single `TaskCompleted` (with outcome: `Succeeded`, `Retrying`, or `PermanentFailure`) and sends it on `tx`. When all senders are dropped (workers done, Engine drops its copy), `rx.recv()` returns `Err` and the loop exits.
 
 Every source sends `ControlFlow<WorkflowResult, StateLogEntry>` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(FinallyRun(...))` for finally entries, and `Break(Ok(()))` or `Break(Err(..))` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop and returns the result.
 
@@ -127,21 +127,28 @@ enum TaskOrigin {
 struct TaskCompleted {
     task_id: LogTaskId,
     outcome: TaskOutcome,
-    subsequent: Subsequent,
 }
 
-/// What follows a completion. Determined by the worker — workers know
-/// about children (they spawned them) and retries (they decided to
-/// retry). Workers do NOT know about finallys — that's an Engine
-/// concern handled via FinallyRun.
-enum Subsequent {
-    /// Task succeeded, spawned children. Parent transitions to
-    /// WaitingForChildren(N).
-    Children(Vec<TaskSubmitted>),
-    /// Task failed, retrying. Task is replaced by the retry.
-    Retry(TaskSubmitted),
-    /// No follow-up. Leaf success or permanent failure.
-    None,
+/// The outcome of running a task. Each variant captures everything
+/// needed — no separate "subsequent" field. Workers determine the
+/// outcome (children, retry, or permanent failure) based on the
+/// result and step config captured in their closure. Workers do NOT
+/// know about finallys — that's an Engine concern via FinallyRun.
+enum TaskOutcome {
+    /// Task succeeded. Children may be empty (leaf success).
+    Succeeded {
+        finally_value: StepInputValue,
+        children: Vec<TaskSubmitted>,
+    },
+    /// Task failed, retrying. The retry replaces this task.
+    Retrying {
+        reason: FailureReason,
+        retry: TaskSubmitted,
+    },
+    /// Task failed permanently (retries exhausted or non-retryable).
+    PermanentFailure {
+        reason: FailureReason,
+    },
 }
 
 /// Records that a finally script ran for a parent whose children all
@@ -150,28 +157,13 @@ enum Subsequent {
 /// (expected to be fast) and emits this event with the children produced.
 struct FinallyRun {
     finally_for: LogTaskId,
-    subsequent: Vec<TaskSubmitted>,
-}
-
-enum TaskOutcome {
-    Success(TaskSuccess),
-    Failed(TaskFailed),
-}
-
-struct TaskSuccess {
-    finally_value: StepInputValue,
-}
-
-struct TaskFailed {
-    reason: FailureReason,
+    children: Vec<TaskSubmitted>,
 }
 ```
 
-`TaskSuccess` carries only the finally value. Children are in `subsequent` as `TaskSubmitted` entries with `origin: Spawned { parent_id }`. `apply_completed` uses the children count to set the parent's child count directly — no transient state needed.
+Each `TaskOutcome` variant is self-contained. `Succeeded` carries the finally value and children (empty vec for leaf tasks). `Retrying` carries the failure reason and the retry task. `PermanentFailure` carries just the reason. No impossible states — success can't have a retry, failure can't have children.
 
-`TaskFailed` carries only the failure reason. Workers decide whether to retry based on step config (captured in their closure). A retry is in `subsequent` as a `TaskSubmitted` with `TaskOrigin::Retry { replaces }`.
-
-`TaskCompleted.subsequent` makes each completion self-contained. `apply_completed` processes the completion and inserts all subsequent tasks atomically — no ordering dependencies between separate entries, no transient states, no two-pass processing. Workers produce `Children`, `Retry`, or `None` — they don't know about finallys.
+`apply_completed` matches on the single `outcome` field. For `Succeeded` with non-empty children, the parent transitions to `WaitingForChildren(N)`. For `Succeeded` with empty children or `PermanentFailure`, the task is removed and the Engine walks up the parent chain for finally detection. For `Retrying`, the task is marked `Failed` and the retry's `apply_submitted` replaces it.
 
 `FinallyRun` is the Engine's record that a finally mechanism fired. The Engine runs the script synchronously post-batch, emits `FinallyRun` on `tx`. It comes back through the coordinator and flows through all appliers. During replay, `FinallyRun` entries are in the batch — the Engine marks them as handled and skips re-running. On resume, if a parent's children are all done but no `FinallyRun` is in the log, the Engine re-runs the finally.
 
@@ -199,17 +191,11 @@ struct Engine {
     config: Option<Config>,
     tx: Sender<ControlFlow<WorkflowResult, StateLogEntry>>,
     id_counter: Arc<AtomicU32>,
-    max_seen_id: u32,
     pool: PoolConnection,
     in_flight: usize,
     max_concurrency: usize,
     pending_dispatches: VecDeque<PendingTask>,
     dispatched: HashSet<LogTaskId>,
-    /// Parents whose children all completed during this batch.
-    /// Accumulated during entry processing, drained post-batch
-    /// to run finally scripts. During replay, FinallyRun entries
-    /// in the batch clear these before the post-batch step runs.
-    parents_needing_finally: Vec<PendingFinally>,
 }
 
 impl Engine {
@@ -235,15 +221,18 @@ struct PendingTask {
 }
 ```
 
-`id_counter` is shared between Engine and workers (via `Arc<AtomicU32>`). Workers allocate IDs atomically for children and retries. `max_seen_id` tracks the highest task ID seen during `apply()` — used to initialize the shared counter after the seed batch. After each `apply()` call, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max`.
+`id_counter` is shared between Engine and workers (via `Arc<AtomicU32>`). Workers allocate IDs atomically for children and retries. During `apply()`, a local `max_seen_id` tracks the highest task ID seen in the batch. After the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max` — this initializes the counter correctly after the seed batch (replay). During live execution the counter is already past all seen IDs, so `fetch_max` is a no-op.
 
 **`apply()`**: Processes a batch of entries, then runs finally scripts for any parents whose children all completed, then flushes dispatches. All entries in the batch are processed before any dispatch or finally execution happens — this is critical for replay, where the entire old log is applied as one batch.
 
 ```rust
 impl Applier for Engine {
     fn apply(&mut self, entries: &[StateLogEntry]) {
+        let mut max_seen_id: u32 = 0;
+        let mut parents_needing_finally: Vec<PendingFinally> = Vec::new();
+
         for entry in entries {
-            self.track_max_id(entry);
+            max_seen_id = max_seen_id.max(max_id_in(entry));
             match entry {
                 StateLogEntry::TaskSubmitted(s) => {
                     assert!(!self.state.tasks.contains_key(&s.task_id),
@@ -263,17 +252,16 @@ impl Applier for Engine {
                     }
                     let parent_id = self.state.apply_completed(c);
                     // For leaf/permanent-failure: walk up the parent chain.
-                    // May accumulate a PendingFinally.
-                    if let Some(parent_id) = parent_id {
+                    if let Some(pid) = parent_id {
                         if let Some(pf) = self.state.walk_up_for_finally(
-                            parent_id, self.config()
+                            pid, self.config()
                         ) {
-                            self.parents_needing_finally.push(pf);
+                            parents_needing_finally.push(pf);
                         }
                     }
-                    // Queue subsequent tasks for dispatch.
-                    match &c.subsequent {
-                        Subsequent::Children(children) => {
+                    // Queue children/retry for dispatch.
+                    match &c.outcome {
+                        TaskOutcome::Succeeded { children, .. } => {
                             for s in children {
                                 self.pending_dispatches.push_back(PendingTask {
                                     task_id: s.task_id,
@@ -282,23 +270,23 @@ impl Applier for Engine {
                                 });
                             }
                         }
-                        Subsequent::Retry(s) => {
+                        TaskOutcome::Retrying { retry, .. } => {
                             self.pending_dispatches.push_back(PendingTask {
-                                task_id: s.task_id,
-                                step: s.step.clone(),
-                                value: s.value.clone(),
+                                task_id: retry.task_id,
+                                step: retry.step.clone(),
+                                value: retry.value.clone(),
                             });
                         }
-                        Subsequent::None => {}
+                        TaskOutcome::PermanentFailure { .. } => {}
                     }
                 }
                 StateLogEntry::FinallyRun(f) => {
                     let grandparent_id = self.state.apply_finally_run(f);
                     // Mark this parent as handled — don't re-run post-batch.
-                    self.parents_needing_finally
+                    parents_needing_finally
                         .retain(|pf| pf.parent_id != f.finally_for);
                     // Queue children for dispatch.
-                    for s in &f.subsequent {
+                    for s in &f.children {
                         self.pending_dispatches.push_back(PendingTask {
                             task_id: s.task_id,
                             step: s.step.clone(),
@@ -311,7 +299,7 @@ impl Applier for Engine {
                         if let Some(pf) = self.state.walk_up_for_finally(
                             gp_id, self.config()
                         ) {
-                            self.parents_needing_finally.push(pf);
+                            parents_needing_finally.push(pf);
                         }
                     }
                 }
@@ -328,21 +316,21 @@ impl Applier for Engine {
         // Post-batch: run finally scripts for parents whose children
         // all completed during this batch. During replay, FinallyRun
         // entries in the batch already cleared these.
-        let sent_finally = !self.parents_needing_finally.is_empty();
-        for pf in self.parents_needing_finally.drain(..) {
+        let sent_finally = !parents_needing_finally.is_empty();
+        for pf in parents_needing_finally {
             let result = self.pool.run_finally_sync(&pf.step, &pf.finally_value);
-            let subsequent = self.build_submitted_from_result(
+            let children = self.build_submitted_from_result(
                 &pf, &result, &self.id_counter,
             );
             let entry = StateLogEntry::FinallyRun(FinallyRun {
                 finally_for: pf.parent_id,
-                subsequent,
+                children,
             });
             self.tx.send(ControlFlow::Continue(entry))
                 .expect("[P050] channel send failed");
         }
 
-        self.id_counter.fetch_max(self.max_seen_id + 1, Ordering::SeqCst);
+        self.id_counter.fetch_max(max_seen_id + 1, Ordering::SeqCst);
         self.flush_dispatches(sent_finally);
     }
 }
@@ -381,7 +369,7 @@ fn flush_dispatches(&mut self, sent_finally: bool) {
 1. Runs the task via the pool
 2. Interprets the result (`process_submit_result`, post hooks) — step config captured in closure
 3. Allocates IDs for children/retries from the shared `id_counter`
-4. Produces a single `TaskCompleted` with `subsequent`: `Children`, `Retry`, or `None`
+4. Produces a single `TaskCompleted` with outcome: `Succeeded`, `Retrying`, or `PermanentFailure`
 5. Sends `ControlFlow::Continue(StateLogEntry::TaskCompleted(...))` on `tx`, drops `tx` clone
 
 Workers don't know about finallys — that's an Engine concern. Workers only know about children (they spawned them) and retries (they decided to retry based on step config in their closure).
@@ -424,10 +412,10 @@ impl RunState {
     }
 
     /// Called for every completion — both success and failure, both live
-    /// and replay. Handles the completion and all subsequent tasks
+    /// and replay. Handles the completion and all tasks in the outcome
     /// atomically. No transient states. Returns the parent_id of the
-    /// removed task when Subsequent::None — the Engine uses this to
-    /// start the parent-chain walk.
+    /// removed task for leaf/permanent-failure — the Engine uses this
+    /// to start the parent-chain walk.
     fn apply_completed(&mut self, completed: &TaskCompleted)
         -> Option<LogTaskId>
     {
@@ -436,35 +424,31 @@ impl RunState {
         assert!(matches!(&entry.state, TaskState::Pending { .. }),
             "[P034] completed task not in Pending state");
 
-        match (&completed.outcome, &completed.subsequent) {
-            (TaskOutcome::Success(success), Subsequent::Children(children)) => {
+        match &completed.outcome {
+            TaskOutcome::Succeeded { finally_value, children }
+                if !children.is_empty() =>
+            {
                 entry.state = TaskState::WaitingForChildren {
                     pending_children_count: NonZeroU16::new(
                         children.len() as u16
-                    ).expect("[P047] Children variant must be non-empty"),
-                    finally_value: success.finally_value.clone(),
+                    ).unwrap(),
+                    finally_value: finally_value.clone(),
                 };
                 for submitted in children {
                     self.apply_submitted(submitted);
                 }
                 None
             }
-            (TaskOutcome::Failed(_), Subsequent::Retry(retry)) => {
-                entry.state = TaskState::Failed;
-                self.apply_submitted(retry);
-                None
-            }
-            (_, Subsequent::None) => {
+            TaskOutcome::Succeeded { .. } | TaskOutcome::PermanentFailure { .. } => {
                 // Leaf success or permanent failure. Remove the task.
                 let removed = self.tasks.remove(&completed.task_id)
                     .expect("[P033]");
                 removed.parent_id
             }
-            (TaskOutcome::Success(_), Subsequent::Retry(_)) => {
-                panic!("[P056] success cannot have Retry subsequent");
-            }
-            (TaskOutcome::Failed(_), Subsequent::Children(_)) => {
-                panic!("[P057] failure cannot have Children subsequent");
+            TaskOutcome::Retrying { retry, .. } => {
+                entry.state = TaskState::Failed;
+                self.apply_submitted(retry);
+                None
             }
         }
     }
@@ -752,13 +736,11 @@ struct TaskEntry {
 #[test] fn apply_submitted_retry_inherits_parent_id()
 
 // RunState — apply_completed
-#[test] fn apply_completed_with_children_transitions_to_waiting()
-#[test] fn apply_completed_leaf_success_removes_and_returns_parent()
+#[test] fn apply_completed_succeeded_with_children_transitions_to_waiting()
+#[test] fn apply_completed_succeeded_empty_children_removes_and_returns_parent()
 #[test] fn apply_completed_permanent_failure_removes_and_returns_parent()
-#[test] fn apply_completed_failure_with_retry_marks_failed()
-#[test] fn apply_completed_inserts_subsequent_children()
-#[test] fn apply_completed_panics_on_success_with_retry()
-#[test] fn apply_completed_panics_on_failure_with_children()
+#[test] fn apply_completed_retrying_marks_failed_and_inserts_retry()
+#[test] fn apply_completed_inserts_children_via_apply_submitted()
 
 // RunState — apply_finally_run
 #[test] fn apply_finally_run_removes_parent()
@@ -779,14 +761,13 @@ struct TaskEntry {
 // Engine — apply()
 #[test] fn apply_submitted_queues_dispatch()
 #[test] fn apply_submitted_panics_on_duplicate_id()
-#[test] fn apply_completed_queues_children_for_dispatch()
-#[test] fn apply_completed_queues_retry_for_dispatch()
+#[test] fn apply_succeeded_queues_children_for_dispatch()
+#[test] fn apply_retrying_queues_retry_for_dispatch()
 #[test] fn apply_completed_panics_on_unknown_task()
 #[test] fn apply_completed_walks_up_for_finally()
 #[test] fn apply_finally_run_queues_children_for_dispatch()
 #[test] fn apply_finally_run_clears_pending_finally()
 #[test] fn apply_finally_run_empty_triggers_walk_up()
-#[test] fn apply_tracks_max_seen_id()
 #[test] fn apply_initializes_counter_from_max_seen_id()
 #[test] fn apply_post_batch_runs_finally_scripts()
 #[test] fn apply_post_batch_sends_finally_run_on_tx()
@@ -810,8 +791,9 @@ struct TaskEntry {
 #[test] fn event_loop_exits_on_break()
 
 // Workers
-#[test] fn worker_produces_task_completed_with_children()
-#[test] fn worker_produces_task_completed_with_retry()
-#[test] fn worker_produces_task_completed_with_none()
+#[test] fn worker_produces_succeeded_with_children()
+#[test] fn worker_produces_succeeded_leaf()
+#[test] fn worker_produces_retrying()
+#[test] fn worker_produces_permanent_failure()
 #[test] fn worker_allocates_ids_from_shared_counter()
 ```
