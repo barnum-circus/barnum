@@ -41,7 +41,11 @@ During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter.
 
 ### Target event loop
 
-The channel carries `ControlFlow<WorkflowResult, StateLogEntry>`. `Continue(entry)` is a normal entry — workers send one `TaskCompleted`, Engine sends `FinallyRun` entries. `Break(result)` is the shutdown signal — Engine sends `Break(Ok(()))` when the workflow completes successfully, `Break(Err(..))` when a task permanently fails (retries exhausted, `Subsequent::None` on a failure). The coordinator matches on the message: `Continue` entries flow through `process_entries`, `Break` exits the loop and logs the result. The workflow result is NOT written to the state log — it's derivable from the entries.
+```rust
+type ChannelMsg = ControlFlow<WorkflowResult, StateLogEntry>;
+```
+
+The channel carries `ChannelMsg`. `Continue(entry)` is a normal entry — workers send one `TaskCompleted`, Engine sends `FinallyRun` entries. `Break(result)` is the shutdown signal — Engine sends `Break(Ok(()))` when the workflow completes successfully, `Break(Err(..))` when a task permanently fails (retries exhausted). The coordinator matches on the message: `Continue` entries flow through `process_entries`, `Break` exits the loop and logs the result. The workflow result is NOT written to the state log — it's derivable from the entries.
 
 ```rust
 enum RunMode {
@@ -60,7 +64,6 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> WorkflowResult {
         }
     };
 
-    type ChannelMsg = ControlFlow<WorkflowResult, StateLogEntry>;
     let (tx, rx) = mpsc::channel::<ChannelMsg>();
 
     let mut appliers: Vec<Box<dyn Applier>> = vec![
@@ -96,7 +99,7 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 
 `tx` moves into the Engine — workers get clones when spawned. Each worker produces a single `TaskCompleted` (with outcome: `Succeeded`, `Retrying`, or `PermanentFailure`) and sends it on `tx`. When all senders are dropped (workers done, Engine drops its copy), `rx.recv()` returns `Err` and the loop exits.
 
-Every source sends `ControlFlow<WorkflowResult, StateLogEntry>` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(FinallyRun(...))` for finally entries, and `Break(Ok(()))` or `Break(Err(..))` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop and returns the result.
+Every source sends `ChannelMsg` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(FinallyRun(...))` for finally entries, and `Break(Ok(()))` or `Break(Err(..))` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop and returns the result.
 
 ## StateLogEntry
 
@@ -181,7 +184,7 @@ Both Engine and LogApplier implement this trait. One method. The coordinator cal
 
 ### Engine
 
-Owns the full execution lifecycle: task state, dispatch, finally execution, and shutdown. Holds a `Sender<ControlFlow<WorkflowResult, StateLogEntry>>` — workers get clones (they send their `TaskCompleted`), and the Engine sends `FinallyRun` entries and `Break(result)` for shutdown.
+Owns the full execution lifecycle: task state, dispatch, finally execution, and shutdown. Holds a `Sender<ChannelMsg>` — workers get clones (they send their `TaskCompleted`), and the Engine sends `FinallyRun` entries and `Break(result)` for shutdown.
 
 Config is not passed to the constructor — it arrives as the first `StateLogEntry::Config` entry in the seed batch. Engine validates that Config is the first entry it receives and that there are no duplicates.
 
@@ -189,7 +192,7 @@ Config is not passed to the constructor — it arrives as the first `StateLogEnt
 struct Engine {
     state: RunState,
     config: Option<Config>,
-    tx: Sender<ControlFlow<WorkflowResult, StateLogEntry>>,
+    tx: Sender<ChannelMsg>,
     id_counter: Arc<AtomicU32>,
     pool: PoolConnection,
     in_flight: usize,
