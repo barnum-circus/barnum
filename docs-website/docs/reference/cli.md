@@ -92,7 +92,7 @@ Commands:
   docs      Generate markdown documentation from config
   validate  Validate a config file
   graph     Generate DOT visualization (for GraphViz)
-  schema    Print the JSON schema for config files
+  schema    Print the config schema (Zod TypeScript by default, or JSON)
 ```
 
 **Examples:**
@@ -108,8 +108,11 @@ barnum config docs --config config.json > WORKFLOW.md
 barnum config graph --config config.json > workflow.dot
 dot -Tpng workflow.dot -o workflow.png
 
+# Get the Zod TypeScript schema (default)
+barnum config schema
+
 # Get the JSON schema
-barnum config schema > barnum-config-schema.json
+barnum config schema --type json
 ```
 
 ## Troupe CLI

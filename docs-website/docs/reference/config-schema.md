@@ -6,7 +6,7 @@ image: /img/og/reference-config-schema.png
 
 Barnum workflows are defined in JSON (or JSONC) config files. This page documents all available fields.
 
-Run `barnum config schema` to get the full JSON Schema for editor validation.
+Run `barnum config schema` to get the Zod TypeScript schema, which provides both runtime validation and TypeScript types. For the raw JSON Schema, use `barnum config schema --type json`.
 
 ## Top-Level Structure
 

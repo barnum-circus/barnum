@@ -67,13 +67,13 @@ pnpm dlx @barnum/barnum run --config config.jsonc --pool agents
 
 ## Creating Config Files
 
-To see the JSON schema for config files:
+To get the Zod TypeScript schema for config files:
 
 ```bash
 pnpm dlx @barnum/barnum config schema
 ```
 
-**Tip for AI agents:** When asking an AI to create a Barnum config, tell it to run `barnum config schema` first to see all available fields and their types.
+**Tip for AI agents:** When asking an AI to create a Barnum config, tell it to run `barnum config schema` first. This outputs a Zod schema with all available fields, their types, defaults, and descriptions.
 
 ## Components
 

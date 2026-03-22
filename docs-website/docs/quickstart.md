@@ -106,7 +106,7 @@ I want to create a Barnum workflow config that:
 3. Applies the refactors
 4. Commits the changes to each file
 
-First, run `pnpm dlx @barnum/barnum config schema` to see the config format.
+First, run `pnpm dlx @barnum/barnum config schema` to get the Zod TypeScript schema describing the config format.
 
 Then look at this example for reference:
 https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos/refactor-workflow
