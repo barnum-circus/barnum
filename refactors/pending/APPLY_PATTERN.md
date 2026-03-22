@@ -492,10 +492,10 @@ Each phase is a separate branch that passes CI and merges independently.
 
 Independent sub-refactors, each in its own file. Can land in any order.
 
-- **0a.** `EXTRACT_RUN_STATE.md` — Move `tasks` and `next_task_id` into a RunState struct. Pure structural move.
+- **0a.** `EXTRACT_RUN_STATE.md` — **Done.** Moved `tasks` and `next_task_id` into RunState. Also moved `remove_and_notify_parent` onto RunState with deferred parent removal via non-recursive cascade (absorbs 0d).
 - **0b.** `REMOVE_INFLIGHT_VARIANT.md` (not yet written) — Replace InFlight TaskState variant with `in_flight: usize` counter on TaskRunner.
 - **0c.** `REMOVE_CONFIG_FROM_TASK_ENTRY.md` (not yet written) — Drop `finally_script` and `retries_remaining` from TaskEntry. Look them up from `step_map` when needed.
-- **0d.** `DEFER_PARENT_REMOVAL.md` (not yet written) — Accumulate removed parents in `Vec<RemovedParent>` instead of calling `schedule_finally` inline. The runner drains this to check config for finally scripts.
+- **0d.** Absorbed into 0a (EXTRACT_RUN_STATE Phase 2).
 
 ### Phase 1: Event loop restructure
 
