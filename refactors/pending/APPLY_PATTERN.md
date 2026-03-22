@@ -63,39 +63,39 @@ fn run(&mut self) {
 }
 
 fn apply(&mut self, entries: &[StateLogEntry]) {
-    self.state.apply(entries);
-    self.log.apply(entries);
-    for entry in entries {
-        match entry {
-            StateLogEntry::TaskSubmitted(s) => {
-                self.pending_dispatches.push(s.task_id);
+    let mut pending = entries.to_vec();
+    while !pending.is_empty() {
+        self.state.apply(&pending);
+        self.log.apply(&pending);
+        for entry in &pending {
+            match entry {
+                StateLogEntry::TaskSubmitted(s) => {
+                    self.pending_dispatches.push(s.task_id);
+                }
+                StateLogEntry::TaskCompleted(c) => {
+                    self.pending_dispatches.retain(|id| *id != c.task_id);
+                }
+                StateLogEntry::Config(_) => {}
             }
-            StateLogEntry::TaskCompleted(c) => {
-                self.pending_dispatches.retain(|id| *id != c.task_id);
-            }
-            StateLogEntry::Config(_) => {}
         }
+        pending = self.finally_entries();
     }
-
-    for parent in self.state.drain_removed_parents() {
-        if let Some(script) = self.step_map.get(&parent.step)
-            .and_then(|s| s.finally.as_ref())
-        {
-            let id = self.state.next_id();
-            let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id: id,
-                step: script.step.clone(),
-                value: parent.finally_value,
-                parent_id: None,
-                origin: TaskOrigin::Finally,
-            })];
-            self.state.apply(&finally_entry);
-            self.log.apply(&finally_entry);
-            self.pending_dispatches.push(id);
-        }
-    }
-
     self.flush_dispatches();
+}
+
+fn finally_entries(&mut self) -> Vec<StateLogEntry> {
+    self.state.drain_removed_parents().into_iter().filter_map(|parent| {
+        let script = self.step_map.get(&parent.step)
+            .and_then(|s| s.finally.as_ref())?;
+        let id = self.state.next_id();
+        Some(StateLogEntry::TaskSubmitted(TaskSubmitted {
+            task_id: id,
+            step: script.step.clone(),
+            value: parent.finally_value,
+            parent_id: None,
+            origin: TaskOrigin::Finally,
+        }))
+    }).collect()
 }
 ```
 
@@ -410,39 +410,39 @@ struct Runner {
 
 impl Runner {
     fn apply(&mut self, entries: &[StateLogEntry]) {
-        self.state.apply(entries);
-        self.log.apply(entries);
-        for entry in entries {
-            match entry {
-                StateLogEntry::TaskSubmitted(s) => {
-                    self.pending_dispatches.push(s.task_id);
+        let mut pending = entries.to_vec();
+        while !pending.is_empty() {
+            self.state.apply(&pending);
+            self.log.apply(&pending);
+            for entry in &pending {
+                match entry {
+                    StateLogEntry::TaskSubmitted(s) => {
+                        self.pending_dispatches.push(s.task_id);
+                    }
+                    StateLogEntry::TaskCompleted(c) => {
+                        self.pending_dispatches.retain(|id| *id != c.task_id);
+                    }
+                    StateLogEntry::Config(_) => {}
                 }
-                StateLogEntry::TaskCompleted(c) => {
-                    self.pending_dispatches.retain(|id| *id != c.task_id);
-                }
-                StateLogEntry::Config(_) => {}
             }
+            pending = self.finally_entries();
         }
-
-        for parent in self.state.drain_removed_parents() {
-            if let Some(script) = self.step_map.get(&parent.step)
-                .and_then(|s| s.finally.as_ref())
-            {
-                let id = self.state.next_id();
-                let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
-                    task_id: id,
-                    step: script.step.clone(),
-                    value: parent.finally_value,
-                    parent_id: None,
-                    origin: TaskOrigin::Finally,
-                })];
-                self.state.apply(&finally_entry);
-                self.log.apply(&finally_entry);
-                self.pending_dispatches.push(id);
-            }
-        }
-
         self.flush_dispatches();
+    }
+
+    fn finally_entries(&mut self) -> Vec<StateLogEntry> {
+        self.state.drain_removed_parents().into_iter().filter_map(|parent| {
+            let script = self.step_map.get(&parent.step)
+                .and_then(|s| s.finally.as_ref())?;
+            let id = self.state.next_id();
+            Some(StateLogEntry::TaskSubmitted(TaskSubmitted {
+                task_id: id,
+                step: script.step.clone(),
+                value: parent.finally_value,
+                parent_id: None,
+                origin: TaskOrigin::Finally,
+            }))
+        }).collect()
     }
 
     fn flush_dispatches(&mut self) {
@@ -606,12 +606,16 @@ for (id, task) in children {
     entries.push(StateLogEntry::TaskSubmitted(TaskSubmitted { task_id: id, ... }));
 }
 
-// Runner::apply() does everything:
+// Runner::apply() loops: apply entries, collect finally entries, repeat
 fn apply(&mut self, entries: &[StateLogEntry]) {
-    self.state.apply(entries);   // update state (batch)
-    self.log.apply(entries);     // write log (batch)
-    // ... track pending_dispatches ...
-    // ... handle removed parents / finally ...
+    let mut pending = entries.to_vec();
+    while !pending.is_empty() {
+        self.state.apply(&pending);
+        self.log.apply(&pending);
+        // ... track pending_dispatches ...
+        pending = self.finally_entries();
+    }
+    self.flush_dispatches();
 }
 ```
 
@@ -640,26 +644,31 @@ fn schedule_finally(&mut self, task_id: LogTaskId, hook: HookScript, value: Step
 }
 ```
 
-After: RunState has no config awareness. When a parent's children all complete, it's removed and captured in `removed_parents`. The Runner checks `step_map` for a finally script and produces a TaskSubmitted entry through `apply()`.
+After: RunState has no config awareness. When a parent's children all complete, it's removed and captured in `removed_parents`. Runner drains these, creates TaskSubmitted entries, and feeds them back through the same apply loop — no bypassing.
 
 ```rust
-// Inside Runner::apply(), after processing entries:
-for parent in self.state.drain_removed_parents() {
-    if let Some(script) = self.step_map.get(&parent.step)
-        .and_then(|s| s.finally.as_ref())
-    {
+// apply() loops until no more finally entries:
+let mut pending = entries.to_vec();
+while !pending.is_empty() {
+    self.state.apply(&pending);
+    self.log.apply(&pending);
+    // ... dispatch tracking ...
+    pending = self.finally_entries(); // drain removed parents → TaskSubmitted
+}
+
+fn finally_entries(&mut self) -> Vec<StateLogEntry> {
+    self.state.drain_removed_parents().into_iter().filter_map(|parent| {
+        let script = self.step_map.get(&parent.step)
+            .and_then(|s| s.finally.as_ref())?;
         let id = self.state.next_id();
-        let finally_entry = [StateLogEntry::TaskSubmitted(TaskSubmitted {
+        Some(StateLogEntry::TaskSubmitted(TaskSubmitted {
             task_id: id,
             step: script.step.clone(),
             value: parent.finally_value,
             parent_id: None,
             origin: TaskOrigin::Finally,
-        })];
-        self.state.apply(&finally_entry);
-        self.log.apply(&finally_entry);
-        self.pending_dispatches.push(id);
-    }
+        }))
+    }).collect()
 }
 ```
 
