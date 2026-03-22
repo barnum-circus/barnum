@@ -3,6 +3,7 @@
 #![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
 #![expect(clippy::redundant_clone)]
+#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
@@ -50,6 +51,7 @@ fn strict_config() -> Config {
 
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn invalid_transition_causes_retry() {
     let root = setup_test_dir(TEST_DIR);
 
@@ -93,6 +95,7 @@ fn invalid_transition_causes_retry() {
 
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn unknown_step_causes_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown"));
 
