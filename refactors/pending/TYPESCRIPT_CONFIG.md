@@ -277,7 +277,125 @@ The `main.rs` changes are minimal. In the `(None, Some(ts_file))` match arm of t
 }
 ```
 
-### 4. User workflow
+### 4. Step builder helpers
+
+The npm package also exports helper functions for common Command-action patterns. Today, every Command step in a workflow does the same `jq` wrangling in bash: read `stdin`, extract `.value`, transform it, emit `[{"kind": "...", "value": ...}]`. In TypeScript, these become composable functions that return a `StepFile`.
+
+#### `commandStep` — typed Command action from a function
+
+Wraps a synchronous TypeScript function as a Command step. At config serialization time, the function body is embedded as an inline `node -e` script. The function receives the task value and returns an array of follow-up tasks.
+
+```typescript
+import { defineConfig, commandStep } from "@barnum/barnum";
+
+export default defineConfig({
+  entrypoint: "Distribute",
+  steps: [
+    commandStep("Distribute", {
+      next: ["Worker"],
+      handler: (value: { files: string[] }) =>
+        value.files.map(file => ({ kind: "Worker", value: { file } })),
+    }),
+    {
+      name: "Worker",
+      action: { kind: "Pool", instructions: { link: "worker.md" } },
+      next: [],
+    },
+  ],
+});
+```
+
+`commandStep("Distribute", { next, handler })` produces:
+```json
+{
+  "name": "Distribute",
+  "action": {
+    "kind": "Command",
+    "script": "node -e \"const input=JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')); const fn=<serialized handler>; const result=fn(input.value); process.stdout.write(JSON.stringify(result));\""
+  },
+  "next": ["Worker"]
+}
+```
+
+The handler is serialized via `.toString()` and embedded in the script. This works for pure functions (no closures over external state). The helper validates at build time that the function is serializable.
+
+#### `fanOut` — map an array to parallel tasks
+
+Takes an array field from the input value and spawns one task per element on a target step:
+
+```typescript
+import { defineConfig, fanOut } from "@barnum/barnum";
+
+export default defineConfig({
+  entrypoint: "Start",
+  steps: [
+    fanOut("Start", {
+      arrayField: "branches",
+      targetStep: "ProcessBranch",
+      mapItem: (item: string) => ({ branch_name: item }),
+    }),
+    {
+      name: "ProcessBranch",
+      action: { kind: "Pool", instructions: { link: "process.md" } },
+      next: [],
+    },
+  ],
+});
+```
+
+Given input `{ branches: ["a", "b", "c"] }`, this spawns three `ProcessBranch` tasks with values `{ branch_name: "a" }`, `{ branch_name: "b" }`, `{ branch_name: "c" }`.
+
+#### `passthrough` — forward value to the next step
+
+A step that does nothing but emit a single task on another step with the same (or transformed) value:
+
+```typescript
+import { defineConfig, passthrough } from "@barnum/barnum";
+
+export default defineConfig({
+  steps: [
+    passthrough("CheckDiff", {
+      targetStep: "Validate",
+      // Optional: transform the value
+      transform: (value) => ({ ...value, checked: true }),
+    }),
+    // ...
+  ],
+});
+```
+
+#### `conditional` — route to different steps based on value
+
+```typescript
+import { defineConfig, conditional } from "@barnum/barnum";
+
+export default defineConfig({
+  steps: [
+    conditional("Route", {
+      next: ["StepA", "StepB"],
+      decide: (value: { type: string }) =>
+        value.type === "a"
+          ? [{ kind: "StepA", value }]
+          : [{ kind: "StepB", value }],
+    }),
+    // ...
+  ],
+});
+```
+
+#### Implementation
+
+All helpers return a `StepFile` object. They produce Command actions with embedded `node -e` scripts that evaluate the serialized handler function. The helpers are defined in `libs/barnum/helpers.ts` (hand-written, not generated) and exported from the package:
+
+```typescript
+// libs/barnum/index.d.ts
+export { defineConfig } from './types';
+export { commandStep, fanOut, passthrough, conditional } from './helpers';
+```
+
+The helpers have no runtime dependencies beyond Node's built-in `fs` module (for reading stdin). They work with any TS runner because the generated Command scripts are plain JavaScript.
+
+### 5. User workflow
 
 Install types for editor support:
 ```bash
