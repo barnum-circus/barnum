@@ -1,6 +1,8 @@
 //! Task queue runner for Barnum.
 //!
 //! Executes tasks through `troupe`, validating transitions and handling timeouts.
+//! The Engine processes worker results, converts them to state log entries,
+//! and dispatches new work. A log writer persists every entry for resume.
 
 mod dispatch;
 mod hooks;
@@ -16,8 +18,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use barnum_state::{
-    FailureReason, ReconstructedState, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed,
-    TaskOrigin, TaskSubmitted,
+    FailureReason, FinallyRun, StateLogConfig, StateLogEntry, TaskCompleted, TaskOrigin,
+    TaskSubmitted,
 };
 use cli_invoker::Invoker;
 use tracing::{error, info};
@@ -61,83 +63,50 @@ struct PoolConnection {
     invoker: Invoker<TroupeCli>,
 }
 
-/// Whether a task was permanently dropped (retries exhausted).
-#[derive(Debug)]
-enum TaskResult {
-    /// Task completed or will be retried.
-    Handled,
-    /// Task was dropped after exhausting retries.
-    Dropped,
-}
+/// Default maximum concurrent task submissions.
+const DEFAULT_MAX_CONCURRENCY: usize = 20;
 
-/// Entry in the unified task state map.
+/// Entry in the task state map.
 struct TaskEntry {
-    /// The step this task is executing.
     step: StepName,
-    /// Parent task waiting for this task to complete.
     parent_id: Option<LogTaskId>,
-    /// `true` = Finally task (no pre-hook, just run the step's `finally_hook` script).
-    /// `false` = Step task (run pre-hook, then action).
-    ///
-    /// The actual `HookScript` is looked up from step config at dispatch time.
-    is_finally: bool,
-    /// Current state of this task.
     state: TaskState,
 }
 
 /// State of a task in the runner.
 enum TaskState {
-    /// Task waiting to be dispatched, or dispatched and awaiting completion.
-    ///
-    /// Dispatched tasks have their value consumed (set to Null) — the worker
-    /// thread holds the real value. `pending_queue` tracks which Pending tasks
-    /// haven't been dispatched yet.
-    Pending {
-        /// The step input value. Consumed (set to Null) when dispatched.
-        value: StepInputValue,
-    },
+    /// Task waiting to be dispatched or in flight.
+    Pending(PendingState),
     /// Task completed its action, waiting for children to complete.
-    WaitingForChildren {
-        /// Number of children still pending.
-        pending_children_count: NonZeroU16,
-        /// Value to pass to the step's finally hook when all children complete.
-        /// `Some` for Step tasks whose step config has a finally hook.
-        /// `None` for Finally tasks (no "finally of finally") or steps without a hook.
-        /// The `HookScript` is looked up from step config when scheduling the finally.
-        finally_value: Option<StepInputValue>,
-    },
+    WaitingForChildren(WaitingState),
+    /// Task failed and a retry follows. Transient: only exists between
+    /// `apply_completed` setting it and retry's `apply_submitted` removing it.
+    Failed,
 }
 
-/// Default maximum concurrent task submissions.
-///
-/// Limits parallel submissions to avoid exhausting inotify instances.
-/// Linux defaults to `max_user_instances=128`.
-const DEFAULT_MAX_CONCURRENCY: usize = 20;
+struct PendingState {
+    value: StepInputValue,
+}
 
-/// Task-tree state: the set of live tasks and the ID counter.
-///
-/// Separated from `TaskRunner` to isolate state with no I/O dependencies.
-/// All methods are pure state mutations — no I/O, no log writes, no dispatch.
+struct WaitingState {
+    pending_children_count: NonZeroU16,
+    finally_value: StepInputValue,
+}
+
+/// What to dispatch next.
+enum PendingDispatch {
+    /// Dispatch a task worker.
+    Task { task_id: LogTaskId },
+    /// Dispatch a finally worker for a parent whose children all completed.
+    Finally { parent_id: LogTaskId },
+}
+
+// ==================== RunState ====================
+
+/// Pure task-tree state. All methods are state mutations — no I/O.
 struct RunState {
-    /// All task state in one place. Tasks not in this map are fully done.
-    /// `BTreeMap` ordering by key = FIFO dispatch order (task IDs are monotonic).
     tasks: BTreeMap<LogTaskId, TaskEntry>,
-    /// Counter for assigning unique task IDs.
     next_task_id: u32,
-    /// Parents whose children all completed, accumulated during `remove_and_notify_parent`.
-    /// Drained by `TaskRunner` to handle finally scheduling (which requires I/O).
-    removed_parents: Vec<RemovedParent>,
-}
-
-/// A parent task whose last child just completed, ready for finally scheduling.
-///
-/// Accumulated by `RunState::remove_and_notify_parent` instead of calling
-/// `schedule_finally` inline (which would require I/O).
-struct RemovedParent {
-    task_id: LogTaskId,
-    step: StepName,
-    parent_id: Option<LogTaskId>,
-    finally_value: Option<StepInputValue>,
 }
 
 impl RunState {
@@ -145,377 +114,599 @@ impl RunState {
         Self {
             tasks: BTreeMap::new(),
             next_task_id: 0,
-            removed_parents: Vec::new(),
         }
     }
 
     /// Allocate the next task ID.
-    #[expect(clippy::missing_const_for_fn)] // &mut self can't be const
-    fn next_id(&mut self) -> LogTaskId {
+    const fn next_id(&mut self) -> LogTaskId {
         let id = LogTaskId(self.next_task_id);
         self.next_task_id += 1;
         id
     }
 
-    /// Remove a task and notify its parent that a child completed.
+    /// Ensure `next_task_id` is at least `min`.
+    const fn advance_id_to(&mut self, min: u32) {
+        if self.next_task_id < min {
+            self.next_task_id = min;
+        }
+    }
+
+    /// Insert a submitted task into the state.
     ///
-    /// When a parent's `pending_children_count` reaches zero, the parent is
-    /// recorded in `removed_parents` (with its `finally_data`) but NOT removed
-    /// from the map yet. The caller drives the cascade by draining
-    /// `removed_parents`, scheduling finally tasks (which may increment
-    /// grandparent counts), and then calling `remove_and_notify_parent` again
-    /// on each removed parent.
-    ///
-    /// This non-recursive design ensures finally scheduling can increment
-    /// ancestor counts before those ancestors are removed.
-    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // Invariants
-    fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
-        let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
-        let Some(parent_id) = entry.parent_id else {
-            return;
+    /// Derives `parent_id` from the origin:
+    /// - `Seed` → None
+    /// - `Spawned { parent_id }` → `parent_id` (verified in `WaitingForChildren`)
+    /// - `Retry { replaces }` → inherited from replaced task (removed from map)
+    #[expect(clippy::expect_used)]
+    fn apply_submitted(&mut self, submitted: &TaskSubmitted) {
+        let parent_id = match &submitted.origin {
+            TaskOrigin::Seed => None,
+            TaskOrigin::Spawned { parent_id } => {
+                if let Some(pid) = parent_id {
+                    let parent = self
+                        .tasks
+                        .get(pid)
+                        .expect("[P046] spawned child's parent must exist");
+                    assert!(
+                        matches!(&parent.state, TaskState::WaitingForChildren(..)),
+                        "[P049] spawned child's parent not in WaitingForChildren state"
+                    );
+                }
+                *parent_id
+            }
+            TaskOrigin::Retry { replaces } => {
+                let old = self
+                    .tasks
+                    .remove(replaces)
+                    .expect("[P042] retry target must exist");
+                assert!(
+                    matches!(old.state, TaskState::Failed),
+                    "[P045] retry target not in Failed state"
+                );
+                old.parent_id
+            }
         };
 
+        let prev = self.tasks.insert(
+            submitted.task_id,
+            TaskEntry {
+                step: submitted.step.clone(),
+                parent_id,
+                state: TaskState::Pending(PendingState {
+                    value: submitted.value.clone(),
+                }),
+            },
+        );
+        assert!(
+            prev.is_none(),
+            "[P035] duplicate task_id {:?}",
+            submitted.task_id
+        );
+    }
+
+    /// Process a task completion. Returns the `parent_id` when the completed task
+    /// is removed (leaf success or permanent failure) — used by the Engine to
+    /// start the parent-chain walk for finally detection.
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn apply_completed(&mut self, completed: &TaskCompleted) -> Option<LogTaskId> {
+        let entry = self
+            .tasks
+            .get_mut(&completed.task_id)
+            .expect("[P033] completed task must exist");
+        assert!(
+            matches!(&entry.state, TaskState::Pending(..)),
+            "[P034] completed task not in Pending state"
+        );
+
+        match &completed.outcome {
+            barnum_state::TaskOutcome::Success(success) if !success.children.is_empty() => {
+                // Has children → transition to WaitingForChildren, insert children
+                entry.state = TaskState::WaitingForChildren(WaitingState {
+                    pending_children_count: NonZeroU16::new(
+                        success.children.len().try_into().unwrap(),
+                    )
+                    .unwrap(),
+                    finally_value: success.finally_value.clone(),
+                });
+                for child in &success.children {
+                    self.apply_submitted(child);
+                }
+                None
+            }
+            barnum_state::TaskOutcome::Failed(failure) if failure.retry.is_some() => {
+                // Failed with retry → mark Failed, insert retry (which removes this task)
+                entry.state = TaskState::Failed;
+                self.apply_submitted(failure.retry.as_ref().unwrap());
+                None
+            }
+            barnum_state::TaskOutcome::Success(_) | barnum_state::TaskOutcome::Failed(_) => {
+                // Leaf success or permanent failure → remove task
+                let removed = self
+                    .tasks
+                    .remove(&completed.task_id)
+                    .expect("[P033] task must exist for removal");
+                removed.parent_id
+            }
+        }
+    }
+
+    /// Process a `FinallyRun` event. Removes the parent whose finally ran.
+    /// If children exist, inserts them (replacing the parent under grandparent).
+    /// Returns `grandparent_id` if the grandparent reached zero children.
+    #[expect(clippy::expect_used)]
+    fn apply_finally_run(&mut self, finally_run: &FinallyRun) -> Option<LogTaskId> {
         let parent = self
             .tasks
-            .get_mut(&parent_id)
-            .expect("[P022] parent task must exist");
-        let TaskState::WaitingForChildren {
-            pending_children_count,
-            finally_value,
-        } = &mut parent.state
-        else {
-            panic!("[P023] parent task not in WaitingForChildren state");
-        };
+            .remove(&finally_run.finally_for)
+            .expect("[P058] FinallyRun target must exist");
+        let grandparent_id = parent.parent_id;
 
-        let new_count = pending_children_count.get() - 1;
-        if new_count > 0 {
-            *pending_children_count = NonZeroU16::new(new_count).unwrap();
+        if finally_run.children.is_empty() {
+            // No children from the finally. Notify grandparent.
+            if let Some(gp_id) = grandparent_id {
+                return self.decrement_child_count(gp_id);
+            }
         } else {
-            let step = parent.step.clone();
-            let fv = finally_value.take();
-            self.removed_parents.push(RemovedParent {
-                task_id: parent_id,
-                step,
-                parent_id: parent.parent_id,
-                finally_value: fv,
-            });
+            // Children replace the parent under the grandparent.
+            for child in &finally_run.children {
+                self.apply_submitted(child);
+            }
+            if let Some(gp_id) = grandparent_id {
+                // Count adjustment: -1 (parent removed) + N (new children) = delta N-1
+                #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let delta = finally_run.children.len() as i16 - 1;
+                self.adjust_child_count(gp_id, delta);
+            }
+        }
+        None
+    }
+
+    /// Walk up the parent chain from a completed child's parent.
+    /// Decrements the parent's child count. If the parent reaches zero:
+    ///   - Has a finally script → return its ID (stop walking)
+    ///   - No finally script → remove it, continue to grandparent
+    ///
+    /// Returns `None` if no ancestor needs a finally.
+    #[expect(clippy::expect_used)]
+    fn walk_up_for_finally(
+        &mut self,
+        mut parent_id: LogTaskId,
+        config: &Config,
+    ) -> Option<LogTaskId> {
+        let step_map = config.step_map();
+        loop {
+            self.decrement_child_count(parent_id)?;
+
+            let entry = self
+                .tasks
+                .get(&parent_id)
+                .expect("[P059] parent must exist");
+            let has_finally = step_map
+                .get(&entry.step)
+                .is_some_and(|s| s.finally_hook.is_some());
+            if has_finally {
+                return Some(parent_id);
+            }
+
+            // No finally — remove this ancestor and continue up.
+            let removed = self
+                .tasks
+                .remove(&parent_id)
+                .expect("[P059] parent must exist for removal");
+            match removed.parent_id {
+                Some(gp_id) => parent_id = gp_id,
+                None => return None, // reached root
+            }
+        }
+    }
+
+    /// Decrements a task's `pending_children_count`. Returns `Some(task_id)`
+    /// if the count reached zero, `None` otherwise.
+    #[expect(clippy::expect_used, clippy::panic)]
+    fn decrement_child_count(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
+        let entry = self
+            .tasks
+            .get_mut(&task_id)
+            .expect("[P060] task must exist");
+        match &mut entry.state {
+            TaskState::WaitingForChildren(w) => {
+                let count = w.pending_children_count.get() - 1;
+                if let Some(new_count) = NonZeroU16::new(count) {
+                    w.pending_children_count = new_count;
+                    None
+                } else {
+                    Some(task_id)
+                }
+            }
+            _ => panic!("[P061] decrement on non-WaitingForChildren task"),
+        }
+    }
+
+    /// Adjusts a task's `pending_children_count` by a delta.
+    #[expect(clippy::expect_used, clippy::panic)]
+    fn adjust_child_count(&mut self, task_id: LogTaskId, delta: i16) {
+        if delta == 0 {
+            return;
+        }
+        let entry = self
+            .tasks
+            .get_mut(&task_id)
+            .expect("[P066] task must exist");
+        match &mut entry.state {
+            TaskState::WaitingForChildren(w) => {
+                #[expect(clippy::cast_sign_loss)]
+                let new_count = (w.pending_children_count.get().cast_signed() + delta) as u16;
+                w.pending_children_count =
+                    NonZeroU16::new(new_count).expect("[P067] child count underflowed");
+            }
+            _ => panic!("[P068] adjust on non-WaitingForChildren task"),
         }
     }
 }
 
-/// Internal task queue runner.
+// ==================== Engine ====================
+
+/// Execution engine: processes entries, manages state, dispatches workers.
 ///
-/// Tasks are submitted concurrently, and results are yielded as they complete.
-struct TaskRunner<'a> {
+/// The Engine converts raw worker results into state log entries, applies
+/// them to `RunState`, and dispatches new work. It does NOT write log entries —
+/// the coordinator writes entries returned by `process_worker_result`.
+struct Engine<'a> {
     config: &'a Config,
     schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
     pool: PoolConnection,
-    max_concurrency: usize,
-    /// Count of dispatched tasks (for concurrency limiting).
-    in_flight: usize,
-    /// Tasks waiting to be dispatched. Popped by `dispatch_all_pending`.
-    pending_queue: VecDeque<LogTaskId>,
     tx: mpsc::Sender<WorkerResult>,
-    rx: mpsc::Receiver<WorkerResult>,
-    /// State log writer for persistence/resume.
-    state_log: io::BufWriter<std::fs::File>,
+    max_concurrency: usize,
+    in_flight: usize,
+    pending_dispatches: VecDeque<PendingDispatch>,
+    dropped_count: u32,
 }
 
-impl<'a> TaskRunner<'a> {
+impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
         schemas: &'a CompiledSchemas,
-        runner_config: &RunnerConfig<'a>,
-        initial_tasks: Vec<Task>,
-    ) -> io::Result<Self> {
-        if let Some(script) = runner_config.wake_script {
-            call_wake_script(script)?;
-        }
-
-        // Pool existence/readiness is checked by submit_via_cli on first task submission
-        let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
-
-        info!(
-            tasks = initial_tasks.len(),
-            pool_root = %runner_config.troupe_root.display(),
-            invoker = %runner_config.invoker.description(),
-            max_concurrency,
-            "starting task queue"
-        );
-
-        let (tx, rx) = mpsc::channel();
-
-        let pool = PoolConnection {
-            root: runner_config.troupe_root.to_path_buf(),
-            working_dir: runner_config.working_dir.to_path_buf(),
-            invoker: Clone::clone(runner_config.invoker),
-        };
-
-        // Open state log file
-        let state_log = {
-            let file = std::fs::File::create(runner_config.state_log_path)?;
-            io::BufWriter::new(file)
-        };
-
-        info!(state_log = %runner_config.state_log_path.display(), "state log");
-
-        let mut runner = Self {
+        pool: PoolConnection,
+        tx: mpsc::Sender<WorkerResult>,
+        max_concurrency: usize,
+    ) -> Self {
+        Self {
             config,
             schemas,
             step_map: config.step_map(),
             state: RunState::new(),
             pool,
+            tx,
             max_concurrency,
             in_flight: 0,
-            pending_queue: VecDeque::new(),
-            tx,
-            rx,
-            state_log,
-        };
-
-        // Write config entry to state log
-        let config_json = serde_json::to_value(config)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        runner.write_log(&StateLogEntry::Config(StateLogConfig {
-            config: config_json,
-        }));
-
-        for task in initial_tasks {
-            // Validate step exists
-            if !runner.step_map.contains_key(&task.step) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("[E019] unknown step '{}' in initial tasks", task.step),
-                ));
-            }
-
-            // Validate value against step's schema
-            if let Err(e) = schemas.validate(&task.step, &task.value) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("[E020] initial task validation failed: {e}"),
-                ));
-            }
-
-            let task_id = LogTaskId(runner.state.next_task_id);
-            runner.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id,
-                step: task.step.clone(),
-                value: task.value.clone(),
-                parent_id: None,
-                origin: TaskOrigin::Initial,
-            }));
-            runner.queue_task(task, None, false);
+            pending_dispatches: VecDeque::new(),
+            dropped_count: 0,
         }
-
-        Ok(runner)
     }
 
-    /// Create a `TaskRunner` from reconstructed state (for resume).
+    /// Apply a batch of entries (used for seed/replay).
     ///
-    /// The state log should already contain copied entries from the old log.
-    fn new_resumed(
-        config: &'a Config,
-        schemas: &'a CompiledSchemas,
-        runner_config: &RunnerConfig<'a>,
-        state: ReconstructedState,
-        state_log: io::BufWriter<std::fs::File>,
-    ) -> io::Result<Self> {
-        if let Some(script) = runner_config.wake_script {
-            call_wake_script(script)?;
+    /// Processes all entries, then flushes dispatches. During replay,
+    /// `in_flight` stays at 0 (no actual workers), so `flush_dispatches`
+    /// dispatches any remaining pending work.
+    fn apply_entries(&mut self, entries: &[StateLogEntry]) {
+        for entry in entries {
+            self.apply_entry(entry);
         }
+        self.flush_dispatches();
+    }
 
-        let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+    /// Apply a single entry to state, queueing dispatches as needed.
+    fn apply_entry(&mut self, entry: &StateLogEntry) {
+        match entry {
+            StateLogEntry::Config(_) => {
+                // Config is handled by the coordinator, not the engine.
+            }
+            StateLogEntry::TaskSubmitted(s) => {
+                self.state.advance_id_to(s.task_id.0 + 1);
+                self.state.apply_submitted(s);
+                self.pending_dispatches
+                    .push_back(PendingDispatch::Task { task_id: s.task_id });
+            }
+            StateLogEntry::TaskCompleted(c) => {
+                self.in_flight = self.in_flight.saturating_sub(1);
+                // Remove pending dispatch for this task (it completed before being dispatched,
+                // which happens during replay)
+                self.pending_dispatches.retain(
+                    |d| !matches!(d, PendingDispatch::Task { task_id } if *task_id == c.task_id),
+                );
 
-        info!(
-            pending = state.pending_tasks.len(),
-            waiting = state.waiting_tasks.len(),
-            next_task_id = state.next_task_id,
-            pool_root = %runner_config.troupe_root.display(),
-            max_concurrency,
-            "resuming task queue"
+                // Track max ID from embedded children/retries
+                match &c.outcome {
+                    barnum_state::TaskOutcome::Success(s) => {
+                        for child in &s.children {
+                            self.state.advance_id_to(child.task_id.0 + 1);
+                        }
+                    }
+                    barnum_state::TaskOutcome::Failed(f) => {
+                        if let Some(retry) = &f.retry {
+                            self.state.advance_id_to(retry.task_id.0 + 1);
+                        }
+                    }
+                }
+
+                let parent_id = self.state.apply_completed(c);
+
+                // Queue children/retry for dispatch
+                match &c.outcome {
+                    barnum_state::TaskOutcome::Success(s) => {
+                        for child in &s.children {
+                            self.pending_dispatches.push_back(PendingDispatch::Task {
+                                task_id: child.task_id,
+                            });
+                        }
+                    }
+                    barnum_state::TaskOutcome::Failed(f) => {
+                        if let Some(retry) = &f.retry {
+                            self.pending_dispatches.push_back(PendingDispatch::Task {
+                                task_id: retry.task_id,
+                            });
+                        }
+                    }
+                }
+
+                // For leaf/permanent-failure: walk up the parent chain for finally
+                if let Some(pid) = parent_id
+                    && let Some(finally_id) = self.state.walk_up_for_finally(pid, self.config)
+                {
+                    self.pending_dispatches.push_back(PendingDispatch::Finally {
+                        parent_id: finally_id,
+                    });
+                }
+            }
+            StateLogEntry::FinallyRun(f) => {
+                self.in_flight = self.in_flight.saturating_sub(1);
+                // Remove pending finally dispatch (it completed during replay)
+                self.pending_dispatches.retain(|d| {
+                    !matches!(d, PendingDispatch::Finally { parent_id } if *parent_id == f.finally_for)
+                });
+
+                for child in &f.children {
+                    self.state.advance_id_to(child.task_id.0 + 1);
+                }
+
+                let grandparent_id = self.state.apply_finally_run(f);
+
+                for child in &f.children {
+                    self.pending_dispatches.push_back(PendingDispatch::Task {
+                        task_id: child.task_id,
+                    });
+                }
+
+                // Walk up from grandparent for further finally detection
+                if let Some(gp_id) = grandparent_id
+                    && let Some(finally_id) = self.state.walk_up_for_finally(gp_id, self.config)
+                {
+                    self.pending_dispatches.push_back(PendingDispatch::Finally {
+                        parent_id: finally_id,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Process a raw worker result. Returns entries to write to the log.
+    fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
+        let WorkerResult {
+            task_id,
+            task,
+            result: submit_result,
+        } = result;
+
+        let entries = match submit_result {
+            dispatch::SubmitResult::Finally { value, output } => {
+                self.convert_finally_result(task_id, value, output)
+            }
+            other => self.convert_task_result(task_id, &task, other),
+        };
+
+        for entry in &entries {
+            self.apply_entry(entry);
+        }
+        self.flush_dispatches();
+        entries
+    }
+
+    /// Convert a regular task result into log entries.
+    #[expect(clippy::expect_used)]
+    fn convert_task_result(
+        &mut self,
+        task_id: LogTaskId,
+        task: &Task,
+        submit_result: dispatch::SubmitResult,
+    ) -> Vec<StateLogEntry> {
+        let step = self
+            .step_map
+            .get(&task.step)
+            .expect("[P015] task step must exist");
+
+        let outcome = process_and_finalize(
+            submit_result,
+            task,
+            step,
+            self.schemas,
+            &self.pool.working_dir,
         );
 
-        let (tx, rx) = mpsc::channel();
+        match outcome {
+            TaskOutcome::Success {
+                spawned,
+                finally_value,
+            } => {
+                let children: Vec<TaskSubmitted> = spawned
+                    .into_iter()
+                    .map(|child| {
+                        let id = self.state.next_id();
+                        TaskSubmitted {
+                            task_id: id,
+                            step: child.step,
+                            value: child.value,
+                            origin: TaskOrigin::Spawned {
+                                parent_id: Some(task_id),
+                            },
+                        }
+                    })
+                    .collect();
 
-        let pool = PoolConnection {
-            root: runner_config.troupe_root.to_path_buf(),
-            working_dir: runner_config.working_dir.to_path_buf(),
-            invoker: Clone::clone(runner_config.invoker),
-        };
-
-        let mut runner = Self {
-            config,
-            schemas,
-            step_map: config.step_map(),
-            state: RunState {
-                tasks: BTreeMap::new(),
-                next_task_id: state.next_task_id,
-                removed_parents: Vec::new(),
-            },
-            pool,
-            max_concurrency,
-            in_flight: 0,
-            pending_queue: VecDeque::new(),
-            tx,
-            rx,
-            state_log,
-        };
-
-        runner.load_reconstructed_state(state);
-        Ok(runner)
-    }
-
-    /// Load pre-existing task state from a reconstructed log.
-    ///
-    /// Waiting tasks become `WaitingForChildren` entries in the task map.
-    /// Pending tasks become `Pending` entries (will be dispatched on next iteration).
-    fn load_reconstructed_state(&mut self, state: ReconstructedState) {
-        // Load waiting tasks (completed, have alive children)
-        for waiting in state.waiting_tasks {
-            let has_finally = self
-                .step_map
-                .get(&waiting.step)
-                .and_then(|s| s.finally_hook.as_ref())
-                .is_some();
-            let finally_value = if has_finally {
-                Some(waiting.finally_value)
-            } else {
-                None
-            };
-
-            self.state.tasks.insert(
-                waiting.task_id,
-                TaskEntry {
-                    step: waiting.step,
-                    parent_id: waiting.parent_id,
-                    is_finally: false,
-                    state: TaskState::WaitingForChildren {
-                        pending_children_count: waiting.pending_children_count,
+                vec![StateLogEntry::TaskCompleted(TaskCompleted {
+                    task_id,
+                    outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
                         finally_value,
-                    },
-                },
-            );
-        }
-
-        // Load pending tasks (need dispatch)
-        for pending in state.pending_tasks {
-            let is_finally = matches!(pending.origin, TaskOrigin::Finally { .. });
-
-            self.state.tasks.insert(
-                pending.task_id,
-                TaskEntry {
-                    step: pending.step,
-                    parent_id: pending.parent_id,
-                    is_finally,
-                    state: TaskState::Pending {
-                        value: pending.value,
-                    },
-                },
-            );
-            self.pending_queue.push_back(pending.task_id);
+                        children,
+                    }),
+                })]
+            }
+            TaskOutcome::Retry(retry_task, failure_kind) => {
+                let retry_id = self.state.next_id();
+                vec![StateLogEntry::TaskCompleted(TaskCompleted {
+                    task_id,
+                    outcome: barnum_state::TaskOutcome::Failed(barnum_state::TaskFailed {
+                        reason: map_failure(failure_kind),
+                        retry: Some(TaskSubmitted {
+                            task_id: retry_id,
+                            step: retry_task.step,
+                            value: retry_task.value,
+                            origin: TaskOrigin::Retry { replaces: task_id },
+                        }),
+                    }),
+                })]
+            }
+            TaskOutcome::Dropped(failure_kind) => {
+                self.dropped_count += 1;
+                vec![StateLogEntry::TaskCompleted(TaskCompleted {
+                    task_id,
+                    outcome: barnum_state::TaskOutcome::Failed(barnum_state::TaskFailed {
+                        reason: map_failure(failure_kind),
+                        retry: None,
+                    }),
+                })]
+            }
         }
     }
 
-    // ==================== State Log ====================
-
-    /// Write an entry to the state log (no-op if logging is disabled).
-    fn write_log(&mut self, entry: &StateLogEntry) {
-        if let Err(e) = barnum_state::write_entry(&mut self.state_log, entry) {
-            error!(error = %e, "failed to write state log entry");
-        }
-    }
-
-    /// Map the runner's `FailureKind` to the state log's `FailureReason`.
-    fn map_failure(kind: FailureKind) -> FailureReason {
-        match kind {
-            FailureKind::Timeout => FailureReason::Timeout,
-            FailureKind::InvalidResponse => FailureReason::InvalidResponse {
-                message: "invalid response".to_string(),
+    /// Convert a finally worker result into log entries.
+    #[expect(clippy::expect_used)]
+    fn convert_finally_result(
+        &mut self,
+        parent_id: LogTaskId,
+        _value: StepInputValue,
+        output: Result<String, String>,
+    ) -> Vec<StateLogEntry> {
+        let raw_children = match output {
+            Ok(stdout) => match json5::from_str::<Vec<Task>>(&stdout) {
+                Ok(tasks) => {
+                    info!(parent = ?parent_id, count = tasks.len(), "finally hook completed");
+                    tasks
+                }
+                Err(e) => {
+                    tracing::warn!(parent = ?parent_id, error = %e,
+                        "finally hook output not parseable, treating as empty");
+                    vec![]
+                }
             },
-            FailureKind::SubmitError => FailureReason::AgentLost,
-        }
-    }
+            Err(e) => {
+                error!(parent = ?parent_id, error = %e, "finally hook failed");
+                vec![]
+            }
+        };
 
-    // ==================== State Transitions ====================
-
-    /// Add a new task - dispatch immediately if under concurrency, otherwise queue as Pending.
-    fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>, is_finally: bool) {
-        let id = self.state.next_id();
-
-        if self.in_flight < self.max_concurrency {
-            // Dispatch immediately — value goes to the worker, entry stores Null.
-            let prev = self.state.tasks.insert(
-                id,
-                TaskEntry {
-                    step: task.step.clone(),
-                    parent_id,
-                    is_finally,
-                    state: TaskState::Pending {
-                        value: StepInputValue(serde_json::Value::Null),
-                    },
-                },
-            );
-            assert!(prev.is_none(), "task_id collision: {id:?} already in map");
-            self.in_flight += 1;
-            self.dispatch(id, task);
-        } else {
-            // Queue for later dispatch — value stays in the entry.
-            let prev = self.state.tasks.insert(
-                id,
-                TaskEntry {
-                    step: task.step,
-                    parent_id,
-                    is_finally,
-                    state: TaskState::Pending { value: task.value },
-                },
-            );
-            assert!(prev.is_none(), "task_id collision: {id:?} already in map");
-            self.pending_queue.push_back(id);
-        }
-    }
-
-    /// Dispatch a task to a worker thread.
-    ///
-    /// Workers receive only the data they need (pre-hook, action-specific params)
-    /// and send raw results back. Validation and post-hooks run on the main thread.
-    #[expect(clippy::expect_used)] // Invariants
-    fn dispatch(&self, task_id: LogTaskId, task: Task) {
-        let entry = self
+        // Look up grandparent before the FinallyRun removes the parent
+        let grandparent_id = self
             .state
             .tasks
-            .get(&task_id)
-            .expect("[P014] task must exist");
+            .get(&parent_id)
+            .expect("[P058] finally target must exist")
+            .parent_id;
+
+        let children: Vec<TaskSubmitted> = raw_children
+            .into_iter()
+            .map(|child| {
+                let id = self.state.next_id();
+                TaskSubmitted {
+                    task_id: id,
+                    step: child.step,
+                    value: child.value,
+                    origin: TaskOrigin::Spawned {
+                        parent_id: grandparent_id,
+                    },
+                }
+            })
+            .collect();
+
+        vec![StateLogEntry::FinallyRun(FinallyRun {
+            finally_for: parent_id,
+            children,
+        })]
+    }
+
+    /// Dispatch pending work up to `max_concurrency`.
+    #[expect(clippy::expect_used, clippy::panic)]
+    fn flush_dispatches(&mut self) {
+        while self.in_flight < self.max_concurrency {
+            let Some(dispatch) = self.pending_dispatches.pop_front() else {
+                break;
+            };
+            match dispatch {
+                PendingDispatch::Task { task_id } => {
+                    let entry = self
+                        .state
+                        .tasks
+                        .get_mut(&task_id)
+                        .expect("[P064] pending task not in map");
+                    let TaskState::Pending(pending) = &mut entry.state else {
+                        panic!("[P065] pending task not in Pending state");
+                    };
+                    let value = std::mem::replace(
+                        &mut pending.value,
+                        StepInputValue(serde_json::Value::Null),
+                    );
+                    let step_name = entry.step.clone();
+                    let task = Task::new(step_name.as_str(), value);
+
+                    self.in_flight += 1;
+                    self.dispatch_task(task_id, task);
+                }
+                PendingDispatch::Finally { parent_id } => {
+                    let entry = self
+                        .state
+                        .tasks
+                        .get(&parent_id)
+                        .expect("[P063] pending finally parent not in map");
+                    let TaskState::WaitingForChildren(waiting) = &entry.state else {
+                        panic!("[P069] pending finally not in WaitingForChildren state");
+                    };
+                    let finally_value = waiting.finally_value.clone();
+                    let step_name = entry.step.clone();
+                    let task = Task::new(step_name.as_str(), finally_value);
+
+                    self.in_flight += 1;
+                    self.dispatch_finally(parent_id, task);
+                }
+            }
+        }
+    }
+
+    /// Spawn a task worker thread.
+    #[expect(clippy::expect_used)]
+    fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
         let step = self.step_map.get(&task.step).expect("[P015] unknown step");
         let tx = self.tx.clone();
 
-        if entry.is_finally {
-            let script = step
-                .finally_hook
-                .clone()
-                .expect("[P073] finally task's step must have finally_hook");
-            let working_dir = self.pool.working_dir.clone();
-
-            info!(step = %task.step, "dispatching finally task");
-
-            thread::spawn(move || {
-                dispatch_finally_task(task_id, task, &script, &working_dir, &tx);
-            });
-            return;
-        }
-
-        let pre_hook = step.pre.clone();
-
         match &step.action {
             Action::Pool { .. } => {
+                let pre_hook = step.pre.clone();
                 let docs = generate_step_docs(step, self.config);
                 let timeout = step.options.timeout;
                 let pool = self.pool.clone();
 
                 info!(step = %task.step, "submitting task to pool");
-
                 thread::spawn(move || {
                     dispatch_pool_task(
                         task_id,
@@ -529,11 +720,11 @@ impl<'a> TaskRunner<'a> {
                 });
             }
             Action::Command { script } => {
+                let pre_hook = step.pre.clone();
                 let script = script.clone();
                 let working_dir = self.pool.working_dir.clone();
 
                 info!(step = %task.step, script = %script, "executing command");
-
                 thread::spawn(move || {
                     dispatch_command_task(
                         task_id,
@@ -548,371 +739,66 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
-    /// Dispatch pending tasks up to max concurrency.
-    #[expect(clippy::expect_used, clippy::panic)] // Invariant: queued tasks must exist in Pending state
-    fn dispatch_all_pending(&mut self) {
-        while self.in_flight < self.max_concurrency {
-            let Some(task_id) = self.pending_queue.pop_front() else {
-                break;
-            };
-            let entry = self
-                .state
-                .tasks
-                .get_mut(&task_id)
-                .expect("[P070] queued task must exist in map");
-            let TaskState::Pending { value } = &mut entry.state else {
-                panic!("[P071] queued task not in Pending state");
-            };
-            let value = std::mem::replace(value, StepInputValue(serde_json::Value::Null));
-            let task = Task::new(entry.step.as_str(), value);
-            self.in_flight += 1;
-            self.dispatch(task_id, task);
-        }
+    /// Spawn a finally worker thread.
+    #[expect(clippy::expect_used)]
+    fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
+        let step = self.step_map.get(&task.step).expect("[P015] unknown step");
+        let script = step
+            .finally_hook
+            .clone()
+            .expect("[P073] finally parent's step must have finally_hook");
+        let working_dir = self.pool.working_dir.clone();
+        let tx = self.tx.clone();
+
+        info!(step = %task.step, parent = ?parent_id, "dispatching finally worker");
+        thread::spawn(move || {
+            dispatch_finally_task(parent_id, task, &script, &working_dir, &tx);
+        });
     }
 
-    /// Remove a dispatched task (for retry — don't notify parent).
-    #[expect(clippy::expect_used)] // Invariant: task must exist
-    fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-        let entry = self.state.tasks.remove(&task_id).expect("task must exist");
-        assert!(matches!(entry.state, TaskState::Pending { .. }));
-        self.in_flight -= 1;
-        entry.parent_id
+    /// True when all work is done.
+    fn is_done(&self) -> bool {
+        self.pending_dispatches.is_empty() && self.in_flight == 0
     }
 
-    /// Does this task's step have a finally hook?
-    /// Returns false for Finally tasks (no "finally of finally").
-    fn has_finally_hook(&self, entry: &TaskEntry) -> bool {
-        if entry.is_finally {
-            return false; // No "finally of finally"
-        }
-        self.step_map
-            .get(&entry.step)
-            .is_some_and(|s| s.finally_hook.is_some())
-    }
-
-    /// Schedule a finally task as a sibling of the given task.
-    ///
-    /// The finally task becomes a child of the original task's parent.
-    /// `parent_id` and `step` are passed explicitly because the task may
-    /// already be removed from the map (when called from `schedule_removed_finally`).
-    fn schedule_finally(
-        &mut self,
-        task_id: LogTaskId,
-        parent_id: Option<LogTaskId>,
-        step: &StepName,
-        value: StepInputValue,
-    ) {
-        // Increment parent's pending count (finally becomes another child)
-        if let Some(parent_id) = parent_id {
-            self.increment_pending_children(parent_id);
-        }
-
-        // Create the finally task
-        let id = self.state.next_id();
-
-        // Log the finally task submission
-        self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
-            task_id: id,
-            step: step.clone(),
-            value: value.clone(),
-            parent_id,
-            origin: TaskOrigin::Finally {
-                finally_for: task_id,
-            },
-        }));
-
-        let finally_entry = TaskEntry {
-            step: step.clone(),
-            parent_id,
-            is_finally: true,
-            state: TaskState::Pending { value },
-        };
-        self.state.tasks.insert(id, finally_entry);
-        self.pending_queue.push_back(id);
-    }
-
-    /// Increment a task's `pending_children_count`.
-    #[expect(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // Invariants
-    fn increment_pending_children(&mut self, task_id: LogTaskId) {
-        let entry = self
-            .state
-            .tasks
-            .get_mut(&task_id)
-            .expect("[P019] task must exist");
-        let TaskState::WaitingForChildren {
-            pending_children_count,
-            ..
-        } = &mut entry.state
-        else {
-            panic!("[P020] task not in WaitingForChildren state");
-        };
-        *pending_children_count = NonZeroU16::new(pending_children_count.get() + 1).unwrap();
-    }
-
-    // ==================== Key Operations ====================
-
-    /// Process removed parents after a `RunState::remove_and_notify_parent` call.
-    ///
-    /// Each removed parent may have `finally_data` that needs scheduling.
-    /// This handles the I/O side (log writes, task insertion) that `RunState` defers.
-    /// Drive the cascade of parent removals after a `remove_and_notify_parent` call.
-    ///
-    /// For each removed parent: schedule its finally task (if any), then
-    /// remove it from the map and notify its own parent. Scheduling finally
-    /// first ensures grandparent counts are incremented before the grandparent
-    /// is considered for removal.
-    fn schedule_removed_finally(&mut self) {
-        while let Some(removed) = self.state.removed_parents.pop() {
-            if let Some(value) = removed.finally_value {
-                self.schedule_finally(removed.task_id, removed.parent_id, &removed.step, value);
-            }
-            self.state.remove_and_notify_parent(removed.task_id);
-        }
-    }
-
-    /// Handle task success.
-    ///
-    /// If task has no children:
-    ///   - Schedule finally as sibling (if any)
-    ///   - Remove task, notify parent
-    ///
-    /// If task has children:
-    ///   - Transition to `WaitingForChildren` with `finally_data`
-    ///   - Queue children
-    #[expect(
-        clippy::unwrap_used,
-        clippy::cast_possible_truncation,
-        clippy::expect_used
-    )]
-    fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: StepInputValue) {
-        self.in_flight -= 1;
-
-        let entry = self
-            .state
-            .tasks
-            .get(&task_id)
-            .expect("[P024] task must exist");
-        let has_finally = self.has_finally_hook(entry);
-        let parent_id = entry.parent_id;
-        let step = entry.step.clone();
-
-        if spawned.is_empty() {
-            // Log completion with no children
-            self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {
-                task_id,
-                outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
-                    spawned_task_ids: vec![],
-                    finally_value: value.clone(),
-                }),
-            }));
-
-            // No children - schedule finally (if any) as sibling, then remove
-            if has_finally {
-                self.schedule_finally(task_id, parent_id, &step, value);
-            }
-            self.state.remove_and_notify_parent(task_id);
-            self.schedule_removed_finally();
-        } else {
-            // Compute child IDs before queuing (IDs are monotonically assigned)
-            let first_child_id = self.state.next_task_id;
-            let spawned_task_ids: Vec<LogTaskId> = (0..spawned.len())
-                .map(|i| LogTaskId(first_child_id + i as u32))
-                .collect();
-
-            // Log completion with spawned child IDs
-            self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {
-                task_id,
-                outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
-                    spawned_task_ids,
-                    finally_value: value.clone(),
-                }),
-            }));
-
-            // Has children - wait for them, storing finally_value
-            let count = NonZeroU16::new(spawned.len() as u16).unwrap();
-            let finally_value = if has_finally { Some(value) } else { None };
-
-            let entry = self
-                .state
-                .tasks
-                .get_mut(&task_id)
-                .expect("[P025] task must exist");
-            entry.state = TaskState::WaitingForChildren {
-                pending_children_count: count,
-                finally_value,
-            };
-            for child in spawned {
-                // Log each spawned child
-                let child_id = LogTaskId(self.state.next_task_id);
-                self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
-                    task_id: child_id,
-                    step: child.step.clone(),
-                    value: child.value.clone(),
-                    parent_id: Some(task_id),
-                    origin: TaskOrigin::Spawned,
-                }));
-                self.queue_task(child, Some(task_id), false);
-            }
-        }
-    }
-
-    /// Handle task failure (with optional retry).
-    #[expect(clippy::expect_used)] // Invariant: task must exist
-    fn task_failed(&mut self, task_id: LogTaskId, retry: Option<Task>, failure_kind: FailureKind) {
-        let entry = self
-            .state
-            .tasks
-            .get(&task_id)
-            .expect("[P026] task must exist");
-        let parent_id = entry.parent_id;
-        let is_finally = entry.is_finally;
-
-        if let Some(retry_task) = retry {
-            // Compute retry task ID before logging
-            let retry_task_id = LogTaskId(self.state.next_task_id);
-
-            // Log failure with retry
-            self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {
-                task_id,
-                outcome: barnum_state::TaskOutcome::Failed(TaskFailed {
-                    reason: Self::map_failure(failure_kind),
-                    retry_task_id: Some(retry_task_id),
-                }),
-            }));
-
-            // Log the retry task submission
-            self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id: retry_task_id,
-                step: retry_task.step.clone(),
-                value: retry_task.value.clone(),
-                parent_id,
-                origin: TaskOrigin::Retry { replaces: task_id },
-            }));
-
-            self.queue_task(retry_task, parent_id, is_finally);
-            self.transition_to_done(task_id); // Don't notify - retry takes over
-        } else {
-            // Log permanent failure
-            self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {
-                task_id,
-                outcome: barnum_state::TaskOutcome::Failed(TaskFailed {
-                    reason: Self::map_failure(failure_kind),
-                    retry_task_id: None,
-                }),
-            }));
-
-            // Permanent failure - decrement in_flight, remove and notify parent
-            let entry = self
-                .state
-                .tasks
-                .get(&task_id)
-                .expect("[P027] task must exist");
-            assert!(
-                matches!(entry.state, TaskState::Pending { .. }),
-                "[P072] completed task not in Pending state"
+    /// Compute the workflow result.
+    fn compute_result(&self) -> io::Result<()> {
+        if self.dropped_count > 0 {
+            error!(
+                dropped_count = self.dropped_count,
+                "task queue completed with dropped tasks"
             );
-            self.in_flight -= 1;
-            self.state.remove_and_notify_parent(task_id);
-            self.schedule_removed_finally();
-        }
-    }
-
-    /// Process a worker result through validation, post-hooks, and state transitions.
-    ///
-    /// Workers handle pre-hooks and actions. This method runs the remaining
-    /// pipeline (validation, post-hooks, retry logic) and routes the outcome.
-    #[expect(clippy::expect_used)] // Invariant: task step must exist
-    fn process_result(&mut self, result: WorkerResult) -> TaskResult {
-        let WorkerResult {
-            task_id,
-            task,
-            result: submit_result,
-        } = result;
-
-        let step = self.step_map.get(&task.step).expect(
-            "[P015] BUG: task step must exist - all queued tasks are validated at entry points",
-        );
-
-        let outcome = process_and_finalize(
-            submit_result,
-            &task,
-            step,
-            self.schemas,
-            &self.pool.working_dir,
-        );
-
-        match outcome {
-            TaskOutcome::Success {
-                spawned,
-                finally_value,
-            } => {
-                self.task_succeeded(task_id, spawned, finally_value);
-                TaskResult::Handled
-            }
-            TaskOutcome::Retry(retry_task, failure_kind) => {
-                self.task_failed(task_id, Some(retry_task), failure_kind);
-                TaskResult::Handled
-            }
-            TaskOutcome::Dropped(failure_kind) => {
-                self.task_failed(task_id, None, failure_kind);
-                TaskResult::Dropped
-            }
+            Err(io::Error::other(format!(
+                "[E018] {} task(s) were dropped (retries exhausted)",
+                self.dropped_count
+            )))
+        } else {
+            Ok(())
         }
     }
 }
 
-impl TaskRunner<'_> {
-    /// Run the task queue to completion.
-    ///
-    /// Dispatches pending tasks, receives results, and processes them until
-    /// all tasks are done. Returns an error if any tasks were permanently dropped.
-    #[expect(clippy::expect_used)] // Channel closing while tasks in flight is a bug
-    fn run(&mut self) -> io::Result<()> {
-        let mut completed_count = 0u32;
-        let mut dropped_count = 0u32;
+// ==================== Helpers ====================
 
-        loop {
-            self.dispatch_all_pending();
-            if self.in_flight == 0 {
-                break;
-            }
-            let result = self
-                .rx
-                .recv()
-                .expect("[P062] channel closed while tasks in flight");
-            let task_result = self.process_result(result);
-            completed_count += 1;
-            if matches!(task_result, TaskResult::Dropped) {
-                dropped_count += 1;
-            }
-
-            info!(
-                "{} {} completed, {} {} remaining",
-                completed_count,
-                if completed_count == 1 {
-                    "task"
-                } else {
-                    "tasks"
-                },
-                self.pending_queue.len(),
-                if self.pending_queue.len() == 1 {
-                    "task"
-                } else {
-                    "tasks"
-                }
-            );
-        }
-
-        if dropped_count > 0 {
-            error!(dropped_count, "task queue completed with dropped tasks");
-            return Err(io::Error::other(format!(
-                "[E018] {dropped_count} task(s) were dropped (retries exhausted)"
-            )));
-        }
-        info!(total = completed_count, "task queue complete");
-        Ok(())
+/// Map the runner's `FailureKind` to the state log's `FailureReason`.
+fn map_failure(kind: FailureKind) -> FailureReason {
+    match kind {
+        FailureKind::Timeout => FailureReason::Timeout,
+        FailureKind::InvalidResponse => FailureReason::InvalidResponse {
+            message: "invalid response".to_string(),
+        },
+        FailureKind::SubmitError => FailureReason::AgentLost,
     }
 }
+
+/// Write a state log entry, logging errors.
+fn write_log(writer: &mut io::BufWriter<std::fs::File>, entry: &StateLogEntry) {
+    if let Err(e) = barnum_state::write_entry(writer, entry) {
+        error!(error = %e, "failed to write state log entry");
+    }
+}
+
+// ==================== Public API ====================
 
 /// Run the task queue to completion.
 ///
@@ -925,35 +811,133 @@ pub fn run(
     runner_config: &RunnerConfig<'_>,
     initial_tasks: Vec<Task>,
 ) -> io::Result<()> {
-    let mut runner = TaskRunner::new(config, schemas, runner_config, initial_tasks)?;
-    runner.run()
+    if let Some(script) = runner_config.wake_script {
+        call_wake_script(script)?;
+    }
+
+    let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+
+    info!(
+        tasks = initial_tasks.len(),
+        pool_root = %runner_config.troupe_root.display(),
+        invoker = %runner_config.invoker.description(),
+        max_concurrency,
+        "starting task queue"
+    );
+
+    let (tx, rx) = mpsc::channel();
+
+    let pool = PoolConnection {
+        root: runner_config.troupe_root.to_path_buf(),
+        working_dir: runner_config.working_dir.to_path_buf(),
+        invoker: Clone::clone(runner_config.invoker),
+    };
+
+    // Open state log
+    let mut log_writer = {
+        let file = std::fs::File::create(runner_config.state_log_path)?;
+        io::BufWriter::new(file)
+    };
+    info!(state_log = %runner_config.state_log_path.display(), "state log");
+
+    // Write config entry
+    let config_json =
+        serde_json::to_value(config).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let config_entry = StateLogEntry::Config(StateLogConfig {
+        config: config_json,
+    });
+    write_log(&mut log_writer, &config_entry);
+
+    // Create engine
+    let mut engine = Engine::new(config, schemas, pool, tx, max_concurrency);
+
+    // Validate and submit initial tasks as seed entries
+    let mut seed_entries = Vec::with_capacity(initial_tasks.len());
+    for task in initial_tasks {
+        if !engine.step_map.contains_key(&task.step) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("[E019] unknown step '{}' in initial tasks", task.step),
+            ));
+        }
+        if let Err(e) = schemas.validate(&task.step, &task.value) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("[E020] initial task validation failed: {e}"),
+            ));
+        }
+
+        let id = engine.state.next_id();
+        let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+            task_id: id,
+            step: task.step,
+            value: task.value,
+            origin: TaskOrigin::Seed,
+        });
+        write_log(&mut log_writer, &entry);
+        seed_entries.push(entry);
+    }
+
+    // Apply seed entries (queues dispatches, then flushes)
+    engine.apply_entries(&seed_entries);
+
+    // Main loop
+    run_loop(&mut engine, &rx, &mut log_writer)
 }
 
 /// Resume a run from a state log file.
 ///
-/// Reads the old log, reconstructs state, optionally copies entries to a new
-/// log, and continues executing pending tasks.
+/// Reads the old log, replays it through the engine, and continues
+/// executing pending tasks.
 ///
 /// # Errors
 ///
 /// Returns an error if the log is malformed, config deserialization fails,
 /// or any I/O error occurs.
 pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Result<()> {
-    // 1. Read and reconstruct state from old log
+    // 1. Read old log entries
     let file = std::fs::File::open(old_log_path)?;
-    let entries = barnum_state::read_entries(file);
-    let (config_json, state) = barnum_state::reconstruct(entries)
-        .map_err(|e| io::Error::other(format!("[E070] failed to reconstruct state: {e}")))?;
+    let old_entries: Vec<StateLogEntry> =
+        barnum_state::read_entries(file).collect::<Result<Vec<_>, _>>()?;
 
-    // 2. Deserialize config from the log's stored config
+    if old_entries.is_empty() {
+        return Err(io::Error::other("[E070] empty state log"));
+    }
+
+    // 2. Extract config from first entry
+    let config_json = match &old_entries[0] {
+        StateLogEntry::Config(c) => c.config.clone(),
+        _ => return Err(io::Error::other("[E070] first entry must be Config")),
+    };
     let config: Config = serde_json::from_value(config_json).map_err(|e| {
         io::Error::other(format!("[E071] failed to deserialize config from log: {e}"))
     })?;
     let schemas = CompiledSchemas::compile(&config)?;
 
+    if let Some(script) = runner_config.wake_script {
+        call_wake_script(script)?;
+    }
+
+    let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+
+    info!(
+        entries = old_entries.len(),
+        pool_root = %runner_config.troupe_root.display(),
+        max_concurrency,
+        "resuming task queue"
+    );
+
+    let (tx, rx) = mpsc::channel();
+
+    let pool = PoolConnection {
+        root: runner_config.troupe_root.to_path_buf(),
+        working_dir: runner_config.working_dir.to_path_buf(),
+        invoker: Clone::clone(runner_config.invoker),
+    };
+
     // 3. Open new state log and copy old entries
     info!(state_log = %runner_config.state_log_path.display(), "state log");
-    let state_log = {
+    let mut log_writer = {
         let mut writer = io::BufWriter::new(std::fs::File::create(runner_config.state_log_path)?);
         let old_content = std::fs::read(old_log_path)?;
         writer.write_all(&old_content)?;
@@ -961,9 +945,53 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
         writer
     };
 
-    // 4. Create runner with reconstructed state and continue
-    let mut runner = TaskRunner::new_resumed(&config, &schemas, runner_config, state, state_log)?;
-    runner.run()
+    // 4. Create engine and replay old entries
+    let mut engine = Engine::new(&config, &schemas, pool, tx, max_concurrency);
+    engine.apply_entries(&old_entries);
+
+    // 5. Continue with main loop
+    run_loop(&mut engine, &rx, &mut log_writer)
+}
+
+/// Shared main loop: dispatch pending, receive results, write entries.
+#[expect(clippy::expect_used)]
+fn run_loop(
+    engine: &mut Engine<'_>,
+    rx: &mpsc::Receiver<WorkerResult>,
+    log_writer: &mut io::BufWriter<std::fs::File>,
+) -> io::Result<()> {
+    let mut completed_count = 0u32;
+
+    loop {
+        if engine.is_done() {
+            break;
+        }
+        let result = rx
+            .recv()
+            .expect("[P062] channel closed while tasks in flight");
+        let entries = engine.process_worker_result(result);
+        for entry in &entries {
+            write_log(log_writer, entry);
+        }
+        completed_count += 1;
+
+        info!(
+            "{} {} completed, {} in flight",
+            completed_count,
+            if completed_count == 1 {
+                "task"
+            } else {
+                "tasks"
+            },
+            engine.in_flight,
+        );
+    }
+
+    let result = engine.compute_result();
+    if result.is_ok() {
+        info!(total = completed_count, "task queue complete");
+    }
+    result
 }
 
 #[cfg(test)]

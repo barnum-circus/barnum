@@ -680,11 +680,9 @@ pub fn run(&mut self) -> WorkflowResult {
 
 No behavioral change — same dispatch/recv/process sequence, just not behind the Iterator trait.
 
-### Phase 2: Worker self-containment
+### Phase 2: Worker self-containment — **Done.**
 
-**Depends on: Phase 0c (workers need step config in closures).**
-
-Workers currently send a raw pool result on `tx`. `process_result` on TaskRunner interprets it (runs post hooks, determines success/failure/retry, extracts children). Refactor so workers capture step config in their closures and produce a self-contained `TaskCompleted` message with `TaskOutcome`. This decouples result interpretation from state mutation and is a prerequisite for Phase 3 — the Applier trait needs to receive complete entries, not raw results that require further interpretation.
+Workers now send `WorkerResult { task_id, task, result: SubmitResult }`. Dispatch functions take only cloneable extracted data (pre_hook, timeout, docs, script) — no Step or CompiledSchemas. `process_and_finalize` consolidates validation + post-hook + retry into a single pipeline called on the main thread. `extract_next_tasks` moved to dispatch.rs. PoolConnection is Clone for pool dispatch.
 
 ### Phase 3: Apply pattern
 

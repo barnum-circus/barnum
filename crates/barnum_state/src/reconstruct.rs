@@ -3,6 +3,11 @@
 //! Replays a log to determine which tasks still need work:
 //! - **Pending**: submitted but never completed → needs action dispatch
 //! - **Waiting**: completed with children that are still alive → don't re-dispatch
+//!
+//! Note: This module cannot determine which steps have finally hooks (that
+//! requires config). Parents whose children are all done but have no
+//! `FinallyRun` entry are treated as done — the Engine's replay handles
+//! finally re-dispatch using config.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -27,7 +32,7 @@ pub enum ReconstructError {
     /// Config entry appeared more than once.
     #[error("Config appeared more than once")]
     DuplicateConfig,
-    /// A `TaskSubmitted` entry reused an existing task ID.
+    /// A task ID appeared more than once in submitted tasks.
     #[error("duplicate task_id {0:?}")]
     DuplicateTaskId(LogTaskId),
     /// A `TaskCompleted` entry referenced an unknown task ID.
@@ -36,6 +41,18 @@ pub enum ReconstructError {
     /// A `TaskCompleted` entry referenced a task that was already completed.
     #[error("TaskCompleted for already-completed task_id {0:?}")]
     AlreadyCompleted(LogTaskId),
+    /// A `FinallyRun` entry referenced an unknown parent task.
+    #[error("FinallyRun for unknown task_id {0:?}")]
+    FinallyRunUnknownTask(LogTaskId),
+}
+
+/// Info extracted from a submitted task (from any source in the log).
+struct SubmittedTask {
+    step: StepName,
+    value: StepInputValue,
+    /// Parent task, derived from origin.
+    parent_id: Option<LogTaskId>,
+    origin: TaskOrigin,
 }
 
 /// A task that needs its action dispatched on resume.
@@ -93,7 +110,8 @@ pub struct ReconstructedState {
 ///
 /// # Algorithm
 ///
-/// 1. Parse all entries, building submitted/completed maps
+/// 1. Parse all entries, collecting submitted tasks from all sources
+///    (top-level `TaskSubmitted`, embedded in `TaskCompleted`, embedded in `FinallyRun`)
 /// 2. Identify "alive" tasks (pending or have alive descendants)
 /// 3. Classify alive tasks as Pending (need dispatch) or Waiting (have alive children)
 ///
@@ -112,9 +130,9 @@ pub fn reconstruct(
         None => return Err(ReconstructError::EmptyLog),
     };
 
-    // Collect all submitted and completed entries
-    let mut submitted: BTreeMap<LogTaskId, TaskSubmitted> = BTreeMap::new();
+    let mut submitted: BTreeMap<LogTaskId, SubmittedTask> = BTreeMap::new();
     let mut completed: BTreeMap<LogTaskId, TaskCompleted> = BTreeMap::new();
+    let mut finally_ran: BTreeSet<LogTaskId> = BTreeSet::new();
     let mut max_task_id: u32 = 0;
 
     for entry in entries {
@@ -123,11 +141,7 @@ pub fn reconstruct(
                 return Err(ReconstructError::DuplicateConfig);
             }
             StateLogEntry::TaskSubmitted(task) => {
-                if submitted.contains_key(&task.task_id) {
-                    return Err(ReconstructError::DuplicateTaskId(task.task_id));
-                }
-                max_task_id = max_task_id.max(task.task_id.0);
-                submitted.insert(task.task_id, task);
+                insert_submitted(&mut submitted, &task, &mut max_task_id)?;
             }
             StateLogEntry::TaskCompleted(c) => {
                 if !submitted.contains_key(&c.task_id) {
@@ -136,24 +150,81 @@ pub fn reconstruct(
                 if completed.contains_key(&c.task_id) {
                     return Err(ReconstructError::AlreadyCompleted(c.task_id));
                 }
+                // Extract embedded children/retries
+                match &c.outcome {
+                    TaskOutcome::Success(s) => {
+                        for child in &s.children {
+                            insert_submitted(&mut submitted, child, &mut max_task_id)?;
+                        }
+                    }
+                    TaskOutcome::Failed(f) => {
+                        if let Some(retry) = &f.retry {
+                            insert_submitted(&mut submitted, retry, &mut max_task_id)?;
+                        }
+                    }
+                }
                 completed.insert(c.task_id, c);
+            }
+            StateLogEntry::FinallyRun(f) => {
+                if !submitted.contains_key(&f.finally_for) {
+                    return Err(ReconstructError::FinallyRunUnknownTask(f.finally_for));
+                }
+                for child in &f.children {
+                    insert_submitted(&mut submitted, child, &mut max_task_id)?;
+                }
+                finally_ran.insert(f.finally_for);
             }
         }
     }
 
-    let state = build_state(&submitted, &completed, max_task_id);
+    let state = build_state(&submitted, &completed, &finally_ran, max_task_id);
     Ok((config, state))
 }
 
-/// Build the reconstructed state from submitted/completed maps.
+/// Insert a submitted task into the map, deriving `parent_id` from origin.
+fn insert_submitted(
+    submitted: &mut BTreeMap<LogTaskId, SubmittedTask>,
+    task: &TaskSubmitted,
+    max_task_id: &mut u32,
+) -> Result<(), ReconstructError> {
+    if submitted.contains_key(&task.task_id) {
+        return Err(ReconstructError::DuplicateTaskId(task.task_id));
+    }
+    *max_task_id = (*max_task_id).max(task.task_id.0);
+
+    let parent_id = match &task.origin {
+        TaskOrigin::Seed => None,
+        TaskOrigin::Spawned { parent_id } => *parent_id,
+        TaskOrigin::Retry { replaces } => {
+            // Inherit parent from replaced task.
+            // The replaced task must already be in the map (it was submitted earlier).
+            submitted.get(replaces).and_then(|s| s.parent_id)
+        }
+    };
+
+    submitted.insert(
+        task.task_id,
+        SubmittedTask {
+            step: task.step.clone(),
+            value: task.value.clone(),
+            parent_id,
+            origin: task.origin.clone(),
+        },
+    );
+    Ok(())
+}
+
+/// Build the reconstructed state from collected data.
 fn build_state(
-    submitted: &BTreeMap<LogTaskId, TaskSubmitted>,
+    submitted: &BTreeMap<LogTaskId, SubmittedTask>,
     completed: &BTreeMap<LogTaskId, TaskCompleted>,
+    finally_ran: &BTreeSet<LogTaskId>,
     max_task_id: u32,
 ) -> ReconstructedState {
     // A task is "alive" if it was submitted but not completed,
     // OR if it completed with children that are alive.
-    let alive = compute_alive_set(submitted, completed);
+    // Parents whose finally has run are NOT kept alive by the finally.
+    let alive = compute_alive_set(submitted, completed, finally_ran);
 
     let mut pending_tasks = Vec::new();
     let mut waiting_tasks = Vec::new();
@@ -166,8 +237,6 @@ fn build_state(
         if let Some(comp) = completed.get(task_id) {
             // Task completed but is alive → it has alive dependents → Waiting
             if let TaskOutcome::Success(ref success) = comp.outcome {
-                // Count all alive tasks that depend on this task.
-                // Uses parent_id for children/retries, and origin for finally tasks.
                 let alive_count = count_alive_dependents(*task_id, submitted, &alive);
                 if let Some(count) = NonZeroU16::new(alive_count) {
                     waiting_tasks.push(WaitingTask {
@@ -191,7 +260,6 @@ fn build_state(
         }
     }
 
-    // next_task_id: one past the highest seen ID, or 0 if no tasks
     let next_task_id = if submitted.is_empty() {
         0
     } else {
@@ -206,25 +274,17 @@ fn build_state(
 }
 
 /// Count alive tasks that depend on a given parent task.
-///
-/// Counts tasks that have `parent_id` pointing to this task (covers children
-/// and retry replacements), plus finally tasks (via origin) that don't already
-/// have this task as `parent_id` (to avoid double-counting).
 fn count_alive_dependents(
     task_id: LogTaskId,
-    submitted: &BTreeMap<LogTaskId, TaskSubmitted>,
+    submitted: &BTreeMap<LogTaskId, SubmittedTask>,
     alive: &BTreeSet<LogTaskId>,
 ) -> u16 {
     let mut count: u16 = 0;
-    for s in submitted.values() {
-        if !alive.contains(&s.task_id) {
+    for (id, s) in submitted {
+        if !alive.contains(id) {
             continue;
         }
         if s.parent_id == Some(task_id) {
-            count = count.saturating_add(1);
-        } else if matches!(&s.origin, TaskOrigin::Finally { finally_for } if *finally_for == task_id)
-        {
-            // Finally task not already counted via parent_id
             count = count.saturating_add(1);
         }
     }
@@ -236,10 +296,11 @@ fn count_alive_dependents(
 /// A task is alive if:
 /// - It was submitted but never completed (pending at crash time), OR
 /// - It completed successfully and has at least one alive dependent
-///   (spawned child, retry replacement, or finally task)
+///   (a task whose `parent_id` points to it)
 fn compute_alive_set(
-    submitted: &BTreeMap<LogTaskId, TaskSubmitted>,
+    submitted: &BTreeMap<LogTaskId, SubmittedTask>,
     completed: &BTreeMap<LogTaskId, TaskCompleted>,
+    _finally_ran: &BTreeSet<LogTaskId>,
 ) -> BTreeSet<LogTaskId> {
     let mut alive = BTreeSet::new();
 
@@ -250,38 +311,25 @@ fn compute_alive_set(
         }
     }
 
-    // Propagate upward: if a task is alive, its ancestors that are
-    // waiting for it should also be alive.
-    // We iterate until no new tasks are added (fixed point).
+    // Propagate upward: if a task is alive, ancestors waiting for it should be alive too.
     loop {
         let mut changed = false;
 
         for (task_id, comp) in completed {
             if alive.contains(task_id) {
-                continue; // Already marked alive
+                continue;
             }
 
-            let TaskOutcome::Success(ref success) = comp.outcome else {
-                continue; // Failed tasks don't wait for children
+            let TaskOutcome::Success(_) = &comp.outcome else {
+                continue;
             };
 
-            // Check if any spawned child is alive
-            let has_alive_child = success.spawned_task_ids.iter().any(|id| alive.contains(id));
-
-            // Check if any alive task has this task as parent_id.
-            // This catches retry replacements: when a child fails and is retried,
-            // the retry task has the same parent_id but is NOT in spawned_task_ids.
+            // Check if any alive task has this task as parent_id
             let has_alive_dependent = submitted
-                .values()
-                .any(|s| s.parent_id == Some(*task_id) && alive.contains(&s.task_id));
+                .iter()
+                .any(|(id, s)| s.parent_id == Some(*task_id) && alive.contains(id));
 
-            // Check if any finally task for this task is alive
-            let has_alive_finally = submitted.values().any(|s| {
-                matches!(&s.origin, TaskOrigin::Finally { finally_for } if *finally_for == *task_id)
-                    && alive.contains(&s.task_id)
-            });
-
-            if has_alive_child || has_alive_dependent || has_alive_finally {
+            if has_alive_dependent {
                 alive.insert(*task_id);
                 changed = true;
             }
@@ -302,87 +350,73 @@ mod tests {
     use crate::types::*;
     use serde_json::json;
 
-    // ==================== Helpers ====================
-
     fn config_entry() -> StateLogEntry {
         StateLogEntry::Config(StateLogConfig {
             config: json!({"steps": []}),
         })
     }
 
-    fn submit(
-        task_id: u32,
-        step: &str,
-        parent_id: Option<u32>,
-        origin: TaskOrigin,
-    ) -> StateLogEntry {
+    fn submit_seed(task_id: u32, step: &str) -> StateLogEntry {
         StateLogEntry::TaskSubmitted(TaskSubmitted {
             task_id: LogTaskId(task_id),
             step: StepName::new(step),
             value: StepInputValue(json!({"input": task_id})),
-            parent_id: parent_id.map(LogTaskId),
-            origin,
+            origin: TaskOrigin::Seed,
         })
     }
 
-    fn submit_initial(task_id: u32, step: &str) -> StateLogEntry {
-        submit(task_id, step, None, TaskOrigin::Initial)
-    }
-
-    fn submit_spawned(task_id: u32, step: &str, parent_id: u32) -> StateLogEntry {
-        submit(task_id, step, Some(parent_id), TaskOrigin::Spawned)
-    }
-
-    fn complete_success(task_id: u32, spawned: &[u32]) -> StateLogEntry {
+    fn complete_success(task_id: u32, children: Vec<TaskSubmitted>) -> StateLogEntry {
         StateLogEntry::TaskCompleted(TaskCompleted {
             task_id: LogTaskId(task_id),
             outcome: TaskOutcome::Success(TaskSuccess {
-                spawned_task_ids: spawned.iter().map(|id| LogTaskId(*id)).collect(),
                 finally_value: StepInputValue(json!({"input": task_id})),
+                children,
             }),
         })
     }
 
-    fn complete_failed(task_id: u32, reason: FailureReason, retry: Option<u32>) -> StateLogEntry {
-        StateLogEntry::TaskCompleted(TaskCompleted {
+    fn complete_success_leaf(task_id: u32) -> StateLogEntry {
+        complete_success(task_id, vec![])
+    }
+
+    fn spawned_task(task_id: u32, step: &str, parent_id: u32) -> TaskSubmitted {
+        TaskSubmitted {
             task_id: LogTaskId(task_id),
-            outcome: TaskOutcome::Failed(TaskFailed {
-                reason,
-                retry_task_id: retry.map(LogTaskId),
-            }),
-        })
+            step: StepName::new(step),
+            value: StepInputValue(json!({"input": task_id})),
+            origin: TaskOrigin::Spawned {
+                parent_id: Some(LogTaskId(parent_id)),
+            },
+        }
     }
 
-    fn submit_retry(
-        task_id: u32,
-        step: &str,
-        parent_id: Option<u32>,
-        replaces: u32,
-    ) -> StateLogEntry {
-        submit(
-            task_id,
-            step,
-            parent_id,
-            TaskOrigin::Retry {
+    fn retry_task(task_id: u32, step: &str, replaces: u32) -> TaskSubmitted {
+        TaskSubmitted {
+            task_id: LogTaskId(task_id),
+            step: StepName::new(step),
+            value: StepInputValue(json!({"input": task_id})),
+            origin: TaskOrigin::Retry {
                 replaces: LogTaskId(replaces),
             },
-        )
+        }
     }
 
-    fn submit_finally(
+    fn complete_failed(
         task_id: u32,
-        step: &str,
-        parent_id: Option<u32>,
-        finally_for: u32,
+        reason: FailureReason,
+        retry: Option<TaskSubmitted>,
     ) -> StateLogEntry {
-        submit(
-            task_id,
-            step,
-            parent_id,
-            TaskOrigin::Finally {
-                finally_for: LogTaskId(finally_for),
-            },
-        )
+        StateLogEntry::TaskCompleted(TaskCompleted {
+            task_id: LogTaskId(task_id),
+            outcome: TaskOutcome::Failed(TaskFailed { reason, retry }),
+        })
+    }
+
+    fn finally_run(finally_for: u32, children: Vec<TaskSubmitted>) -> StateLogEntry {
+        StateLogEntry::FinallyRun(FinallyRun {
+            finally_for: LogTaskId(finally_for),
+            children,
+        })
     }
 
     fn run_reconstruct(
@@ -410,14 +444,13 @@ mod tests {
 
     #[test]
     fn reconstruct_single_task_pending() {
-        let (_, state) =
-            run_reconstruct(vec![config_entry(), submit_initial(0, "Analyze")]).unwrap();
+        let (_, state) = run_reconstruct(vec![config_entry(), submit_seed(0, "Analyze")]).unwrap();
 
         assert_eq!(state.pending_tasks.len(), 1);
         assert_eq!(state.pending_tasks[0].task_id, LogTaskId(0));
         assert_eq!(state.pending_tasks[0].step, "Analyze");
         assert!(state.pending_tasks[0].parent_id.is_none());
-        assert_eq!(state.pending_tasks[0].origin, TaskOrigin::Initial);
+        assert_eq!(state.pending_tasks[0].origin, TaskOrigin::Seed);
         assert!(state.waiting_tasks.is_empty());
         assert_eq!(state.next_task_id, 1);
     }
@@ -426,8 +459,8 @@ mod tests {
     fn reconstruct_single_task_completed_returns_empty() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "Analyze"),
-            complete_success(0, &[]),
+            submit_seed(0, "Analyze"),
+            complete_success_leaf(0),
         ])
         .unwrap();
 
@@ -436,28 +469,12 @@ mod tests {
     }
 
     #[test]
-    fn reconstruct_submit_complete_submit_leaves_second_pending() {
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "Analyze"),
-            complete_success(0, &[]),
-            submit_initial(1, "Process"),
-        ])
-        .unwrap();
-
-        assert_eq!(state.pending_tasks.len(), 1);
-        assert_eq!(state.pending_tasks[0].task_id, LogTaskId(1));
-        assert_eq!(state.pending_tasks[0].step, "Process");
-        assert_eq!(state.next_task_id, 2);
-    }
-
-    #[test]
     fn reconstruct_multiple_pending_tasks() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            submit_initial(1, "B"),
-            submit_initial(2, "C"),
+            submit_seed(0, "A"),
+            submit_seed(1, "B"),
+            submit_seed(2, "C"),
         ])
         .unwrap();
 
@@ -469,12 +486,11 @@ mod tests {
 
     #[test]
     fn reconstruct_child_pending_parent_waiting() {
-        // Parent completes, spawns child. Child still pending → parent is Waiting.
+        // Parent completes with child. Child still pending → parent is Waiting.
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "Analyze"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "Process", 0),
+            submit_seed(0, "Analyze"),
+            complete_success(0, vec![spawned_task(1, "Process", 0)]),
         ])
         .unwrap();
 
@@ -491,11 +507,12 @@ mod tests {
     fn reconstruct_two_children_one_complete_parent_waiting() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "Analyze"),
-            complete_success(0, &[1, 2]),
-            submit_spawned(1, "Process", 0),
-            submit_spawned(2, "Process", 0),
-            complete_success(1, &[]),
+            submit_seed(0, "Analyze"),
+            complete_success(
+                0,
+                vec![spawned_task(1, "Process", 0), spawned_task(2, "Process", 0)],
+            ),
+            complete_success_leaf(1),
         ])
         .unwrap();
 
@@ -513,12 +530,13 @@ mod tests {
     fn reconstruct_all_children_complete_parent_done() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "Analyze"),
-            complete_success(0, &[1, 2]),
-            submit_spawned(1, "Process", 0),
-            submit_spawned(2, "Process", 0),
-            complete_success(1, &[]),
-            complete_success(2, &[]),
+            submit_seed(0, "Analyze"),
+            complete_success(
+                0,
+                vec![spawned_task(1, "Process", 0), spawned_task(2, "Process", 0)],
+            ),
+            complete_success_leaf(1),
+            complete_success_leaf(2),
         ])
         .unwrap();
 
@@ -529,14 +547,11 @@ mod tests {
     #[test]
     fn reconstruct_grandchild_pending_sets_ancestor_waiting() {
         // Task 0 → spawns 1 → spawns 2 (still pending)
-        // Both 0 and 1 should be Waiting
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "B", 0),
-            complete_success(1, &[2]),
-            submit_spawned(2, "C", 1),
+            submit_seed(0, "A"),
+            complete_success(0, vec![spawned_task(1, "B", 0)]),
+            complete_success(1, vec![spawned_task(2, "C", 1)]),
         ])
         .unwrap();
 
@@ -550,31 +565,14 @@ mod tests {
         assert!(waiting_ids.contains(&LogTaskId(1)));
     }
 
-    #[test]
-    fn reconstruct_preserves_parent_id_on_pending_tasks() {
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1, 2]),
-            submit_spawned(1, "B", 0),
-            submit_spawned(2, "B", 0),
-        ])
-        .unwrap();
-
-        for task in &state.pending_tasks {
-            assert_eq!(task.parent_id, Some(LogTaskId(0)));
-        }
-    }
-
     // ==================== Retry Chains ====================
 
     #[test]
     fn reconstruct_failed_with_retry_only_retry_pending() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_failed(0, FailureReason::Timeout, Some(1)),
-            submit_retry(1, "A", None, 0),
+            submit_seed(0, "A"),
+            complete_failed(0, FailureReason::Timeout, Some(retry_task(1, "A", 0))),
         ])
         .unwrap();
 
@@ -593,7 +591,7 @@ mod tests {
     fn reconstruct_failed_without_retry_task_dropped() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
+            submit_seed(0, "A"),
             complete_failed(0, FailureReason::Timeout, None),
         ])
         .unwrap();
@@ -603,199 +601,58 @@ mod tests {
     }
 
     #[test]
-    fn reconstruct_retry_chain_only_final_pending() {
-        // Task 0 fails → retry 1 fails → retry 2 (pending)
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_failed(0, FailureReason::Timeout, Some(1)),
-            submit_retry(1, "A", None, 0),
-            complete_failed(1, FailureReason::AgentLost, Some(2)),
-            submit_retry(2, "A", None, 1),
-        ])
-        .unwrap();
-
-        assert_eq!(state.pending_tasks.len(), 1);
-        assert_eq!(state.pending_tasks[0].task_id, LogTaskId(2));
-    }
-
-    #[test]
     fn reconstruct_retry_of_child_parent_still_waiting() {
         // Task 0 spawns child 1. Child 1 fails, retried as 2.
         // Parent 0 should be waiting for the retry.
-        //
-        // Key subtlety: task 2 (retry) has parent_id=0 but is NOT in
-        // task 0's spawned_task_ids=[1]. We propagate alive-ness via
-        // parent_id relationships, not just spawned_task_ids.
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "B", 0),
-            complete_failed(1, FailureReason::Timeout, Some(2)),
-            submit_retry(2, "B", Some(0), 1),
+            submit_seed(0, "A"),
+            complete_success(0, vec![spawned_task(1, "B", 0)]),
+            complete_failed(1, FailureReason::Timeout, Some(retry_task(2, "B", 1))),
         ])
         .unwrap();
 
         assert_eq!(state.pending_tasks.len(), 1);
         assert_eq!(state.pending_tasks[0].task_id, LogTaskId(2));
 
-        // Parent 0 is waiting because retry task 2 is alive and has parent_id=0
+        // Parent 0 is waiting because retry task 2 inherits parent_id=0
         assert_eq!(state.waiting_tasks.len(), 1);
         assert_eq!(state.waiting_tasks[0].task_id, LogTaskId(0));
         assert_eq!(state.waiting_tasks[0].pending_children_count.get(), 1);
     }
 
-    // ==================== Finally Tasks ====================
+    // ==================== FinallyRun ====================
 
     #[test]
-    fn reconstruct_finally_pending_after_parent_complete() {
-        // Task 0 completes with no children, finally task 1 is scheduled
+    fn reconstruct_finally_run_with_children() {
+        // Task 0 completes with child 1. Child 1 completes.
+        // Finally runs for task 0, spawning child 2.
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[]),
-            submit_finally(1, "A", None, 0),
+            submit_seed(0, "A"),
+            complete_success(0, vec![spawned_task(1, "B", 0)]),
+            complete_success_leaf(1),
+            finally_run(0, vec![spawned_task(2, "C", 0)]),
         ])
         .unwrap();
 
+        // Child 2 from finally is pending
         assert_eq!(state.pending_tasks.len(), 1);
-        assert_eq!(state.pending_tasks[0].task_id, LogTaskId(1));
-        assert_eq!(
-            state.pending_tasks[0].origin,
-            TaskOrigin::Finally {
-                finally_for: LogTaskId(0)
-            }
-        );
+        assert_eq!(state.pending_tasks[0].task_id, LogTaskId(2));
     }
 
     #[test]
-    fn reconstruct_finally_identifies_via_origin() {
+    fn reconstruct_finally_run_no_children_all_done() {
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "B", 0),
-            complete_success(1, &[]),
-            // After child 1 completes, task 0's children are all done.
-            // Finally for task 0 is scheduled as sibling (parent=None since 0 has no parent)
-            submit_finally(2, "A", None, 0),
-        ])
-        .unwrap();
-
-        assert_eq!(state.pending_tasks.len(), 1);
-        assert_eq!(
-            state.pending_tasks[0].origin,
-            TaskOrigin::Finally {
-                finally_for: LogTaskId(0)
-            }
-        );
-    }
-
-    #[test]
-    fn reconstruct_finally_complete_all_done() {
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[]),
-            submit_finally(1, "A", None, 0),
-            complete_success(1, &[]),
+            submit_seed(0, "A"),
+            complete_success_leaf(0),
+            finally_run(0, vec![]),
         ])
         .unwrap();
 
         assert!(state.pending_tasks.is_empty());
         assert!(state.waiting_tasks.is_empty());
-    }
-
-    #[test]
-    fn reconstruct_finally_with_alive_finally_parent_waiting() {
-        // Task 0 (root, parent=None) spawns children 1,2.
-        // Both complete. Finally task 3 scheduled for task 0 (parent=None, finally_for=0).
-        // Task 3 is still pending → task 0 should be Waiting.
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1, 2]),
-            submit_spawned(1, "B", 0),
-            submit_spawned(2, "B", 0),
-            complete_success(1, &[]),
-            complete_success(2, &[]),
-            submit_finally(3, "A", None, 0),
-        ])
-        .unwrap();
-
-        assert_eq!(state.pending_tasks.len(), 1);
-        assert_eq!(state.pending_tasks[0].task_id, LogTaskId(3));
-
-        // Task 0 is waiting because its finally task is alive
-        assert_eq!(state.waiting_tasks.len(), 1);
-        assert_eq!(state.waiting_tasks[0].task_id, LogTaskId(0));
-        assert_eq!(state.waiting_tasks[0].pending_children_count.get(), 1);
-    }
-
-    // ==================== Waiting State ====================
-
-    #[test]
-    fn reconstruct_waiting_has_correct_pending_count() {
-        // 3 children, 1 complete → 2 alive
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1, 2, 3]),
-            submit_spawned(1, "B", 0),
-            submit_spawned(2, "B", 0),
-            submit_spawned(3, "B", 0),
-            complete_success(1, &[]),
-        ])
-        .unwrap();
-
-        assert_eq!(state.waiting_tasks.len(), 1);
-        assert_eq!(state.waiting_tasks[0].pending_children_count.get(), 2);
-    }
-
-    #[test]
-    fn reconstruct_waiting_task_not_in_pending() {
-        // A waiting task should NOT appear in pending_tasks
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "B", 0),
-        ])
-        .unwrap();
-
-        let pending_ids: BTreeSet<_> = state.pending_tasks.iter().map(|t| t.task_id).collect();
-        let waiting_ids: BTreeSet<_> = state.waiting_tasks.iter().map(|w| w.task_id).collect();
-
-        // No overlap
-        assert!(pending_ids.is_disjoint(&waiting_ids));
-        // Task 0 is waiting, not pending
-        assert!(waiting_ids.contains(&LogTaskId(0)));
-        assert!(!pending_ids.contains(&LogTaskId(0)));
-    }
-
-    #[test]
-    fn reconstruct_waiting_preserves_finally_value() {
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            // Task 0 completes with a specific finally_value
-            StateLogEntry::TaskCompleted(TaskCompleted {
-                task_id: LogTaskId(0),
-                outcome: TaskOutcome::Success(TaskSuccess {
-                    spawned_task_ids: vec![LogTaskId(1)],
-                    finally_value: StepInputValue(json!({"custom": "data"})),
-                }),
-            }),
-            submit_spawned(1, "B", 0),
-        ])
-        .unwrap();
-
-        assert_eq!(state.waiting_tasks.len(), 1);
-        assert_eq!(
-            state.waiting_tasks[0].finally_value,
-            StepInputValue(json!({"custom": "data"}))
-        );
     }
 
     // ==================== Error Cases ====================
@@ -804,15 +661,15 @@ mod tests {
     fn reconstruct_duplicate_task_id_errors() {
         let result = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            submit_initial(0, "B"), // duplicate
+            submit_seed(0, "A"),
+            submit_seed(0, "B"), // duplicate
         ]);
         assert!(matches!(result, Err(ReconstructError::DuplicateTaskId(_))));
     }
 
     #[test]
     fn reconstruct_complete_unknown_task_errors() {
-        let result = run_reconstruct(vec![config_entry(), complete_success(99, &[])]);
+        let result = run_reconstruct(vec![config_entry(), complete_success_leaf(99)]);
         assert!(matches!(
             result,
             Err(ReconstructError::CompletedUnknownTask(_))
@@ -827,7 +684,7 @@ mod tests {
 
     #[test]
     fn reconstruct_first_entry_not_config_errors() {
-        let result = run_reconstruct(vec![submit_initial(0, "A")]);
+        let result = run_reconstruct(vec![submit_seed(0, "A")]);
         assert!(matches!(result, Err(ReconstructError::FirstEntryNotConfig)));
     }
 
@@ -835,9 +692,9 @@ mod tests {
     fn reconstruct_already_completed_errors() {
         let result = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[]),
-            complete_success(0, &[]), // duplicate
+            submit_seed(0, "A"),
+            complete_success_leaf(0),
+            complete_success_leaf(0), // duplicate
         ]);
         assert!(matches!(result, Err(ReconstructError::AlreadyCompleted(_))));
     }
@@ -845,46 +702,15 @@ mod tests {
     // ==================== Complex Scenarios ====================
 
     #[test]
-    fn reconstruct_mixed_pending_waiting_done() {
-        // Task 0: done (completed, no children)
-        // Task 1: waiting (completed, child 3 pending)
-        // Task 2: pending
-        // Task 3: pending (child of 1)
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            submit_initial(1, "A"),
-            submit_initial(2, "A"),
-            complete_success(0, &[]),
-            complete_success(1, &[3]),
-            submit_spawned(3, "B", 1),
-        ])
-        .unwrap();
-
-        let pending_ids: BTreeSet<_> = state.pending_tasks.iter().map(|t| t.task_id).collect();
-        let waiting_ids: BTreeSet<_> = state.waiting_tasks.iter().map(|w| w.task_id).collect();
-
-        assert_eq!(pending_ids.len(), 2);
-        assert!(pending_ids.contains(&LogTaskId(2)));
-        assert!(pending_ids.contains(&LogTaskId(3)));
-        assert_eq!(waiting_ids.len(), 1);
-        assert!(waiting_ids.contains(&LogTaskId(1)));
-    }
-
-    #[test]
     fn reconstruct_deep_nesting_five_levels() {
         // 0 → 1 → 2 → 3 → 4 (pending)
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1]),
-            submit_spawned(1, "A", 0),
-            complete_success(1, &[2]),
-            submit_spawned(2, "A", 1),
-            complete_success(2, &[3]),
-            submit_spawned(3, "A", 2),
-            complete_success(3, &[4]),
-            submit_spawned(4, "A", 3),
+            submit_seed(0, "A"),
+            complete_success(0, vec![spawned_task(1, "A", 0)]),
+            complete_success(1, vec![spawned_task(2, "A", 1)]),
+            complete_success(2, vec![spawned_task(3, "A", 2)]),
+            complete_success(3, vec![spawned_task(4, "A", 3)]),
         ])
         .unwrap();
 
@@ -897,53 +723,12 @@ mod tests {
     }
 
     #[test]
-    fn reconstruct_wide_fanout_ten_children() {
-        let mut entries = vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            complete_success(0, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-        ];
-        for i in 1..=10 {
-            entries.push(submit_spawned(i, "B", 0));
-        }
-        // Complete half of them
-        for i in 1..=5 {
-            entries.push(complete_success(i, &[]));
-        }
-
-        let (_, state) = run_reconstruct(entries).unwrap();
-
-        assert_eq!(state.pending_tasks.len(), 5); // 6-10
-        assert_eq!(state.waiting_tasks.len(), 1); // task 0
-        assert_eq!(state.waiting_tasks[0].pending_children_count.get(), 5);
-    }
-
-    #[test]
-    fn reconstruct_interleaved_submits_and_completes() {
-        let (_, state) = run_reconstruct(vec![
-            config_entry(),
-            submit_initial(0, "A"),
-            submit_initial(1, "A"),
-            complete_success(0, &[2]),
-            submit_spawned(2, "B", 0),
-            complete_success(1, &[]),
-            complete_success(2, &[]),
-        ])
-        .unwrap();
-
-        // Everything done
-        assert!(state.pending_tasks.is_empty());
-        assert!(state.waiting_tasks.is_empty());
-    }
-
-    #[test]
     fn reconstruct_next_task_id_correct_with_gaps() {
-        // Task IDs 0, 5, 10 - next should be 11
+        // Task IDs 0, 5, 10 from completions with embedded children
         let (_, state) = run_reconstruct(vec![
             config_entry(),
-            submit(0, "A", None, TaskOrigin::Initial),
-            submit(5, "A", None, TaskOrigin::Initial),
-            submit(10, "A", None, TaskOrigin::Initial),
+            submit_seed(0, "A"),
+            complete_success(0, vec![spawned_task(5, "B", 0), spawned_task(10, "B", 0)]),
         ])
         .unwrap();
 

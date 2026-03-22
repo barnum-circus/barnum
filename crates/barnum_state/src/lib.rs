@@ -11,8 +11,8 @@ pub use reconstruct::{
     ReconstructError, ReconstructedState, ReconstructedTask, WaitingTask, reconstruct,
 };
 pub use types::{
-    FailureReason, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed, TaskOrigin,
-    TaskOutcome, TaskSubmitted, TaskSuccess,
+    FailureReason, FinallyRun, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed,
+    TaskOrigin, TaskOutcome, TaskSubmitted, TaskSuccess,
 };
 
 use std::io::{self, BufRead, BufReader, Write};
@@ -72,8 +72,7 @@ mod tests {
             task_id: LogTaskId(0),
             step: StepName::new("Analyze"),
             value: StepInputValue(json!({"url": "https://example.com"})),
-            parent_id: None,
-            origin: TaskOrigin::Initial,
+            origin: TaskOrigin::Seed,
         })
     }
 
@@ -81,9 +80,23 @@ mod tests {
         StateLogEntry::TaskCompleted(TaskCompleted {
             task_id: LogTaskId(0),
             outcome: TaskOutcome::Success(TaskSuccess {
-                spawned_task_ids: vec![LogTaskId(1)],
                 finally_value: StepInputValue(json!({"url": "https://example.com"})),
+                children: vec![TaskSubmitted {
+                    task_id: LogTaskId(1),
+                    step: StepName::new("Process"),
+                    value: StepInputValue(json!({"data": "x"})),
+                    origin: TaskOrigin::Spawned {
+                        parent_id: Some(LogTaskId(0)),
+                    },
+                }],
             }),
+        })
+    }
+
+    fn sample_finally_run_entry() -> StateLogEntry {
+        StateLogEntry::FinallyRun(FinallyRun {
+            finally_for: LogTaskId(0),
+            children: vec![],
         })
     }
 
@@ -104,6 +117,7 @@ mod tests {
         write_entry(&mut buf, &sample_config_entry()).unwrap();
         write_entry(&mut buf, &sample_submit_entry()).unwrap();
         write_entry(&mut buf, &sample_complete_entry()).unwrap();
+        write_entry(&mut buf, &sample_finally_run_entry()).unwrap();
 
         let output = String::from_utf8(buf).unwrap();
         for line in output.lines() {
@@ -194,27 +208,17 @@ mod tests {
                 task_id: LogTaskId(1),
                 outcome: TaskOutcome::Failed(TaskFailed {
                     reason: FailureReason::Timeout,
-                    retry_task_id: Some(LogTaskId(2)),
+                    retry: Some(TaskSubmitted {
+                        task_id: LogTaskId(2),
+                        step: StepName::new("Analyze"),
+                        value: StepInputValue(json!(null)),
+                        origin: TaskOrigin::Retry {
+                            replaces: LogTaskId(1),
+                        },
+                    }),
                 }),
             }),
-            StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id: LogTaskId(2),
-                step: StepName::new("Analyze"),
-                value: StepInputValue(json!(null)),
-                parent_id: Some(LogTaskId(0)),
-                origin: TaskOrigin::Retry {
-                    replaces: LogTaskId(1),
-                },
-            }),
-            StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id: LogTaskId(3),
-                step: StepName::new("Analyze"),
-                value: StepInputValue(json!(null)),
-                parent_id: None,
-                origin: TaskOrigin::Finally {
-                    finally_for: LogTaskId(0),
-                },
-            }),
+            sample_finally_run_entry(),
         ];
 
         let mut buf = Vec::new();
@@ -235,11 +239,14 @@ mod tests {
                 (StateLogEntry::TaskSubmitted(a), StateLogEntry::TaskSubmitted(b)) => {
                     assert_eq!(a.task_id, b.task_id);
                     assert_eq!(a.step, b.step);
-                    assert_eq!(a.parent_id, b.parent_id);
                     assert_eq!(a.origin, b.origin);
                 }
                 (StateLogEntry::TaskCompleted(a), StateLogEntry::TaskCompleted(b)) => {
                     assert_eq!(a.task_id, b.task_id);
+                }
+                (StateLogEntry::FinallyRun(a), StateLogEntry::FinallyRun(b)) => {
+                    assert_eq!(a.finally_for, b.finally_for);
+                    assert_eq!(a.children.len(), b.children.len());
                 }
                 _ => unreachable!("entry type mismatch"),
             }
@@ -262,7 +269,7 @@ mod tests {
                 task_id: LogTaskId(i as u32),
                 outcome: TaskOutcome::Failed(TaskFailed {
                     reason: reason.clone(),
-                    retry_task_id: None,
+                    retry: None,
                 }),
             });
 
@@ -282,6 +289,38 @@ mod tests {
             } else {
                 unreachable!();
             }
+        }
+    }
+
+    #[test]
+    fn roundtrip_finally_run_with_children() {
+        let entry = StateLogEntry::FinallyRun(FinallyRun {
+            finally_for: LogTaskId(5),
+            children: vec![TaskSubmitted {
+                task_id: LogTaskId(10),
+                step: StepName::new("Cleanup"),
+                value: StepInputValue(json!({"target": "temp"})),
+                origin: TaskOrigin::Spawned {
+                    parent_id: Some(LogTaskId(5)),
+                },
+            }],
+        });
+
+        let mut buf = Vec::new();
+        write_entry(&mut buf, &entry).unwrap();
+
+        let read_back: Vec<_> = read_entries(Cursor::new(buf))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(read_back.len(), 1);
+        if let StateLogEntry::FinallyRun(f) = &read_back[0] {
+            assert_eq!(f.finally_for, LogTaskId(5));
+            assert_eq!(f.children.len(), 1);
+            assert_eq!(f.children[0].task_id, LogTaskId(10));
+            assert_eq!(f.children[0].step, "Cleanup");
+        } else {
+            unreachable!();
         }
     }
 }
