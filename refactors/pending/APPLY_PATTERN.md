@@ -490,15 +490,12 @@ Each phase is a separate branch that passes CI and merges independently.
 
 ### Phase 0: Data structure cleanup
 
-Independent refactors that can land in any order.
+Independent sub-refactors, each in its own file. Can land in any order.
 
-**0a.** Extract `RunState` from `TaskRunner`. Move `tasks: BTreeMap<LogTaskId, TaskEntry>` and `next_task_id: u32` into a `RunState` struct with its own `apply()` method. `TaskRunner` holds `state: RunState`. Pure structural move.
-
-**0b.** Remove `InFlight` from `TaskState`. Dispatched tasks stay `Pending`. Track dispatch count with `in_flight: usize` on TaskRunner.
-
-**0c.** Remove config fields from `TaskEntry`. Drop `finally_script` and `retries_remaining`. Look them up from `step_map` when needed.
-
-**0d.** Make parent removal derived. When the last child completes, remove the parent inside `apply()` and capture the removed parent's info in `removed_parents: Vec<RemovedParent>`. The runner drains this to check config for finally scripts.
+- **0a.** `EXTRACT_RUN_STATE.md` — Move `tasks` and `next_task_id` into a RunState struct. Pure structural move.
+- **0b.** `REMOVE_INFLIGHT_VARIANT.md` (not yet written) — Replace InFlight TaskState variant with `in_flight: usize` counter on TaskRunner.
+- **0c.** `REMOVE_CONFIG_FROM_TASK_ENTRY.md` (not yet written) — Drop `finally_script` and `retries_remaining` from TaskEntry. Look them up from `step_map` when needed.
+- **0d.** `DEFER_PARENT_REMOVAL.md` (not yet written) — Accumulate removed parents in `Vec<RemovedParent>` instead of calling `schedule_finally` inline. The runner drains this to check config for finally scripts.
 
 ### Phase 1: Event loop restructure
 
