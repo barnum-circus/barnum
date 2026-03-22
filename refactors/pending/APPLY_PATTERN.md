@@ -1,6 +1,6 @@
 # Apply Pattern for State/Log Consistency
 
-**Status:** Not started
+**Status:** Done
 
 **Depends on:** None
 
@@ -684,11 +684,11 @@ No behavioral change — same dispatch/recv/process sequence, just not behind th
 
 Workers now send `WorkerResult { task_id, task, result: SubmitResult }`. Dispatch functions take only cloneable extracted data (pre_hook, timeout, docs, script) — no Step or CompiledSchemas. `process_and_finalize` consolidates validation + post-hook + retry into a single pipeline called on the main thread. `extract_next_tasks` moved to dispatch.rs. PoolConnection is Clone for pool dispatch.
 
-### Phase 3: Apply pattern
+### Phase 3: Apply pattern — **Done.**
 
 **Depends on: Phase 0, Phase 1, Phase 2.**
 
-The core refactor. Introduce `Applier` trait, `Engine`, `LogApplier`, `StateLogEntry` types, `FinallyRun` as a logged event, unified `PendingDispatch` queue, `ChannelMsg` type alias, `walk_up_for_finally`. The coordinator becomes `Vec<Box<dyn Applier>>` with `process_entries`. Seed entries flow through `process_entries` like everything else. Everything described in this document.
+Replaced TaskRunner with Engine. Self-contained `StateLogEntry` values with embedded children/retries. Engine centrally allocates IDs, converts raw worker results to entries, applies via `apply_entry` (same code path for replay and live). `RunState` for pure state mutations, `PendingDispatch` queue, `walk_up_for_finally` for parent chain traversal. No Arc anywhere.
 
 ## Before/After
 
