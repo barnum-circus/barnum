@@ -89,6 +89,20 @@ After finishing a draft, do a full verification pass. This is not optional and n
 
 6. **Every type and function referenced must be defined.** If a code block calls `interpret_response`, the document must either define it or state that it's existing code with a file reference. If a struct uses `NonZeroU16`, the import context must be clear. Undefined references are bugs.
 
+### Simplification pass
+
+After verifying consistency, re-read the entire document and ask whether the architecture is as simple as it could be. This pass is about reducing the design, not checking it.
+
+For every component, ask: can this be eliminated? If RunState and StateRunner are separate structs, is there a reason they can't be one struct? If they must be separate, the document should make the reason obvious (e.g., RunState is tested in isolation without I/O). If the reason isn't obvious, they should be merged.
+
+For every piece of state, ask: who owns this, and is ownership unambiguous? Every field should live on exactly one struct with a clear reason for being there. If two components both need access to the same data, the document must show how that access works — shared reference, passed as argument, returned as value. "Both components have access to the config" is ambiguous; "StateRunner owns the config and passes `&Step` to RunState methods" is not.
+
+For every interface between components, ask: is this the narrowest possible surface? If a method takes `&Config` but only reads one field, it should take that field. If a trait has three methods but every impl only does meaningful work in one of them, the trait is too wide. Interfaces should be hard to misuse — a caller that compiles should be a caller that's correct.
+
+For every abstraction, ask: does this compose? If you add a third applier, does the architecture accommodate it without changes to the event loop or other appliers? If you swap out the log format, does anything outside LogApplier need to change? Components that require coordinated changes across boundaries are not composable.
+
+If this pass produces simplifications, apply them and redo the consistency checks above. A simpler design with fewer components, narrower interfaces, and unambiguous ownership is always preferred over a sophisticated one.
+
 ### Writing quality
 
 Read `.claude/writing.md` before writing prose in a refactor document. After the self-review pass above, do a second pass for writing quality. Common failures in refactor docs:
