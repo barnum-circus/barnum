@@ -2,6 +2,7 @@
 
 #![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
+#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
@@ -105,6 +106,7 @@ fn valid_schema_passes() {
 
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn invalid_response_causes_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_invalid_response"));
 
