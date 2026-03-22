@@ -31,13 +31,8 @@
     "barnum-config-schema.json",
     "barnum-config-schema.zod.ts"
   ],
-  "peerDependencies": {
+  "dependencies": {
     "zod": "^3.0.0"
-  },
-  "peerDependenciesMeta": {
-    "zod": {
-      "optional": true
-    }
   },
   "sideEffects": false
 }
