@@ -8,7 +8,7 @@ mod response;
 mod shell;
 mod submit;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write as _};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
@@ -100,14 +100,15 @@ struct TaskEntry {
 
 /// State of a task in the runner.
 enum TaskState {
-    /// Task waiting to be dispatched (queued due to concurrency limit).
+    /// Task waiting to be dispatched, or dispatched and awaiting completion.
+    ///
+    /// Dispatched tasks have their value consumed (set to Null) — the worker
+    /// thread holds the real value. `pending_queue` tracks which Pending tasks
+    /// haven't been dispatched yet.
     Pending {
-        /// The step input value. For Step tasks, may be transformed by pre-hook.
-        /// For Finally tasks, comes from parent (already through pre-hook).
+        /// The step input value. Consumed (set to Null) when dispatched.
         value: StepInputValue,
     },
-    /// Task currently executing in a worker thread.
-    InFlight(InFlight),
     /// Task completed its action, waiting for children to complete.
     WaitingForChildren {
         /// Number of children still pending.
@@ -121,23 +122,6 @@ enum TaskState {
         /// The hook is looked up once when entering this state, not again when scheduling.
         finally_data: Option<(HookScript, StepInputValue)>,
     },
-}
-
-/// Zero-sized marker that a task is currently executing.
-///
-/// Only created when spawning a worker thread, enforcing that
-/// `InFlight` state means the task is actually running.
-struct InFlight(());
-
-impl InFlight {
-    /// Create an `InFlight` marker.
-    ///
-    /// # Safety (invariant)
-    ///
-    /// Only call this immediately after spawning a worker thread for the task.
-    const fn new() -> Self {
-        InFlight(())
-    }
 }
 
 /// Default maximum concurrent task submissions.
@@ -245,8 +229,10 @@ struct TaskRunner<'a> {
     state: RunState,
     pool: PoolConnection,
     max_concurrency: usize,
-    /// Cached count of `InFlight` tasks (for concurrency limiting).
+    /// Count of dispatched tasks (for concurrency limiting).
     in_flight: usize,
+    /// Tasks waiting to be dispatched. Popped by `dispatch_all_pending`.
+    pending_queue: VecDeque<LogTaskId>,
     tx: mpsc::Sender<InFlightResult>,
     rx: mpsc::Receiver<InFlightResult>,
     /// State log writer for persistence/resume.
@@ -299,6 +285,7 @@ impl<'a> TaskRunner<'a> {
             pool,
             max_concurrency,
             in_flight: 0,
+            pending_queue: VecDeque::new(),
             tx,
             rx,
             state_log,
@@ -387,6 +374,7 @@ impl<'a> TaskRunner<'a> {
             pool,
             max_concurrency,
             in_flight: 0,
+            pending_queue: VecDeque::new(),
             tx,
             rx,
             state_log,
@@ -452,15 +440,12 @@ impl<'a> TaskRunner<'a> {
                     retries_remaining,
                 },
             );
+            self.pending_queue.push_back(pending.task_id);
         }
     }
 
     fn pending(&self) -> usize {
-        self.state
-            .tasks
-            .values()
-            .filter(|e| matches!(e.state, TaskState::Pending { .. }))
-            .count()
+        self.pending_queue.len()
     }
 
     // ==================== State Log ====================
@@ -501,14 +486,16 @@ impl<'a> TaskRunner<'a> {
             .map_or(0, |s| s.options.max_retries);
 
         if self.in_flight < self.max_concurrency {
-            // Create entry in InFlight state and dispatch
+            // Dispatch immediately — value goes to the worker, entry stores Null.
             let prev = self.state.tasks.insert(
                 id,
                 TaskEntry {
                     step: task.step.clone(),
                     parent_id,
                     finally_script,
-                    state: TaskState::InFlight(InFlight::new()),
+                    state: TaskState::Pending {
+                        value: StepInputValue(serde_json::Value::Null),
+                    },
                     retries_remaining,
                 },
             );
@@ -516,7 +503,7 @@ impl<'a> TaskRunner<'a> {
             self.in_flight += 1;
             self.dispatch(id, task);
         } else {
-            // Queue as Pending
+            // Queue for later dispatch — value stays in the entry.
             let prev = self.state.tasks.insert(
                 id,
                 TaskEntry {
@@ -528,13 +515,13 @@ impl<'a> TaskRunner<'a> {
                 },
             );
             assert!(prev.is_none(), "task_id collision: {id:?} already in map");
+            self.pending_queue.push_back(id);
         }
     }
 
     /// Dispatch a task to a worker thread.
     ///
-    /// Precondition: The task must already be in `InFlight` state in the map
-    /// (set by `take_next_pending`).
+    /// Precondition: The task must already exist in the map.
     #[expect(clippy::expect_used)] // Invariants
     fn dispatch(&self, task_id: LogTaskId, task: Task) {
         let entry = self
@@ -603,42 +590,32 @@ impl<'a> TaskRunner<'a> {
     }
 
     /// Dispatch pending tasks up to max concurrency.
+    #[expect(clippy::expect_used, clippy::panic)] // Invariant: queued tasks must exist in Pending state
     fn dispatch_all_pending(&mut self) {
         while self.in_flight < self.max_concurrency {
-            let Some((task_id, task)) = self.take_next_pending() else {
+            let Some(task_id) = self.pending_queue.pop_front() else {
                 break;
             };
+            let entry = self
+                .state
+                .tasks
+                .get_mut(&task_id)
+                .expect("[P070] queued task must exist in map");
+            let TaskState::Pending { value } = &mut entry.state else {
+                panic!("[P071] queued task not in Pending state");
+            };
+            let value = std::mem::replace(value, StepInputValue(serde_json::Value::Null));
+            let task = Task::new(entry.step.as_str(), value);
+            self.in_flight += 1;
             self.dispatch(task_id, task);
         }
     }
 
-    /// Find and extract the next pending task, transitioning it to `InFlight`.
-    ///
-    /// Returns `(task_id, task)` if a pending task was found.
-    /// The task is transitioned to `InFlight` state in the map.
-    fn take_next_pending(&mut self) -> Option<(LogTaskId, Task)> {
-        let result = self.state.tasks.iter_mut().find_map(|(id, entry)| {
-            if let TaskState::Pending { value } = &mut entry.state {
-                let value = std::mem::replace(value, StepInputValue(serde_json::Value::Null));
-                let task = Task::new(entry.step.as_str(), value);
-                entry.state = TaskState::InFlight(InFlight::new());
-                Some((*id, task))
-            } else {
-                None
-            }
-        });
-
-        if result.is_some() {
-            self.in_flight += 1;
-        }
-        result
-    }
-
-    /// Remove an `InFlight` task (for retry - don't notify parent).
+    /// Remove a dispatched task (for retry — don't notify parent).
     #[expect(clippy::expect_used)] // Invariant: task must exist
     fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
         let entry = self.state.tasks.remove(&task_id).expect("task must exist");
-        assert!(matches!(entry.state, TaskState::InFlight(_)));
+        assert!(matches!(entry.state, TaskState::Pending { .. }));
         self.in_flight -= 1;
         entry.parent_id
     }
@@ -697,6 +674,7 @@ impl<'a> TaskRunner<'a> {
             retries_remaining,
         };
         self.state.tasks.insert(id, finally_entry);
+        self.pending_queue.push_back(id);
     }
 
     /// Increment a task's `pending_children_count`.
@@ -881,9 +859,11 @@ impl<'a> TaskRunner<'a> {
                 .tasks
                 .get(&task_id)
                 .expect("[P027] task must exist");
-            if matches!(entry.state, TaskState::InFlight(_)) {
-                self.in_flight -= 1;
-            }
+            assert!(
+                matches!(entry.state, TaskState::Pending { .. }),
+                "[P072] completed task not in Pending state"
+            );
+            self.in_flight -= 1;
             self.state.remove_and_notify_parent(task_id);
             self.schedule_removed_finally();
         }
@@ -963,7 +943,7 @@ impl Iterator for TaskRunner<'_> {
         }
 
         let result = self.rx.recv().ok()?;
-        // Note: in_flight is decremented inside process_result when task transitions out of InFlight
+        // Note: in_flight is decremented inside process_result
 
         Some(self.process_result(result))
     }
