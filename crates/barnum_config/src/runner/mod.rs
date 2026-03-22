@@ -104,9 +104,14 @@ enum PendingDispatch {
 // ==================== RunState ====================
 
 /// Pure task-tree state. All methods are state mutations — no I/O.
+///
+/// Processes `StateLogEntry` values via `apply_entry`, mutating the task tree
+/// and accumulating `PendingDispatch` items. Callers drain `pending_dispatches`
+/// to do actual work (spawn threads, etc.).
 struct RunState {
     tasks: BTreeMap<LogTaskId, TaskEntry>,
     next_task_id: u32,
+    pending_dispatches: VecDeque<PendingDispatch>,
 }
 
 impl RunState {
@@ -114,6 +119,7 @@ impl RunState {
         Self {
             tasks: BTreeMap::new(),
             next_task_id: 0,
+            pending_dispatches: VecDeque::new(),
         }
     }
 
@@ -261,6 +267,99 @@ impl RunState {
         None
     }
 
+    /// Apply a single state log entry. Mutates the task tree and queues
+    /// pending dispatches. Does not execute dispatches — the caller drains
+    /// `pending_dispatches` to spawn actual work.
+    fn apply_entry(&mut self, entry: &StateLogEntry, config: &Config) {
+        match entry {
+            StateLogEntry::Config(_) => {
+                // Config is handled by the coordinator, not the engine.
+            }
+            StateLogEntry::TaskSubmitted(s) => {
+                self.advance_id_to(s.task_id.0 + 1);
+                self.apply_submitted(s);
+                self.pending_dispatches
+                    .push_back(PendingDispatch::Task { task_id: s.task_id });
+            }
+            StateLogEntry::TaskCompleted(c) => {
+                // Remove pending dispatch for this task (replay: completed before dispatched)
+                self.pending_dispatches.retain(
+                    |d| !matches!(d, PendingDispatch::Task { task_id } if *task_id == c.task_id),
+                );
+
+                // Track max ID from embedded children/retries
+                match &c.outcome {
+                    barnum_state::TaskOutcome::Success(s) => {
+                        for child in &s.children {
+                            self.advance_id_to(child.task_id.0 + 1);
+                        }
+                    }
+                    barnum_state::TaskOutcome::Failed(f) => {
+                        if let Some(retry) = &f.retry {
+                            self.advance_id_to(retry.task_id.0 + 1);
+                        }
+                    }
+                }
+
+                let parent_id = self.apply_completed(c);
+
+                // Queue children/retry for dispatch
+                match &c.outcome {
+                    barnum_state::TaskOutcome::Success(s) => {
+                        for child in &s.children {
+                            self.pending_dispatches.push_back(PendingDispatch::Task {
+                                task_id: child.task_id,
+                            });
+                        }
+                    }
+                    barnum_state::TaskOutcome::Failed(f) => {
+                        if let Some(retry) = &f.retry {
+                            self.pending_dispatches.push_back(PendingDispatch::Task {
+                                task_id: retry.task_id,
+                            });
+                        }
+                    }
+                }
+
+                // For leaf/permanent-failure: walk up the parent chain for finally
+                if let Some(pid) = parent_id
+                    && let Some(finally_id) = self.walk_up_for_finally(pid, config)
+                {
+                    self.pending_dispatches.push_back(PendingDispatch::Finally {
+                        parent_id: finally_id,
+                    });
+                }
+            }
+            StateLogEntry::FinallyRun(f) => {
+                // Remove pending finally dispatch (replay: completed before dispatched)
+                self.pending_dispatches.retain(|d| {
+                    !matches!(d, PendingDispatch::Finally { parent_id } if *parent_id == f.finally_for)
+                });
+
+                for child in &f.children {
+                    self.advance_id_to(child.task_id.0 + 1);
+                }
+
+                let grandparent_id = self.apply_finally_run(f);
+
+                for child in &f.children {
+                    self.pending_dispatches.push_back(PendingDispatch::Task {
+                        task_id: child.task_id,
+                    });
+                }
+
+                // Walk up from grandparent for further finally detection
+                if let Some(gp_id) = grandparent_id
+                    && let Some(finally_id) = self.walk_up_for_finally(gp_id, config)
+                {
+                    self.pending_dispatches.push_back(PendingDispatch::Finally {
+                        parent_id: finally_id,
+                    });
+                }
+            }
+        }
+    }
+
     /// Walk up the parent chain from a completed child's parent.
     /// Decrements the parent's child count. If the parent reaches zero:
     ///   - Has a finally script → return its ID (stop walking)
@@ -360,7 +459,6 @@ struct Engine<'a> {
     tx: mpsc::Sender<WorkerResult>,
     max_concurrency: usize,
     in_flight: usize,
-    pending_dispatches: VecDeque<PendingDispatch>,
     dropped_count: u32,
 }
 
@@ -381,115 +479,20 @@ impl<'a> Engine<'a> {
             tx,
             max_concurrency,
             in_flight: 0,
-            pending_dispatches: VecDeque::new(),
             dropped_count: 0,
         }
     }
 
-    /// Apply a batch of entries (used for seed/replay).
+    /// Apply entries to state and dispatch pending work.
     ///
-    /// Processes all entries, then flushes dispatches. During replay,
-    /// `in_flight` stays at 0 (no actual workers), so `flush_dispatches`
-    /// dispatches any remaining pending work.
-    fn apply_entries(&mut self, entries: &[StateLogEntry]) {
+    /// Used for seed entries and replay. During replay, `in_flight` stays
+    /// at 0 (no actual workers), so `flush_dispatches` dispatches any
+    /// remaining pending work after all entries are applied.
+    fn apply_and_dispatch(&mut self, entries: &[StateLogEntry]) {
         for entry in entries {
-            self.apply_entry(entry);
+            self.state.apply_entry(entry, self.config);
         }
         self.flush_dispatches();
-    }
-
-    /// Apply a single entry to state, queueing dispatches as needed.
-    fn apply_entry(&mut self, entry: &StateLogEntry) {
-        match entry {
-            StateLogEntry::Config(_) => {
-                // Config is handled by the coordinator, not the engine.
-            }
-            StateLogEntry::TaskSubmitted(s) => {
-                self.state.advance_id_to(s.task_id.0 + 1);
-                self.state.apply_submitted(s);
-                self.pending_dispatches
-                    .push_back(PendingDispatch::Task { task_id: s.task_id });
-            }
-            StateLogEntry::TaskCompleted(c) => {
-                self.in_flight = self.in_flight.saturating_sub(1);
-                // Remove pending dispatch for this task (it completed before being dispatched,
-                // which happens during replay)
-                self.pending_dispatches.retain(
-                    |d| !matches!(d, PendingDispatch::Task { task_id } if *task_id == c.task_id),
-                );
-
-                // Track max ID from embedded children/retries
-                match &c.outcome {
-                    barnum_state::TaskOutcome::Success(s) => {
-                        for child in &s.children {
-                            self.state.advance_id_to(child.task_id.0 + 1);
-                        }
-                    }
-                    barnum_state::TaskOutcome::Failed(f) => {
-                        if let Some(retry) = &f.retry {
-                            self.state.advance_id_to(retry.task_id.0 + 1);
-                        }
-                    }
-                }
-
-                let parent_id = self.state.apply_completed(c);
-
-                // Queue children/retry for dispatch
-                match &c.outcome {
-                    barnum_state::TaskOutcome::Success(s) => {
-                        for child in &s.children {
-                            self.pending_dispatches.push_back(PendingDispatch::Task {
-                                task_id: child.task_id,
-                            });
-                        }
-                    }
-                    barnum_state::TaskOutcome::Failed(f) => {
-                        if let Some(retry) = &f.retry {
-                            self.pending_dispatches.push_back(PendingDispatch::Task {
-                                task_id: retry.task_id,
-                            });
-                        }
-                    }
-                }
-
-                // For leaf/permanent-failure: walk up the parent chain for finally
-                if let Some(pid) = parent_id
-                    && let Some(finally_id) = self.state.walk_up_for_finally(pid, self.config)
-                {
-                    self.pending_dispatches.push_back(PendingDispatch::Finally {
-                        parent_id: finally_id,
-                    });
-                }
-            }
-            StateLogEntry::FinallyRun(f) => {
-                self.in_flight = self.in_flight.saturating_sub(1);
-                // Remove pending finally dispatch (it completed during replay)
-                self.pending_dispatches.retain(|d| {
-                    !matches!(d, PendingDispatch::Finally { parent_id } if *parent_id == f.finally_for)
-                });
-
-                for child in &f.children {
-                    self.state.advance_id_to(child.task_id.0 + 1);
-                }
-
-                let grandparent_id = self.state.apply_finally_run(f);
-
-                for child in &f.children {
-                    self.pending_dispatches.push_back(PendingDispatch::Task {
-                        task_id: child.task_id,
-                    });
-                }
-
-                // Walk up from grandparent for further finally detection
-                if let Some(gp_id) = grandparent_id
-                    && let Some(finally_id) = self.state.walk_up_for_finally(gp_id, self.config)
-                {
-                    self.pending_dispatches.push_back(PendingDispatch::Finally {
-                        parent_id: finally_id,
-                    });
-                }
-            }
-        }
     }
 
     /// Process a raw worker result. Returns entries to write to the log.
@@ -500,6 +503,8 @@ impl<'a> Engine<'a> {
             result: submit_result,
         } = result;
 
+        self.in_flight = self.in_flight.saturating_sub(1);
+
         let entries = match submit_result {
             dispatch::SubmitResult::Finally { value, output } => {
                 self.convert_finally_result(task_id, value, output)
@@ -508,7 +513,7 @@ impl<'a> Engine<'a> {
         };
 
         for entry in &entries {
-            self.apply_entry(entry);
+            self.state.apply_entry(entry, self.config);
         }
         self.flush_dispatches();
         entries
@@ -650,7 +655,7 @@ impl<'a> Engine<'a> {
     #[expect(clippy::expect_used, clippy::panic)]
     fn flush_dispatches(&mut self) {
         while self.in_flight < self.max_concurrency {
-            let Some(dispatch) = self.pending_dispatches.pop_front() else {
+            let Some(dispatch) = self.state.pending_dispatches.pop_front() else {
                 break;
             };
             match dispatch {
@@ -758,7 +763,7 @@ impl<'a> Engine<'a> {
 
     /// True when all work is done.
     fn is_done(&self) -> bool {
-        self.pending_dispatches.is_empty() && self.in_flight == 0
+        self.state.pending_dispatches.is_empty() && self.in_flight == 0
     }
 
     /// Compute the workflow result.
@@ -879,7 +884,7 @@ pub fn run(
     }
 
     // Apply seed entries (queues dispatches, then flushes)
-    engine.apply_entries(&seed_entries);
+    engine.apply_and_dispatch(&seed_entries);
 
     // Main loop
     run_loop(&mut engine, &rx, &mut log_writer)
@@ -947,7 +952,7 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
 
     // 4. Create engine and replay old entries
     let mut engine = Engine::new(&config, &schemas, pool, tx, max_concurrency);
-    engine.apply_entries(&old_entries);
+    engine.apply_and_dispatch(&old_entries);
 
     // 5. Continue with main loop
     run_loop(&mut engine, &rx, &mut log_writer)
@@ -1017,5 +1022,655 @@ mod tests {
                 .unwrap()
                 .contains("Test Step")
         );
+    }
+}
+
+#[cfg(test)]
+mod run_state_tests {
+    use barnum_state::{FinallyRun, StateLogEntry, TaskCompleted, TaskOrigin, TaskSubmitted};
+
+    use crate::resolved::{Action, Config, Options, Step};
+    use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
+
+    use super::{PendingDispatch, RunState, TaskState};
+
+    // ==================== Helpers ====================
+
+    fn step(name: &str) -> Step {
+        Step {
+            name: StepName::new(name),
+            value_schema: None,
+            pre: None,
+            action: Action::Command {
+                script: "true".into(),
+            },
+            post: None,
+            next: vec![],
+            finally_hook: None,
+            options: Options::default(),
+        }
+    }
+
+    fn step_with_finally(name: &str) -> Step {
+        Step {
+            finally_hook: Some(HookScript::new("echo done")),
+            ..step(name)
+        }
+    }
+
+    fn config(steps: Vec<Step>) -> Config {
+        Config {
+            max_concurrency: None,
+            steps,
+        }
+    }
+
+    fn val() -> StepInputValue {
+        StepInputValue(serde_json::json!({}))
+    }
+
+    fn seed(id: u32, step_name: &str) -> StateLogEntry {
+        StateLogEntry::TaskSubmitted(TaskSubmitted {
+            task_id: LogTaskId(id),
+            step: StepName::new(step_name),
+            value: val(),
+            origin: TaskOrigin::Seed,
+        })
+    }
+
+    fn spawned(id: u32, step_name: &str, parent_id: u32) -> TaskSubmitted {
+        TaskSubmitted {
+            task_id: LogTaskId(id),
+            step: StepName::new(step_name),
+            value: val(),
+            origin: TaskOrigin::Spawned {
+                parent_id: Some(LogTaskId(parent_id)),
+            },
+        }
+    }
+
+    fn leaf_success(task_id: u32) -> StateLogEntry {
+        StateLogEntry::TaskCompleted(TaskCompleted {
+            task_id: LogTaskId(task_id),
+            outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
+                finally_value: val(),
+                children: vec![],
+            }),
+        })
+    }
+
+    fn success_with_children(task_id: u32, children: Vec<TaskSubmitted>) -> StateLogEntry {
+        StateLogEntry::TaskCompleted(TaskCompleted {
+            task_id: LogTaskId(task_id),
+            outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
+                finally_value: val(),
+                children,
+            }),
+        })
+    }
+
+    fn failed_with_retry(task_id: u32, retry: TaskSubmitted) -> StateLogEntry {
+        StateLogEntry::TaskCompleted(TaskCompleted {
+            task_id: LogTaskId(task_id),
+            outcome: barnum_state::TaskOutcome::Failed(barnum_state::TaskFailed {
+                reason: barnum_state::FailureReason::Timeout,
+                retry: Some(retry),
+            }),
+        })
+    }
+
+    fn failed_permanent(task_id: u32) -> StateLogEntry {
+        StateLogEntry::TaskCompleted(TaskCompleted {
+            task_id: LogTaskId(task_id),
+            outcome: barnum_state::TaskOutcome::Failed(barnum_state::TaskFailed {
+                reason: barnum_state::FailureReason::Timeout,
+                retry: None,
+            }),
+        })
+    }
+
+    fn retry_task(id: u32, step_name: &str, replaces: u32) -> TaskSubmitted {
+        TaskSubmitted {
+            task_id: LogTaskId(id),
+            step: StepName::new(step_name),
+            value: val(),
+            origin: TaskOrigin::Retry {
+                replaces: LogTaskId(replaces),
+            },
+        }
+    }
+
+    fn finally_run(parent_id: u32, children: Vec<TaskSubmitted>) -> StateLogEntry {
+        StateLogEntry::FinallyRun(FinallyRun {
+            finally_for: LogTaskId(parent_id),
+            children,
+        })
+    }
+
+    fn has_task_dispatch(state: &RunState, task_id: u32) -> bool {
+        state.pending_dispatches.iter().any(
+            |d| matches!(d, PendingDispatch::Task { task_id: id } if *id == LogTaskId(task_id)),
+        )
+    }
+
+    fn has_finally_dispatch(state: &RunState, parent_id: u32) -> bool {
+        state
+            .pending_dispatches
+            .iter()
+            .any(|d| matches!(d, PendingDispatch::Finally { parent_id: id } if *id == LogTaskId(parent_id)))
+    }
+
+    // ==================== TaskSubmitted ====================
+
+    #[test]
+    fn seed_queues_task_dispatch() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+
+        assert!(state.tasks.contains_key(&LogTaskId(0)));
+        assert!(matches!(
+            state.tasks[&LogTaskId(0)].state,
+            TaskState::Pending(_)
+        ));
+        assert_eq!(state.pending_dispatches.len(), 1);
+        assert!(has_task_dispatch(&state, 0));
+        assert_eq!(state.next_task_id, 1);
+    }
+
+    #[test]
+    fn spawned_child_queues_dispatch() {
+        let cfg = config(vec![step("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.pending_dispatches.clear();
+
+        // Child 1 is in the map with parent_id 0
+        assert!(state.tasks.contains_key(&LogTaskId(1)));
+        assert_eq!(state.tasks[&LogTaskId(1)].parent_id, Some(LogTaskId(0)));
+    }
+
+    #[test]
+    fn retry_replaces_failed_task() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&failed_with_retry(0, retry_task(1, "A", 0)), &cfg);
+
+        // Original removed, retry in map
+        assert!(!state.tasks.contains_key(&LogTaskId(0)));
+        assert!(state.tasks.contains_key(&LogTaskId(1)));
+        assert!(matches!(
+            state.tasks[&LogTaskId(1)].state,
+            TaskState::Pending(_)
+        ));
+        assert!(has_task_dispatch(&state, 1));
+    }
+
+    #[test]
+    fn multiple_seeds_all_queued() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&seed(1, "A"), &cfg);
+        state.apply_entry(&seed(2, "A"), &cfg);
+
+        assert_eq!(state.tasks.len(), 3);
+        assert_eq!(state.pending_dispatches.len(), 3);
+        assert_eq!(state.next_task_id, 3);
+    }
+
+    #[test]
+    fn id_advancement_handles_gaps() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+            task_id: LogTaskId(5),
+            step: StepName::new("A"),
+            value: val(),
+            origin: TaskOrigin::Seed,
+        });
+        state.apply_entry(&entry, &cfg);
+
+        assert_eq!(state.next_task_id, 6);
+    }
+
+    // ==================== TaskCompleted — Success ====================
+
+    #[test]
+    fn leaf_success_removes_task() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(0), &cfg);
+
+        assert!(state.tasks.is_empty());
+        assert!(state.pending_dispatches.is_empty());
+    }
+
+    #[test]
+    fn success_with_children_transitions_to_waiting() {
+        let cfg = config(vec![step("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(
+            &success_with_children(0, vec![spawned(1, "B", 0), spawned(2, "B", 0)]),
+            &cfg,
+        );
+
+        // Parent in WaitingForChildren with count 2
+        assert!(matches!(
+            &state.tasks[&LogTaskId(0)].state,
+            TaskState::WaitingForChildren(w) if w.pending_children_count.get() == 2
+        ));
+        // Children in map
+        assert!(state.tasks.contains_key(&LogTaskId(1)));
+        assert!(state.tasks.contains_key(&LogTaskId(2)));
+        // Two child dispatches queued
+        assert!(has_task_dispatch(&state, 1));
+        assert!(has_task_dispatch(&state, 2));
+    }
+
+    #[test]
+    fn success_with_children_advances_ids() {
+        let cfg = config(vec![step("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(
+            &success_with_children(0, vec![spawned(5, "B", 0), spawned(10, "B", 0)]),
+            &cfg,
+        );
+
+        assert_eq!(state.next_task_id, 11);
+    }
+
+    // ==================== TaskCompleted — Failure ====================
+
+    #[test]
+    fn failed_with_retry_inserts_retry() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&failed_with_retry(0, retry_task(1, "A", 0)), &cfg);
+
+        assert!(!state.tasks.contains_key(&LogTaskId(0)));
+        assert!(state.tasks.contains_key(&LogTaskId(1)));
+        assert_eq!(state.pending_dispatches.len(), 1);
+        assert!(has_task_dispatch(&state, 1));
+    }
+
+    #[test]
+    fn failed_permanent_removes_task() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&failed_permanent(0), &cfg);
+
+        assert!(state.tasks.is_empty());
+        assert!(state.pending_dispatches.is_empty());
+    }
+
+    #[test]
+    fn failed_permanent_under_parent_walks_up() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&failed_permanent(1), &cfg);
+
+        assert!(has_finally_dispatch(&state, 0));
+    }
+
+    // ==================== FinallyRun ====================
+
+    #[test]
+    fn finally_no_children_removes_parent() {
+        let cfg = config(vec![
+            step_with_finally("A"),
+            step("B"),
+            step_with_finally("Root"),
+        ]);
+        let mut state = RunState::new();
+
+        // Root(0) → A(1) → B(2). B completes, A's finally runs with no children.
+        state.apply_entry(&seed(0, "Root"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "A", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "B", 1)]), &cfg);
+        state.apply_entry(&leaf_success(2), &cfg);
+        state.pending_dispatches.clear();
+
+        // A's finally runs with no children
+        state.apply_entry(&finally_run(1, vec![]), &cfg);
+
+        // A removed from map
+        assert!(!state.tasks.contains_key(&LogTaskId(1)));
+    }
+
+    #[test]
+    fn finally_with_children_adds_children() {
+        let cfg = config(vec![step_with_finally("A"), step("B"), step("C")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.apply_entry(&leaf_success(1), &cfg);
+        state.pending_dispatches.clear();
+
+        // A's finally spawns two children
+        let children = vec![
+            TaskSubmitted {
+                task_id: LogTaskId(2),
+                step: StepName::new("C"),
+                value: val(),
+                origin: TaskOrigin::Spawned { parent_id: None },
+            },
+            TaskSubmitted {
+                task_id: LogTaskId(3),
+                step: StepName::new("C"),
+                value: val(),
+                origin: TaskOrigin::Spawned { parent_id: None },
+            },
+        ];
+        state.apply_entry(&finally_run(0, children), &cfg);
+
+        // A removed, children added
+        assert!(!state.tasks.contains_key(&LogTaskId(0)));
+        assert!(state.tasks.contains_key(&LogTaskId(2)));
+        assert!(state.tasks.contains_key(&LogTaskId(3)));
+        assert!(has_task_dispatch(&state, 2));
+        assert!(has_task_dispatch(&state, 3));
+    }
+
+    #[test]
+    fn finally_no_children_under_grandparent_triggers_grandparent_finally() {
+        let cfg = config(vec![
+            step_with_finally("GP"),
+            step_with_finally("P"),
+            step("C"),
+        ]);
+        let mut state = RunState::new();
+
+        // GP(0) → P(1) → C(2). C completes, P's finally runs with no children.
+        state.apply_entry(&seed(0, "GP"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "P", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "C", 1)]), &cfg);
+        state.apply_entry(&leaf_success(2), &cfg);
+        state.pending_dispatches.clear();
+
+        // P's finally runs with no children → GP count should reach 0
+        state.apply_entry(&finally_run(1, vec![]), &cfg);
+
+        // GP should now need its finally
+        assert!(has_finally_dispatch(&state, 0));
+    }
+
+    // ==================== Finally Detection ====================
+
+    #[test]
+    fn child_complete_triggers_parent_finally() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(1), &cfg);
+
+        assert_eq!(state.pending_dispatches.len(), 1);
+        assert!(has_finally_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn child_complete_parent_no_finally_removes_parent() {
+        let cfg = config(vec![step("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(1), &cfg);
+
+        // Both removed, no finally
+        assert!(state.tasks.is_empty());
+        assert!(state.pending_dispatches.is_empty());
+    }
+
+    #[test]
+    fn child_complete_skips_no_finally_ancestors() {
+        let cfg = config(vec![step_with_finally("GP"), step("P"), step("C")]);
+        let mut state = RunState::new();
+
+        // GP(0) → P(1) → C(2)
+        state.apply_entry(&seed(0, "GP"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "P", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "C", 1)]), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(2), &cfg);
+
+        // P has no finally → removed. GP has finally → dispatch queued.
+        assert!(!state.tasks.contains_key(&LogTaskId(1)));
+        assert!(!state.tasks.contains_key(&LogTaskId(2)));
+        assert!(has_finally_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn child_complete_parent_still_has_siblings() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(
+            &success_with_children(0, vec![spawned(1, "B", 0), spawned(2, "B", 0)]),
+            &cfg,
+        );
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(1), &cfg);
+
+        // Parent still waiting (count 1), no finally yet
+        assert!(matches!(
+            &state.tasks[&LogTaskId(0)].state,
+            TaskState::WaitingForChildren(w) if w.pending_children_count.get() == 1
+        ));
+        assert!(!has_finally_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn both_children_complete_then_finally() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(
+            &success_with_children(0, vec![spawned(1, "B", 0), spawned(2, "B", 0)]),
+            &cfg,
+        );
+        state.pending_dispatches.clear();
+
+        // First child
+        state.apply_entry(&leaf_success(1), &cfg);
+        assert!(!has_finally_dispatch(&state, 0));
+
+        // Second child
+        state.apply_entry(&leaf_success(2), &cfg);
+        assert!(has_finally_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn no_finally_at_any_level_just_removes() {
+        let cfg = config(vec![step("GP"), step("P"), step("C")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "GP"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "P", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "C", 1)]), &cfg);
+        state.pending_dispatches.clear();
+
+        state.apply_entry(&leaf_success(2), &cfg);
+
+        // All removed, no finally dispatches
+        assert!(state.tasks.is_empty());
+        assert!(state.pending_dispatches.is_empty());
+    }
+
+    // ==================== Replay Behavior ====================
+
+    #[test]
+    fn replay_completed_removes_stale_task_dispatch() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        // Seed queues a dispatch
+        state.apply_entry(&seed(0, "A"), &cfg);
+        assert!(has_task_dispatch(&state, 0));
+
+        // Completed removes the stale dispatch
+        state.apply_entry(&leaf_success(0), &cfg);
+        assert!(!has_task_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn replay_finally_removes_stale_finally_dispatch() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.apply_entry(&leaf_success(1), &cfg);
+        assert!(has_finally_dispatch(&state, 0));
+
+        // FinallyRun removes the stale dispatch
+        state.apply_entry(&finally_run(0, vec![]), &cfg);
+        assert!(!has_finally_dispatch(&state, 0));
+    }
+
+    // ==================== Complex Scenarios ====================
+
+    #[test]
+    fn retry_under_parent_preserves_parent_waiting() {
+        let cfg = config(vec![step_with_finally("A"), step("B")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "B", 0)]), &cfg);
+        state.pending_dispatches.clear();
+
+        // Child fails with retry
+        state.apply_entry(&failed_with_retry(1, retry_task(2, "B", 1)), &cfg);
+
+        // Parent still waiting (retry inherits parent_id)
+        assert!(matches!(
+            &state.tasks[&LogTaskId(0)].state,
+            TaskState::WaitingForChildren(w) if w.pending_children_count.get() == 1
+        ));
+        assert!(state.tasks.contains_key(&LogTaskId(2)));
+        assert!(!has_finally_dispatch(&state, 0));
+    }
+
+    #[test]
+    fn deeply_nested_finally_chain() {
+        // GGP (finally) → GP (no finally) → P (finally) → C
+        let cfg = config(vec![
+            step_with_finally("GGP"),
+            step("GP"),
+            step_with_finally("P"),
+            step("C"),
+        ]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "GGP"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "GP", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "P", 1)]), &cfg);
+        state.apply_entry(&success_with_children(2, vec![spawned(3, "C", 2)]), &cfg);
+        state.pending_dispatches.clear();
+
+        // C completes → P has finally, so P's finally fires (not GGP's)
+        state.apply_entry(&leaf_success(3), &cfg);
+
+        assert!(has_finally_dispatch(&state, 2)); // P's finally
+        assert!(!has_finally_dispatch(&state, 0)); // NOT GGP's
+    }
+
+    #[test]
+    fn finally_spawns_children_that_complete() {
+        let cfg = config(vec![
+            step_with_finally("GP"),
+            step_with_finally("P"),
+            step("C"),
+            step("FC"),
+        ]);
+        let mut state = RunState::new();
+
+        // GP(0) → P(1) → C(2)
+        state.apply_entry(&seed(0, "GP"), &cfg);
+        state.apply_entry(&success_with_children(0, vec![spawned(1, "P", 0)]), &cfg);
+        state.apply_entry(&success_with_children(1, vec![spawned(2, "C", 1)]), &cfg);
+        state.apply_entry(&leaf_success(2), &cfg);
+        state.pending_dispatches.clear();
+
+        // P's finally spawns FC(3) and FC(4) under GP
+        let children = vec![
+            TaskSubmitted {
+                task_id: LogTaskId(3),
+                step: StepName::new("FC"),
+                value: val(),
+                origin: TaskOrigin::Spawned {
+                    parent_id: Some(LogTaskId(0)),
+                },
+            },
+            TaskSubmitted {
+                task_id: LogTaskId(4),
+                step: StepName::new("FC"),
+                value: val(),
+                origin: TaskOrigin::Spawned {
+                    parent_id: Some(LogTaskId(0)),
+                },
+            },
+        ];
+        state.apply_entry(&finally_run(1, children), &cfg);
+        state.pending_dispatches.clear();
+
+        // GP had 1 child (P), now has 2 (FC3, FC4) after adjustment
+        assert!(matches!(
+            &state.tasks[&LogTaskId(0)].state,
+            TaskState::WaitingForChildren(w) if w.pending_children_count.get() == 2
+        ));
+
+        // Complete FC(3)
+        state.apply_entry(&leaf_success(3), &cfg);
+        assert!(matches!(
+            &state.tasks[&LogTaskId(0)].state,
+            TaskState::WaitingForChildren(w) if w.pending_children_count.get() == 1
+        ));
+        assert!(!has_finally_dispatch(&state, 0));
+
+        // Complete FC(4) — GP reaches zero, GP's finally should fire
+        state.apply_entry(&leaf_success(4), &cfg);
+        assert!(has_finally_dispatch(&state, 0));
     }
 }
