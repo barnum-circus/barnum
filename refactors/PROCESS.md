@@ -281,28 +281,38 @@ git push
 
 Atomic commits live on the branch for development and debugging. Master gets a clean, linear history where each commit is a complete, self-contained change that passes CI.
 
-## Extract independent work (after approval)
+## Extract sub-refactors
 
-**Critical**: After receiving approval, actively identify changes that are independent of the main refactor. These should be:
+**This happens during design, not after approval.** While writing the architecture document, actively compare the target code against the current code. Whenever the target and current code share the same logic with only structural differences (decoupled from I/O, different ownership, deferred side effects), that structural change is a sub-refactor that can land independently.
 
-1. **Extracted** into their own small changes
-2. **Implemented first** before the main refactor
-3. **Marked as done** in the plan
+Each sub-refactor gets its own markdown file in `refactors/pending/`. It has its own motivation, its own before/after, and can be implemented and merged without the parent refactor existing. The parent document references it by filename.
 
-Examples of independent work:
-- Format changes that don't affect behavior
-- Removing dead code
-- Adding new enum variants (before using them)
-- Refactoring internal structure (typestate patterns, etc.)
+The goal: shrink the parent refactor's diff to only the irreducible core — the thing that can't be done incrementally. Every line of code that can be changed in advance, should be.
 
-The goal: by the time you start the "real" refactor, as much preliminary work as possible is already done. The remaining changes are the irreducible core that must happen together.
+### How to find sub-refactors
 
-## Why this matters
+Compare each proposed component against its current equivalent:
 
-- Smaller PRs are easier to review
-- Independent changes can be tested in isolation
-- If the main refactor is abandoned, the preliminary work still has value
-- Reduces risk by making each change smaller
+1. If the proposed code is the same logic with I/O removed, the I/O extraction is a sub-refactor.
+2. If the proposed code moves state from one struct to another, the extraction is a sub-refactor.
+3. If the proposed code replaces an inline side effect with a deferred mechanism (e.g., inline `schedule_finally()` becomes deferred `removed_parents`), that deferral is a sub-refactor.
+4. If the proposed code removes fields from a struct and looks them up instead, that field removal is a sub-refactor.
+5. If the proposed code replaces a state machine variant with a counter, that simplification is a sub-refactor.
+
+Each of these can land on master independently and pass CI. After they all land, the parent refactor's diff is smaller, focused, and less risky.
+
+### Why separate files
+
+Large refactor documents become unmanageable. When a document covers both "extract RunState from TaskRunner" and "introduce the Applier trait", the scope is too wide to review or implement cleanly. Sub-refactors in separate files can be approved, implemented, and completed independently. The parent document stays focused on the architectural change that requires everything to happen together.
+
+### Examples
+
+A refactor that introduces an event loop with appliers might produce:
+- `EXTRACT_RUN_STATE.md` — move task tracking into its own struct
+- `REMOVE_INFLIGHT_VARIANT.md` — replace InFlight state with a counter
+- `REMOVE_CONFIG_FROM_TASK_ENTRY.md` — drop cached config fields
+- `DEFER_PARENT_REMOVAL.md` — accumulate removed parents instead of inline finally scheduling
+- `APPLY_PATTERN.md` — the parent refactor, now a much smaller diff
 
 ## Completing refactors
 
