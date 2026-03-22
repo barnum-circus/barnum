@@ -6,6 +6,7 @@
 #![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
 #![expect(clippy::doc_markdown)]
+#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
@@ -99,6 +100,7 @@ fn retry_on_invalid_response_false_drops_task() {
 /// Test that retry_on_invalid_response=true retries up to max_retries.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn retry_on_invalid_response_true_retries() {
     let root = setup_test_dir(&format!("{TEST_DIR}_retry_true"));
 
@@ -172,6 +174,7 @@ fn retry_on_invalid_response_true_retries() {
 /// Test that agent returning malformed JSON triggers retry.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn malformed_json_triggers_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_malformed"));
 
