@@ -41,7 +41,7 @@ During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter.
 
 ### Target event loop
 
-The channel carries individual `StateLogEntry` values — each message is exactly one entry. Workers produce a single `TaskCompleted` (with children/retry embedded in `subsequent`) and send it on `tx`. The coordinator receives entries and passes them through all appliers via `process_entries`.
+The channel carries `ControlFlow<(), StateLogEntry>`. `Continue(entry)` is a normal entry — workers send one `TaskCompleted`, Engine sends cascade `TaskSubmitted` entries. `Break(())` is the shutdown signal — Engine sends it when the workflow is done (no pending dispatches, no in-flight workers, no cascade entries sent). The coordinator matches on the message: `Continue` entries flow through `process_entries`, `Break` exits the loop.
 
 ```rust
 enum RunMode {
@@ -60,7 +60,7 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
         }
     };
 
-    let (tx, rx) = mpsc::channel::<StateLogEntry>();
+    let (tx, rx) = mpsc::channel::<ControlFlow<(), StateLogEntry>>();
 
     let mut appliers: Vec<Box<dyn Applier>> = vec![
         Box::new(Engine::new(runner_config, tx)),
@@ -71,8 +71,13 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
     // Applied as one batch — Engine processes all entries before dispatching.
     process_entries(&mut appliers, &seed);
 
-    while let Ok(entry) = rx.recv() {
-        process_entries(&mut appliers, &[entry]);
+    while let Ok(msg) = rx.recv() {
+        match msg {
+            ControlFlow::Continue(entry) => {
+                process_entries(&mut appliers, &[entry]);
+            }
+            ControlFlow::Break(()) => break,
+        }
     }
 
     Ok(())
@@ -87,7 +92,7 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 
 `tx` moves into the Engine — workers get clones when spawned. Each worker produces a single `TaskCompleted` (with children/retry in `subsequent`) and sends it on `tx`. When all senders are dropped (workers done, Engine drops its copy), `rx.recv()` returns `Err` and the loop exits.
 
-Every source on the channel produces exactly one event: workers send one `TaskCompleted`, Engine sends individual `TaskSubmitted` entries for finally tasks. The coordinator wraps each received entry in `&[entry]` for the batch-based Applier interface.
+Every source sends `ControlFlow<(), StateLogEntry>` on the channel. Workers send `Continue(TaskCompleted(...))`. Engine sends `Continue(TaskSubmitted(...))` for cascade (finally) entries, and `Break(())` for shutdown. The coordinator matches on the message: `Continue` entries are wrapped in `&[entry]` for the batch-based Applier interface, `Break` exits the loop.
 
 ## StateLogEntry
 
@@ -168,7 +173,7 @@ Config is not passed to the constructor — it arrives as the first `StateLogEnt
 struct Engine {
     state: RunState,
     config: Option<Config>,
-    tx: Option<Sender<StateLogEntry>>,
+    tx: Sender<ControlFlow<(), StateLogEntry>>,
     id_counter: Arc<AtomicU32>,
     pool: PoolConnection,
     in_flight: usize,
@@ -254,6 +259,7 @@ impl Applier for Engine {
         // without, remove immediately (may cascade — the while loop
         // picks up further removals). During replay, parents may already
         // be removed by a Finally entry in the same batch — skip them.
+        let mut sent_cascade = false;
         while let Some((parent_id, step)) = self.state.removed_parents.pop() {
             let has_finally = self.config().step_map.get(&step)
                 .and_then(|s| s.finally.as_ref())
@@ -281,16 +287,16 @@ impl Applier for Engine {
                     value: finally_value,
                     origin: TaskOrigin::Finally { finally_for: parent_id },
                 });
-                if let Some(tx) = &self.tx {
-                    tx.send(entry).expect("[P050] channel send failed");
-                }
+                self.tx.send(ControlFlow::Continue(entry))
+                    .expect("[P050] channel send failed");
+                sent_cascade = true;
             } else {
                 // No finally script — remove immediately, may cascade
                 self.state.remove_and_notify_parent(parent_id);
             }
         }
 
-        self.flush_dispatches();
+        self.flush_dispatches(sent_cascade);
     }
 }
 ```
@@ -300,9 +306,7 @@ Cascade entries go on `tx` as individual messages and arrive as subsequent entri
 **`flush_dispatches()`**: Spawns worker threads. Each worker gets a `tx` clone, an `id_counter` clone, and the step config.
 
 ```rust
-fn flush_dispatches(&mut self) {
-    let Some(tx) = &self.tx else { return };
-
+fn flush_dispatches(&mut self, sent_cascade: bool) {
     while self.in_flight < self.max_concurrency {
         let Some(task) = self.pending_dispatches.pop_front() else { break };
         // Skip tasks no longer in Pending state (completed during replay).
@@ -312,13 +316,14 @@ fn flush_dispatches(&mut self) {
         }
         self.in_flight += 1;
         self.dispatched.insert(task.task_id);
-        let tx = tx.clone();
+        let tx = self.tx.clone();
         let id_counter = self.id_counter.clone();
         // spawn worker thread with task, step config, tx, id_counter
     }
 
-    if self.pending_dispatches.is_empty() && self.in_flight == 0 {
-        self.tx = None; // drop sender → channel closes when workers finish
+    if !sent_cascade && self.pending_dispatches.is_empty() && self.in_flight == 0 {
+        self.tx.send(ControlFlow::Break(()))
+            .expect("[P055] shutdown send failed");
     }
 }
 ```
@@ -329,7 +334,7 @@ fn flush_dispatches(&mut self) {
 2. Interprets the result (`process_submit_result`, post hooks) — step config captured in closure
 3. Allocates IDs for children/retries from the shared `id_counter`
 4. Produces a single `TaskCompleted` with children/retry in `subsequent`
-5. Sends `StateLogEntry::TaskCompleted(...)` on `tx`, drops `tx` clone
+5. Sends `ControlFlow::Continue(StateLogEntry::TaskCompleted(...))` on `tx`, drops `tx` clone
 
 **RunState internals**:
 
@@ -455,7 +460,7 @@ Writes every entry it receives, including replayed entries during Resume. The ne
 
 ### Termination
 
-Worker threads hold `Sender<StateLogEntry>` clones (one per worker). They drop them after sending. The Engine drops its `tx` when `pending_dispatches` is empty and `in_flight == 0`. With all senders dropped, `rx.recv()` returns `Err` and the coordinator loop exits.
+Engine sends `ControlFlow::Break(())` on `tx` when `pending_dispatches` is empty and `in_flight == 0` (checked in `flush_dispatches`). The coordinator matches on `Break` and exits the loop. All appliers are dropped, including Engine (which drops `tx`). Worker threads hold `Sender` clones — they've already completed and dropped theirs by the time shutdown fires (in_flight is 0).
 
 ### TaskEntry and TaskState
 
