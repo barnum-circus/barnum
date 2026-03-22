@@ -186,10 +186,11 @@ impl Engine {
 struct RunState {
     tasks: BTreeMap<LogTaskId, TaskEntry>,
     next_task_id: u32,
-    /// Parent task IDs whose children are all done. The parent entry
-    /// is still in the map (in WaitingForChildren state with count 0)
-    /// until explicitly removed.
-    removed_parents: Vec<LogTaskId>,
+    /// Parent tasks whose children are all done. The parent entry
+    /// is still in the map (in WaitingForChildren state) until
+    /// explicitly removed. Carries the step name so the cascade
+    /// handler can look up the finally script from config.
+    removed_parents: Vec<(LogTaskId, StepName)>,
 }
 
 struct PendingTask {
@@ -253,9 +254,15 @@ impl Applier for Engine {
         // without, remove immediately (may cascade — the while loop
         // picks up further removals). During replay, parents may already
         // be removed by a Finally entry in the same batch — skip them.
-        while let Some(parent_id) = self.state.removed_parents.pop() {
+        while let Some((parent_id, step)) = self.state.removed_parents.pop() {
+            let has_finally = self.config().step_map.get(&step)
+                .and_then(|s| s.finally.as_ref())
+                .is_some();
             let Some(parent) = self.state.tasks.get(&parent_id) else {
-                continue; // Already removed by a replayed Finally entry
+                // During replay, a Finally entry already removed this parent.
+                assert!(has_finally,
+                    "[P054] removed parent missing but step has no finally script");
+                continue;
             };
             let finally_value = match &parent.state {
                 TaskState::WaitingForChildren { finally_value, .. } =>
@@ -263,7 +270,6 @@ impl Applier for Engine {
                 TaskState::Pending { .. } | TaskState::Failed =>
                     panic!("[P041] removed parent not in WaitingForChildren"),
             };
-            let step = parent.step.clone();
 
             let script = self.config().step_map.get(&step)
                 .and_then(|s| s.finally.as_ref());
