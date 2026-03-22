@@ -167,15 +167,15 @@ After (on RunState):
 
 ```rust
 fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
-    let entry = self.tasks.remove(&task_id).expect("task must exist");
+    let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
     let Some(parent_id) = entry.parent_id else { return };
-    let Some(parent) = self.tasks.get_mut(&parent_id) else { return };
+    let parent = self.tasks.get_mut(&parent_id).expect("[P022] parent task must exist");
     let TaskState::WaitingForChildren {
         pending_children_count,
         finally_data,
     } = &mut parent.state
     else {
-        return;
+        panic!("[P023] parent task not in WaitingForChildren state");
     };
 
     let new_count = pending_children_count.get() - 1;
@@ -259,7 +259,7 @@ for parent in self.state.drain_removed_parents() {
 
 `decrement_pending_children` is replaced by `RunState::remove_and_notify_parent`.
 
-`increment_pending_children` (line 620) is only called by `schedule_finally`. It stays on TaskRunner since it mutates `self.state.tasks` directly — it's a one-liner that increments a parent's `pending_children_count`. It can move onto RunState too for consistency, but it's not required.
+`increment_pending_children` (line 620) is only called by `schedule_finally`. It stays on TaskRunner since its only caller stays on TaskRunner.
 
 ## Testing
 
