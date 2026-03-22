@@ -63,6 +63,8 @@ Your singular mission is creating S-tier libraries where:
 
 6. **Flaky tests are unacceptable** - worse than broken tests because they erode trust. If a test is flaky, fix it immediately or delete it. **Never increase timeouts** - that treats symptoms, not causes. Tests should pass reliably within their original timeouts.
 
+7. **Unclear ownership is unacceptable.** Every piece of data should have one obvious owner. If two structs both hold references to the same data and it's ambiguous who's responsible for it, the design is wrong. If a method mutates state that "belongs" to a different abstraction, the boundaries are wrong. Ownership should be legible from the type signatures alone — you shouldn't need to read the implementation to understand who owns what.
+
 ## Generated artifacts
 
 **Generated files that are checked in must always be kept in sync.** When you modify code that affects a generated artifact:
