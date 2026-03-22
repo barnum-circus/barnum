@@ -4,101 +4,263 @@
 
 ## Motivation
 
-Barnum configs are JSON/JSONC files. The JSON Schema provides editor validation, but users writing configs programmatically (generating steps in a loop, computing values, sharing step definitions across workflows) have no type safety.
-
-This refactor generates TypeScript type definitions from the existing JSON Schema and exports them from the `@barnum/barnum` npm package, so users can write typed config files.
+Barnum configs are JSON/JSONC files. The JSON Schema provides editor validation in VS Code, but users writing configs programmatically (generating steps in a loop, sharing step definitions across workflows) have no compile-time type checking. Adding TypeScript type definitions to the `@barnum/barnum` npm package lets users write `import type { ConfigFile } from "@barnum/barnum"` and get editor completion, type errors, and autocomplete on every field.
 
 ## Current State
 
-### Config types
+### Config types in Rust
 
-`crates/barnum_config/src/config.rs` defines `ConfigFile` as the top-level serde struct. Each field derives `schemars::JsonSchema` for automatic JSON Schema generation.
+`crates/barnum_config/src/config.rs` defines the config types. Each struct derives `schemars::JsonSchema` for JSON Schema generation and `serde::Serialize`/`Deserialize` for JSON parsing:
+
+```rust
+// crates/barnum_config/src/config.rs (approximate)
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigFile {
+    #[serde(rename = "$schema", default, skip_serializing)]
+    pub schema_url: Option<String>,
+    pub entrypoint: Option<StepName>,
+    #[serde(default)]
+    pub options: Options,
+    pub steps: Vec<StepFile>,
+}
+```
+
+Other config types in the same file: `StepFile`, `ActionFile` (enum: Pool | Command), `Options`, `StepOptions`, `PreHook`, `PostHook`, `FinallyHook`, `MaybeLinked<T>`, `SchemaRef`.
 
 ### JSON Schema generation
 
-`crates/barnum_config/src/bin/build_barnum_schema.rs` calls `config_schema()` (which calls `schemars::schema_for!(ConfigFile)`), serializes the result to JSON, and writes it to `libs/barnum/barnum-config-schema.json`. This file is checked in and verified by CI.
+`crates/barnum_config/src/bin/build_barnum_schema.rs` generates `libs/barnum/barnum-config-schema.json` via schemars. This is a 408-line JSON Schema (draft-07). The file is checked in and verified by CI.
 
-### npm package
+### npm package structure
 
-`libs/barnum/package.json` publishes `@barnum/barnum` (v0.2.4) with:
-- `index.js` — resolves the platform-specific binary path
-- `cli.js` — shebang wrapper that spawns the binary
-- `barnum-config-schema.json` — JSON Schema
-- `artifacts/` — pre-built binaries
+`libs/barnum/package.json`:
+```json
+{
+  "name": "@barnum/barnum",
+  "version": "0.2.4",
+  "main": "index.js",
+  "bin": { "barnum": "cli.js" },
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*",
+    "barnum-config-schema.json"
+  ]
+}
+```
 
-The package has no TypeScript type definitions and no `.d.ts` files.
+`libs/barnum/index.js` resolves the platform-specific binary path. `libs/barnum/cli.js` spawns the binary. No `.d.ts` files exist.
+
+### CI verification
+
+`.github/workflows/ci.yml` regenerates the JSON Schema and diffs it against the checked-in version. The pre-commit hook in `hooks/pre-commit` regenerates it automatically.
 
 ## Proposed Changes
 
-### 1. Generate TypeScript types from the JSON Schema
+### Task 1: Add `ts-rs` to Rust config types
 
-The build pipeline becomes:
+**Goal:** Generate TypeScript type definitions directly from Rust structs using `ts-rs`, avoiding the JSON Schema intermediate step entirely.
 
+#### 1.1: Add `ts-rs` dependency
+
+**File:** `crates/barnum_config/Cargo.toml`
+
+```toml
+# Before
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "0.8", features = ["preserve_order"] }
+
+# After
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "0.8", features = ["preserve_order"] }
+ts-rs = { version = "10", features = ["serde-compat"] }
 ```
-Rust types (schemars) --> barnum-config-schema.json --> types.d.ts
+
+`serde-compat` is required because the config types use serde attributes (`#[serde(tag = "kind")]`, `#[serde(rename)]`, `#[serde(default)]`) that affect the serialized shape.
+
+#### 1.2: Derive `TS` on config types
+
+**File:** `crates/barnum_config/src/config.rs`
+
+Add `#[derive(TS)]` and `#[ts(export)]` to each config type that should appear in the TypeScript definitions.
+
+Before:
+```rust
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigFile {
+    #[serde(rename = "$schema", default, skip_serializing)]
+    pub schema_url: Option<String>,
+    pub entrypoint: Option<StepName>,
+    #[serde(default)]
+    pub options: Options,
+    pub steps: Vec<StepFile>,
+}
 ```
 
-A Node script in `libs/barnum/` converts the JSON Schema to TypeScript definitions using `json-schema-to-typescript` (established npm package, 3k+ GitHub stars, handles JSON Schema draft-07). The script runs after `build_barnum_schema` regenerates the JSON Schema.
+After:
+```rust
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-```bash
-# In libs/barnum/
-node build-types.js
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, TS)]
+#[ts(export)]
+pub struct ConfigFile {
+    #[serde(rename = "$schema", default, skip_serializing)]
+    pub schema_url: Option<String>,
+    pub entrypoint: Option<StepName>,
+    #[serde(default)]
+    pub options: Options,
+    pub steps: Vec<StepFile>,
+}
 ```
 
-The script reads `barnum-config-schema.json`, produces `types.d.ts`, and appends a `defineConfig` helper signature:
+Same change for: `StepFile`, `ActionFile`, `Options`, `StepOptions`, `PreHook`, `PostHook`, `FinallyHook`, `MaybeLinked<T>`, `SchemaRef`, `StepName`, `StepInputValue`.
 
+**Complication: `$schema` field.** The `$schema` field uses `#[serde(rename = "$schema")]`. `ts-rs` should respect this and generate `"$schema"?: string | null` in the TypeScript output. Verify this.
+
+**Complication: `MaybeLinked<T>`.** This is a generic enum. `ts-rs` handles generics:
+```rust
+#[derive(Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum MaybeLinked<T> {
+    Inline(T),
+    Link(String),
+}
+```
+Generates: `type MaybeLinked<T> = { inline: T } | { link: string }` (depending on serde tagging). Verify the output matches the JSON schema's `anyOf`.
+
+**Complication: Enum tagging.** `ActionFile` uses `#[serde(tag = "kind")]`:
+```rust
+#[derive(Serialize, Deserialize, TS)]
+#[serde(tag = "kind")]
+#[ts(export)]
+pub enum ActionFile {
+    Pool { instructions: MaybeLinked<String> },
+    Command { script: String },
+}
+```
+With `serde-compat`, `ts-rs` should generate a discriminated union:
 ```typescript
-// Generated from barnum-config-schema.json — do not edit manually.
-
-export interface ConfigFile {
-  entrypoint?: string;
-  options?: Options;
-  steps: StepFile[];
-}
-
-export interface Options {
-  timeout?: number;
-  max_retries?: number;
-  max_concurrency?: number;
-  retry_on_timeout?: boolean;
-  retry_on_invalid_response?: boolean;
-}
-
-export interface StepFile {
-  name: string;
-  value_schema?: unknown;
-  pre?: PreHook;
-  action: ActionFile;
-  post?: PostHook;
-  next?: string[];
-  finally?: FinallyHook;
-  options?: StepOptions;
-}
-
-// ... (ActionFile, PreHook, PostHook, FinallyHook, StepOptions, etc.)
-
-/**
- * Identity function that provides type inference for config objects.
- * Returns its argument unchanged.
- */
-export declare function defineConfig(config: ConfigFile): ConfigFile;
+type ActionFile =
+  | { kind: "Pool"; instructions: MaybeLinked<string> }
+  | { kind: "Command"; script: string };
 ```
 
-The exact output depends on `json-schema-to-typescript`'s mapping of the schema. The above is illustrative. The generated file is checked in alongside the schema and verified by CI (same diff-check pattern).
+#### 1.3: Mapping reference
 
-**Build command sequence:**
-```bash
-cargo run -p barnum_config --bin build_barnum_schema   # Rust -> JSON Schema
-cd libs/barnum && node build-types.js                   # JSON Schema -> types.d.ts
+| Rust Type | Expected TypeScript | Notes |
+|-----------|-------------------|-------|
+| `String` | `string` | |
+| `Option<T>` | `T \| null` | serde serializes `None` as `null` |
+| `Vec<T>` | `Array<T>` | |
+| `u32`, `u64` | `number` | precision loss for u64 is acceptable (config values are small) |
+| `bool` | `boolean` | |
+| `StepName` (newtype around `String`) | `string` | need `#[ts(as = "String")]` or implement `TS` manually |
+| `StepInputValue` (newtype around `serde_json::Value`) | `unknown` or `any` | JSON payload, no static type |
+| `serde_json::Value` | `unknown` | for `value_schema` and similar |
+
+### Task 2: Create TypeScript generation binary
+
+**Goal:** A Rust binary that writes the generated TypeScript to `libs/barnum/types.d.ts`, matching the pattern of `build_barnum_schema`.
+
+**File:** `crates/barnum_config/src/bin/build_barnum_types.rs` (new)
+
+```rust
+//! Build-time TypeScript type generator for Barnum config.
+//!
+//! Generates TypeScript definitions and writes them to libs/barnum/types.d.ts
+//! for inclusion in the npm package.
+//!
+//! Run with: `cargo run -p barnum_config --bin build_barnum_types`
+
+#![expect(clippy::print_stdout)]
+#![expect(clippy::print_stderr)]
+
+use barnum_config::ConfigFile;
+use std::fs;
+use std::path::Path;
+use ts_rs::TS;
+
+fn main() {
+    let ts = ConfigFile::export_to_string()
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to generate TypeScript: {e}");
+            std::process::exit(1);
+        });
+
+    // Prepend banner and append defineConfig
+    let output = format!(
+        "// Generated from Rust types — do not edit manually.\n\n\
+         {ts}\n\n\
+         /**\n * Identity function that provides type inference for config objects.\n \
+         * Returns its argument unchanged.\n */\n\
+         export declare function defineConfig(config: ConfigFile): ConfigFile;\n"
+    );
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir.parent().and_then(|p| p.parent())
+        .expect("Cannot find workspace root");
+    let output_path = workspace_root.join("libs/barnum/types.d.ts");
+
+    fs::write(&output_path, &output).unwrap_or_else(|e| {
+        eprintln!("Failed to write types file: {e}");
+        std::process::exit(1);
+    });
+
+    println!("Types written to: {}", output_path.display());
+}
 ```
 
-### 2. Export types from the npm package
+**Complication:** `ts-rs` generates types per-struct via `T::export_to_string()`. For a single file with all types, we may need to call `export_to_string()` on each type and concatenate, or use `ts-rs`'s `export_all_to!` macro. The exact API depends on the `ts-rs` version. With `#[ts(export)]`, running `cargo test` writes individual `.ts` files to `bindings/`. The binary approach above would need to collect all types into one file.
 
-New files in `libs/barnum/`:
+Alternative: Use `ts-rs`'s test-based generation (`cargo test` writes to `bindings/`), then have the binary copy/concatenate those files into `libs/barnum/types.d.ts`. Less elegant but reliable.
 
-**`types.d.ts`** — generated TypeScript definitions (all config types).
+**Recommended approach:** Use `ConfigFile::export_to_string_with_all_dependencies()` (if available in ts-rs v10) to get the full type tree from the root `ConfigFile` type. This recursively includes all referenced types (`StepFile`, `ActionFile`, `Options`, etc.) in a single string.
 
-**`index.d.ts`** — re-exports from `types.d.ts`:
+#### 2.1: Register binary in Cargo.toml
+
+**File:** `crates/barnum_config/Cargo.toml`
+
+```toml
+[[bin]]
+name = "build_barnum_types"
+path = "src/bin/build_barnum_types.rs"
+```
+
+Alongside the existing:
+```toml
+[[bin]]
+name = "build_barnum_schema"
+path = "src/bin/build_barnum_schema.rs"
+```
+
+### Task 3: Create `defineConfig.js`
+
+**Goal:** Runtime identity function so `import { defineConfig } from "@barnum/barnum"` works.
+
+**File:** `libs/barnum/defineConfig.js` (new)
+
+```javascript
+'use strict';
+module.exports.defineConfig = function defineConfig(config) {
+  return config;
+};
+```
+
+This function does nothing at runtime. It exists so TypeScript can infer the type from the call site without requiring an explicit type annotation.
+
+### Task 4: Create `index.d.ts`
+
+**Goal:** TypeScript entry point that re-exports generated types and the defineConfig helper.
+
+**File:** `libs/barnum/index.d.ts` (new)
+
 ```typescript
 export type {
   ConfigFile,
@@ -114,45 +276,36 @@ export type {
 export { defineConfig } from './types';
 ```
 
-**`defineConfig.js`** — runtime identity function:
-```javascript
-'use strict';
-module.exports.defineConfig = function defineConfig(config) {
-  return config;
-};
-```
+The exact list of re-exported types depends on what `ts-rs` generates. If newtypes like `StepName` export as `string` (via `#[ts(as = "String")]`), they won't appear here.
 
-`defineConfig` provides type inference at the call site without requiring a separate type annotation:
+### Task 5: Update `package.json`
 
-```typescript
-import { defineConfig } from "@barnum/barnum";
+**File:** `libs/barnum/package.json`
 
-export default defineConfig({
-  entrypoint: "Analyze",
-  steps: [
-    { name: "Analyze", action: { kind: "Pool", instructions: { inline: "..." } }, next: ["Done"] },
-    { name: "Done", action: { kind: "Command", script: "echo '[]'" }, next: [] },
-  ],
-});
-```
-
-Users who prefer not to install the package can use a type-only import instead:
-
-```typescript
-import type { ConfigFile } from "@barnum/barnum";
-
-const config: ConfigFile = {
-  steps: [/* ... */],
-};
-export default config;
-```
-
-Type-only imports are erased by every TS runtime (tsx, bun, tsc), so the file executes without `@barnum/barnum` in `node_modules`. The types are only needed for editor completion and `tsc` type-checking.
-
-**package.json changes:**
+Before:
 ```json
 {
+  "name": "@barnum/barnum",
+  "version": "0.2.4",
+  "main": "index.js",
+  "bin": { "barnum": "cli.js" },
+  "files": [
+    "index.js",
+    "cli.js",
+    "artifacts/**/*",
+    "barnum-config-schema.json"
+  ]
+}
+```
+
+After:
+```json
+{
+  "name": "@barnum/barnum",
+  "version": "0.2.4",
+  "main": "index.js",
   "types": "index.d.ts",
+  "bin": { "barnum": "cli.js" },
   "files": [
     "index.js",
     "index.d.ts",
@@ -165,7 +318,75 @@ Type-only imports are erased by every TS runtime (tsx, bun, tsc), so the file ex
 }
 ```
 
-### 3. User workflow
+Changes:
+- Added `"types": "index.d.ts"`.
+- Added `index.d.ts`, `types.d.ts`, `defineConfig.js` to `files`.
+
+### Task 6: Update `index.js` exports
+
+**File:** `libs/barnum/index.js`
+
+Before (`libs/barnum/index.js:1-23`):
+```javascript
+'use strict';
+const path = require('path');
+let binary;
+// ... platform detection ...
+module.exports = binary;
+```
+
+After:
+```javascript
+'use strict';
+const path = require('path');
+let binary;
+// ... platform detection (unchanged) ...
+
+module.exports = {
+  binary,
+  defineConfig: require('./defineConfig').defineConfig,
+};
+```
+
+**File:** `libs/barnum/cli.js`
+
+Before (`libs/barnum/cli.js:4`):
+```javascript
+var bin = require('.');
+```
+
+After:
+```javascript
+var bin = require('.').binary;
+```
+
+### Task 7: Update CI to verify `types.d.ts`
+
+**File:** `.github/workflows/ci.yml`
+
+Add a step after the existing schema verification:
+
+```yaml
+- name: Verify generated TypeScript types
+  run: |
+    cargo run -p barnum_config --bin build_barnum_types
+    git diff --exit-code libs/barnum/types.d.ts
+```
+
+No npm dependencies needed — the generation is pure Rust.
+
+### Task 8: Update pre-commit hook
+
+**File:** `hooks/pre-commit`
+
+Add after the existing schema regeneration:
+
+```bash
+cargo run -p barnum_config --bin build_barnum_types
+git add libs/barnum/types.d.ts
+```
+
+## User Workflow (after all tasks)
 
 Install types for editor support:
 ```bash
@@ -183,7 +404,7 @@ export default defineConfig({
   steps: [
     {
       name: "Analyze",
-      action: { kind: "Pool", instructions: { link: "analyze.md" } },
+      action: { kind: "Pool", instructions: { inline: "Analyze the code." } },
       next: ["Implement"],
     },
     {
@@ -195,10 +416,15 @@ export default defineConfig({
 });
 ```
 
-The file exports a typed `ConfigFile` object. How barnum consumes it at runtime (`barnum run --ts`, runtime discovery, step builder helpers) is covered in `TYPESCRIPT_RUNTIME.md`.
-
 ## Open Questions
 
-1. **Should `build-types.js` be a dev dependency or a checked-in script?** It only runs during the build. If it's a script, we vendor `json-schema-to-typescript` or shell out to `npx`. If it's a dev dependency, `libs/barnum/` needs a `package-lock.json` or similar.
+1. **`ts-rs` version and API.** The exact API for exporting all dependent types into a single string varies between ts-rs versions. v7 uses `TS::export_to_string()` per type; v10 may have `export_to_string_with_all_dependencies()`. Need to verify which version provides the cleanest single-file output.
 
-2. **Should the generated types use `interface` or `type`?** `json-schema-to-typescript` defaults to interfaces. Union types (like `ActionFile` which is `Pool | Command`) may need adjustment. We should verify the output and hand-edit if the generated types are awkward.
+2. **Newtype handling.** `StepName` is a newtype around `String`. Options:
+   - `#[ts(as = "String")]` — generates `string`, losing the nominal type.
+   - `type StepName = string` — preserves the name but it's just an alias. TypeScript has no runtime distinction.
+   - Recommend `#[ts(as = "String")]` for simplicity since `StepName` adds no TypeScript-visible semantics.
+
+3. **`serde_json::Value` mapping.** Fields like `value_schema` accept arbitrary JSON. `ts-rs` maps `serde_json::Value` to `unknown` by default (or `any` depending on config). `unknown` is safer. Verify the default and adjust if needed.
+
+4. **`$schema` field.** The `ConfigFile` struct has a `$schema` field renamed via `#[serde(rename = "$schema")]`. The generated TypeScript needs `"$schema"?: string | null`. Verify `ts-rs` handles the dollar-sign rename correctly — it may need `#[ts(rename = "$schema")]` explicitly.
