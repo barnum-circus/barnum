@@ -487,8 +487,15 @@ impl BarnumRunner {
             .output()
     }
 
-    /// Run `barnum config schema`.
+    /// Run `barnum config schema` (defaults to Zod output).
     pub fn schema(&self) -> std::io::Result<std::process::Output> {
         Command::new(&self.bin).args(["config", "schema"]).output()
+    }
+
+    /// Run `barnum config schema --type json`.
+    pub fn schema_json(&self) -> std::io::Result<std::process::Output> {
+        Command::new(&self.bin)
+            .args(["config", "schema", "--type", "json"])
+            .output()
     }
 }

@@ -30,7 +30,7 @@ fn step(name: &str, next: &[&str]) -> String {
 #[timeout(Duration::from_secs(5))]
 fn schema_outputs_valid_json() {
     let barnum = BarnumRunner::new();
-    let result = barnum.schema().expect("schema");
+    let result = barnum.schema_json().expect("schema");
 
     assert!(result.status.success(), "Schema should succeed");
 
@@ -47,7 +47,7 @@ fn schema_outputs_valid_json() {
 #[timeout(Duration::from_secs(5))]
 fn schema_has_required_steps_field() {
     let barnum = BarnumRunner::new();
-    let result = barnum.schema().expect("schema");
+    let result = barnum.schema_json().expect("schema");
     let stdout = String::from_utf8_lossy(&result.stdout);
     let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
@@ -64,7 +64,7 @@ fn schema_has_required_steps_field() {
 #[timeout(Duration::from_secs(5))]
 fn schema_defines_step_type() {
     let barnum = BarnumRunner::new();
-    let result = barnum.schema().expect("schema");
+    let result = barnum.schema_json().expect("schema");
     let stdout = String::from_utf8_lossy(&result.stdout);
     let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
@@ -86,7 +86,7 @@ fn schema_defines_step_type() {
 #[timeout(Duration::from_secs(5))]
 fn schema_action_has_pool_and_command_variants() {
     let barnum = BarnumRunner::new();
-    let result = barnum.schema().expect("schema");
+    let result = barnum.schema_json().expect("schema");
     let stdout = String::from_utf8_lossy(&result.stdout);
     let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
@@ -110,6 +110,32 @@ fn schema_action_has_pool_and_command_variants() {
             .is_some_and(|e| e.iter().any(|k| k == "Command"))
     });
     assert!(has_command, "Action should have Command variant");
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+fn schema_defaults_to_zod() {
+    let barnum = BarnumRunner::new();
+    let result = barnum.schema().expect("schema");
+    let stdout = String::from_utf8_lossy(&result.stdout);
+
+    assert!(result.status.success(), "Schema should succeed");
+    assert!(
+        stdout.starts_with("import { z } from \"zod\";"),
+        "Default output should be Zod"
+    );
+    assert!(
+        stdout.contains("export const configFileSchema ="),
+        "Should export configFileSchema"
+    );
+    assert!(
+        stdout.contains("export type ConfigFile ="),
+        "Should export ConfigFile type"
+    );
+    assert!(
+        stdout.contains("export function defineConfig("),
+        "Should export defineConfig helper"
+    );
 }
 
 // =============================================================================

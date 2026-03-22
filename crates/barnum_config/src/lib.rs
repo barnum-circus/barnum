@@ -24,6 +24,7 @@ mod resolved;
 mod runner;
 mod types;
 mod value_schema;
+pub mod zod;
 
 // Public API - only what barnum_cli actually uses
 pub use config::{ConfigFile, config_schema};

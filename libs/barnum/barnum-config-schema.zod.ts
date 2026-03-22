@@ -1,0 +1,99 @@
+import { z } from "zod";
+
+const MaybeLinked_for_String = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Inline"),
+    value: z.string().describe("The content value, provided directly in the config file."),
+  }).describe("Inline content."),
+  z.object({
+    kind: z.literal("Link"),
+    path: z.string().describe("Relative path to the file (resolved relative to the config file's directory)."),
+  }).describe("Link to a file whose contents will be loaded at runtime."),
+]).describe("Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)");
+
+const ActionFile = z.discriminatedUnion("kind", [
+  z.object({
+    instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
+    kind: z.literal("Pool"),
+  }).describe("Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks."),
+  z.object({
+    kind: z.literal("Command"),
+    script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
+  }).describe("Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic."),
+]).describe("How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.");
+
+const FinallyHook = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Command"),
+    script: z.string().describe("Shell script to execute. Receives the task's original value as JSON on stdin, must write a JSON array of follow-up tasks on stdout."),
+  }).describe("Run a shell command as the finally hook."),
+]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** The task's original value payload as JSON. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
+
+const Options = z.object({
+  max_concurrency: z.number().int().nonnegative().nullable().optional().default(null).describe("Maximum concurrent tasks (None = unlimited)."),
+  max_retries: z.number().int().nonnegative().optional().default(0).describe("Maximum retries per task (default: 0)."),
+  retry_on_invalid_response: z.boolean().optional().default(true).describe("Whether to retry when agent returns invalid response (default: true)."),
+  retry_on_timeout: z.boolean().optional().default(true).describe("Whether to retry when agent times out (default: true)."),
+  timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Timeout in seconds for each task (None = no timeout)."),
+}).strict().describe("Global runtime options for task execution. All fields have sensible defaults.");
+
+const PostHook = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Command"),
+    script: z.string().describe("Shell script to execute. Receives the action outcome as JSON on stdin, must write the (possibly modified) outcome as JSON on stdout."),
+  }).describe("Run a shell command as the post hook."),
+]).describe("Post-action hook. Inspects or modifies the action's outcome.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./post-hook.sh\"}`\n\n**stdin:** Tagged JSON describing the outcome (`\"kind\": \"Success\"`, `\"Timeout\"`, `\"Error\"`, or `\"PreHookError\"`). On success, includes an `input`, `output`, and `next` (follow-up tasks) field. **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).");
+
+const PreHook = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Command"),
+    script: z.string().describe("Shell script to execute. Receives the task's value as JSON on stdin, must write the (possibly modified) value as JSON on stdout."),
+  }).describe("Run a shell command as the pre hook."),
+]).describe("Pre-action hook. Transforms the task value before the action runs.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./pre-hook.sh\"}`\n\n**stdin:** Task value payload (e.g., `{\"path\": \"/src\"}`). **stdout:** Modified value payload (same shape).");
+
+const SchemaRef = z.union([
+  z.object({
+    link: z.string().describe("Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`)."),
+  }).describe("Reference to an external JSON Schema file. The path is relative to the config file's directory."),
+  z.any().describe("Inline JSON Schema object (any valid JSON Schema)."),
+]).describe("A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)");
+
+const StepOptions = z.object({
+  max_retries: z.number().int().nonnegative().nullable().optional().default(null).describe("Maximum retries for tasks on this step (overrides global `max_retries`)."),
+  retry_on_invalid_response: z.boolean().nullable().optional().default(null).describe("Whether to retry when an agent returns an invalid response on this step (overrides global `retry_on_invalid_response`)."),
+  retry_on_timeout: z.boolean().nullable().optional().default(null).describe("Whether to retry when an agent times out on this step (overrides global `retry_on_timeout`)."),
+  timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Timeout in seconds for tasks on this step (overrides global `timeout`)."),
+}).strict().describe("Per-step option overrides. Only set the fields you want to override; omitted fields inherit from the global `options`.");
+
+const StepFile = z.object({
+  action: ActionFile.describe("How this step processes tasks — either send to the agent pool (`Pool`) or run a local shell command (`Command`)."),
+  finally: FinallyHook.nullable().optional().default(null).describe("Shell script that runs after this task **and all tasks it spawned (recursively)** have completed.\n\n**stdin:** The task's original `value` payload as JSON (same as what the pre hook received — just the value, not the full task wrapper).\n\n**stdout:** A JSON array of follow-up tasks to spawn: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Each `kind` must be a valid step name. Return `[]` to spawn no follow-ups.\n\nUse this for cleanup, aggregation, or spawning a final summarization step after an entire subtree of work completes."),
+  name: z.string().describe("Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`."),
+  next: z.array(z.string()).optional().default([]).describe("Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups)."),
+  options: StepOptions.optional().default({"max_retries": null, "retry_on_invalid_response": null, "retry_on_timeout": null, "timeout": null}).describe("Per-step options that override the global `options`. Only the fields you set here take effect; everything else falls through to the global defaults."),
+  post: PostHook.nullable().optional().default(null).describe("Shell script that runs **after** the action completes (or fails).\n\n**stdin:** A tagged JSON object describing the outcome. The `kind` field indicates what happened:\n\n- `{\"kind\": \"Success\", \"input\": <value>, \"output\": <agent_output>, \"next\": [<tasks>]}` — Action succeeded. `next` contains the follow-up tasks to spawn. - `{\"kind\": \"Timeout\", \"input\": <value>}` — Action timed out. - `{\"kind\": \"Error\", \"input\": <value>, \"error\": \"<message>\"}` — Action failed. - `{\"kind\": \"PreHookError\", \"input\": <value>, \"error\": \"<message>\"}` — Pre hook failed.\n\n**stdout:** The same tagged JSON object, possibly modified. Typically you modify the `next` array in `Success` to filter, rewrite, or add follow-up tasks."),
+  pre: PreHook.nullable().optional().default(null).describe("Shell script that runs **before** the action.\n\n**stdin:** The task's `value` payload as JSON (e.g., `{\"path\": \"/src\"}`). This is just the value — not the full `{\"kind\": ..., \"value\": ...}` wrapper.\n\n**stdout:** The (possibly modified) value payload as JSON. Must be the same shape. The modified value is what the action receives.\n\nUse this to enrich or transform the task before the action sees it (e.g., adding timestamps, resolving paths, fetching metadata)."),
+  value_schema: SchemaRef.nullable().optional().default(null).describe("JSON Schema that validates the `value` payload for tasks on this step. When set, tasks whose `value` doesn't conform are rejected. When omitted, any JSON value is accepted."),
+}).strict().describe("A named step in the workflow. Steps are the nodes of the task graph.\n\nExecution order for each task: `pre` hook → `action` → `post` hook. The `finally` hook runs after the task **and all of its descendant tasks** complete.");
+
+export const configFileSchema = z.object({
+  "$schema": z.string().nullable().optional().describe("Optional JSON Schema URL for editor validation (e.g., `\"./node_modules/@barnum/barnum/barnum-config-schema.json\"`). Ignored at runtime."),
+  entrypoint: z.string().nullable().optional().default(null).describe("Name of the step that starts the workflow. When set, the CLI accepts `--entrypoint-value` to provide the initial task value (defaults to `{}`). When omitted, `--initial-state` must provide explicit `[{\"kind\": \"StepName\", \"value\": ...}]` tasks."),
+  options: Options.optional().default({"max_concurrency": null, "max_retries": 0, "retry_on_invalid_response": true, "retry_on_timeout": true, "timeout": null}).describe("Global runtime options (timeout, retries, concurrency). Individual steps can override these via their own `options` field."),
+  steps: z.array(StepFile).describe("The steps that make up this workflow. Each step defines how to process a task and which steps it can spawn follow-up tasks on."),
+}).strict().describe("Top-level Barnum configuration file format.\n\nDefines a workflow as a directed graph of steps. Each step processes tasks and can spawn follow-up tasks on other steps.");
+
+export type ConfigFile = z.infer<typeof configFileSchema>;
+export type MaybeLinked_for_String = z.infer<typeof MaybeLinked_for_String>;
+export type ActionFile = z.infer<typeof ActionFile>;
+export type FinallyHook = z.infer<typeof FinallyHook>;
+export type Options = z.infer<typeof Options>;
+export type PostHook = z.infer<typeof PostHook>;
+export type PreHook = z.infer<typeof PreHook>;
+export type SchemaRef = z.infer<typeof SchemaRef>;
+export type StepOptions = z.infer<typeof StepOptions>;
+export type StepFile = z.infer<typeof StepFile>;
+
+export function defineConfig(config: z.input<typeof configFileSchema>): ConfigFile {
+  return configFileSchema.parse(config);
+}

@@ -132,8 +132,20 @@ enum ConfigCommand {
         config: String,
     },
 
-    /// Print the JSON schema for config files
-    Schema,
+    /// Print the config schema (Zod by default, JSON with --type json)
+    Schema {
+        /// Output format: zod (default) or json
+        #[arg(long = "type", default_value = "zod")]
+        schema_type: SchemaType,
+    },
+}
+
+/// Output format for `barnum config schema`.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum SchemaType {
+    #[default]
+    Zod,
+    Json,
 }
 
 fn main() -> io::Result<()> {
@@ -248,11 +260,20 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
             print!("{dot}");
         }
 
-        ConfigCommand::Schema => {
-            let schema = config_schema();
-            let json = serde_json::to_string_pretty(&schema)
-                .map_err(|e| io::Error::other(format!("[E059] failed to serialize schema: {e}")))?;
-            println!("{json}");
+        ConfigCommand::Schema { schema_type } => {
+            let root = config_schema();
+            match schema_type {
+                SchemaType::Zod => {
+                    let zod = barnum_config::zod::emit_zod(&root);
+                    print!("{zod}");
+                }
+                SchemaType::Json => {
+                    let json = serde_json::to_string_pretty(&root).map_err(|e| {
+                        io::Error::other(format!("[E059] failed to serialize schema: {e}"))
+                    })?;
+                    println!("{json}");
+                }
+            }
         }
     }
     Ok(())
