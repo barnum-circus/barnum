@@ -418,7 +418,9 @@ export default defineConfig({
 
 ## Open Questions
 
-1. **`ts-rs` version and API.** The exact API for exporting all dependent types into a single string varies between ts-rs versions. v7 uses `TS::export_to_string()` per type; v10 may have `export_to_string_with_all_dependencies()`. Need to verify which version provides the cleanest single-file output.
+1. **`ts-rs` vs Specta.** The doc uses `ts-rs` but Specta (`specta` crate, v2 RC) is an alternative with cleaner export semantics (explicit export binary, no `cargo test` side effects, JSDoc from `///` comments). Either works. The choice should be made at implementation time by testing both against the actual config types. Key factor: whichever handles `MaybeLinked<T>` generics and serde-tagged enums correctly with less manual intervention wins.
+
+2. **`ts-rs` version and API.** The exact API for exporting all dependent types into a single string varies between ts-rs versions. v7 uses `TS::export_to_string()` per type; v10 may have `export_to_string_with_all_dependencies()`. Need to verify which version provides the cleanest single-file output.
 
 2. **Newtype handling.** `StepName` is a newtype around `String`. Options:
    - `#[ts(as = "String")]` — generates `string`, losing the nominal type.
