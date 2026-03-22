@@ -25,7 +25,7 @@ use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
 use crate::resolved::{Action, Config, Step};
-use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
+use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use dispatch::{
@@ -79,23 +79,13 @@ struct TaskEntry {
     step: StepName,
     /// Parent task waiting for this task to complete.
     parent_id: Option<LogTaskId>,
-    /// **"Am I a finally task?"** (this task's type)
+    /// `true` = Finally task (no pre-hook, just run the step's `finally_hook` script).
+    /// `false` = Step task (run pre-hook, then action).
     ///
-    /// - `None` = Step task (run pre-hook, then action)
-    /// - `Some` = Finally task with this script (no pre-hook, just run script)
-    ///
-    /// The script is looked up once when the finally is scheduled, not again at dispatch.
-    ///
-    /// **Not to be confused with `finally_data` in `WaitingForChildren`:**
-    /// - `finally_script`: "Am I a finally task?" (this task's type)
-    /// - `finally_data`:   "Do I have a finally hook to run after my children?" (step's config)
-    finally_script: Option<HookScript>,
+    /// The actual `HookScript` is looked up from step config at dispatch time.
+    is_finally: bool,
     /// Current state of this task.
     state: TaskState,
-    /// Number of retries remaining for this task.
-    // TODO: Use this for finally task retries (currently uses Task.retries like other tasks)
-    #[expect(dead_code)]
-    retries_remaining: u32,
 }
 
 /// State of a task in the runner.
@@ -113,14 +103,11 @@ enum TaskState {
     WaitingForChildren {
         /// Number of children still pending.
         pending_children_count: NonZeroU16,
-        /// **"Does this step have a finally hook to run after children?"** (step's config)
-        ///
-        /// Hook + value to schedule finally when all children complete.
-        /// - `Some` for Step tasks whose step config has a finally hook
-        /// - `None` for Finally tasks (no "finally of finally")
-        ///
-        /// The hook is looked up once when entering this state, not again when scheduling.
-        finally_data: Option<(HookScript, StepInputValue)>,
+        /// Value to pass to the step's finally hook when all children complete.
+        /// `Some` for Step tasks whose step config has a finally hook.
+        /// `None` for Finally tasks (no "finally of finally") or steps without a hook.
+        /// The `HookScript` is looked up from step config when scheduling the finally.
+        finally_value: Option<StepInputValue>,
     },
 }
 
@@ -153,7 +140,7 @@ struct RemovedParent {
     task_id: LogTaskId,
     step: StepName,
     parent_id: Option<LogTaskId>,
-    finally_data: Option<(HookScript, StepInputValue)>,
+    finally_value: Option<StepInputValue>,
 }
 
 impl RunState {
@@ -197,7 +184,7 @@ impl RunState {
             .expect("[P022] parent task must exist");
         let TaskState::WaitingForChildren {
             pending_children_count,
-            finally_data,
+            finally_value,
         } = &mut parent.state
         else {
             panic!("[P023] parent task not in WaitingForChildren state");
@@ -208,12 +195,12 @@ impl RunState {
             *pending_children_count = NonZeroU16::new(new_count).unwrap();
         } else {
             let step = parent.step.clone();
-            let fd = finally_data.take();
+            let fv = finally_value.take();
             self.removed_parents.push(RemovedParent {
                 task_id: parent_id,
                 step,
                 parent_id: parent.parent_id,
-                finally_data: fd,
+                finally_value: fv,
             });
         }
     }
@@ -323,7 +310,7 @@ impl<'a> TaskRunner<'a> {
                 parent_id: None,
                 origin: TaskOrigin::Initial,
             }));
-            runner.queue_task(task, None, None);
+            runner.queue_task(task, None, false);
         }
 
         Ok(runner)
@@ -391,53 +378,44 @@ impl<'a> TaskRunner<'a> {
     fn load_reconstructed_state(&mut self, state: ReconstructedState) {
         // Load waiting tasks (completed, have alive children)
         for waiting in state.waiting_tasks {
-            let finally_data = self
+            let has_finally = self
                 .step_map
                 .get(&waiting.step)
-                .and_then(|s| s.finally_hook.clone())
-                .map(|hook| (hook, waiting.finally_value));
+                .and_then(|s| s.finally_hook.as_ref())
+                .is_some();
+            let finally_value = if has_finally {
+                Some(waiting.finally_value)
+            } else {
+                None
+            };
 
             self.state.tasks.insert(
                 waiting.task_id,
                 TaskEntry {
                     step: waiting.step,
                     parent_id: waiting.parent_id,
-                    finally_script: None,
+                    is_finally: false,
                     state: TaskState::WaitingForChildren {
                         pending_children_count: waiting.pending_children_count,
-                        finally_data,
+                        finally_value,
                     },
-                    retries_remaining: 0,
                 },
             );
         }
 
         // Load pending tasks (need dispatch)
         for pending in state.pending_tasks {
-            let retries_remaining = self
-                .step_map
-                .get(&pending.step)
-                .map_or(0, |s| s.options.max_retries);
-
-            // Finally tasks carry their hook script
-            let finally_script = if matches!(pending.origin, TaskOrigin::Finally { .. }) {
-                self.step_map
-                    .get(&pending.step)
-                    .and_then(|s| s.finally_hook.clone())
-            } else {
-                None
-            };
+            let is_finally = matches!(pending.origin, TaskOrigin::Finally { .. });
 
             self.state.tasks.insert(
                 pending.task_id,
                 TaskEntry {
                     step: pending.step,
                     parent_id: pending.parent_id,
-                    finally_script,
+                    is_finally,
                     state: TaskState::Pending {
                         value: pending.value,
                     },
-                    retries_remaining,
                 },
             );
             self.pending_queue.push_back(pending.task_id);
@@ -471,19 +449,8 @@ impl<'a> TaskRunner<'a> {
     // ==================== State Transitions ====================
 
     /// Add a new task - dispatch immediately if under concurrency, otherwise queue as Pending.
-    ///
-    /// If `finally_script` is `Some`, this is a finally task (retry or initial).
-    fn queue_task(
-        &mut self,
-        task: Task,
-        parent_id: Option<LogTaskId>,
-        finally_script: Option<HookScript>,
-    ) {
+    fn queue_task(&mut self, task: Task, parent_id: Option<LogTaskId>, is_finally: bool) {
         let id = self.state.next_id();
-        let retries_remaining = self
-            .step_map
-            .get(&task.step)
-            .map_or(0, |s| s.options.max_retries);
 
         if self.in_flight < self.max_concurrency {
             // Dispatch immediately — value goes to the worker, entry stores Null.
@@ -492,11 +459,10 @@ impl<'a> TaskRunner<'a> {
                 TaskEntry {
                     step: task.step.clone(),
                     parent_id,
-                    finally_script,
+                    is_finally,
                     state: TaskState::Pending {
                         value: StepInputValue(serde_json::Value::Null),
                     },
-                    retries_remaining,
                 },
             );
             assert!(prev.is_none(), "task_id collision: {id:?} already in map");
@@ -509,9 +475,8 @@ impl<'a> TaskRunner<'a> {
                 TaskEntry {
                     step: task.step,
                     parent_id,
-                    finally_script,
+                    is_finally,
                     state: TaskState::Pending { value: task.value },
-                    retries_remaining,
                 },
             );
             assert!(prev.is_none(), "task_id collision: {id:?} already in map");
@@ -532,8 +497,12 @@ impl<'a> TaskRunner<'a> {
         let tx = self.tx.clone();
 
         // Finally tasks: run the finally script directly (no pre-hook)
-        if let Some(script) = &entry.finally_script {
-            let script = script.clone();
+        if entry.is_finally {
+            let script = self
+                .step_map
+                .get(&entry.step)
+                .and_then(|s| s.finally_hook.clone())
+                .expect("[P073] finally task's step must have finally_hook");
             let identity = TaskIdentity { task, task_id };
             let working_dir = self.pool.working_dir.clone();
 
@@ -620,17 +589,15 @@ impl<'a> TaskRunner<'a> {
         entry.parent_id
     }
 
-    /// Look up the finally hook for a task's step, if any.
-    /// Returns None for Finally tasks (no "finally of finally").
-    fn lookup_finally_hook(&self, entry: &TaskEntry) -> Option<HookScript> {
-        if entry.finally_script.is_some() {
-            return None; // No "finally of finally"
+    /// Does this task's step have a finally hook?
+    /// Returns false for Finally tasks (no "finally of finally").
+    fn has_finally_hook(&self, entry: &TaskEntry) -> bool {
+        if entry.is_finally {
+            return false; // No "finally of finally"
         }
-        self.config
-            .steps
-            .iter()
-            .find(|s| s.name == entry.step)
-            .and_then(|s| s.finally_hook.clone())
+        self.step_map
+            .get(&entry.step)
+            .is_some_and(|s| s.finally_hook.is_some())
     }
 
     /// Schedule a finally task as a sibling of the given task.
@@ -643,7 +610,6 @@ impl<'a> TaskRunner<'a> {
         task_id: LogTaskId,
         parent_id: Option<LogTaskId>,
         step: &StepName,
-        hook: HookScript,
         value: StepInputValue,
     ) {
         // Increment parent's pending count (finally becomes another child)
@@ -653,7 +619,6 @@ impl<'a> TaskRunner<'a> {
 
         // Create the finally task
         let id = self.state.next_id();
-        let retries_remaining = self.step_map.get(step).map_or(0, |s| s.options.max_retries);
 
         // Log the finally task submission
         self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
@@ -669,9 +634,8 @@ impl<'a> TaskRunner<'a> {
         let finally_entry = TaskEntry {
             step: step.clone(),
             parent_id,
-            finally_script: Some(hook),
+            is_finally: true,
             state: TaskState::Pending { value },
-            retries_remaining,
         };
         self.state.tasks.insert(id, finally_entry);
         self.pending_queue.push_back(id);
@@ -709,14 +673,8 @@ impl<'a> TaskRunner<'a> {
     /// is considered for removal.
     fn schedule_removed_finally(&mut self) {
         while let Some(removed) = self.state.removed_parents.pop() {
-            if let Some((hook, value)) = removed.finally_data {
-                self.schedule_finally(
-                    removed.task_id,
-                    removed.parent_id,
-                    &removed.step,
-                    hook,
-                    value,
-                );
+            if let Some(value) = removed.finally_value {
+                self.schedule_finally(removed.task_id, removed.parent_id, &removed.step, value);
             }
             self.state.remove_and_notify_parent(removed.task_id);
         }
@@ -744,7 +702,7 @@ impl<'a> TaskRunner<'a> {
             .tasks
             .get(&task_id)
             .expect("[P024] task must exist");
-        let finally_hook = self.lookup_finally_hook(entry);
+        let has_finally = self.has_finally_hook(entry);
         let parent_id = entry.parent_id;
         let step = entry.step.clone();
 
@@ -759,8 +717,8 @@ impl<'a> TaskRunner<'a> {
             }));
 
             // No children - schedule finally (if any) as sibling, then remove
-            if let Some(hook) = finally_hook {
-                self.schedule_finally(task_id, parent_id, &step, hook, value);
+            if has_finally {
+                self.schedule_finally(task_id, parent_id, &step, value);
             }
             self.state.remove_and_notify_parent(task_id);
             self.schedule_removed_finally();
@@ -780,9 +738,9 @@ impl<'a> TaskRunner<'a> {
                 }),
             }));
 
-            // Has children - wait for them, storing finally_data
+            // Has children - wait for them, storing finally_value
             let count = NonZeroU16::new(spawned.len() as u16).unwrap();
-            let finally_data = finally_hook.map(|hook| (hook, value));
+            let finally_value = if has_finally { Some(value) } else { None };
 
             let entry = self
                 .state
@@ -791,7 +749,7 @@ impl<'a> TaskRunner<'a> {
                 .expect("[P025] task must exist");
             entry.state = TaskState::WaitingForChildren {
                 pending_children_count: count,
-                finally_data,
+                finally_value,
             };
             for child in spawned {
                 // Log each spawned child
@@ -803,7 +761,7 @@ impl<'a> TaskRunner<'a> {
                     parent_id: Some(task_id),
                     origin: TaskOrigin::Spawned,
                 }));
-                self.queue_task(child, Some(task_id), None);
+                self.queue_task(child, Some(task_id), false);
             }
         }
     }
@@ -817,7 +775,7 @@ impl<'a> TaskRunner<'a> {
             .get(&task_id)
             .expect("[P026] task must exist");
         let parent_id = entry.parent_id;
-        let finally_script = entry.finally_script.clone();
+        let is_finally = entry.is_finally;
 
         if let Some(retry_task) = retry {
             // Compute retry task ID before logging
@@ -841,7 +799,7 @@ impl<'a> TaskRunner<'a> {
                 origin: TaskOrigin::Retry { replaces: task_id },
             }));
 
-            self.queue_task(retry_task, parent_id, finally_script);
+            self.queue_task(retry_task, parent_id, is_finally);
             self.transition_to_done(task_id); // Don't notify - retry takes over
         } else {
             // Log permanent failure
