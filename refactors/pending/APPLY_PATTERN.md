@@ -656,21 +656,41 @@ Each phase is a separate branch that passes CI and merges independently.
 Independent sub-refactors, each in its own file. Can land in any order.
 
 - **0a.** `EXTRACT_RUN_STATE.md` — **Done.** Moved `tasks` and `next_task_id` into RunState. Also moved `remove_and_notify_parent` onto RunState with deferred parent removal via non-recursive cascade (absorbs 0d).
-- **0b.** `REMOVE_INFLIGHT_VARIANT.md` (not yet written) — Replace InFlight TaskState variant with `in_flight: usize` counter on TaskRunner.
-- **0c.** `REMOVE_CONFIG_FROM_TASK_ENTRY.md` (not yet written) — Drop `finally_script` and `retries_remaining` from TaskEntry. Look them up from `step_map` when needed.
-- **0d.** Absorbed into 0a (EXTRACT_RUN_STATE Phase 2).
+- **0b.** Remove InFlight variant — Replace `TaskState::InFlight(InFlight)` (zero-sized marker) with `in_flight: usize` counter on TaskRunner. TaskState becomes `Pending { value }` and `WaitingForChildren { ... }` only. Dispatch sets `in_flight += 1` and transitions directly from Pending to InFlight-equivalent (task is in the map but not in any TaskState — or add a small marker). Completion decrements `in_flight`.
+- **0c.** Remove config from TaskEntry — Drop `finally_script: Option<HookScript>` and `retries_remaining: u32` from TaskEntry. `finally_script` is used to distinguish "am I a finally task?" — replace with a bool or look up from step config. `retries_remaining` is already `#[expect(dead_code)]` — just delete it. The `finally_data: Option<(HookScript, StepInputValue)>` on WaitingForChildren becomes `finally_value: StepInputValue` — the HookScript is looked up from config when scheduling the finally.
+- **0d.** Absorbed into 0a.
 
 ### Phase 1: Event loop restructure
 
 **Depends on: None (can run in parallel with Phase 0).**
 
-Convert the Iterator-based loop to an explicit `run()` method with a recv loop. `process_result` still handles everything internally, and the Applier trait isn't introduced yet. The only change is the loop shape: `while let Ok(result) = self.rx.recv() { self.process_result(result); }`.
+Convert the Iterator-based loop to an explicit `run()` method with a recv loop. Currently `impl Iterator for TaskRunner` with `dispatch_all_pending()` + `recv()` + `process_result()`. Change to:
 
-### Phase 2: Apply pattern
+```rust
+pub fn run(&mut self) -> WorkflowResult {
+    loop {
+        self.dispatch_all_pending();
+        if self.in_flight == 0 { break; }
+        let result = self.rx.recv().expect("[P062]");
+        self.process_result(result);
+    }
+    self.compute_workflow_result()
+}
+```
 
-**Depends on: Phase 0, Phase 1.**
+No behavioral change — same dispatch/recv/process sequence, just not behind the Iterator trait.
 
-Introduce the `Applier` trait, `Engine`, and `LogApplier`. The coordinator becomes `Vec<Box<dyn Applier>>` with the `process_entries` loop. Seed entries flow through `process_entries` like everything else.
+### Phase 2: Worker self-containment
+
+**Depends on: Phase 0c (workers need step config in closures).**
+
+Workers currently send a raw pool result on `tx`. `process_result` on TaskRunner interprets it (runs post hooks, determines success/failure/retry, extracts children). Refactor so workers capture step config in their closures and produce a self-contained `TaskCompleted` message with `TaskOutcome`. This decouples result interpretation from state mutation and is a prerequisite for Phase 3 — the Applier trait needs to receive complete entries, not raw results that require further interpretation.
+
+### Phase 3: Apply pattern
+
+**Depends on: Phase 0, Phase 1, Phase 2.**
+
+The core refactor. Introduce `Applier` trait, `Engine`, `LogApplier`, `StateLogEntry` types, `FinallyRun` as a logged event, unified `PendingDispatch` queue, `ChannelMsg` type alias, `walk_up_for_finally`. The coordinator becomes `Vec<Box<dyn Applier>>` with `process_entries`. Seed entries flow through `process_entries` like everything else. Everything described in this document.
 
 ## Before/After
 
