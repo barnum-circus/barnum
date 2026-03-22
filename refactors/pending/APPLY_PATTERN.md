@@ -108,20 +108,11 @@ enum TaskOrigin {
     Seed,
     /// Spawned by a successful parent task.
     Spawned { parent_id: LogTaskId },
-    /// Retry of a failed task. Inherits the failed task's parent.
-    Retry { replaces: LogTaskId, parent_id: Option<LogTaskId> },
-    /// Finally task for a completed parent. Child of the parent's parent.
-    Finally { finally_for: LogTaskId, parent_id: Option<LogTaskId> },
-}
-
-impl TaskOrigin {
-    fn parent_id(&self) -> Option<LogTaskId> {
-        match self {
-            Self::Seed => None,
-            Self::Spawned { parent_id } => Some(*parent_id),
-            Self::Retry { parent_id, .. } | Self::Finally { parent_id, .. } => *parent_id,
-        }
-    }
+    /// Retry of a failed task. parent_id derived from the replaced task.
+    Retry { replaces: LogTaskId },
+    /// Finally task for a removed parent. parent_id derived from
+    /// the finally_for task's parent (the grandparent).
+    Finally { finally_for: LogTaskId },
 }
 
 struct TaskCompleted {
@@ -151,9 +142,9 @@ struct TaskSpec {
 
 `TaskSuccess` carries task specs (step + value), not allocated IDs. The worker doesn't allocate IDs — it just reports what children to spawn. The Engine allocates IDs when it produces `TaskSubmitted` entries for each spec. The parent transitions to `WaitingForChildren` with `pending_children_count` set from `spawned.len()` — it doesn't need child IDs, just the count. Children carry their parent via `TaskOrigin::Spawned { parent_id }`; when they complete, they decrement the parent's count.
 
-`TaskFailed` carries only the failure reason. The Engine decides whether to retry based on step config and the original task's step/value (already in RunState). A retry produces a `TaskSubmitted` with `TaskOrigin::Retry { replaces, parent_id }` — inheriting the failed task's parent.
+`TaskFailed` carries only the failure reason. The Engine decides whether to retry based on step config and the original task's step/value (already in RunState). A retry produces a `TaskSubmitted` with `TaskOrigin::Retry { replaces }` — `apply_submitted` derives the parent_id by looking up the replaced task in the map.
 
-`parent_id` lives inside `TaskOrigin`, not as a separate field. Each origin variant carries exactly the relationship information it needs: `Seed` has none, `Spawned` always has a parent, `Retry` and `Finally` may or may not (root tasks have no parent).
+Each `TaskOrigin` variant carries only non-derivable information. `Spawned { parent_id }` needs the parent explicitly (no other way to know it). `Retry { replaces }` and `Finally { finally_for }` reference a task that's still in the map — `apply_submitted` derives `parent_id` from the referenced task's entry. `Seed` has no relationships.
 
 Each variant records a fact. The Engine derives task removal internally when all children of a parent complete.
 
@@ -257,7 +248,7 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
 }
 ```
 
-**`process_completion()`**: Handles the result interpretation that today lives in `process_result`. For success, delegates to `apply_completed` (shared with replay) and produces child entries. For failure, the Engine handles state directly — it decides whether to retry based on config, not from anything on the log entry. Does NOT apply produced entries — they go on `tx`, come back through the channel, and are applied in a future `apply()` call.
+**`process_completion()`**: Handles the result interpretation that today lives in `process_result`. Always calls `apply_completed` first (shared with replay). For success, produces child entries. For failure, captures step/value before the Failed transition, then decides retry based on config. Does NOT apply produced entries — they go on `tx`, come back through the channel, and are applied in a future `apply()` call.
 
 ```rust
 fn process_completion(&mut self, completed: &TaskCompleted) -> Vec<StateLogEntry> {
@@ -275,28 +266,26 @@ fn process_completion(&mut self, completed: &TaskCompleted) -> Vec<StateLogEntry
             }).collect()
         }
         TaskOutcome::Failed(_) => {
+            // Capture step/value before apply_completed transitions to Failed.
             let entry = self.state.tasks.get(&completed.task_id)
                 .expect("[P038] completed task must exist");
-            let parent_id = entry.parent_id;
             let step = entry.step.clone();
             let value = match &entry.state {
                 TaskState::Pending { value } => value.clone(),
                 _ => panic!("[P039] failed task not in Pending state"),
             };
 
+            self.state.apply_completed(completed); // transitions to Failed
+
             if self.should_retry(&step) {
-                // Retry: remove task without parent notification.
-                // The retry inherits the failed task's parent.
-                self.state.tasks.remove(&completed.task_id);
+                // Retry: task stays in map as Failed. apply_submitted for
+                // the Retry will remove it and inherit its parent_id.
                 let id = self.state.next_id();
                 vec![StateLogEntry::TaskSubmitted(TaskSubmitted {
                     task_id: id,
                     step,
                     value,
-                    origin: TaskOrigin::Retry {
-                        replaces: completed.task_id,
-                        parent_id,
-                    },
+                    origin: TaskOrigin::Retry { replaces: completed.task_id },
                 })]
             } else {
                 // Permanent failure: remove and notify parent.
@@ -335,10 +324,7 @@ fn produce_finally_entries(&mut self) -> Vec<StateLogEntry> {
                 task_id: id,
                 step: script.step.clone(),
                 value: finally_value,
-                origin: TaskOrigin::Finally {
-                    finally_for: parent_id,
-                    parent_id: grandparent_id,
-                },
+                origin: TaskOrigin::Finally { finally_for: parent_id },
             }));
             self.pending_removals.push(parent_id);
         } else {
@@ -388,8 +374,35 @@ impl RunState {
     }
 
     fn apply_submitted(&mut self, submitted: &TaskSubmitted) {
-        let parent_id = submitted.origin.parent_id();
         self.next_task_id = self.next_task_id.max(submitted.task_id.0 + 1);
+
+        let parent_id = match &submitted.origin {
+            TaskOrigin::Seed => None,
+            TaskOrigin::Spawned { parent_id } => Some(*parent_id),
+            TaskOrigin::Retry { replaces } => {
+                // Replace the failed task. Inherit its parent.
+                let old = self.tasks.remove(replaces)
+                    .expect("[P042] retry target must exist");
+                assert!(matches!(old.state, TaskState::Failed),
+                    "[P045] retry target not in Failed state");
+                old.parent_id
+            }
+            TaskOrigin::Finally { finally_for } => {
+                // Child of the grandparent (finally_for's parent).
+                let parent_entry = self.tasks.get(finally_for)
+                    .expect("[P043] finally target must exist");
+                let grandparent_id = parent_entry.parent_id;
+                // Increment grandparent's child count.
+                // Spawned children don't — their count is set upfront
+                // in apply_completed. Retry doesn't — the failed task's
+                // parent count was never decremented.
+                if let Some(gp) = grandparent_id {
+                    self.increment_pending_children(gp);
+                }
+                grandparent_id
+            }
+        };
+
         self.tasks.insert(submitted.task_id, TaskEntry {
             step: submitted.step.clone(),
             parent_id,
@@ -397,18 +410,11 @@ impl RunState {
                 value: submitted.value.clone(),
             },
         });
-        // Finally tasks increment their parent's child count.
-        // Spawned children don't — their count is set upfront in apply_completed.
-        // Retry children don't — the Engine removed the failed task without
-        // decrementing the parent count, so no increment is needed.
-        if let TaskOrigin::Finally { parent_id: Some(gp), .. } = &submitted.origin {
-            self.increment_pending_children(*gp);
-        }
     }
 
-    /// Used by both the Engine (for success) and replay (for all outcomes).
-    /// For failures during live operation, the Engine handles state directly
-    /// in process_completion instead of calling this.
+    /// Called for every completion — both success and failure, both live
+    /// and replay. For success: transitions to WaitingForChildren or
+    /// removes the task. For failure: transitions to Failed.
     fn apply_completed(&mut self, completed: &TaskCompleted) {
         match &completed.outcome {
             TaskOutcome::Success(success) => {
@@ -426,11 +432,14 @@ impl RunState {
                 }
             }
             TaskOutcome::Failed(_) => {
-                // Just remove the task. No parent notification.
-                // During replay: if a retry follows, the TaskSubmitted(Retry)
-                // takes its place (same parent_id). If no retry follows,
-                // the replay cleanup reconciles parent counts.
-                self.tasks.remove(&completed.task_id);
+                // Mark as failed. Don't remove — the task stays in the map.
+                // If a retry follows, apply_submitted for the Retry origin
+                // removes this entry and inherits its parent_id.
+                // If no retry follows, replay cleanup removes it and
+                // notifies the parent.
+                let entry = self.tasks.get_mut(&completed.task_id)
+                    .expect("[P044] failed task must exist");
+                entry.state = TaskState::Failed;
             }
         }
     }
@@ -477,10 +486,18 @@ enum TaskState {
         pending_children_count: NonZeroU16,
         finally_value: StepInputValue,
     },
+    /// Task completed with failure, not yet cleaned up.
+    /// Transient state during replay only — in live operation,
+    /// the Engine handles failure immediately in process_completion.
+    /// Stays in this state until either a Retry replaces it or
+    /// replay cleanup removes it.
+    Failed,
 }
 ```
 
-TaskState has two variants. The current `InFlight` variant is replaced by `in_flight: usize` + `dispatched: HashSet<LogTaskId>` on the Engine. `finally_script` and `retries_remaining` are removed from TaskEntry — the Engine looks up the finally script from config when building finally entries, and the Engine determines whether to retry based on step config.
+TaskState has three variants. `Pending` and `WaitingForChildren` are the live states. `Failed` is a transient replay-only state: `apply_completed` marks the task as failed, and either `apply_submitted` for a Retry replaces it, or replay cleanup removes it. During live operation, the Engine handles failure immediately in `process_completion` — the `Failed` state is never visible.
+
+The current `InFlight` variant is replaced by `in_flight: usize` + `dispatched: HashSet<LogTaskId>` on the Engine. `finally_script` and `retries_remaining` are removed from TaskEntry — the Engine looks up the finally script from config when building finally entries, and the Engine determines whether to retry based on step config.
 
 ## Replay
 
@@ -499,35 +516,24 @@ fn replay_log(path: &Path) -> io::Result<(Config, RunState)> {
         }
     }
 
-    // Cleanup phase 1: drain removed_parents accumulated from successes.
-    // During the original run, finally entries were applied before parent
-    // removal. During replay, the finally entries are already in the log
-    // (applied above), so we just need the removals.
-    while let Some(parent_id) = state.removed_parents.pop() {
-        state.remove_and_notify_parent(parent_id);
+    // Cleanup phase 1: remove permanently failed tasks.
+    // Tasks in Failed state that weren't replaced by a retry are
+    // permanent failures. Remove them and notify their parents.
+    let permanently_failed: Vec<LogTaskId> = state.tasks.iter()
+        .filter(|(_, e)| matches!(&e.state, TaskState::Failed))
+        .map(|(id, _)| *id)
+        .collect();
+    for id in permanently_failed {
+        state.remove_and_notify_parent(id);
     }
 
-    // Cleanup phase 2: reconcile parent counts after failures.
-    // During replay, apply_completed for failures just removes the task
-    // without notifying the parent. Retries re-register as children
-    // (same parent_id), so the parent's child set is correct. But
-    // permanent failures leave parent counts stale. Scan for parents
-    // whose children are all gone and trigger their removal cascade.
-    loop {
-        let removable: Vec<LogTaskId> = state.tasks.iter()
-            .filter(|(_, entry)| matches!(&entry.state, TaskState::WaitingForChildren { .. }))
-            .filter(|(task_id, _)| {
-                !state.tasks.values().any(|e| e.parent_id == Some(**task_id))
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        if removable.is_empty() { break; }
-        for id in removable {
-            state.remove_and_notify_parent(id);
-        }
-        while let Some(parent_id) = state.removed_parents.pop() {
-            state.remove_and_notify_parent(parent_id);
-        }
+    // Cleanup phase 2: drain removed_parents from successes and
+    // permanent failures above. During the original run, finally entries
+    // were applied before parent removal. During replay, the finally
+    // entries are already in the log (applied above), so we just need
+    // the removals. May cascade.
+    while let Some(parent_id) = state.removed_parents.pop() {
+        state.remove_and_notify_parent(parent_id);
     }
 
     let config = /* deserialize config_json */;
