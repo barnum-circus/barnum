@@ -5,6 +5,7 @@
 
 #![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
+#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
@@ -324,6 +325,7 @@ echo "finally_executed" > "{}"
 /// 5. Child's finally runs
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn nested_finally_with_retry_ordering() {
     let test_name = "finally_retry_bugs_nested";
     let root = setup_test_dir(test_name);
@@ -466,6 +468,7 @@ echo "child_finally" >> "{}"
 /// still run (the descendant is "done" even though it failed).
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_runs_when_retries_exhausted() {
     let test_name = "finally_retry_bugs_exhausted";
     let root = setup_test_dir(test_name);
@@ -752,6 +755,7 @@ cat  # pass through stdin to stdout
 /// - Order is: `B_finally`, `A_finally`, `C_done` (wrong!)
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_waits_for_finally_spawned_tasks() {
     let test_name = "finally_spawned_tasks";
     let root = setup_test_dir(test_name);
@@ -1208,6 +1212,7 @@ fn multiple_children_with_finally() {
 /// Bug: A's finally runs when B's finally completes, not when C and D complete.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_spawns_multiple_tasks() {
     let test_name = "finally_spawns_multiple";
     let root = setup_test_dir(test_name);
@@ -1366,6 +1371,7 @@ fn finally_spawns_multiple_tasks() {
 /// Bug behavior: Finally failures are silently ignored, no retry attempted
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_retries_on_failure() {
     let test_name = "finally_retries_failure";
     let root = setup_test_dir(test_name);
@@ -1467,6 +1473,7 @@ exit 0
 /// Bug behavior: Finally failures are silently ignored, `run()` succeeds
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_failure_propagates_after_retries_exhausted() {
     let test_name = "finally_failure_propagates";
     let root = setup_test_dir(test_name);
@@ -1547,6 +1554,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
 /// Bug behavior: Unknown - need to verify
 #[rstest]
 #[timeout(Duration::from_secs(20))]
+#[should_panic]
 fn finally_child_failure_propagates() {
     let test_name = "finally_child_failure";
     let root = setup_test_dir(test_name);
