@@ -1,6 +1,6 @@
 # Engine Unit Testing: Separate State Transitions from Dispatch
 
-**Status:** In progress
+**Status:** Done
 
 **Depends on:** APPLY_PATTERN (done)
 
