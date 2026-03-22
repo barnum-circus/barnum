@@ -37,7 +37,7 @@ The structure is already there: receive a result, process it. `process_result` i
 
 Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs independently.
 
-During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter. Workers allocate IDs for children and retries. The counter guarantees uniqueness across concurrent allocators. During `apply()`, a local `max_seen_id` tracks the highest ID seen in `TaskSubmitted` entries (the only place IDs are introduced); after the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max`.
+During live execution, IDs are allocated from a shared `Arc<AtomicU32>` counter. Workers allocate IDs for children and retries. The counter guarantees uniqueness across concurrent allocators. During `apply()`, a local `max_seen_id` records the last `TaskSubmitted` ID seen — IDs are monotonically increasing, so the last one is always the largest. After the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max`.
 
 ### Target event loop
 
@@ -242,7 +242,7 @@ struct RunState {
 }
 ```
 
-`id_counter` is shared between Engine and workers (via `Arc<AtomicU32>`). Workers allocate IDs atomically for children and retries. During `apply()`, a local `max_seen_id` tracks the highest task ID seen in `TaskSubmitted` entries — the only place new IDs are introduced. After the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max` — this initializes the counter correctly after the seed batch (replay). During live execution the counter is already past all seen IDs, so `fetch_max` is a no-op.
+`id_counter` is shared between Engine and workers (via `Arc<AtomicU32>`). Workers allocate IDs atomically for children and retries. During `apply()`, a local `max_seen_id` records the last `TaskSubmitted` ID — IDs are monotonically increasing, so the last is always the largest. After the batch, `id_counter` is set to at least `max_seen_id + 1` via `fetch_max` — this initializes the counter correctly after the seed batch (replay). During live execution the counter is already past all seen IDs, so `fetch_max` is a no-op.
 
 **`apply()`**: Processes a batch of entries, then dispatches via `flush_dispatches`. All entries in the batch are processed before any dispatch happens — this is critical for replay, where the entire old log is applied as one batch.
 
@@ -254,7 +254,7 @@ impl Applier for Engine {
         for entry in entries {
             match entry {
                 StateLogEntry::TaskSubmitted(s) => {
-                    max_seen_id = max_seen_id.max(s.task_id.0);
+                    max_seen_id = s.task_id.0;
                     assert!(!self.state.tasks.contains_key(&s.task_id),
                         "[P035] duplicate TaskSubmitted for {:?}", s.task_id);
                     self.state.apply_submitted(s);
