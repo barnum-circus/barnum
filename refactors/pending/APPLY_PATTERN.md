@@ -41,7 +41,7 @@ Workers produce only `TaskCompleted` entries, which reference an existing task I
 
 ### Target event loop
 
-The coordinator owns a `Receiver<Vec<StateLogEntry>>` and a `Vec<Box<dyn Applier>>`. It receives entries from the channel and passes them to every applier via `process_entries`. That's it — the coordinator has no knowledge of RunState, config, or any other internal detail.
+The coordinator owns a `Receiver<StateLogEntry>` and a `Vec<Box<dyn Applier>>`. It receives a single entry from the channel, wraps it in a slice, and passes it to every applier via `process_entries`. That's it — the coordinator has no knowledge of RunState, config, or any other internal detail.
 
 ```rust
 pub fn run(
@@ -61,8 +61,8 @@ pub fn run(
     process_entries(&mut appliers, &seed);
 
     // Event loop (follows Troupe pattern: receive → apply)
-    while let Ok(entries) = rx.recv() {
-        process_entries(&mut appliers, &entries);
+    while let Ok(entry) = rx.recv() {
+        process_entries(&mut appliers, &[entry]);
     }
 
     Ok(())
@@ -81,8 +81,8 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig) -> io::Result<(
     process_entries(&mut appliers, &[]);
 
     // Event loop
-    while let Ok(entries) = rx.recv() {
-        process_entries(&mut appliers, &entries);
+    while let Ok(entry) = rx.recv() {
+        process_entries(&mut appliers, &[entry]);
     }
 
     Ok(())
@@ -95,7 +95,7 @@ fn process_entries(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry])
 }
 ```
 
-`tx` moves into the Engine — no clone, no coordinator-side sender. Workers hold `tx` clones (given by the Engine when it spawns them). The Engine sends finally/children/retry entries on `tx`. When all senders are dropped, `rx.recv()` returns `Err` and the loop exits.
+`tx` moves into the Engine — no clone, no coordinator-side sender. Workers hold `tx` clones (given by the Engine when it spawns them). The Engine sends each produced entry individually on `tx`. When all senders are dropped, `rx.recv()` returns `Err` and the loop exits.
 
 The current loop already has the same shape: receive, process. The refactor converts it in two stages:
 
@@ -154,13 +154,13 @@ The coordinator calls `process_entries` which passes entries to `apply()` on eac
 
 ### Engine
 
-Owns the full execution lifecycle: task state, dispatch, and entry production. Holds a `Sender<Vec<StateLogEntry>>` to feed entries back to the coordinator channel.
+Owns the full execution lifecycle: task state, dispatch, and entry production. Holds a `Sender<StateLogEntry>` to feed entries back to the coordinator channel.
 
 ```rust
 struct Engine<'a> {
     state: RunState,
     config: &'a Config,
-    tx: Option<Sender<Vec<StateLogEntry>>>,
+    tx: Option<Sender<StateLogEntry>>,
     pool: PoolConnection,
     in_flight: usize,
     max_concurrency: usize,
@@ -222,9 +222,9 @@ fn apply(&mut self, entries: &[StateLogEntry]) {
     produced.extend(self.process_removed_parents());
 
     // Send produced entries and flush
-    if !produced.is_empty() {
-        if let Some(tx) = &self.tx {
-            tx.send(produced).expect("[P031] channel open");
+    if let Some(tx) = &self.tx {
+        for entry in produced {
+            tx.send(entry).expect("[P031] channel open");
         }
     }
 
@@ -536,8 +536,8 @@ impl Iterator for TaskRunner<'_> {
 After: the coordinator is a dumb loop.
 
 ```rust
-while let Ok(entries) = rx.recv() {
-    process_entries(&mut appliers, &entries);
+while let Ok(entry) = rx.recv() {
+    process_entries(&mut appliers, &[entry]);
 }
 ```
 
