@@ -78,19 +78,16 @@ pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
 }
 
 fn apply_entries(engine: &mut Engine, log: &mut LogApplier, entries: &[StateLogEntry]) {
-    let mut current = entries.to_vec();
-    loop {
-        let produced = engine.apply(&current);
-        log.apply(&current);
-        if produced.is_empty() { break; }
-        current = produced;
+    engine.apply(entries);
+    log.apply(entries);
+    let produced = engine.take_produced();
+    if !produced.is_empty() {
+        log.apply(&produced);
     }
 }
 ```
 
-`worker_tx` moves into the Engine — workers get clones when spawned. The Engine does not send on the channel; it returns produced entries from `apply()` directly. When all senders are dropped (workers done, Engine drops its copy), `worker_rx.recv()` returns `Err` and the loop exits.
-
-The `apply_entries` loop typically runs 1-2 iterations: the first processes the initial entries, the second processes any finally entries produced by parent removals. The loop is bounded by tree depth — each iteration removes at least one task.
+`worker_tx` moves into the Engine — workers get clones when spawned. Engine.apply() handles all cascading internally (cleanup, finally entries, deferred removals) and accumulates produced entries. The coordinator feeds produced entries to LogApplier via `take_produced()`. When all senders are dropped (workers done, Engine drops its copy), `worker_rx.recv()` returns `Err` and the loop exits.
 
 ## StateLogEntry
 
@@ -200,6 +197,9 @@ struct Engine<'a> {
     pending_dispatches: VecDeque<PendingTask>,
     dispatched: HashSet<LogTaskId>,
     pending_removals: Vec<LogTaskId>,
+    /// Entries produced during apply() (finally tasks).
+    /// Drained by take_produced() after each apply() call.
+    produced: Vec<StateLogEntry>,
 }
 
 struct RunState {
@@ -218,13 +218,24 @@ struct PendingTask {
 }
 ```
 
-**`apply()`**: Processes entries, cleans up transient states, and returns any produced entries (finally tasks). The coordinator loops until no more entries are produced. Duplicate `TaskSubmitted` or unknown `TaskCompleted` entries are logic bugs that panic.
+**`apply()`**: Processes entries and handles all cascading effects internally (cleanup, finally entries, deferred removals). Produced entries accumulate in `self.produced` for the coordinator to feed to LogApplier via `take_produced()`. Duplicate `TaskSubmitted` or unknown `TaskCompleted` entries are logic bugs that panic.
 
 ```rust
-fn apply(&mut self, entries: &[StateLogEntry]) -> Vec<StateLogEntry> {
+fn apply(&mut self, entries: &[StateLogEntry]) {
+    self.apply_batch(entries);
+    self.resolve_cascades();
+    self.flush_dispatches();
+}
+
+fn take_produced(&mut self) -> Vec<StateLogEntry> {
+    std::mem::take(&mut self.produced)
+}
+
+/// Process a batch of entries: apply to state, track completions,
+/// clean up transient states, and process deferred removals.
+fn apply_batch(&mut self, entries: &[StateLogEntry]) {
     let mut just_completed = Vec::new();
 
-    // 1. Process incoming entries
     for entry in entries {
         match entry {
             StateLogEntry::TaskSubmitted(s) => {
@@ -250,11 +261,11 @@ fn apply(&mut self, entries: &[StateLogEntry]) -> Vec<StateLogEntry> {
         }
     }
 
-    // 2. Clean up transient states from this batch.
-    //    Tasks still in Succeeded are leaf tasks (no children submitted).
-    //    Tasks still in Failed are permanent failures (no retry submitted).
-    //    Both need removal — if children/retry were in the same batch,
-    //    apply_submitted already transitioned them out of these states.
+    // Clean up transient states from this batch.
+    // Tasks still in Succeeded are leaf tasks (no children submitted).
+    // Tasks still in Failed are permanent failures (no retry submitted).
+    // Both need removal — if children/retry were in the same batch,
+    // apply_submitted already transitioned them out of these states.
     for task_id in just_completed {
         if let Some(entry) = self.state.tasks.get(&task_id) {
             match &entry.state {
@@ -269,23 +280,24 @@ fn apply(&mut self, entries: &[StateLogEntry]) -> Vec<StateLogEntry> {
         } // else: already removed (Retry's apply_submitted removed it)
     }
 
-    // 3. Process deferred parent removals from previous cycle.
-    //    These were deferred because the finally entries they produced
-    //    needed to be applied first (to increment grandparent counts).
+    // Process deferred parent removals from previous cycle.
+    // These were deferred because the finally entries they produced
+    // needed to be applied first (to increment grandparent counts).
     for parent_id in self.pending_removals.drain(..) {
         self.state.remove_and_notify_parent(parent_id);
     }
+}
 
-    // 4. Produce finally entries for all newly removed parents
-    //    (from completions in step 2 and removals in step 3).
-    //    Parents with finally scripts get deferred removal (pending_removals).
-    //    Parents without finally scripts are removed immediately (may cascade).
-    let produced = self.produce_finally_entries();
-
-    // 5. Flush dispatches
-    self.flush_dispatches();
-
-    produced
+/// Produce finally entries and process them until no more cascades.
+/// Each produced finally entry is applied to state (via apply_batch)
+/// and accumulated in self.produced for LogApplier.
+fn resolve_cascades(&mut self) {
+    loop {
+        let finally_entries = self.produce_finally_entries();
+        if finally_entries.is_empty() { break; }
+        self.apply_batch(&finally_entries);
+        self.produced.extend(finally_entries);
+    }
 }
 ```
 
@@ -348,9 +360,9 @@ fn process_worker_result(&mut self, wr: WorkerResult) -> Vec<StateLogEntry> {
 }
 ```
 
-**`produce_finally_entries()`**: Drains `removed_parents` and produces finally entries. The returned entries are applied by the coordinator in the next iteration of the `apply_entries` loop.
+**`produce_finally_entries()`**: Drains `removed_parents` and produces finally entries. Called by `resolve_cascades`, which applies the returned entries via `apply_batch` and loops until no more are produced.
 
-For parents **with** a finally script: produce the `TaskSubmitted` entry and **defer** the parent removal by pushing to `pending_removals`. The removal must wait until the finally entry has been applied (next iteration), because `apply_submitted` increments the grandparent's child count. If we removed the parent now, the grandparent's count could hit zero prematurely.
+For parents **with** a finally script: produce the `TaskSubmitted` entry and **defer** the parent removal by pushing to `pending_removals`. The removal must wait until the finally entry has been applied (by `apply_batch` in the next `resolve_cascades` iteration), because `apply_submitted` increments the grandparent's child count. If we removed the parent now, the grandparent's count could hit zero prematurely.
 
 For parents **without** a finally script: remove immediately via `remove_and_notify_parent`. This may cascade (adding more entries to `removed_parents`), which the while loop picks up.
 
@@ -772,7 +784,7 @@ struct TaskEntry {
 #[test] fn writes_all_entry_variants()
 
 // Coordinator
-#[test] fn apply_entries_loops_until_no_produced()
+#[test] fn apply_entries_feeds_produced_to_log_applier()
 #[test] fn event_loop_exits_when_channel_closes()
 
 // Replay
