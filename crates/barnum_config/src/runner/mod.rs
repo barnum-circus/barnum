@@ -146,6 +146,95 @@ impl InFlight {
 /// Linux defaults to `max_user_instances=128`.
 const DEFAULT_MAX_CONCURRENCY: usize = 20;
 
+/// Task-tree state: the set of live tasks and the ID counter.
+///
+/// Separated from `TaskRunner` to isolate state with no I/O dependencies.
+/// All methods are pure state mutations — no I/O, no log writes, no dispatch.
+struct RunState {
+    /// All task state in one place. Tasks not in this map are fully done.
+    /// `BTreeMap` ordering by key = FIFO dispatch order (task IDs are monotonic).
+    tasks: BTreeMap<LogTaskId, TaskEntry>,
+    /// Counter for assigning unique task IDs.
+    next_task_id: u32,
+    /// Parents whose children all completed, accumulated during `remove_and_notify_parent`.
+    /// Drained by `TaskRunner` to handle finally scheduling (which requires I/O).
+    removed_parents: Vec<RemovedParent>,
+}
+
+/// A parent task whose last child just completed, ready for finally scheduling.
+///
+/// Accumulated by `RunState::remove_and_notify_parent` instead of calling
+/// `schedule_finally` inline (which would require I/O).
+struct RemovedParent {
+    task_id: LogTaskId,
+    step: StepName,
+    parent_id: Option<LogTaskId>,
+    finally_data: Option<(HookScript, StepInputValue)>,
+}
+
+impl RunState {
+    const fn new() -> Self {
+        Self {
+            tasks: BTreeMap::new(),
+            next_task_id: 0,
+            removed_parents: Vec::new(),
+        }
+    }
+
+    /// Allocate the next task ID.
+    #[expect(clippy::missing_const_for_fn)] // &mut self can't be const
+    fn next_id(&mut self) -> LogTaskId {
+        let id = LogTaskId(self.next_task_id);
+        self.next_task_id += 1;
+        id
+    }
+
+    /// Remove a task and notify its parent that a child completed.
+    ///
+    /// When a parent's `pending_children_count` reaches zero, the parent is
+    /// recorded in `removed_parents` (with its `finally_data`) but NOT removed
+    /// from the map yet. The caller drives the cascade by draining
+    /// `removed_parents`, scheduling finally tasks (which may increment
+    /// grandparent counts), and then calling `remove_and_notify_parent` again
+    /// on each removed parent.
+    ///
+    /// This non-recursive design ensures finally scheduling can increment
+    /// ancestor counts before those ancestors are removed.
+    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // Invariants
+    fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
+        let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
+        let Some(parent_id) = entry.parent_id else {
+            return;
+        };
+
+        let parent = self
+            .tasks
+            .get_mut(&parent_id)
+            .expect("[P022] parent task must exist");
+        let TaskState::WaitingForChildren {
+            pending_children_count,
+            finally_data,
+        } = &mut parent.state
+        else {
+            panic!("[P023] parent task not in WaitingForChildren state");
+        };
+
+        let new_count = pending_children_count.get() - 1;
+        if new_count > 0 {
+            *pending_children_count = NonZeroU16::new(new_count).unwrap();
+        } else {
+            let step = parent.step.clone();
+            let fd = finally_data.take();
+            self.removed_parents.push(RemovedParent {
+                task_id: parent_id,
+                step,
+                parent_id: parent.parent_id,
+                finally_data: fd,
+            });
+        }
+    }
+}
+
 /// Internal task queue runner.
 ///
 /// Tasks are submitted concurrently, and results are yielded as they complete.
@@ -153,17 +242,13 @@ struct TaskRunner<'a> {
     config: &'a Config,
     schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
-    /// All task state in one place. Tasks not in this map are fully done.
-    /// `BTreeMap` ordering by key = FIFO dispatch order (task IDs are monotonic).
-    tasks: BTreeMap<LogTaskId, TaskEntry>,
+    state: RunState,
     pool: PoolConnection,
     max_concurrency: usize,
     /// Cached count of `InFlight` tasks (for concurrency limiting).
     in_flight: usize,
     tx: mpsc::Sender<InFlightResult>,
     rx: mpsc::Receiver<InFlightResult>,
-    /// Counter for assigning unique task IDs.
-    next_task_id: u32,
     /// State log writer for persistence/resume.
     state_log: io::BufWriter<std::fs::File>,
 }
@@ -210,13 +295,12 @@ impl<'a> TaskRunner<'a> {
             config,
             schemas,
             step_map: config.step_map(),
-            tasks: BTreeMap::new(),
+            state: RunState::new(),
             pool,
             max_concurrency,
             in_flight: 0,
             tx,
             rx,
-            next_task_id: 0,
             state_log,
         };
 
@@ -244,7 +328,7 @@ impl<'a> TaskRunner<'a> {
                 ));
             }
 
-            let task_id = LogTaskId(runner.next_task_id);
+            let task_id = LogTaskId(runner.state.next_task_id);
             runner.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
                 task_id,
                 step: task.step.clone(),
@@ -295,13 +379,16 @@ impl<'a> TaskRunner<'a> {
             config,
             schemas,
             step_map: config.step_map(),
-            tasks: BTreeMap::new(),
+            state: RunState {
+                tasks: BTreeMap::new(),
+                next_task_id: state.next_task_id,
+                removed_parents: Vec::new(),
+            },
             pool,
             max_concurrency,
             in_flight: 0,
             tx,
             rx,
-            next_task_id: state.next_task_id,
             state_log,
         };
 
@@ -322,7 +409,7 @@ impl<'a> TaskRunner<'a> {
                 .and_then(|s| s.finally_hook.clone())
                 .map(|hook| (hook, waiting.finally_value));
 
-            self.tasks.insert(
+            self.state.tasks.insert(
                 waiting.task_id,
                 TaskEntry {
                     step: waiting.step,
@@ -353,7 +440,7 @@ impl<'a> TaskRunner<'a> {
                 None
             };
 
-            self.tasks.insert(
+            self.state.tasks.insert(
                 pending.task_id,
                 TaskEntry {
                     step: pending.step,
@@ -369,18 +456,11 @@ impl<'a> TaskRunner<'a> {
     }
 
     fn pending(&self) -> usize {
-        self.tasks
+        self.state
+            .tasks
             .values()
             .filter(|e| matches!(e.state, TaskState::Pending { .. }))
             .count()
-    }
-
-    /// Allocate the next task ID.
-    #[expect(clippy::missing_const_for_fn)] // &mut self can't be const
-    fn next_task_id(&mut self) -> LogTaskId {
-        let id = LogTaskId(self.next_task_id);
-        self.next_task_id += 1;
-        id
     }
 
     // ==================== State Log ====================
@@ -414,7 +494,7 @@ impl<'a> TaskRunner<'a> {
         parent_id: Option<LogTaskId>,
         finally_script: Option<HookScript>,
     ) {
-        let id = self.next_task_id();
+        let id = self.state.next_id();
         let retries_remaining = self
             .step_map
             .get(&task.step)
@@ -422,7 +502,7 @@ impl<'a> TaskRunner<'a> {
 
         if self.in_flight < self.max_concurrency {
             // Create entry in InFlight state and dispatch
-            let prev = self.tasks.insert(
+            let prev = self.state.tasks.insert(
                 id,
                 TaskEntry {
                     step: task.step.clone(),
@@ -437,7 +517,7 @@ impl<'a> TaskRunner<'a> {
             self.dispatch(id, task);
         } else {
             // Queue as Pending
-            let prev = self.tasks.insert(
+            let prev = self.state.tasks.insert(
                 id,
                 TaskEntry {
                     step: task.step,
@@ -457,7 +537,11 @@ impl<'a> TaskRunner<'a> {
     /// (set by `take_next_pending`).
     #[expect(clippy::expect_used)] // Invariants
     fn dispatch(&self, task_id: LogTaskId, task: Task) {
-        let entry = self.tasks.get(&task_id).expect("[P014] task must exist");
+        let entry = self
+            .state
+            .tasks
+            .get(&task_id)
+            .expect("[P014] task must exist");
         let tx = self.tx.clone();
 
         // Finally tasks: run the finally script directly (no pre-hook)
@@ -533,7 +617,7 @@ impl<'a> TaskRunner<'a> {
     /// Returns `(task_id, task)` if a pending task was found.
     /// The task is transitioned to `InFlight` state in the map.
     fn take_next_pending(&mut self) -> Option<(LogTaskId, Task)> {
-        let result = self.tasks.iter_mut().find_map(|(id, entry)| {
+        let result = self.state.tasks.iter_mut().find_map(|(id, entry)| {
             if let TaskState::Pending { value } = &mut entry.state {
                 let value = std::mem::replace(value, StepInputValue(serde_json::Value::Null));
                 let task = Task::new(entry.step.as_str(), value);
@@ -553,7 +637,7 @@ impl<'a> TaskRunner<'a> {
     /// Remove an `InFlight` task (for retry - don't notify parent).
     #[expect(clippy::expect_used)] // Invariant: task must exist
     fn transition_to_done(&mut self, task_id: LogTaskId) -> Option<LogTaskId> {
-        let entry = self.tasks.remove(&task_id).expect("task must exist");
+        let entry = self.state.tasks.remove(&task_id).expect("task must exist");
         assert!(matches!(entry.state, TaskState::InFlight(_)));
         self.in_flight -= 1;
         entry.parent_id
@@ -575,24 +659,24 @@ impl<'a> TaskRunner<'a> {
     /// Schedule a finally task as a sibling of the given task.
     ///
     /// The finally task becomes a child of the original task's parent.
-    /// Does NOT remove `task_id` - caller must do that.
-    #[expect(clippy::expect_used)] // Invariant: task must exist
-    fn schedule_finally(&mut self, task_id: LogTaskId, hook: HookScript, value: StepInputValue) {
-        let entry = self.tasks.get(&task_id).expect("[P018] task must exist");
-        let parent_id = entry.parent_id;
-        let step = entry.step.clone();
-
+    /// `parent_id` and `step` are passed explicitly because the task may
+    /// already be removed from the map (when called from `schedule_removed_finally`).
+    fn schedule_finally(
+        &mut self,
+        task_id: LogTaskId,
+        parent_id: Option<LogTaskId>,
+        step: &StepName,
+        hook: HookScript,
+        value: StepInputValue,
+    ) {
         // Increment parent's pending count (finally becomes another child)
         if let Some(parent_id) = parent_id {
             self.increment_pending_children(parent_id);
         }
 
         // Create the finally task
-        let id = self.next_task_id();
-        let retries_remaining = self
-            .step_map
-            .get(&step)
-            .map_or(0, |s| s.options.max_retries);
+        let id = self.state.next_id();
+        let retries_remaining = self.step_map.get(step).map_or(0, |s| s.options.max_retries);
 
         // Log the finally task submission
         self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
@@ -606,19 +690,20 @@ impl<'a> TaskRunner<'a> {
         }));
 
         let finally_entry = TaskEntry {
-            step,
+            step: step.clone(),
             parent_id,
             finally_script: Some(hook),
             state: TaskState::Pending { value },
             retries_remaining,
         };
-        self.tasks.insert(id, finally_entry);
+        self.state.tasks.insert(id, finally_entry);
     }
 
     /// Increment a task's `pending_children_count`.
     #[expect(clippy::expect_used, clippy::unwrap_used, clippy::panic)] // Invariants
     fn increment_pending_children(&mut self, task_id: LogTaskId) {
         let entry = self
+            .state
             .tasks
             .get_mut(&task_id)
             .expect("[P019] task must exist");
@@ -632,49 +717,30 @@ impl<'a> TaskRunner<'a> {
         *pending_children_count = NonZeroU16::new(pending_children_count.get() + 1).unwrap();
     }
 
-    /// Remove task and decrement parent's count.
-    fn remove_and_notify_parent(&mut self, task_id: LogTaskId) {
-        #[expect(clippy::expect_used)] // Invariant: task must exist
-        let entry = self.tasks.remove(&task_id).expect("[P021] task must exist");
-        if let Some(parent_id) = entry.parent_id {
-            self.decrement_pending_children(parent_id);
-        }
-    }
-
     // ==================== Key Operations ====================
 
-    /// Decrement a task's `pending_children_count`.
-    /// When count hits zero: schedule finally (if any), then remove.
-    #[expect(clippy::expect_used, clippy::panic, clippy::unwrap_used)] // Invariants
-    fn decrement_pending_children(&mut self, task_id: LogTaskId) {
-        let (hit_zero, finally_data) = {
-            let entry = self
-                .tasks
-                .get_mut(&task_id)
-                .expect("[P022] task must exist");
-            let TaskState::WaitingForChildren {
-                pending_children_count,
-                finally_data,
-            } = &mut entry.state
-            else {
-                panic!("[P023] task not in WaitingForChildren state");
-            };
-
-            let new_count = pending_children_count.get() - 1;
-            if new_count == 0 {
-                (true, finally_data.take())
-            } else {
-                *pending_children_count = NonZeroU16::new(new_count).unwrap();
-                (false, None)
+    /// Process removed parents after a `RunState::remove_and_notify_parent` call.
+    ///
+    /// Each removed parent may have `finally_data` that needs scheduling.
+    /// This handles the I/O side (log writes, task insertion) that `RunState` defers.
+    /// Drive the cascade of parent removals after a `remove_and_notify_parent` call.
+    ///
+    /// For each removed parent: schedule its finally task (if any), then
+    /// remove it from the map and notify its own parent. Scheduling finally
+    /// first ensures grandparent counts are incremented before the grandparent
+    /// is considered for removal.
+    fn schedule_removed_finally(&mut self) {
+        while let Some(removed) = self.state.removed_parents.pop() {
+            if let Some((hook, value)) = removed.finally_data {
+                self.schedule_finally(
+                    removed.task_id,
+                    removed.parent_id,
+                    &removed.step,
+                    hook,
+                    value,
+                );
             }
-        };
-
-        if hit_zero {
-            // Schedule finally as sibling (if any), then remove task
-            if let Some((hook, value)) = finally_data {
-                self.schedule_finally(task_id, hook, value);
-            }
-            self.remove_and_notify_parent(task_id);
+            self.state.remove_and_notify_parent(removed.task_id);
         }
     }
 
@@ -695,8 +761,14 @@ impl<'a> TaskRunner<'a> {
     fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: StepInputValue) {
         self.in_flight -= 1;
 
-        let entry = self.tasks.get(&task_id).expect("[P024] task must exist");
+        let entry = self
+            .state
+            .tasks
+            .get(&task_id)
+            .expect("[P024] task must exist");
         let finally_hook = self.lookup_finally_hook(entry);
+        let parent_id = entry.parent_id;
+        let step = entry.step.clone();
 
         if spawned.is_empty() {
             // Log completion with no children
@@ -710,12 +782,13 @@ impl<'a> TaskRunner<'a> {
 
             // No children - schedule finally (if any) as sibling, then remove
             if let Some(hook) = finally_hook {
-                self.schedule_finally(task_id, hook, value);
+                self.schedule_finally(task_id, parent_id, &step, hook, value);
             }
-            self.remove_and_notify_parent(task_id);
+            self.state.remove_and_notify_parent(task_id);
+            self.schedule_removed_finally();
         } else {
             // Compute child IDs before queuing (IDs are monotonically assigned)
-            let first_child_id = self.next_task_id;
+            let first_child_id = self.state.next_task_id;
             let spawned_task_ids: Vec<LogTaskId> = (0..spawned.len())
                 .map(|i| LogTaskId(first_child_id + i as u32))
                 .collect();
@@ -734,6 +807,7 @@ impl<'a> TaskRunner<'a> {
             let finally_data = finally_hook.map(|hook| (hook, value));
 
             let entry = self
+                .state
                 .tasks
                 .get_mut(&task_id)
                 .expect("[P025] task must exist");
@@ -743,7 +817,7 @@ impl<'a> TaskRunner<'a> {
             };
             for child in spawned {
                 // Log each spawned child
-                let child_id = LogTaskId(self.next_task_id);
+                let child_id = LogTaskId(self.state.next_task_id);
                 self.write_log(&StateLogEntry::TaskSubmitted(TaskSubmitted {
                     task_id: child_id,
                     step: child.step.clone(),
@@ -759,13 +833,17 @@ impl<'a> TaskRunner<'a> {
     /// Handle task failure (with optional retry).
     #[expect(clippy::expect_used)] // Invariant: task must exist
     fn task_failed(&mut self, task_id: LogTaskId, retry: Option<Task>, failure_kind: FailureKind) {
-        let entry = self.tasks.get(&task_id).expect("[P026] task must exist");
+        let entry = self
+            .state
+            .tasks
+            .get(&task_id)
+            .expect("[P026] task must exist");
         let parent_id = entry.parent_id;
         let finally_script = entry.finally_script.clone();
 
         if let Some(retry_task) = retry {
             // Compute retry task ID before logging
-            let retry_task_id = LogTaskId(self.next_task_id);
+            let retry_task_id = LogTaskId(self.state.next_task_id);
 
             // Log failure with retry
             self.write_log(&StateLogEntry::TaskCompleted(TaskCompleted {
@@ -797,14 +875,17 @@ impl<'a> TaskRunner<'a> {
                 }),
             }));
 
-            // Permanent failure - remove and notify parent
-            let entry = self.tasks.remove(&task_id).expect("[P027] task must exist");
+            // Permanent failure - decrement in_flight, remove and notify parent
+            let entry = self
+                .state
+                .tasks
+                .get(&task_id)
+                .expect("[P027] task must exist");
             if matches!(entry.state, TaskState::InFlight(_)) {
                 self.in_flight -= 1;
             }
-            if let Some(parent_id) = entry.parent_id {
-                self.decrement_pending_children(parent_id);
-            }
+            self.state.remove_and_notify_parent(task_id);
+            self.schedule_removed_finally();
         }
     }
 
