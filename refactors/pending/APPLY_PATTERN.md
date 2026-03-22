@@ -17,24 +17,6 @@ This creates bugs: missed log writes when state changes, missed state updates wh
 
 ## Architecture
 
-Troupe's daemon event loop (`crates/troupe/src/daemon/wiring.rs:342`):
-
-```rust
-fn run_event_loop(events_rx: Receiver<Event>, effect_tx: Sender<Effect>) -> PoolState {
-    let mut state = PoolState::new();
-    while let Ok(event) = events_rx.recv() {
-        let (new_state, effects) = step(state, event);
-        state = new_state;
-        for effect in effects {
-            if effect_tx.send(effect).is_err() {
-                break;
-            }
-        }
-    }
-    state
-}
-```
-
 Barnum's current loop (`crates/barnum_config/src/runner/mod.rs:870`):
 
 ```rust
