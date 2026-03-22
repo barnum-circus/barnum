@@ -182,7 +182,7 @@ Each `TaskOutcome` variant is self-contained. `Succeeded` carries the finally va
 
 `apply_completed` matches on the outcome. For `Succeeded` with non-empty children, the parent transitions to `WaitingForChildren(N)`. For `Succeeded` with empty children or `Failed` with no retry, the task is removed and the Engine walks up the parent chain for finally detection. For `Failed` with a retry, the task is marked `Failed` and the retry's `apply_submitted` replaces it.
 
-`FinallyRun` is produced by a finally worker thread. When a parent's children all complete and the parent has a finally script, the Engine queues a `PendingFinally` in `pending_dispatches`. `flush_dispatches` spawns a finally worker, same as it spawns task workers — both respect `max_concurrency`. The worker runs the script, allocates IDs for children, and sends `FinallyRun` on `tx`. It flows through all appliers like any other entry. During replay, `FinallyRun` entries in the batch cause `apply_finally_run` to remove the parent from the map — so `flush_dispatches` skips the stale `PendingFinally`. On resume, if a parent's children are all done but no `FinallyRun` is in the log, the `PendingFinally` stays valid and `flush_dispatches` dispatches a new finally worker.
+`FinallyRun` is produced by a finally worker thread. When a parent's children all complete and the parent has a finally script, the Engine queues a `PendingFinally` in `pending_dispatches`. `flush_dispatches` spawns a finally worker, same as it spawns task workers — both respect `max_concurrency`. The worker runs the script, allocates IDs for children, and sends `FinallyRun` on `tx`. It flows through all appliers like any other entry. During replay, when `apply()` encounters a `FinallyRun` entry, it removes the matching `PendingFinally` from `pending_dispatches` before calling `apply_finally_run`. This means any `PendingFinally` that reaches `flush_dispatches` is valid — if the parent is missing from the map, that's a bug (panic). On resume, if a parent's children are all done but no `FinallyRun` is in the log, the `PendingFinally` stays in the queue and `flush_dispatches` dispatches a new finally worker.
 
 Each `TaskOrigin` variant carries only non-derivable information. `Spawned { parent_id }` needs the parent explicitly (no other way to know it). `Retry { replaces }` references a task that's still in the map — `apply_submitted` derives `parent_id` from the referenced task's entry. `Seed` has no relationships.
 
@@ -305,6 +305,14 @@ impl Applier for Engine {
                 }
                 StateLogEntry::FinallyRun(f) => {
                     self.in_flight = self.in_flight.saturating_sub(1);
+                    // Remove the matching PendingFinally — it was queued
+                    // earlier in this batch when walk_up_for_finally fired.
+                    // During replay this prevents stale dispatch; during
+                    // live execution there's nothing to remove (already
+                    // dispatched).
+                    self.pending_dispatches.retain(|d| !matches!(d,
+                        PendingDispatch::Finally(pf)
+                            if pf.parent_id == f.finally_for));
                     let grandparent_id = self.state.apply_finally_run(f);
                     // Queue children for dispatch.
                     for s in &f.children {
@@ -361,11 +369,9 @@ fn flush_dispatches(&mut self) {
                 // spawn task worker thread with task, step config, tx, id_counter
             }
             PendingDispatch::Finally(pf) => {
-                // Skip finallys already handled (parent removed by apply_finally_run
-                // during replay — FinallyRun was in the same batch).
-                if !self.state.tasks.contains_key(&pf.parent_id) {
-                    continue;
-                }
+                assert!(self.state.tasks.contains_key(&pf.parent_id),
+                    "[P063] PendingFinally for {:?} but parent not in map",
+                    pf.parent_id);
                 self.in_flight += 1;
                 let tx = self.tx.clone();
                 let id_counter = self.id_counter.clone();
@@ -648,7 +654,7 @@ RunMode::Resume { old_log_path } => {
 The old entries flow through `process_entries` like any other batch. The first entry is `Config` — Engine deserializes and stores it. Subsequent entries (`TaskSubmitted`, `TaskCompleted`, `FinallyRun`) build up RunState. `in_flight` stays at 0 throughout the seed batch via `saturating_sub` — nothing was actually dispatched. After the batch:
 
 1. `id_counter` is initialized to `max_seen_id + 1` via `fetch_max`.
-2. `flush_dispatches` dispatches any remaining Pending tasks and finally workers. Tasks that completed during replay are skipped (state check). Finallys whose `FinallyRun` was already in the batch are skipped (parent removed from map by `apply_finally_run`).
+2. `flush_dispatches` dispatches any remaining Pending tasks and finally workers. Tasks that completed during replay are skipped (state check). Finallys whose `FinallyRun` was already in the batch were removed from `pending_dispatches` when `apply()` processed the `FinallyRun` entry.
 
 If the old log ended mid-workflow (e.g. a parent's children all completed but no `FinallyRun` was logged — crash before the finally worker completed), `walk_up_for_finally` pushed a `PendingFinally` into `pending_dispatches` during the batch and no `FinallyRun` cleared it — so `flush_dispatches` dispatches a new finally worker.
 
@@ -794,10 +800,11 @@ struct TaskEntry {
 #[test] fn apply_completed_walks_up_for_finally()
 #[test] fn apply_finally_run_queues_children_for_dispatch()
 #[test] fn apply_finally_run_queues_walk_up_finally()
+#[test] fn apply_finally_run_removes_pending_finally_from_queue()
 #[test] fn apply_initializes_counter_from_max_seen_id()
 #[test] fn flush_dispatches_up_to_max_concurrency()
 #[test] fn flush_dispatches_skips_completed_tasks()
-#[test] fn flush_dispatches_skips_handled_finallys()
+#[test] fn flush_panics_on_finally_with_missing_parent()
 #[test] fn flush_sends_shutdown_when_empty_and_no_in_flight()
 #[test] fn flush_respects_max_concurrency_for_finallys()
 
