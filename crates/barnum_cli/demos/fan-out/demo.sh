@@ -53,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run Barnum against existing pool
     echo "Running Barnum with fan-out config..."
-    $BARNUM run "$SCRIPT_DIR/config.jsonc" \
+    $BARNUM run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$ROOT" \
         $WAKE_ARG
 
@@ -115,7 +115,7 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $BARNUM --root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+    $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
         --pool "$POOL_ID"
 
     END_TIME=$(date +%s.%N)

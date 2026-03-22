@@ -44,7 +44,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$BARNUM --root "$POOL_ROOT" run "$SCRIPT_DIR/config.jsonc" \
+$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
     --pool "$POOL_ID" \
     --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}'
 
