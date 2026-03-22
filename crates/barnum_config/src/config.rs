@@ -166,9 +166,9 @@ pub enum ActionFile {
     /// of follow-up tasks.
     Pool {
         /// Markdown prompt shown to the agent processing this task. This is
-        /// the core of what tells the agent what to do. Use `{"inline": "..."}` to
-        /// write the markdown directly, or `{"link": "path/to/file.md"}` to
-        /// reference an external file.
+        /// the core of what tells the agent what to do. Use
+        /// `{"kind": "Inline", "value": "..."}` to write the markdown directly, or
+        /// `{"kind": "Link", "path": "path/to/file.md"}` to reference an external file.
         instructions: crate::maybe_linked::MaybeLinked<Instructions>,
     },
     /// Run a local shell command instead of sending to an agent. Use this for
@@ -306,7 +306,7 @@ impl EffectiveOptions {
 /// loaded from a file.
 ///
 /// - Inline: write the JSON Schema object directly, e.g. `{"type": "object", "properties": {...}}`
-/// - Linked: `{"link": "path/to/schema.json"}` to reference an external file (path relative to config file)
+/// - Linked: `{"link": "path/to/schema.json"}` to load from a file (path relative to config file)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SchemaRef {
@@ -552,7 +552,7 @@ mod tests {
     use super::*;
     use crate::maybe_linked::MaybeLinked;
 
-    const POOL: &str = r#"{"kind": "Pool", "instructions": {"inline": ""}}"#;
+    const POOL: &str = r#"{"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}"#;
 
     /// Helper to build a step JSON with required action field.
     fn step(name: &str, next: &[&str]) -> String {
@@ -588,7 +588,7 @@ mod tests {
                 {{
                     "name": "Analyze",
                     "value_schema": {{"type": "object"}},
-                    "action": {{"kind": "Pool", "instructions": {{"inline": "Analyze the input."}}}},
+                    "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": "Analyze the input."}}}},
                     "next": ["Done"]
                 }},
                 {}
@@ -722,7 +722,7 @@ mod tests {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "action": {"kind": "Pool", "instructions": {"inline": "Inline markdown here."}},
+                "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Inline markdown here."}},
                 "next": []
             }]
         }"#;
@@ -730,7 +730,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool { instructions: MaybeLinked::Inline { inline: Instructions(s) } } if s == "Inline markdown here."
+            ActionFile::Pool { instructions: MaybeLinked::Inline { value: Instructions(s) } } if s == "Inline markdown here."
         ));
     }
 
@@ -739,7 +739,7 @@ mod tests {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "action": {"kind": "Pool", "instructions": {"link": "path/to/instructions.md"}},
+                "action": {"kind": "Pool", "instructions": {"kind": "Link", "path": "path/to/instructions.md"}},
                 "next": []
             }]
         }"#;
@@ -747,7 +747,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool { instructions: MaybeLinked::Link { link } } if link == "path/to/instructions.md"
+            ActionFile::Pool { instructions: MaybeLinked::Link { path } } if path == "path/to/instructions.md"
         ));
     }
 

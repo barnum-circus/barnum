@@ -4,7 +4,7 @@ image: /img/og/reference-file-extraction.png
 
 # Extracting to separate files
 
-As configs grow, inline instructions and schemas can make the config hard to read. Barnum supports extracting both into separate files using `{"link": "path"}`.
+As configs grow, inline instructions and schemas can make the config hard to read. Barnum supports extracting both into separate files.
 
 ## Linkable fields
 
@@ -24,7 +24,7 @@ Pool action instructions can be inline strings or linked files:
 {
   "action": {
     "kind": "Pool",
-    "instructions": "Read the file. Return `[]`."
+    "instructions": { "kind": "Inline", "value": "Read the file. Return `[]`." }
   }
 }
 
@@ -32,12 +32,12 @@ Pool action instructions can be inline strings or linked files:
 {
   "action": {
     "kind": "Pool",
-    "instructions": { "link": "instructions/analyze.md" }
+    "instructions": { "kind": "Link", "path": "instructions/analyze.md" }
   }
 }
 ```
 
-When using `{"link": "..."}`, the path resolves relative to the config file's directory. So if your config is at `project/config.json` and the link is `instructions/analyze.md`, Barnum reads `project/instructions/analyze.md`.
+When using `{"kind": "Link", "path": "..."}`, the path resolves relative to the config file's directory. So if your config is at `project/config.json` and the path is `instructions/analyze.md`, Barnum reads `project/instructions/analyze.md`.
 
 The linked file contains raw instruction text, no JSON wrapping needed:
 
@@ -120,7 +120,7 @@ And the config stays clean:
       "value_schema": { "link": "schemas/analyze.json" },
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "instructions/analyze.md" }
+        "instructions": { "kind": "Link", "path": "instructions/analyze.md" }
       },
       "next": ["ExtractToFile", "RenameVariables"]
     },
@@ -129,7 +129,7 @@ And the config stays clean:
       "value_schema": { "link": "schemas/refactor-target.json" },
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "instructions/extract-to-file.md" }
+        "instructions": { "kind": "Link", "path": "instructions/extract-to-file.md" }
       },
       "next": []
     },
@@ -138,7 +138,7 @@ And the config stays clean:
       "value_schema": { "link": "schemas/refactor-target.json" },
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "instructions/rename-variables.md" }
+        "instructions": { "kind": "Link", "path": "instructions/rename-variables.md" }
       },
       "next": []
     }

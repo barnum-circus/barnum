@@ -24,7 +24,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"link": "list-files.md"}
+        "instructions": {"kind": "Link", "path": "list-files.md"}
       },
       "next": ["AnalyzeFile"]
     },
@@ -43,7 +43,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"link": "analyze-file.md"}
+        "instructions": {"kind": "Link", "path": "analyze-file.md"}
       },
       "next": ["ProcessRefactorList"]
     },
@@ -67,7 +67,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"link": "process-refactor-list.md"}
+        "instructions": {"kind": "Link", "path": "process-refactor-list.md"}
       },
       "next": ["ProcessRefactorList", "CommitFile"]
     },
@@ -86,7 +86,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"link": "commit-file.md"}
+        "instructions": {"kind": "Link", "path": "commit-file.md"}
       },
       "next": []
     }

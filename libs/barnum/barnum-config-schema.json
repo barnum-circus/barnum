@@ -60,7 +60,7 @@
           ],
           "properties": {
             "instructions": {
-              "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"inline\": \"...\"}` to write the markdown directly, or `{\"link\": \"path/to/file.md\"}` to reference an external file.",
+              "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file.",
               "allOf": [
                 {
                   "$ref": "#/definitions/MaybeLinked_for_String"
@@ -123,16 +123,23 @@
       ]
     },
     "MaybeLinked_for_String": {
-      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"inline\": <value>}` → content provided directly in the config - `{\"link\": \"path\"}` → content loaded from a file (path relative to the config file)",
-      "anyOf": [
+      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)",
+      "oneOf": [
         {
           "description": "Inline content.",
           "type": "object",
           "required": [
-            "inline"
+            "kind",
+            "value"
           ],
           "properties": {
-            "inline": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Inline"
+              ]
+            },
+            "value": {
               "description": "The content value, provided directly in the config file.",
               "type": "string"
             }
@@ -142,10 +149,17 @@
           "description": "Link to a file whose contents will be loaded at runtime.",
           "type": "object",
           "required": [
-            "link"
+            "kind",
+            "path"
           ],
           "properties": {
-            "link": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "Link"
+              ]
+            },
+            "path": {
               "description": "Relative path to the file (resolved relative to the config file's directory).",
               "type": "string"
             }
@@ -248,7 +262,7 @@
       ]
     },
     "SchemaRef": {
-      "description": "A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to reference an external file (path relative to config file)",
+      "description": "A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)",
       "anyOf": [
         {
           "description": "Reference to an external JSON Schema file. The path is relative to the config file's directory.",

@@ -37,7 +37,7 @@ Analyze a file, implement a refactor, then have a separate agent judge the resul
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the file at the given path. Identify ONE concrete refactoring opportunity (e.g., extract a function, simplify a conditional, remove duplication).\n\nReturn a task for the Refactor step with the file path and a description of the refactoring to perform:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract the validation logic on lines 45-60 into a separate validate_input() function\", \"feedback\": null}}]\n```" }
+        "instructions": { "kind": "Inline", "value": "Read the file at the given path. Identify ONE concrete refactoring opportunity (e.g., extract a function, simplify a conditional, remove duplication).\n\nReturn a task for the Refactor step with the file path and a description of the refactoring to perform:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract the validation logic on lines 45-60 into a separate validate_input() function\", \"feedback\": null}}]\n```" }
       },
       "next": ["Refactor"]
     },
@@ -54,7 +54,7 @@ Analyze a file, implement a refactor, then have a separate agent judge the resul
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the file and apply the refactoring described in `instructions`. Write the changes back to disk.\n\nIf `feedback` is present, a previous attempt was rejected by the reviewer. Address the feedback in your implementation.\n\nReturn a task for the Judge step with the file path and what you changed:\n```json\n[{\"kind\": \"Judge\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"description\": \"Extracted lines 45-60 into validate_input() and replaced with a call\"}}]\n```" }
+        "instructions": { "kind": "Inline", "value": "Read the file and apply the refactoring described in `instructions`. Write the changes back to disk.\n\nIf `feedback` is present, a previous attempt was rejected by the reviewer. Address the feedback in your implementation.\n\nReturn a task for the Judge step with the file path and what you changed:\n```json\n[{\"kind\": \"Judge\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"description\": \"Extracted lines 45-60 into validate_input() and replaced with a call\"}}]\n```" }
       },
       "next": ["Judge"]
     },
@@ -71,7 +71,7 @@ Analyze a file, implement a refactor, then have a separate agent judge the resul
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a code reviewer. Read the file and evaluate whether the refactoring was done correctly.\n\nThe original instructions were in `instructions`. The implementer described what they did in `description`. Read the actual file to verify.\n\nIf the refactoring is correct, clean, and complete, approve it:\n```json\n[]\n```\n\nIf there are problems, send it back to Refactor with specific feedback:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"feedback\": \"The extracted function still references a local variable 'config' from the original scope. Pass it as a parameter instead.\"}}]\n```\n\nBe rigorous. Only approve if the code is genuinely better than before." }
+        "instructions": { "kind": "Inline", "value": "You are a code reviewer. Read the file and evaluate whether the refactoring was done correctly.\n\nThe original instructions were in `instructions`. The implementer described what they did in `description`. Read the actual file to verify.\n\nIf the refactoring is correct, clean, and complete, approve it:\n```json\n[]\n```\n\nIf there are problems, send it back to Refactor with specific feedback:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"feedback\": \"The extracted function still references a local variable 'config' from the original scope. Pass it as a parameter instead.\"}}]\n```\n\nBe rigorous. Only approve if the code is genuinely better than before." }
       },
       "next": ["Refactor"]
     }

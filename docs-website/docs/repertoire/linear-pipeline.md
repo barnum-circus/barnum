@@ -24,7 +24,7 @@ A linear pipeline processes data through a sequence of steps.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Analyze this code for potential issues. Return `[{\"kind\": \"Review\", \"value\": {\"issues\": [\"unused variable\", \"missing error handling\"]}}]`" }
+        "instructions": { "kind": "Inline", "value": "Analyze this code for potential issues. Return `[{\"kind\": \"Review\", \"value\": {\"issues\": [\"unused variable\", \"missing error handling\"]}}]`" }
       },
       "next": ["Review"]
     },
@@ -39,7 +39,7 @@ A linear pipeline processes data through a sequence of steps.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Review these issues and suggest fixes. Return `[{\"kind\": \"Implement\", \"value\": {\"fixes\": [\"remove unused var x\", \"add try-catch\"]}}]`" }
+        "instructions": { "kind": "Inline", "value": "Review these issues and suggest fixes. Return `[{\"kind\": \"Implement\", \"value\": {\"fixes\": [\"remove unused var x\", \"add try-catch\"]}}]`" }
       },
       "next": ["Implement"]
     },
@@ -54,7 +54,7 @@ A linear pipeline processes data through a sequence of steps.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Implement these fixes. Return `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Implement these fixes. Return `[]` when done." }
       },
       "next": []
     }

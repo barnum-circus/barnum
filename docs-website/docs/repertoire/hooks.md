@@ -45,7 +45,7 @@ Pre hooks transform the input before it reaches the agent.
       "pre": { "kind": "Command", "script": "jq '. + {git_branch: env.BRANCH, git_sha: env.SHA}'" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Analyze this code with the enriched context. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Analyze this code with the enriched context. Return `[]`." }
       },
       "next": []
     }
@@ -86,7 +86,7 @@ Post hooks run after the action completes and can modify the results.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Deploy the application. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Deploy the application. Return `[]`." }
       },
       // Log the deployment result to an external endpoint.
       "post": { "kind": "Command", "script": "INPUT=$(cat) && curl -s -X POST \"$LOG_ENDPOINT\" -d \"$INPUT\" > /dev/null && echo \"$INPUT\"" },
@@ -215,7 +215,7 @@ The `finally` hook runs after ALL descendants of a task complete (not just direc
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Fan out to analyze each file. Return `[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"src/main.rs\"}}]`" }
+        "instructions": { "kind": "Inline", "value": "Fan out to analyze each file. Return `[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"src/main.rs\"}}]`" }
       },
       "next": ["AnalyzeFile"],
       // After all analyses complete, emit a summary task.
@@ -232,7 +232,7 @@ The `finally` hook runs after ALL descendants of a task complete (not just direc
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Analyze this file. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Analyze this file. Return `[]`." }
       },
       "next": []
     },
@@ -247,7 +247,7 @@ The `finally` hook runs after ALL descendants of a task complete (not just direc
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Summarize the analysis results. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Summarize the analysis results. Return `[]`." }
       },
       "next": []
     }

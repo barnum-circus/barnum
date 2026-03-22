@@ -58,12 +58,12 @@ fn retry_on_invalid_response_false_drops_task() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]
@@ -132,12 +132,12 @@ fn retry_on_invalid_response_true_retries() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]
@@ -206,7 +206,7 @@ fn malformed_json_triggers_retry() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]
@@ -276,7 +276,7 @@ fn per_step_options_override_global() {
             "steps": [
                 {
                     "name": "NoRetryStep",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": ["End"],
                     "options": {
                         "retry_on_invalid_response": false
@@ -284,7 +284,7 @@ fn per_step_options_override_global() {
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]
@@ -361,7 +361,7 @@ fn recovery_on_nth_attempt() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]
@@ -426,7 +426,7 @@ fn max_retries_zero_no_retries() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]

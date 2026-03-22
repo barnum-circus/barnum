@@ -13,7 +13,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "This is the starting step. Return an empty array to finish."}
+        "instructions": {"kind": "Inline", "value": "This is the starting step. Return an empty array to finish."}
       },
       "next": []
     }

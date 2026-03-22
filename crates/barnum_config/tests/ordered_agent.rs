@@ -24,7 +24,7 @@ fn simple_config() -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"inline": "Process this task."}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Process this task."}},
                     "next": []
                 }
             ]
@@ -40,12 +40,12 @@ fn fan_out_config() -> Config {
             "steps": [
                 {
                     "name": "Distribute",
-                    "action": {"kind": "Pool", "instructions": {"inline": "Spawn workers."}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Spawn workers."}},
                     "next": ["Worker"]
                 },
                 {
                     "name": "Worker",
-                    "action": {"kind": "Pool", "instructions": {"inline": "Do work."}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Do work."}},
                     "next": []
                 }
             ]

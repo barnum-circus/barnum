@@ -64,7 +64,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a legal analyst specializing in case law.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify every reference to court cases, legal precedents, and statutory citations.\n3. For each reference, look up the actual case or statute. Summarize the ruling and assess whether the contract's citation is accurate and used in proper context.\n4. Flag any references that are misleading, taken out of context, or cite overturned decisions.\n\nWrite your findings to `{output_dir}/court_case_references.md` with a section per citation.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "You are a legal analyst specializing in case law.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify every reference to court cases, legal precedents, and statutory citations.\n3. For each reference, look up the actual case or statute. Summarize the ruling and assess whether the contract's citation is accurate and used in proper context.\n4. Flag any references that are misleading, taken out of context, or cite overturned decisions.\n\nWrite your findings to `{output_dir}/court_case_references.md` with a section per citation.\n\nReturn `[]` when done." }
       },
       "next": []
     },
@@ -80,7 +80,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a financial analyst reviewing contract terms.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify all financial claims: payment terms, penalty clauses, interest rates, cap amounts, royalty percentages, and revenue-sharing formulas.\n3. For each claim, verify that the numbers are internally consistent (e.g., percentages add up, caps are reasonable relative to contract value).\n4. Flag any terms that are unusual, one-sided, or significantly above/below market rates.\n5. Cross-reference any financial projections or estimates against the assumptions stated in the contract.\n\nWrite your findings to `{output_dir}/financial_claims.md`.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "You are a financial analyst reviewing contract terms.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify all financial claims: payment terms, penalty clauses, interest rates, cap amounts, royalty percentages, and revenue-sharing formulas.\n3. For each claim, verify that the numbers are internally consistent (e.g., percentages add up, caps are reasonable relative to contract value).\n4. Flag any terms that are unusual, one-sided, or significantly above/below market rates.\n5. Cross-reference any financial projections or estimates against the assumptions stated in the contract.\n\nWrite your findings to `{output_dir}/financial_claims.md`.\n\nReturn `[]` when done." }
       },
       "next": []
     },
@@ -96,7 +96,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a legal analyst specializing in liability and risk.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify all indemnification clauses, limitation of liability provisions, warranty disclaimers, and force majeure terms.\n3. Assess whether the liability allocation is balanced or heavily favors one party.\n4. Flag any unlimited liability exposure, broad indemnification obligations, or missing standard protections (e.g., no liability cap, no mutual indemnification).\n5. Note any clauses that could create unexpected obligations under adverse conditions.\n\nWrite your findings to `{output_dir}/liability_analysis.md`.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "You are a legal analyst specializing in liability and risk.\n\n1. Read the contract at the path in `contract_path`.\n2. Identify all indemnification clauses, limitation of liability provisions, warranty disclaimers, and force majeure terms.\n3. Assess whether the liability allocation is balanced or heavily favors one party.\n4. Flag any unlimited liability exposure, broad indemnification obligations, or missing standard protections (e.g., no liability cap, no mutual indemnification).\n5. Note any clauses that could create unexpected obligations under adverse conditions.\n\nWrite your findings to `{output_dir}/liability_analysis.md`.\n\nReturn `[]` when done." }
       },
       "next": []
     },
@@ -111,7 +111,7 @@ Legal contracts require expertise across multiple domains. Rather than asking on
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You are a senior legal reviewer producing a final recommendation.\n\n1. Read all analysis files in `output_dir`:\n   - `court_case_references.md`\n   - `financial_claims.md`\n   - `liability_analysis.md`\n2. Synthesize the findings into a single executive summary.\n3. Categorize issues by severity: **Critical** (deal-breakers), **Major** (require negotiation), **Minor** (acceptable risk).\n4. Produce a clear **recommendation**: sign as-is, sign with amendments, or do not sign.\n5. If amendments are recommended, list the specific clauses that need changes and what the changes should be.\n\nWrite the final report to `{output_dir}/recommendation.md`.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "You are a senior legal reviewer producing a final recommendation.\n\n1. Read all analysis files in `output_dir`:\n   - `court_case_references.md`\n   - `financial_claims.md`\n   - `liability_analysis.md`\n2. Synthesize the findings into a single executive summary.\n3. Categorize issues by severity: **Critical** (deal-breakers), **Major** (require negotiation), **Minor** (acceptable risk).\n4. Produce a clear **recommendation**: sign as-is, sign with amendments, or do not sign.\n5. If amendments are recommended, list the specific clauses that need changes and what the changes should be.\n\nWrite the final report to `{output_dir}/recommendation.md`.\n\nReturn `[]` when done." }
       },
       "next": []
     }

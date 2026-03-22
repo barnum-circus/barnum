@@ -12,7 +12,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks.\n\nReturn:\n```json\n[\n  {\"kind\": \"Worker\", \"value\": {\"id\": 1}},\n  {\"kind\": \"Worker\", \"value\": {\"id\": 2}},\n  ...\n  {\"kind\": \"Worker\", \"value\": {\"id\": 10}}\n]\n```"}
+        "instructions": {"kind": "Inline", "value": "Fan out to 10 parallel workers. Return an array with 10 Worker tasks.\n\nReturn:\n```json\n[\n  {\"kind\": \"Worker\", \"value\": {\"id\": 1}},\n  {\"kind\": \"Worker\", \"value\": {\"id\": 2}},\n  ...\n  {\"kind\": \"Worker\", \"value\": {\"id\": 10}}\n]\n```"}
       },
       "next": ["Worker"]
     },
@@ -31,7 +31,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "Process your assigned work item.\n\nInput: `{\"id\": <number>}`\n\nReturn `[]` when done."}
+        "instructions": {"kind": "Inline", "value": "Process your assigned work item.\n\nInput: `{\"id\": <number>}`\n\nReturn `[]` when done."}
       },
       "next": []
     }

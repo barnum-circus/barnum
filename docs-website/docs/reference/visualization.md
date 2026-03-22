@@ -60,23 +60,23 @@ This config defines a branching refactor workflow: list files, analyze each one,
       "name": "Analyze",
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the file. Decide which refactor it needs. Return one task." }
+        "instructions": { "kind": "Inline", "value": "Read the file. Decide which refactor it needs. Return one task." }
       },
       "next": ["ExtractToFile", "RenameVariables", "RemoveUnused"]
     },
     {
       "name": "ExtractToFile",
-      "action": { "kind": "Pool", "instructions": { "inline": "Extract the specified code into a new file. Return []." } },
+      "action": { "kind": "Pool", "instructions": { "kind": "Inline", "value": "Extract the specified code into a new file. Return []." } },
       "next": []
     },
     {
       "name": "RenameVariables",
-      "action": { "kind": "Pool", "instructions": { "inline": "Rename variables for clarity. Return []." } },
+      "action": { "kind": "Pool", "instructions": { "kind": "Inline", "value": "Rename variables for clarity. Return []." } },
       "next": []
     },
     {
       "name": "RemoveUnused",
-      "action": { "kind": "Pool", "instructions": { "inline": "Remove unused code. Return []." } },
+      "action": { "kind": "Pool", "instructions": { "kind": "Inline", "value": "Remove unused code. Return []." } },
       "next": []
     },
     {

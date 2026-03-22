@@ -103,7 +103,7 @@ Instructions can be inline or linked to a file:
 {
   "action": {
     "kind": "Pool",
-    "instructions": { "link": "instructions/analyze.md" }
+    "instructions": { "kind": "Link", "path": "instructions/analyze.md" }
   }
 }
 ```

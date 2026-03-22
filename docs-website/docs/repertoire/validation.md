@@ -36,7 +36,7 @@ Validate the value payload for each step:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Process this order and prepare for shipping. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" }
+        "instructions": { "kind": "Inline", "value": "Process this order and prepare for shipping. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" }
       },
       "next": ["Ship"]
     },
@@ -51,7 +51,7 @@ Validate the value payload for each step:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Ship the order. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Ship the order. Return `[]`." }
       },
       "next": []
     }
@@ -78,7 +78,7 @@ Reference schemas from files using `{"link": "path"}`:
       "value_schema": { "link": "./schemas/order.json" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Process the order. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" }
+        "instructions": { "kind": "Inline", "value": "Process the order. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" }
       },
       "next": ["Ship"]
     },
@@ -87,7 +87,7 @@ Reference schemas from files using `{"link": "path"}`:
       "value_schema": { "type": "object" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Ship it. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Ship it. Return `[]`." }
       },
       "next": []
     }

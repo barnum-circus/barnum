@@ -279,7 +279,7 @@ Hooks (pre, post, finally) are currently Command-only: `{"kind": "Command", "scr
 ```jsonc
 {
   "pre": {"kind": "Typescript", "module": "./hooks/enrich.ts"},
-  "action": {"kind": "Pool", "instructions": {"link": "analyze.md"}},
+  "action": {"kind": "Pool", "instructions": {"kind": "Link", "path": "analyze.md"}},
   "post": {"kind": "Command", "script": "jq '.next'"}
 }
 ```

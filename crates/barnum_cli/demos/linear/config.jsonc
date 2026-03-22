@@ -12,7 +12,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "You are at the start. Transition to Middle.\n\nReturn: `[{\"kind\": \"Middle\", \"value\": {}}]`"}
+        "instructions": {"kind": "Inline", "value": "You are at the start. Transition to Middle.\n\nReturn: `[{\"kind\": \"Middle\", \"value\": {}}]`"}
       },
       "next": ["Middle"]
     },
@@ -25,7 +25,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "You are in the middle. Transition to End.\n\nReturn: `[{\"kind\": \"End\", \"value\": {}}]`"}
+        "instructions": {"kind": "Inline", "value": "You are in the middle. Transition to End.\n\nReturn: `[{\"kind\": \"End\", \"value\": {}}]`"}
       },
       "next": ["End"]
     },
@@ -38,7 +38,7 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"inline": "You have reached the end. Return an empty array.\n\nReturn: `[]`"}
+        "instructions": {"kind": "Inline", "value": "You have reached the end. Return an empty array.\n\nReturn: `[]`"}
       },
       "next": []
     }

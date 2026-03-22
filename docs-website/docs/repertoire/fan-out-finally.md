@@ -60,7 +60,7 @@ List files, refactor them all in parallel, then commit the changes.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the file at the path provided. Refactor it to improve readability and remove dead code. Write the changes back to disk. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Read the file at the path provided. Refactor it to improve readability and remove dead code. Write the changes back to disk. Return `[]`." }
       },
       "next": []
     },

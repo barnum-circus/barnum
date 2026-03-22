@@ -31,7 +31,7 @@ fn worker_config() -> Config {
             "steps": [
                 {
                     "name": "Worker",
-                    "action": {"kind": "Pool", "instructions": {"inline": "Process this task."}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Process this task."}},
                     "next": []
                 }
             ]
@@ -138,7 +138,7 @@ fn max_concurrency_limits_parallel_tasks() {
             "steps": [
                 {
                     "name": "Worker",
-                    "action": {"kind": "Pool", "instructions": {"inline": "Work"}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Work"}},
                     "next": []
                 }
             ]
@@ -215,13 +215,13 @@ fn nested_fan_out() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Root", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": ["Branch1", "Branch2"]},
-                {"name": "Branch1", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": ["Leaf1A", "Leaf1B"]},
-                {"name": "Branch2", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": ["Leaf2A", "Leaf2B"]},
-                {"name": "Leaf1A", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []},
-                {"name": "Leaf1B", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []},
-                {"name": "Leaf2A", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []},
-                {"name": "Leaf2B", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Root", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Branch1", "Branch2"]},
+                {"name": "Branch1", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Leaf1A", "Leaf1B"]},
+                {"name": "Branch2", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Leaf2A", "Leaf2B"]},
+                {"name": "Leaf1A", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []},
+                {"name": "Leaf1B", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []},
+                {"name": "Leaf2A", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []},
+                {"name": "Leaf2B", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
     )

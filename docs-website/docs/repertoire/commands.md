@@ -44,7 +44,7 @@ Use agents when the task requires judgment, creativity, or understanding natural
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Analyze this file. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Analyze this file. Return `[]`." }
       },
       "next": []
     }
@@ -110,7 +110,7 @@ Commands and agents work together naturally:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"echo hello\"}}]`" }
+        "instructions": { "kind": "Inline", "value": "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"echo hello\"}}]`" }
       },
       "next": ["Execute"]
     },
@@ -134,7 +134,7 @@ Commands and agents work together naturally:
       "value_schema": { "type": "object" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Verify the changes. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Verify the changes. Return `[]`." }
       },
       "next": []
     }

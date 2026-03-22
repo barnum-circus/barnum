@@ -49,7 +49,7 @@ Some tools charge $25 per code review. Barnum runs the same checks (coding stand
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "instructions/check-standards.md" }
+        "instructions": { "kind": "Link", "path": "instructions/check-standards.md" }
       },
       "next": []
     },
@@ -62,7 +62,7 @@ Some tools charge $25 per code review. Barnum runs the same checks (coding stand
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "instructions/check-security.md" }
+        "instructions": { "kind": "Link", "path": "instructions/check-security.md" }
       },
       "next": []
     },
@@ -71,7 +71,7 @@ Some tools charge $25 per code review. Barnum runs the same checks (coding stand
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Review all findings from the code review. Compile a summary: files reviewed, standards violations, security issues. Post a GitHub comment with the results. Return []."
+          "kind": "Inline", "value": "Review all findings from the code review. Compile a summary: files reviewed, standards violations, security issues. Post a GitHub comment with the results. Return []."
         }
       },
       "next": []

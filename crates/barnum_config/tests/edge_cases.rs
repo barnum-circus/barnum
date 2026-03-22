@@ -38,7 +38,7 @@ fn empty_initial_tasks_completes() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Start", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
     )
@@ -101,8 +101,8 @@ fn large_fan_out() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Distribute", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": ["Worker"]},
-                {"name": "Worker", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Distribute", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Worker"]},
+                {"name": "Worker", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
     )
@@ -204,7 +204,7 @@ fn rapid_task_completion() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Fast", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Fast", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
     )
@@ -241,7 +241,7 @@ fn unknown_step_in_initial_tasks_returns_error() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Known", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Known", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
     )
@@ -290,7 +290,7 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
                         "required": ["name"],
                         "properties": {"name": {"type": "string"}}
                     },
-                    "action": {"kind": "Pool", "instructions": {"inline": ""}},
+                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
                     "next": []
                 }
             ]

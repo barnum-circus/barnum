@@ -148,8 +148,8 @@ mod tests {
         let config_file: ConfigFile = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Pool", "instructions": {"inline": "Begin here."}}, "next": ["End"]},
-                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Start", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Begin here."}}, "next": ["End"]},
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
         )
@@ -167,7 +167,7 @@ mod tests {
         let config_file: ConfigFile = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
         )
@@ -184,8 +184,8 @@ mod tests {
         let config_file: ConfigFile = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Pool", "instructions": {"inline": "Begin."}}, "next": ["End"]},
-                {"name": "End", "action": {"kind": "Pool", "instructions": {"inline": ""}}, "next": []}
+                {"name": "Start", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Begin."}}, "next": ["End"]},
+                {"name": "End", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
         )

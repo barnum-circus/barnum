@@ -23,7 +23,7 @@ Configure how Barnum handles failures and retries.
       "value_schema": { "type": "object" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Process the task. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Process the task. Return `[]`." }
       },
       "next": []
     }
@@ -52,7 +52,7 @@ Override global settings for specific steps:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Quick validation. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Quick validation. Return `[]`." }
       },
       "next": ["ExpensiveAnalysis"]
     },
@@ -65,7 +65,7 @@ Override global settings for specific steps:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Deep analysis. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Deep analysis. Return `[]`." }
       },
       "next": []
     }
@@ -114,7 +114,7 @@ For idempotent-sensitive operations:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Send the email. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Send the email. Return `[]`." }
       },
       "next": []
     }

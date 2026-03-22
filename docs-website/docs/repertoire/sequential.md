@@ -46,7 +46,7 @@ Migrate database schema files one at a time, in order, so each migration builds 
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "You receive a list of migration files in `remaining`. Apply ONLY the first migration file. Read the SQL file, execute the migration, and verify it succeeded.\n\nIf there are more files after the first, return:\n```json\n[{\"kind\": \"ProcessNext\", \"value\": {\"remaining\": [\"002.sql\", \"003.sql\"], \"completed\": [\"001.sql\"]}}]\n```\n\nIf this was the last file, return `[]`." }
+        "instructions": { "kind": "Inline", "value": "You receive a list of migration files in `remaining`. Apply ONLY the first migration file. Read the SQL file, execute the migration, and verify it succeeded.\n\nIf there are more files after the first, return:\n```json\n[{\"kind\": \"ProcessNext\", \"value\": {\"remaining\": [\"002.sql\", \"003.sql\"], \"completed\": [\"001.sql\"]}}]\n```\n\nIf this was the last file, return `[]`." }
       },
       // The step can transition to itself to continue the chain.
       "next": ["ProcessNext"]

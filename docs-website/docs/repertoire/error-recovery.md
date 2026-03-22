@@ -41,7 +41,7 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Refactor the file as described in `task`. If `previous_error` is present, a prior attempt broke the build — use the error to guide your approach.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Refactor the file as described in `task`. If `previous_error` is present, a prior attempt broke the build — use the error to guide your approach.\n\nReturn `[]` when done." }
       },
       // Post hook checks if the build still passes.
       "post": { "kind": "Command", "script": "INPUT=$(cat) && KIND=$(echo \"$INPUT\" | jq -r '.kind') && if [ \"$KIND\" != \"Success\" ]; then echo \"$INPUT\"; exit 0; fi && FILE=$(echo \"$INPUT\" | jq -r '.input.file') && if cargo check 2>/tmp/build_err.txt; then echo \"$INPUT\"; else ERROR=$(cat /tmp/build_err.txt) && echo \"$INPUT\" | jq --arg err \"$ERROR\" --arg file \"$FILE\" '.next = [{kind: \"FixBuild\", value: {file: $file, error: $err}}]'; fi" },
@@ -59,7 +59,7 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "The build broke after a refactor. You receive the file that was changed and the build error.\n\nFix the build error. Focus only on making the build pass — don't change the intent of the refactor.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "The build broke after a refactor. You receive the file that was changed and the build error.\n\nFix the build error. Focus only on making the build pass — don't change the intent of the refactor.\n\nReturn `[]` when done." }
       },
       "next": []
     }
@@ -103,7 +103,7 @@ Post hooks are also useful for cleaning up resources. Here's a pattern using a t
       "pre": { "kind": "Command", "script": "INPUT=$(cat) && TMPDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$TMPDIR\" '. + {tmpdir: $dir}'" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Download and process the file at `url`. Use the `tmpdir` directory for any intermediate files.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Download and process the file at `url`. Use the `tmpdir` directory for any intermediate files.\n\nReturn `[]` when done." }
       },
       // Post hook cleans up the temp directory regardless of outcome.
       "post": { "kind": "Command", "script": "INPUT=$(cat) && TMPDIR=$(echo \"$INPUT\" | jq -r '.input.tmpdir // empty') && [ -n \"$TMPDIR\" ] && rm -rf \"$TMPDIR\"; echo \"$INPUT\"" },
@@ -137,7 +137,7 @@ For fan-out workflows, use `finally` to clean up after all children complete:
       "pre": { "kind": "Command", "script": "INPUT=$(cat) && WORKDIR=$(mktemp -d) && echo \"$INPUT\" | jq --arg dir \"$WORKDIR\" '. + {workdir: $dir}'" },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Fan out: return one ProcessFile task per file, passing the workdir to each.\n\n```json\n[{\"kind\": \"ProcessFile\", \"value\": {\"file\": \"src/main.rs\", \"workdir\": \"/tmp/abc123\"}}]\n```" }
+        "instructions": { "kind": "Inline", "value": "Fan out: return one ProcessFile task per file, passing the workdir to each.\n\n```json\n[{\"kind\": \"ProcessFile\", \"value\": {\"file\": \"src/main.rs\", \"workdir\": \"/tmp/abc123\"}}]\n```" }
       },
       "next": ["ProcessFile"],
       // Finally cleans up the shared workspace after ALL files are processed.
@@ -155,7 +155,7 @@ For fan-out workflows, use `finally` to clean up after all children complete:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Process this file. Use `workdir` for intermediate output.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Process this file. Use `workdir` for intermediate output.\n\nReturn `[]` when done." }
       },
       "next": []
     }

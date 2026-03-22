@@ -38,7 +38,7 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
       "value_schema": { "type": "object" },
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze the given file."
+        "instructions": {"kind": "Inline", "value": "Analyze the given file."}
       },
       "next": ["Implement", "Done"]
     },
@@ -46,7 +46,7 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
       "name": "Implement",
       "action": {
         "kind": "Pool",
-        "instructions": { "link": "implement-instructions.md" }
+        "instructions": { "kind": "Link", "path": "implement-instructions.md" }
       },
       "next": ["Test"],
       "options": {
@@ -97,7 +97,7 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
 
 **Pool** (default): Sends tasks to the agent pool for processing by LLM agents.
 ```json
-{"kind": "Pool", "instructions": "Analyze the input."}
+{"kind": "Pool", "instructions": {"kind": "Inline", "value": "Analyze the input."}}
 ```
 
 **Command**: Runs a local shell script. The task JSON is piped to stdin, and the script must output a JSON array of next tasks on stdout.

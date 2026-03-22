@@ -37,7 +37,7 @@ Analyze ──────┼─→ RenameVariables ──→ Done
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Read the file at the given path. Determine which ONE of the following refactors would most improve the code:\n\n1. **ExtractToFile** — A section of the file (a class, a group of related functions, a set of constants) should be extracted into its own file.\n2. **RenameVariables** — Variables, functions, or types have unclear names that hurt readability.\n3. **RemoveUnusedProps** — There are unused imports, function parameters, struct fields, or type properties that should be removed.\n\nReturn exactly one task for the appropriate refactor type. Include the file path and a description of what specifically should be refactored:\n\n```json\n[{\"kind\": \"ExtractToFile\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"The Config struct and its impl block (lines 15-80) should be extracted to src/config.rs\"}}]\n```\n\nOr:\n```json\n[{\"kind\": \"RenameVariables\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"Variables x, tmp, and val on lines 30-45 should be renamed to reflect their purpose\"}}]\n```\n\nOr:\n```json\n[{\"kind\": \"RemoveUnusedProps\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"The 'debug_mode' field on Config and the 'legacy_format' parameter on parse() are never used\"}}]\n```" }
+        "instructions": { "kind": "Inline", "value": "Read the file at the given path. Determine which ONE of the following refactors would most improve the code:\n\n1. **ExtractToFile** — A section of the file (a class, a group of related functions, a set of constants) should be extracted into its own file.\n2. **RenameVariables** — Variables, functions, or types have unclear names that hurt readability.\n3. **RemoveUnusedProps** — There are unused imports, function parameters, struct fields, or type properties that should be removed.\n\nReturn exactly one task for the appropriate refactor type. Include the file path and a description of what specifically should be refactored:\n\n```json\n[{\"kind\": \"ExtractToFile\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"The Config struct and its impl block (lines 15-80) should be extracted to src/config.rs\"}}]\n```\n\nOr:\n```json\n[{\"kind\": \"RenameVariables\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"Variables x, tmp, and val on lines 30-45 should be renamed to reflect their purpose\"}}]\n```\n\nOr:\n```json\n[{\"kind\": \"RemoveUnusedProps\", \"value\": {\"file\": \"src/main.rs\", \"target\": \"The 'debug_mode' field on Config and the 'legacy_format' parameter on parse() are never used\"}}]\n```" }
       },
       "next": ["ExtractToFile", "RenameVariables", "RemoveUnusedProps"]
     },
@@ -53,7 +53,7 @@ Analyze ──────┼─→ RenameVariables ──→ Done
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Extract the specified code into a new file.\n\n1. Read the source file.\n2. Identify the code described in `target`.\n3. Create a new file with the extracted code.\n4. Add appropriate imports/exports in both files.\n5. Update the original file to import from the new file.\n6. Write both files to disk.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Extract the specified code into a new file.\n\n1. Read the source file.\n2. Identify the code described in `target`.\n3. Create a new file with the extracted code.\n4. Add appropriate imports/exports in both files.\n5. Update the original file to import from the new file.\n6. Write both files to disk.\n\nReturn `[]` when done." }
       },
       "next": []
     },
@@ -69,7 +69,7 @@ Analyze ──────┼─→ RenameVariables ──→ Done
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Rename variables for clarity.\n\n1. Read the file.\n2. Identify the variables/functions/types described in `target`.\n3. Choose clear, descriptive names that convey intent.\n4. Rename all occurrences consistently throughout the file.\n5. Write the file to disk.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Rename variables for clarity.\n\n1. Read the file.\n2. Identify the variables/functions/types described in `target`.\n3. Choose clear, descriptive names that convey intent.\n4. Rename all occurrences consistently throughout the file.\n5. Write the file to disk.\n\nReturn `[]` when done." }
       },
       "next": []
     },
@@ -85,7 +85,7 @@ Analyze ──────┼─→ RenameVariables ──→ Done
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Remove unused code.\n\n1. Read the file.\n2. Identify the unused items described in `target`.\n3. Remove them along with any now-unnecessary imports.\n4. Verify the remaining code still compiles/makes sense.\n5. Write the file to disk.\n\nReturn `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Remove unused code.\n\n1. Read the file.\n2. Identify the unused items described in `target`.\n3. Remove them along with any now-unnecessary imports.\n4. Verify the remaining code still compiles/makes sense.\n5. Write the file to disk.\n\nReturn `[]` when done." }
       },
       "next": []
     }

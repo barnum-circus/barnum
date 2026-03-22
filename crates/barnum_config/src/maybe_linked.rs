@@ -8,27 +8,27 @@ use std::path::Path;
 /// Content that can be inline or linked to a file.
 ///
 /// In config files:
-/// - `{"inline": <value>}` → content provided directly in the config
-/// - `{"link": "path"}` → content loaded from a file (path relative to the config file)
+/// - `{"kind": "Inline", "value": <content>}` → content provided directly in the config
+/// - `{"kind": "Link", "path": "file.md"}` → content loaded from a file (path relative to the config file)
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
+#[serde(tag = "kind")]
 pub enum MaybeLinked<T> {
     /// Inline content.
     Inline {
         /// The content value, provided directly in the config file.
-        inline: T,
+        value: T,
     },
     /// Link to a file whose contents will be loaded at runtime.
     Link {
         /// Relative path to the file (resolved relative to the config file's directory).
-        link: String,
+        path: String,
     },
 }
 
 impl<T: Default> Default for MaybeLinked<T> {
     fn default() -> Self {
         Self::Inline {
-            inline: T::default(),
+            value: T::default(),
         }
     }
 }
@@ -38,7 +38,7 @@ impl<T> MaybeLinked<T> {
     #[must_use]
     pub const fn as_inline(&self) -> Option<&T> {
         match self {
-            Self::Inline { inline } => Some(inline),
+            Self::Inline { value } => Some(value),
             Self::Link { .. } => None,
         }
     }
@@ -48,7 +48,7 @@ impl<T> MaybeLinked<T> {
     pub fn as_link(&self) -> Option<&str> {
         match self {
             Self::Inline { .. } => None,
-            Self::Link { link } => Some(link),
+            Self::Link { path } => Some(path),
         }
     }
 
@@ -65,13 +65,13 @@ impl<T> MaybeLinked<T> {
         T: Into<U>,
     {
         match self {
-            Self::Inline { inline } => Ok(inline.into()),
-            Self::Link { link } => {
-                let path = base_path.join(&link);
-                read_file(&path).map_err(|e| {
+            Self::Inline { value } => Ok(value.into()),
+            Self::Link { path: link_path } => {
+                let resolved = base_path.join(&link_path);
+                read_file(&resolved).map_err(|e| {
                     io::Error::new(
                         e.kind(),
-                        format!("failed to read '{}': {e}", path.display()),
+                        format!("failed to read '{}': {e}", resolved.display()),
                     )
                 })
             }

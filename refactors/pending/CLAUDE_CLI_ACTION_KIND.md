@@ -17,7 +17,7 @@ This builds on the pluggable action kinds design (see `PLUGGABLE_ACTION_KINDS.md
       "name": "Analyze",
       "action": {
         "kind": "Claude",
-        "prompt": {"link": "prompts/analyze.md"},
+        "prompt": {"kind": "Link", "path": "prompts/analyze.md"},
         "model": "sonnet",
         "max_tokens": 4096,
         "output_dir": "./outputs"
@@ -28,7 +28,7 @@ This builds on the pluggable action kinds design (see `PLUGGABLE_ACTION_KINDS.md
       "name": "Implement",
       "action": {
         "kind": "Claude",
-        "prompt": {"inline": "Implement the changes described in the analysis."},
+        "prompt": {"kind": "Inline", "value": "Implement the changes described in the analysis."},
         "model": "sonnet",
         "allowed_tools": ["Read", "Edit", "Write", "Bash"]
       },

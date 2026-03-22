@@ -23,7 +23,7 @@ Branching allows agents to choose different paths based on their analysis.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Review this PR. If it looks good, return `[{\"kind\": \"Approve\", \"value\": {\"pr_number\": 123}}]`. If changes are needed, return `[{\"kind\": \"RequestChanges\", \"value\": {\"pr_number\": 123, \"comments\": [\"fix typo\"]}}]`." }
+        "instructions": { "kind": "Inline", "value": "Review this PR. If it looks good, return `[{\"kind\": \"Approve\", \"value\": {\"pr_number\": 123}}]`. If changes are needed, return `[{\"kind\": \"RequestChanges\", \"value\": {\"pr_number\": 123, \"comments\": [\"fix typo\"]}}]`." }
       },
       "next": ["Approve", "RequestChanges"]
     },
@@ -38,7 +38,7 @@ Branching allows agents to choose different paths based on their analysis.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Merge the PR. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Merge the PR. Return `[]`." }
       },
       "next": []
     },
@@ -54,7 +54,7 @@ Branching allows agents to choose different paths based on their analysis.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Comment on the PR with requested changes. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Comment on the PR with requested changes. Return `[]`." }
       },
       "next": []
     }

@@ -124,16 +124,17 @@ Same change for: `StepFile`, `ActionFile`, `Options`, `StepOptions`, `PreHook`, 
 
 **Complication: `$schema` field.** The `$schema` field uses `#[serde(rename = "$schema")]`. `ts-rs` should respect this and generate `"$schema"?: string | null` in the TypeScript output. Verify this.
 
-**Complication: `MaybeLinked<T>`.** This is a generic enum. `ts-rs` handles generics:
+**Complication: `MaybeLinked<T>`.** This is a generic enum with `#[serde(tag = "kind")]`. `ts-rs` handles generics:
 ```rust
 #[derive(Serialize, Deserialize, TS)]
+#[serde(tag = "kind")]
 #[ts(export)]
 pub enum MaybeLinked<T> {
-    Inline(T),
-    Link(String),
+    Inline { value: T },
+    Link { path: String },
 }
 ```
-Generates: `type MaybeLinked<T> = { inline: T } | { link: string }` (depending on serde tagging). Verify the output matches the JSON schema's `anyOf`.
+Generates: `type MaybeLinked<T> = { kind: "Inline"; value: T } | { kind: "Link"; path: string }` (discriminated union). Verify the output matches the JSON schema's `oneOf`.
 
 **Complication: Enum tagging.** `ActionFile` uses `#[serde(tag = "kind")]`:
 ```rust
@@ -404,12 +405,12 @@ export default defineConfig({
   steps: [
     {
       name: "Analyze",
-      action: { kind: "Pool", instructions: { inline: "Analyze the code." } },
+      action: { kind: "Pool", instructions: { kind: "Inline", value: "Analyze the code." } },
       next: ["Implement"],
     },
     {
       name: "Implement",
-      action: { kind: "Pool", instructions: { link: "implement.md" } },
+      action: { kind: "Pool", instructions: { kind: "Link", path: "implement.md" } },
       next: [],
     },
   ],

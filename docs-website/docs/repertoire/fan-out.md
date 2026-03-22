@@ -37,7 +37,7 @@ Fan-out splits one task into multiple parallel tasks.
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Analyze this file. Return `[]` when done." }
+        "instructions": { "kind": "Inline", "value": "Analyze this file. Return `[]` when done." }
       },
       "next": []
     }
@@ -80,7 +80,7 @@ Agents can also fan out by returning multiple tasks:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Find all functions that need refactoring. Return one task per function: `[{\"kind\": \"Refactor\", \"value\": {\"function\": \"parse_config\"}}, {\"kind\": \"Refactor\", \"value\": {\"function\": \"validate_input\"}}]`" }
+        "instructions": { "kind": "Inline", "value": "Find all functions that need refactoring. Return one task per function: `[{\"kind\": \"Refactor\", \"value\": {\"function\": \"parse_config\"}}, {\"kind\": \"Refactor\", \"value\": {\"function\": \"validate_input\"}}]`" }
       },
       "next": ["Refactor"]
     },
@@ -95,7 +95,7 @@ Agents can also fan out by returning multiple tasks:
       },
       "action": {
         "kind": "Pool",
-        "instructions": { "inline": "Refactor this function. Return `[]`." }
+        "instructions": { "kind": "Inline", "value": "Refactor this function. Return `[]`." }
       },
       "next": []
     }
