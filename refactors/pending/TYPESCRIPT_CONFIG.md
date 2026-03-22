@@ -418,7 +418,7 @@ export default defineConfig({
 
 ## Open Questions
 
-1. **`ts-rs` vs Specta.** The doc uses `ts-rs` but Specta (`specta` crate, v2 RC) is an alternative with cleaner export semantics (explicit export binary, no `cargo test` side effects, JSDoc from `///` comments). Either works. The choice should be made at implementation time by testing both against the actual config types. Key factor: whichever handles `MaybeLinked<T>` generics and serde-tagged enums correctly with less manual intervention wins.
+1. **`ts-rs` vs Specta — extensibility is the deciding factor.** When pluggable action kinds land (`PLUGGABLE_ACTION_KINDS.md`), `ActionFile` becomes an open discriminated union: users register custom executor types that need to appear in the generated TypeScript. The static `types.d.ts` in the npm package will only contain the built-in action kinds (Pool, Command). Per-project type generation must include user-defined action kinds in the union. Specta's type registry approach (collecting types into a central registry at generation time) is better suited for this than `ts-rs`'s per-struct `#[derive(TS)]`, because user-defined executor types live outside the barnum crate and can't have barnum's derive macros added to them. With Specta, a generation binary can accept a list of user-registered types and include them in the output. This is the primary constraint on the tool choice — whichever handles extensible type collections wins.
 
 2. **`ts-rs` version and API.** The exact API for exporting all dependent types into a single string varies between ts-rs versions. v7 uses `TS::export_to_string()` per type; v10 may have `export_to_string_with_all_dependencies()`. Need to verify which version provides the cleanest single-file output.
 
