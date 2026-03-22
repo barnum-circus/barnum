@@ -1,6 +1,6 @@
 # TypeScript Config API
 
-**Status:** Phase 1 — Architecture document
+**Status:** Superseded by `ZOD_SCHEMA.md`
 
 ## Motivation
 

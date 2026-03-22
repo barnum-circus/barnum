@@ -23,11 +23,21 @@
     "automation",
     "cli"
   ],
+  "types": "barnum-config-schema.zod.ts",
   "files": [
     "index.js",
     "cli.js",
     "artifacts/**/*",
-    "barnum-config-schema.json"
+    "barnum-config-schema.json",
+    "barnum-config-schema.zod.ts"
   ],
+  "peerDependencies": {
+    "zod": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
+  },
   "sideEffects": false
 }
