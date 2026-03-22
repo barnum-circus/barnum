@@ -247,10 +247,40 @@ impl Applier for Engine {
             }
         }
 
-        let finally_entries = self.produce_finally_entries();
-        if let Some(tx) = &self.tx {
-            for entry in finally_entries {
-                tx.send(entry).expect("[P050] channel send failed");
+        // Handle cascaded parent completions. When a parent's children
+        // are all done, it lands in removed_parents. For parents with a
+        // finally script, produce the entry and send on tx. For parents
+        // without, remove immediately (may cascade — the while loop
+        // picks up further removals). During replay, parents may already
+        // be removed by a Finally entry in the same batch — skip them.
+        while let Some(parent_id) = self.state.removed_parents.pop() {
+            let Some(parent) = self.state.tasks.get(&parent_id) else {
+                continue; // Already removed by a replayed Finally entry
+            };
+            let finally_value = match &parent.state {
+                TaskState::WaitingForChildren { finally_value, .. } =>
+                    finally_value.clone(),
+                TaskState::Pending { .. } | TaskState::Failed =>
+                    panic!("[P041] removed parent not in WaitingForChildren"),
+            };
+            let step = parent.step.clone();
+
+            let script = self.config().step_map.get(&step)
+                .and_then(|s| s.finally.as_ref());
+            if let Some(script) = script {
+                let id = self.next_id();
+                let entry = StateLogEntry::TaskSubmitted(TaskSubmitted {
+                    task_id: id,
+                    step: script.step.clone(),
+                    value: finally_value,
+                    origin: TaskOrigin::Finally { finally_for: parent_id },
+                });
+                if let Some(tx) = &self.tx {
+                    tx.send(entry).expect("[P050] channel send failed");
+                }
+            } else {
+                // No finally script — remove immediately, may cascade
+                self.state.remove_and_notify_parent(parent_id);
             }
         }
 
@@ -260,45 +290,6 @@ impl Applier for Engine {
 ```
 
 Cascade entries go on `tx` as individual messages and arrive as subsequent entries in the coordinator loop. Each is wrapped in `&[entry]` and flows through all appliers. Engine does NOT apply cascade entries to its own state when producing them — that happens when they come back through the channel.
-
-**`produce_finally_entries()`**: Drains `removed_parents` and produces finally entries. The entries go on `tx` and come back through the coordinator loop.
-
-For parents **with** a finally script: produce the `TaskSubmitted` entry. The parent is NOT removed here — `apply_submitted` for the Finally origin removes it when the entry is applied (see RunState internals). The finally task replaces the parent as a child of the grandparent, so the grandparent's count doesn't change.
-
-For parents **without** a finally script: remove immediately via `remove_and_notify_parent`. This may cascade (adding more entries to `removed_parents`), which the while loop picks up.
-
-```rust
-fn produce_finally_entries(&mut self) -> Vec<StateLogEntry> {
-    let mut entries = Vec::new();
-    while let Some(parent_id) = self.state.removed_parents.pop() {
-        let parent = self.state.tasks.get(&parent_id)
-            .expect("[P040] removed parent must still be in map");
-        let finally_value = match &parent.state {
-            TaskState::WaitingForChildren { finally_value, .. } => finally_value.clone(),
-            TaskState::Pending { .. } | TaskState::Failed => {
-                panic!("[P041] removed parent not in WaitingForChildren state");
-            }
-        };
-        let step = parent.step.clone();
-
-        let script = self.config().step_map.get(&step)
-            .and_then(|s| s.finally.as_ref());
-        if let Some(script) = script {
-            let id = self.next_id();
-            entries.push(StateLogEntry::TaskSubmitted(TaskSubmitted {
-                task_id: id,
-                step: script.step.clone(),
-                value: finally_value,
-                origin: TaskOrigin::Finally { finally_for: parent_id },
-            }));
-        } else {
-            // No finally script — remove immediately, may cascade
-            self.state.remove_and_notify_parent(parent_id);
-        }
-    }
-    entries
-}
-```
 
 **`flush_dispatches()`**: Spawns worker threads. Each worker gets a `tx` clone, an `id_counter` clone, and the step config.
 
@@ -622,8 +613,9 @@ struct TaskEntry {
 #[test] fn apply_submitted_panics_on_duplicate_id()
 #[test] fn apply_completed_queues_subsequent_for_dispatch()
 #[test] fn apply_completed_panics_on_unknown_task()
-#[test] fn produce_finally_removes_parent_without_script_immediately()
-#[test] fn produce_finally_sends_entries_on_tx()
+#[test] fn apply_cascade_sends_finally_entry_on_tx()
+#[test] fn apply_cascade_removes_parent_without_finally_immediately()
+#[test] fn apply_cascade_skips_already_removed_parent()
 #[test] fn flush_dispatches_up_to_max_concurrency()
 #[test] fn flush_dispatches_skips_completed_tasks()
 #[test] fn flush_drops_tx_when_empty_and_no_in_flight()
