@@ -15,10 +15,6 @@
 - Requires a TS-capable runtime. Discovery order: env var, project-local tsx, global tsx, bun, node 22.6+ with `--experimental-strip-types`.
 - Optional `--ts-runner` flag to override auto-detection.
 
-### Step builder helpers
-
-Helper functions exported from `@barnum/barnum` that generate `StepFile` objects for common patterns (fan-out, passthrough, conditional routing). These replace the inline bash/jq glue code in Command steps like those in `r1-3/config.jsonc`. The runtime decision (bun vs node) affects how these helpers generate their Command scripts.
-
 ### Programmatic `barnum.run()`
 
 - `@barnum/barnum` exports a `run()` function that accepts a `ConfigFile` and options.
