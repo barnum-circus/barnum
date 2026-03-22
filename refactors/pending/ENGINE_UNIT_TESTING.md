@@ -1,6 +1,6 @@
 # Engine Unit Testing: Separate State Transitions from Dispatch
 
-**Status:** Not started
+**Status:** In progress
 
 **Depends on:** APPLY_PATTERN (done)
 
@@ -15,245 +15,104 @@ These are tangled inside Engine: `apply_entry` mutates `self.state` and pushes t
 
 The state transition logic is the hardest code to get right (parent chain walks, child count arithmetic, finally detection, retry replacement) and the easiest to unit test — if it were accessible without I/O dependencies.
 
-## Current State
+## Change
 
-`Engine` (`mod.rs:354`) owns everything:
+Move `pending_dispatches` from Engine to RunState. Add `apply_entry` on RunState that takes a `&StateLogEntry` and `&Config`, mutates the task tree, and accumulates pending dispatches — but never dispatches anything. Engine calls this method, then drains the pending dispatches into actual thread spawns.
 
-```rust
-struct Engine<'a> {
-    config: &'a Config,
-    schemas: &'a CompiledSchemas,
-    step_map: HashMap<&'a StepName, &'a Step>,
-    state: RunState,               // pure state
-    pool: PoolConnection,          // I/O
-    tx: mpsc::Sender<WorkerResult>, // I/O
-    max_concurrency: usize,        // dispatch policy
-    in_flight: usize,              // dispatch tracking
-    pending_dispatches: VecDeque<PendingDispatch>, // straddles both
-    dropped_count: u32,            // result tracking
-}
-```
+No `apply_entries` batch method — callers just loop.
 
-`RunState` (`mod.rs:107`) is already pure — no I/O, just `BTreeMap<LogTaskId, TaskEntry>` and `next_task_id`. Its methods (`apply_submitted`, `apply_completed`, `apply_finally_run`, `walk_up_for_finally`) are pure state mutations. But they're not independently testable because `apply_entry` on Engine orchestrates the calls and manages `pending_dispatches`.
-
-The flow today:
-
-```
-apply_entry(StateLogEntry)
-  ├── advance_id_to(...)        // RunState
-  ├── apply_submitted(...)       // RunState
-  ├── apply_completed(...)       // RunState — returns parent_id
-  ├── walk_up_for_finally(...)   // RunState — returns finally_id
-  ├── pending_dispatches.push_back(...)  // Engine field
-  └── in_flight.saturating_sub(1)        // Engine field
-```
-
-Then `flush_dispatches` reads `pending_dispatches` and spawns threads.
-
-## Proposed Change
-
-Move `pending_dispatches` onto `RunState`. Add a method on `RunState` that takes a `StateLogEntry`, mutates the task tree, and accumulates pending dispatches — but never dispatches anything. Engine calls this method, then drains the pending dispatches into actual thread spawns.
-
-### RunState after
-
-```rust
-struct RunState {
-    tasks: BTreeMap<LogTaskId, TaskEntry>,
-    next_task_id: u32,
-    pending_dispatches: VecDeque<PendingDispatch>,
-}
-```
-
-New method:
-
-```rust
-impl RunState {
-    /// Apply a single entry to state. Queues pending dispatches but does not
-    /// execute them. Caller is responsible for draining `pending_dispatches`.
-    fn apply_entry(&mut self, entry: &StateLogEntry, config: &Config) {
-        match entry {
-            StateLogEntry::Config(_) => {}
-            StateLogEntry::TaskSubmitted(s) => {
-                self.advance_id_to(s.task_id.0 + 1);
-                self.apply_submitted(s);
-                self.pending_dispatches
-                    .push_back(PendingDispatch::Task { task_id: s.task_id });
-            }
-            StateLogEntry::TaskCompleted(c) => {
-                // Remove stale pending dispatch for this task (replay case)
-                self.pending_dispatches.retain(
-                    |d| !matches!(d, PendingDispatch::Task { task_id } if *task_id == c.task_id),
-                );
-
-                // Advance IDs from embedded children/retries
-                // ... (same logic as current apply_entry)
-
-                let parent_id = self.apply_completed(c);
-
-                // Queue children/retry
-                // ... (same logic)
-
-                // Walk up for finally
-                if let Some(pid) = parent_id
-                    && let Some(finally_id) = self.walk_up_for_finally(pid, config)
-                {
-                    self.pending_dispatches
-                        .push_back(PendingDispatch::Finally { parent_id: finally_id });
-                }
-            }
-            StateLogEntry::FinallyRun(f) => {
-                // ... (same logic)
-            }
-        }
-    }
-
-    /// Apply a batch of entries.
-    fn apply_entries(&mut self, entries: &[StateLogEntry], config: &Config) {
-        for entry in entries {
-            self.apply_entry(entry, config);
-        }
-    }
-}
-```
-
-Engine becomes thinner — it owns RunState and handles I/O:
-
-```rust
-impl Engine<'_> {
-    fn apply_and_dispatch(&mut self, entries: &[StateLogEntry]) {
-        self.state.apply_entries(entries, self.config);
-        self.flush_dispatches();
-    }
-
-    fn flush_dispatches(&mut self) {
-        while self.in_flight < self.max_concurrency {
-            let Some(dispatch) = self.state.pending_dispatches.pop_front() else {
-                break;
-            };
-            self.in_flight += 1;
-            // ... spawn thread based on dispatch variant
-        }
-    }
-}
-```
-
-### What moves where
-
-| Field | Before | After |
-|-------|--------|-------|
-| `tasks` | RunState | RunState (unchanged) |
-| `next_task_id` | RunState | RunState (unchanged) |
-| `pending_dispatches` | Engine | RunState |
-| `in_flight` | Engine | Engine (unchanged) |
-| `pool`, `tx` | Engine | Engine (unchanged) |
-| `config`, `schemas`, `step_map` | Engine | Engine (unchanged, passed as args to RunState methods) |
-| `dropped_count` | Engine | Engine (unchanged) |
-
-### `in_flight` tracking during replay
-
-Currently `apply_entry` decrements `in_flight` on `TaskCompleted` and `FinallyRun`. This is Engine-level concern (tracking actual workers), not state-level. During replay `in_flight` is 0 so the `saturating_sub` is harmless, but it shouldn't be in RunState.
-
-The clean split: RunState doesn't know about `in_flight`. Engine adjusts `in_flight` based on what entries it processes. When Engine receives a `WorkerResult` (live execution), it decrements `in_flight` before calling `state.apply_entry`. During replay, `in_flight` stays 0.
+`in_flight` stays on Engine (it tracks actual workers, not state). Engine decrements `in_flight` when it receives a `WorkerResult`, before calling `state.apply_entry`.
 
 ## Unit Tests
 
-With this separation, RunState is testable with no I/O at all:
+### Test helpers
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_state() -> RunState {
-        RunState::new()
+fn test_step(name: &str) -> Step {
+    Step {
+        name: StepName::new(name),
+        value_schema: None,
+        pre: None,
+        action: Action::Command { script: "true".into() },
+        post: None,
+        next: vec![],
+        finally_hook: None,
+        options: Options::default(),
     }
+}
 
-    fn seed(id: u32, step: &str) -> StateLogEntry {
-        StateLogEntry::TaskSubmitted(TaskSubmitted {
-            task_id: LogTaskId(id),
-            step: StepName::new(step),
-            value: StepInputValue(serde_json::json!({})),
-            origin: TaskOrigin::Seed,
-        })
+fn test_step_with_finally(name: &str) -> Step {
+    Step {
+        finally_hook: Some(HookScript::new("echo done")),
+        ..test_step(name)
     }
+}
 
-    #[test]
-    fn seed_task_queues_dispatch() {
-        let mut state = make_state();
-        let config = /* minimal config with one step */;
-
-        state.apply_entry(&seed(0, "Analyze"), &config);
-
-        // Task is in the map
-        assert!(state.tasks.contains_key(&LogTaskId(0)));
-        // Dispatch was queued
-        assert_eq!(state.pending_dispatches.len(), 1);
-        assert!(matches!(
-            state.pending_dispatches[0],
-            PendingDispatch::Task { task_id: LogTaskId(0) }
-        ));
-    }
-
-    #[test]
-    fn completed_with_children_queues_child_dispatches() {
-        let mut state = make_state();
-        let config = /* ... */;
-
-        state.apply_entry(&seed(0, "Analyze"), &config);
-        state.pending_dispatches.clear(); // drain seed dispatch
-
-        let completed = StateLogEntry::TaskCompleted(TaskCompleted {
-            task_id: LogTaskId(0),
-            outcome: barnum_state::TaskOutcome::Success(barnum_state::TaskSuccess {
-                finally_value: StepInputValue(serde_json::json!({})),
-                children: vec![
-                    TaskSubmitted { task_id: LogTaskId(1), step: StepName::new("Review"), /* ... */ },
-                    TaskSubmitted { task_id: LogTaskId(2), step: StepName::new("Review"), /* ... */ },
-                ],
-            }),
-        });
-        state.apply_entry(&completed, &config);
-
-        // Two child dispatches queued
-        assert_eq!(state.pending_dispatches.len(), 2);
-        // Parent is in WaitingForChildren
-        assert!(matches!(
-            state.tasks[&LogTaskId(0)].state,
-            TaskState::WaitingForChildren(_)
-        ));
-    }
-
-    #[test]
-    fn finally_detected_when_all_children_complete() {
-        // Setup: parent with finally hook, one child
-        // Complete the child
-        // Assert: PendingDispatch::Finally { parent_id } is queued
-    }
-
-    #[test]
-    fn replay_removes_stale_dispatches() {
-        // Apply seed, then immediately apply completed
-        // The seed's PendingDispatch::Task should be removed
-    }
-
-    #[test]
-    fn retry_replaces_failed_task() {
-        // Seed → Completed(Failed with retry) → retry is in map, original removed
-    }
+fn config(steps: Vec<Step>) -> Config {
+    Config { max_concurrency: None, steps }
 }
 ```
 
-These tests exercise the exact state machine logic that currently has zero direct unit test coverage — it's only tested indirectly through the integration tests that spawn real agents.
+### TaskSubmitted
 
-## Relationship to Existing Refactors
+1. **`seed_queues_task_dispatch`** — Apply a seed TaskSubmitted. Assert: task in map as Pending, `PendingDispatch::Task` queued, `next_task_id` advanced.
 
-- **SYNC_TESTING_HARNESS.md** — about troupe's daemon (Transport trait, mock agents). Orthogonal. That's about testing the pool dispatch layer; this is about testing barnum's task orchestration logic.
-- **TEST_HARNESS_IMPROVEMENTS.md** — about troupe's test infrastructure (CLI vs raw file modes). Also orthogonal.
+2. **`spawned_child_queues_dispatch`** — Parent in WaitingForChildren, apply spawned TaskSubmitted. Assert: child in map with correct parent_id, dispatch queued.
 
-Neither is obsolete — they target different layers. This refactor targets barnum's Engine, not troupe.
+3. **`retry_replaces_failed_task`** — Task in Failed state, apply retry TaskSubmitted. Assert: old task removed from map, retry in map with inherited parent_id, dispatch queued.
 
-## Scope
+4. **`multiple_seeds_all_queued`** — Apply three seed entries. Assert: three tasks in map, three dispatches queued, `next_task_id` is 3.
 
-Small refactor — move `pending_dispatches` from Engine to RunState, move `apply_entry` logic from Engine to RunState (passing `config` as arg), adjust Engine to drain dispatches after calling RunState. Then add unit tests.
+5. **`id_advancement_handles_gaps`** — Apply seed with task_id 5. Assert: `next_task_id` is 6 (not 1).
 
-No behavioral change. Same state transitions, same dispatch logic, just split across the struct boundary differently.
+### TaskCompleted — Success
+
+6. **`leaf_success_removes_task`** — Seed task, complete with empty children. Assert: task removed from map, no dispatches queued (no parent to walk).
+
+7. **`success_with_children_transitions_to_waiting`** — Complete with 2 children. Assert: parent in WaitingForChildren with count 2, children in map as Pending, 2 child dispatches queued.
+
+8. **`success_with_children_advances_ids`** — Complete with children at task_ids 5 and 10. Assert: `next_task_id` is 11.
+
+### TaskCompleted — Failure
+
+9. **`failed_with_retry_inserts_retry`** — Failed with retry. Assert: original task removed (via retry's apply_submitted), retry in map as Pending, retry dispatch queued.
+
+10. **`failed_permanent_removes_task`** — Failed without retry. Assert: task removed from map, no dispatch queued (no parent).
+
+11. **`failed_permanent_under_parent_walks_up`** — Child fails permanently under parent with finally. Assert: child removed, `PendingDispatch::Finally` queued for parent.
+
+### FinallyRun
+
+12. **`finally_no_children_removes_parent`** — FinallyRun with empty children for a parent under a grandparent. Assert: parent removed, grandparent child count decremented.
+
+13. **`finally_with_children_adds_children`** — FinallyRun with 2 children. Assert: parent removed, children in map as Pending, child dispatches queued, grandparent child count adjusted (+2 children, -1 parent = net +1).
+
+14. **`finally_no_children_under_grandparent_triggers_grandparent_finally`** — Grandparent has finally hook, parent is its only child. FinallyRun with no children for parent. Assert: grandparent child count reaches 0, `PendingDispatch::Finally` queued for grandparent.
+
+### Finally detection (walk_up_for_finally)
+
+15. **`child_complete_triggers_parent_finally`** — Parent (with finally hook) has one child. Child completes as leaf. Assert: `PendingDispatch::Finally { parent_id }` queued.
+
+16. **`child_complete_parent_no_finally_removes_parent`** — Parent (no finally hook) has one child. Child completes as leaf. Assert: parent removed from map, walks up to grandparent.
+
+17. **`child_complete_skips_no_finally_ancestors`** — Grandparent (has finally), parent (no finally), child. Child completes. Assert: parent removed, `PendingDispatch::Finally` queued for grandparent.
+
+18. **`child_complete_parent_still_has_siblings`** — Parent has 2 children. One child completes. Assert: parent count decremented to 1, no finally dispatch yet.
+
+19. **`both_children_complete_then_finally`** — Parent (with finally) has 2 children. Complete both. Assert: after first, no finally; after second, `PendingDispatch::Finally` queued.
+
+20. **`no_finally_at_any_level_just_removes`** — Three-level tree, no finally hooks anywhere. Leaf completes. Assert: leaf removed, parent removed, grandparent removed, no finally dispatch.
+
+### Replay behavior
+
+21. **`replay_completed_removes_stale_task_dispatch`** — Apply seed (queues dispatch), then immediately apply completed for same task. Assert: the seed's `PendingDispatch::Task` was removed by the completed entry.
+
+22. **`replay_finally_removes_stale_finally_dispatch`** — Set up a parent whose child completed (queuing a finally dispatch), then apply FinallyRun. Assert: the `PendingDispatch::Finally` was removed.
+
+### Complex scenarios
+
+23. **`retry_under_parent_preserves_parent_waiting`** — Parent has child. Child fails with retry. Assert: parent still in WaitingForChildren (retry inherits parent_id, child count unchanged).
+
+24. **`deeply_nested_finally_chain`** — Four levels: great-grandparent (finally) → grandparent (no finally) → parent (finally) → child. Child completes. Assert: parent's finally fires first (not great-grandparent's).
+
+25. **`finally_spawns_children_that_complete`** — Parent (under grandparent) has finally. Finally runs, spawns 2 children. Both children complete. Assert: grandparent count adjustments are correct throughout, grandparent eventually reaches zero children.
