@@ -44,32 +44,24 @@ Workers produce only `TaskCompleted` entries, which reference an existing task I
 The coordinator owns a `Receiver<StateLogEntry>` and a `Vec<Box<dyn Applier>>`. It receives a single entry from the channel, wraps it in a slice, and passes it to every applier via `process_entries`. That's it — the coordinator has no knowledge of RunState, config, or any other internal detail.
 
 ```rust
-pub fn run(
-    config: &Config,
-    initial_tasks: Vec<Task>,
-    runner_config: &RunnerConfig,
-) -> io::Result<()> {
-    let (tx, rx) = mpsc::channel();
-
-    let mut appliers: Vec<Box<dyn Applier>> = vec![
-        Box::new(Engine::new(config, RunState::new(), runner_config, tx)),
-        Box::new(LogApplier::new(&runner_config.state_log_path)?),
-    ];
-
-    // Seed
-    let seed = build_seed_entries(config, &initial_tasks);
-    process_entries(&mut appliers, &seed);
-
-    // Event loop (follows Troupe pattern: receive → apply)
-    while let Ok(entry) = rx.recv() {
-        process_entries(&mut appliers, &[entry]);
-    }
-
-    Ok(())
+enum RunMode {
+    Fresh { initial_tasks: Vec<Task> },
+    Resume { old_log_path: PathBuf },
 }
 
-pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig) -> io::Result<()> {
-    let (config, run_state) = replay_log(old_log_path)?;
+pub fn run(mode: RunMode, runner_config: &RunnerConfig) -> io::Result<()> {
+    let (config, run_state, seed) = match mode {
+        RunMode::Fresh { initial_tasks } => {
+            let config = /* loaded by caller or passed separately */;
+            let seed = build_seed_entries(&config, &initial_tasks);
+            (config, RunState::new(), seed)
+        }
+        RunMode::Resume { old_log_path } => {
+            let (config, run_state) = replay_log(&old_log_path)?;
+            (config, run_state, vec![])
+        }
+    };
+
     let (tx, rx) = mpsc::channel();
 
     let mut appliers: Vec<Box<dyn Applier>> = vec![
@@ -77,10 +69,8 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig) -> io::Result<(
         Box::new(LogApplier::new(&runner_config.state_log_path)?),
     ];
 
-    // Kick — flushes pending dispatches from replay
-    process_entries(&mut appliers, &[]);
+    process_entries(&mut appliers, &seed);
 
-    // Event loop
     while let Ok(entry) = rx.recv() {
         process_entries(&mut appliers, &[entry]);
     }
@@ -464,9 +454,8 @@ fn replay_log(path: &Path) -> io::Result<(Config, RunState)> {
 After replay:
 - `RunState` contains only active tasks (pending + waiting-for-children)
 - `next_task_id` is past all replayed IDs (advanced by `apply_submitted`)
-- `Engine::new()` initializes `pending_dispatches` from RunState's pending tasks
+- `RunMode::Resume` returns empty seed — `Engine::new()` initializes `pending_dispatches` from RunState's pending tasks, and `process_entries(&[])` flushes them
 - `LogApplier` is created at the current log position (appending)
-- The kick (`process_entries(&mut appliers, &[])`) flushes dispatches for remaining pending tasks
 
 ## Phasing
 
