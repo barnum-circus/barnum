@@ -20,7 +20,7 @@ use barnum_state::{
     TaskOrigin, TaskSubmitted,
 };
 use cli_invoker::Invoker;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
@@ -29,13 +29,11 @@ use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
 use dispatch::{
-    InFlightResult, TaskContext, TaskIdentity, dispatch_command_task, dispatch_finally_task,
-    dispatch_pool_task,
+    WorkerResult, dispatch_command_task, dispatch_finally_task, dispatch_pool_task,
+    process_and_finalize,
 };
-use hooks::{call_wake_script, run_post_hook};
-use response::{FailureKind, ProcessedSubmit, TaskOutcome, process_retry, process_submit_result};
-
-pub use hooks::PostHookInput;
+use hooks::call_wake_script;
+use response::{FailureKind, TaskOutcome};
 
 // ==================== Public API ====================
 
@@ -56,6 +54,7 @@ pub struct RunnerConfig<'a> {
 // ==================== Internal Types ====================
 
 /// Connection details for the agent pool.
+#[derive(Clone)]
 struct PoolConnection {
     root: PathBuf,
     working_dir: PathBuf,
@@ -218,8 +217,8 @@ struct TaskRunner<'a> {
     in_flight: usize,
     /// Tasks waiting to be dispatched. Popped by `dispatch_all_pending`.
     pending_queue: VecDeque<LogTaskId>,
-    tx: mpsc::Sender<InFlightResult>,
-    rx: mpsc::Receiver<InFlightResult>,
+    tx: mpsc::Sender<WorkerResult>,
+    rx: mpsc::Receiver<WorkerResult>,
     /// State log writer for persistence/resume.
     state_log: io::BufWriter<std::fs::File>,
 }
@@ -480,7 +479,8 @@ impl<'a> TaskRunner<'a> {
 
     /// Dispatch a task to a worker thread.
     ///
-    /// Precondition: The task must already exist in the map.
+    /// Workers receive only the data they need (pre-hook, action-specific params)
+    /// and send raw results back. Validation and post-hooks run on the main thread.
     #[expect(clippy::expect_used)] // Invariants
     fn dispatch(&self, task_id: LogTaskId, task: Task) {
         let entry = self
@@ -488,53 +488,42 @@ impl<'a> TaskRunner<'a> {
             .tasks
             .get(&task_id)
             .expect("[P014] task must exist");
+        let step = self.step_map.get(&task.step).expect("[P015] unknown step");
         let tx = self.tx.clone();
 
-        // Finally tasks: run the finally script directly (no pre-hook)
         if entry.is_finally {
-            let script = self
-                .step_map
-                .get(&entry.step)
-                .and_then(|s| s.finally_hook.clone())
+            let script = step
+                .finally_hook
+                .clone()
                 .expect("[P073] finally task's step must have finally_hook");
-            let identity = TaskIdentity { task, task_id };
             let working_dir = self.pool.working_dir.clone();
 
-            info!(step = %identity.task.step, "dispatching finally task");
+            info!(step = %task.step, "dispatching finally task");
 
             thread::spawn(move || {
-                dispatch_finally_task(identity, &script, &working_dir, &tx);
+                dispatch_finally_task(task_id, task, &script, &working_dir, &tx);
             });
             return;
         }
 
-        // Regular tasks: dispatch based on step action
-        let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-
-        let identity = TaskIdentity { task, task_id };
-        let ctx = TaskContext {
-            identity,
-            pre_hook: step.pre.clone(),
-        };
+        let pre_hook = step.pre.clone();
 
         match &step.action {
             Action::Pool { .. } => {
-                let timeout = step.options.timeout;
                 let docs = generate_step_docs(step, self.config);
-                let pool_root = self.pool.root.clone();
-                let working_dir = self.pool.working_dir.clone();
-                let invoker = self.pool.invoker.clone();
+                let timeout = step.options.timeout;
+                let pool = self.pool.clone();
 
-                info!(step = %ctx.identity.task.step, "submitting task to pool");
+                info!(step = %task.step, "submitting task to pool");
 
                 thread::spawn(move || {
                     dispatch_pool_task(
-                        ctx,
+                        task_id,
+                        task,
+                        pre_hook.as_ref(),
                         &docs,
                         timeout,
-                        &pool_root,
-                        &working_dir,
-                        &invoker,
+                        &pool,
                         &tx,
                     );
                 });
@@ -543,10 +532,17 @@ impl<'a> TaskRunner<'a> {
                 let script = script.clone();
                 let working_dir = self.pool.working_dir.clone();
 
-                info!(step = %ctx.identity.task.step, script = %script, "executing command");
+                info!(step = %task.step, script = %script, "executing command");
 
                 thread::spawn(move || {
-                    dispatch_command_task(ctx, &script, &working_dir, &tx);
+                    dispatch_command_task(
+                        task_id,
+                        task,
+                        pre_hook.as_ref(),
+                        &script,
+                        &working_dir,
+                        &tx,
+                    );
                 });
             }
         }
@@ -821,42 +817,29 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
-    fn process_result(&mut self, inflight: InFlightResult) -> TaskResult {
-        let InFlightResult { identity, result } = inflight;
+    /// Process a worker result through validation, post-hooks, and state transitions.
+    ///
+    /// Workers handle pre-hooks and actions. This method runs the remaining
+    /// pipeline (validation, post-hooks, retry logic) and routes the outcome.
+    #[expect(clippy::expect_used)] // Invariant: task step must exist
+    fn process_result(&mut self, result: WorkerResult) -> TaskResult {
+        let WorkerResult {
+            task_id,
+            task,
+            result: submit_result,
+        } = result;
 
-        let TaskIdentity { task, task_id } = identity;
-
-        #[expect(clippy::expect_used)] // Invariant: all queued tasks are validated at entry points
         let step = self.step_map.get(&task.step).expect(
-            "[P015] BUG: task step must exist - all queued tasks should be validated at entry points",
+            "[P015] BUG: task step must exist - all queued tasks are validated at entry points",
         );
 
-        let ProcessedSubmit {
-            outcome,
-            post_input,
-        } = process_submit_result(result, &task, step, self.schemas);
-
-        // Post hook can modify the outcome (e.g., filter spawned tasks)
-        let outcome = if let Some(hook) = &step.post {
-            match run_post_hook(hook, &post_input, &self.pool.working_dir) {
-                Ok(modified) => match outcome {
-                    TaskOutcome::Success { finally_value, .. } => {
-                        let tasks = extract_next_tasks(&modified);
-                        TaskOutcome::Success {
-                            spawned: tasks,
-                            finally_value,
-                        }
-                    }
-                    other => other,
-                },
-                Err(e) => {
-                    warn!(step = %task.step, error = %e, "post hook failed");
-                    process_retry(&task, &step.options, FailureKind::SubmitError)
-                }
-            }
-        } else {
-            outcome
-        };
+        let outcome = process_and_finalize(
+            submit_result,
+            &task,
+            step,
+            self.schemas,
+            &self.pool.working_dir,
+        );
 
         match outcome {
             TaskOutcome::Success {
@@ -866,12 +849,10 @@ impl<'a> TaskRunner<'a> {
                 self.task_succeeded(task_id, spawned, finally_value);
                 TaskResult::Handled
             }
-
             TaskOutcome::Retry(retry_task, failure_kind) => {
                 self.task_failed(task_id, Some(retry_task), failure_kind);
                 TaskResult::Handled
             }
-
             TaskOutcome::Dropped(failure_kind) => {
                 self.task_failed(task_id, None, failure_kind);
                 TaskResult::Dropped
@@ -930,16 +911,6 @@ impl TaskRunner<'_> {
         }
         info!(total = completed_count, "task queue complete");
         Ok(())
-    }
-}
-
-/// Extract next tasks from a post hook result.
-fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
-    match input {
-        PostHookInput::Success { next, .. } => next.clone(),
-        PostHookInput::Timeout { .. }
-        | PostHookInput::Error { .. }
-        | PostHookInput::PreHookError { .. } => vec![],
     }
 }
 

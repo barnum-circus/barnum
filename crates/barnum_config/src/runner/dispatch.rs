@@ -1,36 +1,38 @@
-//! Task dispatch - spawns threads to execute pool and command tasks.
+//! Task dispatch - spawns threads to execute tasks and process results.
+//!
+//! Workers run pre-hooks and actions, sending raw results back on the channel.
+//! `process_and_finalize` handles validation and post-hooks on the main thread.
 
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
-use cli_invoker::Invoker;
-use tracing::debug;
+use tracing::{debug, warn};
 use troupe::Response;
-use troupe_cli::TroupeCli;
 
+use crate::resolved::Step;
 use crate::types::{HookScript, LogTaskId, StepInputValue};
-use crate::value_schema::Task;
+use crate::value_schema::{CompiledSchemas, Task};
 
-use super::hooks::{run_command_action, run_pre_hook};
+use super::hooks::{PostHookInput, run_command_action, run_post_hook, run_pre_hook};
+use super::response::{
+    FailureKind, ProcessedSubmit, TaskOutcome, process_retry, process_submit_result,
+};
 use super::shell::run_shell_command;
 use super::submit::{build_agent_payload, submit_via_cli};
 
-/// Identity of a task being processed.
-#[derive(Clone)]
-pub struct TaskIdentity {
-    pub task: Task,
+/// Result from a worker thread: the task identity and raw action result.
+///
+/// Workers handle pre-hooks and actions. The main thread processes the raw
+/// result through validation, post-hooks, and retry logic via [`process_and_finalize`].
+pub struct WorkerResult {
     pub task_id: LogTaskId,
-}
-
-/// Result of task execution, returned from dispatch threads.
-pub struct InFlightResult {
-    pub identity: TaskIdentity,
+    pub task: Task,
     pub result: SubmitResult,
 }
 
-/// Result of task submission. Value only exists when pre-hook succeeded.
-pub enum SubmitResult {
+/// Raw result of task execution (internal to runner module).
+pub(super) enum SubmitResult {
     Pool {
         value: StepInputValue,
         response: io::Result<Response>,
@@ -39,7 +41,6 @@ pub enum SubmitResult {
         value: StepInputValue,
         output: io::Result<String>,
     },
-    /// Result from a finally task (no pre-hook, stdout parsed as task array).
     Finally {
         value: StepInputValue,
         output: Result<String, String>,
@@ -47,106 +48,158 @@ pub enum SubmitResult {
     PreHookError(String),
 }
 
-/// Context for dispatching a task.
-pub struct TaskContext {
-    pub identity: TaskIdentity,
-    pub pre_hook: Option<HookScript>,
-}
-
-/// Run pre-hook if present, returning the value or sending an error result.
-///
-/// Returns `Some(StepInputValue)` to continue processing, `None` if error was sent.
-fn run_pre_hook_or_send_error(
-    ctx: &TaskContext,
+/// Run pre-hook if present, returning the transformed value or an error string.
+fn run_pre_hook_or_error(
+    pre_hook: Option<&HookScript>,
     original_value: &StepInputValue,
     working_dir: &Path,
-    tx: &mpsc::Sender<InFlightResult>,
-) -> Option<StepInputValue> {
-    let Some(hook) = &ctx.pre_hook else {
-        // No pre-hook, original value passes through unchanged
-        return Some(original_value.clone());
+) -> Result<StepInputValue, String> {
+    let Some(hook) = pre_hook else {
+        return Ok(original_value.clone());
     };
+    run_pre_hook(hook, &original_value.0, working_dir).map(StepInputValue)
+}
 
-    match run_pre_hook(hook, &original_value.0, working_dir) {
-        Ok(v) => Some(StepInputValue(v)),
-        Err(e) => {
-            let _ = tx.send(InFlightResult {
-                identity: ctx.identity.clone(),
-                result: SubmitResult::PreHookError(e),
-            });
-            None
+/// Process a raw submit result through validation, post-hook, and retry logic.
+///
+/// Called on the main thread after receiving a [`WorkerResult`].
+pub(super) fn process_and_finalize(
+    result: SubmitResult,
+    task: &Task,
+    step: &Step,
+    schemas: &CompiledSchemas,
+    working_dir: &Path,
+) -> TaskOutcome {
+    let ProcessedSubmit {
+        outcome,
+        post_input,
+    } = process_submit_result(result, task, step, schemas);
+
+    // Post hook can modify the outcome (e.g., filter spawned tasks)
+    if let Some(hook) = &step.post {
+        match run_post_hook(hook, &post_input, working_dir) {
+            Ok(modified) => match outcome {
+                TaskOutcome::Success { finally_value, .. } => {
+                    let tasks = extract_next_tasks(&modified);
+                    TaskOutcome::Success {
+                        spawned: tasks,
+                        finally_value,
+                    }
+                }
+                other => other,
+            },
+            Err(e) => {
+                warn!(step = %task.step, error = %e, "post hook failed");
+                process_retry(task, &step.options, FailureKind::SubmitError)
+            }
         }
+    } else {
+        outcome
+    }
+}
+
+/// Extract next tasks from a post hook result.
+fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
+    match input {
+        PostHookInput::Success { next, .. } => next.clone(),
+        PostHookInput::Timeout { .. }
+        | PostHookInput::Error { .. }
+        | PostHookInput::PreHookError { .. } => vec![],
     }
 }
 
 /// Execute a pool task (runs in spawned thread).
+///
+/// Runs pre-hook, submits to the agent pool, and sends the raw result
+/// back on the channel for main-thread processing.
 pub fn dispatch_pool_task(
-    ctx: TaskContext,
+    task_id: LogTaskId,
+    task: Task,
+    pre_hook: Option<&HookScript>,
     docs: &str,
     timeout: Option<u64>,
-    pool_root: &Path,
-    working_dir: &Path,
-    invoker: &Invoker<TroupeCli>,
-    tx: &mpsc::Sender<InFlightResult>,
+    pool: &super::PoolConnection,
+    tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let original_value = &ctx.identity.task.value;
-
-    let Some(value) = run_pre_hook_or_send_error(&ctx, original_value, working_dir, tx) else {
-        return;
+    let value = match run_pre_hook_or_error(pre_hook, &task.value, &pool.working_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = tx.send(WorkerResult {
+                task_id,
+                task,
+                result: SubmitResult::PreHookError(e),
+            });
+            return;
+        }
     };
 
-    let payload = build_agent_payload(&ctx.identity.task.step, &value.0, docs, timeout);
+    let payload = build_agent_payload(&task.step, &value.0, docs, timeout);
     debug!(payload = %payload, "task payload");
 
-    let response = submit_via_cli(pool_root, &payload, invoker);
-    let _ = tx.send(InFlightResult {
-        identity: ctx.identity,
+    let response = submit_via_cli(&pool.root, &payload, &pool.invoker);
+    let _ = tx.send(WorkerResult {
+        task_id,
+        task,
         result: SubmitResult::Pool { value, response },
     });
 }
 
 /// Execute a command task (runs in spawned thread).
+///
+/// Runs pre-hook, executes the shell command, and sends the raw result
+/// back on the channel for main-thread processing.
 pub fn dispatch_command_task(
-    ctx: TaskContext,
+    task_id: LogTaskId,
+    task: Task,
+    pre_hook: Option<&HookScript>,
     script: &str,
     working_dir: &Path,
-    tx: &mpsc::Sender<InFlightResult>,
+    tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let original_value = &ctx.identity.task.value;
-
-    let Some(value) = run_pre_hook_or_send_error(&ctx, original_value, working_dir, tx) else {
-        return;
+    let value = match run_pre_hook_or_error(pre_hook, &task.value, working_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = tx.send(WorkerResult {
+                task_id,
+                task,
+                result: SubmitResult::PreHookError(e),
+            });
+            return;
+        }
     };
 
     let task_json = serde_json::to_string(&serde_json::json!({
-        "kind": &ctx.identity.task.step,
+        "kind": &task.step,
         "value": &value.0,
     }))
     .unwrap_or_default();
 
     let output = run_command_action(script, &task_json, working_dir);
-    let _ = tx.send(InFlightResult {
-        identity: ctx.identity,
+    let _ = tx.send(WorkerResult {
+        task_id,
+        task,
         result: SubmitResult::Command { value, output },
     });
 }
 
 /// Execute a finally task (runs in spawned thread).
 ///
-/// Finally tasks have no pre-hook. The script is run directly with the value as JSON input.
-/// Output is parsed as a task array by the receiver.
+/// Runs the finally script and sends the raw result back on the channel
+/// for main-thread processing.
 pub fn dispatch_finally_task(
-    identity: TaskIdentity,
-    script: &HookScript,
+    task_id: LogTaskId,
+    task: Task,
+    finally_script: &HookScript,
     working_dir: &Path,
-    tx: &mpsc::Sender<InFlightResult>,
+    tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let value = identity.task.value.clone();
+    let value = task.value.clone();
     let input_json = serde_json::to_string(&value.0).unwrap_or_default();
 
-    let output = run_shell_command(script.as_str(), &input_json, Some(working_dir));
-    let _ = tx.send(InFlightResult {
-        identity,
+    let output = run_shell_command(finally_script.as_str(), &input_json, Some(working_dir));
+    let _ = tx.send(WorkerResult {
+        task_id,
+        task,
         result: SubmitResult::Finally { value, output },
     });
 }
