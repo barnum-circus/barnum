@@ -35,9 +35,9 @@ The structure is already there: receive a result, process it. `process_result` i
 
 ### Design invariant: IDs come from entries
 
-Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs. The StateApplier is the sole source of new IDs — it allocates them internally and embeds them in the entries it emits.
+Every applier sees task IDs only through `StateLogEntry` values. Appliers read IDs from the entries they receive; they never allocate IDs. The Engine is the sole source of new IDs — it allocates them internally and embeds them in the entries it emits.
 
-This is required for resume correctness. During resume, the NDJSON log is replayed through the same appliers. If an applier allocated its own IDs instead of reading them from entries, the replayed IDs would diverge from the log — state and log would disagree, which is the bug this refactor exists to fix. The StateApplier advances its ID counter during replay by reading IDs from log entries, so live-mode allocations pick up where the log left off.
+This is required for resume correctness. During resume, the NDJSON log is replayed through the same appliers. If an applier allocated its own IDs instead of reading them from entries, the replayed IDs would diverge from the log — state and log would disagree, which is the bug this refactor exists to fix. The Engine advances its ID counter during replay by reading IDs from log entries, so live-mode allocations pick up where the log left off.
 
 ### Target event loop
 
@@ -49,11 +49,8 @@ pub fn run(
     initial_tasks: Vec<Task>,
     runner_config: &RunnerConfig,
 ) -> io::Result<()> {
-    let (tx, rx) = mpsc::channel::<InFlightResult>();
-
     let mut appliers: Vec<Box<dyn Applier>> = vec![
-        Box::new(StateApplier::new(rx, config)),
-        Box::new(Dispatcher::new(tx, &runner_config.pool, runner_config.max_concurrency)),
+        Box::new(Engine::new(config, &runner_config.pool, runner_config.max_concurrency)),
         Box::new(LogApplier::new(&runner_config.state_log_path)?),
     ];
 
@@ -93,7 +90,7 @@ fn apply_all(appliers: &mut [Box<dyn Applier>], entries: &[StateLogEntry]) {
 }
 ```
 
-The coordinator is a dumb loop: ask appliers for new entries via `recv()`, feed them through `apply_all()` which iterates until stable, repeat. Adding or removing appliers requires no changes to the event loop.
+The coordinator is a dumb loop: ask appliers for new entries via `recv()`, feed them through `apply_all()` which iterates until stable, repeat. Adding or removing appliers requires no changes to the event loop. The channel is entirely internal to the Engine — the coordinator never sees `tx` or `rx`.
 
 The current loop already has the same shape: receive, process. The refactor has two separate stages:
 
@@ -103,9 +100,9 @@ The current loop already has the same shape: receive, process. The refactor has 
 
 ### Resume
 
-Replay the NDJSON log through `apply_all`. During replay, entries are applied to all appliers: the StateApplier rebuilds its task tree, the Dispatcher queues incomplete tasks (TaskSubmitted without matching TaskCompleted cancel out), and the LogApplier is either skipped or in a no-write mode.
+Replay the NDJSON log through `apply_all`. During replay, entries are applied to all appliers: the Engine rebuilds its task tree and queues incomplete tasks (TaskSubmitted without matching TaskCompleted cancel out), and the LogApplier is in a no-write mode.
 
-After replay, `start()` is called on all appliers. The Dispatcher enables flushing and dispatches its pending queue. The StateApplier enables `recv()` (which blocks on the channel). Then the event loop begins.
+After replay, `start()` is called on all appliers. The Engine enables `recv()` (which blocks on the channel) and flushes its pending dispatch queue. Then the event loop begins.
 
 ## StateLogEntry
 
@@ -137,7 +134,7 @@ struct TaskFailed {
 }
 ```
 
-Each variant records a fact. The StateApplier derives task removal internally when all children of a parent complete.
+Each variant records a fact. The Engine derives task removal internally when all children of a parent complete.
 
 ## Applier
 
@@ -156,17 +153,29 @@ trait Applier {
 }
 ```
 
-The coordinator holds a `Vec<Box<dyn Applier>>` and interacts with it exclusively through this trait. `apply_all` feeds entries through all appliers and loops until no applier produces new entries. `recv()` is the blocking point for external input — only one applier (StateApplier) actually blocks; others return `None`.
+The coordinator holds a `Vec<Box<dyn Applier>>` and interacts with it exclusively through this trait. `apply_all` feeds entries through all appliers and loops until no applier produces new entries. `recv()` is the blocking point for external input — only the Engine actually blocks; LogApplier returns `None`.
 
-### StateApplier
+### Engine
 
-Wraps RunState and owns the channel receiver, config reference, and ID allocator. All entry production — child tasks, retries, finally tasks — happens inside this applier and flows back through the trait interface.
+Owns the full execution lifecycle: task state, dispatch, channel, result interpretation, and entry production. The channel is an internal implementation detail — the coordinator never sees it.
 
 ```rust
-struct StateApplier<'a> {
+struct Engine<'a> {
+    // State
     state: RunState,
     config: &'a Config,
+
+    // Channel (internal)
+    tx: Option<Sender<InFlightResult>>,
     rx: Receiver<InFlightResult>,
+
+    // Dispatch
+    pool: PoolConnection,
+    in_flight: usize,
+    max_concurrency: usize,
+    pending_dispatches: VecDeque<PendingTask>,
+    dispatched: HashSet<LogTaskId>,
+
     live: bool,
 }
 
@@ -181,9 +190,15 @@ struct RemovedParent {
     step: StepName,
     finally_value: StepInputValue,
 }
+
+struct PendingTask {
+    task_id: LogTaskId,
+    step: StepName,
+    value: StepInputValue,
+}
 ```
 
-**`recv()`**: Blocks on the channel, interprets the result (runs post hooks via config), allocates IDs, and returns entries. This absorbs the current `step()` function.
+**`recv()`**: Blocks on the internal channel, interprets the result (runs post hooks via config), allocates IDs, and returns entries.
 
 ```rust
 fn recv(&mut self) -> Option<Vec<StateLogEntry>> {
@@ -198,18 +213,59 @@ fn recv(&mut self) -> Option<Vec<StateLogEntry>> {
 - **Failure with retry**: looks up task info from `state.tasks`, allocates a retry ID, returns `TaskCompleted` + `TaskSubmitted`.
 - **Failure permanent**: returns `TaskCompleted`.
 
-**`apply()`**: Applies entries to RunState, then drains `removed_parents` to produce finally entries.
+**`apply()`**: Updates state, queues/dequeues dispatches, flushes if live, and produces finally entries.
 
 ```rust
 fn apply(&mut self, entries: &[StateLogEntry]) -> Vec<StateLogEntry> {
+    // Update state
     for entry in entries {
         match entry {
-            StateLogEntry::TaskSubmitted(s) => self.state.apply_submitted(s),
-            StateLogEntry::TaskCompleted(c) => self.state.apply_completed(c),
+            StateLogEntry::TaskSubmitted(s) => {
+                self.state.apply_submitted(s);
+                self.pending_dispatches.push_back(PendingTask {
+                    task_id: s.task_id,
+                    step: s.step.clone(),
+                    value: s.value.clone(),
+                });
+            }
+            StateLogEntry::TaskCompleted(c) => {
+                self.state.apply_completed(c);
+                self.pending_dispatches.retain(|p| p.task_id != c.task_id);
+                if self.dispatched.remove(&c.task_id) {
+                    self.in_flight -= 1;
+                }
+            }
             StateLogEntry::Config(_) => {}
         }
     }
+
+    // Dispatch if live
+    if self.live {
+        self.flush_dispatches();
+    }
+
+    // Produce finally entries
     self.build_finally_entries()
+}
+```
+
+**`flush_dispatches()`**: Spawns worker threads that send results on `tx` clones. Workers completing their work is what produces the next `InFlightResult` on the channel.
+
+```rust
+fn flush_dispatches(&mut self) {
+    let Some(tx) = &self.tx else { return };
+
+    while self.in_flight < self.max_concurrency {
+        let Some(task) = self.pending_dispatches.pop_front() else { break };
+        self.in_flight += 1;
+        self.dispatched.insert(task.task_id);
+        let tx = tx.clone();
+        // spawn worker thread with task.step, task.value, tx clone
+    }
+
+    if self.pending_dispatches.is_empty() && self.in_flight == 0 {
+        self.tx = None;
+    }
 }
 ```
 
@@ -232,7 +288,7 @@ fn build_finally_entries(&mut self) -> Vec<StateLogEntry> {
 }
 ```
 
-**`start()`**: Sets `self.live = true`.
+**`start()`**: Sets `self.live = true` and flushes the pending dispatch queue.
 
 **RunState internals** (unchanged from EXTRACT_RUN_STATE):
 
@@ -339,81 +395,9 @@ impl Applier for LogApplier {
 
 During replay, `live` is false and entries are not written (they came from the log). After `start()`, new entries are written.
 
-### Dispatcher
-
-Tracks pending dispatches and spawns worker threads. Gets all task information (step, value) from `TaskSubmitted` entries. Tracks which tasks were actually dispatched to distinguish worker completions from replay completions when decrementing `in_flight`.
-
-```rust
-struct Dispatcher {
-    pool: PoolConnection,
-    tx: Option<Sender<InFlightResult>>,
-    in_flight: usize,
-    max_concurrency: usize,
-    pending_dispatches: VecDeque<PendingTask>,
-    dispatched: HashSet<LogTaskId>,
-    live: bool,
-}
-
-struct PendingTask {
-    task_id: LogTaskId,
-    step: StepName,
-    value: StepInputValue,
-}
-
-impl Applier for Dispatcher {
-    fn apply(&mut self, entries: &[StateLogEntry]) -> Vec<StateLogEntry> {
-        for entry in entries {
-            match entry {
-                StateLogEntry::TaskSubmitted(s) => {
-                    self.pending_dispatches.push_back(PendingTask {
-                        task_id: s.task_id,
-                        step: s.step.clone(),
-                        value: s.value.clone(),
-                    });
-                }
-                StateLogEntry::TaskCompleted(c) => {
-                    self.pending_dispatches.retain(|p| p.task_id != c.task_id);
-                    if self.dispatched.remove(&c.task_id) {
-                        self.in_flight -= 1;
-                    }
-                }
-                StateLogEntry::Config(_) => {}
-            }
-        }
-        if self.live {
-            self.flush_dispatches();
-        }
-        vec![]
-    }
-
-    fn start(&mut self) {
-        self.live = true;
-        self.flush_dispatches();
-    }
-}
-
-impl Dispatcher {
-    fn flush_dispatches(&mut self) {
-        let Some(tx) = &self.tx else { return };
-
-        while self.in_flight < self.max_concurrency {
-            let Some(task) = self.pending_dispatches.pop_front() else { break };
-            self.in_flight += 1;
-            self.dispatched.insert(task.task_id);
-            let tx = tx.clone();
-            // spawn worker thread with task.step, task.value, tx clone
-        }
-
-        if self.pending_dispatches.is_empty() && self.in_flight == 0 {
-            self.tx = None;
-        }
-    }
-}
-```
-
 ### Termination
 
-Worker threads hold `Sender<InFlightResult>` clones. They drop them after sending their result. The Dispatcher drops its sender when `pending_dispatches` is empty and `in_flight` is 0. With all senders dropped, `rx.recv()` returns `Err`, the StateApplier's `recv()` returns `None`, and the coordinator's loop exits.
+Worker threads hold `Sender<InFlightResult>` clones. They drop them after sending their result. The Engine drops its `tx` when `pending_dispatches` is empty and `in_flight` is 0. With all senders dropped, `rx.recv()` returns `Err`, the Engine's `recv()` returns `None`, and the coordinator's loop exits.
 
 ### TaskEntry and TaskState
 
@@ -433,7 +417,7 @@ enum TaskState {
 }
 ```
 
-TaskState has two variants. The current `InFlight` variant is replaced by `in_flight: usize` on the Dispatcher. `finally_script` and `retries_remaining` are removed from TaskEntry — the StateApplier looks up the finally script from config when building finally entries, and determines retry exhaustion by counting Retry-origin siblings in the task tree.
+TaskState has two variants. The current `InFlight` variant is replaced by `in_flight: usize` on the Engine. `finally_script` and `retries_remaining` are removed from TaskEntry — the Engine looks up the finally script from config when building finally entries, and determines retry exhaustion by counting Retry-origin siblings in the task tree.
 
 ## Phasing
 
@@ -458,7 +442,7 @@ Convert the Iterator-based loop to an explicit `run()` method with a recv loop. 
 
 **Depends on: Phase 0a, Phase 1.**
 
-Introduce the `Applier` trait. StateApplier, Dispatcher, and LogApplier all implement it. Build a `Vec<Box<dyn Applier>>`. The coordinator becomes a dumb loop: `recv()` → `apply_all()` → repeat. All logic lives inside the appliers.
+Introduce the `Applier` trait. Engine and LogApplier implement it. Build a `Vec<Box<dyn Applier>>`. The coordinator becomes a dumb loop: `recv()` -> `apply_all()` -> repeat. All logic lives inside the appliers.
 
 ### Phase 3: Seeding through apply
 
@@ -496,10 +480,10 @@ fn task_succeeded(&mut self, task_id: LogTaskId, spawned: Vec<Task>, value: Step
 }
 ```
 
-After: The StateApplier produces entries from `recv()`. Those entries flow through `apply_all()`, which feeds them to every applier — StateApplier updates its task tree, LogApplier writes to disk, Dispatcher queues/dequeues. All see the same entries.
+After: The Engine produces entries from `recv()`. Those entries flow through `apply_all()`, which feeds them to every applier — Engine updates its task tree and dispatches, LogApplier writes to disk. All see the same entries.
 
 ```rust
-// StateApplier::recv() produces entries from InFlightResult:
+// Engine::recv() produces entries from InFlightResult:
 vec![
     StateLogEntry::TaskCompleted(TaskCompleted { task_id, outcome: ... }),
     StateLogEntry::TaskSubmitted(TaskSubmitted { task_id: child_id, ... }),
@@ -507,9 +491,8 @@ vec![
 ]
 
 // apply_all feeds them through every applier:
-// StateApplier::apply() updates task tree, detects removed parents, emits finally entries
+// Engine::apply() updates task tree, dispatches, detects removed parents, emits finally entries
 // LogApplier::apply() writes entries to disk
-// Dispatcher::apply() queues/dequeues tasks
 ```
 
 ### Finally handling: config baked into state
@@ -537,7 +520,7 @@ fn schedule_finally(&mut self, task_id: LogTaskId, hook: HookScript, value: Step
 }
 ```
 
-After: The StateApplier detects removed parents during `apply()`, looks up finally scripts from config, allocates IDs, and emits `TaskSubmitted` entries. Those entries flow through `apply_all` back to all appliers — the StateApplier inserts the task into its tree, the Dispatcher queues it, the LogApplier writes it. No config on TaskEntry.
+After: The Engine detects removed parents during `apply()`, looks up finally scripts from config, allocates IDs, and emits `TaskSubmitted` entries. Those entries flow through `apply_all` back to all appliers — the Engine inserts the task into its tree and queues it for dispatch, the LogApplier writes it. No config on TaskEntry.
 
 ### Main loop: scattered responsibilities
 
@@ -610,10 +593,17 @@ struct TaskEntry {
 #[test] fn apply_completed_recursive_removal_up_tree()
 #[test] fn apply_completed_failed_removes_task()
 
-// StateApplier
+// Engine
 #[test] fn recv_produces_entries_from_result()
 #[test] fn recv_returns_none_before_start()
 #[test] fn recv_returns_none_when_channel_closed()
+#[test] fn apply_updates_state_and_queues_dispatches()
+#[test] fn apply_dequeues_completed_tasks()
+#[test] fn apply_does_not_flush_before_start()
+#[test] fn start_enables_flushing()
+#[test] fn flush_dispatches_up_to_max_concurrency()
+#[test] fn flush_drops_tx_when_empty_and_no_in_flight()
+#[test] fn completed_only_decrements_in_flight_for_dispatched_tasks()
 #[test] fn apply_produces_finally_entries_for_removed_parents()
 #[test] fn apply_skips_finally_when_no_script()
 #[test] fn apply_allocates_ids_for_finally_entries()
@@ -623,15 +613,6 @@ struct TaskEntry {
 #[test] fn writes_all_entry_variants()
 #[test] fn skips_writes_before_start()
 
-// Dispatcher
-#[test] fn apply_queues_submitted_tasks()
-#[test] fn apply_dequeues_completed_tasks()
-#[test] fn apply_does_not_flush_before_start()
-#[test] fn start_enables_flushing()
-#[test] fn flush_dispatches_up_to_max_concurrency()
-#[test] fn flush_drops_tx_when_empty_and_no_in_flight()
-#[test] fn completed_only_decrements_in_flight_for_dispatched_tasks()
-
 // apply_all
 #[test] fn apply_all_feeds_entries_through_all_appliers()
 #[test] fn apply_all_loops_on_produced_entries()
@@ -639,6 +620,6 @@ struct TaskEntry {
 
 // Resume
 #[test] fn replay_log_reconstructs_identical_state()
-#[test] fn dispatcher_only_dispatches_incomplete_tasks_after_start()
+#[test] fn engine_only_dispatches_incomplete_tasks_after_start()
 #[test] fn log_applier_does_not_write_during_replay()
 ```
