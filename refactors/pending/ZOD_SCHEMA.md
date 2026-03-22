@@ -466,6 +466,44 @@ Current generated artifacts:
 - `libs/barnum/barnum-config-schema.zod.ts` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
 ```
 
+### Task 10: Add tests for `emit_zod`
+
+**Goal:** Snapshot test that calls `emit_zod(&config_schema())` and asserts the output matches a checked-in expectation. This catches regressions when config types change and verifies the renderer handles all schemars patterns in our actual schema.
+
+**File:** `crates/barnum_config/src/zod.rs` (test module at bottom)
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_schema;
+
+    #[test]
+    fn emit_zod_snapshot() {
+        let root = config_schema();
+        let output = emit_zod(&root);
+
+        // Verify structural invariants
+        assert!(output.starts_with("import { z } from \"zod\";\n"));
+        assert!(output.contains("export const configFileSchema ="));
+        assert!(output.contains("export type ConfigFile ="));
+        assert!(output.contains("export function defineConfig("));
+
+        // Verify all definitions are emitted
+        for name in root.definitions.keys() {
+            assert!(output.contains(&format!("const {name} =")), "missing definition: {name}");
+        }
+
+        // Snapshot: update this when config types change intentionally
+        insta::assert_snapshot!(output);
+    }
+}
+```
+
+Uses `insta` for snapshot testing. When the config types change, `cargo insta review` shows the diff and lets you accept the new snapshot.
+
+**Cargo.toml:** Add `insta` as a dev-dependency of `barnum_config`.
+
 ## What breaks
 
 Nothing. This is additive. The JSON schema continues to work for `$schema` references in JSONC configs. The Zod schema is a new file generated alongside it.
