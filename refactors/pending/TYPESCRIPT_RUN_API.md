@@ -4,11 +4,17 @@
 
 ## Motivation
 
-The npm package should export typed functions for invoking the barnum binary. Types are generated from Rust CLI structs via schemars, using the same `emit_zod` function that generates the config schema. When CLI args change, regenerate and CI catches drift.
+The npm package should export typed functions for invoking the barnum binary. Types are generated from Rust CLI structs using the same `emit_zod` function that generates the config schema. When CLI args change, regenerate and CI catches drift.
 
 ## Current State
 
-`emit_zod` (`crates/barnum_config/src/zod.rs:18`) walks a schemars `RootSchema` and emits Zod schemas + TypeScript types. It hardcodes three config-specific things: the root export name (`configFileSchema`), the root type name (`ConfigFile`), and the `defineConfig` helper function.
+`emit_zod` (`crates/barnum_config/src/zod.rs:18`) walks a schemars `RootSchema` and emits Zod schemas + TypeScript types. It works like this:
+
+1. All types in `root.definitions` get emitted as `const TypeName = z.object({...})` and `export type TypeName = z.infer<typeof TypeName>`. These names come from the definition map keys — this part is already generic.
+2. The root schema gets emitted as `export const configFileSchema = ...` and `export type ConfigFile = ...`. The name `configFileSchema`/`ConfigFile` is hardcoded.
+3. A `defineConfig` helper is appended. Config-specific.
+
+schemars puts the type name in the root schema's metadata: `"title": "ConfigFile"` (confirmed in `barnum-config-schema.json:3`). So `emit_zod` can derive the root export name from the title instead of hardcoding it. For `schema_for!(ConfigFile)`, title is `"ConfigFile"` → exports `configFileSchema` / `ConfigFile`. For `schema_for!(Cli)`, title will be `"Cli"` → exports `cliSchema` / `Cli`.
 
 CLI types (`Cli`, `Command`, `ConfigCommand`, `LogLevel`, `SchemaType`) live in `crates/barnum_cli/src/main.rs:20-149`. Private, no `JsonSchema` or `Serialize` derives.
 
@@ -22,17 +28,12 @@ Done.
 
 **New crate:** `crates/schemars_emit`
 
-Move `zod.rs` from `barnum_config` into this crate. Parameterize the root export name:
+Move `zod.rs` from `barnum_config` into this crate. Two changes to `emit_zod`:
 
-```rust
-pub fn emit_zod(root: &RootSchema, root_name: &str) -> String
-```
+1. Read the root type name from `root.schema.metadata.title` instead of hardcoding `configFileSchema` / `ConfigFile`.
+2. Move the `defineConfig` helper out. The config binary appends it after calling `emit_zod`.
 
-Move the `defineConfig` helper out of `emit_zod` — it's config-specific. The config binary appends it after calling `emit_zod`.
-
-Update call sites:
-- `build_barnum_schema.rs`: `schemars_emit::emit_zod(&root, "configFile")` + append `defineConfig`
-- `build_cli_schema.rs`: `schemars_emit::emit_zod(&root, "cli")`
+The function signature stays: `emit_zod(root: &RootSchema) -> String`. No new parameters.
 
 Both `barnum_config` and `barnum_cli` depend on `schemars_emit`.
 
@@ -41,6 +42,8 @@ Both `barnum_config` and `barnum_cli` depend on `schemars_emit`.
 Add `src/lib.rs` to `barnum_cli`. Move type definitions there. `main.rs` imports with `use barnum_cli::*`.
 
 Add `Serialize` and `JsonSchema` derives. Add `#[serde(tag = "kind")]` to `Command` and `ConfigCommand`. Add `#[serde(rename_all = "camelCase")]` on struct variants with multi-word fields. Add `#[serde(rename_all = "lowercase")]` on `LogLevel` and `SchemaType`.
+
+When `emit_zod` runs on `schema_for!(Cli)`, the definitions will include `Command`, `ConfigCommand`, `LogLevel`, `SchemaType` — all exported as types. The root exports `cliSchema` / `Cli`. Every type is accessible.
 
 ### Task 4: CLI schema generation binary
 
@@ -52,18 +55,18 @@ use schemars_emit::emit_zod;
 
 fn main() {
     let root = schemars::schema_for!(Cli);
-    let zod = emit_zod(&root, "cli");
+    let zod = emit_zod(&root);
     // write to libs/barnum/barnum-cli-schema.zod.ts
 }
 ```
 
-Output: `libs/barnum/barnum-cli-schema.zod.ts` — same format as the config schema, with `export const cliSchema`, `export type Cli`, etc.
+Output: `libs/barnum/barnum-cli-schema.zod.ts`. Same format as the config schema. Exports `cliSchema`, `Cli`, `Command`, `ConfigCommand`, `LogLevel`, `SchemaType`.
 
 ### Task 5: Hand-written spawn functions
 
 **File:** `libs/barnum/run.ts` (new)
 
-Imports the generated types from `barnum-cli-schema.zod.ts` and provides spawn functions.
+Imports the generated types and provides spawn functions.
 
 ```typescript
 import { spawn, type ChildProcess } from "node:child_process";
