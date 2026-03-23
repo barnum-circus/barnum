@@ -87,6 +87,8 @@ Current generated artifacts:
 
 See your claude.local.md.
 
+**Do not trust isolated test runs.** Running a single test or a filtered subset (e.g. `cargo test -- some_test_name`) passing is not a reliable positive signal. Tests often only fail when run as part of the full suite due to shared state, ordering dependencies, or compilation with all features. Always run the full test suite for the affected crate(s) before treating tests as passing.
+
 ## CI interpretation
 
 When GitHub CI runs show as "cancelled", that means they **timed out** - not that someone manually cancelled them. Treat cancelled runs as failures that need investigation.
