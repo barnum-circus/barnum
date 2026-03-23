@@ -17,14 +17,15 @@ fi
 echo "Running cargo fmt..."
 cargo fmt --all
 
-echo "Regenerating config schemas..."
-cargo run -p barnum_config --bin build_barnum_schema 2>/dev/null
+echo "Regenerating schemas..."
+cargo run -p barnum_cli --bin build_schemas 2>/dev/null
 
 echo "Regenerating CLI schema..."
 cargo run -p barnum_cli --bin build_cli_schema 2>/dev/null
 
 # Re-stage only files that were already staged (not unrelated unstaged changes)
 echo "$STAGED_FILES" | xargs git add
+git add libs/barnum/barnum-config-schema.json
 git add libs/barnum/barnum-config-schema.zod.ts
 git add libs/barnum/barnum-cli-schema.zod.ts
 
