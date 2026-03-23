@@ -10,126 +10,108 @@ The core principle: **if it runs, it goes through the trait.** Every executable 
 
 ## Current State
 
-### Dispatch fork (`runner/mod.rs:707-744`)
+### `dispatch_task` (`runner/mod.rs`)
 
-The runner pattern-matches on `Action` and calls different functions with different signatures:
+The engine's `dispatch_task` pattern-matches on `Action` and calls different functions:
 
 ```rust
-match &step.action {
-    Action::Pool { .. } => {
-        let timeout = step.options.timeout;  // ← used
-        thread::spawn(move || {
-            dispatch_pool_task(task_id, task, pre_hook, &docs, timeout, &pool, &tx);
-        });
-    }
-    Action::Command { script } => {
-        // ← no timeout
-        thread::spawn(move || {
-            dispatch_command_task(task_id, task, pre_hook, &script, &working_dir, &tx);
-        });
+fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
+    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
+    let tx = self.tx.clone();
+    match &step.action {
+        Action::Pool(..) => {
+            // constructs docs, timeout, pool — calls dispatch_pool_task in a thread
+        }
+        Action::Command(CommandAction { script }) => {
+            // constructs script, working_dir — calls dispatch_command_task in a thread
+        }
     }
 }
 ```
 
-### `SubmitResult` variants (`runner/dispatch.rs:35-49`)
+### `dispatch_pool_task` (`runner/dispatch.rs:124-154`)
+
+Runs in a spawned thread. Calls `run_pre_hook_or_error`, then `build_agent_payload` + `submit_via_cli`. Sends `SubmitResult::Pool(PoolResult { value, response: io::Result<Response> })`.
+
+### `dispatch_command_task` (`runner/dispatch.rs:160-192`)
+
+Runs in a spawned thread. Calls `run_pre_hook_or_error`, then `run_command_action` (which calls `run_shell_command`). Sends `SubmitResult::Command(CommandResult { value, output: io::Result<String> })`.
+
+### `dispatch_finally_task` (`runner/dispatch.rs:198-214`)
+
+Runs in a spawned thread. Calls `run_shell_command` directly (no pre-hook). Sends `SubmitResult::Finally(FinallyResult { value, output: Result<String, String> })`.
+
+### `SubmitResult` (`runner/dispatch.rs:53-58`)
 
 ```rust
 pub(super) enum SubmitResult {
-    Pool { value: StepInputValue, response: io::Result<Response> },
-    Command { value: StepInputValue, output: io::Result<String> },
-    Finally { value: StepInputValue, output: Result<String, String> },
+    Pool(PoolResult),
+    Command(CommandResult),
+    Finally(FinallyResult),
     PreHookError(String),
 }
 ```
 
-Pool wraps a `troupe::Response` (which has `Processed` and `NotProcessed` variants). Command wraps a raw `io::Result<String>`. The response processing in `response.rs:52-127` must then branch again to unwrap each shape.
+Each variant wraps a different result type: `io::Result<Response>` for Pool, `io::Result<String>` for Command, `Result<String, String>` for Finally.
 
-### Hooks
+### `process_submit_result` (`runner/response.rs:46-127`)
 
-Pre-hooks and the action currently execute in the same worker thread (one concurrency slot for both). Post-hooks execute on the main thread. Finally hooks get their own worker thread. None of them have timeout enforcement.
+Has separate match arms for Pool, Command, Finally, and PreHookError. Pool and Command both converge on `process_stdout` for the success case, but take different paths to get there:
+- Pool: unwraps `Response::Processed { stdout }` → `process_stdout`; `Response::NotProcessed` → `FailureKind::Timeout`
+- Command: unwraps `io::Result<String>` → `process_stdout`; no timeout variant
 
-### Response processing (`runner/response.rs:52-127`)
+### Hooks (`runner/hooks.rs`)
 
-Pool's success case unwraps `Response::Processed { stdout }` and calls `process_stdout`. Command's success case calls `process_stdout` directly. They converge on the same function — but the match arms to get there are per-kind.
+- `run_pre_hook`: runs a shell command, returns transformed `serde_json::Value`
+- `run_post_hook`: runs a shell command on the main thread, returns modified `PostHookInput`
+- Neither has timeout. Neither contributes to `in_flight` count.
 
-Pool's timeout case (`Response::NotProcessed`) produces `FailureKind::Timeout`. Command has no equivalent — it can't timeout.
+### `run_shell_command` (`runner/shell.rs`)
 
-### Command execution (`runner/shell.rs:10-47`)
+Blocks forever on `child.wait_with_output()`. No timeout.
 
-```rust
-let output = child
-    .wait_with_output()  // ← blocks forever
-    .map_err(|e| format!("wait failed: {e}"))?;
-```
+## Proposed Changes — Phased Implementation
 
-No timeout enforcement. The thread blocks until the child process exits.
+### Phase 1: Executor trait + PoolExecutor
 
-## Proposed Changes
+**Goal:** Pool actions go through the trait. Everything else stays as-is. Tests pass.
 
-### 1. Introduce the `Executor` trait
-
-**File:** `runner/executor.rs` (new)
-
-This is the central abstraction. Every executable unit goes through this trait. The trait itself is deliberately minimal — it just produces a string:
+#### 1a. Create `runner/executor.rs`
 
 ```rust
+use std::path::Path;
+
 /// Trait for executing work units.
 ///
-/// Pool tasks, Command tasks, pre-hooks, post-hooks, and finally hooks
-/// all go through this interface. The runner schedules, times out, and
-/// tracks concurrency for every `Executor::execute` call identically.
+/// Every action kind implements this. The runner dispatches all work through
+/// this interface, giving every unit timeout enforcement and concurrency accounting.
 ///
-/// Timeout enforcement and working directory are the runner's/construction's
-/// responsibility, not the trait's. The trait takes input, produces output.
-pub trait Executor: Send + Sync {
-    fn execute(&self, input: &str) -> Result<String, String>;
+/// Input is the task's value (as a serde_json::Value). Each executor knows
+/// how to package it for its execution context.
+///
+/// Working directory and other configuration are captured at construction time.
+pub trait Executor: Send {
+    fn execute(&self, value: &serde_json::Value) -> Result<String, String>;
 }
-```
 
-The return type is `Result<String, String>` — success stdout or error message. No typed outcome enum. Working directory is captured at construction time. The runner adds timeout semantics on top:
-
-```rust
-/// Runner-level outcome, wrapping the executor's raw result.
+/// Outcome of executing a work unit (runner-level, not trait-level).
 pub enum ActionOutcome {
     Success(String),
     Timeout,
     Error(String),
 }
-
-fn run_with_timeout(
-    executor: &dyn Executor,
-    input: &str,
-    timeout: Option<Duration>,
-) -> ActionOutcome {
-    // Spawn thread, call executor.execute(), wait with timeout.
-    // On timeout: kill thread, return ActionOutcome::Timeout.
-    // On Ok(stdout): return ActionOutcome::Success(stdout).
-    // On Err(e): return ActionOutcome::Error(e).
-}
 ```
 
-This keeps the trait at the lowest common denominator. Type safety can be layered on later without changing the trait contract.
-
-### 2. Implement `Executor` for Shell and Pool
-
-**`ShellExecutor`** — used by Command actions, pre-hooks, post-hooks, and finally hooks:
+#### 1b. Create `PoolExecutor` in `runner/executor.rs`
 
 ```rust
-pub struct ShellExecutor {
-    pub script: String,
-    pub working_dir: PathBuf,
-}
+use std::path::PathBuf;
+use cli_invoker::Invoker;
+use troupe::Response;
+use troupe_cli::TroupeCli;
+use crate::types::StepName;
+use super::submit::{build_agent_payload, submit_via_cli};
 
-impl Executor for ShellExecutor {
-    fn execute(&self, input: &str) -> Result<String, String> {
-        run_shell_command(&self.script, input, Some(&self.working_dir))
-    }
-}
-```
-
-**`PoolExecutor`** — used by Pool actions. Both working directory and pool timeout are captured at construction:
-
-```rust
 pub struct PoolExecutor {
     pub root: PathBuf,
     pub invoker: Invoker<TroupeCli>,
@@ -139,141 +121,421 @@ pub struct PoolExecutor {
 }
 
 impl Executor for PoolExecutor {
-    fn execute(&self, input: &str) -> Result<String, String> {
+    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
         let payload = build_agent_payload(
-            &self.step_name, /* ... */, &self.docs, self.pool_timeout,
+            &self.step_name, value, &self.docs, self.pool_timeout,
         );
         match submit_via_cli(&self.root, &payload, &self.invoker) {
             Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-            Ok(Response::NotProcessed { .. }) => Err("not processed".into()),
+            Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
             Err(e) => Err(e.to_string()),
         }
     }
 }
 ```
 
-Note: `PoolExecutor` returns `Err` for `NotProcessed`. The runner's timeout wrapper handles the *local* deadline (killing work that exceeds it). The pool's own timeout is separate — it tells the pool how long the agent has, and is captured at construction. These are independent mechanisms.
+This moves `troupe::Response` handling INTO PoolExecutor (out of `response.rs`).
 
-### 3. Decompose task lifecycle into independent work units
+#### 1c. Add `dispatch_via_executor` in `runner/dispatch.rs`
 
-Currently a worker thread runs the pre-hook and action together as one unit. In the unified model, each phase is a separate work unit dispatched through the trait:
-
-**Task lifecycle phases:**
-1. **Pre-hook** — dispatched through `ShellExecutor`, occupies a concurrency slot, has a timeout. On success, the transformed value feeds into the action. On failure, `PreHookError` is produced.
-2. **Action** — dispatched through `PoolExecutor` or `ShellExecutor`, occupies a concurrency slot, has a timeout.
-3. **Post-hook** — dispatched through `ShellExecutor`, occupies a concurrency slot, has a timeout.
-4. **Finally hook** — dispatched through `ShellExecutor`, occupies a concurrency slot, has a timeout.
-
-Each phase completes before the next is scheduled. The `PendingDispatch` enum grows to represent the pipeline:
+This replaces `dispatch_pool_task` for the Pool case:
 
 ```rust
-enum PendingDispatch {
-    /// Run a pre-hook for a task.
-    PreHook { task_id: LogTaskId },
-    /// Run the task's action (pre-hook already completed).
-    Action { task_id: LogTaskId, value: StepInputValue },
-    /// Run a post-hook after action completion.
-    PostHook { task_id: LogTaskId, post_input: PostHookInput },
-    /// Run a finally hook for a parent whose children completed.
-    Finally { parent_id: LogTaskId },
+/// Execute a task through an Executor (runs in spawned thread).
+///
+/// Runs pre-hook, calls executor.execute(), sends the result on the channel.
+pub fn dispatch_via_executor(
+    task_id: LogTaskId,
+    task: Task,
+    pre_hook: Option<&HookScript>,
+    executor: Box<dyn Executor>,
+    working_dir: &Path,
+    tx: &mpsc::Sender<WorkerResult>,
+) {
+    let value = match run_pre_hook_or_error(pre_hook, &task.value, working_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = tx.send(WorkerResult {
+                task_id,
+                task,
+                result: SubmitResult::PreHookError(e),
+            });
+            return;
+        }
+    };
+
+    let result = executor.execute(&value.0);
+    let outcome = match result {
+        Ok(stdout) => ActionOutcome::Success(stdout),
+        Err(e) => ActionOutcome::Error(e),
+    };
+    let _ = tx.send(WorkerResult {
+        task_id,
+        task,
+        result: SubmitResult::Action(ActionResult { value, outcome }),
+    });
 }
 ```
 
-Tasks without a pre-hook skip directly to `Action`. Tasks without a post-hook skip directly to completion processing. The engine dispatches whichever phase is next, and each phase occupies exactly one concurrency slot while executing.
-
-### 4. Add timeout infrastructure to the runner
-
-**File:** `runner/executor.rs`
-
-The `run_with_timeout` function wraps any executor call with a deadline. This is runner infrastructure, separate from the executor trait.
-
-**Dependency:** Add [`wait-timeout`](https://crates.io/crates/wait-timeout) for cross-platform timed waits (waitpid on Unix, WaitForSingleObject on Windows). `child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows).
-
-The `run_shell_command` function in `shell.rs` keeps its current signature (`Result<String, String>`). Timeout enforcement is layered on by the runner when it calls the executor.
-
-### 5. Unify `SubmitResult`
-
-**File:** `runner/dispatch.rs`
-
-Replace the per-kind variants with a single shape:
+#### 1d. Add `SubmitResult::Action` variant
 
 ```rust
+/// Raw result from an executor.
+pub(super) struct ActionResult {
+    pub value: StepInputValue,
+    pub outcome: ActionOutcome,
+}
+
 pub(super) enum SubmitResult {
-    /// Any executor completed (pool, command, hook, finally).
-    Action {
-        value: StepInputValue,
-        outcome: ActionOutcome,
-    },
-    /// Pre-hook failed before the action could run.
+    Pool(PoolResult),         // ← still exists (Command still uses old path)
+    Command(CommandResult),   // ← still exists
+    Finally(FinallyResult),   // ← still exists
+    Action(ActionResult),     // ← NEW: Pool goes through this now
     PreHookError(String),
 }
 ```
 
-`PreHookError` remains separate because it carries semantically different information: the original (untransformed) value, and the post-hook sees `"kind": "PreHookError"` rather than `"kind": "Error"`.
+#### 1e. Add `SubmitResult::Action` arm to `process_submit_result`
 
-### 6. Simplify response processing
-
-**File:** `runner/response.rs`
-
-With the unified `SubmitResult::Action`, there's a single arm:
+In `runner/response.rs`, add:
 
 ```rust
-SubmitResult::Action { value, outcome } => match outcome {
+SubmitResult::Action(ActionResult { value, outcome }) => match outcome {
     ActionOutcome::Success(stdout) => {
-        process_stdout(&stdout, task, &value, step, schemas)
+        let (outcome, post_input) = process_stdout(&stdout, task, &value, step, schemas);
+        ProcessedSubmit { outcome, post_input }
     }
     ActionOutcome::Timeout => {
         let outcome = process_retry(task, &step.options, FailureKind::Timeout);
-        (outcome, PostHookInput::Timeout { input: value })
+        ProcessedSubmit {
+            outcome,
+            post_input: PostHookInput::Timeout(PostHookTimeout { input: value }),
+        }
     }
     ActionOutcome::Error(error) => {
         error!(step = %task.step, %error, "action failed");
         let outcome = process_retry(task, &step.options, FailureKind::SubmitError);
-        (outcome, PostHookInput::Error { input: value, error })
+        ProcessedSubmit {
+            outcome,
+            post_input: PostHookInput::Error(PostHookError { input: value, error }),
+        }
+    }
+},
+```
+
+#### 1f. Modify `dispatch_task` Pool branch
+
+In `runner/mod.rs`, change the `Action::Pool` arm:
+
+```rust
+Action::Pool(..) => {
+    let pre_hook = step.pre.clone();
+    let docs = generate_step_docs(step, self.config);
+    let working_dir = self.pool.working_dir.clone();
+    let executor = Box::new(PoolExecutor {
+        root: self.pool.root.clone(),
+        invoker: self.pool.invoker.clone(),
+        docs,
+        step_name: task.step.clone(),
+        pool_timeout: step.options.timeout,
+    });
+
+    info!(step = %task.step, "submitting task to pool");
+    thread::spawn(move || {
+        dispatch_via_executor(
+            task_id, task, pre_hook.as_ref(), executor, &working_dir, &tx,
+        );
+    });
+}
+```
+
+#### 1g. Delete `dispatch_pool_task`
+
+It's now unused. Remove from `dispatch.rs`. Remove `PoolResult` struct.
+
+#### 1h. Remove `SubmitResult::Pool` variant
+
+Remove from `SubmitResult`. Remove the `SubmitResult::Pool` arm from `process_submit_result`. Remove `process_pool_response` function. Remove `use troupe::Response` from `response.rs`.
+
+**At this point:** Pool goes through `Executor` trait → `dispatch_via_executor` → `SubmitResult::Action`. Command still uses `dispatch_command_task` → `SubmitResult::Command`. Tests pass. Compile, run full suite.
+
+---
+
+### Phase 2: ShellExecutor + Command through trait
+
+**Goal:** Command actions also go through the trait. The `match &step.action` in `dispatch_task` constructs an executor and calls the same `dispatch_via_executor` for both. No more per-kind dispatch functions.
+
+#### 2a. Add `ShellExecutor` to `runner/executor.rs`
+
+```rust
+use std::path::PathBuf;
+use crate::types::StepName;
+use super::shell::run_shell_command;
+
+pub struct ShellExecutor {
+    pub script: String,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+}
+
+impl Executor for ShellExecutor {
+    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
+        let task_json = serde_json::to_string(&serde_json::json!({
+            "kind": &self.step_name,
+            "value": value,
+        }))
+        .unwrap_or_default();
+
+        run_shell_command(&self.script, &task_json, Some(&self.working_dir))
     }
 }
 ```
 
-`process_pool_response` and `process_command_response` are removed. `troupe::Response` no longer leaks into `response.rs` — it's handled inside `PoolExecutor`.
+#### 2b. Modify `dispatch_task` Command branch
 
-### 7. Remove `troupe::Response` dependency from response.rs
+```rust
+Action::Command(CommandAction { script }) => {
+    let pre_hook = step.pre.clone();
+    let working_dir = self.pool.working_dir.clone();
+    let executor = Box::new(ShellExecutor {
+        script: script.clone(),
+        step_name: task.step.clone(),
+        working_dir: self.pool.working_dir.clone(),
+    });
 
-After unification, `response.rs` no longer needs `use troupe::Response`. The troupe dependency is confined to the `PoolExecutor` implementation.
-
-## Dispatch flow summary
-
-```
-                    ┌──────────────┐
-                    │ PendingDispatch│
-                    └──────┬───────┘
-                           │
-            ┌──────────────┼──────────────┐
-            ▼              ▼              ▼
-        PreHook         Action         PostHook / Finally
-            │              │              │
-            ▼              ▼              ▼
-     ShellExecutor    Pool/Shell     ShellExecutor
-            │         Executor            │
-            ▼              ▼              ▼
-     Result<String>   Result<String>  Result<String>
-            │              │              │
-            └──────────────┼──────────────┘
-                           ▼
-                    run_with_timeout
-                           │
-                           ▼
-                     ActionOutcome
+    info!(step = %task.step, script = %script, "executing command");
+    thread::spawn(move || {
+        dispatch_via_executor(
+            task_id, task, pre_hook.as_ref(), executor, &working_dir, &tx,
+        );
+    });
+}
 ```
 
-Every box in the middle row implements `Executor` (returns `Result<String, String>`). The runner wraps each call with `run_with_timeout` to produce `ActionOutcome`. Every execution occupies a concurrency slot.
+#### 2c. Delete `dispatch_command_task`
+
+Remove from `dispatch.rs`. Remove `CommandResult` struct. Remove `run_command_action` from `hooks.rs` (it was a thin wrapper).
+
+#### 2d. Remove `SubmitResult::Command` variant
+
+Remove from `SubmitResult`. Remove the `SubmitResult::Command` arm from `process_submit_result`. Remove `process_command_response` function.
+
+#### 2e. Observe: `dispatch_task` no longer cares about action kind for dispatch
+
+Both branches now do the same thing: construct a `Box<dyn Executor>`, call `dispatch_via_executor`. The match is only for choosing which executor to construct. This is the seam for PLUGGABLE_ACTION_KINDS.
+
+**At this point:** Pool and Command both go through `Executor` trait → `dispatch_via_executor` → `SubmitResult::Action`. `SubmitResult` has only `Action`, `Finally`, and `PreHookError`. `response.rs` has no `troupe::Response` dependency. Tests pass. Compile, run full suite.
+
+---
+
+### Phase 3: Finally hooks through trait
+
+**Goal:** Finally hooks also go through `dispatch_via_executor` with a `ShellExecutor`.
+
+#### 3a. Modify `dispatch_finally` in `runner/mod.rs`
+
+Currently:
+```rust
+fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
+    let step = self.step_map.get(&task.step).expect("...");
+    let script = step.finally_hook.clone().expect("...");
+    let working_dir = self.pool.working_dir.clone();
+    let tx = self.tx.clone();
+    thread::spawn(move || {
+        dispatch_finally_task(parent_id, task, &script, &working_dir, &tx);
+    });
+}
+```
+
+Change to:
+```rust
+fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
+    let step = self.step_map.get(&task.step).expect("...");
+    let script = step.finally_hook.clone().expect("...");
+    let working_dir = self.pool.working_dir.clone();
+    let tx = self.tx.clone();
+    let executor = Box::new(ShellExecutor {
+        script: script.to_string(),
+        step_name: task.step.clone(),
+        working_dir: self.pool.working_dir.clone(),
+    });
+    thread::spawn(move || {
+        // Note: no pre-hook for finally
+        dispatch_via_executor(parent_id, task, None, executor, &working_dir, &tx);
+    });
+}
+```
+
+**Problem:** `dispatch_via_executor` currently sends `SubmitResult::Action`. But `process_worker_result` in `mod.rs` checks `SubmitResult::Finally` to route to `convert_finally_result`. We need a way to distinguish finally results from action results.
+
+**Options:**
+1. Add a `is_finally: bool` field to `ActionResult`
+2. Keep the Finally routing in `process_worker_result` by using WorkerResult metadata
+3. Unify finally processing into the standard action path
+
+Option 3 is cleanest: finally hooks produce the same output shape (stdout = JSON array of tasks). The only difference is how the result is recorded in the state log (`FinallyRun` vs `TaskCompleted`). This can be driven by metadata in `WorkerResult` (e.g., a `WorkerKind` enum: `Task` vs `Finally { parent_id }`).
+
+```rust
+pub enum WorkerKind {
+    Task,
+    Finally { parent_id: LogTaskId },
+}
+
+pub struct WorkerResult {
+    pub task_id: LogTaskId,
+    pub task: Task,
+    pub kind: WorkerKind,
+    pub result: SubmitResult,
+}
+```
+
+`process_worker_result` dispatches based on `kind`:
+- `WorkerKind::Task` → `convert_task_result` (existing path)
+- `WorkerKind::Finally` → `convert_finally_result` (existing path, but now receives `SubmitResult::Action` instead of `SubmitResult::Finally`)
+
+#### 3b. Delete `dispatch_finally_task`
+
+Remove from `dispatch.rs`. Remove `FinallyResult` struct. Remove `SubmitResult::Finally` variant. Remove `SubmitResult::Finally` arm from `process_submit_result`. Remove `process_finally_response` function.
+
+**At this point:** `SubmitResult` has only two variants: `Action(ActionResult)` and `PreHookError(String)`. All executable units go through `dispatch_via_executor`. Tests pass.
+
+---
+
+### Phase 4: Timeout enforcement
+
+**Goal:** All executors get timeouts. Commands can timeout. Hooks can timeout.
+
+**Dependency:** Add `wait-timeout` crate.
+
+#### 4a. Add timeout to `run_shell_command`
+
+Modify `runner/shell.rs`:
+
+```rust
+use std::time::Duration;
+use wait_timeout::ChildExt;
+
+pub fn run_shell_command(
+    script: &str,
+    stdin_input: &str,
+    working_dir: Option<&Path>,
+    timeout: Option<Duration>,   // ← new parameter
+) -> Result<String, String> {
+    let mut child = spawn_shell(script, stdin_input, working_dir)?;
+
+    match timeout {
+        Some(duration) => match child.wait_timeout(duration) {
+            Ok(Some(status)) => collect_and_check(child, status),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Err("timeout".into())
+            }
+            Err(e) => Err(format!("wait failed: {e}")),
+        },
+        None => {
+            let output = child.wait_with_output()
+                .map_err(|e| format!("wait failed: {e}"))?;
+            check_output(output)
+        }
+    }
+}
+```
+
+`child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows).
+
+#### 4b. Thread timeout through ShellExecutor
+
+```rust
+pub struct ShellExecutor {
+    pub script: String,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+    pub timeout: Option<Duration>,  // ← new field
+}
+
+impl Executor for ShellExecutor {
+    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
+        let task_json = /* ... */;
+        run_shell_command(&self.script, &task_json, Some(&self.working_dir), self.timeout)
+    }
+}
+```
+
+#### 4c. Pass `step.options.timeout` when constructing ShellExecutor
+
+In `dispatch_task`'s Command branch:
+```rust
+let executor = Box::new(ShellExecutor {
+    script: script.clone(),
+    step_name: task.step.clone(),
+    working_dir: self.pool.working_dir.clone(),
+    timeout: step.options.timeout.map(Duration::from_secs),
+});
+```
+
+Now Command actions can timeout.
+
+#### 4d. Map timeout errors to `ActionOutcome::Timeout`
+
+In `dispatch_via_executor`, detect the timeout sentinel:
+
+```rust
+let outcome = match result {
+    Ok(stdout) => ActionOutcome::Success(stdout),
+    Err(e) if e == "timeout" => ActionOutcome::Timeout,
+    Err(e) => ActionOutcome::Error(e),
+};
+```
+
+Alternatively, change `run_shell_command` to return a `ShellResult` enum instead of `Result<String, String>`, to avoid sentinel string matching. This is cleaner:
+
+```rust
+pub enum ShellResult {
+    Success(String),
+    Timeout,
+    Error(String),
+}
+```
+
+And update `ShellExecutor::execute` to map `ShellResult` to `Result<String, String>` or have the trait return `ActionOutcome` directly. **Decision point for implementation.**
+
+**At this point:** Pool and Command actions both have timeout. The timeout value comes from `step.options.timeout`. Tests pass.
+
+---
+
+### Phase 5: Hooks as separate concurrency slots (future)
+
+**Goal:** Pre-hooks, post-hooks, and finally hooks each occupy a concurrency slot.
+
+This is the most structurally invasive phase. Currently:
+- Pre-hooks run inside the worker thread (same slot as the action)
+- Post-hooks run on the main thread (no slot)
+- Finally hooks have their own thread (already a slot)
+
+**Changes:**
+1. Expand `PendingDispatch` to include `PreHook`, `PostHook` phases
+2. When a task is dispatched, if it has a pre-hook, first dispatch `PendingDispatch::PreHook`
+3. On pre-hook completion, dispatch `PendingDispatch::Action`
+4. On action completion, if there's a post-hook, dispatch `PendingDispatch::PostHook`
+5. Each phase occupies one `in_flight` slot
+
+This requires the engine to track which phase each task is in, which is a significant state machine change. Details TBD after Phases 1-4 are implemented.
+
+## Implementation Order Summary
+
+| Phase | What | Key deletions | Key additions |
+|-------|------|---------------|---------------|
+| 1 | Pool through trait | `dispatch_pool_task`, `PoolResult`, `SubmitResult::Pool`, `process_pool_response` | `Executor` trait, `PoolExecutor`, `dispatch_via_executor`, `ActionOutcome`, `ActionResult`, `SubmitResult::Action` |
+| 2 | Command through trait | `dispatch_command_task`, `CommandResult`, `SubmitResult::Command`, `process_command_response`, `run_command_action` | `ShellExecutor` |
+| 3 | Finally through trait | `dispatch_finally_task`, `FinallyResult`, `SubmitResult::Finally`, `process_finally_response` | `WorkerKind` enum on `WorkerResult` |
+| 4 | Timeout for all | — | `wait-timeout` dep, `timeout` param on `run_shell_command`, `timeout` field on `ShellExecutor` |
+| 5 | Hooks as concurrency slots | Pre-hook code inside `dispatch_via_executor` | `PendingDispatch::PreHook`, `PendingDispatch::PostHook`, phase tracking in engine |
+
+Each phase compiles and passes tests before moving to the next.
 
 ## What doesn't change
 
 - **Config types:** `ActionFile` and `Action` enums remain as-is. The closed enum is fine until PLUGGABLE_ACTION_KINDS introduces user-defined action kinds.
 - **State logging:** Unchanged. The log captures task submission and completion regardless of action kind.
-
-## Open Questions
-
-1. **Hook timeout source.** Step-level `options.timeout` is the natural choice for hooks associated with a step. A separate hook-specific timeout config could be added later if needed.
-
-2. **Concurrency cost of pipeline decomposition.** Decomposing pre-hook + action into two separate concurrency slots means a task with a pre-hook occupies 2 slots sequentially (never simultaneously). This is correct — each phase is real work. But it means a workflow heavy on pre-hooks will see lower action throughput at the same concurrency limit. This is a factual tradeoff, not necessarily a problem.
+- **Pre-commit hooks (Phases 1-4):** Pre-hooks still run inside the worker thread, same as today. Phase 5 separates them.
