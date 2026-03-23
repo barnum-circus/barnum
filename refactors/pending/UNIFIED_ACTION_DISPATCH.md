@@ -10,132 +10,101 @@ All of these run work in a thread and send a result back on a channel. They shou
 
 ## Current State
 
-### `dispatch_task` (`runner/mod.rs:709-734`)
+Phase 0 (unified result types) is landed on master. All dispatch functions produce unified `ActionResult` with `Result<String, ActionError>`, and `WorkerKind` handles routing between task and finally paths.
 
-Pattern-matches on `ActionKind` and calls different functions:
+### `runner/action.rs`
+
+Defines `ActionError` — the unified error type for action dispatch:
 
 ```rust
-fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let tx = self.tx.clone();
-    match &step.action {
-        ActionKind::Pool(..) => {
-            let docs = generate_step_docs(step, self.config);
-            let timeout = step.options.timeout;
-            let pool = self.pool.clone();
-            info!(step = %task.step, "submitting task to pool");
-            thread::spawn(move || {
-                dispatch_pool_task(task_id, task, &docs, timeout, &pool, &tx);
-            });
-        }
-        ActionKind::Command(CommandAction { script }) => {
-            let script = script.clone();
-            let working_dir = self.pool.working_dir.clone();
-            info!(step = %task.step, script = %script, "executing command");
-            thread::spawn(move || {
-                dispatch_command_task(task_id, task, &script, &working_dir, &tx);
-            });
-        }
-    }
+pub enum ActionError {
+    #[expect(dead_code, reason = "constructed by run_action in Phase 1")]
+    TimedOut,
+    Failed(String),
 }
 ```
 
-### `dispatch_finally` (`runner/mod.rs:738-751`)
+`TimedOut` is dead code until Phase 1 introduces `run_action` with `recv_timeout`. `Failed` wraps all current error paths.
 
-Separate method with its own thread::spawn and dispatch function:
+### `runner/dispatch.rs`
+
+Unified result types and three dispatch functions:
 
 ```rust
-fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let script = step.finally_hook.clone().expect("[P073]...");
-    let working_dir = self.pool.working_dir.clone();
-    let tx = self.tx.clone();
-    info!(step = %task.step, parent = ?parent_id, "dispatching finally worker");
-    thread::spawn(move || {
-        dispatch_finally_task(parent_id, task, &script, &working_dir, &tx);
-    });
+pub(super) struct ActionResult {
+    pub value: StepInputValue,
+    pub output: Result<String, ActionError>,
 }
-```
 
-### `dispatch_pool_task` (`runner/dispatch.rs:56-74`)
+pub(super) enum WorkerKind {
+    Task,
+    Finally { parent_id: LogTaskId },
+}
 
-Spawned thread. Calls `build_agent_payload` + `submit_via_cli`. Sends `SubmitResult::Pool(PoolResult { value, response: io::Result<Response> })`.
-
-### `dispatch_command_task` (`runner/dispatch.rs:80-100`)
-
-Spawned thread. Calls `run_command_action` (which wraps `run_shell_command`, converting `Result<String, String>` to `io::Result<String>`). Sends `SubmitResult::Command(CommandResult { value, output: io::Result<String> })`.
-
-### `dispatch_finally_task` (`runner/dispatch.rs:106-122`)
-
-Spawned thread. Calls `run_shell_command` directly. Sends `SubmitResult::Finally(FinallyResult { value, output: Result<String, String> })`.
-
-### `SubmitResult` and result types (`runner/dispatch.rs:21-50`)
-
-```rust
 pub struct WorkerResult {
     pub task_id: LogTaskId,
     pub task: Task,
-    pub result: SubmitResult,
-}
-
-pub(super) struct PoolResult {
-    pub value: StepInputValue,
-    pub response: io::Result<Response>,
-}
-
-pub(super) struct CommandResult {
-    pub value: StepInputValue,
-    pub output: io::Result<String>,
-}
-
-pub(super) struct FinallyResult {
-    pub value: StepInputValue,
-    pub output: Result<String, String>,
-}
-
-pub(super) enum SubmitResult {
-    Pool(PoolResult),
-    Command(CommandResult),
-    Finally(FinallyResult),
+    pub kind: WorkerKind,
+    pub result: ActionResult,
 }
 ```
 
-Three variants, three different result types.
+`dispatch_pool_task` normalizes `Response::Processed` → `Ok(stdout)`, `Response::NotProcessed` → `Err(ActionError::Failed("not processed by pool"))`, `Err(e)` → `Err(ActionError::Failed(e.to_string()))`.
 
-### `process_submit_result` (`runner/response.rs:42-71`)
+`dispatch_command_task` calls `run_shell_command` directly (the `run_command_action` wrapper was deleted), maps errors via `.map_err(ActionError::Failed)`.
 
-Separate match arms for Pool, Command, Finally. Pool and Command both converge on `process_stdout` for success:
-- Pool: `Response::Processed { stdout }` → `process_stdout`; `Response::NotProcessed` → `FailureKind::Timeout`
-- Command: `io::Result<String>` → `process_stdout`; no timeout variant
-- Finally: parses stdout as `Vec<Task>`; this arm is dead code (Finally is routed to `convert_finally_result` in `mod.rs:521`, never reaches `process_submit_result`)
+`dispatch_finally_task` calls `run_shell_command`, maps errors via `.map_err(ActionError::Failed)`, sends `WorkerKind::Finally { parent_id }`.
 
-### `process_worker_result` routing (`runner/mod.rs:511-532`)
+### `runner/response.rs`
 
-Routes Finally to `convert_finally_result`, everything else to `convert_task_result`:
+Single `process_submit_result` matches on `ActionResult.output`:
 
 ```rust
-let entries = match submit_result {
-    dispatch::SubmitResult::Finally(dispatch::FinallyResult { value, output }) => {
-        self.convert_finally_result(task_id, value, output)
+pub fn process_submit_result(
+    result: ActionResult, task: &Task, step: &Step, schemas: &CompiledSchemas,
+) -> TaskOutcome {
+    match result.output {
+        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, schemas),
+        Err(ActionError::TimedOut) => {
+            warn!(step = %task.step, "action timed out");
+            process_retry(task, &step.options, FailureKind::Timeout)
+        }
+        Err(ActionError::Failed(error)) => {
+            error!(step = %task.step, %error, "action failed");
+            process_retry(task, &step.options, FailureKind::SubmitError)
+        }
     }
-    other => self.convert_task_result(task_id, &task, other),
+}
+```
+
+### `runner/mod.rs` routing
+
+`process_worker_result` routes via `WorkerKind`:
+
+```rust
+let entries = match result.kind {
+    dispatch::WorkerKind::Task => {
+        self.convert_task_result(result.task_id, &result.task, result.result)
+    }
+    dispatch::WorkerKind::Finally { parent_id } => {
+        self.convert_finally_result(parent_id, result.task.value.clone(), result.result.output)
+    }
 };
 ```
 
-### `run_command_action` (`runner/hooks.rs:25-28`)
+`convert_task_result` takes `dispatch::ActionResult`. `convert_finally_result` takes `Result<String, ActionError>`.
 
-Thin wrapper around `run_shell_command` that converts `Result<String, String>` to `io::Result<String>`:
+### `dispatch_task` and `dispatch_finally` (`runner/mod.rs`)
 
-```rust
-pub fn run_command_action(script: &str, task_json: &str, working_dir: &Path) -> io::Result<String> {
-    run_shell_command(script, task_json, Some(working_dir))
-        .map_err(|e| io::Error::other(format!("[E021] command {e}")))
-}
-```
+Still pattern-match on `ActionKind` and call separate dispatch functions with `thread::spawn`. Each dispatch function produces unified `WorkerResult` with `ActionResult` + `WorkerKind`.
 
-### `run_shell_command` (`runner/shell.rs`)
+### `runner/hooks.rs`
 
-Blocks forever on `child.wait_with_output()`. No timeout.
+Only contains `call_wake_script`. `run_command_action` was deleted (inlined into `dispatch_command_task`).
+
+### `runner/shell.rs`
+
+`run_shell_command` blocks forever on `child.wait_with_output()`. No timeout.
 
 ## Design Decisions
 
@@ -272,281 +241,11 @@ For Pool actions specifically: `pool_timeout` (troupe's agent lifecycle timeout,
 
 ## Phased Implementation
 
-### Phase 0: Unify result types
-
-Collapse `SubmitResult`'s three payload types into one `ActionResult`. Retry logic is unchanged.
-
-#### 0a. Create `runner/action.rs` with `ActionError`
-
-`ActionResult.output` uses `ActionError`, so define it first. Create `runner/action.rs` with `ActionError`. Add `mod action;` to `runner/mod.rs`.
-
-```rust
-//! Action trait and dispatch infrastructure.
-
-use std::fmt;
-
-/// Error from action dispatch. Only `run_action` produces `TimedOut`.
-pub enum ActionError {
-    TimedOut,
-    Failed(String),
-}
-
-impl fmt::Display for ActionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::TimedOut => write!(f, "action timed out"),
-            Self::Failed(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-```
-
-#### 0b. Replace types in `runner/dispatch.rs`
-
-Delete `PoolResult`, `CommandResult`, `FinallyResult`, `SubmitResult`. Replace with:
-
-```rust
-use super::action::ActionError;
-
-/// Unified action output.
-pub(super) struct ActionResult {
-    pub value: StepInputValue,
-    pub output: Result<String, ActionError>,
-}
-
-/// Routing tag: determines whether result goes to convert_task_result or convert_finally_result.
-pub(super) enum WorkerKind {
-    Task,
-    Finally { parent_id: LogTaskId },
-}
-
-/// What the engine's main loop receives from worker threads.
-pub struct WorkerResult {
-    pub task_id: LogTaskId,
-    pub task: Task,
-    pub kind: WorkerKind,
-    pub result: ActionResult,
-}
-```
-
-#### 0c. Convert results in dispatch functions
-
-**File: `runner/dispatch.rs`**
-
-Each dispatch function normalizes its native result type to `Result<String, ActionError>` before wrapping in `ActionResult`.
-
-`dispatch_pool_task` — before:
-```rust
-let response = submit_via_cli(&pool.root, &payload, &pool.invoker);
-let _ = tx.send(WorkerResult {
-    task_id, task,
-    result: SubmitResult::Pool(PoolResult { value, response }),
-});
-```
-
-After:
-```rust
-let output = match submit_via_cli(&pool.root, &payload, &pool.invoker) {
-    Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-    Ok(Response::NotProcessed { .. }) => Err(ActionError::Failed("not processed by pool".into())),
-    Err(e) => Err(ActionError::Failed(e.to_string())),
-};
-let _ = tx.send(WorkerResult {
-    task_id, task,
-    kind: WorkerKind::Task,
-    result: ActionResult { value, output },
-});
-```
-
-Note: `NotProcessed` becomes `ActionError::Failed`, not `TimedOut`. Barnum now owns timeout via `run_action`.
-
-`dispatch_command_task` — before:
-```rust
-let output = run_command_action(script, &task_json, working_dir);
-let _ = tx.send(WorkerResult {
-    task_id, task,
-    result: SubmitResult::Command(CommandResult { value, output }),
-});
-```
-
-After (inline `run_shell_command` directly, drop the `io::Result` wrapper):
-```rust
-let output = run_shell_command(script, &task_json, Some(working_dir))
-    .map_err(ActionError::Failed);
-let _ = tx.send(WorkerResult {
-    task_id, task,
-    kind: WorkerKind::Task,
-    result: ActionResult { value, output },
-});
-```
-
-`dispatch_finally_task` — before:
-```rust
-let output = run_shell_command(finally_script.as_str(), &input_json, Some(working_dir));
-let _ = tx.send(WorkerResult {
-    task_id, task,
-    result: SubmitResult::Finally(FinallyResult { value, output }),
-});
-```
-
-After:
-```rust
-let output = run_shell_command(finally_script.as_str(), &input_json, Some(working_dir))
-    .map_err(ActionError::Failed);
-let _ = tx.send(WorkerResult {
-    task_id: parent_id, task,
-    kind: WorkerKind::Finally { parent_id },
-    result: ActionResult { value, output },
-});
-```
-
-Remove import of `run_command_action` from `dispatch.rs`. Add import of `ActionError` from `super::action`.
-
-#### 0d. Collapse `process_submit_result`
-
-**File: `runner/response.rs`**
-
-Before (handles three variants):
-```rust
-pub fn process_submit_result(
-    result: SubmitResult,
-    task: &Task,
-    step: &Step,
-    schemas: &CompiledSchemas,
-) -> TaskOutcome {
-    match result {
-        SubmitResult::Pool(PoolResult { value, response }) => match response {
-            Ok(response) => process_pool_response(response, task, &value, step, schemas),
-            Err(e) => { ... process_retry(task, &step.options, FailureKind::SubmitError) }
-        },
-        SubmitResult::Command(CommandResult { value, output }) => match output {
-            Ok(stdout) => process_command_response(&stdout, task, &value, step, schemas),
-            Err(e) => { ... process_retry(task, &step.options, FailureKind::SubmitError) }
-        },
-        SubmitResult::Finally(FinallyResult { value, output }) => ...  // dead code
-    }
-}
-```
-
-After:
-```rust
-pub fn process_submit_result(
-    result: ActionResult,
-    task: &Task,
-    step: &Step,
-    schemas: &CompiledSchemas,
-) -> TaskOutcome {
-    match result.output {
-        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, schemas),
-        Err(ActionError::TimedOut) => {
-            warn!(step = %task.step, "action timed out");
-            process_retry(task, &step.options, FailureKind::Timeout)
-        }
-        Err(ActionError::Failed(error)) => {
-            error!(step = %task.step, %error, "action failed");
-            process_retry(task, &step.options, FailureKind::SubmitError)
-        }
-    }
-}
-```
-
-Delete `process_pool_response`, `process_command_response`, `process_finally_response`. Update imports: remove `SubmitResult`, `PoolResult`, `CommandResult`, `FinallyResult`; add `ActionResult` and `ActionError`.
-
-#### 0e. Update routing in `process_worker_result`
-
-**File: `runner/mod.rs`**
-
-Before (`mod.rs:510-532`):
-```rust
-fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
-    let WorkerResult { task_id, task, result: submit_result } = result;
-    self.in_flight = self.in_flight.saturating_sub(1);
-    let entries = match submit_result {
-        dispatch::SubmitResult::Finally(dispatch::FinallyResult { value, output }) => {
-            self.convert_finally_result(task_id, value, output)
-        }
-        other => self.convert_task_result(task_id, &task, other),
-    };
-    ...
-}
-```
-
-After:
-```rust
-fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
-    self.in_flight = self.in_flight.saturating_sub(1);
-    let entries = match result.kind {
-        dispatch::WorkerKind::Task => {
-            self.convert_task_result(result.task_id, &result.task, result.result)
-        }
-        dispatch::WorkerKind::Finally { parent_id } => {
-            self.convert_finally_result(parent_id, result.task.value.clone(), result.result.output)
-        }
-    };
-    for entry in &entries {
-        self.state.apply_entry(entry, self.config);
-    }
-    self.flush_dispatches();
-    entries
-}
-```
-
-Update `convert_task_result` signature — takes `ActionResult` instead of `SubmitResult`:
-
-```rust
-fn convert_task_result(
-    &mut self,
-    task_id: LogTaskId,
-    task: &Task,
-    action_result: dispatch::ActionResult,
-) -> Vec<StateLogEntry> {
-    let step = self.step_map.get(&task.step).expect("[P015] task step must exist");
-    let outcome = process_submit_result(action_result, task, step, self.schemas);
-    ...  // rest unchanged
-}
-```
-
-Update `convert_finally_result` — takes `Result<String, ActionError>` instead of `Result<String, String>`:
-
-```rust
-fn convert_finally_result(
-    &mut self,
-    parent_id: LogTaskId,
-    _value: StepInputValue,
-    output: Result<String, ActionError>,
-) -> Vec<StateLogEntry> {
-    let raw_children = match output {
-        Ok(stdout) => match json5::from_str::<Vec<Task>>(&stdout) { ... },
-        Err(e) => {
-            error!(parent = ?parent_id, error = %e, "finally hook failed");
-            vec![]
-        }
-    };
-    ...  // rest unchanged
-}
-```
-
-The `%e` formatting works because `ActionError` implements `Display`.
-
-Update imports in `mod.rs`: remove `dispatch_command_task`, `dispatch_finally_task`, `dispatch_pool_task` from the `use dispatch::` line. Add `dispatch::WorkerKind`. Keep `dispatch::WorkerResult`. Add `use action::ActionError;` (for `convert_finally_result` signature).
-
-#### 0f. Delete dead code
-
-- `PoolResult`, `CommandResult`, `FinallyResult` structs (from `dispatch.rs`)
-- `SubmitResult` enum (from `dispatch.rs`)
-- `process_pool_response`, `process_command_response`, `process_finally_response` (from `response.rs`)
-- `run_command_action` (from `hooks.rs` — the only caller was `dispatch_command_task`, now inlined)
-- Remove `use super::hooks::run_command_action;` from `dispatch.rs`
-
-After this phase: all dispatch functions produce `ActionResult` with `Result<String, ActionError>`, `WorkerKind` handles routing, one code path in `process_submit_result`. Compile, run full suite.
-
----
-
 ### Phase 1: `Action` trait + `run_action` + `spawn_worker` + `PoolAction`
 
 Introduce the trait, the dispatch infrastructure, and move Pool through it. Command stays as-is.
 
-Requires Phase 0 (unified result types).
+Builds on the unified result types (ActionResult, WorkerKind, ActionError) already on master.
 
 #### 1a. Expand `runner/action.rs`
 
@@ -906,7 +605,6 @@ All dispatch sites call `spawn_worker`. Compile, run full suite.
 
 | Phase | What | Deletes | Adds |
 |-------|------|---------|------|
-| 0 | Unify result types | `SubmitResult`, `PoolResult`, `CommandResult`, `FinallyResult`, `process_pool_response`, `process_command_response`, `process_finally_response`, `run_command_action` | `ActionError`, `ActionResult`, `WorkerKind`, `runner/action.rs` |
 | 1 | Trait + dispatch infra + Pool | `dispatch_pool_task` | `Action` trait, `run_action`, `spawn_worker`, `PoolAction` |
 | 2 | Command through trait | `dispatch_command_task` | `ShellAction` |
 | 3 | Finally + cleanup | `dispatch_finally_task`, `runner/dispatch.rs` | (reuses `ShellAction` + `WorkerKind::Finally`) |
