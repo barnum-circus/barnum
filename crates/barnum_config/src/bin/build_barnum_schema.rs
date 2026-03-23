@@ -34,7 +34,14 @@ fn main() {
     write_file(&libs.join("barnum-config-schema.json"), &json);
 
     // Zod TypeScript schema
-    let zod = emit_zod(&root);
+    let mut zod = emit_zod(&root);
+
+    // Append config-specific defineConfig helper
+    zod.push_str(
+        "\nexport function defineConfig(config: z.input<typeof configFileSchema>): ConfigFile {\n  \
+         return configFileSchema.parse(config);\n}\n",
+    );
+
     write_file(&libs.join("barnum-config-schema.zod.ts"), &zod);
 }
 
