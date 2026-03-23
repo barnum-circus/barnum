@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { createRequire } from "node:module";
-import type { configFileSchema } from "./barnum-config-schema.zod.js";
+import { configFileSchema } from "./barnum-config-schema.zod.js";
 import type { z } from "zod";
 
 const require = createRequire(import.meta.url);
@@ -26,14 +26,14 @@ export interface RunOptions {
 }
 
 export class BarnumConfig {
-  private readonly config: z.input<typeof configFileSchema>;
+  private readonly config: z.output<typeof configFileSchema>;
 
-  private constructor(config: z.input<typeof configFileSchema>) {
+  private constructor(config: z.output<typeof configFileSchema>) {
     this.config = config;
   }
 
   static fromConfig(config: z.input<typeof configFileSchema>): BarnumConfig {
-    return new BarnumConfig(config);
+    return new BarnumConfig(configFileSchema.parse(config));
   }
 
   run(opts?: RunOptions): ChildProcess {
