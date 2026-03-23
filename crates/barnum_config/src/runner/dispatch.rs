@@ -13,7 +13,6 @@ use troupe::Response;
 use crate::types::{HookScript, LogTaskId, StepInputValue};
 use crate::value_schema::Task;
 
-use super::hooks::run_command_action;
 use super::shell::run_shell_command;
 use super::submit::{build_agent_payload, submit_via_cli};
 
@@ -91,7 +90,8 @@ pub fn dispatch_command_task(
     }))
     .unwrap_or_default();
 
-    let output = run_command_action(script, &task_json, working_dir);
+    let output = run_shell_command(script, &task_json, Some(working_dir))
+        .map_err(|e| io::Error::other(format!("[E021] command {e}")));
     let _ = tx.send(WorkerResult {
         task_id,
         task,
