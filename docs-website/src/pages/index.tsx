@@ -28,7 +28,8 @@ const exampleConfig = `{
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Convert this JS file to TypeScript. Add types, rename to .ts. Return []."
+          "kind": "Inline",
+          "value": "Convert this JS file to TypeScript. Add types, rename to .ts. Return []."
         }
       },
       "next": []
@@ -38,7 +39,8 @@ const exampleConfig = `{
       "action": {
         "kind": "Pool",
         "instructions": {
-          "inline": "Run npx tsc --noEmit and fix all TypeScript errors. Return []."
+          "kind": "Inline",
+          "value": "Run npx tsc --noEmit and fix all TypeScript errors. Return []."
         }
       },
       "next": []
@@ -126,7 +128,7 @@ function ExampleSection() {
       <div className="container">
         <h2 className={styles.centeredHeading}>One programme. Greatest show on earth.</h2>
         <p>
-          With Barnum, you specify your workflow upfront in a configuration
+          With Barnum, you specify your workflow up front in a configuration
           file. You can express ordering constraints (A before B), fan-out
           (one task per file), and aggregation (do X after everything
           finishes) in plain, readable JSON that can be validated before
@@ -163,7 +165,7 @@ function AgentAuthoring() {
           <a href="/docs/reference/config-schema">published schema</a>.
           Point your agent at{' '}
           <code>pnpm dlx @barnum/barnum config schema</code> to get
-          the full JSON Schema, show it the{' '}
+          the full Zod TypeScript schema, show it the{' '}
           <a href="/docs/repertoire">repertoire</a> for common
           patterns, and tell it what you want. It'll write a working
           programme.
@@ -187,7 +189,7 @@ function WhyBarnum() {
         </p>
         <p>
           Barnum is the ringmaster for your agents. You declare the full graph of
-          steps and valid transitions upfront. It's statically analyzable
+          steps and valid transitions up front. It's statically analyzable
           before anything runs. At runtime, agents choose which path through the
           graph to take, but they can never go off script.
         </p>

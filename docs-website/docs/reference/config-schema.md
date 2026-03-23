@@ -60,7 +60,7 @@ Each step defines a stage in your workflow.
     {
       "name": "Analyze",
       "value_schema": { "type": "object" },
-      "action": { "kind": "Pool", "instructions": "..." },
+      "action": { "kind": "Pool", "instructions": { "kind": "Inline", "value": "..." } },
       "pre": { "kind": "Command", "script": "scripts/pre.sh" },
       "post": { "kind": "Command", "script": "scripts/post.sh" },
       "finally": { "kind": "Command", "script": "scripts/finally.sh" },
@@ -92,7 +92,7 @@ Send the task to an agent in the pool.
 {
   "action": {
     "kind": "Pool",
-    "instructions": "Analyze the code and return findings. Return `[]` when done."
+    "instructions": { "kind": "Inline", "value": "Analyze the code and return findings. Return `[]` when done." }
   }
 }
 ```
@@ -111,7 +111,7 @@ Instructions can be inline or linked to a file:
 | Field | Type | Description |
 |-------|------|-------------|
 | `kind` | `"Pool"` | Send to agent pool |
-| `instructions` | string or object | Markdown instructions for agents |
+| `instructions` | object | Inline (`{"kind": "Inline", "value": "..."}`) or linked (`{"kind": "Link", "path": "..."}`) markdown instructions for agents |
 
 ### Command Action
 
@@ -236,7 +236,7 @@ Runs after ALL descendants complete.
       "pre": { "kind": "Command", "script": "scripts/read-file.sh" },
       "action": {
         "kind": "Pool",
-        "instructions": "Analyze this code. Return `[{\"kind\": \"Implement\", \"value\": {\"changes\": []}}]`"
+        "instructions": { "kind": "Inline", "value": "Analyze this code. Return `[{\"kind\": \"Implement\", \"value\": {\"changes\": []}}]`" }
       },
       "post": { "kind": "Command", "script": "scripts/validate-response.sh" },
       "next": ["Implement"]
@@ -256,7 +256,7 @@ Runs after ALL descendants complete.
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Apply these changes. Return `[]` when done."
+        "instructions": { "kind": "Inline", "value": "Apply these changes. Return `[]` when done." }
       },
       "next": []
     }

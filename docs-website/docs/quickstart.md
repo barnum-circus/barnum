@@ -6,10 +6,6 @@ image: /img/og/quickstart.png
 
 This guide walks you through running your first Barnum workflow. We use Claude in this example, but Barnum works with any AI agent that can follow instructions and write to a file.
 
-## Prerequisites
-
-- An AI agent (Claude Code, claude.ai, ChatGPT, Cursor, or any agent that can run shell commands)
-
 ## Step 1: Start the Troupe
 
 The troupe is a daemon that coordinates work between your agents. In a terminal:
@@ -140,7 +136,7 @@ Here's what a basic refactor config looks like:
       },
       "action": {
         "kind": "Pool",
-        "instructions": "List all source files in the given folder. Return an array of AnalyzeAndRefactor tasks, one per file:\n\n```json\n[{\"kind\": \"AnalyzeAndRefactor\", \"value\": {\"file\": \"src/main.rs\"}}, ...]\n```"
+        "instructions": { "kind": "Inline", "value": "List all source files in the given folder. Return an array of AnalyzeAndRefactor tasks, one per file:\n\n```json\n[{\"kind\": \"AnalyzeAndRefactor\", \"value\": {\"file\": \"src/main.rs\"}}, ...]\n```" }
       },
       "next": ["AnalyzeAndRefactor"]
     },
@@ -153,7 +149,7 @@ Here's what a basic refactor config looks like:
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Read the file and identify ONE refactoring opportunity (rename a variable, extract a function, etc). Apply the refactor. Then return:\n\n```json\n[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"src/main.rs\"}}]\n```\n\nIf no refactoring needed, return `[]`."
+        "instructions": { "kind": "Inline", "value": "Read the file and identify ONE refactoring opportunity (rename a variable, extract a function, etc). Apply the refactor. Then return:\n\n```json\n[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"src/main.rs\"}}]\n```\n\nIf no refactoring needed, return `[]`." }
       },
       "next": ["CommitFile"]
     },
@@ -166,7 +162,7 @@ Here's what a basic refactor config looks like:
       },
       "action": {
         "kind": "Pool",
-        "instructions": "Commit the changes to this file with a descriptive message. Return `[]` when done."
+        "instructions": { "kind": "Inline", "value": "Commit the changes to this file with a descriptive message. Return `[]` when done." }
       },
       "next": []
     }

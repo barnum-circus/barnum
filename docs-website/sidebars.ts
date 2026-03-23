@@ -41,11 +41,6 @@ const sidebars: SidebarsConfig = {
         'repertoire/editing-assistant',
       ],
     },
-    {
-      type: 'doc',
-      id: 'coming-attractions',
-      label: 'Coming Attractions',
-    },
   ],
 };
 
