@@ -234,11 +234,6 @@ The JS layer passes the executor path via a new CLI flag: `barnum run --executor
 
 ```typescript
 import { type ZodType, type z } from "zod";
-import type { configFileSchema } from "../barnum-config-schema.zod.js";
-
-export type ConfigFile = z.output<typeof configFileSchema>;
-export type StepFile = ConfigFile["steps"][number];
-
 import type { ActionFile, StepFile, ConfigFile } from "../barnum-config-schema.zod.js";
 export type { ActionFile, StepFile, ConfigFile };
 
@@ -249,25 +244,35 @@ export interface FollowUpTask {
 }
 
 /** The raw envelope piped to the JS executor's stdin by Rust. */
-export interface RawEnvelope {
+export interface RawEnvelope<
+  TAction = ActionFile,
+  TTask = { kind: string; value: unknown },
+  TStep = StepFile,
+  TConfig = ConfigFile,
+> {
   /** The step's action config — typed discriminated union from the generated schema. */
-  action: ActionFile;
+  action: TAction;
   /** The task being dispatched. */
-  task: { kind: string; value: unknown };
+  task: TTask;
   /** The full step definition (for handlers that need context like next steps, schemas). */
-  step: StepFile;
+  step: TStep;
   /** The full config (for handlers that need global context like all steps). */
-  config: ConfigFile;
+  config: TConfig;
 }
 
 /** Context passed to an action's handle function, with typed params. */
-export interface ActionContext<TParams = Record<string, unknown>> {
+export interface ActionContext<
+  TParams = Record<string, unknown>,
+  TTask = { kind: string; value: unknown },
+  TStep = StepFile,
+  TConfig = ConfigFile,
+> {
   /** The validated and typed action params. */
   params: TParams;
   /** The task being dispatched. */
-  task: { kind: string; value: unknown };
+  task: TTask;
   /** The full step definition. */
-  step: StepFile;
+  step: TStep;
   /** The full config. */
   config: ConfigFile;
 }
