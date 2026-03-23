@@ -1,18 +1,18 @@
 # Unified Action Dispatch
 
-**Prerequisite to:** PLUGGABLE_ACTION_KINDS (future)
+Prerequisite to PLUGGABLE_ACTION_KINDS (future).
 
 ## Motivation
 
-Everything that executes — tasks and finally hooks — should go through a single dispatch trait. Today, Pool and Command actions have separate dispatch functions, finally hooks run through their own code path, and timeouts only exist for Pool actions. Commands block forever. Finally hooks don't participate in concurrency limits.
+Pool actions, Command actions, and finally hooks each have their own dispatch function, their own result type, and their own response-processing path. Timeouts only exist for Pool (via troupe). Commands block forever. Finally hooks ignore concurrency limits.
 
-The core principle: **if it runs, it goes through the trait.** Every executable unit — Pool task, Command task, finally hook — is scheduled, timed out, and tracked through the same interface. All contribute to the concurrency limit.
+All of these run work in a thread and send a result back on a channel. They should go through one dispatch path with one trait. If it runs, it goes through the trait. Timeout, concurrency, and result routing wrap the trait from the outside.
 
 ## Current State
 
 ### `dispatch_task` (`runner/mod.rs`)
 
-The engine's `dispatch_task` pattern-matches on `Action` and calls different functions:
+Pattern-matches on `Action` and calls different functions:
 
 ```rust
 fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
@@ -31,15 +31,15 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
 
 ### `dispatch_pool_task` (`runner/dispatch.rs:56-74`)
 
-Runs in a spawned thread. Calls `build_agent_payload` + `submit_via_cli`. Sends `SubmitResult::Pool(PoolResult { value, response: io::Result<Response> })`.
+Spawned thread. Calls `build_agent_payload` + `submit_via_cli`. Sends `SubmitResult::Pool(PoolResult { value, response: io::Result<Response> })`.
 
 ### `dispatch_command_task` (`runner/dispatch.rs:80-100`)
 
-Runs in a spawned thread. Calls `run_command_action` (which calls `run_shell_command`). Sends `SubmitResult::Command(CommandResult { value, output: io::Result<String> })`.
+Spawned thread. Calls `run_command_action` (which calls `run_shell_command`). Sends `SubmitResult::Command(CommandResult { value, output: io::Result<String> })`.
 
 ### `dispatch_finally_task` (`runner/dispatch.rs:106-122`)
 
-Runs in a spawned thread. Calls `run_shell_command` directly. Sends `SubmitResult::Finally(FinallyResult { value, output: Result<String, String> })`.
+Spawned thread. Calls `run_shell_command` directly. Sends `SubmitResult::Finally(FinallyResult { value, output: Result<String, String> })`.
 
 ### `SubmitResult` (`runner/dispatch.rs:46-50`)
 
@@ -51,13 +51,13 @@ pub(super) enum SubmitResult {
 }
 ```
 
-Each variant wraps a different result type: `io::Result<Response>` for Pool, `io::Result<String>` for Command, `Result<String, String>` for Finally.
+Three variants, three different result types: `io::Result<Response>` for Pool, `io::Result<String>` for Command, `Result<String, String>` for Finally.
 
 ### `process_submit_result` (`runner/response.rs:42-71`)
 
-Has separate match arms for Pool, Command, Finally. Pool and Command both converge on `process_stdout` for the success case, but take different paths to get there:
-- Pool: unwraps `Response::Processed { stdout }` → `process_stdout`; `Response::NotProcessed` → `FailureKind::Timeout`
-- Command: unwraps `io::Result<String>` → `process_stdout`; no timeout variant
+Separate match arms for Pool, Command, Finally. Pool and Command both converge on `process_stdout` for success but take different paths there:
+- Pool: unwraps `Response::Processed { stdout }` into `process_stdout`; `Response::NotProcessed` becomes `FailureKind::Timeout`
+- Command: unwraps `io::Result<String>` into `process_stdout`; no timeout variant
 
 ### `run_shell_command` (`runner/shell.rs`)
 
@@ -65,20 +65,20 @@ Blocks forever on `child.wait_with_output()`. No timeout.
 
 ## Design Decisions
 
-### The executor is just a function that runs in a thread
+### Executor trait
 
-The trait is minimal:
+Minimal:
 ```rust
 pub trait Executor: Send {
     fn execute(&self, value: &serde_json::Value) -> Result<String, String>;
 }
 ```
 
-No timeout, no concurrency. It takes a value, runs something, returns a string or an error. Everything else — timeout, concurrency accounting, result routing — is handled by free functions external to the trait that take `Box<dyn Executor>`.
+Takes a value, runs something, returns stdout or an error string. The executor knows nothing about timeout or concurrency. Those are handled by free functions that take `Box<dyn Executor>`.
 
-### Timeout wraps the executor from the outside
+### External timeout
 
-The executor doesn't know about timeout. A `run_with_timeout` function spawns the executor in a thread and waits on a channel with `recv_timeout`:
+The executor doesn't know about timeout. `run_with_timeout` spawns the executor in a thread and waits on a channel:
 
 ```rust
 fn run_with_timeout(
@@ -98,39 +98,30 @@ fn run_with_timeout(
 }
 ```
 
-On timeout, the executor's thread keeps running (can't kill threads in Rust). This is acceptable: both executors spawn child processes that terminate on their own. The troupe pool eventually times out the agent, and shell commands finish or get reaped. The leak is bounded.
+On timeout, the executor's thread keeps running (can't kill threads in Rust). Both executors spawn child processes that terminate on their own: the troupe pool eventually times out the agent, and shell commands finish or get reaped. The leak is bounded.
 
-This means:
+Consequences:
 - No `timeout` field on any executor
-- No changes to `run_shell_command` signature
-- No changes to `cli_invoker` crate
-- `PoolExecutor` still sends `pool_timeout` to troupe in the payload (an implementation detail for agent lifecycle management — eventually removable)
+- No changes to `run_shell_command` or `cli_invoker`
+- `PoolExecutor` still sends `pool_timeout` to troupe in the payload (implementation detail for agent lifecycle, eventually removable)
 
-### Concurrency is managed by the engine, not the executor
+### Concurrency stays in the engine
 
-The `in_flight` counter is managed by `Engine::flush_dispatches` (increments before spawning) and `Engine::process_worker_result` (decrements on completion). Both run on the main thread. Executors run in spawned threads and have no access to `Engine`.
+`in_flight` is managed by `Engine::flush_dispatches` (increment before spawn) and `Engine::process_worker_result` (decrement on completion). Both run on the main thread. Executors run in spawned threads with no access to `Engine`.
 
-### All failures retry the same way
+### Uniform retry
 
-Today, retry behavior depends on the error type: `retry_on_timeout`, `retry_on_invalid_response`, always-retry for submit errors. This is unnecessary complexity.
+Today retry behavior branches on error type: `retry_on_timeout`, `retry_on_invalid_response`, always-retry for submit errors. After Phase 0, all failures retry up to `max_retries`. The failure reason is logged and recorded in the state log, but doesn't gate retry decisions.
 
-After Phase 0: **all failures retry up to `max_retries`.** No `retry_on_timeout`, no `retry_on_invalid_response`. Failed = retry. The failure reason is logged and recorded in the state log for observability, but doesn't affect retry logic.
-
-## Proposed Changes — Phased Implementation
+## Phased Implementation
 
 ### Phase 0: Unify retry logic and result types
 
-**Goal:** All failure types retry the same way. `SubmitResult` collapses to two variants. Lands independently before the Executor trait.
+Collapse `SubmitResult`'s three variants into one struct. Make all failures retry the same way. Lands independently before the Executor trait.
 
 #### 0a. Remove `retry_on_timeout` and `retry_on_invalid_response` from `Options`
 
-In `resolved.rs`, remove:
-```rust
-pub retry_on_timeout: bool,
-pub retry_on_invalid_response: bool,
-```
-
-And their serde defaults, `default_true()`, and `Default` impl entries. `Options` becomes:
+In `resolved.rs`, remove both fields, their serde defaults, `default_true()`, and their `Default` impl entries. `Options` becomes:
 ```rust
 pub struct Options {
     pub timeout: Option<u64>,
@@ -138,11 +129,11 @@ pub struct Options {
 }
 ```
 
-Remove from `config.rs` (the file-level config type) as well. Update the JSON schema and Zod files (`cargo run -p barnum_cli --bin build_schemas`).
+Same removal in `config.rs`. Regenerate schema/zod files (`cargo run -p barnum_cli --bin build_schemas`).
 
 #### 0b. Simplify `process_retry`
 
-In `response.rs`, `process_retry` currently branches on `FailureKind` to check `retry_on_timeout`/`retry_on_invalid_response`. Remove the branching:
+Remove the `FailureKind`-based branching that checks `retry_on_timeout`/`retry_on_invalid_response`:
 
 ```rust
 pub fn process_retry(task: &Task, options: &Options, failure_kind: FailureKind) -> TaskOutcome {
@@ -165,11 +156,11 @@ pub fn process_retry(task: &Task, options: &Options, failure_kind: FailureKind) 
 }
 ```
 
-`FailureKind` stays as a parameter for logging/state-log purposes. It just doesn't affect retry logic anymore.
+`FailureKind` stays as a parameter for logging. It just doesn't affect retry logic anymore.
 
-#### 0c. Unify `SubmitResult` to one variant
+#### 0c. Collapse `SubmitResult` to a struct
 
-Replace:
+Replace the enum:
 ```rust
 pub(super) enum SubmitResult {
     Pool(PoolResult),
@@ -186,15 +177,13 @@ pub(super) struct ActionResult {
 }
 ```
 
-`SubmitResult` becomes just `ActionResult` (no enum needed — the old `PreHookError` variant was removed with pre-hooks).
-
 Delete `PoolResult`, `CommandResult`, `FinallyResult`.
 
 #### 0d. Convert results in dispatch functions
 
-Each dispatch function converts its native result type to `Result<String, String>` before sending:
+Each dispatch function normalizes its native result type to `Result<String, String>` before sending.
 
-**`dispatch_pool_task`**: Convert `io::Result<Response>` → `Result<String, String>`:
+`dispatch_pool_task` converts `io::Result<Response>`:
 ```rust
 let output = match submit_via_cli(&pool.root, &payload, &pool.invoker) {
     Ok(Response::Processed { stdout, .. }) => Ok(stdout),
@@ -208,7 +197,7 @@ let _ = tx.send(WorkerResult {
 });
 ```
 
-**`dispatch_command_task`**: Convert `io::Result<String>` → `Result<String, String>`:
+`dispatch_command_task` converts `io::Result<String>`:
 ```rust
 let output = run_command_action(script, &task_json, working_dir)
     .map_err(|e| e.to_string());
@@ -219,18 +208,11 @@ let _ = tx.send(WorkerResult {
 });
 ```
 
-**`dispatch_finally_task`**: Already `Result<String, String>`, just wrap:
-```rust
-let _ = tx.send(WorkerResult {
-    task_id,
-    task,
-    result: ActionResult { value, output },
-});
-```
+`dispatch_finally_task` already returns `Result<String, String>`, so it just wraps directly.
 
 #### 0e. Add `WorkerKind` to `WorkerResult`
 
-`process_worker_result` in `mod.rs` currently routes `SubmitResult::Finally` to `convert_finally_result`. Since the `Finally` variant is gone, add a `kind` field:
+`process_worker_result` currently routes `SubmitResult::Finally` to `convert_finally_result`. With the `Finally` variant gone, replace that with a `kind` field:
 
 ```rust
 pub enum WorkerKind {
@@ -246,9 +228,9 @@ pub struct WorkerResult {
 }
 ```
 
-`dispatch_pool_task` and `dispatch_command_task` send `WorkerKind::Task`. `dispatch_finally_task` sends `WorkerKind::Finally { parent_id }` (it already receives `parent_id` as a parameter — the `task_id` parameter is currently the parent_id).
+Pool and Command send `WorkerKind::Task`. Finally sends `WorkerKind::Finally { parent_id }` (it already receives `parent_id` as a parameter).
 
-Update `process_worker_result` to dispatch on `kind`:
+`process_worker_result` dispatches on `kind`:
 ```rust
 fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
     self.in_flight = self.in_flight.saturating_sub(1);
@@ -270,7 +252,7 @@ fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> 
 
 #### 0f. Collapse `process_submit_result`
 
-With one `ActionResult` type, `process_submit_result` becomes:
+With `ActionResult`, this becomes:
 ```rust
 pub fn process_submit_result(
     result: ActionResult,
@@ -288,45 +270,36 @@ pub fn process_submit_result(
 }
 ```
 
-Delete `process_pool_response`, `process_command_response`.
+Delete `process_pool_response` and `process_command_response`.
 
 #### 0g. Delete dead code
 
 - `PoolResult`, `CommandResult`, `FinallyResult` structs
 - `process_pool_response`, `process_command_response` functions
-- `run_command_action` from `hooks.rs` (thin wrapper, inline the `run_shell_command` call in `dispatch_command_task`)
+- `run_command_action` from `hooks.rs` (thin wrapper; inline the `run_shell_command` call in `dispatch_command_task`)
 - `retry_on_timeout`, `retry_on_invalid_response` from config types and schema
 
-**At this point:** All dispatch functions produce `ActionResult`. One code path in `process_submit_result`. Retry logic is uniform. `WorkerKind` distinguishes task from finally. Tests pass. Compile, run full suite, regenerate schemas.
+After this phase: all dispatch functions produce `ActionResult`, one code path in `process_submit_result`, uniform retry logic, `WorkerKind` distinguishes task from finally. Compile, run full suite, regenerate schemas.
 
 ---
 
 ### Phase 1: Executor trait + PoolExecutor
 
-**Goal:** Pool actions go through the trait. Everything else stays as-is. Tests pass.
+Introduce the trait. Move Pool dispatch through it. Command stays as-is.
 
-**Prerequisite:** Phase 0 (unified result types) is complete. `WorkerResult` already has `ActionResult` and `WorkerKind`.
+Requires Phase 0 (unified result types).
 
 #### 1a. Create `runner/executor.rs`
 
 ```rust
-/// Trait for executing work units.
-///
-/// Every action kind implements this. The runner dispatches all work through
-/// this interface, giving every unit the same dispatch path.
-///
-/// Input is the task's value (as a serde_json::Value). Each executor knows
-/// how to package it for its execution context.
-///
-/// Working directory and other configuration are captured at construction time.
 pub trait Executor: Send {
     fn execute(&self, value: &serde_json::Value) -> Result<String, String>;
 }
 ```
 
-#### 1b. Create `PoolExecutor` in `runner/executor.rs`
+#### 1b. `PoolExecutor`
 
-Move the `Response` → `Result<String, String>` conversion from `dispatch_pool_task` (Phase 0d) into the executor:
+Move the `Response` to `Result<String, String>` conversion from `dispatch_pool_task` (Phase 0d) into the executor:
 
 ```rust
 pub struct PoolExecutor {
@@ -351,12 +324,11 @@ impl Executor for PoolExecutor {
 }
 ```
 
-#### 1c. Add `dispatch_via_executor` in `runner/dispatch.rs`
+#### 1c. `dispatch_via_executor`
 
-Replaces `dispatch_pool_task`:
+Replaces `dispatch_pool_task`. Takes `WorkerKind` so it works for both tasks and finally hooks (Phase 3).
 
 ```rust
-/// Execute a task through an Executor (runs in spawned thread).
 pub fn dispatch_via_executor(
     task_id: LogTaskId,
     task: Task,
@@ -375,11 +347,7 @@ pub fn dispatch_via_executor(
 }
 ```
 
-Note: `dispatch_via_executor` takes `WorkerKind` as a parameter so the same function works for both tasks and finally hooks (Phase 3).
-
-#### 1d. Modify `dispatch_task` Pool branch
-
-In `runner/mod.rs`, change the `Action::Pool` arm to construct a `PoolExecutor` and call `dispatch_via_executor`:
+#### 1d. Update `dispatch_task` Pool branch
 
 ```rust
 Action::Pool(..) => {
@@ -404,17 +372,15 @@ Action::Pool(..) => {
 
 #### 1e. Delete `dispatch_pool_task`
 
-It's now unused. Remove from `dispatch.rs`.
-
-**At this point:** Pool goes through `Executor` trait → `dispatch_via_executor`. Command still uses `dispatch_command_task`. Tests pass. Compile, run full suite.
+Compile, run full suite.
 
 ---
 
 ### Phase 2: ShellExecutor + Command through trait
 
-**Goal:** Command actions also go through the trait. Both branches of `dispatch_task` construct a `Box<dyn Executor>` and call `dispatch_via_executor`.
+Both branches of `dispatch_task` now construct a `Box<dyn Executor>` and call `dispatch_via_executor`.
 
-#### 2a. Add `ShellExecutor` to `runner/executor.rs`
+#### 2a. `ShellExecutor`
 
 ```rust
 pub struct ShellExecutor {
@@ -436,7 +402,7 @@ impl Executor for ShellExecutor {
 }
 ```
 
-#### 2b. Modify `dispatch_task` Command branch
+#### 2b. Update `dispatch_task` Command branch
 
 ```rust
 Action::Command(CommandAction { script }) => {
@@ -458,21 +424,17 @@ Action::Command(CommandAction { script }) => {
 
 #### 2c. Delete `dispatch_command_task`
 
-Remove from `dispatch.rs`.
+After this, both branches of `dispatch_task` do the same thing: construct an executor, call `dispatch_via_executor`. The match only picks which executor. This is the seam for PLUGGABLE_ACTION_KINDS.
 
-#### 2d. Observe: `dispatch_task` no longer cares about action kind for dispatch
-
-Both branches now do the same thing: construct a `Box<dyn Executor>`, call `dispatch_via_executor`. The match is only for choosing which executor to construct. This is the seam for PLUGGABLE_ACTION_KINDS.
-
-**At this point:** Pool and Command both go through `Executor` trait → `dispatch_via_executor`. Tests pass. Compile, run full suite.
+Compile, run full suite.
 
 ---
 
 ### Phase 3: Finally hooks through trait
 
-**Goal:** Finally hooks also go through `dispatch_via_executor` with a `ShellExecutor`. `WorkerKind` (already added in Phase 0e) routes the result to `convert_finally_result`.
+Finally hooks also go through `dispatch_via_executor` with a `ShellExecutor`. `WorkerKind` (added in Phase 0e) routes the result to `convert_finally_result`.
 
-#### 3a. Modify `dispatch_finally` in `runner/mod.rs`
+#### 3a. Update `dispatch_finally`
 
 ```rust
 fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
@@ -496,27 +458,19 @@ fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
 
 #### 3b. Delete `dispatch_finally_task`
 
-Remove from `dispatch.rs`.
-
-**At this point:** All executable units go through `dispatch_via_executor`. Three dispatch functions replaced by one. Tests pass.
+Three dispatch functions replaced by one. Compile, run full suite.
 
 ---
 
 ### Phase 4: Timeout enforcement
 
-**Goal:** Barnum enforces timeout for all executor types. The timeout wraps the executor from the outside.
+Barnum-enforced timeout for all executor types, using `mpsc::recv_timeout` (stdlib, no new deps).
 
-**No new dependencies needed.** Timeout uses `mpsc::recv_timeout` on the standard library channel.
-
-#### 4a. Add `run_with_timeout` to `runner/dispatch.rs`
+#### 4a. `run_with_timeout`
 
 ```rust
 use std::time::Duration;
 
-/// Run an executor with optional timeout.
-///
-/// Spawns a thread for the executor. If timeout expires, returns Err
-/// without waiting for the thread (which will finish on its own).
 fn run_with_timeout(
     executor: Box<dyn Executor>,
     value: &serde_json::Value,
@@ -534,11 +488,9 @@ fn run_with_timeout(
 }
 ```
 
-On timeout, the executor's thread keeps running. Both executor types spawn child processes that terminate on their own (shell commands finish, troupe pool eventually times out the agent). The thread leak is bounded and transient.
+On timeout, the executor's thread keeps running. Both executor types spawn child processes that terminate on their own (shell commands finish, troupe pool times out the agent). Bounded, transient leak.
 
-#### 4b. Modify `dispatch_via_executor` to use `run_with_timeout`
-
-Add a `timeout` parameter:
+#### 4b. Add `timeout` param to `dispatch_via_executor`
 
 ```rust
 pub fn dispatch_via_executor(
@@ -558,12 +510,11 @@ pub fn dispatch_via_executor(
 }
 ```
 
-#### 4c. Pass `step.options.timeout` from dispatch sites
+#### 4c. Pass timeout from dispatch sites
 
-In `dispatch_task` (both Pool and Command branches), pass the timeout:
+In `dispatch_task` (both branches):
 ```rust
 let timeout = step.options.timeout.map(Duration::from_secs);
-// ...
 dispatch_via_executor(
     task_id, task, WorkerKind::Task, executor, timeout, &tx,
 );
@@ -577,23 +528,22 @@ dispatch_via_executor(
 );
 ```
 
-**No changes to executors, `run_shell_command`, `cli_invoker`, or `submit.rs`.** The timeout is entirely external.
+No changes to executors, `run_shell_command`, `cli_invoker`, or `submit.rs`. The timeout is entirely external. The clock starts when `run_with_timeout` is called in the dispatch thread; time spent in `pending_dispatches` doesn't count.
 
-**At this point:** Both Pool and Command actions have barnum-enforced timeout. The timeout clock starts when `run_with_timeout` is called in the dispatch thread — time in `pending_dispatches` doesn't count. All errors retry the same way. Tests pass.
+Compile, run full suite.
 
-## Implementation Order Summary
+## Summary
 
-| Phase | What | Key deletions | Key additions |
-|-------|------|---------------|---------------|
+| Phase | What | Deletes | Adds |
+|-------|------|---------|------|
 | 0 | Unify results + retry | `PoolResult`, `CommandResult`, `FinallyResult`, `SubmitResult` enum, `process_pool_response`, `process_command_response`, `run_command_action`, `retry_on_timeout`, `retry_on_invalid_response` | `ActionResult`, `WorkerKind` |
 | 1 | Pool through trait | `dispatch_pool_task` | `Executor` trait, `PoolExecutor`, `dispatch_via_executor` |
 | 2 | Command through trait | `dispatch_command_task` | `ShellExecutor` |
-| 3 | Finally through trait | `dispatch_finally_task` | — (reuses `ShellExecutor` + `WorkerKind::Finally`) |
-| 4 | Timeout | — | `run_with_timeout`, `timeout` param on `dispatch_via_executor` |
+| 3 | Finally through trait | `dispatch_finally_task` | (reuses `ShellExecutor` + `WorkerKind::Finally`) |
+| 4 | Timeout | | `run_with_timeout`, `timeout` param on `dispatch_via_executor` |
 
 Each phase compiles and passes tests before moving to the next.
 
 ## What doesn't change
 
-- **Config types:** `ActionFile` and `Action` enums remain as-is. The closed enum is fine until PLUGGABLE_ACTION_KINDS introduces user-defined action kinds.
-- **State logging:** Task submission and completion logging unchanged.
+`ActionFile` and `Action` enums stay as-is. The closed enum is fine until PLUGGABLE_ACTION_KINDS. State logging (task submission and completion) is unchanged.
