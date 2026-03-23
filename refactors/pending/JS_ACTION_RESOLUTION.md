@@ -190,17 +190,38 @@ The registry is a hardcoded `Map<string, ActionDefinition>`. Adding a new kind m
 
 ## Rust Changes
 
-Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
+Two concerns, in separate sub-refactors:
 
-1. **Hidden CLI flag:** `--executor <command>` on `barnum run` (and `--resume-from`). Hidden from `--help`. Rust errors if not provided — the binary must be invoked through `cli.cjs`.
+**Executor plumbing** (EXECUTOR_CLI_FLAG.md): `cli.cjs` detects runtime, resolves executor command, injects hidden `--executor` flag. Rust threads it through `RunnerConfig` → `Engine` → `dispatch_task`.
 
-2. **Engine holds executor script:** `Engine.executor_script: String`. Pre-serializes config JSON once at construction.
+**Enriched envelope** (this doc): ShellAction always pipes `{ action, task, step, config }` on stdin. Both `dispatch_task` and `dispatch_finally` construct ShellAction identically — the only difference is the script (executor command vs finally hook script). No optional fields, no branching, one code path.
 
-3. **ShellAction always pipes enriched envelope:** `{ action, task, step, config }` on stdin for every invocation. No optional fields, no branching. Both `dispatch_task` and `dispatch_finally` construct ShellAction the same way — the only difference is the script (executor command vs finally hook script).
+```rust
+pub struct ShellAction {
+    pub script: String,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+    pub action_json: serde_json::Value,
+    pub step_json: serde_json::Value,
+    pub config_json: serde_json::Value,
+}
 
-4. **`dispatch_task` uses executor:** Always constructs a `ShellAction` with the executor command. No dual-mode — `--executor` is always present because `cli.cjs` always provides it.
+impl Action for ShellAction {
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        let stdin_json = serde_json::to_string(&serde_json::json!({
+            "action": self.action_json,
+            "task": { "kind": &self.step_name, "value": &value },
+            "step": self.step_json,
+            "config": self.config_json,
+        }))
+        .unwrap_or_default();
 
-5. **`dispatch_finally` uses same envelope:** Finally hooks receive `{ action, task, step, config }` on stdin, same as task dispatch. The hook script differs but the stdin format is uniform.
+        // ... spawn sh -c, pipe stdin, read stdout (unchanged)
+    }
+}
+```
+
+Engine pre-serializes `config_json` once at construction. `action_json` and `step_json` are serialized per-dispatch (different per step).
 
 ## What Doesn't Change
 
@@ -225,9 +246,9 @@ Create `libs/barnum/actions/` with all handler files, types, executor, and docs 
 
 ### 2. EXECUTOR_CLI_FLAG.md
 
-Add `--executor` CLI flag, thread it through `RunnerConfig` and `Engine`, implement dual-mode `dispatch_task`. Purely additive Rust changes — when `--executor` is not passed, behavior is identical to today. See the sub-refactor document for full specification.
+Add hidden `--executor` CLI flag, `cli.cjs` runtime detection and injection, `BarnumConfig.run()` calling `cli.cjs`, threading executor through `RunnerConfig` and `Engine`. See the sub-refactor document for full specification.
 
-**Dependency:** Neither sub-refactor depends on the other. They can land in either order or in parallel.
+**Dependency:** EXECUTOR_CLI_FLAG depends on JS_ACTION_HANDLERS (executor.ts must exist for cli.cjs to reference it). JS_ACTION_HANDLERS has no dependencies.
 
 ## Remaining Work (after sub-refactors land)
 

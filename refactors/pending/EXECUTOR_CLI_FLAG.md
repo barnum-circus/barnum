@@ -112,80 +112,11 @@ struct Engine<'a> {
 }
 ```
 
-### 5. ShellAction always pipes enriched envelope
-
-**File:** `crates/barnum_config/src/runner/action.rs`
-
-ShellAction always carries the full context. No optional fields, no branching.
-
-```rust
-pub struct ShellAction {
-    pub script: String,
-    pub step_name: StepName,
-    pub working_dir: PathBuf,
-    pub action_json: serde_json::Value,
-    pub step_json: serde_json::Value,
-    pub config_json: serde_json::Value,
-}
-```
-
-`ShellAction::start` always constructs the enriched envelope:
-
-```rust
-fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
-    let stdin_json = serde_json::to_string(&serde_json::json!({
-        "action": self.action_json,
-        "task": { "kind": &self.step_name, "value": &value },
-        "step": self.step_json,
-        "config": self.config_json,
-    }))
-    .unwrap_or_default();
-
-    // ... spawn sh -c, pipe stdin, read stdout (unchanged)
-}
-```
-
-Both `dispatch_task` and `dispatch_finally` construct ShellAction the same way — the only difference is the script (executor command vs finally hook script).
-
-### 6. dispatch_task and dispatch_finally
+### 5. dispatch_task uses executor_script
 
 **File:** `crates/barnum_config/src/runner/mod.rs`
 
-Both use the same ShellAction construction:
-
-```rust
-fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let timeout = step.options.timeout.map(Duration::from_secs);
-
-    let action = Box::new(ShellAction {
-        script: self.executor_script.clone(),
-        step_name: task.step.clone(),
-        working_dir: self.working_dir.clone(),
-        action_json: serde_json::to_value(&step.action).unwrap_or_default(),
-        step_json: serde_json::to_value(step).unwrap_or_default(),
-        config_json: self.config_json.clone(),
-    });
-    spawn_worker(self.tx.clone(), action, task_id, task, WorkerKind::Task, timeout);
-}
-
-fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let script = step.finally_hook.as_ref().expect("[P018]");
-
-    let action = Box::new(ShellAction {
-        script: script.as_str().to_owned(),
-        step_name: task.step.clone(),
-        working_dir: self.working_dir.clone(),
-        action_json: serde_json::to_value(&step.action).unwrap_or_default(),
-        step_json: serde_json::to_value(step).unwrap_or_default(),
-        config_json: self.config_json.clone(),
-    });
-    spawn_worker(self.tx.clone(), action, parent_id, task, WorkerKind::Finally, None);
-}
-```
-
-Finally hooks now receive `{ action, task, step, config }` on stdin instead of `{ kind, value }`. The task is at `envelope.task` — hooks use `jq '.task'` instead of `. directly`.
+`dispatch_task` uses `self.executor_script` as the ShellAction script. The enriched envelope format (`{ action, task, step, config }`) is defined in the parent doc — this sub-refactor just wires `executor_script` into the dispatch path.
 
 ## Testing
 
