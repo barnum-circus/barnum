@@ -11,8 +11,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::fs;
@@ -47,7 +47,7 @@ fn finally_runs_too_early_on_retry() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Track how many times B's agent is called
     let b_call_count = Arc::new(AtomicUsize::new(0));
@@ -106,8 +106,9 @@ echo "finally_ran" > "{}"
     }
 
     // Config: A has finally hook, spawns B. B has retries enabled.
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -126,7 +127,9 @@ echo "finally_ran" > "{}"
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -136,7 +139,6 @@ echo "finally_ran" > "{}"
     let initial_tasks = vec![Task::new("StepA", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -182,7 +184,7 @@ fn finally_timing_via_counters() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Counters for B's agent calls
     let b_call_count = Arc::new(AtomicUsize::new(0));
@@ -240,8 +242,9 @@ echo "finally_executed" > "{}"
             .expect("chmod script");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -260,7 +263,9 @@ echo "finally_executed" > "{}"
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -269,7 +274,6 @@ echo "finally_executed" > "{}"
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -336,7 +340,7 @@ fn nested_finally_with_retry_ordering() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Log file to track ordering
     let order_log = root.join("order.log");
@@ -398,8 +402,9 @@ echo "child_finally" >> "{}"
             .expect("chmod child finally");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -419,8 +424,10 @@ echo "child_finally" >> "{}"
             }}
         ]
     }}"#,
-        parent_finally.display(),
-        child_finally.display()
+            parent_finally.display(),
+            child_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -429,7 +436,6 @@ echo "child_finally" >> "{}"
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -479,7 +485,7 @@ fn finally_runs_when_retries_exhausted() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
         let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
@@ -516,8 +522,9 @@ echo "finally_executed" > "{}"
             .expect("chmod script");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "options": {{
             "max_retries": 2,
             "retry_on_invalid_response": true
@@ -536,7 +543,9 @@ echo "finally_executed" > "{}"
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -545,7 +554,6 @@ echo "finally_executed" > "{}"
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -604,7 +612,7 @@ fn subtree_finally_waits_for_grandchildren() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Log file to track ordering
     let order_log = root.join("order.log");
@@ -658,8 +666,9 @@ echo "B_finally" >> "{}"
             .expect("chmod B finally");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{
                 "name": "StepA",
@@ -680,8 +689,10 @@ echo "B_finally" >> "{}"
             }}
         ]
     }}"#,
-        a_finally.display(),
-        b_finally.display()
+            a_finally.display(),
+            b_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -690,7 +701,6 @@ echo "B_finally" >> "{}"
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -754,7 +764,7 @@ fn finally_waits_for_finally_spawned_tasks() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Log file to track ordering
     let order_log = root.join("order.log");
@@ -807,8 +817,9 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
             .expect("chmod B finally");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{
                 "name": "StepA",
@@ -829,8 +840,10 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
             }}
         ]
     }}"#,
-        a_finally.display(),
-        b_finally.display()
+            a_finally.display(),
+            b_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -839,7 +852,6 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -892,7 +904,7 @@ fn deeply_nested_finally_chain() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let order_log = root.join("order.log");
     let order_log_a = order_log.clone();
@@ -954,8 +966,9 @@ fn deeply_nested_finally_chain() {
         fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
@@ -963,9 +976,11 @@ fn deeply_nested_finally_chain() {
             {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": []}}
         ]
     }}"#,
-        a_finally.display(),
-        b_finally.display(),
-        c_finally.display()
+            a_finally.display(),
+            b_finally.display(),
+            c_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -974,7 +989,6 @@ fn deeply_nested_finally_chain() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -1025,7 +1039,7 @@ fn multiple_children_with_finally() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let order_log = root.join("order.log");
     let order_log_a = order_log.clone();
@@ -1079,8 +1093,9 @@ fn multiple_children_with_finally() {
 
     // C and D are leaf steps — finally hooks only fire on steps with descendants,
     // so only A and B get finally hooks.
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "script": "{}"}}}},
@@ -1088,8 +1103,10 @@ fn multiple_children_with_finally() {
             {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": []}}
         ]
     }}"#,
-        a_finally.display(),
-        b_finally.display()
+            a_finally.display(),
+            b_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1098,7 +1115,6 @@ fn multiple_children_with_finally() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -1151,7 +1167,7 @@ fn finally_spawns_multiple_tasks() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let order_log = root.join("order.log");
     let order_log_a = order_log.clone();
@@ -1199,8 +1215,9 @@ fn finally_spawns_multiple_tasks() {
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
@@ -1208,8 +1225,10 @@ fn finally_spawns_multiple_tasks() {
             {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": []}}
         ]
     }}"#,
-        a_finally.display(),
-        b_finally.display()
+            a_finally.display(),
+            b_finally.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1218,7 +1237,6 @@ fn finally_spawns_multiple_tasks() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -1272,7 +1290,7 @@ fn finally_retries_on_failure() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent just returns empty (no children)
     let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
@@ -1302,8 +1320,9 @@ exit 0
             .expect("chmod finally script");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{
                 "name": "StepA",
@@ -1314,7 +1333,9 @@ exit 0
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1323,7 +1344,6 @@ exit 0
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -1374,7 +1394,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent just returns empty (no children)
     let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
@@ -1390,8 +1410,9 @@ fn finally_failure_propagates_after_retries_exhausted() {
             .expect("chmod finally script");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{
                 "name": "StepA",
@@ -1402,7 +1423,9 @@ fn finally_failure_propagates_after_retries_exhausted() {
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1411,7 +1434,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -1455,7 +1477,7 @@ fn finally_child_failure_propagates() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent: StepA returns empty, Cleanup always fails
     let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |payload| {
@@ -1490,8 +1512,9 @@ echo '[{"kind": "Cleanup", "value": {}}]'
             .expect("chmod finally script");
     }
 
-    let config_json = format!(
-        r#"{{
+    let config_json = inject_pool_config(
+        &format!(
+            r#"{{
         "steps": [
             {{
                 "name": "StepA",
@@ -1508,7 +1531,9 @@ echo '[{"kind": "Cleanup", "value": {}}]'
             }}
         ]
     }}"#,
-        finally_script.display()
+            finally_script.display()
+        ),
+        &root,
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1517,7 +1542,6 @@ echo '[{"kind": "Cleanup", "value": {}}]'
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

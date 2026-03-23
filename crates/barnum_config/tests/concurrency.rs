@@ -12,8 +12,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::collections::HashSet;
@@ -25,8 +25,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "concurrency";
 
-fn worker_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn worker_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -36,8 +36,9 @@ fn worker_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -55,7 +56,7 @@ fn tasks_execute_in_parallel() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Start 3 agents with 100ms processing delay
     let processing_delay = Duration::from_millis(100);
@@ -63,7 +64,7 @@ fn tasks_execute_in_parallel() {
     let _agent2 = BarnumTestAgent::terminator(&root, processing_delay);
     let _agent3 = BarnumTestAgent::terminator(&root, processing_delay);
 
-    let config = worker_config();
+    let config = worker_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let initial_tasks: Vec<Task> = (0..6)
@@ -72,7 +73,6 @@ fn tasks_execute_in_parallel() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -96,7 +96,7 @@ fn max_concurrency_limits_parallel_tasks() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Track concurrent task count
     let concurrent = Arc::new(AtomicUsize::new(0));
@@ -130,7 +130,7 @@ fn max_concurrency_limits_parallel_tasks() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     // Config with max_concurrency = 2
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_concurrency": 2
@@ -143,8 +143,9 @@ fn max_concurrency_limits_parallel_tasks() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -155,7 +156,6 @@ fn max_concurrency_limits_parallel_tasks() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -187,7 +187,7 @@ fn nested_fan_out() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let processed_kinds = Arc::new(std::sync::Mutex::new(Vec::new()));
     let kinds_clone = processed_kinds.clone();
@@ -212,7 +212,7 @@ fn nested_fan_out() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {"name": "Root", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Branch1", "Branch2"]},
@@ -224,8 +224,9 @@ fn nested_fan_out() {
                 {"name": "Leaf2B", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -233,7 +234,6 @@ fn nested_fan_out() {
     let initial_tasks = vec![Task::new("Root", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

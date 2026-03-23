@@ -7,8 +7,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::io;
@@ -18,8 +18,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "ordered_agent";
 
-fn simple_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn simple_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -29,13 +29,14 @@ fn simple_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
-fn fan_out_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn fan_out_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -50,8 +51,9 @@ fn fan_out_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -59,17 +61,15 @@ fn fan_out_config() -> Config {
 fn run_barnum_background(
     config: Config,
     initial_tasks: Vec<Task>,
-    pool: &TroupeHandle,
+    _pool: &TroupeHandle,
     root: &Path,
 ) -> thread::JoinHandle<io::Result<()>> {
     let invoker = create_test_invoker();
-    let pool_path = pool.pool_path().to_path_buf();
     let state_log = test_state_log_path(root);
 
     thread::spawn(move || {
         let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
         let runner_config = RunnerConfig {
-            troupe_root: &pool_path,
             working_dir: Path::new("."),
             wake_script: None,
             invoker: &invoker,
@@ -93,7 +93,7 @@ fn ordered_agent_single_task() {
     let pool = TroupeHandle::start(&root);
     let (agent, ctrl) = BarnumTestAgent::ordered(&root);
 
-    let config = simple_config();
+    let config = simple_config(&root);
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let handle = run_barnum_background(config, initial_tasks, &pool, &root);
 
@@ -131,7 +131,7 @@ fn ordered_agent_wait_for_multiple() {
     let pool = TroupeHandle::start(&root);
     let (agent, ctrl) = BarnumTestAgent::ordered(&root);
 
-    let config = fan_out_config();
+    let config = fan_out_config(&root);
     let initial_tasks = vec![Task::new(
         "Distribute",
         StepInputValue(serde_json::json!({})),
@@ -188,7 +188,7 @@ fn ordered_agent_complete_out_of_order() {
     let pool = TroupeHandle::start(&root);
     let (agent, ctrl) = BarnumTestAgent::ordered(&root);
 
-    let config = fan_out_config();
+    let config = fan_out_config(&root);
     let initial_tasks = vec![Task::new(
         "Distribute",
         StepInputValue(serde_json::json!({})),
@@ -238,7 +238,7 @@ fn ordered_agent_waiting_tasks_query() {
     let pool = TroupeHandle::start(&root);
     let (agent, ctrl) = BarnumTestAgent::ordered(&root);
 
-    let config = fan_out_config();
+    let config = fan_out_config(&root);
     let initial_tasks = vec![Task::new(
         "Distribute",
         StepInputValue(serde_json::json!({})),

@@ -37,8 +37,6 @@ use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
 /// Runner configuration (how to run, not what to run).
 pub struct RunnerConfig<'a> {
-    /// Path to the `troupe` root directory.
-    pub troupe_root: &'a Path,
     /// Working directory for command actions (typically the config file's directory).
     pub working_dir: &'a Path,
     /// Optional wake script to call before starting.
@@ -50,14 +48,6 @@ pub struct RunnerConfig<'a> {
 }
 
 // ==================== Internal Types ====================
-
-/// Connection details for the agent pool.
-#[derive(Clone)]
-struct PoolConnection {
-    root: PathBuf,
-    working_dir: PathBuf,
-    invoker: Invoker<TroupeCli>,
-}
 
 /// Default maximum concurrent task submissions.
 const DEFAULT_MAX_CONCURRENCY: usize = 20;
@@ -466,7 +456,8 @@ struct Engine<'a> {
     schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
-    pool: PoolConnection,
+    invoker: Invoker<TroupeCli>,
+    working_dir: PathBuf,
     tx: mpsc::Sender<WorkerResult>,
     max_concurrency: usize,
     in_flight: usize,
@@ -477,7 +468,8 @@ impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
         schemas: &'a CompiledSchemas,
-        pool: PoolConnection,
+        invoker: Invoker<TroupeCli>,
+        working_dir: PathBuf,
         tx: mpsc::Sender<WorkerResult>,
         max_concurrency: usize,
     ) -> Self {
@@ -486,7 +478,8 @@ impl<'a> Engine<'a> {
             schemas,
             step_map: config.step_map(),
             state: RunState::new(),
-            pool,
+            invoker,
+            working_dir,
             tx,
             max_concurrency,
             in_flight: 0,
@@ -714,30 +707,10 @@ impl<'a> Engine<'a> {
             }) => {
                 let docs = generate_step_docs(step, self.config);
                 info!(step = %task.step, "submitting task to pool");
-
-                // Use config values, falling back to PoolConnection for backward
-                // compatibility with --root/--pool CLI args. This fallback is
-                // removed once CLI args are deleted.
-                let effective_root = root.clone().or_else(|| {
-                    // self.pool.root is the full pool path: <root>/pools/<id>
-                    self.pool
-                        .root
-                        .parent()
-                        .and_then(|p| p.parent())
-                        .map(|p| p.to_path_buf())
-                });
-                let effective_pool = pool.clone().or_else(|| {
-                    self.pool
-                        .root
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.to_owned())
-                });
-
                 let action = Box::new(PoolAction {
-                    root: effective_root,
-                    pool: effective_pool,
-                    invoker: self.pool.invoker.clone(),
+                    root: root.clone(),
+                    pool: pool.clone(),
+                    invoker: self.invoker.clone(),
                     docs,
                     step_name: task.step.clone(),
                     pool_timeout: *pool_timeout,
@@ -749,7 +722,7 @@ impl<'a> Engine<'a> {
                 let action = Box::new(ShellAction {
                     script: script.clone(),
                     step_name: task.step.clone(),
-                    working_dir: self.pool.working_dir.clone(),
+                    working_dir: self.working_dir.clone(),
                 });
                 spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
             }
@@ -770,7 +743,7 @@ impl<'a> Engine<'a> {
         let action = Box::new(ShellAction {
             script: script.as_str().to_owned(),
             step_name: task.step.clone(),
-            working_dir: self.pool.working_dir.clone(),
+            working_dir: self.working_dir.clone(),
         });
         spawn_worker(
             self.tx.clone(),
@@ -845,19 +818,12 @@ pub fn run(
 
     info!(
         tasks = initial_tasks.len(),
-        pool_root = %runner_config.troupe_root.display(),
         invoker = %runner_config.invoker.description(),
         max_concurrency,
         "starting task queue"
     );
 
     let (tx, rx) = mpsc::channel();
-
-    let pool = PoolConnection {
-        root: runner_config.troupe_root.to_path_buf(),
-        working_dir: runner_config.working_dir.to_path_buf(),
-        invoker: Clone::clone(runner_config.invoker),
-    };
 
     // Open state log
     let mut log_writer = {
@@ -875,7 +841,14 @@ pub fn run(
     write_log(&mut log_writer, &config_entry);
 
     // Create engine
-    let mut engine = Engine::new(config, schemas, pool, tx, max_concurrency);
+    let mut engine = Engine::new(
+        config,
+        schemas,
+        Clone::clone(runner_config.invoker),
+        runner_config.working_dir.to_path_buf(),
+        tx,
+        max_concurrency,
+    );
 
     // Validate and submit initial tasks as seed entries
     let mut seed_entries = Vec::with_capacity(initial_tasks.len());
@@ -948,18 +921,10 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
 
     info!(
         entries = old_entries.len(),
-        pool_root = %runner_config.troupe_root.display(),
-        max_concurrency,
-        "resuming task queue"
+        max_concurrency, "resuming task queue"
     );
 
     let (tx, rx) = mpsc::channel();
-
-    let pool = PoolConnection {
-        root: runner_config.troupe_root.to_path_buf(),
-        working_dir: runner_config.working_dir.to_path_buf(),
-        invoker: Clone::clone(runner_config.invoker),
-    };
 
     // 3. Open new state log and copy old entries
     info!(state_log = %runner_config.state_log_path.display(), "state log");
@@ -972,7 +937,14 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     };
 
     // 4. Create engine and replay old entries
-    let mut engine = Engine::new(&config, &schemas, pool, tx, max_concurrency);
+    let mut engine = Engine::new(
+        &config,
+        &schemas,
+        Clone::clone(runner_config.invoker),
+        runner_config.working_dir.to_path_buf(),
+        tx,
+        max_concurrency,
+    );
     engine.apply_and_dispatch(&old_entries);
 
     // 5. Continue with main loop

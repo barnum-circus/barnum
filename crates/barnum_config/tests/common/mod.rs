@@ -24,6 +24,32 @@ use std::time::Duration;
 use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
 use troupe_cli::TroupeCli;
 
+/// Inject pool root and pool name into all Pool actions in a config JSON string.
+///
+/// Decomposes `pool_root` (e.g., `.td/test_name`) into:
+/// - root = parent directory (troupe root)
+/// - pool = basename (pool name)
+pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
+    let cli_root = pool_root.parent().unwrap_or(pool_root);
+    let pool_name = pool_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("default");
+    let mut val: serde_json::Value =
+        serde_json::from_str(config_json).expect("invalid config JSON");
+    if let Some(steps) = val.get_mut("steps").and_then(|s| s.as_array_mut()) {
+        for step in steps {
+            if let Some(action) = step.get_mut("action") {
+                if action.get("kind").and_then(|k| k.as_str()) == Some("Pool") {
+                    action["root"] = serde_json::json!(cli_root);
+                    action["pool"] = serde_json::json!(pool_name);
+                }
+            }
+        }
+    }
+    serde_json::to_string(&val).expect("serialize config")
+}
+
 /// Get the path to the test data directory for a given test file.
 ///
 /// Uses `TEST_TMPDIR` env var when set (CI sets this to `/tmp/bt` to keep

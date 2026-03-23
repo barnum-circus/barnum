@@ -31,7 +31,6 @@ const Command = z.discriminatedUnion("kind", [
     initialState: z.string().nullable().optional().describe("Initial tasks (JSON string or path to file). Required if config has no `entrypoint`. Cannot be used with `--entrypoint-value`."),
     kind: z.literal("Run"),
     logFile: z.string().nullable().optional().describe("Log file path (logs emitted in addition to stderr)"),
-    pool: z.string().nullable().optional().describe("Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`). Defaults to `default`."),
     resumeFrom: z.string().nullable().optional().describe("Resume from a previous state log file. Incompatible with `--config`, `--initial-state`, and `--entrypoint-value`."),
     stateLog: z.string().nullable().optional().describe("State log file path (NDJSON file for persistence/resume)"),
     wake: z.string().nullable().optional().describe("Wake script to call before starting"),
@@ -58,7 +57,6 @@ const LogLevel = z.union([
 export const cliSchema = z.object({
   command: Command.describe("Subcommand to run."),
   logLevel: LogLevel.describe("Log level (debug shows task return values)"),
-  root: z.string().nullable().optional().describe("Root directory. Pools live in `<root>/pools/<id>/`. Defaults to `/tmp/troupe` on Unix."),
 }).describe("Top-level CLI arguments for barnum.");
 
 export type Cli = z.infer<typeof cliSchema>;

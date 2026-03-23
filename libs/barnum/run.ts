@@ -15,10 +15,8 @@ function spawnBarnum(args: string[]): ChildProcess {
 }
 
 export interface RunOptions {
-  pool?: string;
   entrypointValue?: string;
   resumeFrom?: string;
-  root?: string;
   logLevel?: string;
   logFile?: string;
   stateLog?: string;
@@ -40,9 +38,7 @@ export class BarnumConfig {
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
       : ["run", "--config", JSON.stringify(this.config)];
-    if (opts?.pool) args.push("--pool", opts.pool);
     if (opts?.entrypointValue) args.push("--entrypoint-value", opts.entrypointValue);
-    if (opts?.root) args.push("--root", opts.root);
     if (opts?.logLevel) args.push("--log-level", opts.logLevel);
     if (opts?.logFile) args.push("--log-file", opts.logFile);
     if (opts?.stateLog) args.push("--state-log", opts.stateLog);

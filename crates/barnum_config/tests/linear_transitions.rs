@@ -8,8 +8,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -17,8 +17,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "linear_transitions";
 
-fn linear_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn linear_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -38,8 +38,9 @@ fn linear_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -54,7 +55,7 @@ fn three_step_linear_machine() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
     let agent = BarnumTestAgent::with_transitions(
         &root,
         Duration::from_millis(10),
@@ -63,13 +64,12 @@ fn three_step_linear_machine() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = linear_config();
+    let config = linear_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,
@@ -105,18 +105,17 @@ fn instructions_included_in_payload() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
     let agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = linear_config();
+    let config = linear_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,

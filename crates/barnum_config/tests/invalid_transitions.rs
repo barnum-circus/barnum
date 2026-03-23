@@ -9,8 +9,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -20,8 +20,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "invalid_transitions";
 
-fn strict_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn strict_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 1
@@ -44,8 +44,9 @@ fn strict_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -61,7 +62,7 @@ fn invalid_transition_causes_retry() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent tries to skip from Start directly to End (invalid)
     let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |_| {
@@ -70,12 +71,11 @@ fn invalid_transition_causes_retry() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = strict_config();
+    let config = strict_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -105,7 +105,7 @@ fn unknown_step_causes_retry() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent returns a step that doesn't exist
     let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |_| {
@@ -114,12 +114,11 @@ fn unknown_step_causes_retry() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = strict_config();
+    let config = strict_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -148,7 +147,7 @@ fn recovery_after_invalid_then_valid() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent that fails first, then succeeds
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -176,12 +175,11 @@ fn recovery_after_invalid_then_valid() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = strict_config();
+    let config = strict_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

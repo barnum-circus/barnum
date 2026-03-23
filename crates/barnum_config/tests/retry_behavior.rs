@@ -12,8 +12,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -35,7 +35,7 @@ fn retry_on_invalid_response_false_drops_task() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -49,7 +49,7 @@ fn retry_on_invalid_response_false_drops_task() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 5,
@@ -68,15 +68,15 @@ fn retry_on_invalid_response_false_drops_task() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -110,7 +110,7 @@ fn retry_on_invalid_response_true_retries() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -123,7 +123,7 @@ fn retry_on_invalid_response_true_retries() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 3,
@@ -142,15 +142,15 @@ fn retry_on_invalid_response_true_retries() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -184,7 +184,7 @@ fn malformed_json_triggers_retry() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -197,7 +197,7 @@ fn malformed_json_triggers_retry() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 2,
@@ -211,15 +211,15 @@ fn malformed_json_triggers_retry() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -252,7 +252,7 @@ fn per_step_options_override_global() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -267,7 +267,7 @@ fn per_step_options_override_global() {
 
     // Global: retry=true, max_retries=5
     // Step: retry=false (override)
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 5,
@@ -289,8 +289,9 @@ fn per_step_options_override_global() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -300,7 +301,6 @@ fn per_step_options_override_global() {
     )];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -333,7 +333,7 @@ fn recovery_on_nth_attempt() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -352,7 +352,7 @@ fn recovery_on_nth_attempt() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 5,
@@ -366,15 +366,15 @@ fn recovery_on_nth_attempt() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -405,7 +405,7 @@ fn max_retries_zero_no_retries() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let call_count = Arc::new(AtomicUsize::new(0));
     let count_clone = call_count.clone();
@@ -417,7 +417,7 @@ fn max_retries_zero_no_retries() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 0,
@@ -431,15 +431,15 @@ fn max_retries_zero_no_retries() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

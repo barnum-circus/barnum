@@ -22,9 +22,6 @@ const VERSION: &str = env!("BARNUM_VERSION");
 
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
-
-    // Extract root for commands that need it
-    let root = cli.root.unwrap_or_else(troupe::default_root);
     let log_level = cli.log_level;
 
     match cli.command {
@@ -32,7 +29,6 @@ fn main() -> io::Result<()> {
             config,
             initial_state,
             entrypoint_value,
-            pool,
             wake,
             log_file,
             state_log,
@@ -40,22 +36,18 @@ fn main() -> io::Result<()> {
         } => match (resume_from, config) {
             (Some(resume_path), _) => resume_command(
                 &resume_path,
-                pool.as_deref(),
                 wake.as_deref(),
                 log_file.as_ref(),
                 state_log.as_ref(),
-                &root,
                 log_level,
             )?,
             (None, Some(config)) => run_command(
                 &config,
                 initial_state.as_deref(),
                 entrypoint_value.as_deref(),
-                pool.as_deref(),
                 wake.as_deref(),
                 log_file.as_ref(),
                 state_log.as_ref(),
-                &root,
                 log_level,
             )?,
             (None, None) => {
@@ -156,16 +148,13 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments)]
 fn run_command(
     config: &str,
     initial_state: Option<&str>,
     entrypoint_value: Option<&str>,
-    pool: Option<&str>,
     wake: Option<&str>,
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
-    root: &std::path::Path,
     log_level: LogLevel,
 ) -> io::Result<()> {
     // Initialize tracing with optional log file
@@ -198,18 +187,13 @@ fn run_command(
         entrypoint.as_ref(),
     )?;
 
-    // Resolve pool ID
-    let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
-    let pool_path = resolve_pool_path(pool_id, root)?;
-
-    // State log: use explicit path or generate default under <root>/logs/
+    // State log: use explicit path or generate default
     let state_log_path = match state_log {
         Some(p) => p.clone(),
-        None => default_state_log_path(root, pool_id)?,
+        None => default_state_log_path()?,
     };
 
     let runner_config = RunnerConfig {
-        troupe_root: &pool_path,
         working_dir: &config_dir,
         wake_script: wake,
         invoker: &invoker,
@@ -221,24 +205,19 @@ fn run_command(
 
 fn resume_command(
     resume_from: &Path,
-    pool: Option<&str>,
     wake: Option<&str>,
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
-    root: &std::path::Path,
     log_level: LogLevel,
 ) -> io::Result<()> {
     init_tracing(log_file, log_level)?;
 
     let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
-    let pool_id = pool.unwrap_or(troupe::DEFAULT_POOL_ID);
-    let pool_path = resolve_pool_path(pool_id, root)?;
-
-    // State log: use explicit path or generate default under <root>/logs/
+    // State log: use explicit path or generate default
     let state_log_path = match state_log {
         Some(p) => p.clone(),
-        None => default_state_log_path(root, pool_id)?,
+        None => default_state_log_path()?,
     };
 
     // Validate: resume-from and state-log must not be the same path
@@ -258,7 +237,6 @@ fn resume_command(
     let working_dir = std::env::current_dir()?;
 
     let runner_config = RunnerConfig {
-        troupe_root: &pool_path,
         working_dir: &working_dir,
         wake_script: wake,
         invoker: &invoker,
@@ -268,29 +246,14 @@ fn resume_command(
     resume(resume_from, &runner_config)
 }
 
-/// Resolve pool ID to full path.
+/// Generate a default state log path under `/tmp/barnum/logs/<run_id>.ndjson`.
 ///
-/// Pool IDs cannot contain `/` - use `--root` to specify the base directory.
-fn resolve_pool_path(pool_id: &str, root: &std::path::Path) -> io::Result<PathBuf> {
-    if pool_id.contains('/') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "[E058] pool ID '{pool_id}' cannot contain '/'. Use --root to specify the base directory."
-            ),
-        ));
-    }
-    Ok(troupe::resolve_pool(root, pool_id))
-}
-
-/// Generate a default state log path under `<root>/logs/<pool_id>.<run_id>.ndjson`.
-///
-/// Creates the `<root>/logs/` directory if it doesn't exist.
-fn default_state_log_path(root: &Path, pool_id: &str) -> io::Result<PathBuf> {
-    let logs_dir = root.join("logs");
+/// Creates the directory if it doesn't exist.
+fn default_state_log_path() -> io::Result<PathBuf> {
+    let logs_dir = PathBuf::from("/tmp/barnum/logs");
     std::fs::create_dir_all(&logs_dir)?;
     let run_id = troupe::generate_id();
-    Ok(logs_dir.join(format!("{pool_id}.{run_id}.ndjson")))
+    Ok(logs_dir.join(format!("{run_id}.ndjson")))
 }
 
 /// Parse config from either inline JSON/JSONC or a file path.

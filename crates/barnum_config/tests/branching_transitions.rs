@@ -8,8 +8,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -19,8 +19,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "branching_transitions";
 
-fn branching_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn branching_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -45,8 +45,9 @@ fn branching_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -61,7 +62,7 @@ fn branch_to_path_a() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
     let agent = BarnumTestAgent::with_transitions(
         &root,
         Duration::from_millis(10),
@@ -70,12 +71,11 @@ fn branch_to_path_a() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = branching_config();
+    let config = branching_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -109,7 +109,7 @@ fn branch_to_path_b() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
     let agent = BarnumTestAgent::with_transitions(
         &root,
         Duration::from_millis(10),
@@ -118,12 +118,11 @@ fn branch_to_path_b() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = branching_config();
+    let config = branching_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -157,7 +156,7 @@ fn fan_out_multiple_tasks() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent that fans out: Decide -> [PathA, PathB]
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -180,12 +179,11 @@ fn fan_out_multiple_tasks() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = branching_config();
+    let config = branching_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

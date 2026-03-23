@@ -8,8 +8,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -17,8 +17,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "schema_validation";
 
-fn config_with_schema() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn config_with_schema(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 0
@@ -50,8 +50,9 @@ fn config_with_schema() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -66,7 +67,7 @@ fn valid_schema_passes() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent returns valid Output schema for Input, empty for Output
     let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |payload| {
@@ -80,7 +81,7 @@ fn valid_schema_passes() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = config_with_schema();
+    let config = config_with_schema(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new(
         "Input",
@@ -88,7 +89,6 @@ fn valid_schema_passes() {
     )];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -116,7 +116,7 @@ fn invalid_response_causes_retry() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent returns invalid Output schema (missing "result")
     let agent = BarnumTestAgent::start(&root, Duration::from_millis(50), |_| {
@@ -126,7 +126,7 @@ fn invalid_response_causes_retry() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     // Config allows 2 retries
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "options": {
                 "max_retries": 2
@@ -150,15 +150,15 @@ fn invalid_response_causes_retry() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Input", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

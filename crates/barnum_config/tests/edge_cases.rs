@@ -8,8 +8,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -31,25 +31,25 @@ fn empty_initial_tasks_completes() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // No sleep needed - pool is ready after start() returns, and no tasks means no agent needed
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {"name": "Start", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![]; // Empty!
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -74,7 +74,7 @@ fn large_fan_out() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     let task_count = Arc::new(AtomicUsize::new(0));
     let count_clone = task_count.clone();
@@ -98,15 +98,16 @@ fn large_fan_out() {
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {"name": "Distribute", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Worker"]},
                 {"name": "Worker", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -116,7 +117,6 @@ fn large_fan_out() {
     )];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -169,7 +169,6 @@ fn command_action_executes() {
     )];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -194,21 +193,22 @@ fn rapid_task_completion() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
 
     // Agent with minimal delay (zero can cause races)
     let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(1));
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {"name": "Fast", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -220,7 +220,6 @@ fn rapid_task_completion() {
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -238,14 +237,15 @@ fn rapid_task_completion() {
 fn unknown_step_in_initial_tasks_returns_error() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown_step"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {"name": "Known", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -254,7 +254,6 @@ fn unknown_step_in_initial_tasks_returns_error() {
     ];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),
@@ -280,7 +279,7 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
     let root = setup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
 
     // Config with schema requiring "name" field
-    let config_file: ConfigFile = serde_json::from_str(
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -295,8 +294,9 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        &root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
@@ -305,7 +305,6 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
     ];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &create_test_invoker(),

@@ -34,11 +34,6 @@ pub enum LogLevel {
 #[command(name = "barnum")]
 #[command(about = "Barnum - workflow engine for agents")]
 pub struct Cli {
-    /// Root directory. Pools live in `<root>/pools/<id>/`.
-    /// Defaults to `/tmp/troupe` on Unix.
-    #[arg(long, global = true)]
-    pub root: Option<PathBuf>,
-
     /// Log level (debug shows task return values)
     #[arg(short, long, global = true, default_value = "info")]
     pub log_level: LogLevel,
@@ -68,11 +63,6 @@ pub enum Command {
         /// Only valid when config has an `entrypoint`. Defaults to `{}` if not provided.
         #[arg(long, conflicts_with = "resume_from")]
         entrypoint_value: Option<String>,
-
-        /// Agent pool ID (e.g., `abc123` resolves to `<root>/pools/abc123/`).
-        /// Defaults to `default`.
-        #[arg(long)]
-        pool: Option<String>,
 
         /// Wake script to call before starting
         #[arg(long)]

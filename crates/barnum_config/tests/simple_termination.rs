@@ -7,8 +7,8 @@ mod common;
 
 use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, is_ipc_available,
-    setup_test_dir, test_state_log_path,
+    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
+    is_ipc_available, setup_test_dir, test_state_log_path,
 };
 use rstest::rstest;
 use std::path::Path;
@@ -16,8 +16,8 @@ use std::time::Duration;
 
 const TEST_DIR: &str = "simple_termination";
 
-fn simple_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn simple_config(pool_root: &Path) -> Config {
+    let json = inject_pool_config(
         r#"{
             "steps": [
                 {
@@ -27,8 +27,9 @@ fn simple_config() -> Config {
                 }
             ]
         }"#,
-    )
-    .expect("parse config");
+        pool_root,
+    );
+    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     config_file.resolve(Path::new(".")).expect("resolve config")
 }
 
@@ -43,18 +44,17 @@ fn single_step_terminates() {
         return;
     }
 
-    let pool = TroupeHandle::start(&root);
+    let _pool = TroupeHandle::start(&root);
     let agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
 
     // Wait for agent to be ready (has processed initial heartbeat)
 
-    let config = simple_config();
+    let config = simple_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: pool.pool_path(),
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,
@@ -80,13 +80,12 @@ fn empty_initial_tasks_does_nothing() {
 
     // No IPC needed - we're not even starting the pool
     // With no initial tasks, the runner completes immediately without connecting to the pool
-    let config = simple_config();
+    let config = simple_config(&root);
     let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
-        troupe_root: &root,
         working_dir: Path::new("."),
         wake_script: None,
         invoker: &invoker,

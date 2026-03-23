@@ -16,6 +16,32 @@ use std::thread;
 use std::time::Duration;
 use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
 
+/// Inject pool root and pool name into all Pool actions in a config JSON string.
+///
+/// Decomposes `pool_root` (e.g., `.td/test_name/pool`) into:
+/// - root = parent directory (troupe root)
+/// - pool = basename (pool name)
+pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
+    let cli_root = pool_root.parent().unwrap_or(pool_root);
+    let pool_name = pool_root
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("default");
+    let mut val: serde_json::Value =
+        serde_json::from_str(config_json).expect("invalid config JSON");
+    if let Some(steps) = val.get_mut("steps").and_then(|s| s.as_array_mut()) {
+        for step in steps {
+            if let Some(action) = step.get_mut("action") {
+                if action.get("kind").and_then(|k| k.as_str()) == Some("Pool") {
+                    action["root"] = serde_json::json!(cli_root);
+                    action["pool"] = serde_json::json!(pool_name);
+                }
+            }
+        }
+    }
+    serde_json::to_string(&val).expect("serialize config")
+}
+
 /// Get the path to the test data directory for a given test file.
 ///
 /// Uses `TEST_TMPDIR` env var when set (CI sets this to `/tmp/bt` to keep
@@ -434,32 +460,21 @@ impl BarnumRunner {
     ///
     /// The `pool_root` parameter follows the same convention as `TroupeHandle::start`:
     /// it's the logical pool path (e.g., `.test-data/test_name/pool`), which is decomposed
-    /// into `--root` (parent) and `--pool` (basename). The CLI adds `pools/` internally.
+    /// into root (parent) and pool name (basename). These are injected into all Pool actions
+    /// in the config JSON.
     pub fn run(
         &self,
         config: &str,
         initial_tasks: &str,
         pool_root: &Path,
     ) -> std::io::Result<std::process::Output> {
-        // Decompose pool_root the same way TroupeHandle::start does:
-        // pool_root = .test-data/test_name/pool
-        // --root = .test-data/test_name (parent)
-        // --pool = pool (basename)
-        let cli_root = pool_root.parent().unwrap_or(pool_root);
-        let pool_id = pool_root
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("pool");
+        let modified_config = inject_pool_config(config, pool_root);
         Command::new(&self.bin)
-            .arg("--root")
-            .arg(cli_root)
             .arg("run")
             .arg("--config")
-            .arg(config)
+            .arg(&modified_config)
             .arg("--initial-state")
             .arg(initial_tasks)
-            .arg("--pool")
-            .arg(pool_id)
             .output()
     }
 
