@@ -56,12 +56,40 @@ Pre hooks transform the input before it reaches the agent.
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"file": "src/main.rs"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "Analyze",
+  steps: [
+    {
+      name: "Analyze",
+      value_schema: {
+        type: "object",
+        required: ["file"],
+        properties: {
+          file: { type: "string" },
+        },
+      },
+      // Add git context to the task value before the agent sees it.
+      pre: {
+        kind: "Command",
+        script:
+          "jq '. + {git_branch: env.BRANCH, git_sha: env.SHA}'",
+      },
+      action: {
+        kind: "Pool",
+        instructions: {
+          kind: "Inline",
+          value:
+            "Analyze this code with the enriched context. Return `[]`.",
+        },
+      },
+      next: [],
+    },
+  ],
+})
+  .run({ entrypointValue: '{"file": "src/main.rs"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 **Pre hook contract:**

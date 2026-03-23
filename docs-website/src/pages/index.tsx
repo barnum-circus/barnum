@@ -152,9 +152,49 @@ function ExampleSection() {
         </div>
         <div className={styles.codeBlockWrap}>
           <CodeBlock language="js" title="run.js">
-{`import { barnumRun } from "@barnum/barnum";
+{`import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({ config: "config.jsonc" })
+BarnumConfig.fromConfig({
+  "entrypoint": "ListFiles",
+  "steps": [
+    {
+      "name": "ListFiles",
+      "action": {
+        "kind": "Command",
+        "script": "find \\"$(pwd)/src\\" -name '*.js' | jq -R '{kind: \\"ConvertToTS\\", value: {file: .}}' | jq -s '.'"
+      },
+      "next": ["ConvertToTS"],
+      "finally": { "kind": "Command", "script": "echo '[{\\"kind\\": \\"FixErrors\\", \\"value\\": {}}]'" }
+    },
+    {
+      "name": "ConvertToTS",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": { "file": { "type": "string" } }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {
+          "kind": "Inline",
+          "value": "Convert this JS file to TypeScript. Add types, rename to .ts. Return []."
+        }
+      },
+      "next": []
+    },
+    {
+      "name": "FixErrors",
+      "action": {
+        "kind": "Pool",
+        "instructions": {
+          "kind": "Inline",
+          "value": "Run npx tsc --noEmit and fix all TypeScript errors. Return []."
+        }
+      },
+      "next": []
+    }
+  ]
+}).run()
   .on("exit", (code) => process.exit(code ?? 1));`}
           </CodeBlock>
         </div>

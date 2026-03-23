@@ -24,17 +24,35 @@ Completed tasks are never re-executed. Only pending and in-flight tasks are re-d
 ## Usage
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
+
+const workflow = BarnumConfig.fromConfig({
+  entrypoint: "Analyze",
+  steps: [
+    {
+      name: "Analyze",
+      value_schema: {
+        type: "object",
+        required: ["files"],
+        properties: { files: { type: "array", items: { type: "string" } } },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Analyze the files. Return []." },
+      },
+      next: [],
+    },
+  ],
+});
 
 // Normal run with state logging
-barnumRun({
-  config: "config.jsonc",
+workflow.run({
   entrypointValue: '{"files": ["src/main.rs"]}',
   stateLog: "/tmp/myrun.ndjson",
 }).on("exit", (code) => process.exit(code ?? 1));
 
-// Resume from a previous run
-barnumRun({
+// Resume from a previous run (config comes from the log)
+workflow.run({
   resumeFrom: "/tmp/myrun.ndjson",
   stateLog: "/tmp/myrun-resumed.ndjson",
 }).on("exit", (code) => process.exit(code ?? 1));

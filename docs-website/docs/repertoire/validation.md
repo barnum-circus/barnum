@@ -62,12 +62,55 @@ Validate the value payload for each step:
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "ProcessOrder",
+  steps: [
+    {
+      name: "ProcessOrder",
+      value_schema: {
+        type: "object",
+        required: ["order_id", "items"],
+        properties: {
+          order_id: { type: "string", pattern: "^ORD-[0-9]+$" },
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["sku", "quantity"],
+              properties: {
+                sku: { type: "string" },
+                quantity: { type: "integer", minimum: 1 }
+              }
+            }
+          }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Process this order and prepare for shipping. Return `[{\"kind\": \"Ship\", \"value\": {\"order_id\": \"ORD-12345\"}}]`" }
+      },
+      next: ["Ship"]
+    },
+    {
+      name: "Ship",
+      value_schema: {
+        type: "object",
+        required: ["order_id"],
+        properties: {
+          order_id: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Ship the order. Return `[]`." }
+      },
+      next: []
+    }
+  ]
+}).run({ entrypointValue: '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## External Schema Files

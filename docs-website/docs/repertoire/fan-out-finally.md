@@ -87,12 +87,60 @@ List files, refactor them all in parallel, then commit the changes.
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"directory": "src"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  "entrypoint": "ListFiles",
+  "steps": [
+    {
+      "name": "ListFiles",
+      "value_schema": {
+        "type": "object",
+        "required": ["directory"],
+        "properties": {
+          "directory": { "type": "string" }
+        }
+      },
+      "action": {
+        "kind": "Command",
+        "script": "jq -r '.value.directory' | xargs -I{} find {} -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map({kind: \"Refactor\", value: {file: .}})'"
+      },
+      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'" },
+      "next": ["Refactor"]
+    },
+    {
+      "name": "Refactor",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": { "type": "string" }
+        }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Read the file at the path provided. Refactor it to improve readability and remove dead code. Write the changes back to disk. Return `[]`." }
+      },
+      "next": []
+    },
+    {
+      "name": "Commit",
+      "value_schema": {
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+          "message": { "type": "string" }
+        }
+      },
+      "action": {
+        "kind": "Command",
+        "script": "MSG=$(jq -r '.value.message') && git add -A && git commit -m \"$MSG\" && echo '[]'"
+      },
+      "next": []
+    }
+  ]
+}).run({ entrypointValue: '{"directory": "src"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

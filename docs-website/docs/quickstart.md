@@ -70,18 +70,25 @@ You can start multiple agents with different names (c1, c2, c3) for parallel pro
 
 ## Step 3: Showtime
 
-Download a [demo config](https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos/linear):
-
-```bash
-curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/barnum_cli/demos/linear/config.jsonc
-```
-
-Create `run.js`:
+Create `run.js` with a simple one-step workflow:
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({ config: "config.jsonc" })
+BarnumConfig.fromConfig({
+  entrypoint: "Start",
+  steps: [
+    {
+      name: "Start",
+      value_schema: { type: "object", properties: {}, additionalProperties: true },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Say hello and return `[]`." },
+      },
+      next: [],
+    },
+  ],
+}).run()
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 
@@ -188,12 +195,53 @@ Here's what a basic refactor config looks like:
 Save this as `refactor.jsonc` and create `run.js`:
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "refactor.jsonc",
-  entrypointValue: '{"folder": "./src"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  "entrypoint": "ListFiles",
+  "steps": [
+    {
+      "name": "ListFiles",
+      "value_schema": {
+        "type": "object",
+        "required": ["folder"],
+        "properties": { "folder": { "type": "string" } }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "List all source files in the given folder. Return an array of AnalyzeAndRefactor tasks, one per file:\n\n```json\n[{\"kind\": \"AnalyzeAndRefactor\", \"value\": {\"file\": \"src/main.rs\"}}, ...]\n```" }
+      },
+      "next": ["AnalyzeAndRefactor"]
+    },
+    {
+      "name": "AnalyzeAndRefactor",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": { "file": { "type": "string" } }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Read the file and identify ONE refactoring opportunity (rename a variable, extract a function, etc). Apply the refactor. Then return:\n\n```json\n[{\"kind\": \"CommitFile\", \"value\": {\"file\": \"src/main.rs\"}}]\n```\n\nIf no refactoring needed, return `[]`." }
+      },
+      "next": ["CommitFile"]
+    },
+    {
+      "name": "CommitFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": { "file": { "type": "string" } }
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Commit the changes to this file with a descriptive message. Return `[]` when done." }
+      },
+      "next": []
+    }
+  ]
+}).run({ entrypointValue: '{"folder": "./src"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ```bash

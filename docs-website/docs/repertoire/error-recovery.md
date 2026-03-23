@@ -70,12 +70,48 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"file": "src/lib.rs", "task": "Extract the Config struct into its own module"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "Refactor",
+  steps: [
+    {
+      name: "Refactor",
+      value_schema: {
+        type: "object",
+        required: ["file", "task"],
+        properties: {
+          file: { type: "string" },
+          task: { type: "string" },
+          previous_error: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Refactor the file as described in `task`. If `previous_error` is present, a prior attempt broke the build — use the error to guide your approach.\n\nReturn `[]` when done." }
+      },
+      post: { kind: "Command", script: "INPUT=$(cat) && KIND=$(echo \"$INPUT\" | jq -r '.kind') && if [ \"$KIND\" != \"Success\" ]; then echo \"$INPUT\"; exit 0; fi && FILE=$(echo \"$INPUT\" | jq -r '.input.file') && if cargo check 2>/tmp/build_err.txt; then echo \"$INPUT\"; else ERROR=$(cat /tmp/build_err.txt) && echo \"$INPUT\" | jq --arg err \"$ERROR\" --arg file \"$FILE\" '.next = [{kind: \"FixBuild\", value: {file: $file, error: $err}}]'; fi" },
+      next: ["FixBuild"]
+    },
+    {
+      name: "FixBuild",
+      value_schema: {
+        type: "object",
+        required: ["file", "error"],
+        properties: {
+          file: { type: "string" },
+          error: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "The build broke after a refactor. You receive the file that was changed and the build error.\n\nFix the build error. Focus only on making the build pass — don't change the intent of the refactor.\n\nReturn `[]` when done." }
+      },
+      next: []
+    }
+  ]
+}).run({ entrypointValue: '{"file": "src/lib.rs", "task": "Extract the Config struct into its own module"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

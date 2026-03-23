@@ -55,9 +55,37 @@ Use agents when the task requires judgment, creativity, or understanding natural
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({ config: "config.json" })
+BarnumConfig.fromConfig({
+  entrypoint: "ListFiles",
+  steps: [
+    {
+      name: "ListFiles",
+      value_schema: { type: "object" },
+      action: {
+        kind: "Command",
+        script: "find . -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(. != \"\")) | map({kind: \"Analyze\", value: {file: .}})'"
+      },
+      next: ["Analyze"]
+    },
+    {
+      name: "Analyze",
+      value_schema: {
+        type: "object",
+        required: ["file"],
+        properties: {
+          file: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Analyze this file. Return `[]`." }
+      },
+      next: []
+    }
+  ]
+}).run()
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 
@@ -148,12 +176,53 @@ Commands and agents work together naturally:
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"task": "Add logging"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "Plan",
+  steps: [
+    {
+      name: "Plan",
+      value_schema: {
+        type: "object",
+        required: ["task"],
+        properties: {
+          task: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"echo hello\"}}]`" }
+      },
+      next: ["Execute"]
+    },
+    {
+      name: "Execute",
+      value_schema: {
+        type: "object",
+        required: ["command"],
+        properties: {
+          command: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Command",
+        script: "jq -r '.value.command' | sh && echo '[{\"kind\": \"Verify\", \"value\": {}}]'"
+      },
+      next: ["Verify"]
+    },
+    {
+      name: "Verify",
+      value_schema: { type: "object" },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Verify the changes. Return `[]`." }
+      },
+      next: []
+    }
+  ]
+}).run({ entrypointValue: '{"task": "Add logging"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Key Points

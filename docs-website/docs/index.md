@@ -39,11 +39,23 @@ Define your workflow in a config file, then run it from JavaScript or the CLI.
 
 ```js
 // run.js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.jsonc",
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "Start",
+  steps: [
+    {
+      name: "Start",
+      value_schema: { type: "object", properties: {}, additionalProperties: true },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Say hello and return `[]`." },
+      },
+      next: [],
+    },
+  ],
+}).run()
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ```bash

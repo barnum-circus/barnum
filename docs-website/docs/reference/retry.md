@@ -76,9 +76,43 @@ Override global settings for specific steps:
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({ config: "config.json" })
+BarnumConfig.fromConfig({
+  entrypoint: "QuickCheck",
+  options: {
+    timeout: 60,
+    max_retries: 2,
+  },
+  steps: [
+    {
+      name: "QuickCheck",
+      value_schema: { type: "object" },
+      options: {
+        timeout: 10,
+        max_retries: 0,
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Quick validation. Return `[]`." },
+      },
+      next: ["ExpensiveAnalysis"],
+    },
+    {
+      name: "ExpensiveAnalysis",
+      value_schema: { type: "object" },
+      options: {
+        timeout: 300,
+        max_retries: 5,
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Deep analysis. Return `[]`." },
+      },
+      next: [],
+    },
+  ],
+}).run()
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 

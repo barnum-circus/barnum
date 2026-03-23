@@ -112,9 +112,61 @@ Return `[]`.
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({ config: "code-review.jsonc" })
+BarnumConfig.fromConfig({
+  entrypoint: "ListChanges",
+  steps: [
+    {
+      name: "ListChanges",
+      // Two review tasks per changed file
+      action: {
+        kind: "Command",
+        script: "git diff --name-only origin/main | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map([{kind: \"CheckStandards\", value: {file: .}}, {kind: \"CheckSecurity\", value: {file: .}}]) | flatten'",
+      },
+      next: ["CheckStandards", "CheckSecurity"],
+      // After all checks: compile a summary
+      finally: { kind: "Command", script: "echo '[{\"kind\": \"CompileReport\", \"value\": {}}]'" },
+    },
+    {
+      name: "CheckStandards",
+      value_schema: {
+        type: "object",
+        required: ["file"],
+        properties: { file: { type: "string" } },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Link", path: "instructions/check-standards.md" },
+      },
+      next: [],
+    },
+    {
+      name: "CheckSecurity",
+      value_schema: {
+        type: "object",
+        required: ["file"],
+        properties: { file: { type: "string" } },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Link", path: "instructions/check-security.md" },
+      },
+      next: [],
+    },
+    {
+      name: "CompileReport",
+      action: {
+        kind: "Pool",
+        instructions: {
+          kind: "Inline",
+          value: "Review all findings from the code review. Compile a summary: files reviewed, standards violations, security issues. Post a GitHub comment with the results. Return [].",
+        },
+      },
+      next: [],
+    },
+  ],
+}).run()
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 

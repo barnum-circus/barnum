@@ -85,10 +85,64 @@ Each WriteFile writes:
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
+BarnumConfig.fromConfig({
+  entrypoint: "IdentifyFacts",
+  steps: [
+    {
+      name: "IdentifyFacts",
+      value_schema: {
+        type: "object",
+        required: ["file", "output_dir"],
+        properties: {
+          file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one EvaluateFact task per claim. Example: [{\"kind\": \"EvaluateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}]\n\nIf the document contains no verifiable claims, return []." },
+      },
+      next: ["EvaluateFact"],
+    },
+    {
+      name: "EvaluateFact",
+      value_schema: {
+        type: "object",
+        required: ["id", "claim", "source_file", "output_dir"],
+        properties: {
+          id: { type: "string" },
+          claim: { type: "string" },
+          source_file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "You are a fact-checker. Evaluate whether the following claim is true, false, or unknown.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim thoroughly:\n1. Look for primary sources, official records, or authoritative references that confirm or deny the claim.\n2. Check for common misquotations, outdated figures, or misleading framings.\n3. Consider whether the claim is technically true but misleading.\n\nReach a verdict: exactly one of \"true\", \"false\", or \"unknown\" (if evidence is insufficient or contradictory).\n\nReturn a WriteFile task. The path must be `{output_dir}/{id}.{verdict}.txt` where verdict is one of true, false, unknown. The content should include the original claim, your verdict, a summary of evidence for and against, and references consulted.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.true.txt\", \"content\": \"Claim: The company's revenue doubled...\\n\\nVerdict: true\\n\\nEvidence: SEC filings confirm...\"}}]" },
+      },
+      next: ["WriteFile"],
+    },
+    {
+      name: "WriteFile",
+      // Generic file-writing step. Agents return data; this step handles I/O.
+      value_schema: {
+        type: "object",
+        required: ["path", "content"],
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Command",
+        script: "INPUT=$(cat) && FILEPATH=$(echo \"$INPUT\" | jq -r '.value.path') && CONTENT=$(echo \"$INPUT\" | jq -r '.value.content') && mkdir -p \"$(dirname \"$FILEPATH\")\" && printf '%s\\n' \"$CONTENT\" > \"$FILEPATH\" && echo '[]'",
+      },
+      next: [],
+    },
+  ],
+}).run({
   entrypointValue: '{"file": "claims.md", "output_dir": "verification-output"}',
 }).on("exit", (code) => process.exit(code ?? 1));
 ```
@@ -248,10 +302,123 @@ Per fact:
 ### Running the adversarial variant
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
+BarnumConfig.fromConfig({
+  entrypoint: "IdentifyFacts",
+  steps: [
+    {
+      name: "IdentifyFacts",
+      value_schema: {
+        type: "object",
+        required: ["file", "output_dir"],
+        properties: {
+          file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Read the document at the path in `file`.\n\nExtract every verifiable factual claim. A verifiable claim is one that can be confirmed or denied through research — dates, statistics, named events, attributed quotes, technical specifications, etc. Skip opinions, predictions, and subjective assessments.\n\nAssign each fact a numeric ID (starting at 1, zero-padded to 3 digits) and a short kebab-case label (no spaces, lowercase, max 5 words) describing the claim.\n\nReturn one DebateFact task per claim. Example: [{\"kind\": \"DebateFact\", \"value\": {\"id\": \"001-revenue-doubled-in-2024\", \"claim\": \"The company's revenue doubled from $50M to $100M in fiscal year 2024.\", \"source_file\": \"report.md\", \"output_dir\": \"output/\"}}]\n\nIf the document contains no verifiable claims, return []." },
+      },
+      next: ["DebateFact"],
+    },
+    {
+      name: "DebateFact",
+      // Coordinator: fans out to both advocates, then triggers the judge via finally.
+      value_schema: {
+        type: "object",
+        required: ["id", "claim", "source_file", "output_dir"],
+        properties: {
+          id: { type: "string" },
+          claim: { type: "string" },
+          source_file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Command",
+        script: "INPUT=$(cat) && V=$(echo \"$INPUT\" | jq -c '.value') && echo \"$V\" | jq -c '[{kind: \"ArgueTrue\", value: .}, {kind: \"ArgueFalse\", value: .}]'",
+      },
+      finally: {
+        kind: "Command",
+        script: "INPUT=$(cat) && echo \"$INPUT\" | jq -c '[{kind: \"JudgeFact\", value: .}]'",
+      },
+      next: ["ArgueTrue", "ArgueFalse"],
+    },
+    {
+      name: "ArgueTrue",
+      value_schema: {
+        type: "object",
+        required: ["id", "claim", "source_file", "output_dir"],
+        properties: {
+          id: { type: "string" },
+          claim: { type: "string" },
+          source_file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "You are an advocate arguing that the following claim is TRUE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is true:\n1. Find primary sources, official records, or authoritative references that support the claim.\n2. Address obvious counterarguments preemptively.\n3. If the claim is partially true, argue for the interpretation that makes it most accurate.\n\nReturn a WriteFile task with your argument. The path must be `{output_dir}/{id}.argue-true.txt`. The content should include: the original claim, your best evidence supporting it, sources consulted, and preemptive rebuttals to likely counterarguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.argue-true.txt\", \"content\": \"Claim: ...\\n\\nEvidence: ...\\n\\nSources: ...\"}}]" },
+      },
+      next: ["WriteFile"],
+    },
+    {
+      name: "ArgueFalse",
+      value_schema: {
+        type: "object",
+        required: ["id", "claim", "source_file", "output_dir"],
+        properties: {
+          id: { type: "string" },
+          claim: { type: "string" },
+          source_file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "You are an advocate arguing that the following claim is FALSE.\n\nThe claim: see `claim` in the input.\nThe source document: see `source_file` (read it for context if needed).\n\nResearch the claim and build the strongest possible case that it is false or misleading:\n1. Find primary sources, official records, or authoritative references that contradict the claim.\n2. Identify misleading framings, outdated figures, or missing context that make the claim deceptive even if technically true.\n3. Address obvious counterarguments preemptively.\n\nReturn a WriteFile task with your argument. The path must be `{output_dir}/{id}.argue-false.txt`. The content should include: the original claim, your best evidence against it, sources consulted, and preemptive rebuttals to likely counterarguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.argue-false.txt\", \"content\": \"Claim: ...\\n\\nEvidence: ...\\n\\nSources: ...\"}}]" },
+      },
+      next: ["WriteFile"],
+    },
+    {
+      name: "JudgeFact",
+      value_schema: {
+        type: "object",
+        required: ["id", "claim", "source_file", "output_dir"],
+        properties: {
+          id: { type: "string" },
+          claim: { type: "string" },
+          source_file: { type: "string" },
+          output_dir: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "You are an impartial judge evaluating a factual claim.\n\nThe claim: see `claim` in the input.\n\nTwo advocates have already researched this claim and written their arguments:\n- `{output_dir}/{id}.argue-true.txt` — the case that the claim is true\n- `{output_dir}/{id}.argue-false.txt` — the case that the claim is false\n\nRead both arguments carefully. Evaluate the quality of evidence on each side:\n1. Which side cites stronger, more authoritative sources?\n2. Which side's reasoning is more rigorous?\n3. Are there logical fallacies or unsupported leaps on either side?\n4. Is one side's evidence clearly more current and relevant?\n\nReach a verdict: exactly one of \"true\", \"false\", or \"unknown\" (if both sides present compelling evidence and you cannot determine the answer with confidence).\n\nReturn a WriteFile task. The path must be `{output_dir}/{id}.{verdict}.txt` where verdict is the one you chose. The content should include the original claim, your verdict, and your reasoning citing specific evidence from both arguments.\n\nExample: [{\"kind\": \"WriteFile\", \"value\": {\"path\": \"output/001-revenue-doubled-in-2024.true.txt\", \"content\": \"Claim: ...\\n\\nVerdict: true\\n\\nReasoning: The true-side cited SEC filings...\"}}]" },
+      },
+      next: ["WriteFile"],
+    },
+    {
+      name: "WriteFile",
+      // Generic file-writing step. Agents return data; this step handles I/O.
+      value_schema: {
+        type: "object",
+        required: ["path", "content"],
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+        },
+      },
+      action: {
+        kind: "Command",
+        script: "INPUT=$(cat) && FILEPATH=$(echo \"$INPUT\" | jq -r '.value.path') && CONTENT=$(echo \"$INPUT\" | jq -r '.value.content') && mkdir -p \"$(dirname \"$FILEPATH\")\" && printf '%s\\n' \"$CONTENT\" > \"$FILEPATH\" && echo '[]'",
+      },
+      next: [],
+    },
+  ],
+}).run({
   entrypointValue: '{"file": "claims.md", "output_dir": "verification-output"}',
 }).on("exit", (code) => process.exit(code ?? 1));
 ```

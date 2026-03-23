@@ -58,12 +58,48 @@ Migrate database schema files one at a time, in order, so each migration builds 
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "ProcessNext",
+  options: {
+    max_concurrency: 1,
+  },
+  steps: [
+    {
+      name: "ProcessNext",
+      value_schema: {
+        type: "object",
+        required: ["remaining"],
+        properties: {
+          remaining: {
+            type: "array",
+            items: { type: "string" },
+          },
+          completed: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+      },
+      action: {
+        kind: "Pool",
+        instructions: {
+          kind: "Inline",
+          value:
+            'You receive a list of migration files in `remaining`. Apply ONLY the first migration file. Read the SQL file, execute the migration, and verify it succeeded.\n\nIf there are more files after the first, return:\n```json\n[{"kind": "ProcessNext", "value": {"remaining": ["002.sql", "003.sql"], "completed": ["001.sql"]}}]\n```\n\nIf this was the last file, return `[]`.',
+        },
+      },
+      // The step can transition to itself to continue the chain.
+      next: ["ProcessNext"],
+    },
+  ],
+})
+  .run({
+    entrypointValue:
+      '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}',
+  })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

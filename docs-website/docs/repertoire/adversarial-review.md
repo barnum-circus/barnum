@@ -82,12 +82,63 @@ Analyze a file, implement a refactor, then have a separate agent judge the resul
 ## Running
 
 ```js
-import { barnumRun } from "@barnum/barnum";
+import { BarnumConfig } from "@barnum/barnum";
 
-barnumRun({
-  config: "config.json",
-  entrypointValue: '{"file": "src/main.rs"}',
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig({
+  entrypoint: "Analyze",
+  steps: [
+    {
+      name: "Analyze",
+      value_schema: {
+        type: "object",
+        required: ["file"],
+        properties: {
+          file: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Read the file at the given path. Identify ONE concrete refactoring opportunity (e.g., extract a function, simplify a conditional, remove duplication).\n\nReturn a task for the Refactor step with the file path and a description of the refactoring to perform:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract the validation logic on lines 45-60 into a separate validate_input() function\", \"feedback\": null}}]\n```" }
+      },
+      next: ["Refactor"]
+    },
+    {
+      name: "Refactor",
+      value_schema: {
+        type: "object",
+        required: ["file", "instructions"],
+        properties: {
+          file: { type: "string" },
+          instructions: { type: "string" },
+          feedback: { type: ["string", "null"] }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Read the file and apply the refactoring described in `instructions`. Write the changes back to disk.\n\nIf `feedback` is present, a previous attempt was rejected by the reviewer. Address the feedback in your implementation.\n\nReturn a task for the Judge step with the file path and what you changed:\n```json\n[{\"kind\": \"Judge\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"description\": \"Extracted lines 45-60 into validate_input() and replaced with a call\"}}]\n```" }
+      },
+      next: ["Judge"]
+    },
+    {
+      name: "Judge",
+      value_schema: {
+        type: "object",
+        required: ["file", "instructions", "description"],
+        properties: {
+          file: { type: "string" },
+          instructions: { type: "string" },
+          description: { type: "string" }
+        }
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "You are a code reviewer. Read the file and evaluate whether the refactoring was done correctly.\n\nThe original instructions were in `instructions`. The implementer described what they did in `description`. Read the actual file to verify.\n\nIf the refactoring is correct, clean, and complete, approve it:\n```json\n[]\n```\n\nIf there are problems, send it back to Refactor with specific feedback:\n```json\n[{\"kind\": \"Refactor\", \"value\": {\"file\": \"src/main.rs\", \"instructions\": \"Extract validate_input()\", \"feedback\": \"The extracted function still references a local variable 'config' from the original scope. Pass it as a parameter instead.\"}}]\n```\n\nBe rigorous. Only approve if the code is genuinely better than before." }
+      },
+      next: ["Refactor"]
+    }
+  ]
+}).run({ entrypointValue: '{"file": "src/main.rs"}' })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works
