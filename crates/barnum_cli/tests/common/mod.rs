@@ -31,11 +31,11 @@ pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
         serde_json::from_str(config_json).expect("invalid config JSON");
     if let Some(steps) = val.get_mut("steps").and_then(|s| s.as_array_mut()) {
         for step in steps {
-            if let Some(action) = step.get_mut("action") {
-                if action.get("kind").and_then(|k| k.as_str()) == Some("Pool") {
-                    action["root"] = serde_json::json!(cli_root);
-                    action["pool"] = serde_json::json!(pool_name);
-                }
+            if let Some(action) = step.get_mut("action")
+                && action.get("kind").and_then(|k| k.as_str()) == Some("Pool")
+            {
+                action["root"] = serde_json::json!(cli_root);
+                action["pool"] = serde_json::json!(pool_name);
             }
         }
     }
