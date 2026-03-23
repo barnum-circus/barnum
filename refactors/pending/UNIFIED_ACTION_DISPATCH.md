@@ -121,14 +121,14 @@ pub trait Action: Send {
 
 pub struct ActionHandle {
     pub rx: mpsc::Receiver<Result<String, String>>,
-    _guard: Box<dyn Send>,
+    drop_guard: Box<dyn Send>,
 }
 ```
 
 `start` kicks off the work (typically by spawning a thread) and returns an `ActionHandle` immediately — it does not block. The handle has two parts:
 
 - `rx`: receives the action's result (`Ok(stdout)` or `Err(message)`) when the work completes.
-- `_guard`: type-erased cleanup. When the handle is dropped, the guard's `Drop` impl stops the work (best-effort). For shell actions, this kills the child process. For pool actions, this is a no-op (troupe manages its own lifecycle).
+- `drop_guard`: type-erased cleanup. When the handle is dropped, the guard's `Drop` impl stops the work (best-effort). For shell actions, this kills the child process. For pool actions, this is a no-op (troupe manages its own lifecycle).
 
 **Contract**: dropping the `ActionHandle` signals "I don't want the result, clean up." The guard's `Drop` does best-effort cancellation — the action should stop, but if it doesn't, the closed channel discards any late sends harmlessly (userland code, not UB). It's cooperative cancellation with a safety net.
 
@@ -164,7 +164,7 @@ Sends SIGKILL to the child process. If the process already exited, `kill` return
 **No-op guard** (for `PoolAction`):
 
 ```rust
-ActionHandle { rx, _guard: Box::new(()) }
+ActionHandle { rx, drop_guard: Box::new(()) }
 ```
 
 `PoolAction` calls `invoker.run()`, which encapsulates the child process. There's no PID to kill. On timeout, the invoker thread keeps running until troupe returns. This is the same behavior as today — troupe manages its own agent lifecycle.
@@ -331,13 +331,13 @@ impl fmt::Display for ActionError {
 /// - Late sends to a dropped handle are silently discarded.
 pub struct ActionHandle {
     pub rx: mpsc::Receiver<Result<String, String>>,
-    _guard: Box<dyn Send>,
+    drop_guard: Box<dyn Send>,
 }
 
 impl ActionHandle {
     /// Create a handle with a type-erased cleanup guard.
     pub fn new(rx: mpsc::Receiver<Result<String, String>>, guard: impl Send + 'static) -> Self {
-        Self { rx, _guard: Box::new(guard) }
+        Self { rx, drop_guard: Box::new(guard) }
     }
 }
 
