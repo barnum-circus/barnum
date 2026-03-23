@@ -31,11 +31,19 @@ echo ""
 export TROUPE="${TROUPE:-$WORKSPACE_ROOT/target/debug/troupe}"
 export BARNUM="${BARNUM:-$WORKSPACE_ROOT/target/debug/barnum}"
 
+# Inject pool root and pool name into config Pool actions
+inject_pool_config() {
+    jq --arg root "$1" --arg pool "$2" \
+        '.steps |= map(if .action.kind == "Pool" then .action.root = $root | .action.pool = $pool else . end)' \
+        "$3"
+}
+
 if [ -n "$EXISTING_POOL" ]; then
-    # Use existing pool
-    ROOT="$EXISTING_POOL"
+    # Use existing pool — decompose path into root (parent) and pool (basename)
+    POOL_ROOT="$(dirname "$EXISTING_POOL")"
+    POOL_ID="$(basename "$EXISTING_POOL")"
     echo "=== Demo: Branching Task Queue (using existing pool) ==="
-    echo "Pool directory: $ROOT"
+    echo "Pool directory: $EXISTING_POOL"
     if [ -n "$WAKE_SCRIPT" ]; then
         echo "Wake script: $WAKE_SCRIPT"
     fi
@@ -48,9 +56,9 @@ if [ -n "$EXISTING_POOL" ]; then
     fi
 
     # Run Barnum against existing pool
+    CONFIG_JSON=$(inject_pool_config "$POOL_ROOT" "$POOL_ID" "$SCRIPT_DIR/config.json")
     echo "Running Barnum with branching config..."
-    $BARNUM run --config "$SCRIPT_DIR/config.json" \
-        --pool "$ROOT" \
+    $BARNUM run --config "$CONFIG_JSON" \
         $WAKE_ARG
 
     echo ""
@@ -90,10 +98,10 @@ else
     sleep 0.3
 
     # Run Barnum
+    CONFIG_JSON=$(inject_pool_config "$POOL_ROOT" "$POOL_ID" "$SCRIPT_DIR/config.json")
     echo ""
     echo "Running Barnum with branching config..."
-    $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
-        --pool "$POOL_ID"
+    $BARNUM run --config "$CONFIG_JSON"
 
     echo ""
     echo "=== Success! ==="

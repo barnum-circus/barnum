@@ -16,19 +16,26 @@ use std::thread;
 use std::time::Duration;
 use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
 
-/// Inject pool root and pool name into all Pool actions in a config JSON string.
+/// Inject pool root and pool name into all Pool actions in a config.
+///
+/// Accepts either a JSON string or a file path. Returns a JSON string
+/// with `root` and `pool` injected into every Pool action.
 ///
 /// Decomposes `pool_root` (e.g., `.td/test_name/pool`) into:
 /// - root = parent directory (troupe root)
 /// - pool = basename (pool name)
-pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
+pub fn inject_pool_config(config: &str, pool_root: &Path) -> String {
     let cli_root = pool_root.parent().unwrap_or(pool_root);
     let pool_name = pool_root
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("default");
-    let mut val: serde_json::Value =
-        serde_json::from_str(config_json).expect("invalid config JSON");
+    let json_str = if Path::new(config).is_file() {
+        fs::read_to_string(config).expect("read config file")
+    } else {
+        config.to_string()
+    };
+    let mut val: serde_json::Value = serde_json::from_str(&json_str).expect("invalid config JSON");
     if let Some(steps) = val.get_mut("steps").and_then(|s| s.as_array_mut()) {
         for step in steps {
             if let Some(action) = step.get_mut("action")

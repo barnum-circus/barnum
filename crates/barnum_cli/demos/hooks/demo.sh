@@ -19,24 +19,11 @@ export BARNUM="${BARNUM:-$WORKSPACE_ROOT/target/debug/barnum}"
 echo "=== Demo: Finally Hooks ==="
 echo ""
 
-# Create a temp pool directory
-POOL_ROOT=$(mktemp -d)
-POOL_ID="demo"
-
-cleanup() {
-    echo ""
-    echo "=== Cleaning up ==="
-    rm -rf "$POOL_ROOT"
-    echo "Done."
-}
-trap cleanup EXIT
-
 echo "Running Barnum with hooks config..."
 echo "Watch for hook messages in the output."
 echo ""
 
-$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
-    --pool "$POOL_ID" \
+$BARNUM run --config "$SCRIPT_DIR/config.json" \
     --entrypoint-value '{"item": "test-item"}'
 
 echo ""

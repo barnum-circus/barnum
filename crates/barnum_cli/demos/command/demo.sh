@@ -30,22 +30,13 @@ echo "This demo uses 'command' actions (local scripts) instead of 'pool' actions
 echo "No agent pool is needed - tasks are processed by jq commands."
 echo ""
 
-# Create a temp directory for the pool root (even though we don't use the pool)
-POOL_ROOT=$(mktemp -d)
-POOL_ID="demo"
-cleanup() {
-    rm -rf "$POOL_ROOT"
-}
-trap cleanup EXIT
-
 # Run Barnum with command demo config
 echo "Running Barnum with command-demo config..."
 echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
-    --pool "$POOL_ID" \
+$BARNUM run --config "$SCRIPT_DIR/config.json" \
     --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}'
 
 echo ""
