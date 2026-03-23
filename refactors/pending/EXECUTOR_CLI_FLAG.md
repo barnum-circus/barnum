@@ -19,7 +19,13 @@ This sub-refactor adds a hidden `--executor` flag as the internal communication 
 
 ```javascript
 const { resolve } = require("path");
-const { createRequire } = require("module");
+
+// Error if the user passed --executor — it's internal.
+const userArgs = process.argv.slice(2);
+if (userArgs.includes("--executor")) {
+  console.error("Error: --executor is an internal flag and cannot be passed directly.");
+  process.exit(1);
+}
 
 const executorPath = resolve(__dirname, "actions", "executor.ts");
 
@@ -38,7 +44,7 @@ const binaryPath = process.env.BARNUM || require("./index.cjs");
 
 // Inject --executor, then forward all user args
 const executor = resolveExecutorCommand();
-const args = [...process.argv.slice(2), "--executor", executor];
+const args = [...userArgs, "--executor", executor];
 
 const { execFileSync } = require("child_process");
 // ... spawn binaryPath with args
