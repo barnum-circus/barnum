@@ -74,6 +74,7 @@ Your singular mission is creating S-tier libraries where:
 Current generated artifacts:
 - `libs/barnum/barnum-config-schema.json` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
 - `libs/barnum/barnum-config-schema.zod.ts` — regenerate with `cargo run -p barnum_config --bin build_barnum_schema`
+- `libs/barnum/barnum-cli-schema.zod.ts` — regenerate with `cargo run -p barnum_cli --bin build_cli_schema`
 
 ## Backward compatibility
 

@@ -456,10 +456,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Generate Barnum config schemas
         run: cargo run --locked -p barnum_config --bin build_barnum_schema
+      - name: Generate Barnum CLI schema
+        run: cargo run --locked -p barnum_cli --bin build_cli_schema
       - name: Check schemas are up to date
         run: |
-          if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts; then
-            echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_config --bin build_barnum_schema' and commit."
+          if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts libs/barnum/barnum-cli-schema.zod.ts; then
+            echo "::error::Generated schemas differ from checked-in versions. Run schema generators and commit."
             exit 1
           fi
       - uses: actions/upload-artifact@v4
@@ -468,6 +470,7 @@ jobs:
           path: |
             libs/barnum/barnum-config-schema.json
             libs/barnum/barnum-config-schema.zod.ts
+            libs/barnum/barnum-cli-schema.zod.ts
 
   build-website:
     needs: gate-docs
