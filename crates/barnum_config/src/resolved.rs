@@ -31,7 +31,7 @@ impl Config {
     pub fn has_pool_actions(&self) -> bool {
         self.steps
             .iter()
-            .any(|s| matches!(s.action, Action::Pool(..)))
+            .any(|s| matches!(s.action, ActionKind::Pool(..)))
     }
 }
 
@@ -46,7 +46,7 @@ pub struct Step {
     pub value_schema: Option<serde_json::Value>,
 
     /// How to execute the step.
-    pub action: Action,
+    pub action: ActionKind,
 
     /// Valid next steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -77,7 +77,7 @@ pub struct CommandAction {
 /// How a resolved step processes tasks.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
-pub enum Action {
+pub enum ActionKind {
     /// Send to the agent pool for processing.
     Pool(PoolAction),
     /// Run a local command.

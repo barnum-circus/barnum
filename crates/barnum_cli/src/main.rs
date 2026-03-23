@@ -7,7 +7,7 @@
 
 use barnum_cli::{Cli, Command, ConfigCommand, LogLevel, SchemaType};
 use barnum_config::{
-    Action, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
+    ActionKind, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
     generate_full_docs, resume, run,
 };
 use clap::Parser;
@@ -467,8 +467,8 @@ fn generate_graphviz(config: &Config) -> String {
 
         // Shape and color based on action type
         let (shape, fill_color) = match &step.action {
-            Action::Pool(..) => ("box", "#e3f2fd"),
-            Action::Command(..) => ("diamond", "#fff3e0"),
+            ActionKind::Pool(..) => ("box", "#e3f2fd"),
+            ActionKind::Command(..) => ("diamond", "#fff3e0"),
         };
         attrs.push(format!("shape={shape}"));
 
