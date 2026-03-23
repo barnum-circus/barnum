@@ -6,7 +6,7 @@ Prerequisite to PLUGGABLE_ACTION_KINDS (future).
 
 Pool actions, Command actions, and finally hooks each have their own dispatch function, their own result type, and their own response-processing path. Timeouts only exist for Pool (via troupe). Commands block forever. Finally hooks ignore concurrency limits.
 
-All of these run work in a thread and send a result back on a channel. They should go through one dispatch path with one trait. If it runs, it goes through the trait. Timeout, concurrency, and result routing wrap the trait from the outside.
+All of these run work in a thread and send a result back on a channel. They should go through one dispatch path with one trait. If it runs, it goes through the trait. Concurrency and result routing wrap the trait from the outside.
 
 ## Current State
 
@@ -65,49 +65,32 @@ Blocks forever on `child.wait_with_output()`. No timeout.
 
 ## Design Decisions
 
-### Executor trait
+### Naming: `Action` trait, config enum becomes `ActionKind`
 
-Minimal:
+The existing `Action` enum (`Action::Pool`, `Action::Command`) in config types is an enum of action kinds. Rename it to `ActionKind`. The `Action` name belongs to the trait — the thing that performs work. Similarly `ActionFile` becomes `ActionKindFile`.
+
+### `Action` trait
+
 ```rust
-pub trait Executor: Send {
-    fn execute(&self, value: &serde_json::Value) -> Result<String, String>;
+pub trait Action: Send {
+    fn perform(&self, value: &serde_json::Value) -> Result<String, String>;
 }
 ```
 
-Takes a value, runs something, returns stdout or an error string. The executor knows nothing about timeout or concurrency. Those are handled by free functions that take `Box<dyn Executor>`.
+Takes a value, runs something, returns stdout or an error string. The engine calls `action.perform()` in a spawned thread and collects the result on a channel. One thread per action.
 
-### External timeout
+### Barnum owns the timeout
 
-The executor doesn't know about timeout. `run_with_timeout` spawns the executor in a thread and waits on a channel:
+The timeout comes from step config. Barnum passes it to the action at construction time. The action is responsible for honoring it — `perform()` must return within the deadline.
 
-```rust
-fn run_with_timeout(
-    executor: Box<dyn Executor>,
-    value: &serde_json::Value,
-    timeout: Option<Duration>,
-) -> Result<String, String> {
-    let value = value.clone();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(executor.execute(&value));
-    });
-    match timeout {
-        Some(d) => rx.recv_timeout(d).unwrap_or(Err("timed out".into())),
-        None => rx.recv().unwrap_or(Err("executor panicked".into())),
-    }
-}
-```
+- `ShellAction`: `run_shell_command` takes an `Option<Duration>`. On timeout, a reaper thread kills the child process. The dispatch thread blocks on `wait_with_output`, which returns immediately once the child is killed.
+- `PoolAction`: passes the timeout to troupe as `pool_timeout` (for agent lifecycle) AND uses it as its own deadline. Two timeouts, same value: one is troupe's concern (agent management), one is Barnum's (the action must return).
 
-On timeout, the executor's thread keeps running (can't kill threads in Rust). Both executors spawn child processes that terminate on their own: the troupe pool eventually times out the agent, and shell commands finish or get reaped. The leak is bounded.
-
-Consequences:
-- No `timeout` field on any executor
-- No changes to `run_shell_command` or `cli_invoker`
-- `PoolExecutor` still sends `pool_timeout` to troupe in the payload (implementation detail for agent lifecycle, eventually removable)
+`action.perform()` is synchronous. The engine spawns one thread, which calls `perform()`, which returns. No wrapper threads, no abandoned threads.
 
 ### Concurrency stays in the engine
 
-`in_flight` is managed by `Engine::flush_dispatches` (increment before spawn) and `Engine::process_worker_result` (decrement on completion). Both run on the main thread. Executors run in spawned threads with no access to `Engine`.
+`in_flight` is managed by `Engine::flush_dispatches` (increment before spawn) and `Engine::process_worker_result` (decrement on completion). Both run on the main thread. Actions run in spawned threads with no access to `Engine`.
 
 ### Uniform retry
 
@@ -117,7 +100,7 @@ Today retry behavior branches on error type: `retry_on_timeout`, `retry_on_inval
 
 ### Phase 0: Unify retry logic and result types
 
-Collapse `SubmitResult`'s three variants into one struct. Make all failures retry the same way. Lands independently before the Executor trait.
+Collapse `SubmitResult`'s three variants into one struct. Make all failures retry the same way. Lands independently before the `Action` trait.
 
 #### 0a. Remove `retry_on_timeout` and `retry_on_invalid_response` from `Options`
 
@@ -283,26 +266,32 @@ After this phase: all dispatch functions produce `ActionResult`, one code path i
 
 ---
 
-### Phase 1: Executor trait + PoolExecutor
+### Phase 1: `Action` trait + `PoolAction`
 
 Introduce the trait. Move Pool dispatch through it. Command stays as-is.
 
 Requires Phase 0 (unified result types).
 
-#### 1a. Create `runner/executor.rs`
+Also rename config `Action` enum to `ActionKind` (and `ActionFile` to `ActionKindFile`) to free up the name.
+
+#### 1a. Rename config enum
+
+`Action::Pool` / `Action::Command` becomes `ActionKind::Pool` / `ActionKind::Command` everywhere: `config.rs`, `resolved.rs`, `runner/mod.rs`, tests. Mechanical find-and-replace.
+
+#### 1b. Create `runner/action.rs`
 
 ```rust
-pub trait Executor: Send {
-    fn execute(&self, value: &serde_json::Value) -> Result<String, String>;
+pub trait Action: Send {
+    fn perform(&self, value: &serde_json::Value) -> Result<String, String>;
 }
 ```
 
-#### 1b. `PoolExecutor`
+#### 1c. `PoolAction`
 
-Move the `Response` to `Result<String, String>` conversion from `dispatch_pool_task` (Phase 0d) into the executor:
+Move the `Response` to `Result<String, String>` conversion from `dispatch_pool_task` (Phase 0d) into the action:
 
 ```rust
-pub struct PoolExecutor {
+pub struct PoolAction {
     pub root: PathBuf,
     pub invoker: Invoker<TroupeCli>,
     pub docs: String,
@@ -310,8 +299,8 @@ pub struct PoolExecutor {
     pub pool_timeout: Option<u64>,
 }
 
-impl Executor for PoolExecutor {
-    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
+impl Action for PoolAction {
+    fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
         let payload = build_agent_payload(
             &self.step_name, value, &self.docs, self.pool_timeout,
         );
@@ -324,20 +313,20 @@ impl Executor for PoolExecutor {
 }
 ```
 
-#### 1c. `dispatch_via_executor`
+#### 1d. `dispatch_action`
 
 Replaces `dispatch_pool_task`. Takes `WorkerKind` so it works for both tasks and finally hooks (Phase 3).
 
 ```rust
-pub fn dispatch_via_executor(
+pub fn dispatch_action(
     task_id: LogTaskId,
     task: Task,
     kind: WorkerKind,
-    executor: Box<dyn Executor>,
+    action: Box<dyn Action>,
     tx: &mpsc::Sender<WorkerResult>,
 ) {
     let value = task.value.clone();
-    let output = executor.execute(&value.0);
+    let output = action.perform(&value.0);
     let _ = tx.send(WorkerResult {
         task_id,
         task,
@@ -347,13 +336,12 @@ pub fn dispatch_via_executor(
 }
 ```
 
-#### 1d. Update `dispatch_task` Pool branch
+#### 1e. Update `dispatch_task` Pool branch
 
 ```rust
-Action::Pool(..) => {
+ActionKind::Pool(..) => {
     let docs = generate_step_docs(step, self.config);
-    let working_dir = self.pool.working_dir.clone();
-    let executor = Box::new(PoolExecutor {
+    let action = Box::new(PoolAction {
         root: self.pool.root.clone(),
         invoker: self.pool.invoker.clone(),
         docs,
@@ -363,34 +351,34 @@ Action::Pool(..) => {
 
     info!(step = %task.step, "submitting task to pool");
     thread::spawn(move || {
-        dispatch_via_executor(
-            task_id, task, WorkerKind::Task, executor, &tx,
+        dispatch_action(
+            task_id, task, WorkerKind::Task, action, &tx,
         );
     });
 }
 ```
 
-#### 1e. Delete `dispatch_pool_task`
+#### 1f. Delete `dispatch_pool_task`
 
 Compile, run full suite.
 
 ---
 
-### Phase 2: ShellExecutor + Command through trait
+### Phase 2: `ShellAction` + Command through trait
 
-Both branches of `dispatch_task` now construct a `Box<dyn Executor>` and call `dispatch_via_executor`.
+Both branches of `dispatch_task` now construct a `Box<dyn Action>` and call `dispatch_action`.
 
-#### 2a. `ShellExecutor`
+#### 2a. `ShellAction`
 
 ```rust
-pub struct ShellExecutor {
+pub struct ShellAction {
     pub script: String,
     pub step_name: StepName,
     pub working_dir: PathBuf,
 }
 
-impl Executor for ShellExecutor {
-    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
+impl Action for ShellAction {
+    fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
         let task_json = serde_json::to_string(&serde_json::json!({
             "kind": &self.step_name,
             "value": value,
@@ -405,9 +393,8 @@ impl Executor for ShellExecutor {
 #### 2b. Update `dispatch_task` Command branch
 
 ```rust
-Action::Command(CommandAction { script }) => {
-    let working_dir = self.pool.working_dir.clone();
-    let executor = Box::new(ShellExecutor {
+ActionKind::Command(CommandAction { script }) => {
+    let action = Box::new(ShellAction {
         script: script.clone(),
         step_name: task.step.clone(),
         working_dir: self.pool.working_dir.clone(),
@@ -415,8 +402,8 @@ Action::Command(CommandAction { script }) => {
 
     info!(step = %task.step, script = %script, "executing command");
     thread::spawn(move || {
-        dispatch_via_executor(
-            task_id, task, WorkerKind::Task, executor, &tx,
+        dispatch_action(
+            task_id, task, WorkerKind::Task, action, &tx,
         );
     });
 }
@@ -424,7 +411,7 @@ Action::Command(CommandAction { script }) => {
 
 #### 2c. Delete `dispatch_command_task`
 
-After this, both branches of `dispatch_task` do the same thing: construct an executor, call `dispatch_via_executor`. The match only picks which executor. This is the seam for PLUGGABLE_ACTION_KINDS.
+After this, both branches of `dispatch_task` do the same thing: construct an action, call `dispatch_action`. The match only picks which action to construct. This is the seam for PLUGGABLE_ACTION_KINDS.
 
 Compile, run full suite.
 
@@ -432,7 +419,7 @@ Compile, run full suite.
 
 ### Phase 3: Finally hooks through trait
 
-Finally hooks also go through `dispatch_via_executor` with a `ShellExecutor`. `WorkerKind` (added in Phase 0e) routes the result to `convert_finally_result`.
+Finally hooks also go through `dispatch_action` with a `ShellAction`. `WorkerKind` (added in Phase 0e) routes the result to `convert_finally_result`.
 
 #### 3a. Update `dispatch_finally`
 
@@ -440,17 +427,16 @@ Finally hooks also go through `dispatch_via_executor` with a `ShellExecutor`. `W
 fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
     let step = self.step_map.get(&task.step).expect("...");
     let script = step.finally_hook.clone().expect("...");
-    let working_dir = self.pool.working_dir.clone();
     let tx = self.tx.clone();
-    let executor = Box::new(ShellExecutor {
+    let action = Box::new(ShellAction {
         script: script.to_string(),
         step_name: task.step.clone(),
         working_dir: self.pool.working_dir.clone(),
     });
     thread::spawn(move || {
-        dispatch_via_executor(
+        dispatch_action(
             parent_id, task, WorkerKind::Finally { parent_id },
-            executor, &tx,
+            action, &tx,
         );
     });
 }
@@ -462,73 +448,86 @@ Three dispatch functions replaced by one. Compile, run full suite.
 
 ---
 
-### Phase 4: Timeout enforcement
+### Phase 4: Timeout
 
-Barnum-enforced timeout for all executor types, using `mpsc::recv_timeout` (stdlib, no new deps).
+Barnum enforces timeout for all action types. The timeout value comes from step config and is passed to the action at construction time.
 
-#### 4a. `run_with_timeout`
+#### 4a. Add timeout to `run_shell_command`
+
+`run_shell_command` gains an `Option<Duration>` parameter. When set, a reaper thread kills the child after the deadline:
 
 ```rust
-use std::time::Duration;
-
-fn run_with_timeout(
-    executor: Box<dyn Executor>,
-    value: &serde_json::Value,
+pub fn run_shell_command(
+    script: &str,
+    stdin_input: &str,
+    working_dir: Option<&Path>,
     timeout: Option<Duration>,
 ) -> Result<String, String> {
-    let value = value.clone();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(executor.execute(&value));
-    });
-    match timeout {
-        Some(d) => rx.recv_timeout(d).unwrap_or(Err("timed out".into())),
-        None => rx.recv().unwrap_or(Err("executor panicked".into())),
+    // ... spawn child, write stdin as before ...
+
+    if let Some(duration) = timeout {
+        let child_id = child.id();
+        thread::spawn(move || {
+            thread::sleep(duration);
+            unsafe { libc::kill(-(child_id as i32), libc::SIGKILL); }
+        });
+    }
+
+    let output = child.wait_with_output()
+        .map_err(|e| format!("wait failed: {e}"))?;
+
+    if !output.status.success() {
+        if timeout.is_some() && output.status.code().is_none() {
+            return Err("timed out".into());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("exited with status {}: {}", output.status, stderr.trim()));
+    }
+
+    String::from_utf8(output.stdout).map_err(|e| format!("not valid UTF-8: {e}"))
+}
+```
+
+The reaper thread is fire-and-forget. If the child exits before the deadline, the `kill` fails harmlessly (process gone). If the deadline fires, the child dies and `wait_with_output` returns immediately with a signal status.
+
+#### 4b. Add `timeout` to `ShellAction`
+
+```rust
+pub struct ShellAction {
+    pub script: String,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+    pub timeout: Option<Duration>,
+}
+
+impl Action for ShellAction {
+    fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
+        let task_json = serde_json::to_string(&serde_json::json!({
+            "kind": &self.step_name,
+            "value": value,
+        }))
+        .unwrap_or_default();
+
+        run_shell_command(&self.script, &task_json, Some(&self.working_dir), self.timeout)
     }
 }
 ```
 
-On timeout, the executor's thread keeps running. Both executor types spawn child processes that terminate on their own (shell commands finish, troupe pool times out the agent). Bounded, transient leak.
+#### 4c. Construct with timeout at dispatch sites
 
-#### 4b. Add `timeout` param to `dispatch_via_executor`
-
+In `dispatch_task` (Command branch):
 ```rust
-pub fn dispatch_via_executor(
-    task_id: LogTaskId,
-    task: Task,
-    kind: WorkerKind,
-    executor: Box<dyn Executor>,
-    timeout: Option<Duration>,
-    tx: &mpsc::Sender<WorkerResult>,
-) {
-    let value = task.value.clone();
-    let output = run_with_timeout(executor, &value.0, timeout);
-    let _ = tx.send(WorkerResult {
-        task_id, task, kind,
-        result: ActionResult { value, output },
-    });
-}
+let action = Box::new(ShellAction {
+    script: script.clone(),
+    step_name: task.step.clone(),
+    working_dir: self.pool.working_dir.clone(),
+    timeout: step.options.timeout.map(Duration::from_secs),
+});
 ```
 
-#### 4c. Pass timeout from dispatch sites
+In `dispatch_finally`, pass `None` (finally hooks have no timeout config).
 
-In `dispatch_task` (both branches):
-```rust
-let timeout = step.options.timeout.map(Duration::from_secs);
-dispatch_via_executor(
-    task_id, task, WorkerKind::Task, executor, timeout, &tx,
-);
-```
-
-In `dispatch_finally`, pass `None` (finally hooks have no timeout config):
-```rust
-dispatch_via_executor(
-    parent_id, task, WorkerKind::Finally { parent_id },
-    executor, None, &tx,
-);
-```
-
-No changes to executors, `run_shell_command`, `cli_invoker`, or `submit.rs`. The timeout is entirely external. The clock starts when `run_with_timeout` is called in the dispatch thread; time spent in `pending_dispatches` doesn't count.
+`dispatch_action` is unchanged. It calls `action.perform()` and sends the result. The timeout is between the action and `run_shell_command` — `dispatch_action` doesn't know or care.
 
 Compile, run full suite.
 
@@ -537,13 +536,13 @@ Compile, run full suite.
 | Phase | What | Deletes | Adds |
 |-------|------|---------|------|
 | 0 | Unify results + retry | `PoolResult`, `CommandResult`, `FinallyResult`, `SubmitResult` enum, `process_pool_response`, `process_command_response`, `run_command_action`, `retry_on_timeout`, `retry_on_invalid_response` | `ActionResult`, `WorkerKind` |
-| 1 | Pool through trait | `dispatch_pool_task` | `Executor` trait, `PoolExecutor`, `dispatch_via_executor` |
-| 2 | Command through trait | `dispatch_command_task` | `ShellExecutor` |
-| 3 | Finally through trait | `dispatch_finally_task` | (reuses `ShellExecutor` + `WorkerKind::Finally`) |
-| 4 | Timeout | | `run_with_timeout`, `timeout` param on `dispatch_via_executor` |
+| 1 | Pool through trait | `dispatch_pool_task`, `Action` enum (renamed) | `Action` trait, `PoolAction`, `dispatch_action`, `ActionKind` enum |
+| 2 | Command through trait | `dispatch_command_task` | `ShellAction` |
+| 3 | Finally through trait | `dispatch_finally_task` | (reuses `ShellAction` + `WorkerKind::Finally`) |
+| 4 | Timeout | | `timeout` param on `run_shell_command`, `timeout` field on `ShellAction` |
 
 Each phase compiles and passes tests before moving to the next.
 
 ## What doesn't change
 
-`ActionFile` and `Action` enums stay as-is. The closed enum is fine until PLUGGABLE_ACTION_KINDS. State logging (task submission and completion) is unchanged.
+`ActionKind` enum variants stay as-is (just renamed from `Action`). State logging (task submission and completion) is unchanged.
