@@ -13,7 +13,7 @@ This supersedes ACTION_REGISTRY.md.
 ```
 Rust dispatch_task (every task, regardless of kind)
   → spawns: node /path/to/action-executor.js
-    → stdin: { action: { kind, ...params }, task: { kind, value } }
+    → stdin: { action: { kind, params: {...} }, task: { kind, value } }
     → JS looks up handler by action.kind
     → handler executes (calls troupe, runs shell script, calls Claude, etc.)
     → stdout: [{ kind: "NextStep", value: {...} }, ...]
@@ -154,7 +154,7 @@ The enriched stdin envelope:
 
 ```json
 {
-  "action": { "kind": "Pool", "instructions": "...", "pool": "agents" },
+  "action": { "kind": "Pool", "params": { "instructions": "...", "pool": "agents" } },
   "task": { "kind": "Analyze", "value": { "file": "main.rs" } }
 }
 ```
@@ -230,7 +230,7 @@ export type StepFile = ConfigFile["steps"][number];
 /** The envelope piped to the JS executor's stdin by Rust. */
 export interface ActionEnvelope {
   /** The step's action config (kind + params). */
-  action: { kind: string } & Record<string, unknown>;
+  action: { kind: string; params: Record<string, unknown> };
   /** The task being dispatched. */
   task: { kind: string; value: unknown };
 }
@@ -261,7 +261,7 @@ import type { ActionHandler } from "./types.js";
  * and must write `[{"kind": "NextStep", "value": {...}}, ...]` to stdout.
  */
 export const handle: ActionHandler = async (envelope) => {
-  const script = envelope.action.script;
+  const script = envelope.action.params.script;
   if (typeof script !== "string") {
     throw new Error(`Command action requires a "script" string, got: ${typeof script}`);
   }
@@ -311,12 +311,13 @@ function troupeBinary(): string {
 export const handle: ActionHandler = async (envelope) => {
   const { action, task } = envelope;
   const troupe = troupeBinary();
+  const params = action.params;
 
   // TODO: generateStepDocs needs the full step + config context.
   // For now, use the instructions directly. Full docs generation
   // requires passing step metadata through the envelope.
-  const instructions = typeof action.instructions === "string"
-    ? action.instructions
+  const instructions = typeof params.instructions === "string"
+    ? params.instructions
     : "";
 
   // Build troupe payload
@@ -324,14 +325,14 @@ export const handle: ActionHandler = async (envelope) => {
     task,
     instructions,
   };
-  if (typeof action.timeout === "number") {
-    payload.timeout_seconds = action.timeout;
+  if (typeof params.timeout === "number") {
+    payload.timeout_seconds = params.timeout;
   }
 
   // Submit to troupe
   const args = ["submit_task"];
-  if (typeof action.root === "string") args.push("--root", action.root);
-  if (typeof action.pool === "string") args.push("--pool", action.pool);
+  if (typeof params.root === "string") args.push("--root", params.root);
+  if (typeof params.pool === "string") args.push("--pool", params.pool);
   args.push("--notify", "file", "--data", JSON.stringify(payload));
 
   const result = execFileSync(troupe, args, { encoding: "utf-8" });
@@ -365,7 +366,7 @@ export function generateStepDocs(step: StepFile, config: ConfigFile): string {
   lines.push(`# Current Step: ${step.name}`, "");
 
   if (step.action.kind === "Pool") {
-    const instructions = (step.action as Record<string, unknown>).instructions;
+    const instructions = (step.action.params as Record<string, unknown>).instructions;
     if (typeof instructions === "string" && instructions.length > 0) {
       lines.push(instructions, "");
     }
@@ -497,7 +498,7 @@ The pool handler needs step docs (instructions + valid responses + schemas). Thi
 
 ```json
 {
-  "action": { "kind": "Pool", ... },
+  "action": { "kind": "Pool", "params": { ... } },
   "task": { "kind": "Analyze", "value": {...} },
   "step": { "name": "Analyze", "next": ["Implement", "Done"], ... },
   "config": { "steps": [...] }
@@ -510,7 +511,7 @@ This gives the JS handler everything it needs to generate docs. It's redundant (
 
 ```json
 {
-  "action": { "kind": "Pool", ... },
+  "action": { "kind": "Pool", "params": { ... } },
   "task": { "kind": "Analyze", "value": {...} },
   "docs": "# Current Step: Analyze\n\n..."
 }
