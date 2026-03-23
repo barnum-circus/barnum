@@ -726,7 +726,7 @@ fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
 }
 ```
 
-**Complication**: `dispatch_finally_task` currently uses `serde_json::to_string(&value.0)` for stdin (raw JSON value). `ShellAction::start` uses `serde_json::to_string(&json!({"kind": step_name, "value": value}))` (kind+value envelope). This changes the stdin format for finally hooks. Check whether any existing finally hooks depend on the raw format. If so, create a `FinallyShellAction` that preserves the raw format, or add a stdin format parameter to `ShellAction`.
+**Prerequisite**: `FINALLY_STDIN_ENVELOPE.md` must land first. That sub-refactor unifies the finally hook stdin format from raw value to `{"kind": ..., "value": ...}` envelope (matching command actions). Once that lands, `ShellAction` uses the same envelope for both command and finally dispatch — no format mismatch.
 
 #### 3b. Delete `dispatch_finally_task` and clean up
 
@@ -758,6 +758,6 @@ Each phase compiles and passes tests before moving to the next.
 
 **Retry classification for `NotProcessed`** (already landed in Phase 0): maps to `ActionError::Failed` → `FailureKind::SubmitError` (always retries), instead of the old `FailureKind::Timeout`.
 
-**Finally hook stdin** (Phase 3 complication): The stdin format for finally hooks changes from raw JSON value to `{"kind": "step_name", "value": ...}` envelope, because `ShellAction` uses the same envelope as command actions. Must verify existing finally hooks aren't broken by this.
+**Finally hook stdin**: Handled by prerequisite `FINALLY_STDIN_ENVELOPE.md`. That sub-refactor unifies the stdin format before this refactor touches the dispatch path, so `ShellAction` can use one envelope format for both command and finally dispatch.
 
 **No new dependencies.** `ProcessGuard` uses `std::process::Child::kill()`, which is cross-platform (works on Windows, macOS, Linux) with no external crate.
