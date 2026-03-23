@@ -416,7 +416,18 @@ Delete hook validation warnings (`main.rs:483-486`).
 
 **Demo config:** Delete `crates/barnum_cli/demos/hooks/` directory entirely (the only consumer of pre/post hooks).
 
-### Phase 6: Cleanup
+### Phase 6: Update docs website
+
+**Files in `docs-website/`:**
+
+- `docs/repertoire/hooks.md` — Rewrite to only cover finally hooks. Delete all pre/post hook content (lifecycle diagram, pre hook contract, post hook contract, PostHookInput examples, retry behavior table referencing pre/post). Rename page to "Finally Hooks" or similar.
+- `docs/repertoire/code-review.md` — Remove any pre/post hook references.
+- `docs/repertoire/error-recovery.md` — Remove any pre/post hook references.
+- `docs/reference/config-schema.md` — Remove pre/post from schema reference.
+- `docs/reference/visualization.md` — Remove pre/post hook references.
+- `src/pages/index.tsx` — Remove pre/post hook mentions from landing page.
+
+### Phase 7: Cleanup
 
 - Delete `HookScript` import from `dispatch.rs` (only used for pre-hook parameter type)
 - Remove unused imports from `hooks.rs`, `response.rs`
