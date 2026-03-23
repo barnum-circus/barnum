@@ -111,7 +111,7 @@ The graph shows the **static transition structure**: what `next` transitions are
 - **Finally hook targets**: Steps spawned by `finally` hooks appear as disconnected nodes since they're created at runtime, not via `next`
 - **Runtime fan-out**: A single command step might spawn 50 tasks at runtime, but the graph shows one edge
 - **Retry paths**: Failed tasks that get retried follow the same edges
-- **Pre/post hook transformations**: Hooks can modify task data but don't change the graph structure
+- **Finally hook spawns**: Tasks spawned by `finally` hooks don't appear as static edges
 
 ## DOT output
 

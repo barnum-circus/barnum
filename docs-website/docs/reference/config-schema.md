@@ -61,8 +61,6 @@ Each step defines a stage in your workflow.
       "name": "Analyze",
       "value_schema": { "type": "object" },
       "action": { "kind": "Pool", "instructions": { "kind": "Inline", "value": "..." } },
-      "pre": { "kind": "Command", "script": "scripts/pre.sh" },
-      "post": { "kind": "Command", "script": "scripts/post.sh" },
       "finally": { "kind": "Command", "script": "scripts/finally.sh" },
       "next": ["Review", "Implement"],
       "options": { "timeout": 300 }
@@ -76,8 +74,6 @@ Each step defines a stage in your workflow.
 | `name` | string | **Yes** | Unique step identifier |
 | `value_schema` | object | No | JSON Schema to validate task values |
 | `action` | object | No | How to execute the step (Pool or Command) |
-| `pre` | object | No | Pre-execution hook (`{"kind": "Command", "script": "..."}`) |
-| `post` | object | No | Post-execution hook (`{"kind": "Command", "script": "..."}`) |
 | `finally` | object | No | Finally hook (`{"kind": "Command", "script": "..."}`) |
 | `next` | array | No | Valid next step names (empty = terminal step) |
 | `options` | object | No | Per-step options override |
@@ -179,33 +175,7 @@ Override global options for specific steps.
 
 All fields are optional and override the corresponding global option.
 
-## Hooks
-
-### Pre Hook
-
-Runs before the action. Transforms input.
-
-- **stdin**: Task value JSON
-- **stdout**: Modified task value JSON
-- **exit 0**: Continue with modified value
-- **exit non-zero**: Skip action, run post hook with `PreHookError`
-
-### Post Hook
-
-Runs after the action. Can modify results.
-
-- **stdin**: Result JSON (see below)
-- **stdout**: Modified result JSON
-- **exit 0**: Use modified result
-- **exit non-zero**: Apply retry policy
-
-Result kinds:
-- `Success` - Agent completed, can modify `next` array
-- `Timeout` - Agent timed out
-- `Error` - Agent returned error
-- `PreHookError` - Pre hook failed
-
-### Finally Hook
+## Finally Hook
 
 Runs after ALL descendants complete.
 
@@ -233,12 +203,10 @@ Runs after ALL descendants complete.
           "file": { "type": "string" }
         }
       },
-      "pre": { "kind": "Command", "script": "scripts/read-file.sh" },
       "action": {
         "kind": "Pool",
         "instructions": { "kind": "Inline", "value": "Analyze this code. Return `[{\"kind\": \"Implement\", \"value\": {\"changes\": []}}]`" }
       },
-      "post": { "kind": "Command", "script": "scripts/validate-response.sh" },
       "next": ["Implement"]
     },
     {
