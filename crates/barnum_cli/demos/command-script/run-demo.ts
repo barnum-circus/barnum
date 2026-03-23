@@ -1,3 +1,7 @@
+/*
+Run from repo root:
+BARNUM=./target/debug/barnum ROOT=/tmp/troupe POOL=demo pnpm dlx tsx crates/barnum_cli/demos/command-script/run-demo.ts
+*/
 import { BarnumConfig } from "@barnum/barnum";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
