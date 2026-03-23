@@ -462,6 +462,18 @@ jobs:
             echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_cli --bin build_schemas' and commit."
             exit 1
           fi
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install npm dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: libs/barnum
+      - name: Type-check generated schemas
+        run: pnpm typecheck
+        working-directory: libs/barnum
       - uses: actions/upload-artifact@v4
         with:
           name: barnum-config-schema

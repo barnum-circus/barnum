@@ -164,36 +164,25 @@ For examples, see `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `refact
 
 ## Branching strategy
 
-**Work on feature branches with atomic commits. CI must pass on every commit.**
+**One branch per logical change. Keep branches small.** Each branch should do one thing, squash merge to master, and produce one clean commit. If a refactor has three independent steps, that's three branches — not three commits on one branch.
 
 When implementing a refactor:
 
-1. **Create a feature branch** for the refactor (e.g., `refactor/crossbeam-channels`)
-2. **Make atomic commits where CI passes on every commit** - each commit should be a complete, working state
-3. **Push branches and verify CI is green** before moving to the next commit
-4. **When the branch is fully ready, squash merge to master** - one clean commit per branch
+1. **Break the work into the smallest independent units** — each unit gets its own branch
+2. **Each branch should be a single logical change** that passes CI
+3. **Squash merge each branch to master** as soon as it's green — don't wait for later branches
+4. **Later branches rebase on master** after earlier ones merge
 
-### Stacked branches for CI verification
+The goal: master gets a stream of small, focused commits. Each one is easy to review, easy to bisect, and easy to revert. Large branches with many commits are a sign that the work wasn't decomposed enough.
 
-**Push branches to verify CI passes at each step.** You don't need to create PRs for every commit - just push the branch and check CI. This is especially important for multi-commit refactors.
+### Example: a 3-step refactor
 
-Example workflow for a 3-commit refactor:
-1. Create `refactor/foo-step-1` with the first commit, push branch, verify CI
-2. Create `refactor/foo-step-2` on top with the second commit, push branch, verify CI
-3. Create `refactor/foo` (main branch) on top with the final commit, push branch, verify CI
-4. When all green, squash merge the main branch to master
+Instead of one branch with 3 commits:
+1. `refactor/extract-types` — extract types into lib.rs, merge to master
+2. `refactor/add-derives` — add serde/schemars derives, merge to master
+3. `refactor/generate-schema` — add schema generator binary, merge to master
 
-This ensures:
-- Each commit passes CI independently
-- You can identify exactly which commit breaks CI during development
-- Master has a clean, linear history of squashed commits
-
-When rebasing the stack, rebase from bottom to top:
-```bash
-git checkout refactor/foo-step-1 && git rebase master
-git checkout refactor/foo-step-2 && git rebase refactor/foo-step-1
-git checkout refactor/foo && git rebase refactor/foo-step-2
-```
+Each branch is created from the latest master after the previous one merges. Each produces one squash commit on master.
 
 ### What makes a good atomic commit
 

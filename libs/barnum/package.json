@@ -39,8 +39,14 @@
     "barnum-config-schema.zod.ts",
     "barnum-cli-schema.zod.ts"
   ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "zod": "^3.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   },
   "sideEffects": false
 }
