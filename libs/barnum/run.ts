@@ -63,33 +63,35 @@ export function barnum(cli: Cli): ChildProcess {
 }
 
 type GlobalOpts = { root?: string; logLevel?: Cli["logLevel"] };
+type RunOpts = Omit<Extract<Command, { kind: "Run" }>, "kind">;
 
-export function barnumRun(
-  opts: Omit<Extract<Command, { kind: "Run" }>, "kind">,
-  global?: GlobalOpts,
-): ChildProcess {
+export function barnumRun(opts: RunOpts & GlobalOpts): ChildProcess {
+  const { root, logLevel, ...runOpts } = opts;
   return barnum({
-    ...global,
-    command: { kind: "Run", ...opts },
+    root,
+    logLevel,
+    command: { kind: "Run", ...runOpts },
   } as Cli);
 }
 
 export function barnumConfig(
-  sub: ConfigCommand,
-  global?: GlobalOpts,
+  opts: { command: ConfigCommand } & GlobalOpts,
 ): ChildProcess {
+  const { root, logLevel, command } = opts;
   return barnum({
-    ...global,
-    command: { kind: "Config", command: sub },
+    root,
+    logLevel,
+    command: { kind: "Config", command },
   } as Cli);
 }
 
 export function barnumVersion(
-  opts?: Omit<Extract<Command, { kind: "Version" }>, "kind">,
-  global?: GlobalOpts,
+  opts?: Omit<Extract<Command, { kind: "Version" }>, "kind"> & GlobalOpts,
 ): ChildProcess {
+  const { root, logLevel, ...rest } = opts ?? {};
   return barnum({
-    ...global,
-    command: { kind: "Version", json: false, ...opts },
+    root,
+    logLevel,
+    command: { kind: "Version", json: false, ...rest },
   } as Cli);
 }
