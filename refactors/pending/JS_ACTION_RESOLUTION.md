@@ -165,33 +165,20 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
 }
 ```
 
-But `ShellAction` currently pipes `{"kind": "StepName", "value": {...}}` to stdin. The JS executor needs more: the action config and docs. Two options for getting the action config to the executor:
-
-**Option A: Enriched stdin.** Change what `ShellAction` pipes. Instead of just `{ kind, value }`, pipe `{ action: {...}, task: { kind, value } }`. This breaks the stdin contract for Command actions (users expect `{ kind, value }`), but the JS Command handler restores it by piping just `{ kind, value }` to the user's shell script.
-
-**Option B: Action config as CLI args.** The executor script path includes the action config as a base64 arg: `node executor.js --action <base64>`. Stdin stays as `{ kind, value }`. Simpler for the Rust side but means serializing the action config into a CLI arg.
-
-**Recommendation: Option A.** The stdin contract is between Rust and the JS executor, not between Rust and the user's scripts. The JS handlers control what their subprocesses receive.
-
-The enriched stdin envelope:
-
-```json
-{
-  "action": { "kind": "Pool", "params": { "instructions": "...", "pool": "agents" } },
-  "task": { "kind": "Analyze", "value": { "file": "main.rs" } }
-}
-```
+But `ShellAction` currently pipes `{"kind": "StepName", "value": {...}}` to stdin. The JS executor needs the full envelope: action config, task, step metadata, and full config. The stdin contract is between Rust and the JS executor — the JS handlers control what their subprocesses receive (e.g., Command strips it back down to `{ kind, value }` for the user's shell script).
 
 ### 3. ShellAction pipes the enriched envelope
 
 **File:** `crates/barnum_config/src/runner/action.rs`
 
-`ShellAction` currently constructs `{"kind": step_name, "value": value}` and pipes it. It changes to pipe a richer envelope that includes the step's action config.
+`ShellAction` currently constructs `{"kind": step_name, "value": value}` and pipes it. It changes to pipe a richer envelope with the full context the JS executor needs.
 
 ```rust
 pub struct ShellAction {
     pub script: String,
-    pub action_config: serde_json::Value,  // NEW: the step's action config
+    pub action_config: serde_json::Value,  // the step's action config (opaque JSON)
+    pub step_config: serde_json::Value,    // the full step definition
+    pub full_config: serde_json::Value,    // the full barnum config
     pub step_name: StepName,
     pub working_dir: PathBuf,
 }
@@ -202,6 +189,8 @@ The piped stdin becomes:
 let envelope = serde_json::json!({
     "action": self.action_config,
     "task": { "kind": &self.step_name, "value": value },
+    "step": self.step_config,
+    "config": self.full_config,
 });
 ```
 
@@ -250,6 +239,9 @@ import type { configFileSchema } from "../barnum-config-schema.zod.js";
 export type ConfigFile = z.output<typeof configFileSchema>;
 export type StepFile = ConfigFile["steps"][number];
 
+import type { ActionFile, StepFile, ConfigFile } from "../barnum-config-schema.zod.js";
+export type { ActionFile, StepFile, ConfigFile };
+
 /** A follow-up task to queue after this action completes. */
 export interface FollowUpTask {
   kind: string;
@@ -258,10 +250,14 @@ export interface FollowUpTask {
 
 /** The raw envelope piped to the JS executor's stdin by Rust. */
 export interface RawEnvelope {
-  /** The step's action config (kind + params). */
-  action: { kind: string; params: Record<string, unknown> };
+  /** The step's action config — typed discriminated union from the generated schema. */
+  action: ActionFile;
   /** The task being dispatched. */
   task: { kind: string; value: unknown };
+  /** The full step definition (for handlers that need context like next steps, schemas). */
+  step: StepFile;
+  /** The full config (for handlers that need global context like all steps). */
+  config: ConfigFile;
 }
 
 /** Context passed to an action's handle function, with typed params. */
@@ -270,6 +266,10 @@ export interface ActionContext<TParams = Record<string, unknown>> {
   params: TParams;
   /** The task being dispatched. */
   task: { kind: string; value: unknown };
+  /** The full step definition. */
+  step: StepFile;
+  /** The full config. */
+  config: ConfigFile;
 }
 
 /**
@@ -380,19 +380,18 @@ export default defineAction({
     timeout: z.number().optional(),
   }),
 
-  handle: async ({ params, task }) => {
+  handle: async ({ params, task, step, config }) => {
     // params is fully typed: { instructions: ..., pool?: string, root?: string, timeout?: number }
     const troupe = troupeBinary();
 
-    // TODO: generateStepDocs needs the full step + config context.
-    // For now, use the instructions directly. Full docs generation
-    // requires passing step metadata through the envelope.
     const instructions = params.instructions.kind === "Inline"
       ? params.instructions.value
       : "";
 
+    const docs = generateStepDocs(task.kind, instructions, step, config);
+
     // Build troupe payload
-    const payload: Record<string, unknown> = { task, instructions };
+    const payload: Record<string, unknown> = { task, instructions: docs };
     if (params.timeout != null) {
       payload.timeout_seconds = params.timeout;
     }
@@ -522,12 +521,18 @@ const envelope: RawEnvelope = JSON.parse(Buffer.concat(chunks).toString());
 const action = getAction(envelope.action.kind);
 
 // Validate params if the action defines a schema
+const rawParams = "params" in envelope.action ? envelope.action.params : {};
 const params = action.validate
-  ? action.validate.parse(envelope.action.params)
-  : envelope.action.params;
+  ? action.validate.parse(rawParams)
+  : rawParams;
 
 // Dispatch to handler with validated, typed params
-const results = await action.handle({ params, task: envelope.task });
+const results = await action.handle({
+  params,
+  task: envelope.task,
+  step: envelope.step,
+  config: envelope.config,
+});
 
 // Write follow-up tasks to stdout
 process.stdout.write(JSON.stringify(results));
@@ -588,9 +593,9 @@ The resolved `Step.action` is a `serde_json::Value` containing the original acti
 
 ### 8. Step docs generation
 
-The pool handler needs step docs (instructions + valid responses + schemas). This requires the full step + config context, not just the action config.
+The envelope includes `step` and `config` (see `RawEnvelope` type). The pool handler uses these to generate step docs entirely in JS via `generateStepDocs()`. Rust doesn't generate docs — it just passes the config through.
 
-**Option A: Include step metadata in the envelope.** Rust adds `step` and `config` fields to the stdin envelope:
+Envelope shape:
 
 ```json
 {
@@ -600,22 +605,6 @@ The pool handler needs step docs (instructions + valid responses + schemas). Thi
   "config": { "steps": [...] }
 }
 ```
-
-This gives the JS handler everything it needs to generate docs. It's redundant (the task kind == the step name), but it's explicit.
-
-**Option B: Pre-generate docs in Rust, include in envelope.** Rust generates the docs string and includes it:
-
-```json
-{
-  "action": { "kind": "Pool", "params": { ... } },
-  "task": { "kind": "Analyze", "value": {...} },
-  "docs": "# Current Step: Analyze\n\n..."
-}
-```
-
-Simpler for JS but keeps the docs generation in Rust.
-
-**Recommendation: Option A** for now. It's more data but gives JS handlers full context. Docs generation moves entirely to JS. Option B is fine as a shortcut during migration.
 
 ### 9. Troupe binary discovery
 
