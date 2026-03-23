@@ -15,6 +15,9 @@ const ActionFile = z.discriminatedUnion("kind", [
   z.object({
     instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
     kind: z.literal("Pool"),
+    pool: z.string().nullable().optional().default(null).describe("Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default."),
+    root: z.string().nullable().optional().default(null).describe("Pool root directory. If omitted, the pool infrastructure uses its own default."),
+    timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout."),
   }).describe("Send the task to the agent pool for processing."),
   z.object({
     kind: z.literal("Command"),

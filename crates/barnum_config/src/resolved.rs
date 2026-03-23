@@ -6,6 +6,7 @@
 use crate::types::{HookScript, StepName};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Fully resolved Barnum configuration.
 ///
@@ -65,6 +66,19 @@ pub struct Step {
 pub struct PoolAction {
     /// Resolved markdown instructions.
     pub instructions: String,
+
+    /// Pool name. If `None`, the pool infrastructure uses its own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<String>,
+
+    /// Pool root directory. If `None`, the pool infrastructure uses its own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+
+    /// Agent timeout in seconds. Passed to the pool as `timeout_seconds`.
+    /// Separate from the step-level timeout which controls barnum's worker timeout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
 }
 
 /// Run a local command.

@@ -8,7 +8,7 @@ use std::fmt::Write;
 /// Write instructions to a doc string.
 fn write_instructions(doc: &mut String, action: &ActionKind) {
     match action {
-        ActionKind::Pool(PoolAction { instructions }) if !instructions.is_empty() => {
+        ActionKind::Pool(PoolAction { instructions, .. }) if !instructions.is_empty() => {
             writeln!(doc, "{instructions}").ok();
             writeln!(doc).ok();
         }

@@ -7,6 +7,7 @@ use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 /// Top-level Barnum configuration file format.
 ///
@@ -135,6 +136,23 @@ pub struct PoolActionFile {
     /// `{"kind": "Inline", "value": "..."}` to write the markdown directly, or
     /// `{"kind": "Link", "path": "path/to/file.md"}` to reference an external file.
     pub instructions: crate::maybe_linked::MaybeLinked<Instructions>,
+
+    /// Pool name (e.g., `"demo"`, `"reviewers"`). If omitted, the pool
+    /// infrastructure uses its own default.
+    #[serde(default)]
+    pub pool: Option<String>,
+
+    /// Pool root directory. If omitted, the pool infrastructure uses its
+    /// own default.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
+
+    /// Agent timeout in seconds. Passed to the pool as `timeout_seconds`
+    /// in the task payload. Controls how long the agent gets to work.
+    /// Separate from the step-level `timeout` which controls barnum's
+    /// worker timeout.
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 /// Run a local shell command instead of sending to an agent. Use this for
@@ -189,7 +207,7 @@ impl ActionFile {
     #[must_use]
     pub const fn instructions(&self) -> Option<&crate::maybe_linked::MaybeLinked<Instructions>> {
         match self {
-            Self::Pool(PoolActionFile { instructions }) => Some(instructions),
+            Self::Pool(PoolActionFile { instructions, .. }) => Some(instructions),
             Self::Command(..) => None,
         }
     }
@@ -402,7 +420,12 @@ impl ActionFile {
     /// Resolve this action's file references.
     fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::ActionKind> {
         match self {
-            Self::Pool(PoolActionFile { instructions }) => {
+            Self::Pool(PoolActionFile {
+                instructions,
+                pool,
+                root,
+                timeout,
+            }) => {
                 let resolved: Instructions = instructions.resolve(base_path, |path| {
                     let content = std::fs::read_to_string(path)?;
                     Ok(Instructions(content))
@@ -410,6 +433,9 @@ impl ActionFile {
                 Ok(crate::resolved::ActionKind::Pool(
                     crate::resolved::PoolAction {
                         instructions: resolved.0,
+                        pool,
+                        root,
+                        timeout,
                     },
                 ))
             }
@@ -688,7 +714,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Inline { value: Instructions(s) } }) if s == "Inline markdown here."
+            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Inline { value: Instructions(s) }, .. }) if s == "Inline markdown here."
         ));
     }
 
@@ -705,7 +731,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Link { path } }) if path == "path/to/instructions.md"
+            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Link { path }, .. }) if path == "path/to/instructions.md"
         ));
     }
 

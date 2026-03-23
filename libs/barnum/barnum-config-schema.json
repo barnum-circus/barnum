@@ -72,6 +72,32 @@
               "enum": [
                 "Pool"
               ]
+            },
+            "pool": {
+              "description": "Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default.",
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "root": {
+              "description": "Pool root directory. If omitted, the pool infrastructure uses its own default.",
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeout": {
+              "description": "Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout.",
+              "default": null,
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
             }
           }
         },
