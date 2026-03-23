@@ -104,7 +104,11 @@ pub fn dispatch_finally_task(
     tx: &mpsc::Sender<WorkerResult>,
 ) {
     let value = task.value.clone();
-    let input_json = serde_json::to_string(&value.0).unwrap_or_default();
+    let input_json = serde_json::to_string(&serde_json::json!({
+        "kind": &task.step,
+        "value": &value.0,
+    }))
+    .unwrap_or_default();
 
     let output = run_shell_command(finally_script.as_str(), &input_json, Some(working_dir))
         .map_err(ActionError::Failed);

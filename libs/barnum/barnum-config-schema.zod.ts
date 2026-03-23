@@ -27,7 +27,7 @@ const FinallyHook = z.discriminatedUnion("kind", [
     kind: z.literal("Command"),
     script: z.string().describe("Shell script to execute."),
   }).describe("Run a shell command as the finally hook."),
-]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** The task's original value payload as JSON. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
+]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
 
 const Options = z.object({
   max_concurrency: z.number().int().nonnegative().nullable().optional().default(null).describe("Maximum concurrent tasks (None = unlimited)."),
@@ -55,7 +55,7 @@ const StepOptions = z.object({
 
 const StepFile = z.object({
   action: ActionFile.describe("How this step processes tasks — either send to the agent pool (`Pool`) or run a local shell command (`Command`)."),
-  finally: FinallyHook.nullable().optional().default(null).describe("Shell script that runs after this task **and all tasks it spawned (recursively)** have completed.\n\n**stdin:** The task's original `value` payload as JSON (same as what the pre hook received — just the value, not the full task wrapper).\n\n**stdout:** A JSON array of follow-up tasks to spawn: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Each `kind` must be a valid step name. Return `[]` to spawn no follow-ups.\n\nUse this for cleanup, aggregation, or spawning a final summarization step after an entire subtree of work completes."),
+  finally: FinallyHook.nullable().optional().default(null).describe("Shell script that runs after this task **and all tasks it spawned (recursively)** have completed.\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Same envelope format as command action scripts.\n\n**stdout:** A JSON array of follow-up tasks to spawn: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Each `kind` must be a valid step name. Return `[]` to spawn no follow-ups.\n\nUse this for cleanup, aggregation, or spawning a final summarization step after an entire subtree of work completes."),
   name: z.string().describe("Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`."),
   next: z.array(z.string()).optional().default([]).describe("Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups)."),
   options: StepOptions.optional().default({"max_retries": null, "retry_on_invalid_response": null, "retry_on_timeout": null, "timeout": null}).describe("Per-step options that override the global `options`. Only the fields you set here take effect; everything else falls through to the global defaults."),

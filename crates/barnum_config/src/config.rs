@@ -107,8 +107,8 @@ pub struct StepFile {
     /// Shell script that runs after this task **and all tasks it spawned
     /// (recursively)** have completed.
     ///
-    /// **stdin:** The task's original `value` payload as JSON (same as what
-    /// the pre hook received — just the value, not the full task wrapper).
+    /// **stdin:** JSON object: `{"kind": "<step name>", "value": <payload>}`.
+    /// Same envelope format as command action scripts.
     ///
     /// **stdout:** A JSON array of follow-up tasks to spawn:
     /// `[{"kind": "StepName", "value": {...}}, ...]`. Each `kind` must be a
@@ -174,7 +174,7 @@ pub struct HookCommand {
 ///
 /// In JSON: `{"kind": "Command", "script": "./finally-hook.sh"}`
 ///
-/// **stdin:** The task's original value payload as JSON.
+/// **stdin:** JSON object: `{"kind": "<step name>", "value": <payload>}`.
 /// **stdout:** JSON array of follow-up tasks: `[{"kind": "StepName", "value": {...}}, ...]`.
 /// Return `[]` for no follow-ups.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
