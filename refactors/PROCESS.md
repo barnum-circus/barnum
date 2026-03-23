@@ -303,6 +303,10 @@ Compare each proposed component against its current equivalent:
 4. If the proposed code removes fields from a struct and looks them up instead, that field removal is a sub-refactor.
 5. If the proposed code replaces a state machine variant with a counter, that simplification is a sub-refactor.
 
+6. If the proposed code renames a type, field, or function, that rename is a sub-refactor. Renames are mechanical and land trivially.
+7. If the proposed code adds derives to existing types (e.g., `Serialize`, `Clone`), those derives can land independently.
+8. If the proposed code deletes unused fields, variants, or functions, each deletion is a sub-refactor.
+
 Each of these can land on master independently and pass CI. After they all land, the parent refactor's diff is smaller, focused, and less risky.
 
 ### Why separate files

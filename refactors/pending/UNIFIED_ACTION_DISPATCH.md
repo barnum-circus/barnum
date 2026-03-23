@@ -84,7 +84,7 @@ Takes a value, runs something, returns stdout or an error string. The engine cal
 The timeout comes from step config. Barnum passes it to the action at construction time. The action is responsible for honoring it — `perform()` must return within the deadline.
 
 - `ShellAction`: `run_shell_command` takes an `Option<Duration>`. On timeout, a reaper thread kills the child process. The dispatch thread blocks on `wait_with_output`, which returns immediately once the child is killed.
-- `PoolAction`: passes the timeout to troupe as `pool_timeout` (for agent lifecycle) AND uses it as its own deadline. Two timeouts, same value: one is troupe's concern (agent management), one is Barnum's (the action must return).
+- `PoolAction`: the struct holds `timeout: Option<Duration>` (from step config). In `perform()`, it passes this value to troupe as `pool_timeout` in the payload (agent lifecycle) and also uses it as its own deadline for the CLI invocation. Two timeouts, same value: one is troupe's concern (agent management), one is Barnum's (the action must return).
 
 `action.perform()` is synchronous. The engine spawns one thread, which calls `perform()`, which returns. No wrapper threads, no abandoned threads.
 
@@ -296,13 +296,14 @@ pub struct PoolAction {
     pub invoker: Invoker<TroupeCli>,
     pub docs: String,
     pub step_name: StepName,
-    pub pool_timeout: Option<u64>,
+    pub timeout: Option<Duration>,
 }
 
 impl Action for PoolAction {
     fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
+        let pool_timeout = self.timeout.map(|d| d.as_secs());
         let payload = build_agent_payload(
-            &self.step_name, value, &self.docs, self.pool_timeout,
+            &self.step_name, value, &self.docs, pool_timeout,
         );
         match submit_via_cli(&self.root, &payload, &self.invoker) {
             Ok(Response::Processed { stdout, .. }) => Ok(stdout),
@@ -346,7 +347,7 @@ ActionKind::Pool(..) => {
         invoker: self.pool.invoker.clone(),
         docs,
         step_name: task.step.clone(),
-        pool_timeout: step.options.timeout,
+        timeout: step.options.timeout.map(Duration::from_secs),
     });
 
     info!(step = %task.step, "submitting task to pool");
