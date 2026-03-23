@@ -59,6 +59,10 @@ jobs:
           fi
 
           echo "Comparing HEAD against before: $BEFORE"
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "Running: before commit unreachable (force push)"
+            exit 0
+          fi
           CHANGES=$(git diff --name-only $BEFORE HEAD -- crates/ libs/ Cargo.lock Cargo.toml .github/)
           if [[ -n "$CHANGES" ]]; then
             echo "Running: changes detected in crates/, libs/, or .github/"
@@ -105,6 +109,10 @@ jobs:
           fi
 
           echo "Comparing HEAD against before: $BEFORE"
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "Running: before commit unreachable (force push)"
+            exit 0
+          fi
           CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/)
           if [[ -n "$CHANGES" ]]; then
             echo "Running: changes detected in docs-website/ or .github/"
