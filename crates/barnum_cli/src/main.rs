@@ -264,7 +264,12 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
             let root = config_schema();
             match schema_type {
                 SchemaType::Zod => {
-                    let zod = barnum_config::zod::emit_zod(&root);
+                    let mut zod = barnum_config::zod::emit_zod(&root);
+                    zod.push_str(
+                        "\nexport function defineConfig(config: z.input<typeof \
+                         configFileSchema>): ConfigFile {\n  return \
+                         configFileSchema.parse(config);\n}\n",
+                    );
                     print!("{zod}");
                 }
                 SchemaType::Json => {

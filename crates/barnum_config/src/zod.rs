@@ -14,8 +14,28 @@ use std::fmt::Write as _;
 type Defs = BTreeMap<String, Schema>;
 
 /// Render a schemars `RootSchema` as a TypeScript file containing Zod schemas.
+///
+/// The root type name is read from `root.schema.metadata.title` (set by
+/// schemars from the Rust type name). For example, `schema_for!(ConfigFile)`
+/// produces title `"ConfigFile"`, which yields exports `configFileSchema` and
+/// `type ConfigFile`.
 #[must_use]
 pub fn emit_zod(root: &RootSchema) -> String {
+    let Some(type_name) = root
+        .schema
+        .metadata
+        .as_ref()
+        .and_then(|m| m.title.as_deref())
+    else {
+        return String::from("// ERROR: root schema has no title\n");
+    };
+
+    let schema_var = {
+        let mut s = type_name.to_string();
+        s[..1].make_ascii_lowercase();
+        format!("{s}Schema")
+    };
+
     let mut e = Emitter::new();
 
     let _ = writeln!(e.out, "import {{ z }} from \"zod\";");
@@ -30,26 +50,18 @@ pub fn emit_zod(root: &RootSchema) -> String {
     }
 
     let _ = writeln!(e.out);
-    let _ = write!(e.out, "export const configFileSchema = ");
+    let _ = write!(e.out, "export const {schema_var} = ");
     e.emit_schema_object(&root.schema);
     let _ = writeln!(e.out, ";");
 
     let _ = writeln!(e.out);
     let _ = writeln!(
         e.out,
-        "export type ConfigFile = z.infer<typeof configFileSchema>;"
+        "export type {type_name} = z.infer<typeof {schema_var}>;"
     );
     for name in &ordered {
         let _ = writeln!(e.out, "export type {name} = z.infer<typeof {name}>;");
     }
-
-    let _ = writeln!(e.out);
-    let _ = writeln!(
-        e.out,
-        "export function defineConfig(config: z.input<typeof configFileSchema>): ConfigFile {{"
-    );
-    let _ = writeln!(e.out, "  return configFileSchema.parse(config);");
-    let _ = writeln!(e.out, "}}");
 
     e.out
 }
@@ -597,11 +609,6 @@ mod tests {
             output.contains("export type ConfigFile ="),
             "must export ConfigFile type"
         );
-        assert!(
-            output.contains("export function defineConfig("),
-            "must export defineConfig"
-        );
-
         // All definitions emitted
         for name in root.definitions.keys() {
             assert!(
