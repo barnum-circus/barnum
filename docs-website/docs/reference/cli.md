@@ -77,8 +77,8 @@ barnum run --config config.json --log-file /tmp/barnum.log
 # Run without entrypoint (manual initial state)
 barnum run --config config.json --initial-state '[{"kind": "Start", "value": {}}]'
 
-# Run with a specific pool (default: "default")
-barnum run --config config.json --pool my-pool --entrypoint-value '{}'
+# Run with entrypoint and initial value
+barnum run --config config.json --entrypoint-value '{"user_id": 123}'
 ```
 
 ### barnum config

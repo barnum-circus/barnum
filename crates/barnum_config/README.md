@@ -128,8 +128,8 @@ barnum run --config config.json
 # Run with inline config (from script)
 barnum run --config '{"steps": [...]}' --initial-state tasks.json
 
-# With troupe root and wake script
-barnum run --config config.json --root /tmp/pool --wake ./wake.sh
+# With wake script
+barnum run --config config.json --wake ./wake.sh
 
 # Log to file for later analysis
 barnum run --config config.json --log-file run.log

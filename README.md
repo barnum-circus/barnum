@@ -62,7 +62,7 @@ curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/bar
 Then run the Barnum workflow:
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc --pool agents
+pnpm dlx @barnum/barnum run --config config.jsonc
 ```
 
 ## Creating Config Files
@@ -82,7 +82,7 @@ pnpm dlx @barnum/barnum config schema
 A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc --pool agents
+pnpm dlx @barnum/barnum run --config config.jsonc
 ```
 
 See below for detailed instructions, or [crates/barnum/DESIGN.md](crates/barnum/DESIGN.md) for the config format and protocol.
