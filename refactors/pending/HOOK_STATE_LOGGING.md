@@ -1,8 +1,6 @@
 # Hook State Logging
 
-**Blocks:** UNIFIED_ACTION_DISPATCH Phase 5 (this design must be resolved first; replaces Phase 5)
-
-**Depends on:** UNIFIED_ACTION_DISPATCH Phases 0-4 should land first (executor trait + unified dispatch path), then this refactor uses that infrastructure.
+**Lands before:** UNIFIED_ACTION_DISPATCH. This refactor adds hooks as first-class work units using the current dispatch primitives (`run_shell_command`, direct thread spawning). UNIFIED_ACTION_DISPATCH later unifies all dispatch paths (including these) behind the executor trait.
 
 ## Motivation
 
@@ -698,7 +696,7 @@ Tests to add:
 
 **File: `crates/barnum_config/src/runner/mod.rs`**
 
-#### C1: Expand `flush_dispatches` with `PreHook` arm
+#### C1: Expand `flush_dispatches` with `PreHook` and `Action` arms
 
 Before (`mod.rs:676-694`, the `Task` arm):
 ```rust
@@ -720,7 +718,7 @@ PendingDispatch::Task(PendingTask { task_id }) => {
 }
 ```
 
-After (replaces `Task` arm, adds `PreHook` arm before `Action` arm):
+After (replaces `Task` arm with `PreHook` and `Action` arms):
 ```rust
 PendingDispatch::PreHook { task_id } => {
     let entry = self.state.tasks.get(&task_id)
@@ -732,25 +730,19 @@ PendingDispatch::PreHook { task_id } => {
         .expect("[P015] unknown step");
     let script = step.pre.clone()
         .expect("[P090] pre-hook dispatch for step without pre-hook");
-    let value = state.value.clone();
+    let input_json = serde_json::to_string(&state.value.0).unwrap_or_default();
+    let step_name = entry.step.clone();
     let working_dir = self.pool.working_dir.clone();
     let tx = self.tx.clone();
 
-    let executor = Box::new(ShellExecutor {
-        script: script.to_string(),
-        step_name: entry.step.clone(),
-        working_dir: self.pool.working_dir.clone(),
-    });
-    let timeout = step.options.timeout.map(Duration::from_secs);
-
     self.in_flight += 1;
     thread::spawn(move || {
-        dispatch_via_executor(
-            task_id, Task::new(/* step */, value),
-            WorkerKind::PreHook,
-            None, // no pre-hook for the pre-hook itself
-            executor, timeout, &working_dir, &tx,
-        );
+        let output = run_shell_command(script.as_str(), &input_json, Some(&working_dir));
+        let _ = tx.send(WorkerResult {
+            task_id,
+            kind: WorkerKind::PreHook,
+            output,
+        });
     });
 }
 PendingDispatch::Action { task_id } => {
@@ -771,7 +763,50 @@ PendingDispatch::Action { task_id } => {
 }
 ```
 
-#### C2: Expand `process_worker_result` with `PreHook` arm
+`dispatch_task` stays as-is for now (still calls `dispatch_pool_task` / `dispatch_command_task` with `pre_hook: None` since the pre-hook is already handled).
+
+#### C2: New `WorkerResult` shape for hooks
+
+Hooks send a simpler result than tasks — just a `Result<String, String>`:
+
+```rust
+/// What kind of work a worker performed.
+pub enum WorkerKind {
+    PreHook,
+    Task,     // existing — action dispatch
+    PostHook,
+    Finally,  // existing
+}
+
+/// Result from a worker thread.
+pub struct WorkerResult {
+    pub task_id: LogTaskId,
+    pub kind: WorkerKind,
+    // For Task/Finally: existing SubmitResult
+    // For PreHook/PostHook: Result<String, String> from run_shell_command
+}
+```
+
+The cleanest approach: add a separate `HookWorkerResult` struct, or expand `WorkerResult` with an enum payload:
+
+```rust
+pub enum WorkerPayload {
+    /// Pre/post hook result — just stdout or error.
+    Hook(Result<String, String>),
+    /// Task action result — existing SubmitResult.
+    Task { task: Task, result: SubmitResult },
+    /// Finally result — existing shape.
+    Finally { value: StepInputValue, output: Result<String, String> },
+}
+
+pub struct WorkerResult {
+    pub task_id: LogTaskId,
+    pub kind: WorkerKind,
+    pub payload: WorkerPayload,
+}
+```
+
+#### C3: Expand `process_worker_result` with `PreHook` arm
 
 Before (`mod.rs:514-535`):
 ```rust
@@ -788,16 +823,12 @@ fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> 
 }
 ```
 
-After (assuming UNIFIED_ACTION_DISPATCH Phase 0e's `WorkerKind` is in place):
+After:
 ```rust
 fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
     self.in_flight = self.in_flight.saturating_sub(1);
-    let entries = match result.kind {
-        WorkerKind::PreHook => {
-            let output = match result.result {
-                SubmitResult::Action(ActionResult { output, .. }) => output,
-                SubmitResult::PreHookError(e) => Err(e),
-            };
+    let entries = match (result.kind, result.payload) {
+        (WorkerKind::PreHook, WorkerPayload::Hook(output)) => {
             let outcome = match output {
                 Ok(stdout) => match serde_json::from_str(&stdout) {
                     Ok(value) => HookOutcome::Success { value: StepInputValue(value) },
@@ -810,9 +841,17 @@ fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> 
                 outcome,
             })]
         }
-        WorkerKind::Action => self.convert_task_result(result.task_id, &result.task, result.result),
-        WorkerKind::PostHook => { /* Phase D */ }
-        WorkerKind::Finally { parent_id } => { /* existing */ }
+        (WorkerKind::Task, WorkerPayload::Task { task, result: submit_result }) => {
+            self.convert_task_result(result.task_id, &task, submit_result)
+        }
+        (WorkerKind::Finally, WorkerPayload::Finally { value, output }) => {
+            self.convert_finally_result(result.task_id, value, output)
+        }
+        (WorkerKind::PostHook, WorkerPayload::Hook(output)) => {
+            /* Phase D */
+            todo!()
+        }
+        _ => panic!("mismatched WorkerKind and WorkerPayload"),
     };
     for entry in &entries {
         self.state.apply_entry(entry, self.config);
@@ -822,60 +861,95 @@ fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> 
 }
 ```
 
-#### C3: Remove pre-hook from `dispatch_via_executor`
+#### C4: Remove pre-hook from dispatch functions
 
-After UNIFIED_ACTION_DISPATCH Phases 0-3, `dispatch_via_executor` has a `pre_hook` parameter. Since pre-hooks are now a separate phase, `dispatch_via_executor` no longer runs pre-hooks. Remove the `pre_hook` parameter and `run_pre_hook_or_error` call.
+`dispatch_pool_task` and `dispatch_command_task` currently take `pre_hook: Option<&HookScript>` and call `run_pre_hook_or_error` internally. Since the pre-hook is now a separate phase dispatched before the action, these functions no longer run pre-hooks.
 
-Before (from UNIFIED_ACTION_DISPATCH Phase 1c):
+Before (`dispatch.rs:126-156`, `dispatch_pool_task`):
 ```rust
-pub fn dispatch_via_executor(
+pub fn dispatch_pool_task(
     task_id: LogTaskId,
     task: Task,
-    kind: WorkerKind,
     pre_hook: Option<&HookScript>,
-    executor: Box<dyn Executor>,
-    timeout: Option<Duration>,
-    working_dir: &Path,
+    docs: &str,
+    timeout: Option<u64>,
+    pool: &super::PoolConnection,
     tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let value = match run_pre_hook_or_error(pre_hook, &task.value, working_dir) {
+    let value = match run_pre_hook_or_error(pre_hook, &task.value, &pool.working_dir) {
         Ok(v) => v,
         Err(e) => {
-            let _ = tx.send(WorkerResult { task_id, task, kind, result: SubmitResult::PreHookError(e) });
+            let _ = tx.send(WorkerResult { task_id, task, result: SubmitResult::PreHookError(e) });
             return;
         }
     };
-    let output = run_with_timeout(executor, &value.0, timeout);
-    let _ = tx.send(WorkerResult { task_id, task, kind, result: SubmitResult::Action(ActionResult { value, output }) });
+    // ... submit_via_cli ...
 }
 ```
 
 After:
 ```rust
-pub fn dispatch_via_executor(
+pub fn dispatch_pool_task(
     task_id: LogTaskId,
     task: Task,
-    kind: WorkerKind,
-    executor: Box<dyn Executor>,
-    timeout: Option<Duration>,
+    docs: &str,
+    timeout: Option<u64>,
+    pool: &super::PoolConnection,
     tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let output = run_with_timeout(executor, &task.value.0, timeout);
+    let payload = build_agent_payload(&task.step, &task.value.0, docs, timeout);
+    let response = submit_via_cli(&pool.root, &payload, &pool.invoker);
     let _ = tx.send(WorkerResult {
-        task_id, task, kind,
-        result: SubmitResult::Action(ActionResult {
-            value: task.value.clone(),
-            output,
-        }),
+        task_id,
+        kind: WorkerKind::Task,
+        payload: WorkerPayload::Task {
+            task,
+            result: SubmitResult::Pool(PoolResult { value: task.value.clone(), response }),
+        },
     });
 }
 ```
 
-Delete `run_pre_hook_or_error`. Delete `SubmitResult::PreHookError`. Delete `run_pre_hook` from `hooks.rs`.
+Same pattern for `dispatch_command_task`: remove `pre_hook` parameter, remove `run_pre_hook_or_error` call. The value used for the action is already the pre-hook-transformed value (stored in `AwaitingActionState` by `apply_pre_hook_completed`).
 
-#### C4: Update `dispatch_task` to not pass pre-hook
+Delete `run_pre_hook_or_error` from `dispatch.rs`. Delete `SubmitResult::PreHookError`. Delete `run_pre_hook` from `hooks.rs`.
 
-All `dispatch_task` call sites (both Pool and Command branches) remove the `pre_hook` parameter.
+#### C5: Update `dispatch_task` to not pass pre-hook
+
+Before (`mod.rs:722-740`, Pool branch):
+```rust
+Action::Pool(..) => {
+    let pre_hook = step.pre.clone();
+    let docs = generate_step_docs(step, self.config);
+    let timeout = step.options.timeout;
+    let pool = self.pool.clone();
+
+    thread::spawn(move || {
+        dispatch_pool_task(
+            task_id, task, pre_hook.as_ref(),
+            &docs, timeout, &pool, &tx,
+        );
+    });
+}
+```
+
+After:
+```rust
+Action::Pool(..) => {
+    let docs = generate_step_docs(step, self.config);
+    let timeout = step.options.timeout;
+    let pool = self.pool.clone();
+
+    thread::spawn(move || {
+        dispatch_pool_task(
+            task_id, task,
+            &docs, timeout, &pool, &tx,
+        );
+    });
+}
+```
+
+Same for Command branch: remove `pre_hook` variable and parameter.
 
 ---
 
@@ -901,38 +975,24 @@ PendingDispatch::PostHook { task_id } => {
     let working_dir = self.pool.working_dir.clone();
     let tx = self.tx.clone();
 
-    let executor = Box::new(ShellExecutor {
-        script: script.to_string(),
-        step_name: entry.step.clone(),
-        working_dir: self.pool.working_dir.clone(),
-    });
-    let timeout = step.options.timeout.map(Duration::from_secs);
-
     self.in_flight += 1;
     thread::spawn(move || {
-        // The task value is the PostHookInput JSON, not the original value
-        let task = Task::new(/* step */, StepInputValue(serde_json::json!(input_json)));
-        dispatch_via_executor(
-            task_id, task, WorkerKind::PostHook,
-            executor, timeout, &tx,
-        );
+        let output = run_shell_command(script.as_str(), &input_json, Some(&working_dir));
+        let _ = tx.send(WorkerResult {
+            task_id,
+            kind: WorkerKind::PostHook,
+            payload: WorkerPayload::Hook(output),
+        });
     });
 }
 ```
 
-**Complication:** The `ShellExecutor` receives `&serde_json::Value` in `execute()`, but the post-hook's input is a `PostHookInput` JSON string, not the task's value. Two options:
-- Pass the serialized `PostHookInput` as the executor's input value (the executor doesn't care what the JSON represents).
-- Create a `PostHookExecutor` that captures the `PostHookInput` and serializes it internally.
-
-The first option is simpler: the `ShellExecutor` just runs `run_shell_command(script, &serde_json::to_string(value), working_dir)`. The value happens to be a `PostHookInput` serialized as JSON. The executor doesn't know or care.
+Same pattern as the `PreHook` arm: spawns a thread, calls `run_shell_command` directly, sends a `WorkerPayload::Hook` result.
 
 #### D2: Add `PostHook` arm in `process_worker_result`
 
 ```rust
-WorkerKind::PostHook => {
-    let output = match result.result {
-        SubmitResult::Action(ActionResult { output, .. }) => output,
-    };
+(WorkerKind::PostHook, WorkerPayload::Hook(output)) => {
     let outcome = match output {
         Ok(stdout) => match serde_json::from_str::<PostHookInput>(&stdout) {
             Ok(modified) => {
@@ -997,7 +1057,6 @@ Delete `run_post_hook` (`hooks.rs:90-106`). Delete `extract_next_tasks` from `di
 - Delete `run_pre_hook_or_error` from `dispatch.rs`
 - Delete `run_pre_hook` from `hooks.rs`
 - Delete `run_post_hook` from `hooks.rs`
-- Delete `run_command_action` from `hooks.rs` (if still present after UNIFIED_ACTION_DISPATCH)
 - Delete `process_and_finalize` from `dispatch.rs`
 - Delete `SubmitResult::PreHookError` variant
 - Delete `PostHookInput::PreHookError` variant
@@ -1005,7 +1064,7 @@ Delete `run_post_hook` (`hooks.rs:90-106`). Delete `extract_next_tasks` from `di
 
 ## What doesn't change
 
-- **`run_shell_command`**: Signature and behavior unchanged. Timeout is external (from `run_with_timeout`).
+- **`run_shell_command`**: Signature and behavior unchanged. No timeout added here (UNIFIED_ACTION_DISPATCH adds external timeout later).
 - **Finally hooks**: Already first-class. No changes to `FinallyRun` or finally dispatch.
 - **Config types**: `Step.pre` and `Step.post` remain `Option<HookScript>`. No new config fields.
 - **`TaskCompleted` structure**: Still records success/failure with children and retry. When a post-hook exists, children in `TaskCompleted` are the raw list (before post-hook modification).
