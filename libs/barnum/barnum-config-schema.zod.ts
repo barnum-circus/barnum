@@ -15,17 +15,17 @@ const ActionFile = z.discriminatedUnion("kind", [
   z.object({
     instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
     kind: z.literal("Pool"),
-  }).describe("Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks."),
+  }).describe("Send the task to the agent pool for processing."),
   z.object({
     kind: z.literal("Command"),
     script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
-  }).describe("Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic."),
+  }).describe("Run a local shell command."),
 ]).describe("How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.");
 
 const FinallyHook = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute. Receives the task's original value as JSON on stdin, must write a JSON array of follow-up tasks on stdout."),
+    script: z.string().describe("Shell script to execute."),
   }).describe("Run a shell command as the finally hook."),
 ]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** The task's original value payload as JSON. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
 
@@ -40,21 +40,23 @@ const Options = z.object({
 const PostHook = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute. Receives the action outcome as JSON on stdin, must write the (possibly modified) outcome as JSON on stdout."),
+    script: z.string().describe("Shell script to execute."),
   }).describe("Run a shell command as the post hook."),
 ]).describe("Post-action hook. Inspects or modifies the action's outcome.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./post-hook.sh\"}`\n\n**stdin:** Tagged JSON describing the outcome (`\"kind\": \"Success\"`, `\"Timeout\"`, `\"Error\"`, or `\"PreHookError\"`). On success, includes an `input`, `output`, and `next` (follow-up tasks) field. **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).");
 
 const PreHook = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute. Receives the task's value as JSON on stdin, must write the (possibly modified) value as JSON on stdout."),
+    script: z.string().describe("Shell script to execute."),
   }).describe("Run a shell command as the pre hook."),
 ]).describe("Pre-action hook. Transforms the task value before the action runs.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./pre-hook.sh\"}`\n\n**stdin:** Task value payload (e.g., `{\"path\": \"/src\"}`). **stdout:** Modified value payload (same shape).");
 
+const SchemaLink = z.object({
+  link: z.string().describe("Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`)."),
+}).describe("Reference to an external JSON Schema file.");
+
 const SchemaRef = z.union([
-  z.object({
-    link: z.string().describe("Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`)."),
-  }).describe("Reference to an external JSON Schema file. The path is relative to the config file's directory."),
+  SchemaLink.describe("Reference to an external JSON Schema file. The path is relative to the config file's directory."),
   z.any().describe("Inline JSON Schema object (any valid JSON Schema)."),
 ]).describe("A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)");
 
@@ -90,6 +92,7 @@ export type FinallyHook = z.infer<typeof FinallyHook>;
 export type Options = z.infer<typeof Options>;
 export type PostHook = z.infer<typeof PostHook>;
 export type PreHook = z.infer<typeof PreHook>;
+export type SchemaLink = z.infer<typeof SchemaLink>;
 export type SchemaRef = z.infer<typeof SchemaRef>;
 export type StepOptions = z.infer<typeof StepOptions>;
 export type StepFile = z.infer<typeof StepFile>;

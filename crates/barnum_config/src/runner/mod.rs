@@ -18,15 +18,15 @@ use std::sync::mpsc;
 use std::thread;
 
 use barnum_state::{
-    FailureReason, FinallyRun, StateLogConfig, StateLogEntry, TaskCompleted, TaskOrigin,
-    TaskSubmitted,
+    FailureReason, FinallyRun, InvalidResponseReason, RetryOrigin, SpawnedOrigin, StateLogConfig,
+    StateLogEntry, TaskCompleted, TaskOrigin, TaskSubmitted,
 };
 use cli_invoker::Invoker;
 use tracing::{error, info};
 use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
-use crate::resolved::{Action, Config, Step};
+use crate::resolved::{Action, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
@@ -35,7 +35,7 @@ use dispatch::{
     process_and_finalize,
 };
 use hooks::call_wake_script;
-use response::{FailureKind, TaskOutcome};
+use response::{FailureKind, TaskOutcome, TaskSuccess};
 
 // ==================== Public API ====================
 
@@ -93,12 +93,22 @@ struct WaitingState {
     finally_value: StepInputValue,
 }
 
+/// A pending task dispatch.
+struct PendingTask {
+    task_id: LogTaskId,
+}
+
+/// A pending finally dispatch.
+struct PendingFinally {
+    parent_id: LogTaskId,
+}
+
 /// What to dispatch next.
 enum PendingDispatch {
     /// Dispatch a task worker.
-    Task { task_id: LogTaskId },
+    Task(PendingTask),
     /// Dispatch a finally worker for a parent whose children all completed.
-    Finally { parent_id: LogTaskId },
+    Finally(PendingFinally),
 }
 
 // ==================== RunState ====================
@@ -147,8 +157,8 @@ impl RunState {
     fn apply_submitted(&mut self, submitted: &TaskSubmitted) {
         let parent_id = match &submitted.origin {
             TaskOrigin::Seed => None,
-            TaskOrigin::Spawned { parent_id } => {
-                if let Some(pid) = parent_id {
+            TaskOrigin::Spawned(spawned) => {
+                if let Some(pid) = &spawned.parent_id {
                     let parent = self
                         .tasks
                         .get(pid)
@@ -158,12 +168,12 @@ impl RunState {
                         "[P049] spawned child's parent not in WaitingForChildren state"
                     );
                 }
-                *parent_id
+                spawned.parent_id
             }
-            TaskOrigin::Retry { replaces } => {
+            TaskOrigin::Retry(retry) => {
                 let old = self
                     .tasks
-                    .remove(replaces)
+                    .remove(&retry.replaces)
                     .expect("[P042] retry target must exist");
                 assert!(
                     matches!(old.state, TaskState::Failed),
@@ -279,12 +289,12 @@ impl RunState {
                 self.advance_id_to(s.task_id.0 + 1);
                 self.apply_submitted(s);
                 self.pending_dispatches
-                    .push_back(PendingDispatch::Task { task_id: s.task_id });
+                    .push_back(PendingDispatch::Task(PendingTask { task_id: s.task_id }));
             }
             StateLogEntry::TaskCompleted(c) => {
                 // Remove pending dispatch for this task (replay: completed before dispatched)
                 self.pending_dispatches.retain(
-                    |d| !matches!(d, PendingDispatch::Task { task_id } if *task_id == c.task_id),
+                    |d| !matches!(d, PendingDispatch::Task(PendingTask { task_id }) if *task_id == c.task_id),
                 );
 
                 // Track max ID from embedded children/retries
@@ -307,16 +317,18 @@ impl RunState {
                 match &c.outcome {
                     barnum_state::TaskOutcome::Success(s) => {
                         for child in &s.children {
-                            self.pending_dispatches.push_back(PendingDispatch::Task {
-                                task_id: child.task_id,
-                            });
+                            self.pending_dispatches
+                                .push_back(PendingDispatch::Task(PendingTask {
+                                    task_id: child.task_id,
+                                }));
                         }
                     }
                     barnum_state::TaskOutcome::Failed(f) => {
                         if let Some(retry) = &f.retry {
-                            self.pending_dispatches.push_back(PendingDispatch::Task {
-                                task_id: retry.task_id,
-                            });
+                            self.pending_dispatches
+                                .push_back(PendingDispatch::Task(PendingTask {
+                                    task_id: retry.task_id,
+                                }));
                         }
                     }
                 }
@@ -325,15 +337,16 @@ impl RunState {
                 if let Some(pid) = parent_id
                     && let Some(finally_id) = self.walk_up_for_finally(pid, config)
                 {
-                    self.pending_dispatches.push_back(PendingDispatch::Finally {
-                        parent_id: finally_id,
-                    });
+                    self.pending_dispatches
+                        .push_back(PendingDispatch::Finally(PendingFinally {
+                            parent_id: finally_id,
+                        }));
                 }
             }
             StateLogEntry::FinallyRun(f) => {
                 // Remove pending finally dispatch (replay: completed before dispatched)
                 self.pending_dispatches.retain(|d| {
-                    !matches!(d, PendingDispatch::Finally { parent_id } if *parent_id == f.finally_for)
+                    !matches!(d, PendingDispatch::Finally(PendingFinally { parent_id }) if *parent_id == f.finally_for)
                 });
 
                 for child in &f.children {
@@ -343,18 +356,20 @@ impl RunState {
                 let grandparent_id = self.apply_finally_run(f);
 
                 for child in &f.children {
-                    self.pending_dispatches.push_back(PendingDispatch::Task {
-                        task_id: child.task_id,
-                    });
+                    self.pending_dispatches
+                        .push_back(PendingDispatch::Task(PendingTask {
+                            task_id: child.task_id,
+                        }));
                 }
 
                 // Walk up from grandparent for further finally detection
                 if let Some(gp_id) = grandparent_id
                     && let Some(finally_id) = self.walk_up_for_finally(gp_id, config)
                 {
-                    self.pending_dispatches.push_back(PendingDispatch::Finally {
-                        parent_id: finally_id,
-                    });
+                    self.pending_dispatches
+                        .push_back(PendingDispatch::Finally(PendingFinally {
+                            parent_id: finally_id,
+                        }));
                 }
             }
         }
@@ -506,7 +521,7 @@ impl<'a> Engine<'a> {
         self.in_flight = self.in_flight.saturating_sub(1);
 
         let entries = match submit_result {
-            dispatch::SubmitResult::Finally { value, output } => {
+            dispatch::SubmitResult::Finally(dispatch::FinallyResult { value, output }) => {
                 self.convert_finally_result(task_id, value, output)
             }
             other => self.convert_task_result(task_id, &task, other),
@@ -541,10 +556,10 @@ impl<'a> Engine<'a> {
         );
 
         match outcome {
-            TaskOutcome::Success {
+            TaskOutcome::Success(TaskSuccess {
                 spawned,
                 finally_value,
-            } => {
+            }) => {
                 let children: Vec<TaskSubmitted> = spawned
                     .into_iter()
                     .map(|child| {
@@ -553,9 +568,9 @@ impl<'a> Engine<'a> {
                             task_id: id,
                             step: child.step,
                             value: child.value,
-                            origin: TaskOrigin::Spawned {
+                            origin: TaskOrigin::Spawned(SpawnedOrigin {
                                 parent_id: Some(task_id),
-                            },
+                            }),
                         }
                     })
                     .collect();
@@ -578,7 +593,7 @@ impl<'a> Engine<'a> {
                             task_id: retry_id,
                             step: retry_task.step,
                             value: retry_task.value,
-                            origin: TaskOrigin::Retry { replaces: task_id },
+                            origin: TaskOrigin::Retry(RetryOrigin { replaces: task_id }),
                         }),
                     }),
                 })]
@@ -638,9 +653,9 @@ impl<'a> Engine<'a> {
                     task_id: id,
                     step: child.step,
                     value: child.value,
-                    origin: TaskOrigin::Spawned {
+                    origin: TaskOrigin::Spawned(SpawnedOrigin {
                         parent_id: grandparent_id,
-                    },
+                    }),
                 }
             })
             .collect();
@@ -659,7 +674,7 @@ impl<'a> Engine<'a> {
                 break;
             };
             match dispatch {
-                PendingDispatch::Task { task_id } => {
+                PendingDispatch::Task(PendingTask { task_id }) => {
                     let entry = self
                         .state
                         .tasks
@@ -678,7 +693,7 @@ impl<'a> Engine<'a> {
                     self.in_flight += 1;
                     self.dispatch_task(task_id, task);
                 }
-                PendingDispatch::Finally { parent_id } => {
+                PendingDispatch::Finally(PendingFinally { parent_id }) => {
                     let entry = self
                         .state
                         .tasks
@@ -705,7 +720,7 @@ impl<'a> Engine<'a> {
         let tx = self.tx.clone();
 
         match &step.action {
-            Action::Pool { .. } => {
+            Action::Pool(..) => {
                 let pre_hook = step.pre.clone();
                 let docs = generate_step_docs(step, self.config);
                 let timeout = step.options.timeout;
@@ -724,7 +739,7 @@ impl<'a> Engine<'a> {
                     );
                 });
             }
-            Action::Command { script } => {
+            Action::Command(CommandAction { script }) => {
                 let pre_hook = step.pre.clone();
                 let script = script.clone();
                 let working_dir = self.pool.working_dir.clone();
@@ -789,9 +804,9 @@ impl<'a> Engine<'a> {
 fn map_failure(kind: FailureKind) -> FailureReason {
     match kind {
         FailureKind::Timeout => FailureReason::Timeout,
-        FailureKind::InvalidResponse => FailureReason::InvalidResponse {
+        FailureKind::InvalidResponse => FailureReason::InvalidResponse(InvalidResponseReason {
             message: "invalid response".to_string(),
-        },
+        }),
         FailureKind::SubmitError => FailureReason::AgentLost,
     }
 }
@@ -1027,12 +1042,15 @@ mod tests {
 
 #[cfg(test)]
 mod run_state_tests {
-    use barnum_state::{FinallyRun, StateLogEntry, TaskCompleted, TaskOrigin, TaskSubmitted};
+    use barnum_state::{
+        FinallyRun, RetryOrigin, SpawnedOrigin, StateLogEntry, TaskCompleted, TaskOrigin,
+        TaskSubmitted,
+    };
 
-    use crate::resolved::{Action, Config, Options, Step};
+    use crate::resolved::{Action, CommandAction, Config, Options, Step};
     use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
 
-    use super::{PendingDispatch, RunState, TaskState};
+    use super::{PendingDispatch, PendingFinally, PendingTask, RunState, TaskState};
 
     // ==================== Helpers ====================
 
@@ -1041,9 +1059,9 @@ mod run_state_tests {
             name: StepName::new(name),
             value_schema: None,
             pre: None,
-            action: Action::Command {
+            action: Action::Command(CommandAction {
                 script: "true".into(),
-            },
+            }),
             post: None,
             next: vec![],
             finally_hook: None,
@@ -1083,9 +1101,9 @@ mod run_state_tests {
             task_id: LogTaskId(id),
             step: StepName::new(step_name),
             value: val(),
-            origin: TaskOrigin::Spawned {
+            origin: TaskOrigin::Spawned(SpawnedOrigin {
                 parent_id: Some(LogTaskId(parent_id)),
-            },
+            }),
         }
     }
 
@@ -1134,9 +1152,9 @@ mod run_state_tests {
             task_id: LogTaskId(id),
             step: StepName::new(step_name),
             value: val(),
-            origin: TaskOrigin::Retry {
+            origin: TaskOrigin::Retry(RetryOrigin {
                 replaces: LogTaskId(replaces),
-            },
+            }),
         }
     }
 
@@ -1149,7 +1167,7 @@ mod run_state_tests {
 
     fn has_task_dispatch(state: &RunState, task_id: u32) -> bool {
         state.pending_dispatches.iter().any(
-            |d| matches!(d, PendingDispatch::Task { task_id: id } if *id == LogTaskId(task_id)),
+            |d| matches!(d, PendingDispatch::Task(PendingTask { task_id: id }) if *id == LogTaskId(task_id)),
         )
     }
 
@@ -1157,7 +1175,7 @@ mod run_state_tests {
         state
             .pending_dispatches
             .iter()
-            .any(|d| matches!(d, PendingDispatch::Finally { parent_id: id } if *id == LogTaskId(parent_id)))
+            .any(|d| matches!(d, PendingDispatch::Finally(PendingFinally { parent_id: id }) if *id == LogTaskId(parent_id)))
     }
 
     // ==================== TaskSubmitted ====================
@@ -1384,13 +1402,13 @@ mod run_state_tests {
                 task_id: LogTaskId(2),
                 step: StepName::new("C"),
                 value: val(),
-                origin: TaskOrigin::Spawned { parent_id: None },
+                origin: TaskOrigin::Spawned(SpawnedOrigin { parent_id: None }),
             },
             TaskSubmitted {
                 task_id: LogTaskId(3),
                 step: StepName::new("C"),
                 value: val(),
-                origin: TaskOrigin::Spawned { parent_id: None },
+                origin: TaskOrigin::Spawned(SpawnedOrigin { parent_id: None }),
             },
         ];
         state.apply_entry(&finally_run(0, children), &cfg);
@@ -1639,17 +1657,17 @@ mod run_state_tests {
                 task_id: LogTaskId(3),
                 step: StepName::new("FC"),
                 value: val(),
-                origin: TaskOrigin::Spawned {
+                origin: TaskOrigin::Spawned(SpawnedOrigin {
                     parent_id: Some(LogTaskId(0)),
-                },
+                }),
             },
             TaskSubmitted {
                 task_id: LogTaskId(4),
                 step: StepName::new("FC"),
                 value: val(),
-                origin: TaskOrigin::Spawned {
+                origin: TaskOrigin::Spawned(SpawnedOrigin {
                     parent_id: Some(LogTaskId(0)),
-                },
+                }),
             },
         ];
         state.apply_entry(&finally_run(1, children), &cfg);

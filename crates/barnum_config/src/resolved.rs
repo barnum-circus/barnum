@@ -31,7 +31,7 @@ impl Config {
     pub fn has_pool_actions(&self) -> bool {
         self.steps
             .iter()
-            .any(|s| matches!(s.action, Action::Pool { .. }))
+            .any(|s| matches!(s.action, Action::Pool(..)))
     }
 }
 
@@ -68,20 +68,28 @@ pub struct Step {
     pub options: Options,
 }
 
+/// Send to the agent pool for processing.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PoolAction {
+    /// Resolved markdown instructions.
+    pub instructions: String,
+}
+
+/// Run a local command.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CommandAction {
+    /// Shell script to execute.
+    pub script: String,
+}
+
 /// How a resolved step processes tasks.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Action {
     /// Send to the agent pool for processing.
-    Pool {
-        /// Resolved markdown instructions.
-        instructions: String,
-    },
+    Pool(PoolAction),
     /// Run a local command.
-    Command {
-        /// Shell script to execute.
-        script: String,
-    },
+    Command(CommandAction),
 }
 
 /// Resolved options for a step.

@@ -467,8 +467,8 @@ fn generate_graphviz(config: &Config) -> String {
 
         // Shape and color based on action type
         let (shape, fill_color) = match &step.action {
-            Action::Pool { .. } => ("box", "#e3f2fd"),
-            Action::Command { .. } => ("diamond", "#fff3e0"),
+            Action::Pool(..) => ("box", "#e3f2fd"),
+            Action::Command(..) => ("diamond", "#fff3e0"),
         };
         attrs.push(format!("shape={shape}"));
 

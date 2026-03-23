@@ -12,6 +12,42 @@ use crate::value_schema::Task;
 
 use super::shell::run_shell_command;
 
+/// The action completed successfully.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostHookSuccess {
+    /// The task's input value.
+    pub input: StepInputValue,
+    /// The agent's output.
+    pub output: serde_json::Value,
+    /// Tasks spawned by this completion. Post hook can modify this.
+    pub next: Vec<Task>,
+}
+
+/// The action timed out.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostHookTimeout {
+    /// The task's input value.
+    pub input: StepInputValue,
+}
+
+/// The action failed with an error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostHookError {
+    /// The task's input value.
+    pub input: StepInputValue,
+    /// Error message.
+    pub error: String,
+}
+
+/// The pre hook failed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostHookPreHookError {
+    /// The original input value (before pre hook).
+    pub input: StepInputValue,
+    /// Error message from pre hook.
+    pub error: String,
+}
+
 /// Input/output for post hooks.
 ///
 /// Post hooks receive this JSON on stdin and must output (possibly modified)
@@ -20,33 +56,13 @@ use super::shell::run_shell_command;
 #[serde(tag = "kind")]
 pub enum PostHookInput {
     /// The action completed successfully.
-    Success {
-        /// The task's input value.
-        input: StepInputValue,
-        /// The agent's output.
-        output: serde_json::Value,
-        /// Tasks spawned by this completion. Post hook can modify this.
-        next: Vec<Task>,
-    },
+    Success(PostHookSuccess),
     /// The action timed out.
-    Timeout {
-        /// The task's input value.
-        input: StepInputValue,
-    },
+    Timeout(PostHookTimeout),
     /// The action failed with an error.
-    Error {
-        /// The task's input value.
-        input: StepInputValue,
-        /// Error message.
-        error: String,
-    },
+    Error(PostHookError),
     /// The pre hook failed.
-    PreHookError {
-        /// The original input value (before pre hook).
-        input: StepInputValue,
-        /// Error message from pre hook.
-        error: String,
-    },
+    PreHookError(PostHookPreHookError),
 }
 
 /// Run a pre hook and return the (possibly modified) value.

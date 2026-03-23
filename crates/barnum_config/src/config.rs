@@ -156,34 +156,49 @@ pub struct StepFile {
     pub options: StepOptions,
 }
 
+/// Send the task to the agent pool. An AI agent receives the task's `value`
+/// along with the `instructions` (markdown prompt) and produces a JSON array
+/// of follow-up tasks.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct PoolActionFile {
+    /// Markdown prompt shown to the agent processing this task. This is
+    /// the core of what tells the agent what to do. Use
+    /// `{"kind": "Inline", "value": "..."}` to write the markdown directly, or
+    /// `{"kind": "Link", "path": "path/to/file.md"}` to reference an external file.
+    pub instructions: crate::maybe_linked::MaybeLinked<Instructions>,
+}
+
+/// Run a local shell command instead of sending to an agent. Use this for
+/// deterministic transformations, fan-out, or glue logic.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CommandActionFile {
+    /// Shell script to execute.
+    ///
+    /// **Input (stdin):** JSON object: `{"kind": "<step name>", "value": <payload>}`.
+    /// Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.
+    ///
+    /// **Output (stdout):** JSON array of follow-up tasks to spawn:
+    /// `[{"kind": "NextStep", "value": {...}}, ...]`. Each `kind` must be a step name
+    /// listed in this step's `next` array. Return `[]` to spawn no follow-ups.
+    pub script: String,
+}
+
 /// How a step processes tasks. Set `"kind": "Pool"` to send tasks to AI agents,
 /// or `"kind": "Command"` to run a local shell script.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum ActionFile {
-    /// Send the task to the agent pool. An AI agent receives the task's `value`
-    /// along with the `instructions` (markdown prompt) and produces a JSON array
-    /// of follow-up tasks.
-    Pool {
-        /// Markdown prompt shown to the agent processing this task. This is
-        /// the core of what tells the agent what to do. Use
-        /// `{"kind": "Inline", "value": "..."}` to write the markdown directly, or
-        /// `{"kind": "Link", "path": "path/to/file.md"}` to reference an external file.
-        instructions: crate::maybe_linked::MaybeLinked<Instructions>,
-    },
-    /// Run a local shell command instead of sending to an agent. Use this for
-    /// deterministic transformations, fan-out, or glue logic.
-    Command {
-        /// Shell script to execute.
-        ///
-        /// **Input (stdin):** JSON object: `{"kind": "<step name>", "value": <payload>}`.
-        /// Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.
-        ///
-        /// **Output (stdout):** JSON array of follow-up tasks to spawn:
-        /// `[{"kind": "NextStep", "value": {...}}, ...]`. Each `kind` must be a step name
-        /// listed in this step's `next` array. Return `[]` to spawn no follow-ups.
-        script: String,
-    },
+    /// Send the task to the agent pool for processing.
+    Pool(PoolActionFile),
+    /// Run a local shell command.
+    Command(CommandActionFile),
+}
+
+/// A shell command used as a hook (pre, post, or finally).
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct HookCommand {
+    /// Shell script to execute.
+    pub script: String,
 }
 
 /// Pre-action hook. Transforms the task value before the action runs.
@@ -196,11 +211,7 @@ pub enum ActionFile {
 #[serde(tag = "kind")]
 pub enum PreHook {
     /// Run a shell command as the pre hook.
-    Command {
-        /// Shell script to execute. Receives the task's value as JSON on stdin,
-        /// must write the (possibly modified) value as JSON on stdout.
-        script: String,
-    },
+    Command(HookCommand),
 }
 
 /// Post-action hook. Inspects or modifies the action's outcome.
@@ -215,11 +226,7 @@ pub enum PreHook {
 #[serde(tag = "kind")]
 pub enum PostHook {
     /// Run a shell command as the post hook.
-    Command {
-        /// Shell script to execute. Receives the action outcome as JSON on stdin,
-        /// must write the (possibly modified) outcome as JSON on stdout.
-        script: String,
-    },
+    Command(HookCommand),
 }
 
 /// Finally hook. Runs after a task and all its descendants complete.
@@ -233,11 +240,7 @@ pub enum PostHook {
 #[serde(tag = "kind")]
 pub enum FinallyHook {
     /// Run a shell command as the finally hook.
-    Command {
-        /// Shell script to execute. Receives the task's original value as JSON
-        /// on stdin, must write a JSON array of follow-up tasks on stdout.
-        script: String,
-    },
+    Command(HookCommand),
 }
 
 impl ActionFile {
@@ -245,8 +248,8 @@ impl ActionFile {
     #[must_use]
     pub const fn instructions(&self) -> Option<&crate::maybe_linked::MaybeLinked<Instructions>> {
         match self {
-            Self::Pool { instructions } => Some(instructions),
-            Self::Command { .. } => None,
+            Self::Pool(PoolActionFile { instructions }) => Some(instructions),
+            Self::Command(..) => None,
         }
     }
 }
@@ -302,6 +305,13 @@ impl EffectiveOptions {
     }
 }
 
+/// Reference to an external JSON Schema file.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct SchemaLink {
+    /// Relative path to the JSON Schema file (e.g., `"schemas/task.json"`).
+    pub link: String,
+}
+
 /// A JSON Schema for validating task payloads. Can be provided inline or
 /// loaded from a file.
 ///
@@ -312,10 +322,7 @@ impl EffectiveOptions {
 pub enum SchemaRef {
     /// Reference to an external JSON Schema file. The path is relative to
     /// the config file's directory.
-    Link {
-        /// Relative path to the JSON Schema file (e.g., `"schemas/task.json"`).
-        link: String,
-    },
+    Link(SchemaLink),
     /// Inline JSON Schema object (any valid JSON Schema).
     Inline(serde_json::Value),
 }
@@ -338,7 +345,7 @@ impl ConfigFile {
     pub fn has_pool_actions(&self) -> bool {
         self.steps
             .iter()
-            .any(|s| matches!(s.action, ActionFile::Pool { .. }))
+            .any(|s| matches!(s.action, ActionFile::Pool(..)))
     }
 
     /// Validate the config for internal consistency.
@@ -363,7 +370,9 @@ impl ConfigFile {
             .collect();
 
         if !duplicates.is_empty() {
-            return Err(ConfigError::DuplicateStepNames { names: duplicates });
+            return Err(ConfigError::DuplicateStepNames(DuplicateStepNames {
+                names: duplicates,
+            }));
         }
 
         // Check all next references are valid
@@ -373,10 +382,10 @@ impl ConfigFile {
         for step in &self.steps {
             for next in &step.next {
                 if !step_names.contains(next.as_str()) {
-                    return Err(ConfigError::InvalidNextStep {
+                    return Err(ConfigError::InvalidNextStep(InvalidNextStep {
                         from: step.name.clone(),
                         to: next.clone(),
-                    });
+                    }));
                 }
             }
         }
@@ -385,9 +394,9 @@ impl ConfigFile {
         if let Some(ref entrypoint) = self.entrypoint
             && !step_names.contains(entrypoint.as_str())
         {
-            return Err(ConfigError::InvalidEntrypoint {
+            return Err(ConfigError::InvalidEntrypoint(InvalidEntrypoint {
                 name: entrypoint.clone(),
-            });
+            }));
         }
 
         Ok(())
@@ -433,17 +442,17 @@ impl StepFile {
             name: self.name,
             value_schema,
             pre: self.pre.map(|h| {
-                let PreHook::Command { script } = h;
+                let PreHook::Command(HookCommand { script }) = h;
                 HookScript::new(script)
             }),
             action,
             post: self.post.map(|h| {
-                let PostHook::Command { script } = h;
+                let PostHook::Command(HookCommand { script }) = h;
                 HookScript::new(script)
             }),
             next: self.next,
             finally_hook: self.finally_hook.map(|h| {
-                let FinallyHook::Command { script } = h;
+                let FinallyHook::Command(HookCommand { script }) = h;
                 HookScript::new(script)
             }),
             options: crate::resolved::Options {
@@ -460,16 +469,18 @@ impl ActionFile {
     /// Resolve this action's file references.
     fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::Action> {
         match self {
-            Self::Pool { instructions } => {
+            Self::Pool(PoolActionFile { instructions }) => {
                 let resolved: Instructions = instructions.resolve(base_path, |path| {
                     let content = std::fs::read_to_string(path)?;
                     Ok(Instructions(content))
                 })?;
-                Ok(crate::resolved::Action::Pool {
+                Ok(crate::resolved::Action::Pool(crate::resolved::PoolAction {
                     instructions: resolved.0,
-                })
+                }))
             }
-            Self::Command { script } => Ok(crate::resolved::Action::Command { script }),
+            Self::Command(CommandActionFile { script }) => Ok(crate::resolved::Action::Command(
+                crate::resolved::CommandAction { script },
+            )),
         }
     }
 }
@@ -481,7 +492,7 @@ fn resolve_schema(
 ) -> std::io::Result<serde_json::Value> {
     match schema {
         SchemaRef::Inline(value) => Ok(value),
-        SchemaRef::Link { link } => {
+        SchemaRef::Link(SchemaLink { link }) => {
             let path = base_path.join(&link);
             let content = std::fs::read_to_string(&path).map_err(|e| {
                 std::io::Error::new(
@@ -499,39 +510,51 @@ fn resolve_schema(
     }
 }
 
+/// Two or more steps have the same name.
+#[derive(Debug, Clone)]
+pub struct DuplicateStepNames {
+    /// The step names that appear more than once.
+    pub names: Vec<StepName>,
+}
+
+/// A step references a non-existent next step.
+#[derive(Debug, Clone)]
+pub struct InvalidNextStep {
+    /// The step containing the invalid reference.
+    pub from: StepName,
+    /// The referenced step that doesn't exist.
+    pub to: StepName,
+}
+
+/// The entrypoint references a non-existent step.
+#[derive(Debug, Clone)]
+pub struct InvalidEntrypoint {
+    /// The entrypoint step name that doesn't exist.
+    pub name: StepName,
+}
+
 /// Errors that can occur during config validation.
 #[derive(Debug, Clone)]
 pub enum ConfigError {
     /// Two or more steps have the same name.
-    DuplicateStepNames {
-        /// The step names that appear more than once.
-        names: Vec<StepName>,
-    },
+    DuplicateStepNames(DuplicateStepNames),
     /// A step references a non-existent next step.
-    InvalidNextStep {
-        /// The step containing the invalid reference.
-        from: StepName,
-        /// The referenced step that doesn't exist.
-        to: StepName,
-    },
+    InvalidNextStep(InvalidNextStep),
     /// The entrypoint references a non-existent step.
-    InvalidEntrypoint {
-        /// The entrypoint step name that doesn't exist.
-        name: StepName,
-    },
+    InvalidEntrypoint(InvalidEntrypoint),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::DuplicateStepNames { names } => {
+            Self::DuplicateStepNames(DuplicateStepNames { names }) => {
                 let names_str: Vec<&str> = names.iter().map(StepName::as_str).collect();
                 write!(f, "duplicate step names: {}", names_str.join(", "))
             }
-            Self::InvalidNextStep { from, to } => {
+            Self::InvalidNextStep(InvalidNextStep { from, to }) => {
                 write!(f, "step '{from}' references non-existent step '{to}'")
             }
-            Self::InvalidEntrypoint { name } => {
+            Self::InvalidEntrypoint(InvalidEntrypoint { name }) => {
                 write!(f, "entrypoint '{name}' references non-existent step")
             }
         }
@@ -633,7 +656,7 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(
             result,
-            Err(ConfigError::DuplicateStepNames { names }) if names == vec!["Start"]
+            Err(ConfigError::DuplicateStepNames(DuplicateStepNames { names })) if names == vec!["Start"]
         ));
     }
 
@@ -730,7 +753,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool { instructions: MaybeLinked::Inline { value: Instructions(s) } } if s == "Inline markdown here."
+            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Inline { value: Instructions(s) } }) if s == "Inline markdown here."
         ));
     }
 
@@ -747,7 +770,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Pool { instructions: MaybeLinked::Link { path } } if path == "path/to/instructions.md"
+            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Link { path } }) if path == "path/to/instructions.md"
         ));
     }
 
@@ -764,7 +787,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Command { script } if script == "jq '.value'"
+            ActionFile::Command(CommandActionFile { script }) if script == "jq '.value'"
         ));
     }
 
@@ -817,7 +840,7 @@ mod tests {
         let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].value_schema,
-            Some(SchemaRef::Link { link }) if link == "schemas/test.json"
+            Some(SchemaRef::Link(SchemaLink { link })) if link == "schemas/test.json"
         ));
     }
 }

@@ -52,7 +52,7 @@
       "description": "How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.",
       "oneOf": [
         {
-          "description": "Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.",
+          "description": "Send the task to the agent pool for processing.",
           "type": "object",
           "required": [
             "instructions",
@@ -76,7 +76,7 @@
           }
         },
         {
-          "description": "Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.",
+          "description": "Run a local shell command.",
           "type": "object",
           "required": [
             "kind",
@@ -115,7 +115,7 @@
               ]
             },
             "script": {
-              "description": "Shell script to execute. Receives the task's original value as JSON on stdin, must write a JSON array of follow-up tasks on stdout.",
+              "description": "Shell script to execute.",
               "type": "string"
             }
           }
@@ -229,7 +229,7 @@
               ]
             },
             "script": {
-              "description": "Shell script to execute. Receives the action outcome as JSON on stdin, must write the (possibly modified) outcome as JSON on stdout.",
+              "description": "Shell script to execute.",
               "type": "string"
             }
           }
@@ -254,28 +254,36 @@
               ]
             },
             "script": {
-              "description": "Shell script to execute. Receives the task's value as JSON on stdin, must write the (possibly modified) value as JSON on stdout.",
+              "description": "Shell script to execute.",
               "type": "string"
             }
           }
         }
       ]
     },
+    "SchemaLink": {
+      "description": "Reference to an external JSON Schema file.",
+      "type": "object",
+      "required": [
+        "link"
+      ],
+      "properties": {
+        "link": {
+          "description": "Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`).",
+          "type": "string"
+        }
+      }
+    },
     "SchemaRef": {
       "description": "A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)",
       "anyOf": [
         {
           "description": "Reference to an external JSON Schema file. The path is relative to the config file's directory.",
-          "type": "object",
-          "required": [
-            "link"
-          ],
-          "properties": {
-            "link": {
-              "description": "Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`).",
-              "type": "string"
+          "allOf": [
+            {
+              "$ref": "#/definitions/SchemaLink"
             }
-          }
+          ]
         },
         {
           "description": "Inline JSON Schema object (any valid JSON Schema)."

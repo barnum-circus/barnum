@@ -14,9 +14,11 @@ use crate::resolved::Step;
 use crate::types::{HookScript, LogTaskId, StepInputValue};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use super::hooks::{PostHookInput, run_command_action, run_post_hook, run_pre_hook};
+use super::hooks::{
+    PostHookInput, PostHookSuccess, run_command_action, run_post_hook, run_pre_hook,
+};
 use super::response::{
-    FailureKind, ProcessedSubmit, TaskOutcome, process_retry, process_submit_result,
+    FailureKind, ProcessedSubmit, TaskOutcome, TaskSuccess, process_retry, process_submit_result,
 };
 use super::shell::run_shell_command;
 use super::submit::{build_agent_payload, submit_via_cli};
@@ -31,20 +33,29 @@ pub struct WorkerResult {
     pub result: SubmitResult,
 }
 
+/// Raw result from a pool action.
+pub(super) struct PoolResult {
+    pub value: StepInputValue,
+    pub response: io::Result<Response>,
+}
+
+/// Raw result from a command action.
+pub(super) struct CommandResult {
+    pub value: StepInputValue,
+    pub output: io::Result<String>,
+}
+
+/// Raw result from a finally hook.
+pub(super) struct FinallyResult {
+    pub value: StepInputValue,
+    pub output: Result<String, String>,
+}
+
 /// Raw result of task execution (internal to runner module).
 pub(super) enum SubmitResult {
-    Pool {
-        value: StepInputValue,
-        response: io::Result<Response>,
-    },
-    Command {
-        value: StepInputValue,
-        output: io::Result<String>,
-    },
-    Finally {
-        value: StepInputValue,
-        output: Result<String, String>,
-    },
+    Pool(PoolResult),
+    Command(CommandResult),
+    Finally(FinallyResult),
     PreHookError(String),
 }
 
@@ -79,12 +90,12 @@ pub(super) fn process_and_finalize(
     if let Some(hook) = &step.post {
         match run_post_hook(hook, &post_input, working_dir) {
             Ok(modified) => match outcome {
-                TaskOutcome::Success { finally_value, .. } => {
+                TaskOutcome::Success(TaskSuccess { finally_value, .. }) => {
                     let tasks = extract_next_tasks(&modified);
-                    TaskOutcome::Success {
+                    TaskOutcome::Success(TaskSuccess {
                         spawned: tasks,
                         finally_value,
-                    }
+                    })
                 }
                 other => other,
             },
@@ -101,10 +112,10 @@ pub(super) fn process_and_finalize(
 /// Extract next tasks from a post hook result.
 fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
     match input {
-        PostHookInput::Success { next, .. } => next.clone(),
-        PostHookInput::Timeout { .. }
-        | PostHookInput::Error { .. }
-        | PostHookInput::PreHookError { .. } => vec![],
+        PostHookInput::Success(PostHookSuccess { next, .. }) => next.clone(),
+        PostHookInput::Timeout(..) | PostHookInput::Error(..) | PostHookInput::PreHookError(..) => {
+            vec![]
+        }
     }
 }
 
@@ -140,7 +151,7 @@ pub fn dispatch_pool_task(
     let _ = tx.send(WorkerResult {
         task_id,
         task,
-        result: SubmitResult::Pool { value, response },
+        result: SubmitResult::Pool(PoolResult { value, response }),
     });
 }
 
@@ -178,7 +189,7 @@ pub fn dispatch_command_task(
     let _ = tx.send(WorkerResult {
         task_id,
         task,
-        result: SubmitResult::Command { value, output },
+        result: SubmitResult::Command(CommandResult { value, output }),
     });
 }
 
@@ -200,6 +211,6 @@ pub fn dispatch_finally_task(
     let _ = tx.send(WorkerResult {
         task_id,
         task,
-        result: SubmitResult::Finally { value, output },
+        result: SubmitResult::Finally(FinallyResult { value, output }),
     });
 }
