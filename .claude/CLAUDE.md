@@ -100,6 +100,10 @@ When GitHub CI runs show as "cancelled", that means they **timed out** - not tha
 
 **Commits should be small, always.** Don't wait until the end of a task to commit. After completing a logical unit of work, commit it. This applies to documentation changes, code changes, refactor documents - everything.
 
+### No pull requests
+
+**Do not create pull requests.** Just push branches and let CI run on the push event. The user will handle merging. Never use `gh pr create`.
+
 ### Landing on master
 
 Every commit that lands on master should have initially been a branch that passed CI, unless it's trivial changes to markdown files (planning documents, etc.).
