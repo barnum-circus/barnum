@@ -6,8 +6,7 @@ use crate::resolved::{Options, Step};
 use crate::types::StepInputValue;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 
-use super::action::ActionError;
-use super::dispatch::ActionResult;
+use super::action::{ActionError, ActionResult};
 
 /// Task succeeded, may have spawned children.
 pub struct TaskSuccess {

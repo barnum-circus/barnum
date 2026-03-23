@@ -5,10 +5,8 @@
 //! and dispatches new work. A log writer persists every entry for resume.
 
 mod action;
-mod dispatch;
 mod hooks;
 mod response;
-mod shell;
 mod submit;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -16,7 +14,6 @@ use std::io::{self, Write as _};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use barnum_state::{
@@ -32,8 +29,7 @@ use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use action::{ActionError, PoolAction, ShellAction, spawn_worker};
-use dispatch::{WorkerResult, dispatch_finally_task};
+use action::{ActionError, PoolAction, ShellAction, WorkerKind, WorkerResult, spawn_worker};
 use hooks::call_wake_script;
 use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
@@ -515,10 +511,10 @@ impl<'a> Engine<'a> {
         self.in_flight = self.in_flight.saturating_sub(1);
 
         let entries = match result.kind {
-            dispatch::WorkerKind::Task => {
+            WorkerKind::Task => {
                 self.convert_task_result(result.task_id, &result.task, result.result)
             }
-            dispatch::WorkerKind::Finally { parent_id } => {
+            WorkerKind::Finally { parent_id } => {
                 self.convert_finally_result(parent_id, result.result.output)
             }
         };
@@ -536,7 +532,7 @@ impl<'a> Engine<'a> {
         &mut self,
         task_id: LogTaskId,
         task: &Task,
-        action_result: dispatch::ActionResult,
+        action_result: action::ActionResult,
     ) -> Vec<StateLogEntry> {
         let step = self
             .step_map
@@ -720,14 +716,7 @@ impl<'a> Engine<'a> {
                     step_name: task.step.clone(),
                     pool_timeout: step.options.timeout,
                 });
-                spawn_worker(
-                    tx,
-                    action,
-                    task_id,
-                    task,
-                    dispatch::WorkerKind::Task,
-                    timeout,
-                );
+                spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
             }
             ActionKind::Command(CommandAction { script }) => {
                 info!(step = %task.step, script = %script, "executing command");
@@ -736,14 +725,7 @@ impl<'a> Engine<'a> {
                     step_name: task.step.clone(),
                     working_dir: self.pool.working_dir.clone(),
                 });
-                spawn_worker(
-                    tx,
-                    action,
-                    task_id,
-                    task,
-                    dispatch::WorkerKind::Task,
-                    timeout,
-                );
+                spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
             }
         }
     }
@@ -756,13 +738,22 @@ impl<'a> Engine<'a> {
             .finally_hook
             .clone()
             .expect("[P073] finally parent's step must have finally_hook");
-        let working_dir = self.pool.working_dir.clone();
-        let tx = self.tx.clone();
+        let timeout = step.options.timeout.map(Duration::from_secs);
 
         info!(step = %task.step, parent = ?parent_id, "dispatching finally worker");
-        thread::spawn(move || {
-            dispatch_finally_task(parent_id, task, &script, &working_dir, &tx);
+        let action = Box::new(ShellAction {
+            script: script.as_str().to_owned(),
+            step_name: task.step.clone(),
+            working_dir: self.pool.working_dir.clone(),
         });
+        spawn_worker(
+            self.tx.clone(),
+            action,
+            parent_id,
+            task,
+            WorkerKind::Finally { parent_id },
+            timeout,
+        );
     }
 
     /// True when all work is done.
