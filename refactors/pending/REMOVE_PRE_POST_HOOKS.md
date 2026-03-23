@@ -8,7 +8,9 @@ Pre and post hooks are unused outside a single demo config (`crates/barnum_cli/d
 
 Nobody uses them. The JavaScript consumers of barnum configs don't need them either — pre/post transformations are naturally expressed as separate tasks in a pipeline. A "pre-hook" is just a task whose output feeds the next task. A "post-hook" is just a task that runs after. The task graph already supports this composition without special hook primitives.
 
-Delete them.
+Finally hooks remain necessary — they're the only mechanism to block on a set of child tasks completing and then run follow-up work. There's no way to express "wait for all children, then do X" as a regular task in the current model.
+
+Delete pre and post.
 
 ## Current Code
 
