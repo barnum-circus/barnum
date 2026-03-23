@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import type { Cli, Command, ConfigCommand } from "./barnum-cli-schema.zod.js";
 
 const require = createRequire(import.meta.url);
-const binaryPath: string = require("./index.cjs");
+const binaryPath: string = process.env.BARNUM ?? require("./index.cjs");
 
 function spawnBarnum(args: string[]): ChildProcess {
   try {
