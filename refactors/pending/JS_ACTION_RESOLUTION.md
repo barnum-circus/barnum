@@ -1,567 +1,241 @@
 # JS Action Resolution
 
+**Depends on:** ACTION_PARAMS_NESTING (landed)
+**Sub-refactors:** JS_ACTION_HANDLERS.md, EXECUTOR_CLI_FLAG.md
+
 ## Motivation
 
-The Engine's `dispatch_task` matches on `ActionKind` variants to construct the appropriate `Action` impl. Every new action kind (Claude, Git, custom user kinds) requires adding a Rust enum variant, a match arm, and a new `Action` impl. This coupling is unnecessary — both `Pool` and `Command` ultimately just "run a subprocess, pipe stdin, read stdout."
+`dispatch_task` (`runner/mod.rs:696-730`) matches on `ActionKind` to construct either a `PoolAction` or `ShellAction`. Adding a new action kind requires a Rust enum variant, a match arm, and a new `Action` impl. Both Pool and Command ultimately spawn a subprocess and pipe stdin/stdout. The per-kind Rust dispatch is unnecessary coupling.
 
-The JS layer (`BarnumConfig`) already validates config, constructs CLI args, and spawns the Rust binary. This refactor makes JS the execution layer for all actions. Rust dispatches every task by spawning a single JS executor, passing the action config and task value via stdin. The JS executor looks up the handler by kind and runs it. Rust manages the state machine, timeouts, retries, concurrency. JS handles action-specific execution.
+This refactor makes JS the execution layer. Rust dispatches every task by spawning a JS executor subprocess, passing the action config and task value via stdin. The JS executor looks up a handler by action kind and runs it. Rust keeps the state machine, timeouts, retries, and concurrency control. JS handles action-specific execution.
 
-This supersedes ACTION_REGISTRY.md.
+## Execution Model
 
-## Architecture
+Three process boundaries exist in the new world. Each one is a subprocess spawn.
 
-```
-Rust dispatch_task (every task, regardless of kind)
-  → spawns: node /path/to/action-executor.js
-    → stdin: { action: { kind, params: {...} }, task: { kind, value } }
-    → JS looks up handler by action.kind
-    → handler executes (calls troupe, runs shell script, calls Claude, etc.)
-    → stdout: [{ kind: "NextStep", value: {...} }, ...]
-  ← Rust reads stdout, validates, queues follow-up tasks
-```
+### Boundary 1: JS spawns Rust (once per workflow)
 
-Rust doesn't know what "Pool" or "Command" means. It pipes the action config + task value to the JS executor and reads the result.
+**When:** The user calls `BarnumConfig.run()` from their Node process, or runs `barnum run` from the CLI.
 
-## File Layout
+**What happens:** The JS wrapper resolves the executor command (a tsx invocation of `executor.ts`) and passes it to the barnum binary via a new `--executor` CLI flag. The barnum process runs for the entire workflow.
 
 ```
-libs/barnum/
-├── actions/
-│   ├── executor.ts         # Entry point: reads stdin, dispatches to handler, writes stdout
-│   ├── types.ts            # ActionHandler type, ActionEnvelope type
-│   ├── pool.ts             # Pool handler: submits to troupe, returns agent response
-│   ├── command.ts          # Command handler: spawns sh -c, pipes task, returns output
-│   ├── docs.ts             # JS port of generate_step_docs
-│   └── index.ts            # Hardcoded handler registry (kind → handler)
-├── run.ts                  # BarnumConfig (passes executor path to barnum CLI)
-├── index.ts
-└── package.json
+User's Node process
+  │
+  └─ BarnumConfig.run(opts)
+       │
+       ├─ resolve executor command:
+       │    tsxBinary = require.resolve("tsx/cli")
+       │    executorPath = resolve(import.meta.dirname, "actions", "executor.ts")
+       │    executorCommand = `node ${tsxBinary} ${executorPath}`
+       │
+       └─ spawn("barnum", ["run", "--config", configJson, "--executor", executorCommand, ...])
+            │
+            └─ [barnum Rust process — runs for entire workflow]
 ```
 
-Each handler file exports a default **action definition object** — not just a function. The object has an optional `validate` key (a Zod schema for the action's params) and a `handle` function. The Zod schema does double duty: runtime validation of params and TypeScript type inference for the handler's `params` argument.
+For direct CLI use (no JS wrapper), the user passes `--executor` explicitly:
+
+```
+barnum run --config config.json --executor "npx tsx /path/to/executor.ts"
+```
+
+### Boundary 2: Rust spawns JS executor (once per task)
+
+**When:** `Engine::dispatch_task` runs for each task in the workflow.
+
+**What happens:** Rust constructs a `ShellAction` whose script is the executor command, writes an enriched envelope to stdin, and reads follow-up tasks from stdout. The worker thread manages the subprocess lifetime and timeout.
+
+Here is the exact code path from dispatch to result:
+
+```
+Engine main thread (receiving on rx channel)
+  │
+  ├─ dispatch_task(task_id, task)
+  │    │
+  │    ├─ look up step from step_map
+  │    ├─ compute timeout from step.options.timeout
+  │    ├─ construct ShellAction with executor_script and envelope context
+  │    │
+  │    └─ spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout)
+  │         │
+  │         └─ thread::spawn ─────────────────────────────────────────────────┐
+  │                                                                          │
+  │    ┌─────────────────────── worker thread ───────────────────────────┐    │
+  │    │                                                                │    │
+  │    │  run_action(action, &value.0, timeout)                         │    │
+  │    │    │                                                           │    │
+  │    │    ├─ deadline = Instant::now() + timeout                      │    │
+  │    │    ├─ handle = action.start(value)                             │    │
+  │    │    │    │                                                      │    │
+  │    │    │    ├─ serialize envelope JSON (action + task + step + config)   │
+  │    │    │    ├─ Command::new("sh").arg("-c").arg(executor_script)   │    │
+  │    │    │    │    stdin: enriched envelope                          │    │
+  │    │    │    │    stdout: piped                                     │    │
+  │    │    │    │    stderr: piped                                     │    │
+  │    │    │    ├─ write envelope to stdin, close pipe                 │    │
+  │    │    │    ├─ spawn reader thread (reads stdout+stderr to completion)   │
+  │    │    │    └─ return ActionHandle { rx, ProcessGuard { child } }  │    │
+  │    │    │                                                           │    │
+  │    │    └─ handle.rx.recv_timeout(remaining)                        │    │
+  │    │         │                                                      │    │
+  │    │         ├─ Ok(stdout) → ActionResult { output: Ok(stdout) }    │    │
+  │    │         ├─ Timeout → ProcessGuard drops → child.kill()         │    │
+  │    │         └─ Disconnected → "action panicked"                    │    │
+  │    │                                                                │    │
+  │    │  tx.send(WorkerResult { task_id, task, result })               │    │
+  │    │                                                                │    │
+  │    └────────────────────────────────────────────────────────────────┘    │
+  │                                                                          │
+  └─ rx.recv() → process_worker_result → apply entries → flush_dispatches
+```
+
+`spawn_worker` and `run_action` are defined in `runner/action.rs`. They do not change in this refactor. `spawn_worker` spawns a thread, calls `run_action`, sends the result. `run_action` computes a deadline, calls `action.start()`, and blocks on `recv`/`recv_timeout`. On timeout, the `ActionHandle` drops, which drops the `ProcessGuard`, which kills the child process. The behavior is identical to today's `ShellAction` dispatch — the only difference is what script the ShellAction runs and what stdin it receives.
+
+### Boundary 3: JS handler spawns subprocess (once per task, inside executor)
+
+**When:** The executor's handler calls out to an external process.
+
+**What happens:** The executor reads the envelope from stdin, looks up the handler by `action.kind`, validates params with the handler's Zod schema, and calls `handle()`. The handler spawns its own subprocess depending on the action kind.
+
+```
+node tsx executor.ts                    (spawned by Rust at Boundary 2)
+  │
+  ├─ read stdin → parse envelope
+  ├─ getAction(envelope.action.kind)    → handler definition
+  ├─ handler.validate.parse(params)     → runtime param validation
+  │
+  ├─ handler.handle({ params, task, step, config })
+  │    │
+  │    ├─ [Pool handler]
+  │    │    └─ execFileSync("troupe", ["submit_task", "--pool", pool, "--data", payload, ...])
+  │    │         └─ troupe manages agent lifecycle, returns response
+  │    │
+  │    └─ [Command handler]
+  │         └─ execSync(params.script, { shell: "/bin/sh", input: JSON.stringify(task) })
+  │              └─ user's shell script receives { kind, value } on stdin
+  │
+  └─ process.stdout.write(JSON.stringify(followUpTasks))
+```
+
+The handler controls what its subprocess receives. The Command handler strips the envelope down to `{ kind, value }` for backward compatibility with existing user scripts. The Pool handler constructs the troupe payload (task, instructions/docs, optional timeout_seconds).
+
+### Timeout semantics
+
+Two distinct timeouts exist, operating at different boundaries.
+
+**Barnum worker timeout** (`step.options.timeout`, defaulting to `config.options.timeout`):
+- Applied at Boundary 2 by `run_action` via `recv_timeout`
+- When it fires, `ProcessGuard::drop` sends SIGKILL to the executor process
+- This is barnum's kill deadline for the entire task execution
+- Resolved during `ConfigFile::resolve()`: `step.timeout.or(global.timeout)` (`config.rs:255`)
+
+**Pool agent timeout** (`action.params.timeout` in Pool actions):
+- Applied at Boundary 3 by the Pool handler, passed to troupe as `timeout_seconds`
+- Controls how long the troupe agent gets to work
+- Opaque to Rust — a field in the action params JSON, forwarded by the handler
+
+These timeouts are independent. The barnum worker timeout is the outer envelope. If it fires, the executor process dies regardless of the agent timeout.
+
+## Envelope Format
+
+Rust pipes a JSON envelope to the executor's stdin for each task. The envelope contains everything the handler needs:
+
+```json
+{
+  "action": { "kind": "Pool", "params": { "instructions": {...}, "pool": "demo", "timeout": 300 } },
+  "task": { "kind": "Analyze", "value": { "file": "src/main.rs" } },
+  "step": { "name": "Analyze", "action": {...}, "next": ["Implement", "Done"], "options": {...} },
+  "config": { "steps": [...], "max_concurrency": 10 }
+}
+```
+
+- **`action`**: The step's action config. With ACTION_PARAMS_NESTING landed, `serde_json::to_value(&step.action)` produces `{ "kind": "Pool", "params": { ... } }` — the exact shape the JS executor expects.
+- **`task`**: The task being dispatched: `{ kind: step_name, value: payload }`.
+- **`step`**: The full resolved step definition. Handlers that need context (e.g., Pool handler generating docs from `step.next` and value schemas) use this.
+- **`config`**: The full resolved config. Handlers that need global context (e.g., Pool handler looking up next step schemas for docs) use this.
+
+The `config` field is the same for every task in a workflow run. The Engine pre-serializes it once and reuses it for every dispatch.
+
+## JS Handler Architecture
+
+Detailed in **JS_ACTION_HANDLERS.md**. Summary:
+
+Each handler file exports an action definition object with an optional `validate` Zod schema and a `handle` function. The Zod schema provides runtime validation and TypeScript type inference — `handle` receives typed `params` inferred from the schema.
 
 ```typescript
-// libs/barnum/actions/command.ts
-import { z } from "zod";
-import { defineAction } from "./types.js";
-
 export default defineAction({
   validate: z.object({ script: z.string() }),
   handle: async ({ params, task }) => {
-    // params is typed as { script: string } — inferred from validate
+    // params is typed as { script: string }
     const stdout = execSync(params.script, { input: JSON.stringify(task), ... });
     return JSON.parse(stdout);
   },
 });
 ```
 
-The `index.ts` hardcodes the mapping from kind name to action definition. Adding a new kind means adding an import and a map entry.
+File layout:
 
-**Future:** `BarnumConfig` gets a builder pattern where action kinds are registered explicitly:
-
-```typescript
-const barnum = BarnumConfig.builder()
-  .action("Pool", poolAction)         // built-in, pre-registered
-  .action("Command", commandAction)   // built-in, pre-registered
-  .action("Claude", claudeAction)     // user-registered
-  .fromConfig(config);
-
-barnum.run();
+```
+libs/barnum/actions/
+├── executor.ts    # Reads stdin envelope, dispatches to handler, writes stdout
+├── types.ts       # RawEnvelope, ActionContext, ActionDefinition, defineAction
+├── pool.ts        # Pool handler: generates docs, submits to troupe
+├── command.ts     # Command handler: spawns sh -c, pipes { kind, value }
+├── docs.ts        # JS port of generate_step_docs (used by pool handler)
+└── index.ts       # Handler registry: kind name → action definition
 ```
 
-The built-in kinds (Pool, Command) are pre-registered by the builder. Users add their own via `.action(kind, actionDef)`. Because each action definition carries its Zod schema, the builder can validate config params at construction time and the config construction API is fully typed — when you call `.action("Claude", claudeAction)`, the config type knows what params "Claude" accepts.
-
-The hardcoded map in `index.ts` is the degenerate case of this — it becomes the default set of registrations in the builder.
-
-## Current State
-
-**Prerequisite landed:** ACTION_PARAMS_NESTING is complete. All action enums (`ActionFile`, `ActionKind`, `FinallyHook`) now use `#[serde(tag = "kind", content = "params")]`. This means `serde_json::to_value(action_kind)` produces `{ "kind": "Pool", "params": { "instructions": ..., "pool": ... } }` — exactly the shape the JS executor expects. Making the resolved action opaque (Step 5 below) is now a straightforward `serde_json::to_value()` call during resolution.
-
-### dispatch_task (`crates/barnum_config/src/runner/mod.rs:696-730`)
-
-```rust
-fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let timeout = step.options.timeout.map(Duration::from_secs);
-    let tx = self.tx.clone();
-
-    match &step.action {
-        ActionKind::Pool(PoolActionConfig {
-            pool, root, timeout: pool_timeout, ..
-        }) => {
-            let docs = generate_step_docs(step, self.config);
-            let action = Box::new(PoolAction {
-                root: root.clone(), pool: pool.clone(),
-                invoker: self.invoker.clone(), docs,
-                step_name: task.step.clone(), pool_timeout: *pool_timeout,
-            });
-            spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
-        }
-        ActionKind::Command(CommandAction { script }) => {
-            let action = Box::new(ShellAction {
-                script: script.clone(),
-                step_name: task.step.clone(),
-                working_dir: self.working_dir.clone(),
-            });
-            spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
-        }
-    }
-}
-```
-
-### What gets deleted from Rust
-
-- `PoolAction` struct in `runner/action.rs` (the runtime Action impl)
-- `submit.rs` (troupe submission logic — `build_agent_payload`, `submit_via_cli`)
-- `ActionKind` enum in `resolved.rs`
-- `PoolAction` and `CommandAction` structs in `resolved.rs`
-- `Invoker<TroupeCli>` from `Engine` and `RunnerConfig`
-- `cli_invoker` and `troupe_cli` dependencies from `barnum_config`
-- `generate_step_docs` in `docs.rs` (moves to JS; `generate_full_docs` stays for `barnum config docs`)
-- `Config::has_pool_actions()` in `resolved.rs`
-
-## Proposed Changes
-
-### 1. Resolved action type: opaque JSON
-
-**File:** `crates/barnum_config/src/resolved.rs`
-
-Replace `ActionKind` with opaque JSON. Rust doesn't interpret action configs — it passes them through to the JS executor.
-
-```rust
-pub struct Step {
-    pub name: StepName,
-    pub value_schema: Option<serde_json::Value>,
-    pub action: serde_json::Value,  // was: action: ActionKind — opaque, passed to JS
-    pub next: Vec<StepName>,
-    pub finally_hook: Option<HookScript>,
-    pub options: Options,
-}
-```
-
-With ACTION_PARAMS_NESTING landed, `ConfigFile::resolve()` can convert `ActionFile` → `serde_json::Value` via `serde_json::to_value()`. The result is `{ "kind": "Pool", "params": { ... } }` — the exact shape JS handlers expect. No manual restructuring needed.
-
-The action config serializes into the state log for resume. JS doesn't need to re-resolve anything — the action config is the same data the handler needs.
-
-**Note:** This is a temporary loss of type safety in the resolved layer. The user-facing config types (`ActionFile` with `Pool`/`Command` variants in `config.rs`) and the generated schemas (Zod, JSON Schema) remain fully typed — schema generation operates on config types, not resolved types. Once the builder pattern lands, the resolved type can regain type safety: each registered handler declares its params type, and the builder validates at registration time.
-
-### 2. dispatch_task becomes kind-agnostic
-
-**File:** `crates/barnum_config/src/runner/mod.rs`
-
-Rust builds an enriched envelope containing the action config and task value, then pipes it to the JS executor.
-
-```rust
-fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
-    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-    let timeout = step.options.timeout.map(Duration::from_secs);
-    info!(step = %task.step, "dispatching task");
-    let action = Box::new(ShellAction {
-        script: self.executor_script.clone(),
-        step_name: task.step.clone(),
-        working_dir: self.working_dir.clone(),
-    });
-    spawn_worker(self.tx.clone(), action, task_id, task, WorkerKind::Task, timeout);
-}
-```
-
-But `ShellAction` currently pipes `{"kind": "StepName", "value": {...}}` to stdin. The JS executor needs the full envelope: action config, task, step metadata, and full config. The stdin contract is between Rust and the JS executor — the JS handlers control what their subprocesses receive (e.g., Command strips it back down to `{ kind, value }` for the user's shell script).
-
-### 3. ShellAction pipes the enriched envelope
-
-**File:** `crates/barnum_config/src/runner/action.rs`
-
-`ShellAction` currently constructs `{"kind": step_name, "value": value}` and pipes it. It changes to pipe a richer envelope with the full context the JS executor needs.
-
-```rust
-pub struct ShellAction {
-    pub script: String,
-    pub action_config: serde_json::Value,  // the step's action config (opaque JSON)
-    pub step_config: serde_json::Value,    // the full step definition
-    pub full_config: serde_json::Value,    // the full barnum config
-    pub step_name: StepName,
-    pub working_dir: PathBuf,
-}
-```
-
-The piped stdin becomes:
-```rust
-let envelope = serde_json::json!({
-    "action": self.action_config,
-    "task": { "kind": &self.step_name, "value": value },
-    "step": self.step_config,
-    "config": self.full_config,
-});
-```
-
-### 4. Engine holds executor script path
-
-**File:** `crates/barnum_config/src/runner/mod.rs`
-
-Engine drops `invoker`, adds `executor_script`:
-
-```rust
-struct Engine<'a> {
-    config: &'a Config,
-    schemas: &'a CompiledSchemas,
-    step_map: HashMap<&'a StepName, &'a Step>,
-    state: RunState,
-    executor_script: String,
-    working_dir: PathBuf,
-    tx: mpsc::Sender<WorkerResult>,
-    max_concurrency: usize,
-    in_flight: usize,
-    dropped_count: u32,
-}
-```
-
-`RunnerConfig` drops `invoker`, adds `executor_script`:
-
-```rust
-pub struct RunnerConfig<'a> {
-    pub working_dir: &'a Path,
-    pub wake_script: Option<&'a str>,
-    pub executor_script: &'a str,
-    pub state_log_path: &'a Path,
-}
-```
-
-The JS layer passes the executor path via a new CLI flag: `barnum run --executor /path/to/executor.js --config ...`. For direct CLI use (no JS), the CLI resolves a default executor path.
-
-### 5. JS action handler files
-
-#### `libs/barnum/actions/types.ts`
-
-```typescript
-import { type ZodType, type z } from "zod";
-import type { ActionFile, StepFile, ConfigFile } from "../barnum-config-schema.zod.js";
-export type { ActionFile, StepFile, ConfigFile };
-
-/** A follow-up task to queue after this action completes. */
-export interface FollowUpTask {
-  kind: string;
-  value: unknown;
-}
-
-/** The raw envelope piped to the JS executor's stdin by Rust. */
-export interface RawEnvelope<
-  TAction = ActionFile,
-  TTask = { kind: string; value: unknown },
-  TStep = StepFile,
-  TConfig = ConfigFile,
-> {
-  /** The step's action config — typed discriminated union from the generated schema. */
-  action: TAction;
-  /** The task being dispatched. */
-  task: TTask;
-  /** The full step definition (for handlers that need context like next steps, schemas). */
-  step: TStep;
-  /** The full config (for handlers that need global context like all steps). */
-  config: TConfig;
-}
-
-/** Context passed to an action's handle function, with typed params. */
-export interface ActionContext<
-  TParams = Record<string, unknown>,
-  TTask = { kind: string; value: unknown },
-  TStep = StepFile,
-  TConfig = ConfigFile,
-> {
-  /** The validated and typed action params. */
-  params: TParams;
-  /** The task being dispatched. */
-  task: TTask;
-  /** The full step definition. */
-  step: TStep;
-  /** The full config. */
-  config: ConfigFile;
-}
-
-/**
- * An action definition: an object with a handle function and optional
- * Zod schema for params validation + type inference.
- *
- * The Zod schema serves two purposes:
- * 1. Runtime validation of the action's params before handle() is called
- * 2. TypeScript type inference — params in handle() is typed as z.output<validate>
- */
-export interface ActionDefinition<TParams = Record<string, unknown>> {
-  /** Optional Zod schema. Validates params at runtime, infers TParams at compile time. */
-  validate?: ZodType<TParams>;
-  /** Execute the action. Receives typed params + task, returns follow-up tasks. */
-  handle: (ctx: ActionContext<TParams>) => Promise<FollowUpTask[]>;
-}
-
-/**
- * Helper to define an action with full type inference from the Zod schema.
- *
- * Usage:
- *   export default defineAction({
- *     validate: z.object({ script: z.string() }),
- *     handle: async ({ params, task }) => {
- *       // params is { script: string }
- *     },
- *   });
- */
-export function defineAction<T extends ZodType>(
-  def: { validate: T; handle: (ctx: ActionContext<z.output<T>>) => Promise<FollowUpTask[]> },
-): ActionDefinition<z.output<T>>;
-export function defineAction(
-  def: { handle: (ctx: ActionContext<Record<string, unknown>>) => Promise<FollowUpTask[]> },
-): ActionDefinition;
-export function defineAction(def: ActionDefinition<any>): ActionDefinition<any> {
-  return def;
-}
-```
-
-#### `libs/barnum/actions/command.ts`
-
-The Command handler spawns the user's shell script, piping the task (without the action config — users expect `{ kind, value }`).
-
-```typescript
-import { execSync } from "node:child_process";
-import { z } from "zod";
-import { defineAction } from "./types.js";
-
-/**
- * Command action: spawns sh -c <script>, pipes the task, returns parsed stdout.
- *
- * The user's script receives `{"kind": "StepName", "value": {...}}` on stdin
- * and must write `[{"kind": "NextStep", "value": {...}}, ...]` to stdout.
- */
-export default defineAction({
-  validate: z.object({ script: z.string() }),
-
-  handle: async ({ params, task }) => {
-    // params.script is typed as string — validated by Zod before we get here
-    const stdin = JSON.stringify(task);
-    const stdout = execSync(params.script, {
-      input: stdin,
-      encoding: "utf-8",
-      shell: "/bin/sh",
-    });
-
-    return JSON.parse(stdout);
-  },
-});
-```
-
-#### `libs/barnum/actions/pool.ts`
-
-The Pool handler generates docs, builds the troupe payload, submits via troupe CLI, and returns the agent's response.
-
-```typescript
-import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { z } from "zod";
-import { defineAction } from "./types.js";
-import { generateStepDocs } from "./docs.js";
-
-const require = createRequire(import.meta.url);
-
-function troupeBinary(): string {
-  if (process.env.TROUPE) return process.env.TROUPE;
-  try {
-    return require("@barnum/troupe");
-  } catch {
-    return "troupe";
-  }
-}
-
-const instructionsSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("Inline"), value: z.string() }),
-  z.object({ kind: z.literal("Link"), path: z.string() }),
-]);
-
-/**
- * Pool action: submits the task to the troupe agent pool and returns
- * the agent's response (follow-up tasks).
- */
-export default defineAction({
-  validate: z.object({
-    instructions: instructionsSchema,
-    pool: z.string().optional(),
-    root: z.string().optional(),
-    timeout: z.number().optional(),
-  }),
-
-  handle: async ({ params, task, step, config }) => {
-    // params is fully typed: { instructions: ..., pool?: string, root?: string, timeout?: number }
-    const troupe = troupeBinary();
-
-    const instructions = params.instructions.kind === "Inline"
-      ? params.instructions.value
-      : "";
-
-    const docs = generateStepDocs(task.kind, instructions, step, config);
-
-    // Build troupe payload — params.timeout is the agent timeout passed to troupe (opaque).
-    // Barnum's worker kill deadline is separate (step.options.timeout, handled by Rust).
-    const payload: Record<string, unknown> = { task, instructions: docs };
-    if (params.timeout != null) {
-      payload.timeout_seconds = params.timeout;
-    }
-
-    // Submit to troupe
-    const args = ["submit_task"];
-    if (params.root) args.push("--root", params.root);
-    if (params.pool) args.push("--pool", params.pool);
-    args.push("--notify", "file", "--data", JSON.stringify(payload));
-
-    const result = execFileSync(troupe, args, { encoding: "utf-8" });
-    const response = JSON.parse(result);
-
-    if (response.kind === "Processed") {
-      return JSON.parse(response.stdout);
-    }
-
-    throw new Error(`Pool submission failed: ${JSON.stringify(response)}`);
-  },
-});
-```
-
-#### `libs/barnum/actions/docs.ts`
-
-JS port of `generate_step_docs`. Used by the pool handler to generate agent instructions. Takes the instructions string directly (the pool handler already has it typed from its Zod schema), plus the step/config context for response docs.
-
-```typescript
-import type { ConfigFile, StepFile } from "./types.js";
-
-export function generateStepDocs(
-  stepName: string,
-  instructions: string,
-  step: StepFile,
-  config: ConfigFile,
-): string {
-  const lines: string[] = [];
-
-  lines.push(
-    "**IMPORTANT: This task is completely isolated. You have no memory of previous tasks. " +
-    "Even if this task seems related to prior work, you must complete it from scratch using " +
-    "only the information provided here.**",
-    "",
-  );
-
-  lines.push(`# Current Step: ${stepName}`, "");
-
-  if (instructions.length > 0) {
-    lines.push(instructions, "");
-  }
-
-  if (step.next.length === 0) {
-    lines.push("## Terminal Step", "", "This is a terminal step. Return an empty array: `[]`");
-  } else {
-    lines.push(
-      "## Valid Responses", "",
-      "You must return a JSON array of tasks. Each task has `kind` and `value` fields.", "",
-      "Valid next steps:", "",
-    );
-
-    for (const nextName of step.next) {
-      const nextStep = config.steps.find((s) => s.name === nextName);
-      if (!nextStep) continue;
-
-      lines.push(`### ${nextName}`, "");
-
-      if (!nextStep.value_schema) {
-        lines.push("Accepts any JSON value.", "", "```json", `{"kind": "${nextName}", "value": <any>}`, "```");
-      } else {
-        lines.push(
-          "Value must match schema:", "", "```json",
-          JSON.stringify(nextStep.value_schema, null, 2),
-          "```", "", "Example:", "```json",
-          `{"kind": "${nextName}", "value": {...}}`, "```",
-        );
-      }
-      lines.push("");
-    }
-  }
-
-  return lines.join("\n");
-}
-```
-
-#### `libs/barnum/actions/index.ts`
-
-Hardcoded action definition registry.
-
-```typescript
-import type { ActionDefinition } from "./types.js";
-import poolAction from "./pool.js";
-import commandAction from "./command.js";
-
-const actions = new Map<string, ActionDefinition<any>>([
-  ["Pool", poolAction],
-  ["Command", commandAction],
-]);
-
-export function getAction(kind: string): ActionDefinition<any> {
-  const action = actions.get(kind);
-  if (!action) {
-    throw new Error(
-      `Unknown action kind: "${kind}". ` +
-      `Built-in kinds: ${[...actions.keys()].join(", ")}`,
-    );
-  }
-  return action;
-}
-
-export type { ActionDefinition, ActionContext, FollowUpTask } from "./types.js";
-export { defineAction } from "./types.js";
-```
-
-#### `libs/barnum/actions/executor.ts`
-
-The single entry point that Rust spawns for every task. Reads the envelope from stdin, validates params against the action's Zod schema (if present), dispatches to the handler, writes the result to stdout. Invoked via `tsx` (see section 6).
-
-```typescript
-import { getAction } from "./index.js";
-import type { RawEnvelope } from "./types.js";
-
-// Read envelope from stdin
-const chunks: Buffer[] = [];
-for await (const chunk of process.stdin) chunks.push(chunk);
-const envelope: RawEnvelope = JSON.parse(Buffer.concat(chunks).toString());
-
-// Look up action definition
-const action = getAction(envelope.action.kind);
-
-// Validate params if the action defines a schema
-const rawParams = "params" in envelope.action ? envelope.action.params : {};
-const params = action.validate
-  ? action.validate.parse(rawParams)
-  : rawParams;
-
-// Dispatch to handler with validated, typed params
-const results = await action.handle({
-  params,
-  task: envelope.task,
-  step: envelope.step,
-  config: envelope.config,
-});
-
-// Write follow-up tasks to stdout
-process.stdout.write(JSON.stringify(results));
-```
-
-### 6. BarnumConfig passes executor command
+The registry is a hardcoded `Map<string, ActionDefinition>`. Adding a new kind means adding an import and a map entry. Future: `BarnumConfig.builder().action("Claude", claudeAction)` for user-registered kinds.
+
+## Rust Changes
+
+Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
+
+1. **New CLI flag:** `--executor <command>` on `barnum run` (and `--resume-from`). Stored in `RunnerConfig.executor_script`.
+
+2. **Engine holds executor script:** `Engine.executor_script: Option<String>`. Pre-serializes config JSON once at construction.
+
+3. **ShellAction gains envelope context:** A new optional field stores pre-serialized action/step/config JSON. When present, `start()` pipes the enriched envelope instead of `{ kind, value }`.
+
+4. **Dual-mode `dispatch_task`:** When `executor_script` is `Some`, constructs a `ShellAction` with the executor command and envelope context. When `None`, current `match &step.action { ... }` behavior. This enables incremental migration — the executor path can be tested while the legacy path still works.
+
+5. **`dispatch_finally` unchanged:** Finally hooks continue to use `ShellAction` with the hook's script and `{ kind, value }` stdin. They don't route through the executor.
+
+## What Doesn't Change
+
+- `spawn_worker`, `run_action`, `ActionHandle`, `ProcessGuard` — generic action dispatch infrastructure
+- `RunState` and all state machine logic (task tracking, child counting, finally detection)
+- `CompiledSchemas` and value schema validation
+- State log format (config entry stores the serialized `Config`)
+- `barnum config validate`, `barnum config docs`, `barnum config graph` — operate on config types
+- Finally hooks — direct `ShellAction` with hook script, not routed through executor
+
+## Resume Behavior
+
+On resume, Rust reads the state log which contains the serialized config. The `--executor` flag must be provided again (not stored in the log). For the JS-driven path, `BarnumConfig` always provides it. For direct CLI use, the user passes `--executor` explicitly.
+
+## Sub-refactors
+
+These can land independently, in parallel, before the parent refactor:
+
+### 1. JS_ACTION_HANDLERS.md
+
+Create `libs/barnum/actions/` with all handler files, types, executor, and docs port. Add `tsx` as a dependency. Purely additive JS code — no Rust changes. See the sub-refactor document for full specification.
+
+### 2. EXECUTOR_CLI_FLAG.md
+
+Add `--executor` CLI flag, thread it through `RunnerConfig` and `Engine`, implement dual-mode `dispatch_task`. Purely additive Rust changes — when `--executor` is not passed, behavior is identical to today. See the sub-refactor document for full specification.
+
+**Dependency:** Neither sub-refactor depends on the other. They can land in either order or in parallel.
+
+## Remaining Work (after sub-refactors land)
+
+Once both sub-refactors are on master, three integration steps remain:
+
+### Step 1: BarnumConfig.run() passes --executor
 
 **File:** `libs/barnum/run.ts`
-
-The package ships TypeScript source (no build step). The executor is `executor.ts`, which needs a TS-capable runtime. We use `tsx` as a dependency — it's lightweight (~2MB), works with any Node version, and avoids fragile runtime detection (`process.execPath` doesn't detect `babel-node`, `ts-node` binary, or other wrappers).
-
-**`tsx` added as a dependency in `package.json`:**
-
-```json
-{
-  "dependencies": {
-    "zod": "^3.0.0",
-    "tsx": "^4.0.0"
-  }
-}
-```
-
-The JS layer resolves the `tsx` binary and executor script path, passes them to the barnum CLI via `--executor`.
 
 ```typescript
 import { resolve } from "node:path";
@@ -572,96 +246,56 @@ const tsxBinary = require.resolve("tsx/cli");
 const executorPath = resolve(import.meta.dirname, "actions", "executor.ts");
 
 export class BarnumConfig {
-  // ...existing...
-
   run(opts?: RunOptions): ChildProcess {
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
       : ["run", "--config", JSON.stringify(this.config)];
     args.push("--executor", `node ${tsxBinary} ${executorPath}`);
-    if (opts?.entrypointValue) args.push("--entrypoint-value", opts.entrypointValue);
-    // ...rest of opts...
+    // ... rest of opts
     return spawnBarnum(args);
   }
 }
 ```
 
-For direct CLI use without the JS wrapper, the user passes `--executor` explicitly (e.g., `barnum run --executor "npx tsx /path/to/executor.ts" ...`).
+Also update `package.json`: add `tsx` dependency, add `actions/` to `files` array and `exports`.
 
-### 7. Config resolution simplifies
+### Step 2: Make --executor required, Step.action opaque
 
-`ConfigFile::resolve()` no longer needs to resolve `ActionFile` → `ActionKind`. The action config stays as-is (opaque JSON). Resolution only handles:
-- Resolving `MaybeLinked` instructions (file links → inline content)
-- Resolving schema links
-- Computing effective options
+**File:** `crates/barnum_config/src/resolved.rs`
 
-The resolved `Step.action` is a `serde_json::Value` containing the original action config with links resolved.
-
-### 8. Step docs generation
-
-The envelope includes `step` and `config` (see `RawEnvelope` type). The pool handler uses these to generate step docs entirely in JS via `generateStepDocs()`. Rust doesn't generate docs — it just passes the config through.
-
-Envelope shape:
-
-```json
-{
-  "action": { "kind": "Pool", "params": { ... } },
-  "task": { "kind": "Analyze", "value": {...} },
-  "step": { "name": "Analyze", "next": ["Implement", "Done"], ... },
-  "config": { "steps": [...] }
-}
-```
-
-### 9. Troupe binary discovery
-
-Same as before. The pool handler finds troupe via:
-1. `TROUPE` env var (explicit override)
-2. `require("@barnum/troupe")` (bundled binary from npm package)
-3. `"troupe"` on PATH (fallback)
-
-### 10. dispatch_finally stays in Rust
-
-Finally hooks are always shell scripts (no action kind dispatch). They continue to use `ShellAction` directly with the hook's script. They don't go through the JS executor — they're a Rust-native concept.
+Replace `ActionKind` with `serde_json::Value`:
 
 ```rust
-fn dispatch_finally(&self, ...) {
-    let action = Box::new(ShellAction {
-        script: hook_script.to_string(),
-        action_config: serde_json::Value::Null,  // not used for finally hooks
-        step_name: task.step.clone(),
-        working_dir: self.working_dir.clone(),
-    });
-    // ...
+pub struct Step {
+    pub name: StepName,
+    pub value_schema: Option<serde_json::Value>,
+    pub action: serde_json::Value,  // was: ActionKind
+    pub next: Vec<StepName>,
+    pub finally_hook: Option<HookScript>,
+    pub options: Options,
 }
 ```
 
-For finally hooks, `ShellAction` pipes just `{ kind, value }` (no enriched envelope) since the hook script expects the same format as today's Command actions.
+`ConfigFile::resolve()` converts `ActionFile` to `serde_json::Value` via `serde_json::to_value()`. The result is `{ "kind": "Pool", "params": { ... } }`.
 
-## What doesn't change
+`RunnerConfig.executor_script` becomes `&'a str` (not `Option`). The dual-mode dispatch in `dispatch_task` collapses to the executor-only path.
 
-- State machine logic (`RunState`, task tracking, retry logic)
-- `ActionHandle`, `run_action`, `spawn_worker` (already generic)
-- `CompiledSchemas` and validation
-- State log format (entries are the same; config entry stores action config as-is)
-- `barnum config validate`, `barnum config docs`, `barnum config graph` (operate on user-facing config)
-- Finally hooks (stay as direct `ShellAction` with `sh -c`)
+### Step 3: Delete Rust action dispatch code
 
-## Resume behavior
+Remove:
+- `PoolAction` struct in `runner/action.rs` (the runtime Action impl, lines 155-187)
+- `submit.rs` (troupe submission: `build_agent_payload`, `submit_via_cli`)
+- `ActionKind` enum in `resolved.rs` (lines 92-99)
+- `PoolAction` and `CommandAction` structs in `resolved.rs` (lines 64-89)
+- `Invoker<TroupeCli>` from `Engine` and `RunnerConfig`
+- `cli_invoker` and `troupe_cli` dependencies from `barnum_config`
+- `generate_step_docs` in `docs.rs` (moved to JS; `generate_full_docs` stays for `barnum config docs`)
+- `Config::has_pool_actions()` in `resolved.rs`
 
-On resume, Rust reads the state log which contains the config with action configs per step (opaque JSON). The `--executor` flag must be provided again (it's not stored in the log). For the JS-driven path, `BarnumConfig` always provides it (using bundled `tsx`). For direct CLI use, the user passes `--executor` explicitly.
+Update `generate_full_docs` and `generate_graphviz` to extract fields from the opaque `serde_json::Value` action (read `action["kind"]` and `action["params"]["instructions"]` instead of matching on `ActionKind`).
 
-## Phasing
+## Relationship to Other Docs
 
-1. **Add `executor_script` to Engine/RunnerConfig**, `--executor` CLI flag. Default to current behavior when not set.
-2. **Change `ShellAction` to pipe enriched envelope** when `action_config` is present, plain `{ kind, value }` when null (backward compat for finally hooks and migration).
-3. **Create `libs/barnum/actions/` directory** with types.ts, command.ts, pool.ts, docs.ts, index.ts, executor.ts.
-4. **Update `BarnumConfig.run()`** to pass `--executor` flag.
-5. **Make resolved `Step.action` opaque** (`serde_json::Value` instead of `ActionKind`).
-6. **Update `dispatch_task`** to always use executor script.
-7. **Remove `ActionKind`**, `PoolAction` (runtime), `submit.rs`, `Invoker` from Engine/RunnerConfig.
-
-## Relationship to other docs
-
-- **ACTION_REGISTRY.md** — Superseded and deleted.
-- **PLUGGABLE_ACTION_KINDS.md** — The end-state vision. User-defined kinds register handler functions via the `BarnumConfig` builder's `.action(kind, handler)` method.
-- **CLAUDE_CLI_ACTION_KIND.md** — Claude becomes `libs/barnum/actions/claude.ts` exporting a `handle` function that spawns the Claude CLI with the task value and returns the parsed response. No Rust code needed.
+- **ACTION_PARAMS_NESTING.md** — Prerequisite, landed. Makes `serde_json::to_value(action)` produce `{ "kind": ..., "params": { ... } }`.
+- **PLUGGABLE_ACTION_KINDS.md** — End-state vision. User-defined kinds register via `BarnumConfig.builder().action(kind, handler)`. The hardcoded registry in `index.ts` becomes the default set of registrations.
+- **CLAUDE_CLI_ACTION_KIND.md** — Claude becomes `actions/claude.ts` exporting a handler that spawns the Claude CLI. No Rust code needed.
