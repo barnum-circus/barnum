@@ -2,10 +2,10 @@
   "name": "@barnum/barnum",
   "version": "0.2.4",
   "description": "Barnum CLI - workflow engine for agents.",
-  "main": "barnum-config-schema.zod.ts",
-  "types": "barnum-config-schema.zod.ts",
+  "main": "index.ts",
+  "types": "index.ts",
   "exports": {
-    ".": "./barnum-config-schema.zod.ts",
+    ".": "./index.ts",
     "./schema": "./barnum-config-schema.zod.ts",
     "./binary": "./index.js"
   },
@@ -30,6 +30,7 @@
     "cli"
   ],
   "files": [
+    "index.ts",
     "index.js",
     "cli.js",
     "artifacts/**/*",
