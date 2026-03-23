@@ -70,6 +70,50 @@ Has separate match arms for Pool, Command, Finally, and PreHookError. Pool and C
 
 Blocks forever on `child.wait_with_output()`. No timeout.
 
+## Design Decisions
+
+### Why timeout is NOT a default method on the trait
+
+The user's instinct was to put a default method on `Executor` that wraps `execute()` with timeout enforcement, so everything goes through the same path. After analysis, this doesn't work because timeout enforcement is inherently executor-specific:
+
+- **PoolExecutor**: Timeout is part of the troupe protocol. The `pool_timeout` is sent in the JSON payload, and the pool daemon enforces it server-side by returning `Response::NotProcessed` when the agent doesn't respond in time. There's no child process to kill.
+- **ShellExecutor**: Timeout requires `wait-timeout` crate to call `child.wait_timeout(duration)` on the spawned shell process, then `child.kill()` if it expires. The executor has the `Child` handle; a wrapper doesn't.
+
+A default method wrapping `execute()` would have to spawn a thread, join with a timeout, and... leak the blocking thread if it expires. There's no way to cancel a blocking `execute()` from outside without cooperation from the executor.
+
+### Where the unification happens instead
+
+`dispatch_via_executor` is the single dispatch point. Every executable unit goes through this function, which:
+1. Runs the pre-hook (if any)
+2. Calls `executor.execute()`
+3. Maps the result to `ActionOutcome` (Success/Timeout/Error)
+4. Sends the `WorkerResult` on the channel
+
+This is the "if it runs, it goes through the trait" guarantee — it's a free function wrapping the trait call, not a trait method. It's correct that the function is external to the trait because it has access to the pre-hook, the channel, and the task metadata that executors shouldn't know about.
+
+### Why concurrency is NOT on the trait
+
+The `in_flight` counter is managed by `Engine::flush_dispatches` (increments before spawning) and `Engine::process_worker_result` (decrements on completion). Both run on the main thread. Executors run in spawned threads and have no access to `Engine`. Concurrency is a scheduling concern, not an execution concern. The executor shouldn't know or care about concurrency limits.
+
+### Timeout is enforced by barnum, not the agent pool
+
+Today, timeout only exists for Pool actions, and it's enforced by troupe (the pool daemon). The `pool_timeout` is sent in the JSON payload, and the pool returns `Response::NotProcessed` when the agent doesn't respond in time. Commands have no timeout at all — they block forever.
+
+After this refactor, **barnum enforces timeout for all executor types.** The timeout clock starts when `executor.execute()` is called inside the spawned worker thread — i.e., after the task has been dequeued from `pending_dispatches` and dispatched. Time spent waiting in the queue does NOT count toward the timeout.
+
+Each executor handles timeout internally using whatever mechanism fits its execution context:
+- **ShellExecutor**: `wait-timeout` crate on the child process (`child.wait_timeout(duration)`, then `child.kill()` on expiry)
+- **PoolExecutor**: `wait-timeout` on the CLI child process that `submit_via_cli` spawns. If barnum's local timeout fires before troupe responds, barnum kills the CLI process and moves on. Troupe's internal timeout (`pool_timeout` in the payload) is kept as a secondary mechanism so the pool daemon can clean up its agent, but barnum does not rely on it.
+
+### Trait return type evolution
+
+Phases 1-3 use `Result<String, String>` with a sentinel constant (`TIMEOUT_SENTINEL = "timeout"`) to distinguish timeout from other errors. `dispatch_via_executor` maps `Err(TIMEOUT_SENTINEL)` to `ActionOutcome::Timeout`, preserving the timeout→retry distinction:
+
+- PoolExecutor returns `Err(TIMEOUT_SENTINEL)` when `Response::NotProcessed` is received
+- ShellExecutor returns `Err(TIMEOUT_SENTINEL)` when `wait_timeout` expires (Phase 4)
+
+This keeps the trait simple (`Result<String, String>`) while preserving behavioral correctness from Phase 1 onward.
+
 ## Proposed Changes — Phased Implementation
 
 ### Phase 1: Executor trait + PoolExecutor
@@ -127,23 +171,31 @@ impl Executor for PoolExecutor {
         );
         match submit_via_cli(&self.root, &payload, &self.invoker) {
             Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-            Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
+            Ok(Response::NotProcessed { .. }) => Err(TIMEOUT_SENTINEL.into()),
             Err(e) => Err(e.to_string()),
         }
     }
 }
 ```
 
+`TIMEOUT_SENTINEL` is a module-level constant string (`"timeout"`) that `dispatch_via_executor` uses to distinguish timeout from other errors (see 1c). This is a pragmatic choice: the trait stays simple (`Result<String, String>`) while preserving the timeout→retry distinction that exists today. The sentinel is an internal implementation detail between executors and the dispatcher.
+
 This moves `troupe::Response` handling INTO PoolExecutor (out of `response.rs`).
 
-#### 1c. Add `dispatch_via_executor` in `runner/dispatch.rs`
+#### 1c. Add `TIMEOUT_SENTINEL` and `dispatch_via_executor` in `runner/dispatch.rs`
 
-This replaces `dispatch_pool_task` for the Pool case:
+Add the sentinel constant and the unified dispatch function:
 
 ```rust
+/// Sentinel error string returned by executors to indicate timeout.
+/// dispatch_via_executor maps this to ActionOutcome::Timeout.
+pub(super) const TIMEOUT_SENTINEL: &str = "timeout";
+
 /// Execute a task through an Executor (runs in spawned thread).
 ///
 /// Runs pre-hook, calls executor.execute(), sends the result on the channel.
+/// Maps the executor's Result into ActionOutcome, using TIMEOUT_SENTINEL
+/// to distinguish timeout from other errors.
 pub fn dispatch_via_executor(
     task_id: LogTaskId,
     task: Task,
@@ -167,6 +219,7 @@ pub fn dispatch_via_executor(
     let result = executor.execute(&value.0);
     let outcome = match result {
         Ok(stdout) => ActionOutcome::Success(stdout),
+        Err(e) if e == TIMEOUT_SENTINEL => ActionOutcome::Timeout,
         Err(e) => ActionOutcome::Error(e),
     };
     let _ = tx.send(WorkerResult {
@@ -403,33 +456,82 @@ Remove from `dispatch.rs`. Remove `FinallyResult` struct. Remove `SubmitResult::
 
 ### Phase 4: Timeout enforcement
 
-**Goal:** All executors get timeouts. Commands can timeout. Hooks can timeout.
+**Goal:** Barnum enforces timeout for all executor types. Commands can timeout. Pool timeout is enforced locally (not just by troupe).
 
-**Dependency:** Add `wait-timeout` crate.
+**Dependency:** Add `wait-timeout` crate to `barnum_config/Cargo.toml`.
 
 #### 4a. Add timeout to `run_shell_command`
 
-Modify `runner/shell.rs`:
+Refactor `runner/shell.rs` to separate spawning from waiting, then add timeout:
 
 ```rust
+use std::io::Write;
+use std::path::Path;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::time::Duration;
 use wait_timeout::ChildExt;
 
+use super::dispatch::TIMEOUT_SENTINEL;
+
+/// Spawn a shell command with stdin input. Returns the child process.
+fn spawn_shell(
+    script: &str,
+    stdin_input: &str,
+    working_dir: Option<&Path>,
+) -> Result<Child, String> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(script)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(dir) = working_dir {
+        cmd.current_dir(dir);
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_input.as_bytes());
+    }
+
+    Ok(child)
+}
+
+/// Check an Output for success and extract stdout.
+fn check_output(output: Output) -> Result<String, String> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("exited with status {}: {}", output.status, stderr.trim()));
+    }
+    String::from_utf8(output.stdout).map_err(|e| format!("output is not valid UTF-8: {e}"))
+}
+
+/// Run a shell command with optional timeout.
+///
+/// Returns TIMEOUT_SENTINEL on timeout, enabling ActionOutcome::Timeout mapping.
 pub fn run_shell_command(
     script: &str,
     stdin_input: &str,
     working_dir: Option<&Path>,
-    timeout: Option<Duration>,   // ← new parameter
+    timeout: Option<Duration>,
 ) -> Result<String, String> {
     let mut child = spawn_shell(script, stdin_input, working_dir)?;
 
     match timeout {
         Some(duration) => match child.wait_timeout(duration) {
-            Ok(Some(status)) => collect_and_check(child, status),
+            Ok(Some(status)) => {
+                // Process finished within timeout. Read remaining stdout/stderr.
+                let output = child.wait_with_output()
+                    .map_err(|e| format!("wait failed: {e}"))?;
+                check_output(output)
+            }
             Ok(None) => {
+                // Timeout expired. Kill the process.
                 let _ = child.kill();
-                let _ = child.wait();
-                Err("timeout".into())
+                let _ = child.wait(); // reap zombie
+                Err(TIMEOUT_SENTINEL.into())
             }
             Err(e) => Err(format!("wait failed: {e}")),
         },
@@ -444,7 +546,9 @@ pub fn run_shell_command(
 
 `child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows).
 
-#### 4b. Thread timeout through ShellExecutor
+**Note on `wait_timeout` + `wait_with_output`:** After `wait_timeout` returns `Ok(Some(status))`, the process has exited but stdout/stderr pipes may still have unread data. We call `wait_with_output()` to drain them. This is safe because the process is already dead.
+
+#### 4b. Add timeout to `ShellExecutor`
 
 ```rust
 pub struct ShellExecutor {
@@ -456,7 +560,12 @@ pub struct ShellExecutor {
 
 impl Executor for ShellExecutor {
     fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
-        let task_json = /* ... */;
+        let task_json = serde_json::to_string(&serde_json::json!({
+            "kind": &self.step_name,
+            "value": value,
+        }))
+        .unwrap_or_default();
+
         run_shell_command(&self.script, &task_json, Some(&self.working_dir), self.timeout)
     }
 }
@@ -464,7 +573,7 @@ impl Executor for ShellExecutor {
 
 #### 4c. Pass `step.options.timeout` when constructing ShellExecutor
 
-In `dispatch_task`'s Command branch:
+In `dispatch_task`'s Command branch (already modified in Phase 2b):
 ```rust
 let executor = Box::new(ShellExecutor {
     script: script.clone(),
@@ -474,33 +583,107 @@ let executor = Box::new(ShellExecutor {
 });
 ```
 
-Now Command actions can timeout.
-
-#### 4d. Map timeout errors to `ActionOutcome::Timeout`
-
-In `dispatch_via_executor`, detect the timeout sentinel:
-
+In `dispatch_finally` (already modified in Phase 3a), pass `None` for timeout (finally hooks don't have their own timeout config):
 ```rust
-let outcome = match result {
-    Ok(stdout) => ActionOutcome::Success(stdout),
-    Err(e) if e == "timeout" => ActionOutcome::Timeout,
-    Err(e) => ActionOutcome::Error(e),
-};
+let executor = Box::new(ShellExecutor {
+    script: script.to_string(),
+    step_name: task.step.clone(),
+    working_dir: self.pool.working_dir.clone(),
+    timeout: None,
+});
 ```
 
-Alternatively, change `run_shell_command` to return a `ShellResult` enum instead of `Result<String, String>`, to avoid sentinel string matching. This is cleaner:
+#### 4d. Add local timeout to `PoolExecutor`
+
+Currently, `PoolExecutor::execute` calls `submit_via_cli`, which calls `invoker.invoke()`, which spawns a CLI process and blocks on its output. To enforce barnum-local timeout, we need to timeout on this CLI process.
+
+Two approaches:
+1. **Wrap `submit_via_cli`** in a child-process timeout (requires `submit_via_cli` to return a `Child` handle instead of blocking)
+2. **Add timeout to the invoker API** (changes `cli_invoker` crate)
+
+Approach 1 is less invasive. Modify `submit.rs` to expose a lower-level API:
 
 ```rust
-pub enum ShellResult {
-    Success(String),
-    Timeout,
-    Error(String),
+/// Spawn the CLI invocation as a child process.
+pub fn spawn_submit(
+    root: &Path,
+    payload: &str,
+    invoker: &Invoker<TroupeCli>,
+) -> io::Result<Child> {
+    // Build the command but return the Child instead of waiting
+    invoker.spawn(root, payload)
+}
+
+/// Wait for the CLI process with optional timeout.
+pub fn wait_submit(
+    child: &mut Child,
+    timeout: Option<Duration>,
+) -> io::Result<Response> {
+    // Similar to run_shell_command's timeout logic
+    match timeout {
+        Some(duration) => match child.wait_timeout(duration) {
+            Ok(Some(_status)) => {
+                let output = child.wait_with_output()?;
+                parse_response(output)
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Ok(Response::NotProcessed { reason: "barnum timeout".into() })
+            }
+            Err(e) => Err(io::Error::other(format!("wait failed: {e}"))),
+        },
+        None => {
+            let output = child.wait_with_output()?;
+            parse_response(output)
+        }
+    }
 }
 ```
 
-And update `ShellExecutor::execute` to map `ShellResult` to `Result<String, String>` or have the trait return `ActionOutcome` directly. **Decision point for implementation.**
+Then `PoolExecutor` becomes:
+```rust
+pub struct PoolExecutor {
+    pub root: PathBuf,
+    pub invoker: Invoker<TroupeCli>,
+    pub docs: String,
+    pub step_name: StepName,
+    pub pool_timeout: Option<u64>,
+    pub local_timeout: Option<Duration>,  // ← barnum-enforced timeout
+}
 
-**At this point:** Pool and Command actions both have timeout. The timeout value comes from `step.options.timeout`. Tests pass.
+impl Executor for PoolExecutor {
+    fn execute(&self, value: &serde_json::Value) -> Result<String, String> {
+        let payload = build_agent_payload(
+            &self.step_name, value, &self.docs, self.pool_timeout,
+        );
+        let mut child = spawn_submit(&self.root, &payload, &self.invoker)
+            .map_err(|e| e.to_string())?;
+        match wait_submit(&mut child, self.local_timeout) {
+            Ok(Response::Processed { stdout, .. }) => Ok(stdout),
+            Ok(Response::NotProcessed { .. }) => Err(TIMEOUT_SENTINEL.into()),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+```
+
+**Note:** `pool_timeout` (sent to troupe in the payload) and `local_timeout` (enforced by barnum on the CLI process) serve different purposes:
+- `pool_timeout` tells the pool daemon how long the agent has to respond. The pool manages agent lifecycle.
+- `local_timeout` is barnum's hard limit. If the CLI process doesn't return in time (e.g., pool is unresponsive), barnum kills it and moves on.
+
+Both come from `step.options.timeout`. The `local_timeout` should be slightly longer than `pool_timeout` to give the pool a chance to respond gracefully before barnum kills the process. A simple heuristic: `local_timeout = pool_timeout + 10s` (or some fixed buffer).
+
+**This requires changes to the `cli_invoker` crate** to expose a `spawn()` method that returns a `Child` instead of blocking. If this is too invasive, an alternative is to wrap the existing `submit_via_cli` call in a `thread::scope` with a join timeout — but this leaks the thread on timeout, which is acceptable for a v1.
+
+#### 4e. Update all `run_shell_command` call sites
+
+`run_shell_command` gained a `timeout` parameter. Update all existing callers:
+
+- `run_pre_hook` in `hooks.rs`: pass `None` (pre-hook timeout is a Phase 5 concern)
+- `run_post_hook` in `hooks.rs`: pass `None` (post-hook timeout is a Phase 5 concern)
+
+**At this point:** Both Pool and Command actions have barnum-enforced timeout. The timeout clock starts when `executor.execute()` runs in the spawned worker thread — time spent waiting in `pending_dispatches` does not count. The sentinel pattern (`TIMEOUT_SENTINEL`) cleanly separates timeout from error. Tests pass.
 
 ---
 
@@ -526,10 +709,10 @@ This requires the engine to track which phase each task is in, which is a signif
 
 | Phase | What | Key deletions | Key additions |
 |-------|------|---------------|---------------|
-| 1 | Pool through trait | `dispatch_pool_task`, `PoolResult`, `SubmitResult::Pool`, `process_pool_response` | `Executor` trait, `PoolExecutor`, `dispatch_via_executor`, `ActionOutcome`, `ActionResult`, `SubmitResult::Action` |
+| 1 | Pool through trait | `dispatch_pool_task`, `PoolResult`, `SubmitResult::Pool`, `process_pool_response` | `Executor` trait, `PoolExecutor`, `dispatch_via_executor`, `TIMEOUT_SENTINEL`, `ActionOutcome`, `ActionResult`, `SubmitResult::Action` |
 | 2 | Command through trait | `dispatch_command_task`, `CommandResult`, `SubmitResult::Command`, `process_command_response`, `run_command_action` | `ShellExecutor` |
 | 3 | Finally through trait | `dispatch_finally_task`, `FinallyResult`, `SubmitResult::Finally`, `process_finally_response` | `WorkerKind` enum on `WorkerResult` |
-| 4 | Timeout for all | — | `wait-timeout` dep, `timeout` param on `run_shell_command`, `timeout` field on `ShellExecutor` |
+| 4 | Barnum-enforced timeout | — | `wait-timeout` dep, `timeout` param on `run_shell_command`, `timeout` on `ShellExecutor`, `local_timeout` on `PoolExecutor`, `spawn_submit`/`wait_submit` in `submit.rs` |
 | 5 | Hooks as concurrency slots | Pre-hook code inside `dispatch_via_executor` | `PendingDispatch::PreHook`, `PendingDispatch::PostHook`, phase tracking in engine |
 
 Each phase compiles and passes tests before moving to the next.
