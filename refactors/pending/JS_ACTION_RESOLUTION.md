@@ -507,10 +507,9 @@ export { defineAction } from "./types.js";
 
 #### `libs/barnum/actions/executor.ts`
 
-The single entry point that Rust spawns for every task. Reads the envelope from stdin, validates params against the action's Zod schema (if present), dispatches to the handler, writes the result to stdout.
+The single entry point that Rust spawns for every task. Reads the envelope from stdin, validates params against the action's Zod schema (if present), dispatches to the handler, writes the result to stdout. Invoked via `tsx` (see section 6).
 
 ```typescript
-#!/usr/bin/env node
 import { getAction } from "./index.js";
 import type { RawEnvelope } from "./types.js";
 
@@ -534,16 +533,32 @@ const results = await action.handle({ params, task: envelope.task });
 process.stdout.write(JSON.stringify(results));
 ```
 
-### 6. BarnumConfig passes executor path
+### 6. BarnumConfig passes executor command
 
 **File:** `libs/barnum/run.ts`
 
-The JS layer resolves the executor script path and passes it to the barnum CLI.
+The package ships TypeScript source (no build step). The executor is `executor.ts`, which needs a TS-capable runtime. We use `tsx` as a dependency — it's lightweight (~2MB), works with any Node version, and avoids fragile runtime detection (`process.execPath` doesn't detect `babel-node`, `ts-node` binary, or other wrappers).
+
+**`tsx` added as a dependency in `package.json`:**
+
+```json
+{
+  "dependencies": {
+    "zod": "^3.0.0",
+    "tsx": "^4.0.0"
+  }
+}
+```
+
+The JS layer resolves the `tsx` binary and executor script path, passes them to the barnum CLI via `--executor`.
 
 ```typescript
 import { resolve } from "node:path";
+import { createRequire } from "node:module";
 
-const executorPath = resolve(import.meta.dirname, "actions", "executor.js");
+const require = createRequire(import.meta.url);
+const tsxBinary = require.resolve("tsx/cli");
+const executorPath = resolve(import.meta.dirname, "actions", "executor.ts");
 
 export class BarnumConfig {
   // ...existing...
@@ -552,13 +567,15 @@ export class BarnumConfig {
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
       : ["run", "--config", JSON.stringify(this.config)];
-    args.push("--executor", `node ${executorPath}`);
+    args.push("--executor", `node ${tsxBinary} ${executorPath}`);
     if (opts?.entrypointValue) args.push("--entrypoint-value", opts.entrypointValue);
     // ...rest of opts...
     return spawnBarnum(args);
   }
 }
 ```
+
+For direct CLI use without the JS wrapper, the user passes `--executor` explicitly (e.g., `barnum run --executor "npx tsx /path/to/executor.ts" ...`).
 
 ### 7. Config resolution simplifies
 
@@ -636,7 +653,7 @@ For finally hooks, `ShellAction` pipes just `{ kind, value }` (no enriched envel
 
 ## Resume behavior
 
-On resume, Rust reads the state log which contains the config with action configs per step (opaque JSON). The `--executor` flag must be provided again (it's not stored in the log). For the JS-driven path, `BarnumConfig` always provides it. For direct CLI use, the user provides it or the CLI uses a default.
+On resume, Rust reads the state log which contains the config with action configs per step (opaque JSON). The `--executor` flag must be provided again (it's not stored in the log). For the JS-driven path, `BarnumConfig` always provides it (using bundled `tsx`). For direct CLI use, the user passes `--executor` explicitly.
 
 ## Phasing
 
