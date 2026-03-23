@@ -107,21 +107,26 @@ pub struct PoolActionFile {
 
 **File:** `crates/barnum_config/src/config.rs`
 
-All fields are optional. A Pool action with no pool/root is valid — it just can't be dispatched without them being set (either in config or resolved by the JS layer before reaching Rust).
+All fields are optional. If pool/root aren't provided, they aren't passed to troupe — troupe uses its own defaults.
 
 ```rust
 pub struct PoolActionFile {
     pub instructions: MaybeLinked<Instructions>,
-    /// Pool name (e.g., "demo", "reviewers").
+    /// Pool name (e.g., "demo", "reviewers"). If omitted, troupe uses its default.
     #[serde(default)]
     pub pool: Option<String>,
-    /// Troupe root directory.
+    /// Troupe root directory. If omitted, troupe uses its default.
     #[serde(default)]
     pub root: Option<PathBuf>,
+    /// Agent lifecycle timeout in seconds. Passed to troupe as `timeout_seconds`
+    /// in the payload. Controls how long the agent gets to work on the task.
+    /// Separate from the step-level timeout which controls barnum's worker timeout.
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 ```
 
-### 2. Add pool and root to resolved PoolAction
+### 2. Add pool, root, and timeout to resolved PoolAction
 
 **File:** `crates/barnum_config/src/resolved.rs`
 
@@ -130,6 +135,7 @@ pub struct PoolAction {
     pub instructions: String,
     pub pool: Option<String>,
     pub root: Option<PathBuf>,
+    pub timeout: Option<u64>,
 }
 ```
 
@@ -138,7 +144,7 @@ pub struct PoolAction {
 **File:** `crates/barnum_config/src/config.rs`, in `ActionFile::resolve`
 
 ```rust
-Self::Pool(PoolActionFile { instructions, pool, root }) => {
+Self::Pool(PoolActionFile { instructions, pool, root, timeout }) => {
     let resolved: Instructions = instructions.resolve(base_path, |path| {
         let content = std::fs::read_to_string(path)?;
         Ok(Instructions(content))
@@ -147,40 +153,48 @@ Self::Pool(PoolActionFile { instructions, pool, root }) => {
         instructions: resolved.0,
         pool,
         root,
+        timeout,
     }))
 }
 ```
 
-### 4. Remove timeout passthrough from payload
+### 4. Timeout comes from pool action, not step options
 
 **File:** `crates/barnum_config/src/runner/submit.rs`
 
-`build_agent_payload` drops the `timeout` parameter. The payload no longer includes `timeout_seconds`. The troupe agent timeout is the pool's responsibility (configured in the pool itself), not barnum's.
+`build_agent_payload` takes the pool action's timeout instead of the step timeout. If `timeout` is set, it's included in the payload as `timeout_seconds`. Otherwise it's omitted.
 
 ```rust
 pub fn build_agent_payload(
     step_name: &StepName,
     value: &serde_json::Value,
     docs: &str,
+    pool_timeout: Option<u64>,
 ) -> String {
-    serde_json::to_string(&serde_json::json!({
+    let mut payload = serde_json::json!({
         "task": { "kind": step_name, "value": value },
         "instructions": docs,
-    }))
-    .unwrap_or_default()
+    });
+    if let Some(t) = pool_timeout {
+        payload["timeout_seconds"] = serde_json::json!(t);
+    }
+    serde_json::to_string(&payload).unwrap_or_default()
 }
 ```
+
+The caller passes `pool_action.timeout` instead of `step.options.timeout`. The step-level timeout now exclusively controls barnum's worker timeout.
 
 ### 5. Use pool/root from PoolAction in dispatch
 
 **File:** `crates/barnum_config/src/runner/action.rs`
 
-`PoolAction` gets its root from the action config instead of from `PoolConnection`:
+`PoolAction` gets pool/root from the action config instead of from `PoolConnection`:
 
 ```rust
 pub struct PoolAction {
-    pub root: PathBuf,              // from resolved config, not PoolConnection
-    pub pool: String,               // pool name from config
+    pub root: Option<PathBuf>,
+    pub pool: Option<String>,
+    pub timeout: Option<u64>,
     pub invoker: Invoker<TroupeCli>,
     pub docs: String,
     pub step_name: StepName,
@@ -189,22 +203,24 @@ pub struct PoolAction {
 
 **File:** `crates/barnum_config/src/runner/submit.rs`
 
-`submit_via_cli` takes root and pool separately instead of computing them from a combined path:
+`submit_via_cli` takes optional root and pool. Only passes them to troupe if present:
 
 ```rust
 pub fn submit_via_cli(
-    root: &Path,
-    pool: &str,
+    root: Option<&Path>,
+    pool: Option<&str>,
     payload: &str,
     invoker: &Invoker<TroupeCli>,
 ) -> io::Result<Response> {
-    let output = invoker.run([
-        "submit_task",
-        "--root", root.to_str().unwrap_or("."),
-        "--pool", pool,
-        "--notify", "file",
-        "--data", payload,
-    ])?;
+    let mut args = vec!["submit_task"];
+    if let Some(root) = root {
+        args.extend(["--root", root.to_str().unwrap_or(".")]);
+    }
+    if let Some(pool) = pool {
+        args.extend(["--pool", pool]);
+    }
+    args.extend(["--notify", "file", "--data", payload]);
+    let output = invoker.run(args)?;
     // ...
 }
 ```
