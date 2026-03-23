@@ -16,12 +16,18 @@ cli_invoker = { path = "../cli_invoker" }
 barnum_config = { path = "../barnum_config" }
 clap = { workspace = true }
 json5 = { workspace = true }
+schemars = "0.8"
+serde = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [[bin]]
 name = "barnum"
 path = "src/main.rs"
+
+[[bin]]
+name = "build_cli_schema"
+path = "src/bin/build_cli_schema.rs"
 
 [dev-dependencies]
 interprocess = { workspace = true }
