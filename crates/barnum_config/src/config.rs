@@ -407,13 +407,15 @@ impl ActionFile {
                     let content = std::fs::read_to_string(path)?;
                     Ok(Instructions(content))
                 })?;
-                Ok(crate::resolved::ActionKind::Pool(crate::resolved::PoolAction {
-                    instructions: resolved.0,
-                }))
+                Ok(crate::resolved::ActionKind::Pool(
+                    crate::resolved::PoolAction {
+                        instructions: resolved.0,
+                    },
+                ))
             }
-            Self::Command(CommandActionFile { script }) => Ok(crate::resolved::ActionKind::Command(
-                crate::resolved::CommandAction { script },
-            )),
+            Self::Command(CommandActionFile { script }) => Ok(
+                crate::resolved::ActionKind::Command(crate::resolved::CommandAction { script }),
+            ),
         }
     }
 }
