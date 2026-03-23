@@ -4,9 +4,9 @@
 
 ## Motivation
 
-Everything that executes — tasks, pre-hooks, post-hooks, finally hooks, sigkill hooks — should go through a single dispatch trait. Today, Pool and Command actions are handled asymmetrically, hooks run through their own ad-hoc code paths, and timeouts only exist for Pool actions. The result: inconsistent timeout enforcement, separate code paths for structurally identical work, and no unified concurrency accounting.
+Everything that executes — tasks, pre-hooks, post-hooks, finally hooks — should go through a single dispatch trait. Today, Pool and Command actions are handled asymmetrically, hooks run through their own ad-hoc code paths, and timeouts only exist for Pool actions. The result: inconsistent timeout enforcement, separate code paths for structurally identical work, and no unified concurrency accounting.
 
-The core principle: **if it runs, it goes through the trait.** Every executable unit — whether it's a Pool task, a Command, a pre-hook, a post-hook, a finally task, or a sigkill hook — gets scheduled, timed out, and tracked identically. All of them contribute to concurrency limits.
+The core principle: **if it runs, it goes through the trait.** Every executable unit — whether it's a Pool task, a Command, a pre-hook, a post-hook, or a finally task — gets scheduled, timed out, and tracked identically. All of them contribute to concurrency limits.
 
 This refactor unifies all execution into a common `ActionOutcome` shape and adds timeout support everywhere. This is the mechanical prerequisite to extracting the `Executor` trait in PLUGGABLE_ACTION_KINDS.md.
 
@@ -48,7 +48,7 @@ Pool wraps a `troupe::Response` (which has `Processed` and `NotProcessed` varian
 
 ### Hooks
 
-Pre-hooks, post-hooks, finally hooks, and sigkill hooks all run shell commands but through separate code paths with no timeout enforcement. They don't contribute to concurrency tracking.
+Pre-hooks, post-hooks, and finally hooks all run shell commands but through separate code paths with no timeout enforcement. They don't contribute to concurrency tracking.
 
 ### Response processing (`runner/response.rs:52-127`)
 
@@ -154,7 +154,7 @@ Both `dispatch_pool_task` and `dispatch_command_task` produce `SubmitResult::Act
 
 ### 3. Dispatch hooks through the same path
 
-**All hooks get timeouts.** Pre-hooks, post-hooks, finally hooks, and sigkill hooks all call `run_shell_command` with an optional timeout. The timeout can come from:
+**All hooks get timeouts.** Pre-hooks, post-hooks, and finally hooks all call `run_shell_command` with an optional timeout. The timeout can come from:
 - Step-level `options.timeout` (inherited by hooks associated with that step)
 - A global hook timeout config (future work if needed)
 
@@ -164,8 +164,6 @@ The dispatch path for hooks:
 1. Hook runs through `run_shell_command` with timeout
 2. Result is mapped to `ActionOutcome`
 3. Timeout/failure handling is identical to task actions
-
-Sigkill hooks specifically: these fire on abnormal termination. They still go through `run_shell_command` with a timeout. If a sigkill hook itself times out, it's killed — no infinite hangs on cleanup.
 
 ### 4. Pass timeout to `dispatch_command_task`
 
