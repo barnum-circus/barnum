@@ -14,11 +14,32 @@ use tracing::debug;
 use troupe::Response;
 use troupe_cli::TroupeCli;
 
-use crate::types::{LogTaskId, StepName};
+use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::Task;
 
-use super::dispatch::{ActionResult, WorkerKind, WorkerResult};
 use super::submit::{build_agent_payload, submit_via_cli};
+
+// ==================== Worker types ====================
+
+/// Unified action output.
+pub(super) struct ActionResult {
+    pub value: StepInputValue,
+    pub output: Result<String, ActionError>,
+}
+
+/// Routing tag: determines whether result goes to `convert_task_result` or `convert_finally_result`.
+pub(super) enum WorkerKind {
+    Task,
+    Finally { parent_id: LogTaskId },
+}
+
+/// Result from a worker thread: the task identity, routing tag, and action output.
+pub struct WorkerResult {
+    pub task_id: LogTaskId,
+    pub task: Task,
+    pub kind: WorkerKind,
+    pub result: ActionResult,
+}
 
 // ==================== ActionError ====================
 
