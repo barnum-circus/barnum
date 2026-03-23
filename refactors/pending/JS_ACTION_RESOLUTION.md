@@ -35,6 +35,20 @@ libs/barnum/
 
 Each resolver file exports a `resolve` function with the same signature. The `index.ts` hardcodes the mapping from kind name to resolver — no convention-based discovery, no magic. Adding a new kind means adding an import and a map entry.
 
+**Future:** `BarnumConfig` gets a builder pattern where action kinds are registered explicitly:
+
+```typescript
+const barnum = BarnumConfig.builder()
+  .action("Pool", resolvePool)       // built-in, pre-registered
+  .action("Command", resolveCommand) // built-in, pre-registered
+  .action("Claude", resolveClaude)   // user-registered
+  .fromConfig(config);
+
+barnum.run();
+```
+
+The built-in kinds (Pool, Command) are pre-registered by the builder. Users add their own via `.action(kind, resolver)`. The hardcoded map in `index.ts` is the degenerate case of this — it becomes the default set of registrations in the builder.
+
 ## Current State
 
 ### dispatch_task (`crates/barnum_config/src/runner/mod.rs:696-730`)
@@ -522,5 +536,5 @@ On resume, Rust reads the state log which contains the resolved config (with `sc
 ## Relationship to other docs
 
 - **ACTION_REGISTRY.md** — Superseded and deleted.
-- **PLUGGABLE_ACTION_KINDS.md** — The end-state vision. User-defined kinds would register additional resolvers via `BarnumConfig` API or a config `"resolvers"` field.
+- **PLUGGABLE_ACTION_KINDS.md** — The end-state vision. User-defined kinds register resolvers via the `BarnumConfig` builder's `.action(kind, resolver)` method.
 - **CLAUDE_CLI_ACTION_KIND.md** — Claude becomes `libs/barnum/actions/claude.ts` exporting a `resolve` function that returns something like `"claude -p --model sonnet --output-format json"`. No Rust code needed.
