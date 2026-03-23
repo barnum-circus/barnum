@@ -324,6 +324,8 @@ A refactor that introduces an event loop with appliers might produce:
 
 ## Completing refactors
 
-**When a refactor is fully implemented and CI is green, move it from `refactors/pending/` to `refactors/past/` immediately.** Do not leave completed refactors in `pending/`. The target directory is `refactors/past/` — not `done/`, not `completed/`, not anywhere else. `past/` already exists.
+**IMPORTANT: When a refactor is fully implemented and merged to master, move it from `refactors/pending/` to `refactors/past/` immediately.** Do this automatically — do not wait for the user to ask. Do not leave completed refactors in `pending/`.
+
+The target directory is `refactors/past/` — not `done/`, not `completed/`, not anywhere else. `past/` already exists.
 
 This keeps the pending folder focused on active work and preserves completed designs for reference.
