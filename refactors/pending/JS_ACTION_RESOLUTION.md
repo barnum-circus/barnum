@@ -196,11 +196,11 @@ Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
 
 2. **Engine holds executor script:** `Engine.executor_script: String`. Pre-serializes config JSON once at construction.
 
-3. **ShellAction gains envelope context:** A new optional field stores pre-serialized action/step/config JSON. When present, `start()` pipes the enriched envelope instead of `{ kind, value }`.
+3. **ShellAction always pipes enriched envelope:** `{ action, task, step, config }` on stdin for every invocation. No optional fields, no branching. Both `dispatch_task` and `dispatch_finally` construct ShellAction the same way — the only difference is the script (executor command vs finally hook script).
 
-4. **`dispatch_task` uses executor:** Always constructs a `ShellAction` with the executor command and envelope context. No dual-mode — `--executor` is always present because `cli.cjs` always provides it.
+4. **`dispatch_task` uses executor:** Always constructs a `ShellAction` with the executor command. No dual-mode — `--executor` is always present because `cli.cjs` always provides it.
 
-5. **`dispatch_finally` unchanged:** Finally hooks continue to use `ShellAction` with the hook's script and `{ kind, value }` stdin. They don't route through the executor.
+5. **`dispatch_finally` uses same envelope:** Finally hooks receive `{ action, task, step, config }` on stdin, same as task dispatch. The hook script differs but the stdin format is uniform.
 
 ## What Doesn't Change
 
@@ -209,7 +209,7 @@ Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
 - `CompiledSchemas` and value schema validation
 - State log format (config entry stores the serialized `Config`)
 - `barnum config validate`, `barnum config docs`, `barnum config graph` — operate on config types
-- Finally hooks — direct `ShellAction` with hook script, not routed through executor
+- Finally hooks — direct `ShellAction` with hook script (not routed through executor), but same enriched envelope format
 
 ## Resume Behavior
 
