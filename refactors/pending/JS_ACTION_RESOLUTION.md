@@ -56,6 +56,8 @@ The built-in kinds (Pool, Command) are pre-registered by the builder. Users add 
 
 ## Current State
 
+**Prerequisite landed:** ACTION_PARAMS_NESTING is complete. All action enums (`ActionFile`, `ActionKind`, `FinallyHook`) now use `#[serde(tag = "kind", content = "params")]`. This means `serde_json::to_value(action_kind)` produces `{ "kind": "Pool", "params": { "instructions": ..., "pool": ... } }` — exactly the shape the JS executor expects. Making the resolved action opaque (Step 5 below) is now a straightforward `serde_json::to_value()` call during resolution.
+
 ### dispatch_task (`crates/barnum_config/src/runner/mod.rs:696-730`)
 
 ```rust
@@ -117,6 +119,8 @@ pub struct Step {
     pub options: Options,
 }
 ```
+
+With ACTION_PARAMS_NESTING landed, `ConfigFile::resolve()` can convert `ActionFile` → `serde_json::Value` via `serde_json::to_value()`. The result is `{ "kind": "Pool", "params": { ... } }` — the exact shape JS handlers expect. No manual restructuring needed.
 
 The action config serializes into the state log for resume. JS doesn't need to re-resolve anything — the action config is the same data the handler needs.
 
