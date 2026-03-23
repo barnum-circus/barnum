@@ -112,31 +112,62 @@ Only contains `call_wake_script`. `run_command_action` was deleted (inlined into
 
 The config enum was already renamed from `Action` to `ActionKind` on master. The `Action` name belongs to the trait.
 
-### `Action` trait
+### `Action` trait and `ActionHandle`
 
 ```rust
 pub trait Action: Send {
-    fn perform(&self, value: &serde_json::Value) -> Result<String, String>;
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle;
+}
+
+pub struct ActionHandle {
+    pub rx: mpsc::Receiver<Result<String, String>>,
+    _guard: Box<dyn Send>,
 }
 ```
 
-Takes a value, runs something, returns stdout or an error message. The action knows nothing about timeouts or `ActionError` — those are `run_action`'s concerns.
+`start` kicks off the work (typically by spawning a thread) and returns an `ActionHandle` immediately — it does not block. The handle has two parts:
 
-### Why active kill is hard: `perform` is opaque
+- `rx`: receives the action's result (`Ok(stdout)` or `Err(message)`) when the work completes.
+- `_guard`: type-erased cleanup. When the handle is dropped, the guard's `Drop` impl stops the work (best-effort). For shell actions, this kills the child process. For pool actions, this is a no-op (troupe manages its own lifecycle).
 
-`perform` is a blocking call that typically spawns a child process (bash for commands, troupe CLI for pool). The outer thread in `run_action` can't see that child process because it's created inside `perform`, which runs in the inner thread. When `recv_timeout` fires, `run_action` can stop waiting — but the inner thread and its child process keep running.
+**Contract**: dropping the `ActionHandle` signals "I don't want the result, clean up." The guard's `Drop` does best-effort cancellation — the action should stop, but if it doesn't, the closed channel discards any late sends harmlessly (userland code, not UB). It's cooperative cancellation with a safety net.
 
-This is a fundamental consequence of the trait abstraction. The outer code doesn't know what `perform` did: it might have spawned one process, multiple processes, or no process at all (PoolAction's child is managed by troupe's invoker). There's no general way to reach into `perform` and kill whatever it's blocking on.
+**Future migration**: this is a hand-rolled future. The mapping is 1:1:
 
-Three approaches to deal with this:
+| Channel + guard | Future |
+|---|---|
+| `start()` returns `ActionHandle` | `perform()` returns `impl Future` |
+| `rx.recv()` | `.await` |
+| `rx.recv_timeout(d)` | `timeout(d, future).await` |
+| Guard's `Drop` kills work | Future's `Drop` cancels (stops polling + drops state) |
 
-**1. Don't kill — accept the leak.** `recv_timeout` fires, `run_action` returns `TimedOut`, the inner thread and child process keep running until the child exits on its own. The channel send fails silently (receiver dropped), and the thread exits. This is what pool actions already do today — troupe manages its own agent lifecycle. For a CLI tool that runs to completion, leaked children get cleaned up on process exit. No `KillHandle`, no `libc`, no `Arc`, no atomic — the simplest option.
+When we adopt async, the guard's cleanup logic moves into the future's captured state. Dropping the future triggers the same `Drop` impls.
 
-**2. Cooperative PID registration (KillHandle).** The action registers its child PID after spawning, and `run_action` sends SIGKILL on timeout. This uses an `AtomicU32` because two threads share one integer: the inner thread writes the PID (after `child.spawn()`), the outer thread reads it (on timeout). `AtomicU32` is the lightest primitive for this — no heap allocation, no locking, no contention. Limitations: only works for the single registered process. If the shell script spawns subprocesses, killing just the `sh` process leaves orphans (fixable with process groups via `setsid` + negative PID kill). PoolAction can't register because `invoker.run()` encapsulates the child.
+### Cancellation guards
 
-**3. Split the trait into spawn + wait.** Instead of one blocking `perform`, have `spawn() -> Handle` and `Handle::wait() -> Result`. The outer code gets the handle directly, can kill it on timeout. No atomics needed. But this doesn't generalize — PoolAction has no meaningful "spawn" step (it's a single blocking RPC via `invoker.run()`), so it would need a degenerate impl that starts a thread in `spawn` and joins it in `wait`, recreating the current pattern with more abstraction.
+Each action provides its own guard type. The guard is boxed as `Box<dyn Send>` in `ActionHandle`, so `run_action` is agnostic — it just drops the handle.
 
-**Decision: approach 1 (don't kill).** Active kill adds a `libc` dependency, `Arc<KillHandle>` threading through `run_action`, a `kill: &KillHandle` parameter on every `Action::perform`, and only works for actions that spawn a single child process the action knows about. The benefit is marginal for a CLI tool: timed-out children finish on their own or get cleaned up on process exit. If active kill becomes necessary later (long-running daemon mode), it can be added as a separate concern without changing the `Action` trait — `run_action` can wrap actions in a process group using `Command::pre_exec` + `setsid` and kill the group on timeout, outside the trait entirely.
+**`ProcessGuard`** (for `ShellAction`):
+
+```rust
+struct ProcessGuard(u32); // child PID
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.0 as i32, libc::SIGKILL); }
+    }
+}
+```
+
+Sends SIGKILL to the child process. If the process already exited, `kill` returns an error that we ignore. PID recycling is theoretically possible but negligible for a CLI tool with short-lived children — the window between child exit and guard drop is typically microseconds. If subprocesses are a concern, `Command::pre_exec` + `setsid` + negative-PID kill can be added to `ShellAction::start` without changing the trait.
+
+**No-op guard** (for `PoolAction`):
+
+```rust
+ActionHandle { rx, _guard: Box::new(()) }
+```
+
+`PoolAction` calls `invoker.run()`, which encapsulates the child process. There's no PID to kill. On timeout, the invoker thread keeps running until troupe returns. This is the same behavior as today — troupe manages its own agent lifecycle.
 
 ### `ActionError`: only `run_action` produces timeouts
 
@@ -162,11 +193,11 @@ impl fmt::Display for ActionError {
 
 `process_submit_result` maps `ActionError::TimedOut` → `FailureKind::Timeout` and `ActionError::Failed` → `FailureKind::SubmitError`, preserving existing retry semantics for timeouts.
 
-**Behavior change for `Response::NotProcessed`**: currently maps to `FailureKind::Timeout` (checked against `retry_on_timeout`). After this refactor, `PoolAction::perform` returns `Err("not processed by pool")` which becomes `ActionError::Failed` → `FailureKind::SubmitError` (always retries). This is more correct: Barnum now enforces timeout via `run_action`, and `NotProcessed` is an operational failure from the pool, not a Barnum timeout.
+**Behavior change for `Response::NotProcessed`** (already landed in Phase 0): maps to `ActionError::Failed("not processed by pool")` → `FailureKind::SubmitError` (always retries), instead of the old `FailureKind::Timeout` (gated on `retry_on_timeout`). This is more correct: Barnum now owns timeout enforcement via `run_action`, and `NotProcessed` is an operational failure from the pool.
 
 ### `run_action`: timeout via `recv_timeout`
 
-`run_action` takes a boxed action, a value, and an optional timeout. Without a timeout, it calls `perform` directly on the current thread — no channel, no extra thread. With a timeout, it spawns an inner thread, waits with `recv_timeout`, and returns `TimedOut` if the deadline fires:
+`run_action` takes a boxed action, a value, and an optional timeout. It calls `start` to kick off the work (non-blocking), then waits on the handle's receiver:
 
 ```rust
 pub fn run_action(
@@ -174,29 +205,25 @@ pub fn run_action(
     value: &serde_json::Value,
     timeout: Option<Duration>,
 ) -> Result<String, ActionError> {
-    match timeout {
-        None => action.perform(value).map_err(ActionError::Failed),
-        Some(duration) => {
-            let (tx, rx) = mpsc::channel();
-            let value = value.clone();
-            thread::spawn(move || {
-                let _ = tx.send(action.perform(&value));
-            });
-            match rx.recv_timeout(duration) {
-                Ok(result) => result.map_err(ActionError::Failed),
-                Err(mpsc::RecvTimeoutError::Timeout) => Err(ActionError::TimedOut),
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    Err(ActionError::Failed("action panicked".into()))
-                }
-            }
+    let handle = action.start(value.clone());
+    let channel_result = match timeout {
+        None => handle.rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        Some(duration) => handle.rx.recv_timeout(duration),
+    };
+    match channel_result {
+        Ok(result) => result.map_err(ActionError::Failed),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(ActionError::TimedOut),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(ActionError::Failed("action panicked".into()))
         }
     }
+    // handle drops here — guard's Drop kills the action if still running
 }
 ```
 
-In the timeout case: `recv_timeout` fires, `run_action` returns `Err(ActionError::TimedOut)`. The inner thread and its child process keep running until the child exits on its own. When `perform` eventually returns, `tx.send()` fails silently (receiver dropped) and the thread exits. No active kill — see "Why active kill is hard" above.
+`run_action` does not spawn any threads — `start` handles that internally. On timeout, `handle` drops at function exit, triggering the guard's `Drop` which kills the underlying work. On success, the work already completed, so the guard's `Drop` is a no-op (process already exited).
 
-In the no-timeout case: `perform` is called directly on the current thread. No channel, no spawn, no overhead.
+Both the timeout and no-timeout paths use the same logic. The only difference is `recv()` vs `recv_timeout()`. This is a slight overhead increase for the no-timeout case (always a channel + thread, even without timeout), but trivial compared to spawning a child process.
 
 ### `spawn_worker`: the single dispatch path
 
@@ -222,18 +249,19 @@ pub fn spawn_worker(
 }
 ```
 
-`WorkerResult` is sent exactly once — either with the action's output or with a timeout error.
+`spawn_worker` spawns one thread that blocks on `run_action` (which blocks on `handle.rx.recv()`). The action's `start` spawns its own work thread internally. Total threads per action: 2 (spawn_worker thread + action's work thread), plus the child process. `WorkerResult` is sent exactly once — either with the action's output or with a timeout error.
 
 ### Timeout flow end-to-end
 
 1. **Source**: `step.options.timeout: Option<u64>` (seconds), configured per-step in the barnum config.
 2. **Conversion**: `dispatch_task` and `dispatch_finally` convert to `Option<Duration>` via `step.options.timeout.map(Duration::from_secs)` and pass to `spawn_worker`.
-3. **Enforcement**: `spawn_worker`'s thread calls `run_action`, which either calls `perform` directly (no timeout) or spawns an inner thread and waits with `recv_timeout` (timeout set).
-4. **On timeout**: `run_action` returns `Err(ActionError::TimedOut)`. The inner thread and its child process keep running until the child exits on its own. When `perform` returns, the channel send fails silently (receiver dropped) and the thread exits.
-5. **Result routing**: `spawn_worker` sends `WorkerResult` with `output: Err(ActionError::TimedOut)`. The engine's main loop receives it via `rx.recv()`.
-6. **Retry**: `process_submit_result` maps `ActionError::TimedOut` → `FailureKind::Timeout`. `process_retry` checks `options.retry_on_timeout` to decide whether to retry or drop.
+3. **Start**: `spawn_worker`'s thread calls `run_action`, which calls `action.start(value)`. The action spawns its work thread and returns an `ActionHandle`.
+4. **Wait**: `run_action` calls `handle.rx.recv_timeout(duration)` (or `recv()` if no timeout).
+5. **On timeout**: `recv_timeout` returns `Err(Timeout)`. `run_action` returns `Err(ActionError::TimedOut)`. The `ActionHandle` drops, triggering the guard's `Drop` — for shell actions, this sends SIGKILL to the child process. The action's work thread eventually sees the child exit (or its `tx.send()` fails on the closed channel) and exits.
+6. **Result routing**: `spawn_worker` sends `WorkerResult` with `output: Err(ActionError::TimedOut)`. The engine's main loop receives it via `rx.recv()`.
+7. **Retry**: `process_submit_result` maps `ActionError::TimedOut` → `FailureKind::Timeout`. `process_retry` checks `options.retry_on_timeout` to decide whether to retry or drop.
 
-For Pool actions specifically: `pool_timeout` (troupe's agent lifecycle timeout, passed in the payload via `build_agent_payload`) and the Barnum-level timeout (enforced by `run_action`) both derive from `step.options.timeout`. The troupe timeout controls how long the agent has to process the task. The Barnum timeout controls how long the engine waits for the result. They use the same value. If troupe times out first, `PoolAction::perform` returns `Err("not processed by pool")`. If Barnum times out first, `run_action` returns `Err(ActionError::TimedOut)` from `recv_timeout` and the pool thread continues until troupe returns.
+For Pool actions specifically: `pool_timeout` (troupe's agent lifecycle timeout, passed in the payload via `build_agent_payload`) and the Barnum-level timeout (enforced by `run_action`) both derive from `step.options.timeout`. The troupe timeout controls how long the agent has to process the task. The Barnum timeout controls how long the engine waits for the result. They use the same value. If troupe times out first, `PoolAction::start`'s thread sends `Err("not processed by pool")` on the handle's channel. If Barnum times out first, `run_action` returns `Err(ActionError::TimedOut)` from `recv_timeout`, the handle drops (no-op guard for pool), and the pool thread continues until troupe returns.
 
 ### Concurrency stays in the engine
 
@@ -249,7 +277,7 @@ Builds on the unified result types (ActionResult, WorkerKind, ActionError) alrea
 
 #### 1a. Expand `runner/action.rs`
 
-Phase 0 created this file with `ActionError`. Add the trait, `run_action`, `spawn_worker`, and `PoolAction`. This is the complete file after Phase 1:
+Phase 0 created this file with `ActionError`. Add the trait, `ActionHandle`, `run_action`, `spawn_worker`, and `PoolAction`. This is the complete file after Phase 1:
 
 ```rust
 //! Action trait and dispatch infrastructure.
@@ -289,45 +317,57 @@ impl fmt::Display for ActionError {
 
 // ==================== Action trait ====================
 
-/// An executable action. Constructed per dispatch, called once in a worker thread.
+/// Handle returned by `Action::start`. Dropping this handle cancels the action.
 ///
-/// `perform` returns `Result<String, String>` — stdout or error message.
-/// It does not return `ActionError`; timeout is `run_action`'s concern.
+/// Contract:
+/// - Call `rx.recv()` or `rx.recv_timeout()` to get the result.
+/// - Drop the handle to cancel the action (best-effort via guard's `Drop`).
+/// - Late sends to a dropped handle are silently discarded.
+pub struct ActionHandle {
+    pub rx: mpsc::Receiver<Result<String, String>>,
+    _guard: Box<dyn Send>,
+}
+
+impl ActionHandle {
+    /// Create a handle with a type-erased cleanup guard.
+    pub fn new(rx: mpsc::Receiver<Result<String, String>>, guard: impl Send + 'static) -> Self {
+        Self { rx, _guard: Box::new(guard) }
+    }
+}
+
+/// An executable action. Constructed per dispatch, consumed once by `start`.
+///
+/// `start` kicks off work (typically by spawning a thread) and returns an
+/// `ActionHandle` immediately. It does not block. The handle's guard
+/// provides cancellation on drop.
 pub trait Action: Send {
-    fn perform(&self, value: &serde_json::Value) -> Result<String, String>;
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle;
 }
 
 // ==================== run_action ====================
 
 /// Run an action with an optional timeout.
 ///
-/// Without a timeout, calls `perform` directly on the current thread.
-/// With a timeout, spawns an inner thread and waits with `recv_timeout`.
-/// On timeout, the inner thread and its child process keep running until
-/// the child exits on its own — see "Why active kill is hard" in the
-/// design doc.
+/// Calls `start` to kick off the work, then waits on the handle's receiver.
+/// On timeout, the handle drops — the guard's `Drop` kills the underlying work.
 pub fn run_action(
     action: Box<dyn Action>,
     value: &serde_json::Value,
     timeout: Option<Duration>,
 ) -> Result<String, ActionError> {
-    match timeout {
-        None => action.perform(value).map_err(ActionError::Failed),
-        Some(duration) => {
-            let (tx, rx) = mpsc::channel();
-            let value = value.clone();
-            thread::spawn(move || {
-                let _ = tx.send(action.perform(&value));
-            });
-            match rx.recv_timeout(duration) {
-                Ok(result) => result.map_err(ActionError::Failed),
-                Err(mpsc::RecvTimeoutError::Timeout) => Err(ActionError::TimedOut),
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    Err(ActionError::Failed("action panicked".into()))
-                }
-            }
+    let handle = action.start(value.clone());
+    let channel_result = match timeout {
+        None => handle.rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        Some(duration) => handle.rx.recv_timeout(duration),
+    };
+    match channel_result {
+        Ok(result) => result.map_err(ActionError::Failed),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(ActionError::TimedOut),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err(ActionError::Failed("action panicked".into()))
         }
     }
+    // handle drops here — guard's Drop kills the action if still running
 }
 
 // ==================== spawn_worker ====================
@@ -366,15 +406,21 @@ pub struct PoolAction {
 }
 
 impl Action for PoolAction {
-    fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
-        let payload = build_agent_payload(
-            &self.step_name, value, &self.docs, self.pool_timeout,
-        );
-        match submit_via_cli(&self.root, &payload, &self.invoker) {
-            Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-            Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
-            Err(e) => Err(e.to_string()),
-        }
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let payload = build_agent_payload(
+                &self.step_name, &value, &self.docs, self.pool_timeout,
+            );
+            let result = match submit_via_cli(&self.root, &payload, &self.invoker) {
+                Ok(Response::Processed { stdout, .. }) => Ok(stdout),
+                Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+        // No-op guard: troupe manages its own agent lifecycle.
+        ActionHandle::new(rx, ())
     }
 }
 ```
@@ -441,12 +487,22 @@ Compile, run full suite.
 
 ### Phase 2: `ShellAction` + Command through trait
 
-#### 2a. Add `ShellAction` to `runner/action.rs`
+#### 2a. Add `ShellAction` and `ProcessGuard` to `runner/action.rs`
 
-`ShellAction` delegates to `run_shell_command` for the actual shell execution:
+`ShellAction::start` spawns the child process, writes stdin, spawns a reader thread, and returns a handle with a `ProcessGuard` that kills the child on drop:
 
 ```rust
-use super::shell::run_shell_command;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+/// Guard that kills a child process on drop.
+struct ProcessGuard(u32);
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        unsafe { libc::kill(self.0 as i32, libc::SIGKILL); }
+    }
+}
 
 /// Shell action: runs a shell script with the task value on stdin.
 pub struct ShellAction {
@@ -456,19 +512,60 @@ pub struct ShellAction {
 }
 
 impl Action for ShellAction {
-    fn perform(&self, value: &serde_json::Value) -> Result<String, String> {
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        let (tx, rx) = mpsc::channel();
         let task_json = serde_json::to_string(&serde_json::json!({
             "kind": &self.step_name,
-            "value": value,
+            "value": &value,
         }))
         .unwrap_or_default();
 
-        run_shell_command(&self.script, &task_json, Some(&self.working_dir))
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(&self.script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(&self.working_dir)
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string()));
+                return ActionHandle::new(rx, ());
+            }
+        };
+
+        let pid = child.id();
+
+        // Write stdin, then drop to close the pipe.
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(task_json.as_bytes());
+        }
+
+        // Reader thread: waits for child, sends result.
+        thread::spawn(move || {
+            let result = match child.wait_with_output() {
+                Ok(out) if out.status.success() => {
+                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+                }
+                Ok(out) => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+
+        ActionHandle::new(rx, ProcessGuard(pid))
     }
 }
 ```
 
-`run_shell_command` (`runner/shell.rs`) stays as-is — it spawns `sh -c`, writes stdin, calls `wait_with_output`, and returns `Result<String, String>`. No need to inline it since there's no kill handle to register with.
+This replaces `run_shell_command` for the action path. The key difference from the old blocking approach: `start` returns immediately after spawning, and the `ProcessGuard` enables kill-on-timeout via the handle's drop.
+
+`run_shell_command` (`runner/shell.rs`) stays for now — `dispatch_finally_task` still uses it until Phase 3. It will be deleted once all callers go through the trait.
+
+**New dependency**: `libc` (for `kill` in `ProcessGuard::Drop`). Add to `Cargo.toml` for `barnum_config`.
 
 #### 2b. Update `dispatch_task` Command branch
 
@@ -587,7 +684,7 @@ fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
 }
 ```
 
-**Complication**: `dispatch_finally_task` currently uses `serde_json::to_string(&value.0)` for stdin (raw JSON value). `ShellAction::perform` uses `serde_json::to_string(&json!({"kind": step_name, "value": value}))` (kind+value envelope). This changes the stdin format for finally hooks. Check whether any existing finally hooks depend on the raw format. If so, create a `FinallyShellAction` that preserves the raw format, or add a stdin format parameter to `ShellAction`.
+**Complication**: `dispatch_finally_task` currently uses `serde_json::to_string(&value.0)` for stdin (raw JSON value). `ShellAction::start` uses `serde_json::to_string(&json!({"kind": step_name, "value": value}))` (kind+value envelope). This changes the stdin format for finally hooks. Check whether any existing finally hooks depend on the raw format. If so, create a `FinallyShellAction` that preserves the raw format, or add a stdin format parameter to `ShellAction`.
 
 #### 3b. Delete `dispatch_finally_task` and clean up
 
@@ -597,7 +694,7 @@ fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
 
 After deleting all three dispatch functions, `dispatch.rs` contains only type definitions: `ActionResult`, `WorkerKind`, `WorkerResult`. Move these to `action.rs` and delete `dispatch.rs`. Update `runner/mod.rs`: remove `mod dispatch;`, change `use dispatch::WorkerResult` to `use action::WorkerResult`, etc.
 
-`runner/shell.rs` stays — `ShellAction::perform` calls `run_shell_command`.
+`runner/shell.rs` can be deleted — `ShellAction::start` spawns the child directly and no other callers remain.
 
 All dispatch sites call `spawn_worker`. Compile, run full suite.
 
@@ -605,9 +702,9 @@ All dispatch sites call `spawn_worker`. Compile, run full suite.
 
 | Phase | What | Deletes | Adds |
 |-------|------|---------|------|
-| 1 | Trait + dispatch infra + Pool | `dispatch_pool_task` | `Action` trait, `run_action`, `spawn_worker`, `PoolAction` |
-| 2 | Command through trait | `dispatch_command_task` | `ShellAction` |
-| 3 | Finally + cleanup | `dispatch_finally_task`, `runner/dispatch.rs` | (reuses `ShellAction` + `WorkerKind::Finally`) |
+| 1 | Trait + dispatch infra + Pool | `dispatch_pool_task` | `Action` trait, `ActionHandle`, `run_action`, `spawn_worker`, `PoolAction` |
+| 2 | Command through trait | `dispatch_command_task` | `ShellAction`, `ProcessGuard`, `libc` dep |
+| 3 | Finally + cleanup | `dispatch_finally_task`, `runner/dispatch.rs`, `runner/shell.rs` | (reuses `ShellAction` + `WorkerKind::Finally`) |
 
 Each phase compiles and passes tests before moving to the next.
 
@@ -615,8 +712,10 @@ Each phase compiles and passes tests before moving to the next.
 
 `ActionKind` enum variants stay as-is (already renamed from `Action`). State logging and retry logic are unchanged.
 
-**Timeout**: `run_action` enforces `step.options.timeout` for all action kinds via `recv_timeout`. Commands and finally hooks, which previously blocked forever, now timeout when configured. On timeout, the inner thread and its child process keep running until the child exits on its own (see "Why active kill is hard" in Design Decisions). The engine treats the action as failed and moves on.
+**Timeout**: `run_action` enforces `step.options.timeout` for all action kinds via `handle.rx.recv_timeout()`. Commands and finally hooks, which previously blocked forever, now timeout when configured. On timeout, the `ActionHandle` drops — for shell actions, the `ProcessGuard` sends SIGKILL to the child process. For pool actions, the guard is a no-op (troupe manages its own lifecycle). The engine treats the action as failed and moves on.
 
-**Retry classification for `NotProcessed`**: currently maps to `FailureKind::Timeout` (checked against `retry_on_timeout`). After this refactor, `PoolAction::perform` returns `Err("not processed by pool")` which becomes `ActionError::Failed` → `FailureKind::SubmitError` (always retries). This is more correct: Barnum now owns timeout enforcement via `run_action`, and `NotProcessed` is an operational failure from the pool.
+**Retry classification for `NotProcessed`** (already landed in Phase 0): maps to `ActionError::Failed` → `FailureKind::SubmitError` (always retries), instead of the old `FailureKind::Timeout`.
 
 **Finally hook stdin** (Phase 3 complication): The stdin format for finally hooks changes from raw JSON value to `{"kind": "step_name", "value": ...}` envelope, because `ShellAction` uses the same envelope as command actions. Must verify existing finally hooks aren't broken by this.
+
+**New dependency**: `libc` is added in Phase 2 for `ProcessGuard`'s SIGKILL. This is contained to `ShellAction`'s guard implementation.
