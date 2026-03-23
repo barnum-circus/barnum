@@ -36,7 +36,44 @@ Add `Serialize` and `JsonSchema` derives to all CLI types. Add `#[serde(tag = "k
 
 clap and serde/schemars derive macros coexist — they read different attribute namespaces.
 
-### Task 3: CLI schema generation binary
+### Task 3: Make `emit_zod` generic
+
+`emit_zod` (`crates/barnum_config/src/zod.rs:18-55`) currently hardcodes the config-specific exports:
+
+- Line 33: `export const configFileSchema = ...`
+- Lines 38-41: `export type ConfigFile = z.infer<typeof configFileSchema>;`
+- Lines 47-52: `export function defineConfig(...)`
+
+These names are wrong for the CLI schema. Parameterize `emit_zod` to accept the root export name:
+
+```rust
+pub fn emit_zod(root: &RootSchema, root_name: &str) -> String {
+    // ... definitions as before ...
+
+    // Root schema export
+    writeln!(e.out, "export const {root_name}Schema = ");
+    e.emit_schema_object(&root.schema);
+    writeln!(e.out, ";");
+
+    // Root type export
+    writeln!(e.out, "export type {root_name} = z.infer<typeof {root_name}Schema>;");
+
+    // Definition type exports (as before)
+    for name in &ordered {
+        writeln!(e.out, "export type {name} = z.infer<typeof {name}>;");
+    }
+
+    e.out
+}
+```
+
+The `defineConfig` helper is config-specific — move it out of `emit_zod` into `build_barnum_schema`. The config binary appends `defineConfig` after calling `emit_zod`. The CLI binary doesn't append anything extra.
+
+Update call sites:
+- `build_barnum_schema.rs`: `emit_zod(&root, "configFile")` + append `defineConfig`
+- `build_cli_schema.rs`: `emit_zod(&root, "cli")`
+
+### Task 4: CLI schema generation binary
 
 **File:** `crates/barnum_cli/src/bin/build_cli_schema.rs` (new)
 
@@ -61,7 +98,7 @@ Generate for `Cli` — the full struct. TypeScript gets a faithful mirror: globa
 
 Add `[[bin]]` to `Cargo.toml` and add `schemars` + `serde` to `barnum_cli`'s dependencies.
 
-### Task 4: Generated file
+### Task 5: Generated file
 
 **File:** `libs/barnum/barnum-cli-schema.zod.ts` (generated)
 
@@ -110,7 +147,7 @@ export type LogLevel = z.infer<typeof LogLevel>;
 export type SchemaType = z.infer<typeof SchemaType>;
 ```
 
-### Task 5: TypeScript functions
+### Task 6: TypeScript functions
 
 **File:** `libs/barnum/run.ts` (new, hand-written)
 
@@ -187,7 +224,7 @@ export function barnumRun(opts: Extract<Command, { kind: "Run" }>, global?: { ro
 }
 ```
 
-### Task 6: Update barrel and package.json
+### Task 7: Update barrel and package.json
 
 **File:** `libs/barnum/index.ts`
 
@@ -199,7 +236,7 @@ export { barnum, barnumRun } from "./run.js";
 
 Add `barnum-cli-schema.zod.ts` and `run.ts` to `files` in `package.json`.
 
-### Task 7: CI verification + pre-commit hook
+### Task 8: CI verification + pre-commit hook
 
 Add to CI:
 
