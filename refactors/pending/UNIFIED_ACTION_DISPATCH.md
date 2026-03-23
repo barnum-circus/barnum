@@ -73,27 +73,20 @@ No timeout enforcement. The thread blocks until the child process exits.
 This is the central abstraction. Every executable unit goes through this trait. The trait itself is deliberately minimal — it just produces a string:
 
 ```rust
-use std::path::Path;
-
 /// Trait for executing work units.
 ///
 /// Pool tasks, Command tasks, pre-hooks, post-hooks, and finally hooks
 /// all go through this interface. The runner schedules, times out, and
 /// tracks concurrency for every `Executor::execute` call identically.
 ///
-/// Timeout enforcement is the runner's responsibility, not the executor's.
-/// The runner wraps each `execute` call with a deadline and kills the
-/// work unit if it exceeds it.
+/// Timeout enforcement and working directory are the runner's/construction's
+/// responsibility, not the trait's. The trait takes input, produces output.
 pub trait Executor: Send + Sync {
-    fn execute(
-        &self,
-        input: &str,
-        working_dir: &Path,
-    ) -> Result<String, String>;
+    fn execute(&self, input: &str) -> Result<String, String>;
 }
 ```
 
-The return type is `Result<String, String>` — success stdout or error message. No typed outcome enum. The runner adds timeout semantics on top:
+The return type is `Result<String, String>` — success stdout or error message. No typed outcome enum. Working directory is captured at construction time. The runner adds timeout semantics on top:
 
 ```rust
 /// Runner-level outcome, wrapping the executor's raw result.
@@ -106,7 +99,6 @@ pub enum ActionOutcome {
 fn run_with_timeout(
     executor: &dyn Executor,
     input: &str,
-    working_dir: &Path,
     timeout: Option<Duration>,
 ) -> ActionOutcome {
     // Spawn thread, call executor.execute(), wait with timeout.
@@ -125,20 +117,17 @@ This keeps the trait at the lowest common denominator. Type safety can be layere
 ```rust
 pub struct ShellExecutor {
     pub script: String,
+    pub working_dir: PathBuf,
 }
 
 impl Executor for ShellExecutor {
-    fn execute(
-        &self,
-        input: &str,
-        working_dir: &Path,
-    ) -> Result<String, String> {
-        run_shell_command(&self.script, input, Some(working_dir))
+    fn execute(&self, input: &str) -> Result<String, String> {
+        run_shell_command(&self.script, input, Some(&self.working_dir))
     }
 }
 ```
 
-**`PoolExecutor`** — used by Pool actions. The pool timeout is baked in at construction (it's a pool-specific detail, not the trait's concern):
+**`PoolExecutor`** — used by Pool actions. Both working directory and pool timeout are captured at construction:
 
 ```rust
 pub struct PoolExecutor {
@@ -150,11 +139,7 @@ pub struct PoolExecutor {
 }
 
 impl Executor for PoolExecutor {
-    fn execute(
-        &self,
-        input: &str,
-        _working_dir: &Path,
-    ) -> Result<String, String> {
+    fn execute(&self, input: &str) -> Result<String, String> {
         let payload = build_agent_payload(
             &self.step_name, /* ... */, &self.docs, self.pool_timeout,
         );
