@@ -41,37 +41,6 @@ libs/barnum/actions/
 └── executor.ts    # Stdin reader, dispatcher, stdout writer
 ```
 
-## Stdin/Stdout Contract
-
-### executor.ts (Boundary 2: Rust → JS)
-
-**stdin:** A single JSON object — the enriched envelope from Rust. Read all of stdin, parse as JSON.
-
-```json
-{
-  "action": { "kind": "Pool", "params": { "instructions": "...", "pool": "demo", "timeout": 300 } },
-  "task": { "kind": "Analyze", "value": { "file": "src/main.rs" } },
-  "step": { "name": "Analyze", "action": {...}, "next": ["Implement", "Done"], "options": {...} },
-  "config": { "steps": [...], "max_concurrency": 10 }
-}
-```
-
-**stdout:** A JSON array of follow-up tasks. Each element has `kind` (string) and `value` (any JSON).
-
-```json
-[{"kind": "Implement", "value": {"file": "src/main.rs", "plan": "..."}}]
-```
-
-**stderr:** Diagnostic output. Rust captures stderr and includes it in error messages on non-zero exit.
-
-**exit code:** 0 on success. Non-zero on failure — Rust treats this as an action error and may retry per step options.
-
-### command handler (Boundary 3: JS → user script)
-
-**stdin to user script:** `{ "kind": "<step_name>", "value": <payload> }` — backward compatible with today's Command action.
-
-**stdout from user script:** JSON array of follow-up tasks (same format as executor stdout).
-
 ## Resolved Types
 
 The envelope contains Rust's **resolved** types, NOT the config file types from the generated Zod schema. Key differences:
