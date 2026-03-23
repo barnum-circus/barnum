@@ -17,28 +17,28 @@ Three process boundaries exist in the new world. Each one is a subprocess spawn.
 
 **When:** The user calls `BarnumConfig.run()` from their Node process, or runs `barnum run` from the CLI.
 
-**What happens:** The JS wrapper resolves the executor command (a tsx invocation of `executor.ts`) and passes it to the barnum binary via a new `--executor` CLI flag. The barnum process runs for the entire workflow.
+**What happens:** Both paths go through `cli.cjs` — the single entry point that spawns the Rust binary. `cli.cjs` detects the JS runtime, resolves the executor command, and injects a hidden `--executor` flag when spawning the Rust binary. Users never see or interact with this flag.
 
 ```
-User's Node process
-  │
-  └─ BarnumConfig.run(opts)
+CLI path:                              JS API path:
+  barnum run --config ...                BarnumConfig.run(opts)
+  │                                      │
+  └─ cli.cjs (npm bin entry)             └─ spawns cli.cjs with args
+       │                                      │
+       ├─ detect runtime (Node/Bun/Deno)      ├─ (same)
+       ├─ resolve executor command:            ├─ (same)
+       │    Node: node <require.resolve("tsx/cli")> <executor.ts>
+       │    Bun:  <process.execPath> <executor.ts>
+       │    Deno: <process.execPath> run <executor.ts>
        │
-       ├─ resolve executor command:
-       │    tsxBinary = require.resolve("tsx/cli")
-       │    executorPath = resolve(import.meta.dirname, "actions", "executor.ts")
-       │    executorCommand = `node ${tsxBinary} ${executorPath}`
-       │
-       └─ spawn("barnum", ["run", "--config", configJson, "--executor", executorCommand, ...])
+       └─ spawn(rustBinary, [...userArgs, "--executor", executorCommand])
             │
             └─ [barnum Rust process — runs for entire workflow]
 ```
 
-For direct CLI use (no JS wrapper), the user passes `--executor` explicitly:
+`BarnumConfig.run()` calls `cli.cjs` rather than the Rust binary directly. This keeps executor resolution logic in a single place. tsx is a declared dependency, so `require.resolve("tsx/cli")` works in all install modes (npm, pnpm, yarn PnP, dlx).
 
-```
-barnum run --config config.json --executor "npx tsx /path/to/executor.ts"
-```
+The `--executor` flag is internal — hidden from `--help`, not documented. If the Rust binary is invoked directly without `--executor`, it errors. The only supported entry points are `cli.cjs` (CLI) and `BarnumConfig.run()` (JS API), both of which always provide it.
 
 ### Boundary 2: Rust spawns JS executor (once per task)
 
@@ -192,13 +192,13 @@ The registry is a hardcoded `Map<string, ActionDefinition>`. Adding a new kind m
 
 Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
 
-1. **New CLI flag:** `--executor <command>` on `barnum run` (and `--resume-from`). Stored in `RunnerConfig.executor_script`.
+1. **Hidden CLI flag:** `--executor <command>` on `barnum run` (and `--resume-from`). Hidden from `--help`. Rust errors if not provided — the binary must be invoked through `cli.cjs`.
 
-2. **Engine holds executor script:** `Engine.executor_script: Option<String>`. Pre-serializes config JSON once at construction.
+2. **Engine holds executor script:** `Engine.executor_script: String`. Pre-serializes config JSON once at construction.
 
 3. **ShellAction gains envelope context:** A new optional field stores pre-serialized action/step/config JSON. When present, `start()` pipes the enriched envelope instead of `{ kind, value }`.
 
-4. **Dual-mode `dispatch_task`:** When `executor_script` is `Some`, constructs a `ShellAction` with the executor command and envelope context. When `None`, current `match &step.action { ... }` behavior. This enables incremental migration — the executor path can be tested while the legacy path still works.
+4. **`dispatch_task` uses executor:** Always constructs a `ShellAction` with the executor command and envelope context. No dual-mode — `--executor` is always present because `cli.cjs` always provides it.
 
 5. **`dispatch_finally` unchanged:** Finally hooks continue to use `ShellAction` with the hook's script and `{ kind, value }` stdin. They don't route through the executor.
 
@@ -213,7 +213,7 @@ Detailed in **EXECUTOR_CLI_FLAG.md**. Summary:
 
 ## Resume Behavior
 
-On resume, Rust reads the state log which contains the serialized config. The `--executor` flag must be provided again (not stored in the log). For the JS-driven path, `BarnumConfig` always provides it. For direct CLI use, the user passes `--executor` explicitly.
+On resume, Rust reads the state log which contains the serialized config. The `--executor` flag must be provided again (not stored in the log). Both entry points (`cli.cjs` and `BarnumConfig.run()`) always provide it.
 
 ## Sub-refactors
 
@@ -231,35 +231,28 @@ Add `--executor` CLI flag, thread it through `RunnerConfig` and `Engine`, implem
 
 ## Remaining Work (after sub-refactors land)
 
-Once both sub-refactors are on master, three integration steps remain:
+Once both sub-refactors are on master, two integration steps remain:
 
-### Step 1: BarnumConfig.run() passes --executor
+### Step 1: BarnumConfig.run() calls cli.cjs
 
 **File:** `libs/barnum/run.ts`
 
+`BarnumConfig.run()` stops calling the Rust binary directly and instead spawns `cli.cjs`. This makes `cli.cjs` the single place that handles runtime detection and `--executor` injection.
+
 ```typescript
-import { resolve } from "node:path";
-import { createRequire } from "node:module";
-
-const require = createRequire(import.meta.url);
-const tsxBinary = require.resolve("tsx/cli");
-const executorPath = resolve(import.meta.dirname, "actions", "executor.ts");
-
 export class BarnumConfig {
   run(opts?: RunOptions): ChildProcess {
+    const cliPath = resolve(import.meta.dirname, "cli.cjs");
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
       : ["run", "--config", JSON.stringify(this.config)];
-    args.push("--executor", `node ${tsxBinary} ${executorPath}`);
     // ... rest of opts
-    return spawnBarnum(args);
+    return spawn(process.execPath, [cliPath, ...args], { stdio: "inherit" });
   }
 }
 ```
 
-Also update `package.json`: add `tsx` dependency, add `actions/` to `files` array and `exports`.
-
-### Step 2: Make --executor required, Step.action opaque
+### Step 2: Make Step.action opaque
 
 **File:** `crates/barnum_config/src/resolved.rs`
 
@@ -278,7 +271,7 @@ pub struct Step {
 
 `ConfigFile::resolve()` converts `ActionFile` to `serde_json::Value` via `serde_json::to_value()`. The result is `{ "kind": "Pool", "params": { ... } }`.
 
-`RunnerConfig.executor_script` becomes `&'a str` (not `Option`). The dual-mode dispatch in `dispatch_task` collapses to the executor-only path.
+`RunnerConfig.executor_script` stays as `&'a str` (not `Option` — it's always present).
 
 ### Step 3: Delete Rust action dispatch code
 
