@@ -103,6 +103,8 @@ dependencies = [
  "interprocess",
  "json5",
  "rstest",
+ "schemars",
+ "serde",
  "serde_json",
  "tracing-subscriber",
  "troupe",
