@@ -26,8 +26,8 @@ name = "barnum"
 path = "src/main.rs"
 
 [[bin]]
-name = "build_cli_schema"
-path = "src/bin/build_cli_schema.rs"
+name = "build_schemas"
+path = "src/bin/build_schemas.rs"
 
 [dev-dependencies]
 interprocess = { workspace = true }

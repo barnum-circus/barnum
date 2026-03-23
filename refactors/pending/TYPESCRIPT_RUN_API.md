@@ -1,6 +1,6 @@
 # TypeScript CLI API
 
-**Status:** Pending (Task 1 done)
+**Status:** Pending (Tasks 1-4, 6-7 done)
 
 ## Motivation
 

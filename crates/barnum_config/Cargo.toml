@@ -9,10 +9,6 @@ description = "Declarative config-based task orchestrator library"
 keywords = ["task", "orchestrator", "state-machine", "config", "agent"]
 categories = ["development-tools"]
 
-[[bin]]
-name = "build_barnum_schema"
-path = "src/bin/build_barnum_schema.rs"
-
 [dependencies]
 troupe = { path = "../troupe" }
 troupe_cli = { path = "../troupe_cli" }
