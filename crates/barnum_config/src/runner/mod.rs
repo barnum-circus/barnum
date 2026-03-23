@@ -721,39 +721,22 @@ impl<'a> Engine<'a> {
 
         match &step.action {
             Action::Pool(..) => {
-                let pre_hook = step.pre.clone();
                 let docs = generate_step_docs(step, self.config);
                 let timeout = step.options.timeout;
                 let pool = self.pool.clone();
 
                 info!(step = %task.step, "submitting task to pool");
                 thread::spawn(move || {
-                    dispatch_pool_task(
-                        task_id,
-                        task,
-                        pre_hook.as_ref(),
-                        &docs,
-                        timeout,
-                        &pool,
-                        &tx,
-                    );
+                    dispatch_pool_task(task_id, task, &docs, timeout, &pool, &tx);
                 });
             }
             Action::Command(CommandAction { script }) => {
-                let pre_hook = step.pre.clone();
                 let script = script.clone();
                 let working_dir = self.pool.working_dir.clone();
 
                 info!(step = %task.step, script = %script, "executing command");
                 thread::spawn(move || {
-                    dispatch_command_task(
-                        task_id,
-                        task,
-                        pre_hook.as_ref(),
-                        &script,
-                        &working_dir,
-                        &tx,
-                    );
+                    dispatch_command_task(task_id, task, &script, &working_dir, &tx);
                 });
             }
         }

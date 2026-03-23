@@ -8,9 +8,7 @@ use crate::types::StepInputValue;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 
 use super::dispatch::{CommandResult, FinallyResult, PoolResult, SubmitResult};
-use super::hooks::{
-    PostHookError, PostHookInput, PostHookPreHookError, PostHookSuccess, PostHookTimeout,
-};
+use super::hooks::{PostHookError, PostHookInput, PostHookSuccess, PostHookTimeout};
 
 /// Task succeeded, may have spawned children.
 pub struct TaskSuccess {
@@ -97,17 +95,6 @@ pub fn process_submit_result(
                 }
             }
         },
-        SubmitResult::PreHookError(e) => {
-            error!(step = %task.step, error = %e, "pre hook failed");
-            let outcome = process_retry(task, &step.options, FailureKind::SubmitError);
-            ProcessedSubmit {
-                outcome,
-                post_input: PostHookInput::PreHookError(PostHookPreHookError {
-                    input: task.value.clone(),
-                    error: e,
-                }),
-            }
-        }
         SubmitResult::Finally(FinallyResult { value, output }) => match output {
             Ok(stdout) => {
                 let (outcome, post_input) = process_finally_response(&stdout, task, &value);
