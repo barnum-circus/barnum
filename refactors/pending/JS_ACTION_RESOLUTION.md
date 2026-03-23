@@ -236,29 +236,32 @@ Engine pre-serializes `config_json` once at construction. `action_json` and `ste
 
 On resume, Rust reads the state log which contains the serialized config. The `--executor` flag must be provided again (not stored in the log). Both entry points (`cli.cjs` and `BarnumConfig.run()`) always provide it.
 
-## Sub-refactors
+## Implementation Order
 
-These can land independently, in parallel, before the parent refactor:
+### ✅ Step 1: EXECUTOR_CLI_FLAG (DONE)
 
-### 1. JS_ACTION_HANDLERS.md
+Hidden `--executor` flag added to Rust CLI. cli.cjs detects runtime (Node/Bun), resolves executor command (tsx for Node, native for Bun), injects `--executor` when spawning Rust. Flag is accepted and ignored on the Rust side. See **EXECUTOR_CLI_FLAG.md**.
 
-Create `libs/barnum/actions/` with all handler files, types, executor, and docs port. Add `tsx` as a dependency. Purely additive JS code — no Rust changes. See the sub-refactor document for full specification.
+### Step 2: JS_ACTION_HANDLERS (next)
 
-### 2. EXECUTOR_CLI_FLAG.md
+Create `libs/barnum/actions/` with all handler files (types.ts, command.ts, pool.ts, docs.ts, index.ts, executor.ts). Add `tsx` as a dependency. Purely additive JS code — no Rust changes. See **JS_ACTION_HANDLERS.md**.
 
-Add hidden `--executor` CLI flag, `cli.cjs` runtime detection and injection, `BarnumConfig.run()` calling `cli.cjs`, threading executor through `RunnerConfig` and `Engine`. See the sub-refactor document for full specification.
+### Step 3: Thread executor through RunnerConfig → Engine → dispatch_task
 
-**Dependency:** EXECUTOR_CLI_FLAG depends on JS_ACTION_HANDLERS (executor.ts must exist for cli.cjs to reference it). JS_ACTION_HANDLERS has no dependencies.
+Wire the `--executor` value through Rust:
 
-## Remaining Work (after sub-refactors land)
+1. Add `executor_script: &'a str` to `RunnerConfig`
+2. Store `executor_script: String` and pre-serialized `config_json: serde_json::Value` on `Engine`
+3. Replace `dispatch_task`'s `ActionKind` match with a single `ShellAction` that runs `executor_script` and pipes the enriched envelope `{ action, task, step, config }` to stdin
+4. `dispatch_finally` uses the same enriched envelope format (finally hook script instead of executor)
 
-Once both sub-refactors are on master, two integration steps remain:
+At this point the executor is required. Change the Rust flag from `Option<String>` to `String` and make it required. Tests that call the binary directly need `--executor` injected.
 
-### Step 1: BarnumConfig.run() calls cli.cjs
+### Step 4: BarnumConfig.run() calls cli.cjs
 
 **File:** `libs/barnum/run.ts`
 
-`BarnumConfig.run()` stops calling the Rust binary directly and instead spawns `cli.cjs`. This makes `cli.cjs` the single place that handles runtime detection and `--executor` injection.
+`BarnumConfig.run()` stops calling the Rust binary directly and instead spawns `cli.cjs`, making cli.cjs the single source of truth for executor resolution.
 
 ```typescript
 export class BarnumConfig {
@@ -273,7 +276,7 @@ export class BarnumConfig {
 }
 ```
 
-### Step 2: Make Step.action opaque
+### Step 5: Make Step.action opaque + delete dead Rust code
 
 **File:** `crates/barnum_config/src/resolved.rs`
 
@@ -290,17 +293,12 @@ pub struct Step {
 }
 ```
 
-`ConfigFile::resolve()` converts `ActionFile` to `serde_json::Value` via `serde_json::to_value()`. The result is `{ "kind": "Pool", "params": { ... } }`.
+`ConfigFile::resolve()` converts `ActionFile` to `serde_json::Value` via `serde_json::to_value()`.
 
-`RunnerConfig.executor_script` stays as `&'a str` (not `Option` — it's always present).
-
-### Step 3: Delete Rust action dispatch code
-
-Remove:
-- `PoolAction` struct in `runner/action.rs` (the runtime Action impl, lines 155-187)
+Delete dead code:
+- `PoolAction` struct in `runner/action.rs` (the runtime Action impl)
 - `submit.rs` (troupe submission: `build_agent_payload`, `submit_via_cli`)
-- `ActionKind` enum in `resolved.rs` (lines 92-99)
-- `PoolAction` and `CommandAction` structs in `resolved.rs` (lines 64-89)
+- `ActionKind` enum and `PoolAction`/`CommandAction` structs in `resolved.rs`
 - `Invoker<TroupeCli>` from `Engine` and `RunnerConfig`
 - `cli_invoker` and `troupe_cli` dependencies from `barnum_config`
 - `generate_step_docs` in `docs.rs` (moved to JS; `generate_full_docs` stays for `barnum config docs`)
