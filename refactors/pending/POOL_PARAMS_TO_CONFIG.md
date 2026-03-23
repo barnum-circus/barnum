@@ -107,25 +107,17 @@ pub struct PoolActionFile {
 
 **File:** `crates/barnum_config/src/config.rs`
 
-All three fields are optional. A Pool action with no pool/root can still be valid — in the JS_ACTION_RESOLUTION future, these get resolved by the JS layer before reaching Rust. For now, they default to `"default"` and the platform's troupe default root.
+All fields are optional. A Pool action with no pool/root is valid — it just can't be dispatched without them being set (either in config or resolved by the JS layer before reaching Rust).
 
 ```rust
 pub struct PoolActionFile {
     pub instructions: MaybeLinked<Instructions>,
-    /// Pool name (e.g., "demo", "reviewers"). Defaults to "default".
-    #[serde(default = "default_pool")]
-    pub pool: String,
-    /// Troupe root directory. Defaults to the platform default (e.g., /tmp/troupe).
-    #[serde(default = "default_root")]
-    pub root: PathBuf,
-}
-
-fn default_pool() -> String {
-    troupe::DEFAULT_POOL_ID.to_owned()
-}
-
-fn default_root() -> PathBuf {
-    troupe::default_root()
+    /// Pool name (e.g., "demo", "reviewers").
+    #[serde(default)]
+    pub pool: Option<String>,
+    /// Troupe root directory.
+    #[serde(default)]
+    pub root: Option<PathBuf>,
 }
 ```
 
@@ -136,12 +128,10 @@ fn default_root() -> PathBuf {
 ```rust
 pub struct PoolAction {
     pub instructions: String,
-    pub pool: String,
-    pub root: PathBuf,
+    pub pool: Option<String>,
+    pub root: Option<PathBuf>,
 }
 ```
-
-These are always populated in the resolved type (defaults applied during deserialization).
 
 ### 3. Update config resolution
 
@@ -275,7 +265,7 @@ Each demo's `config.json` can optionally add `pool` and `root` fields on Pool ac
 }
 ```
 
-Demos that used non-default pool names (like `"demo"`) add just the `pool` field. The `root` can be omitted if `/tmp/troupe` is correct.
+Demos that need a specific pool name add the `pool` field. Root is only needed if it's non-standard.
 
 The `run-demo.ts` files drop the `ROOT` and `POOL` env vars:
 
