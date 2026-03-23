@@ -21,6 +21,20 @@ When the user describes a task or asks you to design something:
 
 ---
 
+## Limit refactor complexity
+
+Each refactor document should cover a single, focused architectural change. If a refactor grows to encompass multiple independent concerns, break it into separate documents that can be reviewed, approved, and implemented independently. A refactor that requires understanding two unrelated subsystems to review is two refactors.
+
+Signs a refactor should be split:
+- The document has phases that could land and be validated without the later phases existing
+- Two sections of the document modify unrelated subsystems
+- The motivation section lists multiple distinct problems
+- You find yourself writing "this is addressed in Phase N" to defer complexity within the same document
+
+Each sub-refactor gets its own file in `refactors/pending/`. Use blocking relationships (noted at the top of each document) when one refactor depends on another being completed first.
+
+---
+
 Big refactors follow a two-phase process:
 
 ## Phase 1: Architecture document
