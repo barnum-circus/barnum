@@ -7,8 +7,8 @@
 
 use barnum_cli::{Cli, Command, ConfigCommand, LogLevel, SchemaType};
 use barnum_config::{
-    ActionKind, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
-    generate_full_docs, resume, run,
+    ActionKind, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task,
+    config_schema, generate_full_docs, resume, run,
 };
 use clap::Parser;
 use cli_invoker::Invoker;
