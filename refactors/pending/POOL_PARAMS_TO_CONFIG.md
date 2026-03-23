@@ -107,13 +107,25 @@ pub struct PoolActionFile {
 
 **File:** `crates/barnum_config/src/config.rs`
 
+All three fields are optional. A Pool action with no pool/root can still be valid — in the JS_ACTION_RESOLUTION future, these get resolved by the JS layer before reaching Rust. For now, they default to `"default"` and the platform's troupe default root.
+
 ```rust
 pub struct PoolActionFile {
     pub instructions: MaybeLinked<Instructions>,
-    /// Pool name (e.g., "demo", "reviewers"). Resolved to <root>/pools/<pool>.
+    /// Pool name (e.g., "demo", "reviewers"). Defaults to "default".
+    #[serde(default = "default_pool")]
     pub pool: String,
-    /// Troupe root directory. Pools live in <root>/pools/<pool>/.
+    /// Troupe root directory. Defaults to the platform default (e.g., /tmp/troupe).
+    #[serde(default = "default_root")]
     pub root: PathBuf,
+}
+
+fn default_pool() -> String {
+    troupe::DEFAULT_POOL_ID.to_owned()
+}
+
+fn default_root() -> PathBuf {
+    troupe::default_root()
 }
 ```
 
@@ -128,6 +140,8 @@ pub struct PoolAction {
     pub root: PathBuf,
 }
 ```
+
+These are always populated in the resolved type (defaults applied during deserialization).
 
 ### 3. Update config resolution
 
@@ -249,18 +263,19 @@ export interface RunOptions {
 
 ### 9. Update demo configs
 
-Each demo's `config.json` gains `pool` and `root` fields on Pool actions:
+Each demo's `config.json` can optionally add `pool` and `root` fields on Pool actions. Since these now have defaults (`"default"` and `/tmp/troupe`), demos that use the standard pool can omit them entirely:
 
 ```json
 {
     "action": {
         "kind": "Pool",
         "instructions": {"kind": "Link", "path": "instructions.md"},
-        "pool": "demo",
-        "root": "/tmp/troupe"
+        "pool": "demo"
     }
 }
 ```
+
+Demos that used non-default pool names (like `"demo"`) add just the `pool` field. The `root` can be omitted if `/tmp/troupe` is correct.
 
 The `run-demo.ts` files drop the `ROOT` and `POOL` env vars:
 
@@ -292,6 +307,4 @@ BarnumConfig.fromConfig(require("./config.json"))
 
 ## Open questions
 
-1. **Should pool/root have defaults?** If most steps use the same pool, repeating `"pool": "demo", "root": "/tmp/troupe"` on every Pool action is verbose. We could allow global defaults in the config that individual actions override. But that reintroduces global pool params, just at the config level instead of CLI. For now, explicit per-action is fine — there are few Pool action steps in practice.
-
-2. **Invoker.** The `Invoker<TroupeCli>` (which locates the troupe binary) currently comes from RunnerConfig. With pool params in config, it still needs to come from somewhere outside the config. It stays on RunnerConfig for now. In the JS_ACTION_RESOLUTION future, the JS pool executor script handles binary discovery.
+1. **Invoker.** The `Invoker<TroupeCli>` (which locates the troupe binary) currently comes from RunnerConfig. With pool params in config, it still needs to come from somewhere outside the config. It stays on RunnerConfig for now. In the JS_ACTION_RESOLUTION future, the JS pool executor script handles binary discovery.
