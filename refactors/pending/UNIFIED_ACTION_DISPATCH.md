@@ -195,9 +195,9 @@ impl fmt::Display for ActionError {
 
 **Behavior change for `Response::NotProcessed`** (already landed in Phase 0): maps to `ActionError::Failed("not processed by pool")` → `FailureKind::SubmitError` (always retries), instead of the old `FailureKind::Timeout` (gated on `retry_on_timeout`). This is more correct: Barnum now owns timeout enforcement via `run_action`, and `NotProcessed` is an operational failure from the pool.
 
-### `run_action`: timeout via `recv_timeout`
+### `run_action`: timeout via deadline + `recv_timeout`
 
-`run_action` takes a boxed action, a value, and an optional timeout. It calls `start` to kick off the work (non-blocking), then waits on the handle's receiver:
+`run_action` takes a boxed action, a value, and an optional timeout. It computes a deadline *before* calling `start`, so time spent in `start` (spawning child processes, etc.) counts against the timeout:
 
 ```rust
 pub fn run_action(
@@ -205,10 +205,14 @@ pub fn run_action(
     value: &serde_json::Value,
     timeout: Option<Duration>,
 ) -> Result<String, ActionError> {
+    let deadline = timeout.map(|d| Instant::now() + d);
     let handle = action.start(value.clone());
-    let channel_result = match timeout {
+    let channel_result = match deadline {
         None => handle.rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-        Some(duration) => handle.rx.recv_timeout(duration),
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            handle.rx.recv_timeout(remaining)
+        }
     };
     match channel_result {
         Ok(result) => result.map_err(ActionError::Failed),
@@ -220,6 +224,8 @@ pub fn run_action(
     // handle drops here — guard's Drop kills the action if still running
 }
 ```
+
+If `start` consumes the entire timeout budget, `remaining` is zero and `recv_timeout(Duration::ZERO)` returns `Timeout` immediately — which drops the handle, triggering the guard's kill.
 
 `run_action` does not spawn any threads — `start` handles that internally. On timeout, `handle` drops at function exit, triggering the guard's `Drop` which kills the underlying work. On success, the work already completed, so the guard's `Drop` is a no-op (process already exited).
 
@@ -286,7 +292,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cli_invoker::Invoker;
 use troupe::Response;
@@ -348,17 +354,22 @@ pub trait Action: Send {
 
 /// Run an action with an optional timeout.
 ///
-/// Calls `start` to kick off the work, then waits on the handle's receiver.
-/// On timeout, the handle drops — the guard's `Drop` kills the underlying work.
+/// Computes a deadline before calling `start`, so time spent in `start`
+/// counts against the timeout. On timeout, the handle drops — the guard's
+/// `Drop` kills the underlying work.
 pub fn run_action(
     action: Box<dyn Action>,
     value: &serde_json::Value,
     timeout: Option<Duration>,
 ) -> Result<String, ActionError> {
+    let deadline = timeout.map(|d| Instant::now() + d);
     let handle = action.start(value.clone());
-    let channel_result = match timeout {
+    let channel_result = match deadline {
         None => handle.rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
-        Some(duration) => handle.rx.recv_timeout(duration),
+        Some(deadline) => {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            handle.rx.recv_timeout(remaining)
+        }
     };
     match channel_result {
         Ok(result) => result.map_err(ActionError::Failed),
