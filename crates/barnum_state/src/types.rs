@@ -60,20 +60,28 @@ pub enum TaskOrigin {
     /// Seed task from initial input.
     Seed,
     /// Spawned by a parent task's action output or finally hook.
-    ///
-    /// `parent_id` is `Some` for children under a parent, `None` for
-    /// children spawned by a root task's finally hook (no grandparent).
-    Spawned {
-        /// The parent task waiting for this one. `None` only for children
-        /// spawned by a root-level finally hook.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        parent_id: Option<LogTaskId>,
-    },
+    Spawned(SpawnedOrigin),
     /// Retry of a failed task. Parent inherited from the replaced task.
-    Retry {
-        /// The task this replaces.
-        replaces: LogTaskId,
-    },
+    Retry(RetryOrigin),
+}
+
+/// Origin data for a spawned task.
+///
+/// `parent_id` is `Some` for children under a parent, `None` for
+/// children spawned by a root task's finally hook (no grandparent).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpawnedOrigin {
+    /// The parent task waiting for this one. `None` only for children
+    /// spawned by a root-level finally hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<LogTaskId>,
+}
+
+/// Origin data for a retried task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RetryOrigin {
+    /// The task this replaces.
+    pub replaces: LogTaskId,
 }
 
 /// Record of a task completing.
@@ -144,8 +152,12 @@ pub enum FailureReason {
     /// Agent disappeared without responding.
     AgentLost,
     /// Agent returned an unparseable or invalid response.
-    InvalidResponse {
-        /// Human-readable description of what went wrong.
-        message: String,
-    },
+    InvalidResponse(InvalidResponseReason),
+}
+
+/// Details of an invalid-response failure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InvalidResponseReason {
+    /// Human-readable description of what went wrong.
+    pub message: String,
 }

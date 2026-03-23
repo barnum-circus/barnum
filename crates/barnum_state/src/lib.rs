@@ -11,8 +11,8 @@ pub use reconstruct::{
     ReconstructError, ReconstructedState, ReconstructedTask, WaitingTask, reconstruct,
 };
 pub use types::{
-    FailureReason, FinallyRun, StateLogConfig, StateLogEntry, TaskCompleted, TaskFailed,
-    TaskOrigin, TaskOutcome, TaskSubmitted, TaskSuccess,
+    FailureReason, FinallyRun, InvalidResponseReason, RetryOrigin, SpawnedOrigin, StateLogConfig,
+    StateLogEntry, TaskCompleted, TaskFailed, TaskOrigin, TaskOutcome, TaskSubmitted, TaskSuccess,
 };
 
 use std::io::{self, BufRead, BufReader, Write};
@@ -85,9 +85,9 @@ mod tests {
                     task_id: LogTaskId(1),
                     step: StepName::new("Process"),
                     value: StepInputValue(json!({"data": "x"})),
-                    origin: TaskOrigin::Spawned {
+                    origin: TaskOrigin::Spawned(SpawnedOrigin {
                         parent_id: Some(LogTaskId(0)),
-                    },
+                    }),
                 }],
             }),
         })
@@ -212,9 +212,9 @@ mod tests {
                         task_id: LogTaskId(2),
                         step: StepName::new("Analyze"),
                         value: StepInputValue(json!(null)),
-                        origin: TaskOrigin::Retry {
+                        origin: TaskOrigin::Retry(RetryOrigin {
                             replaces: LogTaskId(1),
-                        },
+                        }),
                     }),
                 }),
             }),
@@ -258,9 +258,9 @@ mod tests {
         let reasons = [
             FailureReason::Timeout,
             FailureReason::AgentLost,
-            FailureReason::InvalidResponse {
+            FailureReason::InvalidResponse(InvalidResponseReason {
                 message: "bad JSON".to_string(),
-            },
+            }),
         ];
 
         for (i, reason) in reasons.iter().enumerate() {
@@ -300,9 +300,9 @@ mod tests {
                 task_id: LogTaskId(10),
                 step: StepName::new("Cleanup"),
                 value: StepInputValue(json!({"target": "temp"})),
-                origin: TaskOrigin::Spawned {
+                origin: TaskOrigin::Spawned(SpawnedOrigin {
                     parent_id: Some(LogTaskId(5)),
-                },
+                }),
             }],
         });
 

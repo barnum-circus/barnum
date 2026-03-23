@@ -194,11 +194,11 @@ fn insert_submitted(
 
     let parent_id = match &task.origin {
         TaskOrigin::Seed => None,
-        TaskOrigin::Spawned { parent_id } => *parent_id,
-        TaskOrigin::Retry { replaces } => {
+        TaskOrigin::Spawned(spawned) => spawned.parent_id,
+        TaskOrigin::Retry(retry) => {
             // Inherit parent from replaced task.
             // The replaced task must already be in the map (it was submitted earlier).
-            submitted.get(replaces).and_then(|s| s.parent_id)
+            submitted.get(&retry.replaces).and_then(|s| s.parent_id)
         }
     };
 
@@ -384,9 +384,9 @@ mod tests {
             task_id: LogTaskId(task_id),
             step: StepName::new(step),
             value: StepInputValue(json!({"input": task_id})),
-            origin: TaskOrigin::Spawned {
+            origin: TaskOrigin::Spawned(SpawnedOrigin {
                 parent_id: Some(LogTaskId(parent_id)),
-            },
+            }),
         }
     }
 
@@ -395,9 +395,9 @@ mod tests {
             task_id: LogTaskId(task_id),
             step: StepName::new(step),
             value: StepInputValue(json!({"input": task_id})),
-            origin: TaskOrigin::Retry {
+            origin: TaskOrigin::Retry(RetryOrigin {
                 replaces: LogTaskId(replaces),
-            },
+            }),
         }
     }
 
@@ -580,9 +580,9 @@ mod tests {
         assert_eq!(state.pending_tasks[0].task_id, LogTaskId(1));
         assert_eq!(
             state.pending_tasks[0].origin,
-            TaskOrigin::Retry {
+            TaskOrigin::Retry(RetryOrigin {
                 replaces: LogTaskId(0)
-            }
+            })
         );
         assert!(state.waiting_tasks.is_empty());
     }
