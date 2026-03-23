@@ -153,11 +153,12 @@ pub fn spawn_worker(
 
 /// Pool action: submits a task to the troupe agent pool.
 pub struct PoolAction {
-    pub root: PathBuf,
+    pub root: Option<PathBuf>,
+    pub pool: Option<String>,
     pub invoker: Invoker<TroupeCli>,
     pub docs: String,
     pub step_name: StepName,
-    /// Troupe's agent lifecycle timeout (seconds), passed through in the payload.
+    /// Agent lifecycle timeout (seconds) from the pool action config.
     pub pool_timeout: Option<u64>,
 }
 
@@ -168,7 +169,12 @@ impl Action for PoolAction {
             let payload =
                 build_agent_payload(&self.step_name, &value, &self.docs, self.pool_timeout);
             debug!(payload = %payload, "task payload");
-            let result = match submit_via_cli(&self.root, &payload, &self.invoker) {
+            let result = match submit_via_cli(
+                self.root.as_deref(),
+                self.pool.as_deref(),
+                &payload,
+                &self.invoker,
+            ) {
                 Ok(Response::Processed { stdout, .. }) => Ok(stdout),
                 Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
                 Err(e) => Err(e.to_string()),

@@ -25,7 +25,7 @@ use tracing::{error, info};
 use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
-use crate::resolved::{ActionKind, CommandAction, Config, Step};
+use crate::resolved::{ActionKind, CommandAction, Config, PoolAction as PoolActionConfig, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
@@ -706,15 +706,41 @@ impl<'a> Engine<'a> {
         let tx = self.tx.clone();
 
         match &step.action {
-            ActionKind::Pool(..) => {
+            ActionKind::Pool(PoolActionConfig {
+                pool,
+                root,
+                timeout: pool_timeout,
+                ..
+            }) => {
                 let docs = generate_step_docs(step, self.config);
                 info!(step = %task.step, "submitting task to pool");
+
+                // Use config values, falling back to PoolConnection for backward
+                // compatibility with --root/--pool CLI args. This fallback is
+                // removed once CLI args are deleted.
+                let effective_root = root.clone().or_else(|| {
+                    // self.pool.root is the full pool path: <root>/pools/<id>
+                    self.pool
+                        .root
+                        .parent()
+                        .and_then(|p| p.parent())
+                        .map(|p| p.to_path_buf())
+                });
+                let effective_pool = pool.clone().or_else(|| {
+                    self.pool
+                        .root
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_owned())
+                });
+
                 let action = Box::new(PoolAction {
-                    root: self.pool.root.clone(),
+                    root: effective_root,
+                    pool: effective_pool,
                     invoker: self.pool.invoker.clone(),
                     docs,
                     step_name: task.step.clone(),
-                    pool_timeout: step.options.timeout,
+                    pool_timeout: *pool_timeout,
                 });
                 spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
             }
