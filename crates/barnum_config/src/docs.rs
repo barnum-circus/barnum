@@ -2,13 +2,13 @@
 //!
 //! Generates instructions that tell agents what they can do at each step.
 
-use crate::resolved::{Action, Config, PoolAction, Step};
+use crate::resolved::{ActionKind, Config, PoolAction, Step};
 use std::fmt::Write;
 
 /// Write instructions to a doc string.
-fn write_instructions(doc: &mut String, action: &Action) {
+fn write_instructions(doc: &mut String, action: &ActionKind) {
     match action {
-        Action::Pool(PoolAction { instructions }) if !instructions.is_empty() => {
+        ActionKind::Pool(PoolAction { instructions }) if !instructions.is_empty() => {
             writeln!(doc, "{instructions}").ok();
             writeln!(doc).ok();
         }

@@ -26,7 +26,7 @@ use tracing::{error, info};
 use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
-use crate::resolved::{Action, CommandAction, Config, Step};
+use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
@@ -711,7 +711,7 @@ impl<'a> Engine<'a> {
         let tx = self.tx.clone();
 
         match &step.action {
-            Action::Pool(..) => {
+            ActionKind::Pool(..) => {
                 let docs = generate_step_docs(step, self.config);
                 let timeout = step.options.timeout;
                 let pool = self.pool.clone();
@@ -721,7 +721,7 @@ impl<'a> Engine<'a> {
                     dispatch_pool_task(task_id, task, &docs, timeout, &pool, &tx);
                 });
             }
-            Action::Command(CommandAction { script }) => {
+            ActionKind::Command(CommandAction { script }) => {
                 let script = script.clone();
                 let working_dir = self.pool.working_dir.clone();
 
@@ -1021,7 +1021,7 @@ mod run_state_tests {
         TaskSubmitted,
     };
 
-    use crate::resolved::{Action, CommandAction, Config, Options, Step};
+    use crate::resolved::{ActionKind, CommandAction, Config, Options, Step};
     use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
 
     use super::{PendingDispatch, PendingFinally, PendingTask, RunState, TaskState};
@@ -1032,7 +1032,7 @@ mod run_state_tests {
         Step {
             name: StepName::new(name),
             value_schema: None,
-            action: Action::Command(CommandAction {
+            action: ActionKind::Command(CommandAction {
                 script: "true".into(),
             }),
             next: vec![],

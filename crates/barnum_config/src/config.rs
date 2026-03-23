@@ -400,18 +400,18 @@ impl StepFile {
 
 impl ActionFile {
     /// Resolve this action's file references.
-    fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::Action> {
+    fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::ActionKind> {
         match self {
             Self::Pool(PoolActionFile { instructions }) => {
                 let resolved: Instructions = instructions.resolve(base_path, |path| {
                     let content = std::fs::read_to_string(path)?;
                     Ok(Instructions(content))
                 })?;
-                Ok(crate::resolved::Action::Pool(crate::resolved::PoolAction {
+                Ok(crate::resolved::ActionKind::Pool(crate::resolved::PoolAction {
                     instructions: resolved.0,
                 }))
             }
-            Self::Command(CommandActionFile { script }) => Ok(crate::resolved::Action::Command(
+            Self::Command(CommandActionFile { script }) => Ok(crate::resolved::ActionKind::Command(
                 crate::resolved::CommandAction { script },
             )),
         }
