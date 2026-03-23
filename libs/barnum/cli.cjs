@@ -23,10 +23,30 @@ if (process.platform === 'darwin' && process.arch === 'x64') {
   );
 }
 
-var input = process.argv.slice(2);
+// --executor is internal. Error if the user passed it directly.
+var userArgs = process.argv.slice(2);
+if (userArgs.includes('--executor')) {
+  console.error('Error: --executor is an internal flag and cannot be passed directly.');
+  process.exit(1);
+}
+
+var executorPath = path.resolve(__dirname, 'actions', 'executor.ts');
+
+function resolveExecutorCommand() {
+  if (typeof Bun !== 'undefined') {
+    // Bun runs .ts natively
+    return process.execPath + ' ' + executorPath;
+  }
+  // Node: use tsx
+  var tsxPath = require.resolve('tsx/cli');
+  return 'node ' + tsxPath + ' ' + executorPath;
+}
+
+var executor = resolveExecutorCommand();
+var args = userArgs.concat('--executor', executor);
 
 try {
   chmodSync(bin, 0o755);
 } catch {}
 
-spawn(bin, input, { stdio: 'inherit' }).on('exit', process.exit);
+spawn(bin, args, { stdio: 'inherit' }).on('exit', process.exit);

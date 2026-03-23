@@ -33,6 +33,7 @@ fn main() -> io::Result<()> {
             log_file,
             state_log,
             resume_from,
+            executor: _,
         } => match (resume_from, config) {
             (Some(resume_path), _) => resume_command(
                 &resume_path,

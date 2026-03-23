@@ -80,6 +80,11 @@ pub enum Command {
         /// Incompatible with `--config`, `--initial-state`, and `--entrypoint-value`.
         #[arg(long, conflicts_with = "config")]
         resume_from: Option<PathBuf>,
+
+        /// Internal: executor command injected by cli.cjs.
+        /// Not user-facing — hidden from --help.
+        #[arg(long, hide = true)]
+        executor: Option<String>,
     },
 
     /// Config file operations (docs, validate, graph, schema)

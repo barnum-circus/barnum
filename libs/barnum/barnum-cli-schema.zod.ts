@@ -28,6 +28,7 @@ const Command = z.discriminatedUnion("kind", [
   z.object({
     config: z.string().nullable().optional().describe("Config (JSON string or path to file). Required unless `--resume-from` is used."),
     entrypointValue: z.string().nullable().optional().describe("Initial value for the entrypoint step (JSON string or path to file). Only valid when config has an `entrypoint`. Defaults to `{}` if not provided."),
+    executor: z.string().nullable().optional().describe("Internal: executor command injected by cli.cjs. Not user-facing — hidden from --help."),
     initialState: z.string().nullable().optional().describe("Initial tasks (JSON string or path to file). Required if config has no `entrypoint`. Cannot be used with `--entrypoint-value`."),
     kind: z.literal("Run"),
     logFile: z.string().nullable().optional().describe("Log file path (logs emitted in addition to stderr)"),
