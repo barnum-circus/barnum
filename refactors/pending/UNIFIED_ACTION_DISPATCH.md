@@ -98,9 +98,9 @@ The timeout comes from step config. Barnum passes it to the action at constructi
 
 Collapse `SubmitResult`'s three payload types into one `ActionResult`. Retry logic (`retry_on_timeout`, `retry_on_invalid_response`, `process_retry`, `FailureKind`) is unchanged — timeout vs invalid response are different failure classes that warrant separate retry controls.
 
-#### 0a. Unify `SubmitResult` payloads
+#### 0a. Replace `SubmitResult` with `ActionResult` + `WorkerKind`
 
-Introduce `ActionResult` as the uniform payload and collapse `SubmitResult` from three variants to two:
+`SubmitResult`'s three variants serve two purposes: carrying different payload types (Pool/Command/Finally each have different result types) and routing (`Finally` goes to `convert_finally_result`, everything else to `convert_task_result`). These are separate concerns. Split them:
 
 ```rust
 pub(super) struct ActionResult {
@@ -108,13 +108,20 @@ pub(super) struct ActionResult {
     pub output: Result<String, String>,
 }
 
-pub(super) enum SubmitResult {
-    Task(ActionResult),
-    Finally(ActionResult),
+pub enum WorkerKind {
+    Task,
+    Finally { parent_id: LogTaskId },
+}
+
+pub struct WorkerResult {
+    pub task_id: LogTaskId,
+    pub task: Task,
+    pub kind: WorkerKind,
+    pub result: ActionResult,
 }
 ```
 
-Delete `PoolResult`, `CommandResult`, `FinallyResult`. Pool and Command both become `Task(ActionResult)`. Finally becomes `Finally(ActionResult)`. The routing between `convert_task_result` and `convert_finally_result` still works via the two enum variants.
+Delete `SubmitResult`, `PoolResult`, `CommandResult`, `FinallyResult`.
 
 #### 0b. Convert results in dispatch functions
 
@@ -128,9 +135,9 @@ let output = match submit_via_cli(&pool.root, &payload, &pool.invoker) {
     Err(e) => Err(e.to_string()),
 };
 let _ = tx.send(WorkerResult {
-    task_id,
-    task,
-    result: SubmitResult::Task(ActionResult { value, output }),
+    task_id, task,
+    kind: WorkerKind::Task,
+    result: ActionResult { value, output },
 });
 ```
 
@@ -139,24 +146,25 @@ let _ = tx.send(WorkerResult {
 let output = run_command_action(script, &task_json, working_dir)
     .map_err(|e| e.to_string());
 let _ = tx.send(WorkerResult {
-    task_id,
-    task,
-    result: SubmitResult::Task(ActionResult { value, output }),
+    task_id, task,
+    kind: WorkerKind::Task,
+    result: ActionResult { value, output },
 });
 ```
 
 `dispatch_finally_task` already returns `Result<String, String>`:
 ```rust
 let _ = tx.send(WorkerResult {
-    task_id,
-    task,
-    result: SubmitResult::Finally(ActionResult { value, output }),
+    task_id, task,
+    kind: WorkerKind::Finally { parent_id },
+    result: ActionResult { value, output },
 });
 ```
 
 #### 0c. Collapse `process_submit_result`
 
-With `ActionResult`, this becomes:
+`convert_task_result` currently takes `SubmitResult` and passes it to `process_submit_result`. With `ActionResult`, both simplify:
+
 ```rust
 pub fn process_submit_result(
     result: ActionResult,
@@ -174,26 +182,25 @@ pub fn process_submit_result(
 }
 ```
 
-Delete `process_pool_response` and `process_command_response`. The `process_worker_result` match changes from three arms to two:
+Delete `process_pool_response`, `process_command_response`. Update `process_worker_result`:
 
 ```rust
-match result.result {
-    SubmitResult::Task(action_result) => {
-        self.convert_task_result(result.task_id, &result.task, action_result)
+let entries = match result.kind {
+    WorkerKind::Task => self.convert_task_result(result.task_id, &result.task, result.result),
+    WorkerKind::Finally { parent_id } => {
+        self.convert_finally_result(parent_id, result.task.value.clone(), result.result.output)
     }
-    SubmitResult::Finally(action_result) => {
-        self.convert_finally_result(parent_id, result.task.value.clone(), action_result.output)
-    }
-}
+};
 ```
 
 #### 0d. Delete dead code
 
+- `SubmitResult` enum
 - `PoolResult`, `CommandResult`, `FinallyResult` structs
 - `process_pool_response`, `process_command_response` functions
 - `run_command_action` from `hooks.rs` (thin wrapper; inline the `run_shell_command` call in `dispatch_command_task`)
 
-After this phase: all dispatch functions produce `ActionResult`, one code path in `process_submit_result`, `SubmitResult` has two variants (Task vs Finally) for routing. Compile, run full suite.
+After this phase: all dispatch functions produce `ActionResult`, `WorkerKind` handles routing, one code path in `process_submit_result`. Compile, run full suite.
 
 ---
 
@@ -351,58 +358,9 @@ Compile, run full suite.
 
 ### Phase 3: Finally hooks through trait
 
-Finally hooks go through `dispatch_action` with a `ShellAction`. This requires replacing the `SubmitResult` enum (Phase 0c) with a `WorkerKind` field on `WorkerResult`, since `dispatch_action` is now shared and can't know at the call site whether to wrap in `Task(...)` or `Finally(...)`.
+Finally hooks go through `dispatch_action` with a `ShellAction`. `WorkerKind` (Phase 0a) already handles the routing — `dispatch_action` takes `kind: WorkerKind` and passes it through to `WorkerResult`.
 
-#### 3a. Replace `SubmitResult` with `WorkerKind`
-
-```rust
-pub enum WorkerKind {
-    Task,
-    Finally { parent_id: LogTaskId },
-}
-
-pub struct WorkerResult {
-    pub task_id: LogTaskId,
-    pub task: Task,
-    pub kind: WorkerKind,
-    pub result: ActionResult,
-}
-```
-
-Delete `SubmitResult`. Update `dispatch_action` to take `kind: WorkerKind`:
-
-```rust
-pub fn dispatch_action(
-    task_id: LogTaskId,
-    task: Task,
-    kind: WorkerKind,
-    action: Box<dyn Action>,
-    tx: &mpsc::Sender<WorkerResult>,
-) {
-    let value = task.value.clone();
-    let output = action.perform(&value.0);
-    let _ = tx.send(WorkerResult {
-        task_id,
-        task,
-        kind,
-        result: ActionResult { value, output },
-    });
-}
-```
-
-Update `process_worker_result` to dispatch on `kind`:
-```rust
-let entries = match result.kind {
-    WorkerKind::Task => self.convert_task_result(result.task_id, &result.task, result.result),
-    WorkerKind::Finally { parent_id } => {
-        self.convert_finally_result(parent_id, result.task.value.clone(), result.result.output)
-    }
-};
-```
-
-Update dispatch sites in Phases 1-2 to pass `WorkerKind::Task`.
-
-#### 3b. Update `dispatch_finally`
+#### 3a. Update `dispatch_finally`
 
 ```rust
 fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
@@ -516,10 +474,10 @@ Compile, run full suite.
 
 | Phase | What | Deletes | Adds |
 |-------|------|---------|------|
-| 0 | Unify result types | `PoolResult`, `CommandResult`, `FinallyResult`, `process_pool_response`, `process_command_response`, `run_command_action` | `ActionResult`, simplified `SubmitResult` (Task/Finally) |
+| 0 | Unify result types | `SubmitResult`, `PoolResult`, `CommandResult`, `FinallyResult`, `process_pool_response`, `process_command_response`, `run_command_action` | `ActionResult`, `WorkerKind` |
 | 1 | Pool through trait | `dispatch_pool_task`, `Action` enum (renamed) | `Action` trait, `PoolAction`, `dispatch_action`, `ActionKind` enum |
 | 2 | Command through trait | `dispatch_command_task` | `ShellAction` |
-| 3 | Finally through trait | `dispatch_finally_task`, `SubmitResult` enum | `WorkerKind`, reuses `ShellAction` |
+| 3 | Finally through trait | `dispatch_finally_task` | (reuses `ShellAction` + `WorkerKind::Finally`) |
 | 4 | Timeout | | `timeout` param on `run_shell_command`, `timeout` field on `ShellAction` |
 
 Each phase compiles and passes tests before moving to the next.
