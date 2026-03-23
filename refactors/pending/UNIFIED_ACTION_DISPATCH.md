@@ -4,11 +4,11 @@
 
 ## Motivation
 
-Pool and Command actions are handled asymmetrically in the runner. The most visible gap: **Command actions have no timeout enforcement.** A misbehaving shell command hangs forever — no timeout, no retry, no recourse. Pool actions get timeouts because troupe enforces them server-side. But the config schema exposes `options.timeout` for all steps, regardless of action kind, creating a contract the runner doesn't honor for commands.
+Everything that executes — tasks, pre-hooks, post-hooks, finally hooks, sigkill hooks — should go through a single dispatch trait. Today, Pool and Command actions are handled asymmetrically, hooks run through their own ad-hoc code paths, and timeouts only exist for Pool actions. The result: inconsistent timeout enforcement, separate code paths for structurally identical work, and no unified concurrency accounting.
 
-Beyond timeouts, the two action kinds are dispatched through parallel but structurally different code paths. They share pre-hook handling and ultimately feed into the same `process_stdout` function, but the plumbing between dispatch and response processing is kind-specific: separate dispatch functions, separate `SubmitResult` variants, separate response processing branches.
+The core principle: **if it runs, it goes through the trait.** Every executable unit — whether it's a Pool task, a Command, a pre-hook, a post-hook, a finally task, or a sigkill hook — gets scheduled, timed out, and tracked identically. All of them contribute to concurrency limits.
 
-This refactor makes Pool and Command opaque to the runner's dispatch logic, handling them identically through a common `SubmitResult` shape. This is the mechanical prerequisite to introducing the `Executor` trait in PLUGGABLE_ACTION_KINDS.md — once Pool and Command produce the same result type, extracting a trait is a small diff.
+This refactor unifies all execution into a common `ActionOutcome` shape and adds timeout support everywhere. This is the mechanical prerequisite to extracting the `Executor` trait in PLUGGABLE_ACTION_KINDS.md.
 
 ## Current State
 
@@ -46,6 +46,10 @@ pub(super) enum SubmitResult {
 
 Pool wraps a `troupe::Response` (which has `Processed` and `NotProcessed` variants). Command wraps a raw `io::Result<String>`. The response processing in `response.rs:52-127` must then branch again to unwrap each shape.
 
+### Hooks
+
+Pre-hooks, post-hooks, finally hooks, and sigkill hooks all run shell commands but through separate code paths with no timeout enforcement. They don't contribute to concurrency tracking.
+
 ### Response processing (`runner/response.rs:52-127`)
 
 Pool's success case unwraps `Response::Processed { stdout }` and calls `process_stdout`. Command's success case calls `process_stdout` directly. They converge on the same function — but the match arms to get there are per-kind.
@@ -64,15 +68,15 @@ No timeout enforcement. The thread blocks until the child process exits.
 
 ## Proposed Changes
 
-### 1. Add timeout to `run_shell_command`
+### 1. Add cross-platform timeout to `run_shell_command`
 
 **File:** `runner/shell.rs`
 
-Add an optional timeout parameter. When set, spawn a reaper thread that kills the child process after the deadline. Use `child.try_wait()` in a loop with a short sleep, or use the `wait-timeout` crate (which wraps platform-specific APIs for timed waits on child processes).
-
-The cleanest approach uses a background reaper thread:
+**Dependency:** Add [`wait-timeout`](https://crates.io/crates/wait-timeout) crate for cross-platform timed waits on child processes. This wraps platform-specific APIs (waitpid on Unix, WaitForSingleObject on Windows) so timeout enforcement works on all platforms.
 
 ```rust
+use wait_timeout::ChildExt;
+
 pub fn run_shell_command(
     script: &str,
     stdin_input: &str,
@@ -81,29 +85,28 @@ pub fn run_shell_command(
 ) -> ShellResult {
     let mut child = spawn_shell(script, stdin_input, working_dir)?;
 
-    if let Some(duration) = timeout {
-        let child_id = child.id();
-        let (done_tx, done_rx) = std::sync::mpsc::channel();
-
-        // Reaper thread: kill the child if it exceeds the deadline
-        thread::spawn(move || {
-            if done_rx.recv_timeout(duration).is_err() {
-                // Timeout expired before the child finished — kill it
-                unsafe { libc::kill(child_id as i32, libc::SIGKILL); }
+    match timeout {
+        Some(duration) => {
+            match child.wait_timeout(duration) {
+                Ok(Some(status)) => {
+                    // Child exited within the deadline
+                    let output = collect_output(child, status);
+                    classify_output(output, false)
+                }
+                Ok(None) => {
+                    // Timeout expired — kill and reap
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    ShellResult::Timeout
+                }
+                Err(e) => ShellResult::Error(format!("wait failed: {e}")),
             }
-        });
-
-        let output = child.wait_with_output()
-            .map_err(|e| format!("wait failed: {e}"))?;
-
-        // Signal reaper to stop (child finished before timeout)
-        let _ = done_tx.send(());
-
-        classify_output(output, true)
-    } else {
-        let output = child.wait_with_output()
-            .map_err(|e| format!("wait failed: {e}"))?;
-        classify_output(output, false)
+        }
+        None => {
+            let output = child.wait_with_output()
+                .map_err(|e| format!("wait failed: {e}"))?;
+            classify_output(output, false)
+        }
     }
 }
 ```
@@ -118,7 +121,7 @@ pub enum ShellResult {
 }
 ```
 
-This keeps the caller from needing to guess whether a SIGKILL exit was a timeout or something else.
+`child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows). No `libc` dependency needed.
 
 ### 2. Unify `SubmitResult`
 
@@ -131,10 +134,6 @@ pub(super) enum SubmitResult {
     Action {
         value: StepInputValue,
         outcome: ActionOutcome,
-    },
-    Finally {
-        value: StepInputValue,
-        output: Result<String, String>,
     },
     PreHookError(String),
 }
@@ -151,7 +150,24 @@ pub(super) enum ActionOutcome {
 
 Both `dispatch_pool_task` and `dispatch_command_task` produce `SubmitResult::Action`. Pool maps `Response::Processed` to `ActionOutcome::Success` and `Response::NotProcessed` to `ActionOutcome::Timeout`. Command maps `ShellResult::Success` to `ActionOutcome::Success`, `ShellResult::Timeout` to `ActionOutcome::Timeout`, and `ShellResult::Error` to `ActionOutcome::Error`.
 
-### 3. Pass timeout to `dispatch_command_task`
+**Finally tasks also produce `SubmitResult::Action`.** They run shell commands (or pool tasks) and produce the same outcome shape. The `SubmitResult::Finally` variant is removed — finally tasks are dispatched identically, with the "this is a finally" semantics handled by the caller when processing the outcome, not by a separate result type.
+
+### 3. Dispatch hooks through the same path
+
+**All hooks get timeouts.** Pre-hooks, post-hooks, finally hooks, and sigkill hooks all call `run_shell_command` with an optional timeout. The timeout can come from:
+- Step-level `options.timeout` (inherited by hooks associated with that step)
+- A global hook timeout config (future work if needed)
+
+**All hooks contribute to concurrency.** When a hook is running, it occupies a slot in the concurrency limit, same as a task action. This prevents a burst of hooks from overwhelming the system.
+
+The dispatch path for hooks:
+1. Hook runs through `run_shell_command` with timeout
+2. Result is mapped to `ActionOutcome`
+3. Timeout/failure handling is identical to task actions
+
+Sigkill hooks specifically: these fire on abnormal termination. They still go through `run_shell_command` with a timeout. If a sigkill hook itself times out, it's killed — no infinite hangs on cleanup.
+
+### 4. Pass timeout to `dispatch_command_task`
 
 **File:** `runner/dispatch.rs`
 
@@ -161,7 +177,7 @@ Update the signature to accept `timeout: Option<u64>` and pass it through to `ru
 
 Pass `step.options.timeout` to the command dispatch, same as pool.
 
-### 4. Simplify response processing
+### 5. Simplify response processing
 
 **File:** `runner/response.rs`
 
@@ -184,24 +200,19 @@ SubmitResult::Action { value, outcome } => match outcome {
 }
 ```
 
-This removes the `process_pool_response` and `process_command_response` functions entirely, since their logic is now unified in the match arm above. The `troupe::Response` type no longer leaks into response processing — it's handled inside `dispatch_pool_task` where it's mapped to `ActionOutcome`.
+This removes the `process_pool_response` and `process_command_response` functions entirely. The `troupe::Response` type no longer leaks into response processing — it's handled inside `dispatch_pool_task` where it's mapped to `ActionOutcome`.
 
-### 5. Remove `troupe::Response` dependency from response.rs
+### 6. Remove `troupe::Response` dependency from response.rs
 
 After unification, `response.rs` no longer needs `use troupe::Response`. The troupe dependency is confined to `dispatch.rs` and `submit.rs`, where it belongs.
 
 ## What doesn't change
 
 - **Config types:** `ActionFile` and `Action` enums remain as-is. The closed enum is fine until PLUGGABLE_ACTION_KINDS introduces the trait.
-- **Pre-hooks:** Already handled identically for both kinds.
-- **Post-hooks:** Already handled uniformly in `process_and_finalize`.
-- **Finally tasks:** Keep their own `SubmitResult::Finally` variant. They have different semantics (no schema validation, triggered on subtree completion).
 - **State logging:** Unchanged. The log captures task submission and completion regardless of action kind.
 
 ## Open Questions
 
-1. **`libc::kill` vs portable timeout.** The reaper approach uses `libc::kill` which is Unix-only. The `wait-timeout` crate provides cross-platform timed waits. Since barnum currently targets Unix (macOS/Linux), `libc::kill` is fine. If Windows support matters later, switch to `wait-timeout`.
+1. **Hook timeout source.** Step-level `options.timeout` is the natural choice for hooks associated with a step. Should there be a separate global config for hook timeouts? Or is the step timeout sufficient? Leaning toward step timeout only — keep it simple.
 
-2. **SIGKILL vs SIGTERM.** SIGKILL is immediate and non-catchable. SIGTERM gives the process a chance to clean up. For a timeout scenario, SIGKILL is appropriate — the process exceeded its deadline and the runner needs to move on. If graceful shutdown matters for specific commands, users can set a longer timeout.
-
-3. **Should hooks also get timeouts?** Pre-hooks and post-hooks run shell commands too, but they don't currently have timeout support. This refactor scopes timeout to action execution only. Hook timeouts could be added later using the same `run_shell_command` mechanism.
+2. **SIGKILL vs graceful kill.** `child.kill()` is SIGKILL on Unix, TerminateProcess on Windows — both are immediate and non-catchable. For a timeout scenario this is appropriate: the process exceeded its deadline. If graceful shutdown matters for specific commands, users can set a longer timeout.
