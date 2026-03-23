@@ -17,6 +17,7 @@ use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use barnum_state::{
     FailureReason, FinallyRun, InvalidResponseReason, RetryOrigin, SpawnedOrigin, StateLogConfig,
@@ -31,8 +32,8 @@ use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use action::ActionError;
-use dispatch::{WorkerResult, dispatch_command_task, dispatch_finally_task, dispatch_pool_task};
+use action::{ActionError, PoolAction, spawn_worker};
+use dispatch::{WorkerResult, dispatch_command_task, dispatch_finally_task};
 use hooks::call_wake_script;
 use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
@@ -705,18 +706,28 @@ impl<'a> Engine<'a> {
     #[expect(clippy::expect_used)]
     fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
         let step = self.step_map.get(&task.step).expect("[P015] unknown step");
+        let timeout = step.options.timeout.map(Duration::from_secs);
         let tx = self.tx.clone();
 
         match &step.action {
             ActionKind::Pool(..) => {
                 let docs = generate_step_docs(step, self.config);
-                let timeout = step.options.timeout;
-                let pool = self.pool.clone();
-
                 info!(step = %task.step, "submitting task to pool");
-                thread::spawn(move || {
-                    dispatch_pool_task(task_id, task, &docs, timeout, &pool, &tx);
+                let action = Box::new(PoolAction {
+                    root: self.pool.root.clone(),
+                    invoker: self.pool.invoker.clone(),
+                    docs,
+                    step_name: task.step.clone(),
+                    pool_timeout: step.options.timeout,
                 });
+                spawn_worker(
+                    tx,
+                    action,
+                    task_id,
+                    task,
+                    dispatch::WorkerKind::Task,
+                    timeout,
+                );
             }
             ActionKind::Command(CommandAction { script }) => {
                 let script = script.clone();
