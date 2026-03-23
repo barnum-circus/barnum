@@ -11,7 +11,8 @@ use common::BarnumRunner;
 use rstest::rstest;
 use std::time::Duration;
 
-const POOL: &str = r#"{"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}"#;
+const POOL: &str =
+    r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
 
 /// Build a step JSON string with the required action field.
 fn step(name: &str, next: &[&str]) -> String {
@@ -332,8 +333,8 @@ fn docs_generates_markdown_header() {
 fn docs_includes_step_names() {
     let config = r#"{
         "steps": [
-            {"name": "Analyze", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Analyze code"}}, "next": ["Implement"]},
-            {"name": "Implement", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Write code"}}, "next": []}
+            {"name": "Analyze", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Analyze code"}}}, "next": ["Implement"]},
+            {"name": "Implement", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Write code"}}}, "next": []}
         ]
     }"#;
 
@@ -355,7 +356,7 @@ fn docs_includes_instructions() {
     let config = r#"{
         "steps": [{
             "name": "Task",
-            "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Do the important thing"}},
+            "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Do the important thing"}}},
             "next": []
         }]
     }"#;
@@ -432,8 +433,8 @@ fn graph_marks_terminal_steps() {
 fn graph_distinguishes_pool_and_command() {
     let config = r#"{
         "steps": [
-            {"name": "PoolStep", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["CmdStep"]},
-            {"name": "CmdStep", "action": {"kind": "Command", "script": "echo"}, "next": []}
+            {"name": "PoolStep", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": ["CmdStep"]},
+            {"name": "CmdStep", "action": {"kind": "Command", "params": {"script": "echo"}}, "next": []}
         ]
     }"#;
 
@@ -471,7 +472,7 @@ fn graph_shows_hooks() {
         r#"{{"steps": [{{
             "name": "WithHooks",
             "action": {POOL},
-            "finally": {{"kind": "Command", "script": "echo finally"}},
+            "finally": {{"kind": "Command", "params": {{"script": "echo finally"}}}},
             "next": []
         }}]}}"#
     );

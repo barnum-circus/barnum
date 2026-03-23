@@ -24,7 +24,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "jq -c '.value.items[] | {kind: \"Process\", value: .}' | jq -s"
+        "params": {
+          "script": "jq -c '.value.items[] | {kind: \"Process\", value: .}' | jq -s"
+        }
       },
       "next": ["Process"]
     },
@@ -43,7 +45,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "jq -c '{kind: \"Collect\", value: {processed: .value, doubled: (.value.n * 2)}}' | jq -s"
+        "params": {
+          "script": "jq -c '{kind: \"Collect\", value: {processed: .value, doubled: (.value.n * 2)}}' | jq -s"
+        }
       },
       "next": ["Collect"]
     },
@@ -66,7 +70,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "echo '[]'"
+        "params": {
+          "script": "echo '[]'"
+        }
       },
       "next": []
     }

@@ -90,7 +90,7 @@ pub struct CommandAction {
 
 /// How a resolved step processes tasks.
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", content = "params")]
 pub enum ActionKind {
     /// Send to the agent pool for processing.
     Pool(PoolAction),

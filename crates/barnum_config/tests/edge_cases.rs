@@ -38,7 +38,7 @@ fn empty_initial_tasks_completes() {
     let json = inject_pool_config(
         r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
+                {"name": "Start", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
             ]
         }"#,
         &root,
@@ -101,8 +101,8 @@ fn large_fan_out() {
     let json = inject_pool_config(
         r#"{
             "steps": [
-                {"name": "Distribute", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": ["Worker"]},
-                {"name": "Worker", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
+                {"name": "Distribute", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": ["Worker"]},
+                {"name": "Worker", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
             ]
         }"#,
         &root,
@@ -148,12 +148,12 @@ fn command_action_executes() {
             "steps": [
                 {
                     "name": "Echo",
-                    "action": {"kind": "Command", "script": "jq -c '[{kind: \"Done\", value: .value}]'"},
+                    "action": {"kind": "Command", "params": {"script": "jq -c '[{kind: \"Done\", value: .value}]'"}},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "script": "jq -c '[]'"},
+                    "action": {"kind": "Command", "params": {"script": "jq -c '[]'"}},
                     "next": []
                 }
             ]
@@ -203,7 +203,7 @@ fn rapid_task_completion() {
     let json = inject_pool_config(
         r#"{
             "steps": [
-                {"name": "Fast", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
+                {"name": "Fast", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
             ]
         }"#,
         &root,
@@ -240,7 +240,7 @@ fn unknown_step_in_initial_tasks_returns_error() {
     let json = inject_pool_config(
         r#"{
             "steps": [
-                {"name": "Known", "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}, "next": []}
+                {"name": "Known", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
             ]
         }"#,
         &root,
@@ -289,7 +289,7 @@ fn invalid_value_schema_in_initial_tasks_returns_error() {
                         "required": ["name"],
                         "properties": {"name": {"type": "string"}}
                     },
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
                     "next": []
                 }
             ]

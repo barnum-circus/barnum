@@ -22,7 +22,7 @@ fn simple_config(pool_root: &Path) -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "You are at the start. Return an empty array to finish."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "You are at the start. Return an empty array to finish."}}},
                     "next": []
                 }
             ]

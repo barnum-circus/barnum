@@ -481,7 +481,8 @@ mod tests {
         config_file.resolve(Path::new(".")).unwrap()
     }
 
-    const POOL: &str = r#"{"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}"#;
+    const POOL: &str =
+        r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
 
     #[test]
     fn graphviz_basic() {

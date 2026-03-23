@@ -244,7 +244,8 @@ mod tests {
     use crate::config::ConfigFile;
     use std::path::Path;
 
-    const POOL: &str = r#"{"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}"#;
+    const POOL: &str =
+        r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
 
     fn test_config() -> Config {
         let json = format!(

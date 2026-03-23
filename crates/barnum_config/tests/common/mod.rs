@@ -41,9 +41,10 @@ pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
         for step in steps {
             if let Some(action) = step.get_mut("action")
                 && action.get("kind").and_then(|k| k.as_str()) == Some("Pool")
+                && let Some(params) = action.get_mut("params")
             {
-                action["root"] = serde_json::json!(cli_root);
-                action["pool"] = serde_json::json!(pool_name);
+                params["root"] = serde_json::json!(cli_root);
+                params["pool"] = serde_json::json!(pool_name);
             }
         }
     }

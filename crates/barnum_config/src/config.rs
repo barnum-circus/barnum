@@ -173,7 +173,7 @@ pub struct CommandActionFile {
 /// How a step processes tasks. Set `"kind": "Pool"` to send tasks to AI agents,
 /// or `"kind": "Command"` to run a local shell script.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", content = "params")]
 pub enum ActionFile {
     /// Send the task to the agent pool for processing.
     Pool(PoolActionFile),
@@ -190,13 +190,13 @@ pub struct HookCommand {
 
 /// Finally hook. Runs after a task and all its descendants complete.
 ///
-/// In JSON: `{"kind": "Command", "script": "./finally-hook.sh"}`
+/// In JSON: `{"kind": "Command", "params": {"script": "./finally-hook.sh"}}`
 ///
 /// **stdin:** JSON object: `{"kind": "<step name>", "value": <payload>}`.
 /// **stdout:** JSON array of follow-up tasks: `[{"kind": "StepName", "value": {...}}, ...]`.
 /// Return `[]` for no follow-ups.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
+#[serde(tag = "kind", content = "params")]
 pub enum FinallyHook {
     /// Run a shell command as the finally hook.
     Command(HookCommand),
@@ -536,7 +536,8 @@ mod tests {
     use super::*;
     use crate::maybe_linked::MaybeLinked;
 
-    const POOL: &str = r#"{"kind": "Pool", "instructions": {"kind": "Inline", "value": ""}}"#;
+    const POOL: &str =
+        r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
 
     /// Helper to build a step JSON with required action field.
     fn step(name: &str, next: &[&str]) -> String {
@@ -572,7 +573,7 @@ mod tests {
                 {{
                     "name": "Analyze",
                     "value_schema": {{"type": "object"}},
-                    "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": "Analyze the input."}}}},
+                    "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": "Analyze the input."}}}}}},
                     "next": ["Done"]
                 }},
                 {}
@@ -706,7 +707,7 @@ mod tests {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Inline markdown here."}},
+                "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Inline markdown here."}}},
                 "next": []
             }]
         }"#;
@@ -723,7 +724,7 @@ mod tests {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "action": {"kind": "Pool", "instructions": {"kind": "Link", "path": "path/to/instructions.md"}},
+                "action": {"kind": "Pool", "params": {"instructions": {"kind": "Link", "path": "path/to/instructions.md"}}},
                 "next": []
             }]
         }"#;
@@ -740,7 +741,7 @@ mod tests {
         let json = r#"{
             "steps": [{
                 "name": "Test",
-                "action": {"kind": "Command", "script": "jq '.value'"},
+                "action": {"kind": "Command", "params": {"script": "jq '.value'"}},
                 "next": []
             }]
         }"#;

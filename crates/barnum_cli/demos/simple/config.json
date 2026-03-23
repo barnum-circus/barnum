@@ -11,7 +11,9 @@
       },
       "action": {
         "kind": "Pool",
-        "instructions": {"kind": "Inline", "value": "This is the starting step. Return an empty array to finish."}
+        "params": {
+          "instructions": {"kind": "Inline", "value": "This is the starting step. Return an empty array to finish."}
+        }
       },
       "next": []
     }

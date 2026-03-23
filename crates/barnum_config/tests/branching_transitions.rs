@@ -25,22 +25,22 @@ fn branching_config(pool_root: &Path) -> Config {
             "steps": [
                 {
                     "name": "Decide",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Decide which path to take: PathA or PathB"}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Decide which path to take: PathA or PathB"}}},
                     "next": ["PathA", "PathB"]
                 },
                 {
                     "name": "PathA",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "You chose path A. Go to Done."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "You chose path A. Go to Done."}}},
                     "next": ["Done"]
                 },
                 {
                     "name": "PathB",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "You chose path B. Go to Done."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "You chose path B. Go to Done."}}},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "All done."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "All done."}}},
                     "next": []
                 }
             ]

@@ -38,7 +38,7 @@ WORKER_SLEEP=0.3
 # Inject pool root and pool name into config Pool actions
 inject_pool_config() {
     jq --arg root "$1" --arg pool "$2" \
-        '.steps |= map(if .action.kind == "Pool" then .action.root = $root | .action.pool = $pool else . end)' \
+        '.steps |= map(if .action.kind == "Pool" then .action.params.root = $root | .action.params.pool = $pool else . end)' \
         "$3"
 }
 

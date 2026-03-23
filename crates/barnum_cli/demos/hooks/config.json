@@ -19,9 +19,11 @@
       },
       "action": {
         "kind": "Command",
-        "script": "./process.sh"
+        "params": {
+          "script": "./process.sh"
+        }
       },
-      "finally": { "kind": "Command", "script": "./finally-hook.sh" },
+      "finally": { "kind": "Command", "params": { "script": "./finally-hook.sh" } },
       "next": ["Cleanup"]
     },
     {
@@ -39,7 +41,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "echo '[]'"
+        "params": {
+          "script": "echo '[]'"
+        }
       },
       "next": []
     }

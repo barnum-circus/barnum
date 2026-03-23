@@ -55,49 +55,18 @@
           "description": "Send the task to the agent pool for processing.",
           "type": "object",
           "required": [
-            "instructions",
-            "kind"
+            "kind",
+            "params"
           ],
           "properties": {
-            "instructions": {
-              "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file.",
-              "allOf": [
-                {
-                  "$ref": "#/definitions/MaybeLinked_for_String"
-                }
-              ]
-            },
             "kind": {
               "type": "string",
               "enum": [
                 "Pool"
               ]
             },
-            "pool": {
-              "description": "Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default.",
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "root": {
-              "description": "Pool root directory. If omitted, the pool infrastructure uses its own default.",
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "timeout": {
-              "description": "Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout.",
-              "default": null,
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint64",
-              "minimum": 0.0
+            "params": {
+              "$ref": "#/definitions/PoolActionFile"
             }
           }
         },
@@ -106,7 +75,7 @@
           "type": "object",
           "required": [
             "kind",
-            "script"
+            "params"
           ],
           "properties": {
             "kind": {
@@ -115,23 +84,35 @@
                 "Command"
               ]
             },
-            "script": {
-              "description": "Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups.",
-              "type": "string"
+            "params": {
+              "$ref": "#/definitions/CommandActionFile"
             }
           }
         }
       ]
     },
+    "CommandActionFile": {
+      "description": "Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.",
+      "type": "object",
+      "required": [
+        "script"
+      ],
+      "properties": {
+        "script": {
+          "description": "Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups.",
+          "type": "string"
+        }
+      }
+    },
     "FinallyHook": {
-      "description": "Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.",
+      "description": "Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"params\": {\"script\": \"./finally-hook.sh\"}}`\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.",
       "oneOf": [
         {
           "description": "Run a shell command as the finally hook.",
           "type": "object",
           "required": [
             "kind",
-            "script"
+            "params"
           ],
           "properties": {
             "kind": {
@@ -140,13 +121,25 @@
                 "Command"
               ]
             },
-            "script": {
-              "description": "Shell script to execute.",
-              "type": "string"
+            "params": {
+              "$ref": "#/definitions/HookCommand"
             }
           }
         }
       ]
+    },
+    "HookCommand": {
+      "description": "A shell command used as a hook.",
+      "type": "object",
+      "required": [
+        "script"
+      ],
+      "properties": {
+        "script": {
+          "description": "Shell script to execute.",
+          "type": "string"
+        }
+      }
     },
     "MaybeLinked_for_String": {
       "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)",
@@ -236,6 +229,49 @@
         }
       },
       "additionalProperties": false
+    },
+    "PoolActionFile": {
+      "description": "Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.",
+      "type": "object",
+      "required": [
+        "instructions"
+      ],
+      "properties": {
+        "instructions": {
+          "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/MaybeLinked_for_String"
+            }
+          ]
+        },
+        "pool": {
+          "description": "Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "root": {
+          "description": "Pool root directory. If omitted, the pool infrastructure uses its own default.",
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeout": {
+          "description": "Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout.",
+          "default": null,
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
     },
     "SchemaLink": {
       "description": "Reference to an external JSON Schema file.",

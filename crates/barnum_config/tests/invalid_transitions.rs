@@ -29,17 +29,17 @@ fn strict_config(pool_root: &Path) -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Only allowed to go to Middle."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Only allowed to go to Middle."}}},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Only allowed to go to End."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Only allowed to go to End."}}},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Terminal."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Terminal."}}},
                     "next": []
                 }
             ]

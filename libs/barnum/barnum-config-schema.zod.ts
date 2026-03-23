@@ -11,26 +11,38 @@ const MaybeLinked_for_String = z.discriminatedUnion("kind", [
   }).describe("Link to a file whose contents will be loaded at runtime."),
 ]).describe("Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)");
 
+const PoolActionFile = z.object({
+  instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
+  pool: z.string().nullable().optional().default(null).describe("Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default."),
+  root: z.string().nullable().optional().default(null).describe("Pool root directory. If omitted, the pool infrastructure uses its own default."),
+  timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout."),
+}).describe("Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.");
+
+const CommandActionFile = z.object({
+  script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
+}).describe("Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.");
+
 const ActionFile = z.discriminatedUnion("kind", [
   z.object({
-    instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
     kind: z.literal("Pool"),
-    pool: z.string().nullable().optional().default(null).describe("Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default."),
-    root: z.string().nullable().optional().default(null).describe("Pool root directory. If omitted, the pool infrastructure uses its own default."),
-    timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout."),
+    params: PoolActionFile,
   }).describe("Send the task to the agent pool for processing."),
   z.object({
     kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
+    params: CommandActionFile,
   }).describe("Run a local shell command."),
 ]).describe("How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.");
+
+const HookCommand = z.object({
+  script: z.string().describe("Shell script to execute."),
+}).describe("A shell command used as a hook.");
 
 const FinallyHook = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute."),
+    params: HookCommand,
   }).describe("Run a shell command as the finally hook."),
-]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./finally-hook.sh\"}`\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
+]).describe("Finally hook. Runs after a task and all its descendants complete.\n\nIn JSON: `{\"kind\": \"Command\", \"params\": {\"script\": \"./finally-hook.sh\"}}`\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. **stdout:** JSON array of follow-up tasks: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Return `[]` for no follow-ups.");
 
 const Options = z.object({
   max_concurrency: z.number().int().nonnegative().nullable().optional().default(null).describe("Maximum concurrent tasks (None = unlimited)."),
@@ -74,7 +86,10 @@ export const configFileSchema = z.object({
 
 export type ConfigFile = z.infer<typeof configFileSchema>;
 export type MaybeLinked_for_String = z.infer<typeof MaybeLinked_for_String>;
+export type PoolActionFile = z.infer<typeof PoolActionFile>;
+export type CommandActionFile = z.infer<typeof CommandActionFile>;
 export type ActionFile = z.infer<typeof ActionFile>;
+export type HookCommand = z.infer<typeof HookCommand>;
 export type FinallyHook = z.infer<typeof FinallyHook>;
 export type Options = z.infer<typeof Options>;
 export type SchemaLink = z.infer<typeof SchemaLink>;

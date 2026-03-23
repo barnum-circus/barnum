@@ -19,7 +19,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "./list-files.sh"
+        "params": {
+          "script": "./list-files.sh"
+        }
       },
       "next": ["AnalyzeFile"]
     },
@@ -38,7 +40,9 @@
       },
       "action": {
         "kind": "Command",
-        "script": "echo '[]'"
+        "params": {
+          "script": "echo '[]'"
+        }
       },
       "next": []
     }

@@ -26,7 +26,7 @@ fn config_with_schema(pool_root: &Path) -> Config {
             "steps": [
                 {
                     "name": "Input",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Process input."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Process input."}}},
                     "value_schema": {
                         "type": "object",
                         "properties": {
@@ -38,7 +38,7 @@ fn config_with_schema(pool_root: &Path) -> Config {
                 },
                 {
                     "name": "Output",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Produce output."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Produce output."}}},
                     "value_schema": {
                         "type": "object",
                         "properties": {
@@ -134,13 +134,13 @@ fn invalid_response_causes_retry() {
             "steps": [
                 {
                     "name": "Input",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Process."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Process."}}},
                     "value_schema": {"type": "object"},
                     "next": ["Output"]
                 },
                 {
                     "name": "Output",
-                    "action": {"kind": "Pool", "instructions": {"kind": "Inline", "value": "Produce."}},
+                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Produce."}}},
                     "value_schema": {
                         "type": "object",
                         "properties": {"result": {"type": "string"}},
