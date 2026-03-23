@@ -1,30 +1,23 @@
 //! Task dispatch - spawns threads to execute tasks and process results.
 //!
-//! Workers run actions, sending raw results back on the channel.
-//! `process_and_finalize` handles validation and post-hooks on the main thread.
+//! Workers run actions, sending raw results back on the channel for
+//! main-thread processing via response module functions.
 
 use std::io;
 use std::path::Path;
 use std::sync::mpsc;
 
-use tracing::{debug, warn};
+use tracing::debug;
 use troupe::Response;
 
-use crate::resolved::Step;
 use crate::types::{HookScript, LogTaskId, StepInputValue};
-use crate::value_schema::{CompiledSchemas, Task};
+use crate::value_schema::Task;
 
-use super::hooks::{PostHookInput, PostHookSuccess, run_command_action, run_post_hook};
-use super::response::{
-    FailureKind, ProcessedSubmit, TaskOutcome, TaskSuccess, process_retry, process_submit_result,
-};
+use super::hooks::run_command_action;
 use super::shell::run_shell_command;
 use super::submit::{build_agent_payload, submit_via_cli};
 
 /// Result from a worker thread: the task identity and raw action result.
-///
-/// Workers handle pre-hooks and actions. The main thread processes the raw
-/// result through validation, post-hooks, and retry logic via [`process_and_finalize`].
 pub struct WorkerResult {
     pub task_id: LogTaskId,
     pub task: Task,
@@ -54,54 +47,6 @@ pub(super) enum SubmitResult {
     Pool(PoolResult),
     Command(CommandResult),
     Finally(FinallyResult),
-}
-
-/// Process a raw submit result through validation, post-hook, and retry logic.
-///
-/// Called on the main thread after receiving a [`WorkerResult`].
-pub(super) fn process_and_finalize(
-    result: SubmitResult,
-    task: &Task,
-    step: &Step,
-    schemas: &CompiledSchemas,
-    working_dir: &Path,
-) -> TaskOutcome {
-    let ProcessedSubmit {
-        outcome,
-        post_input,
-    } = process_submit_result(result, task, step, schemas);
-
-    // Post hook can modify the outcome (e.g., filter spawned tasks)
-    if let Some(hook) = &step.post {
-        match run_post_hook(hook, &post_input, working_dir) {
-            Ok(modified) => match outcome {
-                TaskOutcome::Success(TaskSuccess { finally_value, .. }) => {
-                    let tasks = extract_next_tasks(&modified);
-                    TaskOutcome::Success(TaskSuccess {
-                        spawned: tasks,
-                        finally_value,
-                    })
-                }
-                other => other,
-            },
-            Err(e) => {
-                warn!(step = %task.step, error = %e, "post hook failed");
-                process_retry(task, &step.options, FailureKind::SubmitError)
-            }
-        }
-    } else {
-        outcome
-    }
-}
-
-/// Extract next tasks from a post hook result.
-fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
-    match input {
-        PostHookInput::Success(PostHookSuccess { next, .. }) => next.clone(),
-        PostHookInput::Timeout(..) | PostHookInput::Error(..) => {
-            vec![]
-        }
-    }
 }
 
 /// Execute a pool task (runs in spawned thread).

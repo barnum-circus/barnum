@@ -8,7 +8,6 @@ use crate::types::StepInputValue;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 
 use super::dispatch::{CommandResult, FinallyResult, PoolResult, SubmitResult};
-use super::hooks::{PostHookError, PostHookInput, PostHookSuccess, PostHookTimeout};
 
 /// Task succeeded, may have spawned children.
 pub struct TaskSuccess {
@@ -39,80 +38,33 @@ pub enum FailureKind {
     SubmitError,
 }
 
-/// Output from processing a submit result.
-pub struct ProcessedSubmit {
-    pub outcome: TaskOutcome,
-    pub post_input: PostHookInput,
-}
-
-/// Process a submit result, extracting `value` where it exists.
+/// Process a submit result into a task outcome.
 pub fn process_submit_result(
     result: SubmitResult,
     task: &Task,
     step: &Step,
     schemas: &CompiledSchemas,
-) -> ProcessedSubmit {
+) -> TaskOutcome {
     match result {
         SubmitResult::Pool(PoolResult { value, response }) => match response {
-            Ok(response) => {
-                let (outcome, post_input) =
-                    process_pool_response(response, task, &value, step, schemas);
-                ProcessedSubmit {
-                    outcome,
-                    post_input,
-                }
-            }
+            Ok(response) => process_pool_response(response, task, &value, step, schemas),
             Err(e) => {
                 error!(step = %task.step, error = %e, "submit failed");
-                let outcome = process_retry(task, &step.options, FailureKind::SubmitError);
-                ProcessedSubmit {
-                    outcome,
-                    post_input: PostHookInput::Error(PostHookError {
-                        input: value,
-                        error: e.to_string(),
-                    }),
-                }
+                process_retry(task, &step.options, FailureKind::SubmitError)
             }
         },
         SubmitResult::Command(CommandResult { value, output }) => match output {
-            Ok(stdout) => {
-                let (outcome, post_input) =
-                    process_command_response(&stdout, task, &value, step, schemas);
-                ProcessedSubmit {
-                    outcome,
-                    post_input,
-                }
-            }
+            Ok(stdout) => process_command_response(&stdout, task, &value, step, schemas),
             Err(e) => {
                 error!(step = %task.step, error = %e, "command failed");
-                let outcome = process_retry(task, &step.options, FailureKind::SubmitError);
-                ProcessedSubmit {
-                    outcome,
-                    post_input: PostHookInput::Error(PostHookError {
-                        input: value,
-                        error: e.to_string(),
-                    }),
-                }
+                process_retry(task, &step.options, FailureKind::SubmitError)
             }
         },
         SubmitResult::Finally(FinallyResult { value, output }) => match output {
-            Ok(stdout) => {
-                let (outcome, post_input) = process_finally_response(&stdout, task, &value);
-                ProcessedSubmit {
-                    outcome,
-                    post_input,
-                }
-            }
+            Ok(stdout) => process_finally_response(&stdout, task, &value),
             Err(e) => {
                 error!(step = %task.step, error = %e, "finally hook failed");
-                let outcome = process_retry(task, &step.options, FailureKind::SubmitError);
-                ProcessedSubmit {
-                    outcome,
-                    post_input: PostHookInput::Error(PostHookError {
-                        input: value,
-                        error: e,
-                    }),
-                }
+                process_retry(task, &step.options, FailureKind::SubmitError)
             }
         },
     }
@@ -122,40 +74,24 @@ pub fn process_submit_result(
 ///
 /// Finally hook output is parsed as a JSON array of tasks.
 /// Unlike regular tasks, there's no schema validation - finally hooks return raw task objects.
-fn process_finally_response(
-    stdout: &str,
-    task: &Task,
-    value: &StepInputValue,
-) -> (TaskOutcome, PostHookInput) {
+fn process_finally_response(stdout: &str, task: &Task, value: &StepInputValue) -> TaskOutcome {
     debug!(stdout = %stdout, "finally hook output");
 
     match json5::from_str::<Vec<Task>>(stdout) {
         Ok(tasks) => {
             info!(step = %task.step, count = tasks.len(), "finally hook completed");
-            let post_input = PostHookInput::Success(PostHookSuccess {
-                input: value.clone(),
-                output: serde_json::json!(tasks),
-                next: tasks.clone(),
-            });
-            let outcome = TaskOutcome::Success(TaskSuccess {
+            TaskOutcome::Success(TaskSuccess {
                 spawned: tasks,
                 finally_value: value.clone(),
-            });
-            (outcome, post_input)
+            })
         }
         Err(e) => {
             // If output can't be parsed as task array, treat as empty (backwards compatible)
             warn!(step = %task.step, error = %e, "finally hook output is not valid JSONC task array");
-            let post_input = PostHookInput::Success(PostHookSuccess {
-                input: value.clone(),
-                output: serde_json::json!([]),
-                next: vec![],
-            });
-            let outcome = TaskOutcome::Success(TaskSuccess {
+            TaskOutcome::Success(TaskSuccess {
                 spawned: vec![],
                 finally_value: value.clone(),
-            });
-            (outcome, post_input)
+            })
         }
     }
 }
@@ -167,7 +103,7 @@ fn process_pool_response(
     value: &StepInputValue,
     step: &Step,
     schemas: &CompiledSchemas,
-) -> (TaskOutcome, PostHookInput) {
+) -> TaskOutcome {
     match response {
         Response::Processed { stdout, .. } => {
             debug!(stdout = %stdout, "agent response");
@@ -175,11 +111,7 @@ fn process_pool_response(
         }
         Response::NotProcessed { reason } => {
             warn!(step = %task.step, ?reason, "task outcome unknown");
-            let outcome = process_retry(task, &step.options, FailureKind::Timeout);
-            let post_input = PostHookInput::Timeout(PostHookTimeout {
-                input: value.clone(),
-            });
-            (outcome, post_input)
+            process_retry(task, &step.options, FailureKind::Timeout)
         }
     }
 }
@@ -191,7 +123,7 @@ fn process_command_response(
     value: &StepInputValue,
     step: &Step,
     schemas: &CompiledSchemas,
-) -> (TaskOutcome, PostHookInput) {
+) -> TaskOutcome {
     debug!(stdout = %stdout, "command output");
     process_stdout(stdout, task, value, step, schemas)
 }
@@ -203,40 +135,24 @@ fn process_stdout(
     value: &StepInputValue,
     step: &Step,
     schemas: &CompiledSchemas,
-) -> (TaskOutcome, PostHookInput) {
+) -> TaskOutcome {
     match json5::from_str::<serde_json::Value>(stdout) {
         Ok(output_value) => match validate_response(&output_value, step, schemas) {
             Ok(new_tasks) => {
                 info!(from = %task.step, new_tasks = new_tasks.len(), "task completed");
-                let post_input = PostHookInput::Success(PostHookSuccess {
-                    input: value.clone(),
-                    output: output_value,
-                    next: new_tasks.clone(),
-                });
-                let outcome = TaskOutcome::Success(TaskSuccess {
+                TaskOutcome::Success(TaskSuccess {
                     spawned: new_tasks,
                     finally_value: value.clone(),
-                });
-                (outcome, post_input)
+                })
             }
             Err(e) => {
                 warn!(step = %task.step, error = %e, "invalid response");
-                let outcome = process_retry(task, &step.options, FailureKind::InvalidResponse);
-                let post_input = PostHookInput::Error(PostHookError {
-                    input: value.clone(),
-                    error: e.to_string(),
-                });
-                (outcome, post_input)
+                process_retry(task, &step.options, FailureKind::InvalidResponse)
             }
         },
         Err(e) => {
             warn!(step = %task.step, error = %e, stdout = %stdout, "failed to parse response JSONC");
-            let outcome = process_retry(task, &step.options, FailureKind::InvalidResponse);
-            let post_input = PostHookInput::Error(PostHookError {
-                input: value.clone(),
-                error: format!("failed to parse response JSONC: {e}"),
-            });
-            (outcome, post_input)
+            process_retry(task, &step.options, FailureKind::InvalidResponse)
         }
     }
 }
