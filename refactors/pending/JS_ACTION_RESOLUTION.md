@@ -120,6 +120,8 @@ pub struct Step {
 
 The action config serializes into the state log for resume. JS doesn't need to re-resolve anything — the action config is the same data the handler needs.
 
+**Note:** This is a temporary loss of type safety in the resolved layer. The user-facing config types (`ActionFile` with `Pool`/`Command` variants in `config.rs`) and the generated schemas (Zod, JSON Schema) remain fully typed — schema generation operates on config types, not resolved types. Once the builder pattern lands, the resolved type can regain type safety: each registered handler declares its params type, and the builder validates at registration time.
+
 ### 2. dispatch_task becomes kind-agnostic
 
 **File:** `crates/barnum_config/src/runner/mod.rs`
