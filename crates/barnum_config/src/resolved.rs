@@ -45,16 +45,8 @@ pub struct Step {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_schema: Option<serde_json::Value>,
 
-    /// Pre-execution hook script.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pre: Option<HookScript>,
-
     /// How to execute the step.
     pub action: Action,
-
-    /// Post-execution hook script.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post: Option<HookScript>,
 
     /// Valid next steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

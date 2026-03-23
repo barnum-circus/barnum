@@ -266,12 +266,12 @@ function WhyBarnum() {
           <div className="col col--6">
             <ul>
               <li>
-                <strong>Safety net</strong>: post hooks catch failures and
-                route them to fix-up agents instead of just retrying blindly.
+                <strong>Safety net</strong>: command steps can check outcomes and
+                route failures to fix-up agents instead of just retrying blindly.
               </li>
               <li>
-                <strong>Hooks</strong>: enrich context before an agent sees it,
-                validate results after, clean up resources when a subtree completes.
+                <strong>Finally hooks</strong>: clean up resources, aggregate results,
+                or spawn follow-up work when a subtree completes.
               </li>
               <li>
                 <strong>Schema validation</strong>: each step declares what data

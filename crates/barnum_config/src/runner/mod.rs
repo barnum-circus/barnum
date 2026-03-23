@@ -30,12 +30,9 @@ use crate::resolved::{Action, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use dispatch::{
-    WorkerResult, dispatch_command_task, dispatch_finally_task, dispatch_pool_task,
-    process_and_finalize,
-};
+use dispatch::{WorkerResult, dispatch_command_task, dispatch_finally_task, dispatch_pool_task};
 use hooks::call_wake_script;
-use response::{FailureKind, TaskOutcome, TaskSuccess};
+use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
 // ==================== Public API ====================
 
@@ -547,13 +544,7 @@ impl<'a> Engine<'a> {
             .get(&task.step)
             .expect("[P015] task step must exist");
 
-        let outcome = process_and_finalize(
-            submit_result,
-            task,
-            step,
-            self.schemas,
-            &self.pool.working_dir,
-        );
+        let outcome = process_submit_result(submit_result, task, step, self.schemas);
 
         match outcome {
             TaskOutcome::Success(TaskSuccess {
@@ -1041,11 +1032,9 @@ mod run_state_tests {
         Step {
             name: StepName::new(name),
             value_schema: None,
-            pre: None,
             action: Action::Command(CommandAction {
                 script: "true".into(),
             }),
-            post: None,
             next: vec![],
             finally_hook: None,
             options: Options::default(),

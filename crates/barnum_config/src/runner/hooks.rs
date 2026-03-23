@@ -1,79 +1,12 @@
-//! Hook execution (post hooks, command actions).
+//! Hook execution (command actions, wake scripts).
 
 use std::io;
 use std::path::Path;
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
-
-use crate::types::{HookScript, StepInputValue};
-use crate::value_schema::Task;
+use tracing::info;
 
 use super::shell::run_shell_command;
-
-/// The action completed successfully.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostHookSuccess {
-    /// The task's input value.
-    pub input: StepInputValue,
-    /// The agent's output.
-    pub output: serde_json::Value,
-    /// Tasks spawned by this completion. Post hook can modify this.
-    pub next: Vec<Task>,
-}
-
-/// The action timed out.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostHookTimeout {
-    /// The task's input value.
-    pub input: StepInputValue,
-}
-
-/// The action failed with an error.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostHookError {
-    /// The task's input value.
-    pub input: StepInputValue,
-    /// Error message.
-    pub error: String,
-}
-
-/// Input/output for post hooks.
-///
-/// Post hooks receive this JSON on stdin and must output (possibly modified)
-/// JSON on stdout. The `next` array can be filtered, added to, or transformed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum PostHookInput {
-    /// The action completed successfully.
-    Success(PostHookSuccess),
-    /// The action timed out.
-    Timeout(PostHookTimeout),
-    /// The action failed with an error.
-    Error(PostHookError),
-}
-
-/// Run a post hook synchronously and return the (possibly modified) result.
-///
-/// Post hooks can modify the `next` array to filter, add, or transform tasks.
-pub fn run_post_hook(
-    script: &HookScript,
-    input: &PostHookInput,
-    working_dir: &Path,
-) -> Result<PostHookInput, String> {
-    info!(script = %script, kind = ?std::mem::discriminant(input), "running post hook");
-
-    let input_json = serde_json::to_string(&input).unwrap_or_default();
-    let stdout = run_shell_command(script.as_str(), &input_json, Some(working_dir))
-        .map_err(|e| format!("post hook {e}"))?;
-
-    serde_json::from_str(&stdout)
-        .map_err(|e| format!("post hook output is not valid JSON: {e}"))
-        .inspect(|_| {
-            debug!(script = %script.as_str(), "post hook completed");
-        })
-}
 
 /// Call a wake script before starting the runner.
 pub fn call_wake_script(script: &str) -> io::Result<()> {

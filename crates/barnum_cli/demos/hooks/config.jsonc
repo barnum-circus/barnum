@@ -13,22 +13,14 @@
           "item": {
             "type": "string",
             "description": "Item to process"
-          },
-          "timestamp": {
-            "type": "string",
-            "description": "Added by pre-hook"
           }
         },
         "additionalProperties": false
       },
-      // Pre-hook: adds a timestamp to the input
-      "pre": { "kind": "Command", "script": "./pre-hook.sh" },
       "action": {
         "kind": "Command",
         "script": "./process.sh"
       },
-      // Post-hook: logs output and can filter/modify next tasks
-      "post": { "kind": "Command", "script": "./post-hook.sh" },
       // Finally: runs after task and all its children complete
       "finally": { "kind": "Command", "script": "./finally-hook.sh" },
       "next": ["Cleanup"]

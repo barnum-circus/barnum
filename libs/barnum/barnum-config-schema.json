@@ -211,56 +211,6 @@
       },
       "additionalProperties": false
     },
-    "PostHook": {
-      "description": "Post-action hook. Inspects or modifies the action's outcome.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./post-hook.sh\"}`\n\n**stdin:** Tagged JSON describing the outcome (`\"kind\": \"Success\"`, `\"Timeout\"`, `\"Error\"`, or `\"PreHookError\"`). On success, includes an `input`, `output`, and `next` (follow-up tasks) field. **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).",
-      "oneOf": [
-        {
-          "description": "Run a shell command as the post hook.",
-          "type": "object",
-          "required": [
-            "kind",
-            "script"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Command"
-              ]
-            },
-            "script": {
-              "description": "Shell script to execute.",
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
-    "PreHook": {
-      "description": "Pre-action hook. Transforms the task value before the action runs.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./pre-hook.sh\"}`\n\n**stdin:** Task value payload (e.g., `{\"path\": \"/src\"}`). **stdout:** Modified value payload (same shape).",
-      "oneOf": [
-        {
-          "description": "Run a shell command as the pre hook.",
-          "type": "object",
-          "required": [
-            "kind",
-            "script"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Command"
-              ]
-            },
-            "script": {
-              "description": "Shell script to execute.",
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
     "SchemaLink": {
       "description": "Reference to an external JSON Schema file.",
       "type": "object",
@@ -291,7 +241,7 @@
       ]
     },
     "StepFile": {
-      "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nExecution order for each task: `pre` hook → `action` → `post` hook. The `finally` hook runs after the task **and all of its descendant tasks** complete.",
+      "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.",
       "type": "object",
       "required": [
         "action",
@@ -341,30 +291,6 @@
           "allOf": [
             {
               "$ref": "#/definitions/StepOptions"
-            }
-          ]
-        },
-        "post": {
-          "description": "Shell script that runs **after** the action completes (or fails).\n\n**stdin:** A tagged JSON object describing the outcome. The `kind` field indicates what happened:\n\n- `{\"kind\": \"Success\", \"input\": <value>, \"output\": <agent_output>, \"next\": [<tasks>]}` — Action succeeded. `next` contains the follow-up tasks to spawn. - `{\"kind\": \"Timeout\", \"input\": <value>}` — Action timed out. - `{\"kind\": \"Error\", \"input\": <value>, \"error\": \"<message>\"}` — Action failed. - `{\"kind\": \"PreHookError\", \"input\": <value>, \"error\": \"<message>\"}` — Pre hook failed.\n\n**stdout:** The same tagged JSON object, possibly modified. Typically you modify the `next` array in `Success` to filter, rewrite, or add follow-up tasks.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PostHook"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pre": {
-          "description": "Shell script that runs **before** the action.\n\n**stdin:** The task's `value` payload as JSON (e.g., `{\"path\": \"/src\"}`). This is just the value — not the full `{\"kind\": ..., \"value\": ...}` wrapper.\n\n**stdout:** The (possibly modified) value payload as JSON. Must be the same shape. The modified value is what the action receives.\n\nUse this to enrich or transform the task before the action sees it (e.g., adding timestamps, resolving paths, fetching metadata).",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/PreHook"
-            },
-            {
-              "type": "null"
             }
           ]
         },
