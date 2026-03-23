@@ -179,7 +179,7 @@ All fields are optional and override the corresponding global option.
 
 Runs after ALL descendants complete.
 
-- **stdin**: Original task value JSON
+- **stdin**: Task JSON (`{"kind": "StepName", "value": {...}}`) — same envelope format as command actions
 - **stdout**: Array of next tasks to spawn
 - Runs even if descendants failed
 

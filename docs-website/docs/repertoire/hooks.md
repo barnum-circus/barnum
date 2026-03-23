@@ -76,7 +76,7 @@ The finally hook waits for the entire subtree to finish — including grandchild
 
 ## Contract
 
-- **stdin**: Original task value JSON (the value of the task that has `finally`)
+- **stdin**: Task JSON (`{"kind": "StepName", "value": {...}}`) — same envelope format as command actions
 - **stdout**: JSON array of follow-up tasks to spawn: `[{"kind": "StepName", "value": {...}}, ...]`
 - Return `[]` to spawn no follow-ups
 - Runs even if some descendants failed

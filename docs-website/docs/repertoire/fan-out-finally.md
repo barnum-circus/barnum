@@ -153,7 +153,7 @@ BarnumConfig.fromConfig({
 ## Key Points
 
 - `finally` runs after ALL descendants complete (not just direct children)
-- `finally` receives the original task's value on stdin
+- `finally` receives the task JSON on stdin (`{"kind": "StepName", "value": {...}}`) — same as command actions
 - `finally` outputs a JSON array of next tasks to spawn follow-up work
 - The finally hook here is an inline script, no external file needed
 - The pattern enables fan-out, then parallel work, then a single follow-up action
