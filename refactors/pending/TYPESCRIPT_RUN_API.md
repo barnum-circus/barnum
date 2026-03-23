@@ -4,195 +4,361 @@
 
 ## Motivation
 
-Users who write TypeScript configs with `defineConfig` should also be able to invoke barnum programmatically from TypeScript. The current package exports `defineConfig` directly from the generated Zod file (`barnum-config-schema.zod.ts`), with no barrel file aggregating exports. There's also no way to call `barnum run` from TypeScript without manually resolving the binary path and constructing CLI args.
+Users who write TypeScript configs with `defineConfig` should also be able to invoke barnum programmatically from TypeScript. The package should export typed functions that spawn the barnum binary, where the parameter types are generated from the same Rust structs the CLI uses at runtime.
 
-Two changes:
-
-1. Add a barrel file (`index.ts`) that re-exports schema/types from the Zod file. `defineConfig` should be importable from the package root via a proper barrel, not directly from a generated file with an unwieldy name.
-
-2. Export a typed `run()` function that spawns the barnum binary with the correct arguments. The parameter type mirrors the Rust `Command::Run` variant and the global `Cli` fields (`crates/barnum_cli/src/main.rs:40-96`), so callers get type safety over the CLI interface.
+The generation pipeline mirrors what already exists for the config schema: Rust types derive `JsonSchema` (schemars), a binary emits the schemars `RootSchema`, `emit_zod` renders it to a TypeScript file with Zod schemas, and CI verifies the checked-in file matches the generated output.
 
 ## Current State
 
-### Package exports (`libs/barnum/package.json:7-11`)
+### Config schema generation pipeline
 
-```json
-"exports": {
-  ".": "./barnum-config-schema.zod.ts",
-  "./schema": "./barnum-config-schema.zod.ts",
-  "./binary": "./index.js"
-}
-```
+`barnum_config` defines `ConfigFile` with `#[derive(JsonSchema)]`. The binary `build_barnum_schema` (`crates/barnum_config/src/bin/build_barnum_schema.rs`) calls `config_schema()` to get a `RootSchema`, then calls `emit_zod()` (`crates/barnum_config/src/zod.rs:18`) to render it as `libs/barnum/barnum-config-schema.zod.ts`. CI verifies this file is in sync.
 
-The root export points directly at the generated Zod file. There is no `index.ts`.
+### CLI types (`crates/barnum_cli/src/main.rs:20-149`)
 
-### Binary resolution (`libs/barnum/index.js`)
+The CLI types live in `main.rs` as private types in a binary crate:
 
-`index.js` is a CJS file that resolves the platform-specific binary path and exports it as a string. `cli.js` uses the same platform-detection logic independently (duplicated) and spawns the binary with `process.argv.slice(2)`.
+- `LogLevel` (lines 21-36) — `#[derive(ValueEnum)]`, six variants: Off, Error, Warn, Info, Debug, Trace
+- `Cli` (lines 40-55) — `#[derive(Parser)]`, global fields: `root: Option<PathBuf>`, `log_level: LogLevel`, `command: Command`
+- `Command` (lines 57-110) — `#[derive(Subcommand)]`, three variants: `Run { ... }`, `Config { command: ConfigCommand }`, `Version { json: bool }`
+- `ConfigCommand` (lines 112-141) — `#[derive(Subcommand)]`, four variants: `Docs`, `Validate`, `Graph`, `Schema`
+- `SchemaType` (lines 144-149) — `#[derive(ValueEnum)]`, two variants: Zod, Json
 
-### CLI opts (`crates/barnum_cli/src/main.rs:40-96`)
+None of these currently derive `Serialize` or `JsonSchema`. They're private to the binary, so no other crate can reference them.
 
-The `Cli` struct has two global fields (`root`, `log_level`). The `Command::Run` variant has: `config`, `initial_state`, `entrypoint_value`, `pool`, `wake`, `log_file`, `state_log`, `resume_from`.
+### Package exports (`libs/barnum/package.json`)
+
+Task 1 (barrel file) is already done — `index.ts` re-exports from `barnum-config-schema.zod.ts` and the root export points at it.
 
 ## Proposed Changes
 
-### Task 1: Create `index.ts` barrel file
+### Task 1: Extract CLI types to a library ~~Create barrel file~~
 
-**File:** `libs/barnum/index.ts` (new)
+Done. `libs/barnum/index.ts` exists and the root export points at it.
 
-```typescript
-// Re-export everything from the generated schema
-export {
-  configFileSchema,
-  defineConfig,
-  type ConfigFile,
-  type MaybeLinked_for_String,
-  type ActionFile,
-  type FinallyHook,
-  type Options,
-  type PostHook,
-  type PreHook,
-  type SchemaRef,
-  type StepOptions,
-  type StepFile,
-} from "./barnum-config-schema.zod.js";
+### Task 2: Extract CLI types into `barnum_cli`'s library target
 
-export { run, type RunOptions } from "./run.js";
+The CLI types are currently private in `main.rs`. To generate schemas from them, they need to be importable by a binary. The simplest path: add `src/lib.rs` to `barnum_cli` and move the type definitions there. `main.rs` imports them with `use barnum_cli::*`.
+
+**File:** `crates/barnum_cli/src/lib.rs` (new)
+
+```rust
+use clap::{Parser, Subcommand, ValueEnum};
+use schemars::JsonSchema;
+use serde::Serialize;
+use std::path::PathBuf;
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    #[default]
+    Info,
+    Debug,
+    Trace,
+}
+
+#[derive(Parser, Serialize, JsonSchema)]
+#[command(name = "barnum")]
+#[command(about = "Barnum - workflow engine for agents")]
+pub struct Cli {
+    #[arg(long, global = true)]
+    pub root: Option<PathBuf>,
+
+    #[arg(short, long, global = true, default_value = "info")]
+    pub log_level: LogLevel,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Serialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum Command {
+    #[serde(rename_all = "camelCase")]
+    Run {
+        #[arg(long, required_unless_present = "resume_from")]
+        pub config: Option<String>,
+
+        #[arg(long, conflicts_with = "resume_from")]
+        pub initial_state: Option<String>,
+
+        #[arg(long, conflicts_with = "resume_from")]
+        pub entrypoint_value: Option<String>,
+
+        #[arg(long)]
+        pub pool: Option<String>,
+
+        #[arg(long)]
+        pub wake: Option<String>,
+
+        #[arg(long)]
+        #[serde(serialize_with = "serialize_pathbuf_option")]
+        pub log_file: Option<PathBuf>,
+
+        #[arg(long)]
+        #[serde(serialize_with = "serialize_pathbuf_option")]
+        pub state_log: Option<PathBuf>,
+
+        #[arg(long, conflicts_with = "config")]
+        #[serde(serialize_with = "serialize_pathbuf_option")]
+        pub resume_from: Option<PathBuf>,
+    },
+
+    Config {
+        #[command(subcommand)]
+        pub command: ConfigCommand,
+    },
+
+    Version {
+        #[arg(long)]
+        pub json: bool,
+    },
+}
+
+#[derive(Subcommand, Serialize, JsonSchema)]
+#[serde(tag = "kind")]
+pub enum ConfigCommand {
+    Docs {
+        #[arg(long)]
+        pub config: String,
+    },
+    Validate {
+        #[arg(long)]
+        pub config: String,
+    },
+    Graph {
+        #[arg(long)]
+        pub config: String,
+    },
+    Schema {
+        #[arg(long = "type", default_value = "zod")]
+        #[serde(rename = "type")]
+        pub schema_type: SchemaType,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SchemaType {
+    #[default]
+    Zod,
+    Json,
+}
 ```
 
-### Task 2: Create `run.ts` with typed run function
+`main.rs` becomes a thin wrapper that imports from the lib and runs the CLI.
+
+**Complication: clap + serde + schemars on the same types.** Clap's `#[derive(Parser)]` and serde's `#[derive(Serialize)]` coexist on the same struct — clap reads `#[arg]` and `#[command]` attributes, serde reads `#[serde]` attributes. schemars' `#[derive(JsonSchema)]` follows serde's conventions for field naming and enum representation. These derive macros don't conflict.
+
+**Complication: `PathBuf` fields.** schemars renders `PathBuf` as `{"type": "string"}`, which is correct. serde serializes `PathBuf` using its `Display` impl. No special handling needed for schema generation.
+
+**Complication: clap `Subcommand` vs serde enum representation.** clap's `#[derive(Subcommand)]` makes the enum a CLI subcommand; serde's `#[serde(tag = "kind")]` makes it an internally tagged enum. Both derive macros process their own attributes independently. The schemars output follows the serde representation, which is what we want for TypeScript: a discriminated union on `"kind"`.
+
+### Task 3: Add CLI schema generation binary
+
+**File:** `crates/barnum_cli/src/bin/build_cli_schema.rs` (new)
+
+```rust
+use barnum_cli::Command;
+use barnum_config::zod::emit_zod;
+
+fn main() {
+    let root = schemars::schema_for!(Command);
+    let zod = emit_zod(&root);
+
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
+    let out = workspace_root.join("libs/barnum/barnum-cli-schema.zod.ts");
+
+    std::fs::write(&out, &zod).unwrap();
+    println!("Written: {}", out.display());
+}
+```
+
+**Why `schema_for!(Command)` and not `schema_for!(Cli)`?** The global fields (`root`, `log_level`) aren't subcommand-specific — they belong on every TypeScript function as optional parameters. Generating the schema for `Command` gives us the discriminated union of subcommands. The global fields are added separately in the hand-written TypeScript functions (two fields, stable, not worth generating).
+
+Alternatively, `schema_for!(Cli)` produces a schema for the whole CLI struct, and the TypeScript side destructures it. Either works. Using `Command` keeps the generated types focused on the part that varies (subcommands) while the stable global options are in the hand-written wrapper.
+
+**Cargo.toml change:** Add a `[[bin]]` section:
+
+```toml
+[[bin]]
+name = "build_cli_schema"
+path = "src/bin/build_cli_schema.rs"
+```
+
+And add `schemars` + `serde` to dependencies (they're workspace deps already available).
+
+### Task 4: Generated CLI schema file
+
+**File:** `libs/barnum/barnum-cli-schema.zod.ts` (generated)
+
+The exact output depends on what schemars produces, but based on the existing `emit_zod` behavior with tagged enums and the types in Task 2, it would look approximately like:
+
+```typescript
+import { z } from "zod";
+
+const LogLevel = z.enum(["off", "error", "warn", "info", "debug", "trace"]);
+
+const SchemaType = z.enum(["zod", "json"]);
+
+const ConfigCommand = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Docs"),
+    config: z.string(),
+  }),
+  z.object({
+    kind: z.literal("Validate"),
+    config: z.string(),
+  }),
+  z.object({
+    kind: z.literal("Graph"),
+    config: z.string(),
+  }),
+  z.object({
+    kind: z.literal("Schema"),
+    type: SchemaType.optional().default("zod"),
+  }),
+]);
+
+export const commandSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("Run"),
+    config: z.string().optional(),
+    initialState: z.string().optional(),
+    entrypointValue: z.string().optional(),
+    pool: z.string().optional(),
+    wake: z.string().optional(),
+    logFile: z.string().optional(),
+    stateLog: z.string().optional(),
+    resumeFrom: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("Config"),
+    command: ConfigCommand,
+  }),
+  z.object({
+    kind: z.literal("Version"),
+    json: z.boolean().optional().default(false),
+  }),
+]);
+
+export type Command = z.infer<typeof commandSchema>;
+export type LogLevel = z.infer<typeof LogLevel>;
+export type SchemaType = z.infer<typeof SchemaType>;
+export type ConfigCommand = z.infer<typeof ConfigCommand>;
+```
+
+This file is checked in and regenerated by `cargo run -p barnum_cli --bin build_cli_schema`. CI verifies it's in sync.
+
+### Task 5: Hand-written TypeScript functions
 
 **File:** `libs/barnum/run.ts` (new)
 
-The `RunOptions` type mirrors the Rust `Cli` + `Command::Run` fields from `crates/barnum_cli/src/main.rs:40-96`:
+The functions that spawn the binary are hand-written because the mapping from a TypeScript object to CLI args involves string manipulation (camelCase to kebab-case, flattening nested objects to positional subcommands) that doesn't belong in the generated schema file.
 
 ```typescript
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync } from "node:fs";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import type { Command } from "./barnum-cli-schema.zod.js";
 
-export interface RunOptions {
-  /** Config: JSON string or path to a file. Required unless resumeFrom is set. */
-  config?: string;
-  /** Initial tasks: JSON string or path to file. Required if config has no entrypoint. */
-  initialState?: string;
-  /** Initial value for the entrypoint step: JSON string or path to file. */
-  entrypointValue?: string;
-  /** Agent pool ID (defaults to "default"). */
-  pool?: string;
-  /** Wake script to call before starting. */
-  wake?: string;
-  /** Log file path. */
-  logFile?: string;
-  /** State log file path (NDJSON for persistence/resume). */
-  stateLog?: string;
-  /** Resume from a previous state log file. Incompatible with config/initialState/entrypointValue. */
-  resumeFrom?: string;
-  /** Root directory (defaults to /tmp/troupe on Unix). */
+const require = createRequire(import.meta.url);
+const binaryPath: string = require("./index.js");
+
+export interface GlobalOptions {
   root?: string;
-  /** Log level. */
-  logLevel?: "debug" | "info" | "warn" | "error";
+  logLevel?: string;
 }
 
-function resolveBinary(): string {
-  const platform = process.platform;
-  const arch = process.arch;
+function ensureExecutable(bin: string): void {
+  try { chmodSync(bin, 0o755); } catch {}
+}
 
-  const key =
-    platform === "darwin" && arch === "x64"    ? "macos-x64" :
-    platform === "darwin" && arch === "arm64"   ? "macos-arm64" :
-    platform === "linux"  && arch === "x64"     ? "linux-x64" :
-    platform === "linux"  && arch === "arm64"   ? "linux-arm64" :
-    platform === "win32"  && arch === "x64"     ? "win-x64" :
-    null;
+function pushGlobal(args: string[], opts: GlobalOptions): void {
+  if (opts.root)     args.push("--root", opts.root);
+  if (opts.logLevel) args.push("--log-level", opts.logLevel);
+}
 
-  if (!key) {
-    throw new Error(`Platform "${platform} (${arch})" not supported.`);
+function camelToKebab(s: string): string {
+  return s.replace(/[A-Z]/g, m => `-${m.toLowerCase()}`);
+}
+
+/** Spawn `barnum run` with the given options. */
+export function barnumRun(
+  opts: Extract<Command, { kind: "Run" }>,
+  global?: GlobalOptions,
+): ChildProcess {
+  ensureExecutable(binaryPath);
+  const args: string[] = [];
+  pushGlobal(args, global ?? {});
+  args.push("run");
+
+  for (const [key, value] of Object.entries(opts)) {
+    if (key === "kind" || value == null) continue;
+    args.push(`--${camelToKebab(key)}`, String(value));
   }
 
-  const ext = platform === "win32" ? ".exe" : "";
-  return join(__dirname, "artifacts", key, `barnum${ext}`);
+  return spawn(binaryPath, args, { stdio: "inherit" });
 }
 
-export function run(options: RunOptions): ChildProcess {
-  const bin = resolveBinary();
-  try { chmodSync(bin, 0o755); } catch {}
-
-  const args: string[] = ["run"];
-
-  if (options.root)            { args.push("--root", options.root); }
-  if (options.logLevel)        { args.push("--log-level", options.logLevel); }
-  if (options.config)          { args.push("--config", options.config); }
-  if (options.initialState)    { args.push("--initial-state", options.initialState); }
-  if (options.entrypointValue) { args.push("--entrypoint-value", options.entrypointValue); }
-  if (options.pool)            { args.push("--pool", options.pool); }
-  if (options.wake)            { args.push("--wake", options.wake); }
-  if (options.logFile)         { args.push("--log-file", options.logFile); }
-  if (options.stateLog)        { args.push("--state-log", options.stateLog); }
-  if (options.resumeFrom)      { args.push("--resume-from", options.resumeFrom); }
-
-  return spawn(bin, args, { stdio: "inherit" });
+/** Spawn `barnum` with an arbitrary command. */
+export function barnum(command: Command, global?: GlobalOptions): ChildProcess {
+  switch (command.kind) {
+    case "Run":
+      return barnumRun(command, global);
+    case "Config":
+      return barnumConfig(command.command, global);
+    case "Version":
+      return barnumVersion(command, global);
+  }
 }
+
+// ... barnumConfig, barnumVersion follow the same pattern
 ```
 
-The function returns a `ChildProcess` rather than a `Promise`. Callers who want a promise can listen on `"exit"`. Returning the raw process gives full control: pipe stdio, send signals, detach, etc.
+Each function extracts the relevant fields from the typed command object and maps them to CLI args. The `Command` type (from the generated schema) is the parameter type, so TypeScript callers get full type checking against the actual CLI interface.
 
-**Note:** Global flags (`--root`, `--log-level`) go before the subcommand in clap's parsing, but clap also accepts them after subcommands when `global = true` is set (which both fields have at `main.rs:46,50`). Placing them before `run` in the args array is the canonical order.
+### Task 6: Update barrel file and package.json
 
-Wait, actually: clap with `global = true` accepts global args in any position, but the conventional placement is before the subcommand. Let me re-check. Looking at `main.rs:46`: `#[arg(long, global = true)]` on `root`, and `main.rs:50`: `#[arg(short, long, global = true, default_value = "info")]` on `log_level`. With `global = true`, clap accepts these args at any position in the command line. I'll place them before `run` for convention, but after works too.
+**File:** `libs/barnum/index.ts`
 
-Actually, re-reading the code: the args are built as `["run", "--root", ..., "--config", ...]` which puts global args after the subcommand. That's fine with `global = true`.
+Add re-exports for the new generated types and hand-written functions:
 
-### Task 3: Update package.json
+```typescript
+export * from "./barnum-config-schema.zod.js";
+export * from "./barnum-cli-schema.zod.js";
+export { barnum, barnumRun, type GlobalOptions } from "./run.js";
+```
 
 **File:** `libs/barnum/package.json`
 
-```json
-{
-  "main": "index.ts",
-  "types": "index.ts",
-  "exports": {
-    ".": "./index.ts",
-    "./schema": "./barnum-config-schema.zod.ts",
-    "./binary": "./index.js"
-  },
-  "files": [
-    "index.ts",
-    "index.js",
-    "run.ts",
-    "cli.js",
-    "artifacts/**/*",
-    "barnum-config-schema.json",
-    "barnum-config-schema.zod.ts"
-  ]
-}
+Add `barnum-cli-schema.zod.ts` and `run.ts` to `files`.
+
+### Task 7: CI verification
+
+Extend the existing CI check that verifies `barnum-config-schema.zod.ts` is in sync. Add a second check:
+
+```bash
+cargo run -p barnum_cli --bin build_cli_schema
+git diff --exit-code libs/barnum/barnum-cli-schema.zod.ts
 ```
 
-Root export changes from the generated Zod file to the barrel. `./schema` stays as a direct path to the Zod file for consumers who only want types without the run dependency.
+Also extend the pre-commit hook to regenerate both files.
 
-### Task 4: Deduplicate binary resolution
+**File:** `CLAUDE.md` generated artifacts section — add:
 
-`cli.js` and `index.js` both contain the same platform-detection switch. The new `run.ts` adds a third copy. `cli.js` and `index.js` are CJS and must stay as plain `.js` (they're the bin entry and the `./binary` export). `run.ts` is TypeScript.
-
-Two options:
-- **A)** Have `run.ts` import from `./index.js` (the existing CJS binary resolver) instead of duplicating the logic. This works since `index.js` just exports a string path.
-- **B)** Keep the duplication. Three files, same switch statement, low churn rate.
-
-Option A is cleaner:
-
-```typescript
-// run.ts — use existing binary resolver
-import { createRequire } from "node:module";
-const require = createRequire(import.meta.url);
-const bin: string = require("./index.js");
 ```
-
-This avoids a third copy of the platform switch. `cli.js` still has its own copy because it's a shebang entry point that can't share imports cleanly with ESM, but that's acceptable for a two-line npm bin wrapper.
+- `libs/barnum/barnum-cli-schema.zod.ts` — regenerate with `cargo run -p barnum_cli --bin build_cli_schema`
+```
 
 ## Open Questions
 
-1. **Should `run()` accept a `ConfigFile` object directly?** The Rust CLI accepts a JSON string or file path for `--config`. The TypeScript `run()` could accept a `ConfigFile` object, serialize it to a temp file or inline JSON, and pass that. This would close the loop with `defineConfig`: `run({ config: JSON.stringify(defineConfig({...})) })`. But the user can do this themselves, and auto-temp-files add cleanup concerns. Leaning toward keeping `config` as `string` and letting callers stringify.
+1. **`schema_for!(Command)` vs `schema_for!(Cli)`.** Generating for `Command` keeps the discriminated union clean — TypeScript callers switch on `kind`. Generating for `Cli` would produce a flat struct with `root`, `logLevel`, and `command` fields. The former is more ergonomic (global options go in a separate `GlobalOptions` param); the latter is a more faithful mirror of the Rust types. Leaning toward `Command` since the global options are two stable fields that don't need generation.
 
-2. **Should `run.ts` use ESM or CJS?** The package currently ships `.ts` files directly (no build step). The barrel `index.ts` uses ESM import syntax. This assumes consumers have a TypeScript-aware bundler or runtime (tsx, vite, next, etc.). This matches the existing pattern where `barnum-config-schema.zod.ts` is shipped as raw `.ts`.
+2. **`emit_zod` changes needed.** The existing `emit_zod` was built for the config schema. The CLI schema uses the same schemars primitives (tagged enums, optional fields, string enums) so it should work without changes. If it doesn't handle some schemars pattern the CLI types produce, we'd need to extend it. The risk is low since the config schema already exercises discriminated unions, optional fields, and string enums.
 
-3. **Keeping `RunOptions` in sync with Rust.** The type is hand-written to match the Rust CLI opts. If the CLI adds or removes flags, `RunOptions` must be updated manually. An alternative: generate `RunOptions` from the clap struct (clap can emit JSON schema via `clap_complete`, but the tooling for TS generation from clap schemas is immature). Hand-written is fine for now given the small surface area.
+3. **Field naming: `rename_all = "camelCase"` on each variant vs a different approach.** Putting `#[serde(rename_all = "camelCase")]` on each struct variant means schemars sees camelCase field names and the generated Zod schema uses camelCase property names. This is the right convention for TypeScript consumers. The hand-written `camelToKebab` in `run.ts` converts back to CLI flag names. An alternative: leave field names as snake_case in the schema and convert to camelCase in TypeScript, but that pushes Rust naming conventions onto TypeScript users.
