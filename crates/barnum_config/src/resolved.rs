@@ -50,7 +50,7 @@ pub struct Step {
     pub action: ActionKind,
 
     /// Valid next steps.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub next: Vec<StepName>,
 
     /// Finally hook (runs after all children complete).
