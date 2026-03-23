@@ -1,0 +1,53 @@
+{
+  "entrypoint": "Process",
+  "options": {
+    "max_retries": 0
+  },
+  "steps": [
+    {
+      "name": "Process",
+      "value_schema": {
+        "type": "object",
+        "required": ["item"],
+        "properties": {
+          "item": {
+            "type": "string",
+            "description": "Item to process"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "Added by pre-hook"
+          }
+        },
+        "additionalProperties": false
+      },
+      "pre": { "kind": "Command", "script": "./pre-hook.sh" },
+      "action": {
+        "kind": "Command",
+        "script": "./process.sh"
+      },
+      "post": { "kind": "Command", "script": "./post-hook.sh" },
+      "finally": { "kind": "Command", "script": "./finally-hook.sh" },
+      "next": ["Cleanup"]
+    },
+    {
+      "name": "Cleanup",
+      "value_schema": {
+        "type": "object",
+        "required": ["result"],
+        "properties": {
+          "result": {
+            "type": "string",
+            "description": "Result from parent task"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Command",
+        "script": "echo '[]'"
+      },
+      "next": []
+    }
+  ]
+}

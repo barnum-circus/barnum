@@ -1,11 +1,8 @@
-import { barnumRun } from "@barnum/barnum";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { BarnumConfig } from "@barnum/barnum";
+import { createRequire } from "node:module";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
-barnumRun({
-  config: join(__dirname, "config.jsonc"),
-  pool: process.env.POOL,
-  root: process.env.ROOT,
-}).on("exit", (code) => process.exit(code ?? 1));
+BarnumConfig.fromConfig(require("./config.json"))
+  .run({ pool: process.env.POOL, root: process.env.ROOT })
+  .on("exit", (code) => process.exit(code ?? 1));

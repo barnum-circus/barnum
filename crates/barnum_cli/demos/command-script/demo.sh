@@ -37,7 +37,7 @@ echo "Running Barnum with command-script config..."
 echo "This will list files in the demo directory and analyze each one."
 echo ""
 
-$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
+$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
     --pool "$POOL_ID" \
     --entrypoint-value "{\"folder\": \"$SCRIPT_DIR\"}"
 

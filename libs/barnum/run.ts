@@ -1,7 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { createRequire } from "node:module";
-import type { Cli, Command, ConfigCommand } from "./barnum-cli-schema.zod.js";
+import type { configFileSchema } from "./barnum-config-schema.zod.js";
+import type { z } from "zod";
 
 const require = createRequire(import.meta.url);
 const binaryPath: string = process.env.BARNUM ?? require("./index.cjs");
@@ -13,85 +14,36 @@ function spawnBarnum(args: string[]): ChildProcess {
   return spawn(binaryPath, args, { stdio: "inherit" });
 }
 
-function camelToKebab(s: string): string {
-  return s.replace(/[A-Z]/g, (m) => `-${m.toLowerCase()}`);
+export interface RunOptions {
+  pool?: string;
+  entrypointValue?: string;
+  root?: string;
+  logLevel?: string;
+  logFile?: string;
+  stateLog?: string;
+  wake?: string;
 }
 
-function pushFields(
-  args: string[],
-  obj: Record<string, unknown>,
-  skip: string[],
-): void {
-  for (const [key, value] of Object.entries(obj)) {
-    if (skip.includes(key) || value == null) continue;
-    if (typeof value === "boolean") {
-      if (value) args.push(`--${camelToKebab(key)}`);
-    } else {
-      args.push(`--${camelToKebab(key)}`, String(value));
-    }
+export class BarnumConfig {
+  private readonly config: z.input<typeof configFileSchema>;
+
+  private constructor(config: z.input<typeof configFileSchema>) {
+    this.config = config;
   }
-}
 
-function pushGlobalArgs(args: string[], cli: Partial<Cli>): void {
-  if (cli.root) args.push("--root", cli.root);
-  if (cli.logLevel) args.push("--log-level", cli.logLevel);
-}
-
-export function barnum(cli: Cli): ChildProcess {
-  const args: string[] = [];
-  pushGlobalArgs(args, cli);
-
-  switch (cli.command.kind) {
-    case "Run": {
-      args.push("run");
-      pushFields(args, cli.command, ["kind"]);
-      return spawnBarnum(args);
-    }
-    case "Config": {
-      args.push("config");
-      const sub = cli.command.command;
-      args.push(sub.kind.toLowerCase());
-      pushFields(args, sub, ["kind"]);
-      return spawnBarnum(args);
-    }
-    case "Version": {
-      args.push("version");
-      pushFields(args, cli.command, ["kind"]);
-      return spawnBarnum(args);
-    }
+  static fromConfig(config: z.input<typeof configFileSchema>): BarnumConfig {
+    return new BarnumConfig(config);
   }
-}
 
-type GlobalOpts = { root?: string; logLevel?: Cli["logLevel"] };
-type RunOpts = Omit<Extract<Command, { kind: "Run" }>, "kind">;
-
-export function barnumRun(opts: RunOpts & GlobalOpts): ChildProcess {
-  const { root, logLevel, ...runOpts } = opts;
-  return barnum({
-    root,
-    logLevel,
-    command: { kind: "Run", ...runOpts },
-  } as Cli);
-}
-
-export function barnumConfig(
-  opts: { command: ConfigCommand } & GlobalOpts,
-): ChildProcess {
-  const { root, logLevel, command } = opts;
-  return barnum({
-    root,
-    logLevel,
-    command: { kind: "Config", command },
-  } as Cli);
-}
-
-export function barnumVersion(
-  opts?: Omit<Extract<Command, { kind: "Version" }>, "kind"> & GlobalOpts,
-): ChildProcess {
-  const { root, logLevel, ...rest } = opts ?? {};
-  return barnum({
-    root,
-    logLevel,
-    command: { kind: "Version", json: false, ...rest },
-  } as Cli);
+  run(opts?: RunOptions): ChildProcess {
+    const args = ["run", "--config", JSON.stringify(this.config)];
+    if (opts?.pool) args.push("--pool", opts.pool);
+    if (opts?.entrypointValue) args.push("--entrypoint-value", opts.entrypointValue);
+    if (opts?.root) args.push("--root", opts.root);
+    if (opts?.logLevel) args.push("--log-level", opts.logLevel);
+    if (opts?.logFile) args.push("--log-file", opts.logFile);
+    if (opts?.stateLog) args.push("--state-log", opts.stateLog);
+    if (opts?.wake) args.push("--wake", opts.wake);
+    return spawnBarnum(args);
+  }
 }

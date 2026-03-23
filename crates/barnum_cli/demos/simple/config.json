@@ -1,0 +1,19 @@
+{
+  "$schema": "../schemas/config.schema.json",
+  "entrypoint": "Start",
+  "steps": [
+    {
+      "name": "Start",
+      "value_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"kind": "Inline", "value": "This is the starting step. Return an empty array to finish."}
+      },
+      "next": []
+    }
+  ]
+}

@@ -38,7 +38,7 @@ echo "Running Barnum with hooks config..."
 echo "Watch for hook messages in the output."
 echo ""
 
-$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.jsonc" \
+$BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
     --pool "$POOL_ID" \
     --entrypoint-value '{"item": "test-item"}'
 

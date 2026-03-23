@@ -1,0 +1,89 @@
+{
+  "entrypoint": "ListFiles",
+  "options": {
+    "max_retries": 2
+  },
+  "steps": [
+    {
+      "name": "ListFiles",
+      "value_schema": {
+        "type": "object",
+        "required": ["folder"],
+        "properties": {
+          "folder": {
+            "type": "string",
+            "description": "Path to folder to scan for files"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"kind": "Link", "path": "list-files.md"}
+      },
+      "next": ["AnalyzeFile"]
+    },
+    {
+      "name": "AnalyzeFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file to analyze"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"kind": "Link", "path": "analyze-file.md"}
+      },
+      "next": ["ProcessRefactorList"]
+    },
+    {
+      "name": "ProcessRefactorList",
+      "value_schema": {
+        "type": "object",
+        "required": ["file", "refactors"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file being refactored"
+          },
+          "refactors": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "List of refactoring operations to apply"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"kind": "Link", "path": "process-refactor-list.md"}
+      },
+      "next": ["ProcessRefactorList", "CommitFile"]
+    },
+    {
+      "name": "CommitFile",
+      "value_schema": {
+        "type": "object",
+        "required": ["file"],
+        "properties": {
+          "file": {
+            "type": "string",
+            "description": "Path to the file to commit"
+          }
+        },
+        "additionalProperties": false
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": {"kind": "Link", "path": "commit-file.md"}
+      },
+      "next": []
+    }
+  ]
+}
