@@ -180,7 +180,7 @@ BarnumConfig.fromConfig({
 ## Extending this
 
 - **Add more checks**: JIRA ticket verification, test coverage, documentation completeness. Each one is just another step and another entry in the ListChanges jq script.
-- **Add a pre-hook**: Enrich each review task with the file's git blame or recent commit history.
+- **Enrich context**: Use a command step to add git blame or recent commit history before the review step.
 - **Post to GitHub**: The CompileReport agent can use `gh pr comment` to post findings directly on the PR.
 
 ## Key points
