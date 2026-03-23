@@ -1,6 +1,6 @@
 //! Task dispatch - spawns threads to execute tasks and process results.
 //!
-//! Workers run pre-hooks and actions, sending raw results back on the channel.
+//! Workers run actions, sending raw results back on the channel.
 //! `process_and_finalize` handles validation and post-hooks on the main thread.
 
 use std::io;
@@ -14,9 +14,7 @@ use crate::resolved::Step;
 use crate::types::{HookScript, LogTaskId, StepInputValue};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use super::hooks::{
-    PostHookInput, PostHookSuccess, run_command_action, run_post_hook, run_pre_hook,
-};
+use super::hooks::{PostHookInput, PostHookSuccess, run_command_action, run_post_hook};
 use super::response::{
     FailureKind, ProcessedSubmit, TaskOutcome, TaskSuccess, process_retry, process_submit_result,
 };
@@ -56,19 +54,6 @@ pub(super) enum SubmitResult {
     Pool(PoolResult),
     Command(CommandResult),
     Finally(FinallyResult),
-    PreHookError(String),
-}
-
-/// Run pre-hook if present, returning the transformed value or an error string.
-fn run_pre_hook_or_error(
-    pre_hook: Option<&HookScript>,
-    original_value: &StepInputValue,
-    working_dir: &Path,
-) -> Result<StepInputValue, String> {
-    let Some(hook) = pre_hook else {
-        return Ok(original_value.clone());
-    };
-    run_pre_hook(hook, &original_value.0, working_dir).map(StepInputValue)
 }
 
 /// Process a raw submit result through validation, post-hook, and retry logic.
@@ -113,7 +98,7 @@ pub(super) fn process_and_finalize(
 fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
     match input {
         PostHookInput::Success(PostHookSuccess { next, .. }) => next.clone(),
-        PostHookInput::Timeout(..) | PostHookInput::Error(..) | PostHookInput::PreHookError(..) => {
+        PostHookInput::Timeout(..) | PostHookInput::Error(..) => {
             vec![]
         }
     }
@@ -121,29 +106,17 @@ fn extract_next_tasks(input: &PostHookInput) -> Vec<Task> {
 
 /// Execute a pool task (runs in spawned thread).
 ///
-/// Runs pre-hook, submits to the agent pool, and sends the raw result
-/// back on the channel for main-thread processing.
+/// Submits to the agent pool and sends the raw result back on the channel
+/// for main-thread processing.
 pub fn dispatch_pool_task(
     task_id: LogTaskId,
     task: Task,
-    pre_hook: Option<&HookScript>,
     docs: &str,
     timeout: Option<u64>,
     pool: &super::PoolConnection,
     tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let value = match run_pre_hook_or_error(pre_hook, &task.value, &pool.working_dir) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = tx.send(WorkerResult {
-                task_id,
-                task,
-                result: SubmitResult::PreHookError(e),
-            });
-            return;
-        }
-    };
-
+    let value = task.value.clone();
     let payload = build_agent_payload(&task.step, &value.0, docs, timeout);
     debug!(payload = %payload, "task payload");
 
@@ -157,28 +130,16 @@ pub fn dispatch_pool_task(
 
 /// Execute a command task (runs in spawned thread).
 ///
-/// Runs pre-hook, executes the shell command, and sends the raw result
-/// back on the channel for main-thread processing.
+/// Executes the shell command and sends the raw result back on the channel
+/// for main-thread processing.
 pub fn dispatch_command_task(
     task_id: LogTaskId,
     task: Task,
-    pre_hook: Option<&HookScript>,
     script: &str,
     working_dir: &Path,
     tx: &mpsc::Sender<WorkerResult>,
 ) {
-    let value = match run_pre_hook_or_error(pre_hook, &task.value, working_dir) {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = tx.send(WorkerResult {
-                task_id,
-                task,
-                result: SubmitResult::PreHookError(e),
-            });
-            return;
-        }
-    };
-
+    let value = task.value.clone();
     let task_json = serde_json::to_string(&serde_json::json!({
         "kind": &task.step,
         "value": &value.0,

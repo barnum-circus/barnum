@@ -1,4 +1,4 @@
-//! Hook execution (pre, post, command actions).
+//! Hook execution (post hooks, command actions).
 
 use std::io;
 use std::path::Path;
@@ -39,15 +39,6 @@ pub struct PostHookError {
     pub error: String,
 }
 
-/// The pre hook failed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostHookPreHookError {
-    /// The original input value (before pre hook).
-    pub input: StepInputValue,
-    /// Error message from pre hook.
-    pub error: String,
-}
-
 /// Input/output for post hooks.
 ///
 /// Post hooks receive this JSON on stdin and must output (possibly modified)
@@ -61,27 +52,6 @@ pub enum PostHookInput {
     Timeout(PostHookTimeout),
     /// The action failed with an error.
     Error(PostHookError),
-    /// The pre hook failed.
-    PreHookError(PostHookPreHookError),
-}
-
-/// Run a pre hook and return the (possibly modified) value.
-pub fn run_pre_hook(
-    script: &HookScript,
-    value: &serde_json::Value,
-    working_dir: &Path,
-) -> Result<serde_json::Value, String> {
-    info!(script = %script, "running pre hook");
-
-    let input = serde_json::to_string(value).unwrap_or_default();
-    let stdout = run_shell_command(script.as_str(), &input, Some(working_dir))
-        .map_err(|e| format!("pre hook {e}"))?;
-
-    serde_json::from_str(&stdout)
-        .map_err(|e| format!("pre hook output is not valid JSON: {e}"))
-        .inspect(|_| {
-            debug!("pre hook transformed value");
-        })
 }
 
 /// Run a post hook synchronously and return the (possibly modified) result.
