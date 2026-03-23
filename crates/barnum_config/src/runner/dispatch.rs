@@ -6,15 +6,11 @@
 use std::path::Path;
 use std::sync::mpsc;
 
-use tracing::debug;
-use troupe::Response;
-
 use crate::types::{HookScript, LogTaskId, StepInputValue};
 use crate::value_schema::Task;
 
 use super::action::ActionError;
 use super::shell::run_shell_command;
-use super::submit::{build_agent_payload, submit_via_cli};
 
 /// Unified action output.
 pub(super) struct ActionResult {
@@ -34,36 +30,6 @@ pub struct WorkerResult {
     pub task: Task,
     pub kind: WorkerKind,
     pub result: ActionResult,
-}
-
-/// Execute a pool task (runs in spawned thread).
-///
-/// Submits to the agent pool and sends the unified result back on the channel.
-pub fn dispatch_pool_task(
-    task_id: LogTaskId,
-    task: Task,
-    docs: &str,
-    timeout: Option<u64>,
-    pool: &super::PoolConnection,
-    tx: &mpsc::Sender<WorkerResult>,
-) {
-    let value = task.value.clone();
-    let payload = build_agent_payload(&task.step, &value.0, docs, timeout);
-    debug!(payload = %payload, "task payload");
-
-    let output = match submit_via_cli(&pool.root, &payload, &pool.invoker) {
-        Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-        Ok(Response::NotProcessed { .. }) => {
-            Err(ActionError::Failed("not processed by pool".into()))
-        }
-        Err(e) => Err(ActionError::Failed(e.to_string())),
-    };
-    let _ = tx.send(WorkerResult {
-        task_id,
-        task,
-        kind: WorkerKind::Task,
-        result: ActionResult { value, output },
-    });
 }
 
 /// Execute a command task (runs in spawned thread).
