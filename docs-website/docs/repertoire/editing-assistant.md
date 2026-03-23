@@ -110,9 +110,13 @@ All three analyses run in parallel and write to separate files. No synthesis ste
 
 ## Running
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"input_file": "drafts/essay.md", "output_dir": "review-output"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"input_file": "drafts/essay.md", "output_dir": "review-output"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How it works

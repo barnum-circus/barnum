@@ -111,8 +111,11 @@ Return `[]`.
 
 ## Running
 
-```bash
-barnum run --config code-review.jsonc
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({ config: "code-review.jsonc" })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How it works

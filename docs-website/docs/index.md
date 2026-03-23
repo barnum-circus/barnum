@@ -31,15 +31,27 @@ Tools like Claude's `/loop` command (and similar features in other agents) are g
 
 For simple "keep trying until it works" loops, `/loop` is fine. For complex, multi-agent workflows where you need guarantees about behavior, Barnum provides the structure that makes ambitious automation possible.
 
-## Components
+## Running a Workflow
 
-:::note
-These examples use `pnpm dlx` to run Barnum without installing it. You can use any package runner (`npx`, `yarn dlx`, etc.) or install it directly with `pnpm add -g @barnum/barnum`.
-:::
+Define your workflow in a config file, then run it from JavaScript or the CLI.
 
-### Barnum CLI
+**From JavaScript:**
 
-The main command-line tool for running task queues:
+```js
+// run.js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.jsonc",
+}).on("exit", (code) => process.exit(code ?? 1));
+```
+
+```bash
+pnpm add @barnum/barnum
+pnpm dlx tsx run.js
+```
+
+**From the CLI:**
 
 ```bash
 pnpm dlx @barnum/barnum run --config config.jsonc
@@ -50,12 +62,8 @@ pnpm dlx @barnum/barnum run --config config.jsonc
 A daemon that manages a pool of long-running agents:
 
 ```bash
-pnpm dlx @barnum/barnum troupe start
+pnpm dlx @barnum/troupe start
 ```
-
-### Task Queue Library
-
-A Rust library for defining task queues as type-safe state machines with compile-time guarantees.
 
 ## Getting Started
 

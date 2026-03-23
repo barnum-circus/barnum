@@ -57,9 +57,13 @@ Migrate database schema files one at a time, in order, so each migration builds 
 
 ## Running
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"remaining": ["001-create-users.sql", "002-add-email.sql", "003-add-index.sql"], "completed": []}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

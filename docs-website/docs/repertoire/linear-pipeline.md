@@ -64,8 +64,13 @@ A linear pipeline processes data through a sequence of steps.
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs", "contents": "fn main() { println!(\"hello\"); }"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "src/main.rs", "contents": "fn main() { println!(\\\"hello\\\"); }"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Flow

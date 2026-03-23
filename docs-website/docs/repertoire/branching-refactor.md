@@ -95,8 +95,13 @@ Analyze ──────┼─→ RenameVariables ──→ Done
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "src/main.rs"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

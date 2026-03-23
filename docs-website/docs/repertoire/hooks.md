@@ -55,8 +55,13 @@ Pre hooks transform the input before it reaches the agent.
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"file": "src/main.rs"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "src/main.rs"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 **Pre hook contract:**

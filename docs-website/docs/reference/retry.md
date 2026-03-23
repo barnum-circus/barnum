@@ -75,8 +75,11 @@ Override global settings for specific steps:
 
 ## Running
 
-```bash
-barnum run --config config.json
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({ config: "config.json" })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Retry Triggers

@@ -70,16 +70,26 @@ You can start multiple agents with different names (c1, c2, c3) for parallel pro
 
 ## Step 3: Showtime
 
-Download a demo config:
+Download a [demo config](https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos/linear):
 
 ```bash
 curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/barnum_cli/demos/linear/config.jsonc
 ```
 
-Now run it:
+Create `run.js`:
+
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({ config: "config.jsonc" })
+  .on("exit", (code) => process.exit(code ?? 1));
+```
+
+Install and run:
 
 ```bash
-pnpm dlx @barnum/barnum run --config config.jsonc
+pnpm add @barnum/barnum
+pnpm dlx tsx run.js
 ```
 
 **What happens:**
@@ -175,11 +185,19 @@ Here's what a basic refactor config looks like:
 - Each `AnalyzeAndRefactor` finds and applies one refactor, then emits a `CommitFile` task
 - `CommitFile` commits the changes and terminates
 
-Save this as `refactor.jsonc` and run:
+Save this as `refactor.jsonc` and create `run.js`:
+
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "refactor.jsonc",
+  entrypointValue: '{"folder": "./src"}',
+}).on("exit", (code) => process.exit(code ?? 1));
+```
 
 ```bash
-pnpm dlx @barnum/barnum run --config refactor.jsonc \
-  --entrypoint-value '{"folder": "./src"}'
+pnpm dlx tsx run.js
 ```
 
 For a more complete example, see the [refactor-workflow demo](https://github.com/barnum-circus/barnum/tree/master/crates/barnum_cli/demos/refactor-workflow).

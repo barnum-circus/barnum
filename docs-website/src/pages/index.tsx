@@ -150,6 +150,14 @@ function ExampleSection() {
             {exampleConfig}
           </CodeBlock>
         </div>
+        <div className={styles.codeBlockWrap}>
+          <CodeBlock language="js" title="run.js">
+{`import { barnumRun } from "@barnum/barnum";
+
+barnumRun({ config: "config.jsonc" })
+  .on("exit", (code) => process.exit(code ?? 1));`}
+          </CodeBlock>
+        </div>
       </div>
     </section>
   );

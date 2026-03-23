@@ -121,9 +121,13 @@ Legal contracts require expertise across multiple domains. Rather than asking on
 
 ## Running
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"contract_path": "contracts/vendor-agreement.pdf", "output_dir": "review-output"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"contract_path": "contracts/vendor-agreement.pdf", "output_dir": "review-output"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How it works

@@ -21,20 +21,26 @@ Resume:
 
 Completed tasks are never re-executed. Only pending and in-flight tasks are re-dispatched.
 
-## CLI usage
+## Usage
 
-```bash
-# Normal run with state logging
-barnum run --config config.jsonc \
-  --entrypoint-value '{"files": ["src/main.rs"]}' \
-  --state-log /tmp/myrun.ndjson
+```js
+import { barnumRun } from "@barnum/barnum";
 
-# Resume from a previous run
-barnum run --resume-from /tmp/myrun.ndjson \
-  --state-log /tmp/myrun-resumed.ndjson
+// Normal run with state logging
+barnumRun({
+  config: "config.jsonc",
+  entrypointValue: '{"files": ["src/main.rs"]}',
+  stateLog: "/tmp/myrun.ndjson",
+}).on("exit", (code) => process.exit(code ?? 1));
+
+// Resume from a previous run
+barnumRun({
+  resumeFrom: "/tmp/myrun.ndjson",
+  stateLog: "/tmp/myrun-resumed.ndjson",
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
-`--resume-from` is incompatible with `--config`, `--initial-state`, and `--entrypoint-value`, since the config is stored in the log itself.
+`resumeFrom` is incompatible with `config`, `initialState`, and `entrypointValue`, since the config is stored in the log itself.
 
 The resume log must be a different file from the original (no in-place mutation).
 

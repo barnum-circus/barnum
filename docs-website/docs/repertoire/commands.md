@@ -54,8 +54,11 @@ Use agents when the task requires judgment, creativity, or understanding natural
 
 ## Running
 
-```bash
-barnum run --config config.json
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({ config: "config.json" })
+  .on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Command Contract
@@ -144,8 +147,13 @@ Commands and agents work together naturally:
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"task": "Add logging"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"task": "Add logging"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Key Points

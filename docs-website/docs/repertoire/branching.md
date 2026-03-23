@@ -64,8 +64,13 @@ Branching allows agents to choose different paths based on their analysis.
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"pr_number": 123}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"pr_number": 123}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## Flow

@@ -69,9 +69,13 @@ An agent refactors a file. If the build breaks, a recovery agent attempts to fix
 
 ## Running
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"file": "src/lib.rs", "task": "Extract the Config struct into its own module"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "src/lib.rs", "task": "Extract the Config struct into its own module"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

@@ -84,9 +84,13 @@ Each WriteFile writes:
 
 ## Running
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"file": "claims.md", "output_dir": "verification-output"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "claims.md", "output_dir": "verification-output"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How it works
@@ -243,9 +247,13 @@ Per fact:
 
 ### Running the adversarial variant
 
-```bash
-barnum run --config config.json \
-  --entrypoint-value '{"file": "claims.md", "output_dir": "verification-output"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"file": "claims.md", "output_dir": "verification-output"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ### How the adversarial variant works

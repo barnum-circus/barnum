@@ -86,8 +86,13 @@ List files, refactor them all in parallel, then commit the changes.
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"directory": "src"}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"directory": "src"}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## How It Works

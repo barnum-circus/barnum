@@ -61,8 +61,13 @@ Validate the value payload for each step:
 
 ## Running
 
-```bash
-barnum run --config config.json --entrypoint-value '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}'
+```js
+import { barnumRun } from "@barnum/barnum";
+
+barnumRun({
+  config: "config.json",
+  entrypointValue: '{"order_id": "ORD-12345", "items": [{"sku": "WIDGET-A", "quantity": 2}]}',
+}).on("exit", (code) => process.exit(code ?? 1));
 ```
 
 ## External Schema Files
