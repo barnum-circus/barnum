@@ -297,7 +297,17 @@ BarnumConfig.fromConfig(require("./config.json"))
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 
-### 10. Regenerate schemas
+### 10. Update integration tests
+
+**File:** `crates/barnum_cli/tests/common/mod.rs`
+
+`BarnumCli::run()` currently takes `pool_root` and passes it as `--root`/`--pool` CLI args to barnum (lines 440-464). After this refactor, the pool root and pool name need to be in the config JSON instead.
+
+The test helper changes: `BarnumCli::run()` drops the `pool_root` parameter. Test configs (constructed as inline JSON strings) gain `"pool"` and `"root"` fields on their Pool actions. The helper could inject these automatically, or each test can include them in its config string.
+
+The troupe CLI invocations (`TroupeHandle::start`, `stop_stale_daemon`, `FileWriterAgent`) still use `--root`/`--pool` — those are troupe args, not barnum args, and don't change.
+
+### 11. Regenerate schemas
 
 `cargo run -p barnum_cli --bin build_schemas` to update:
 - `libs/barnum/barnum-config-schema.json`
