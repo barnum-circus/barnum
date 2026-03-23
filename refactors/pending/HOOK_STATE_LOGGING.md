@@ -1,109 +1,339 @@
 # Hook State Logging
 
-**Blocks:** UNIFIED_ACTION_DISPATCH (Phase 5 depends on this being resolved first)
+**Blocks:** UNIFIED_ACTION_DISPATCH Phase 5 (this design must be resolved first; replaces Phase 5)
+
+**Depends on:** UNIFIED_ACTION_DISPATCH Phases 0-4 should land first (executor trait + unified dispatch path), then this refactor uses that infrastructure.
 
 ## Motivation
 
-Pre-hooks and post-hooks run without being recorded in the NDJSON state log. They can fail, hang forever, or produce wrong output, and there's no trace. On resume, there's no way to know whether a hook already ran for a given task. The state log should record every side-effecting operation so that the run is fully observable and resumable.
+Pre-hooks and post-hooks run without being recorded in the NDJSON state log. They can fail, hang forever, or produce wrong output, and there's no trace. On resume, there's no way to know whether a hook already ran for a given task.
+
+Post-hooks block the main thread. A hanging post-hook stalls the entire event loop.
+
+Both hooks lack timeout. Both lack independent retry. A post-hook failure after a successful action causes the action to re-run on retry.
+
+Every side-effecting operation should be a first-class work unit: dispatched in a thread, subject to timeout, contributing to concurrency limits, recorded in the state log, and independently retryable.
 
 ## Current State
 
 ### Pre-hooks
 
-**Where they run:** Inside the dispatch thread, before the action executes. Called from `dispatch_pool_task` and `dispatch_command_task` via `run_pre_hook_or_error` (`dispatch.rs:63-72`).
+Run inside the dispatch thread, before the action executes. Called from `dispatch_pool_task` and `dispatch_command_task` via `run_pre_hook_or_error` (`dispatch.rs:63-72`). `run_pre_hook` (`hooks.rs:69-85`) calls `run_shell_command` which blocks on `child.wait_with_output()` with no timeout. The hook receives the task's JSON value on stdin and returns a transformed value on stdout.
 
-**Execution model:** `run_pre_hook` (`hooks.rs:69-85`) calls `run_shell_command`, which spawns `sh -c <script>` with the task's JSON value on stdin. It blocks on `child.wait_with_output()` with no timeout. The hook's stdout is parsed as JSON and becomes the new task value.
+On failure, the dispatch function sends `SubmitResult::PreHookError(String)`. This goes through `process_retry` with `FailureKind::SubmitError`, which retries the entire task from scratch.
 
-**On failure:** The dispatch function sends `SubmitResult::PreHookError(String)` back on the channel. `process_submit_result` (`response.rs:100-109`) routes this to `process_retry` with `FailureKind::SubmitError`. The post-hook receives `PostHookInput::PreHookError`.
-
-**What's not logged:** The pre-hook execution itself. The state log sees only `TaskSubmitted` (before hook) and `TaskCompleted` (after everything, including hook failure). There's no way to distinguish "pre-hook failed" from "action failed" in the state log. On resume, there's no way to know whether the pre-hook already ran and transformed the value.
-
-**Concurrency:** Pre-hooks share the dispatch thread's `in_flight` slot with the action. They run sequentially: pre-hook blocks, then action runs. From the engine's perspective, one slot covers both.
+Not in the state log. Shares the action's `in_flight` slot.
 
 ### Post-hooks
 
-**Where they run:** On the main thread, inside `process_and_finalize` (`dispatch.rs:77-110`). Called after `process_submit_result` returns and only if `step.post` is `Some`.
+Run on the main thread inside `process_and_finalize` (`dispatch.rs:77-110`). `run_post_hook` (`hooks.rs:90-106`) calls `run_shell_command` with the `PostHookInput` JSON on stdin. Blocks the main event loop. No timeout. Can modify the spawned tasks list.
 
-**Execution model:** `run_post_hook` (`hooks.rs:90-106`) calls `run_shell_command` with the `PostHookInput` JSON on stdin. It blocks the main thread on `child.wait_with_output()` with no timeout. The hook's stdout is parsed as `PostHookInput` and can modify the `next` tasks array.
+On failure, the entire task is treated as failed and retried from scratch (action re-runs), even though the action succeeded.
 
-**On failure:** `process_and_finalize` (`dispatch.rs:102-105`) calls `process_retry` with `FailureKind::SubmitError`. The entire task is treated as failed, even though the action itself succeeded.
-
-**What's not logged:** The post-hook execution. `TaskCompleted` is written after `process_and_finalize` returns. A post-hook failure appears as a task failure in the log, with no indication that the action succeeded but the post-hook failed. On resume, a task whose post-hook failed will be re-dispatched from scratch (action re-runs).
-
-**Concurrency:** Post-hooks run on the main thread. They don't occupy an `in_flight` slot — they block the entire event loop. While a post-hook runs, no worker results are processed, no new tasks are dispatched.
+Not in the state log. No `in_flight` slot (blocks main thread instead).
 
 ### Finally hooks
 
-**Where they run:** In a spawned thread via `dispatch_finally_task` (`dispatch.rs:200-216`).
+Run in a spawned thread via `dispatch_finally_task`. Occupy an `in_flight` slot. Recorded in state log as `StateLogEntry::FinallyRun`. Resumable. Already a first-class work unit.
 
-**Execution model:** Calls `run_shell_command` directly (no pre-hook). Occupies an `in_flight` slot. The result is sent on the channel and processed as `SubmitResult::Finally`.
+### Gaps
 
-**What IS logged:** `StateLogEntry::FinallyRun` records the finally hook's execution and any children it spawned. The state log knows whether a finally ran and what it produced.
+| Hook type | Thread | In-flight slot | Timeout | State log | Resumable | Independent retry |
+|-----------|--------|----------------|---------|-----------|-----------|-------------------|
+| Pre-hook | Dispatch | Shared with action | No | No | No | No |
+| Post-hook | Main | None (blocks loop) | No | No | No | No |
+| Finally | Spawned | Yes | No | Yes | Yes | N/A |
 
-**Why finally is different:** Finally hooks were designed with resumability from the start. The `FinallyRun` entry is the boundary between "children completed" and "parent done". Without it, resume can't determine whether the finally needs to re-run.
+## Resolved Design Decisions
 
-### Summary of gaps
+**Hooks are separate state log entries.** Not embedded in `TaskCompleted`. Like `FinallyRun`, each hook completion is its own log entry that the apply logic processes to advance the task to the next phase.
 
-| Hook type | Thread | In-flight slot | Timeout | State log entry | Resumable |
-|-----------|--------|----------------|---------|-----------------|-----------|
-| Pre-hook | Dispatch thread | Shared with action | None | No | No |
-| Post-hook | Main thread | None (blocks event loop) | None | No | No |
-| Finally | Spawned thread | Yes | None | `FinallyRun` | Yes |
+**Post-hooks move to spawned threads.** The main thread never blocks on user code. The action's `TaskCompleted` is written before the post-hook runs. The post-hook's modifications are recorded in a separate `PostHookCompleted` entry.
 
-## Problems
+**Hooks occupy their own in-flight slots.** Each phase of a task (pre-hook, action, post-hook) occupies one concurrency slot while executing.
 
-### 1. Main-thread blocking by post-hooks
+**Hook failures retry independently.** A pre-hook failure retries the pre-hook without re-running the action. A post-hook failure retries the post-hook without re-running the action. One retry counter per task, shared across all phases. If the counter exceeds `max_retries`, the task fails.
 
-Post-hooks run on the main thread inside `process_and_finalize`. A hanging post-hook blocks the entire event loop: no worker results are processed, no new tasks are dispatched, the whole run stalls. This is the most acute operational risk.
+**No no-op entries for steps without hooks.** If a step has no pre-hook, no `PreHookCompleted` is emitted. The apply logic checks the step config and skips directly to the next phase. Adding pass-through entries for consistency would create log noise without information value.
 
-### 2. No observability for hook execution
+**Hooks use the step's timeout.** The same `step.options.timeout` that governs the action also governs its hooks. This keeps configuration simple. If hooks need separate timeouts in the future, that's a config addition, not an architectural change.
 
-Hook runs leave no trace in the state log. When debugging a failed run, there's no way to determine whether a hook ran, what it received, or what it returned. The only signal is the task's final outcome, which conflates hook failures with action failures.
+**On resume, missing `Completed` entries mean re-dispatch.** If the log has `TaskSubmitted` but no `PreHookCompleted` for a step with a pre-hook, the pre-hook is re-dispatched. Hooks must be idempotent (they're value-transforming shell scripts; re-running them with the same input should produce the same output).
 
-### 3. Resume re-runs actions unnecessarily
+## Task Lifecycle
 
-If a pre-hook fails, the task is marked failed in the state log (as `TaskCompleted` with failure). On resume, the retry re-runs the entire task from scratch, which is correct. But if a post-hook fails after a successful action, the task is also marked failed. On resume, the action re-runs even though it already succeeded. For expensive actions (agent pool submissions), this wastes significant resources.
+A task moves through phases. Each phase is dispatched, executed in a thread, and recorded in the state log. The apply logic processes each entry and queues the next phase.
 
-### 4. No timeout for hooks
+### Phase sequence for a task with pre-hook, action, and post-hook
 
-Both `run_pre_hook` and `run_post_hook` call `run_shell_command`, which blocks on `wait_with_output()` indefinitely. A hook that hangs (waiting on a network resource, deadlocked, infinite loop) stalls either a dispatch thread (pre-hook) or the entire event loop (post-hook).
-
-## Design Questions
-
-These are the decisions that need to be made before implementation. Capturing them here for discussion.
-
-### Q1: Should post-hooks move off the main thread?
-
-Post-hooks currently run on the main thread because they need to modify the task outcome before it's written to the state log. Moving them to a spawned thread means the action's `TaskCompleted` entry must be written before the post-hook runs, and the post-hook's modifications become a separate log entry.
-
-Options:
-- **Keep on main thread, add timeout.** Simpler. The main thread blocks for at most `timeout` seconds. Risk: even a bounded block delays all other processing.
-- **Move to spawned thread, add state log entry.** The action writes `TaskCompleted` with the raw spawned tasks. The post-hook runs in a thread, writes a `PostHookCompleted` entry that modifies the spawned tasks. More complex, but the main thread never blocks on user code.
-
-### Q2: What state log entries do we need?
-
-Minimal set:
 ```
-PreHookStarted  { task_id }
-PreHookCompleted { task_id, outcome: Result<Value, String> }
-PostHookStarted  { task_id }
-PostHookCompleted { task_id, outcome: Result<PostHookInput, String> }
+TaskSubmitted              → apply queues PendingDispatch::PreHook
+PreHookCompleted(Ok)       → apply stores transformed value, queues PendingDispatch::Action
+TaskCompleted(Success)     → apply stores action result + children, queues PendingDispatch::PostHook
+PostHookCompleted(Ok)      → apply finalizes: spawns children or removes leaf
 ```
 
-Or a more compact approach where hooks are embedded in the existing `TaskCompleted` entry (like how children are embedded in `TaskSuccess`). The tradeoff is resumability granularity vs. log complexity.
+### Phase sequence for a task with no hooks
 
-### Q3: Should hooks occupy their own in-flight slots?
+```
+TaskSubmitted              → apply queues PendingDispatch::Action
+TaskCompleted(Success)     → apply finalizes: spawns children or removes leaf
+```
 
-Currently pre-hooks share the action's slot. If hooks get their own slots, the effective concurrency for actions drops (each task occupies 1-3 slots: pre + action + post). If hooks stay in the action's slot, the concurrency model is simpler but hooks aren't independently cancellable.
+### Phase sequence with pre-hook failure and retry
 
-### Q4: Should hook failures be retried independently of the action?
+```
+TaskSubmitted              → apply queues PendingDispatch::PreHook
+PreHookCompleted(Err)      → apply increments retry, re-queues PendingDispatch::PreHook
+PreHookCompleted(Ok)       → apply stores transformed value, queues PendingDispatch::Action
+TaskCompleted(Success)     → apply finalizes
+```
 
-Currently, a pre-hook failure retries the entire task (pre-hook + action). A post-hook failure also retries the entire task (action re-runs). If hooks are independent work units, a post-hook failure could retry just the post-hook, preserving the action's result.
+### Phase sequence with post-hook failure and retry
 
-### Q5: What happens on resume with partial hook execution?
+```
+TaskSubmitted              → apply queues PendingDispatch::PreHook
+PreHookCompleted(Ok)       → apply queues PendingDispatch::Action
+TaskCompleted(Success)     → apply stores result, queues PendingDispatch::PostHook
+PostHookCompleted(Err)     → apply increments retry, re-queues PendingDispatch::PostHook
+PostHookCompleted(Ok)      → apply finalizes
+```
 
-If the state log has `PreHookStarted` but no `PreHookCompleted`, did the hook run to completion (crash before logging) or not? The safe answer is to re-run it, which means pre-hooks must be idempotent. This is already implicitly required (they're shell scripts that transform values), but it should be documented.
+Note: when the action succeeds but the post-hook fails, the action does NOT re-run. The retry re-dispatches only the post-hook, with the same `PostHookInput` derived from the cached action result.
 
-## Next Steps
+## New Types
 
-This document is intentionally research-focused. The design decisions above need to be resolved before writing an implementation plan. The answers will determine whether this is a small change (add timeout + log entries, keep current threading model) or a significant architectural shift (move post-hooks off main thread, independent retry).
+### State log entries (`barnum_state`)
+
+```rust
+/// A pre-hook completed (success or failure).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PreHookCompleted {
+    /// The task this pre-hook ran for.
+    pub task_id: LogTaskId,
+    /// The outcome of the pre-hook.
+    pub outcome: HookOutcome<StepInputValue>,
+}
+
+/// A post-hook completed (success or failure).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostHookCompleted {
+    /// The task this post-hook ran for.
+    pub task_id: LogTaskId,
+    /// The outcome of the post-hook.
+    pub outcome: HookOutcome<Vec<TaskSubmitted>>,
+}
+
+/// Outcome of a hook execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum HookOutcome<T> {
+    /// Hook succeeded with a value.
+    Success { value: T },
+    /// Hook failed.
+    Failed { error: String },
+}
+```
+
+The `StateLogEntry` enum gains two variants:
+```rust
+pub enum StateLogEntry {
+    Config(StateLogConfig),
+    TaskSubmitted(TaskSubmitted),
+    TaskCompleted(TaskCompleted),
+    FinallyRun(FinallyRun),
+    PreHookCompleted(PreHookCompleted),   // NEW
+    PostHookCompleted(PostHookCompleted), // NEW
+}
+```
+
+### `PreHookCompleted` success value
+
+The success value is `StepInputValue`: the transformed task value that the action will receive. This is stored so that on resume, the action can be dispatched with the pre-hook-transformed value without re-running the pre-hook.
+
+### `PostHookCompleted` success value
+
+The success value is `Vec<TaskSubmitted>`: the final list of children to spawn. The post-hook receives the action's raw spawned tasks and can filter, add, or transform them. The `PostHookCompleted` records the final list. On resume, these children are spawned without re-running the post-hook.
+
+### `TaskCompleted` changes
+
+`TaskCompleted` continues to record the action's outcome. If the step has a post-hook, `TaskCompleted` is written with the *raw* children (before post-hook modification). The post-hook modifies them, and `PostHookCompleted` records the final version.
+
+This means `apply_completed` needs to distinguish between "leaf task done" and "task with post-hook pending." When a step has a post-hook:
+- `TaskCompleted(Success)` transitions the task to `AwaitingPostHook` instead of spawning children.
+- `PostHookCompleted(Success)` spawns the final children.
+
+When a step has no post-hook, `TaskCompleted(Success)` spawns children as it does today.
+
+## RunState Changes
+
+### TaskState expansion
+
+```rust
+enum TaskState {
+    /// Waiting for pre-hook or action dispatch.
+    AwaitingPreHook(AwaitingPreHookState),
+    /// Pre-hook completed, waiting for action dispatch.
+    AwaitingAction(AwaitingActionState),
+    /// Action completed, waiting for post-hook dispatch.
+    AwaitingPostHook(AwaitingPostHookState),
+    /// All phases done, waiting for children to complete.
+    WaitingForChildren(WaitingState),
+    /// Failed, retry pending.
+    Failed,
+}
+
+struct AwaitingPreHookState {
+    /// Original value (before pre-hook).
+    value: StepInputValue,
+    retries: u32,
+}
+
+struct AwaitingActionState {
+    /// Transformed value (after pre-hook, or original if no pre-hook).
+    value: StepInputValue,
+    retries: u32,
+}
+
+struct AwaitingPostHookState {
+    /// The raw action result needed to rebuild PostHookInput on retry.
+    post_hook_input: PostHookInput,
+    /// The raw children from the action (before post-hook modification).
+    raw_children: Vec<Task>,
+    /// The finally value for WaitingForChildren.
+    finally_value: StepInputValue,
+    retries: u32,
+}
+```
+
+Tasks without a pre-hook skip `AwaitingPreHook` and start in `AwaitingAction`. Tasks without a post-hook skip `AwaitingPostHook` and go directly from `TaskCompleted` to `WaitingForChildren` or removal.
+
+### PendingDispatch expansion
+
+```rust
+enum PendingDispatch {
+    PreHook { task_id: LogTaskId },
+    Action { task_id: LogTaskId },
+    PostHook { task_id: LogTaskId },
+    Finally { parent_id: LogTaskId },
+}
+```
+
+### apply_entry additions
+
+`apply_entry` gains two new match arms:
+
+**`PreHookCompleted`:**
+- Success: transition task from `AwaitingPreHook` to `AwaitingAction`, store transformed value, queue `PendingDispatch::Action`.
+- Failure: if `retries < max_retries`, increment retries, re-queue `PendingDispatch::PreHook`. Otherwise, transition to `Failed` (or remove + walk up parent chain).
+
+**`PostHookCompleted`:**
+- Success: extract final children list. If children exist, transition to `WaitingForChildren` and insert children. If no children, remove task and walk up parent chain for finally detection.
+- Failure: if `retries < max_retries`, increment retries, re-queue `PendingDispatch::PostHook`. Otherwise, transition to `Failed` (or remove + walk up parent chain).
+
+**Modified `TaskSubmitted`:**
+- If step has pre-hook: queue `PendingDispatch::PreHook` (instead of `PendingDispatch::Task`).
+- If step has no pre-hook: queue `PendingDispatch::Action`.
+
+**Modified `TaskCompleted`:**
+- If step has post-hook: transition to `AwaitingPostHook`, queue `PendingDispatch::PostHook`. Do NOT spawn children yet.
+- If step has no post-hook: spawn children / remove leaf / walk up parent chain (as today).
+
+Note: `apply_entry` needs access to the step config to know whether hooks exist. It already receives `&Config` today.
+
+## Engine Changes
+
+### `flush_dispatches` expansion
+
+`flush_dispatches` currently handles `PendingDispatch::Task` and `PendingDispatch::Finally`. It gains `PreHook`, `Action`, and `PostHook` arms. `PendingDispatch::Task` is removed (replaced by `PreHook` and `Action`).
+
+Each arm:
+1. Reads the task state to get the value/input for the phase.
+2. Increments `in_flight`.
+3. Spawns a thread that runs the hook/action and sends a `WorkerResult`.
+
+### `process_worker_result` expansion
+
+`WorkerKind` (from UNIFIED_ACTION_DISPATCH Phase 0e) expands:
+
+```rust
+pub enum WorkerKind {
+    PreHook,
+    Action,
+    PostHook,
+    Finally { parent_id: LogTaskId },
+}
+```
+
+`process_worker_result` matches on `WorkerKind` and converts the raw result into the appropriate state log entry:
+- `PreHook` → `StateLogEntry::PreHookCompleted`
+- `Action` → `StateLogEntry::TaskCompleted` (as today)
+- `PostHook` → `StateLogEntry::PostHookCompleted`
+- `Finally` → `StateLogEntry::FinallyRun` (as today)
+
+### Hooks through the executor trait
+
+After UNIFIED_ACTION_DISPATCH Phases 0-3, all work goes through `dispatch_via_executor`. Hooks are shell scripts, so they use `ShellExecutor` (or a thin wrapper). The engine constructs the appropriate executor for each phase:
+
+- **Pre-hook:** `ShellExecutor` with the pre-hook script. Input is the task's original value. Output is the transformed value (JSON).
+- **Action:** `PoolExecutor` or `ShellExecutor` depending on step config.
+- **Post-hook:** `ShellExecutor` with the post-hook script. Input is `PostHookInput` JSON. Output is the modified `PostHookInput` JSON (from which children are extracted).
+
+All three go through `run_with_timeout` from UNIFIED_ACTION_DISPATCH Phase 4.
+
+## Implementation Phases
+
+### Phase A: State log types
+
+Add `PreHookCompleted`, `PostHookCompleted`, and `HookOutcome<T>` to `barnum_state`. Add the two new variants to `StateLogEntry`. Write round-trip serialization tests. No behavioral changes.
+
+### Phase B: RunState phase tracking
+
+Replace `TaskState::Pending` with `AwaitingPreHook` / `AwaitingAction` / `AwaitingPostHook`. Replace `PendingDispatch::Task` with `PendingDispatch::PreHook` / `PendingDispatch::Action` / `PendingDispatch::PostHook`.
+
+Update `apply_submitted` to check step config and queue the correct first phase. Update `apply_completed` to check for post-hook and either transition to `AwaitingPostHook` or finalize.
+
+Add `apply_pre_hook_completed` and `apply_post_hook_completed` methods to `RunState`. Wire them into `apply_entry`.
+
+Update existing `run_state_tests` to use the new phase names. Add tests for:
+- Task with pre-hook: submitted → pre-hook queued
+- Pre-hook success → action queued
+- Pre-hook failure → retry pre-hook
+- Pre-hook failure exhausts retries → task dropped
+- Task with post-hook: action success → post-hook queued
+- Post-hook success → children spawned
+- Post-hook failure → retry post-hook
+- Task with both hooks: full phase sequence
+- Replay: PreHookCompleted removes stale PreHook dispatch
+- Replay: PostHookCompleted removes stale PostHook dispatch
+
+### Phase C: Pre-hooks as dispatched work units
+
+Move pre-hook execution out of the dispatch thread. The engine's `flush_dispatches` handles `PendingDispatch::PreHook` by constructing a `ShellExecutor` for the pre-hook script and dispatching through `dispatch_via_executor` with `WorkerKind::PreHook`.
+
+`process_worker_result` converts `WorkerKind::PreHook` results into `PreHookCompleted` entries. On success, the transformed value is stored in the log entry. On failure, the error string is stored.
+
+`dispatch_via_executor` no longer calls `run_pre_hook_or_error` internally. The pre-hook is already a separate phase by this point. Remove `run_pre_hook_or_error` from `dispatch.rs`. Remove `SubmitResult::PreHookError` (pre-hook errors are now `PreHookCompleted(Failed)`).
+
+### Phase D: Post-hooks as dispatched work units
+
+The engine's `flush_dispatches` handles `PendingDispatch::PostHook` by constructing a `ShellExecutor` for the post-hook script and dispatching through `dispatch_via_executor` with `WorkerKind::PostHook`.
+
+`process_worker_result` converts `WorkerKind::PostHook` results into `PostHookCompleted` entries. On success, the output is parsed as `PostHookInput` and the final children list is extracted. On failure, the error string is stored.
+
+Remove `process_and_finalize` from `dispatch.rs`. The post-hook is no longer called from the main thread's result processing path. `process_submit_result` handles only the action result (no post-hook logic).
+
+### Phase E: Cleanup
+
+- Delete `PostHookInput::PreHookError` variant (pre-hook errors are handled in Phase C, they never reach the post-hook)
+- Delete `run_pre_hook_or_error` and `run_pre_hook` from `hooks.rs` (replaced by executor dispatch)
+- Delete `run_post_hook` from `hooks.rs` (replaced by executor dispatch)
+- Delete `process_and_finalize` from `dispatch.rs` (post-hook logic moved to engine)
+- Update `run_command_action` if still referenced; likely deletable
+
+## What doesn't change
+
+- **`run_shell_command`**: Signature and behavior unchanged. Timeout is external (from `run_with_timeout`).
+- **Finally hooks**: Already first-class. No changes to `FinallyRun` or finally dispatch.
+- **Config types**: `Step.pre` and `Step.post` remain `Option<HookScript>`. No new config fields.
+- **`TaskCompleted` structure**: Still records success/failure with children and retry. The only change is that when a post-hook exists, children in `TaskCompleted` are the *raw* list (before post-hook modification).
