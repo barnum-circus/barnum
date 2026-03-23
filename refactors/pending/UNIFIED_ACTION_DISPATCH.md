@@ -70,36 +70,53 @@ No timeout enforcement. The thread blocks until the child process exits.
 
 **File:** `runner/executor.rs` (new)
 
-This is the central abstraction. Every executable unit goes through this trait:
+This is the central abstraction. Every executable unit goes through this trait. The trait itself is deliberately minimal — it just produces a string:
 
 ```rust
 use std::path::Path;
-use std::time::Duration;
-
-/// Outcome of executing a work unit.
-pub enum ActionOutcome {
-    /// Produced stdout (JSON).
-    Success(String),
-    /// Exceeded its deadline.
-    Timeout,
-    /// Failed with an error.
-    Error(String),
-}
 
 /// Trait for executing work units.
 ///
 /// Pool tasks, Command tasks, pre-hooks, post-hooks, and finally hooks
 /// all go through this interface. The runner schedules, times out, and
 /// tracks concurrency for every `Executor::execute` call identically.
+///
+/// Timeout enforcement is the runner's responsibility, not the executor's.
+/// The runner wraps each `execute` call with a deadline and kills the
+/// work unit if it exceeds it.
 pub trait Executor: Send + Sync {
     fn execute(
         &self,
         input: &str,
         working_dir: &Path,
-        timeout: Option<Duration>,
-    ) -> ActionOutcome;
+    ) -> Result<String, String>;
 }
 ```
+
+The return type is `Result<String, String>` — success stdout or error message. No typed outcome enum. The runner adds timeout semantics on top:
+
+```rust
+/// Runner-level outcome, wrapping the executor's raw result.
+pub enum ActionOutcome {
+    Success(String),
+    Timeout,
+    Error(String),
+}
+
+fn run_with_timeout(
+    executor: &dyn Executor,
+    input: &str,
+    working_dir: &Path,
+    timeout: Option<Duration>,
+) -> ActionOutcome {
+    // Spawn thread, call executor.execute(), wait with timeout.
+    // On timeout: kill thread, return ActionOutcome::Timeout.
+    // On Ok(stdout): return ActionOutcome::Success(stdout).
+    // On Err(e): return ActionOutcome::Error(e).
+}
+```
+
+This keeps the trait at the lowest common denominator. Type safety can be layered on later without changing the trait contract.
 
 ### 2. Implement `Executor` for Shell and Pool
 
@@ -115,18 +132,13 @@ impl Executor for ShellExecutor {
         &self,
         input: &str,
         working_dir: &Path,
-        timeout: Option<Duration>,
-    ) -> ActionOutcome {
-        match run_shell_command(&self.script, input, Some(working_dir), timeout) {
-            ShellResult::Success(stdout) => ActionOutcome::Success(stdout),
-            ShellResult::Timeout => ActionOutcome::Timeout,
-            ShellResult::Error(e) => ActionOutcome::Error(e),
-        }
+    ) -> Result<String, String> {
+        run_shell_command(&self.script, input, Some(working_dir))
     }
 }
 ```
 
-**`PoolExecutor`** — used by Pool actions:
+**`PoolExecutor`** — used by Pool actions. The pool timeout is baked in at construction (it's a pool-specific detail, not the trait's concern):
 
 ```rust
 pub struct PoolExecutor {
@@ -134,25 +146,28 @@ pub struct PoolExecutor {
     pub invoker: Invoker<TroupeCli>,
     pub docs: String,
     pub step_name: StepName,
+    pub pool_timeout: Option<u64>,
 }
 
 impl Executor for PoolExecutor {
     fn execute(
         &self,
         input: &str,
-        working_dir: &Path,
-        timeout: Option<Duration>,
-    ) -> ActionOutcome {
-        let timeout_secs = timeout.map(|d| d.as_secs());
-        let payload = build_agent_payload(&self.step_name, /* ... */, &self.docs, timeout_secs);
+        _working_dir: &Path,
+    ) -> Result<String, String> {
+        let payload = build_agent_payload(
+            &self.step_name, /* ... */, &self.docs, self.pool_timeout,
+        );
         match submit_via_cli(&self.root, &payload, &self.invoker) {
-            Ok(Response::Processed { stdout, .. }) => ActionOutcome::Success(stdout),
-            Ok(Response::NotProcessed { .. }) => ActionOutcome::Timeout,
-            Err(e) => ActionOutcome::Error(e.to_string()),
+            Ok(Response::Processed { stdout, .. }) => Ok(stdout),
+            Ok(Response::NotProcessed { .. }) => Err("not processed".into()),
+            Err(e) => Err(e.to_string()),
         }
     }
 }
 ```
+
+Note: `PoolExecutor` returns `Err` for `NotProcessed`. The runner's timeout wrapper handles the *local* deadline (killing work that exceeds it). The pool's own timeout is separate — it tells the pool how long the agent has, and is captured at construction. These are independent mechanisms.
 
 ### 3. Decompose task lifecycle into independent work units
 
@@ -181,59 +196,15 @@ enum PendingDispatch {
 
 Tasks without a pre-hook skip directly to `Action`. Tasks without a post-hook skip directly to completion processing. The engine dispatches whichever phase is next, and each phase occupies exactly one concurrency slot while executing.
 
-### 4. Add cross-platform timeout to `run_shell_command`
+### 4. Add timeout infrastructure to the runner
 
-**File:** `runner/shell.rs`
+**File:** `runner/executor.rs`
 
-**Dependency:** Add [`wait-timeout`](https://crates.io/crates/wait-timeout) for cross-platform timed waits (waitpid on Unix, WaitForSingleObject on Windows).
+The `run_with_timeout` function wraps any executor call with a deadline. This is runner infrastructure, separate from the executor trait.
 
-```rust
-use wait_timeout::ChildExt;
+**Dependency:** Add [`wait-timeout`](https://crates.io/crates/wait-timeout) for cross-platform timed waits (waitpid on Unix, WaitForSingleObject on Windows). `child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows).
 
-pub enum ShellResult {
-    Success(String),
-    Timeout,
-    Error(String),
-}
-
-pub fn run_shell_command(
-    script: &str,
-    stdin_input: &str,
-    working_dir: Option<&Path>,
-    timeout: Option<Duration>,
-) -> ShellResult {
-    let mut child = match spawn_shell(script, stdin_input, working_dir) {
-        Ok(c) => c,
-        Err(e) => return ShellResult::Error(e),
-    };
-
-    match timeout {
-        Some(duration) => match child.wait_timeout(duration) {
-            Ok(Some(status)) => {
-                let output = collect_output(child, status);
-                classify_output(output)
-            }
-            Ok(None) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                ShellResult::Timeout
-            }
-            Err(e) => ShellResult::Error(format!("wait failed: {e}")),
-        },
-        None => {
-            let output = child
-                .wait_with_output()
-                .map_err(|e| format!("wait failed: {e}"));
-            match output {
-                Ok(o) => classify_output(o),
-                Err(e) => ShellResult::Error(e),
-            }
-        }
-    }
-}
-```
-
-`child.kill()` is cross-platform (SIGKILL on Unix, TerminateProcess on Windows).
+The `run_shell_command` function in `shell.rs` keeps its current signature (`Result<String, String>`). Timeout enforcement is layered on by the runner when it calls the executor.
 
 ### 5. Unify `SubmitResult`
 
@@ -299,10 +270,17 @@ After unification, `response.rs` no longer needs `use troupe::Response`. The tro
      ShellExecutor    Pool/Shell     ShellExecutor
             │         Executor            │
             ▼              ▼              ▼
-       ActionOutcome  ActionOutcome  ActionOutcome
+     Result<String>   Result<String>  Result<String>
+            │              │              │
+            └──────────────┼──────────────┘
+                           ▼
+                    run_with_timeout
+                           │
+                           ▼
+                     ActionOutcome
 ```
 
-Every box in the middle row implements `Executor`. Every execution occupies a concurrency slot and gets a timeout.
+Every box in the middle row implements `Executor` (returns `Result<String, String>`). The runner wraps each call with `run_with_timeout` to produce `ActionOutcome`. Every execution occupies a concurrency slot.
 
 ## What doesn't change
 
