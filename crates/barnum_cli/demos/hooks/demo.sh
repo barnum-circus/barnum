@@ -1,10 +1,7 @@
 #!/bin/bash
-# Demo: Pre-hook, post-hook, and finally-hook execution
+# Demo: Finally-hook execution
 #
-# Shows how hooks transform data at each stage of task processing:
-# - pre-hook: transforms input before action runs
-# - post-hook: can modify output/spawned tasks after action completes
-# - finally: runs after task and all children complete
+# Shows how the finally hook runs after a task and all its children complete.
 
 set -e
 
@@ -19,7 +16,7 @@ echo ""
 
 export BARNUM="${BARNUM:-$WORKSPACE_ROOT/target/debug/barnum}"
 
-echo "=== Demo: Pre/Post/Finally Hooks ==="
+echo "=== Demo: Finally Hooks ==="
 echo ""
 
 # Create a temp pool directory
@@ -45,9 +42,7 @@ $BARNUM --root "$POOL_ROOT" run --config "$SCRIPT_DIR/config.json" \
 echo ""
 echo "=== Success! ==="
 echo ""
-echo "Hook execution order:"
-echo "1. Pre-hook: Added timestamp to input"
-echo "2. Process action: Processed the item"
-echo "3. Post-hook: Logged completion, passed through spawned tasks"
-echo "4. Cleanup action: Child task ran"
-echo "5. Finally hook: Ran after Process and its child Cleanup completed"
+echo "Execution order:"
+echo "1. Process action: Processed the item"
+echo "2. Cleanup action: Child task ran"
+echo "3. Finally hook: Ran after Process and its child Cleanup completed"

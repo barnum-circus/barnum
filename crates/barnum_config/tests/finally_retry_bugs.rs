@@ -647,16 +647,15 @@ echo "B_finally" >> "{}"
     );
     fs::write(&b_finally, &script).expect("write B finally");
 
-    // C's completion marker (written by post hook since C has no finally)
-    let c_post = root.join("c_post.sh");
+    // C's completion marker (written by finally hook since C is a leaf step)
+    let c_finally = root.join("c_finally.sh");
     let script = format!(
         r#"#!/bin/bash
 echo "C_done" >> "{}"
-cat  # pass through stdin to stdout
 "#,
         order_log_c.display()
     );
-    fs::write(&c_post, &script).expect("write C post");
+    fs::write(&c_finally, &script).expect("write C finally");
 
     #[cfg(unix)]
     {
@@ -665,7 +664,8 @@ cat  # pass through stdin to stdout
             .expect("chmod A finally");
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755))
             .expect("chmod B finally");
-        fs::set_permissions(&c_post, fs::Permissions::from_mode(0o755)).expect("chmod C post");
+        fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod C finally");
     }
 
     let config_json = format!(
@@ -687,13 +687,13 @@ cat  # pass through stdin to stdout
                 "name": "StepC",
                 "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}},
                 "next": [],
-                "post": {{"kind": "Command", "script": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }}
         ]
     }}"#,
         a_finally.display(),
         b_finally.display(),
-        c_post.display()
+        c_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -809,16 +809,15 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
     );
     fs::write(&b_finally, &script).expect("write B finally");
 
-    // Cleanup task's post hook - writes completion marker
-    let cleanup_post = root.join("cleanup_post.sh");
+    // Cleanup task's finally hook - writes completion marker
+    let cleanup_finally = root.join("cleanup_finally.sh");
     let script = format!(
         r#"#!/bin/bash
 echo "C_done" >> "{}"
-cat  # pass through stdin to stdout
 "#,
         order_log_c.display()
     );
-    fs::write(&cleanup_post, &script).expect("write cleanup post");
+    fs::write(&cleanup_finally, &script).expect("write cleanup finally");
 
     #[cfg(unix)]
     {
@@ -827,8 +826,8 @@ cat  # pass through stdin to stdout
             .expect("chmod A finally");
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755))
             .expect("chmod B finally");
-        fs::set_permissions(&cleanup_post, fs::Permissions::from_mode(0o755))
-            .expect("chmod cleanup post");
+        fs::set_permissions(&cleanup_finally, fs::Permissions::from_mode(0o755))
+            .expect("chmod cleanup finally");
     }
 
     let config_json = format!(
@@ -850,13 +849,13 @@ cat  # pass through stdin to stdout
                 "name": "Cleanup",
                 "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}},
                 "next": [],
-                "post": {{"kind": "Command", "script": "{}"}}
+                "finally": {{"kind": "Command", "script": "{}"}}
             }}
         ]
     }}"#,
         a_finally.display(),
         b_finally.display(),
-        cleanup_post.display()
+        cleanup_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -940,7 +939,7 @@ fn deeply_nested_finally_chain() {
         }
     });
 
-    // Create finally hooks for A, B, C and a post hook for D
+    // Create finally hooks for A, B, C, D
     let a_finally = root.join("a_finally.sh");
     fs::write(
         &a_finally,
@@ -971,15 +970,15 @@ fn deeply_nested_finally_chain() {
     )
     .expect("write C finally");
 
-    let d_post = root.join("d_post.sh");
+    let d_finally = root.join("d_finally.sh");
     fs::write(
-        &d_post,
+        &d_finally,
         format!(
-            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\n",
             order_log_d.display()
         ),
     )
-    .expect("write D post");
+    .expect("write D finally");
 
     #[cfg(unix)]
     {
@@ -987,7 +986,7 @@ fn deeply_nested_finally_chain() {
         fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
         fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
-        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
     let config_json = format!(
@@ -996,13 +995,13 @@ fn deeply_nested_finally_chain() {
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "script": "{}"}}}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
         b_finally.display(),
         c_finally.display(),
-        d_post.display()
+        d_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1118,11 +1117,11 @@ fn multiple_children_with_finally() {
     )
     .expect("write");
 
-    let d_post = root.join("d_post.sh");
+    let d_finally = root.join("d_finally.sh");
     fs::write(
-        &d_post,
+        &d_finally,
         format!(
-            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\n",
             order_log_d.display()
         ),
     )
@@ -1134,7 +1133,7 @@ fn multiple_children_with_finally() {
         fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
         fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
-        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
     let config_json = format!(
@@ -1143,13 +1142,13 @@ fn multiple_children_with_finally() {
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepC", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
+            {{"name": "StepD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
         b_finally.display(),
         c_finally.display(),
-        d_post.display()
+        d_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
@@ -1266,21 +1265,21 @@ fn finally_spawns_multiple_tasks() {
     )
     .expect("write");
 
-    let c_post = root.join("c_post.sh");
+    let c_finally = root.join("c_finally.sh");
     fs::write(
-        &c_post,
+        &c_finally,
         format!(
-            "#!/bin/bash\necho \"C_done\" >> \"{}\"\ncat\n",
+            "#!/bin/bash\necho \"C_done\" >> \"{}\"\n",
             order_log_c.display()
         ),
     )
     .expect("write");
 
-    let d_post = root.join("d_post.sh");
+    let d_finally = root.join("d_finally.sh");
     fs::write(
-        &d_post,
+        &d_finally,
         format!(
-            "#!/bin/bash\necho \"D_done\" >> \"{}\"\ncat\n",
+            "#!/bin/bash\necho \"D_done\" >> \"{}\"\n",
             order_log_d.display()
         ),
     )
@@ -1291,8 +1290,8 @@ fn finally_spawns_multiple_tasks() {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&a_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
-        fs::set_permissions(&c_post, fs::Permissions::from_mode(0o755)).expect("chmod");
-        fs::set_permissions(&d_post, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
+        fs::set_permissions(&d_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
     let config_json = format!(
@@ -1300,14 +1299,14 @@ fn finally_spawns_multiple_tasks() {
         "steps": [
             {{"name": "StepA", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "script": "{}"}}}},
             {{"name": "StepB", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
-            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}},
-            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "post": {{"kind": "Command", "script": "{}"}}}}
+            {{"name": "CleanupC", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}},
+            {{"name": "CleanupD", "action": {{"kind": "Pool", "instructions": {{"kind": "Inline", "value": ""}}}}, "next": [], "finally": {{"kind": "Command", "script": "{}"}}}}
         ]
     }}"#,
         a_finally.display(),
         b_finally.display(),
-        c_post.display(),
-        d_post.display()
+        c_finally.display(),
+        d_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");

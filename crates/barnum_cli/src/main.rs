@@ -480,12 +480,6 @@ fn generate_graphviz(config: &Config) -> String {
         // Build label with hooks indicator
         let mut label_parts = vec![step.name.to_string()];
         let mut hooks = vec![];
-        if step.pre.is_some() {
-            hooks.push("pre");
-        }
-        if step.post.is_some() {
-            hooks.push("post");
-        }
         if step.finally_hook.is_some() {
             hooks.push("finally");
         }

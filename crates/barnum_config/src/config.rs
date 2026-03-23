@@ -79,7 +79,6 @@ const fn default_true() -> bool {
 
 /// A named step in the workflow. Steps are the nodes of the task graph.
 ///
-/// Execution order for each task: `pre` hook → `action` → `post` hook.
 /// The `finally` hook runs after the task **and all of its descendant tasks** complete.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -95,39 +94,9 @@ pub struct StepFile {
     #[serde(default)]
     pub value_schema: Option<SchemaRef>,
 
-    /// Shell script that runs **before** the action.
-    ///
-    /// **stdin:** The task's `value` payload as JSON (e.g., `{"path": "/src"}`).
-    /// This is just the value — not the full `{"kind": ..., "value": ...}` wrapper.
-    ///
-    /// **stdout:** The (possibly modified) value payload as JSON. Must be the
-    /// same shape. The modified value is what the action receives.
-    ///
-    /// Use this to enrich or transform the task before the action sees it
-    /// (e.g., adding timestamps, resolving paths, fetching metadata).
-    #[serde(default)]
-    pub pre: Option<PreHook>,
-
     /// How this step processes tasks — either send to the agent pool (`Pool`)
     /// or run a local shell command (`Command`).
     pub action: ActionFile,
-
-    /// Shell script that runs **after** the action completes (or fails).
-    ///
-    /// **stdin:** A tagged JSON object describing the outcome. The `kind` field
-    /// indicates what happened:
-    ///
-    /// - `{"kind": "Success", "input": <value>, "output": <agent_output>, "next": [<tasks>]}`
-    ///   — Action succeeded. `next` contains the follow-up tasks to spawn.
-    /// - `{"kind": "Timeout", "input": <value>}` — Action timed out.
-    /// - `{"kind": "Error", "input": <value>, "error": "<message>"}` — Action failed.
-    /// - `{"kind": "PreHookError", "input": <value>, "error": "<message>"}` — Pre hook failed.
-    ///
-    /// **stdout:** The same tagged JSON object, possibly modified. Typically
-    /// you modify the `next` array in `Success` to filter, rewrite, or add
-    /// follow-up tasks.
-    #[serde(default)]
-    pub post: Option<PostHook>,
 
     /// Step names this step is allowed to spawn follow-up tasks on.
     /// Each string must match the `name` of another step in this config.
@@ -194,39 +163,11 @@ pub enum ActionFile {
     Command(CommandActionFile),
 }
 
-/// A shell command used as a hook (pre, post, or finally).
+/// A shell command used as a hook.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct HookCommand {
     /// Shell script to execute.
     pub script: String,
-}
-
-/// Pre-action hook. Transforms the task value before the action runs.
-///
-/// In JSON: `{"kind": "Command", "script": "./pre-hook.sh"}`
-///
-/// **stdin:** Task value payload (e.g., `{"path": "/src"}`).
-/// **stdout:** Modified value payload (same shape).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
-pub enum PreHook {
-    /// Run a shell command as the pre hook.
-    Command(HookCommand),
-}
-
-/// Post-action hook. Inspects or modifies the action's outcome.
-///
-/// In JSON: `{"kind": "Command", "script": "./post-hook.sh"}`
-///
-/// **stdin:** Tagged JSON describing the outcome (`"kind": "Success"`,
-/// `"Timeout"`, `"Error"`, or `"PreHookError"`). On success, includes an
-/// `input`, `output`, and `next` (follow-up tasks) field.
-/// **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
-pub enum PostHook {
-    /// Run a shell command as the post hook.
-    Command(HookCommand),
 }
 
 /// Finally hook. Runs after a task and all its descendants complete.
@@ -441,15 +382,7 @@ impl StepFile {
         Ok(crate::resolved::Step {
             name: self.name,
             value_schema,
-            pre: self.pre.map(|h| {
-                let PreHook::Command(HookCommand { script }) = h;
-                HookScript::new(script)
-            }),
             action,
-            post: self.post.map(|h| {
-                let PostHook::Command(HookCommand { script }) = h;
-                HookScript::new(script)
-            }),
             next: self.next,
             finally_hook: self.finally_hook.map(|h| {
                 let FinallyHook::Command(HookCommand { script }) = h;

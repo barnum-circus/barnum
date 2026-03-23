@@ -471,8 +471,6 @@ fn graph_shows_hooks() {
         r#"{{"steps": [{{
             "name": "WithHooks",
             "action": {POOL},
-            "pre": {{"kind": "Command", "script": "echo pre"}},
-            "post": {{"kind": "Command", "script": "echo post"}},
             "finally": {{"kind": "Command", "script": "echo finally"}},
             "next": []
         }}]}}"#
@@ -483,8 +481,6 @@ fn graph_shows_hooks() {
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
-    assert!(stdout.contains("pre"), "Should show pre hook");
-    assert!(stdout.contains("post"), "Should show post hook");
     assert!(stdout.contains("finally"), "Should show finally hook");
 }
 

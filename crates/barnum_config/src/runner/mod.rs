@@ -1032,11 +1032,9 @@ mod run_state_tests {
         Step {
             name: StepName::new(name),
             value_schema: None,
-            pre: None,
             action: Action::Command(CommandAction {
                 script: "true".into(),
             }),
-            post: None,
             next: vec![],
             finally_hook: None,
             options: Options::default(),

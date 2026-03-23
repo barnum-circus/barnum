@@ -5,12 +5,11 @@
 
 input=$(cat)
 
-# Extract the item and timestamp from the value
+# Extract the item from the value
 item=$(echo "$input" | jq -r '.value.item')
-timestamp=$(echo "$input" | jq -r '.value.timestamp')
 
 # Log what we're processing (to stderr so it doesn't interfere with output)
-echo "Processing item '$item' (received at $timestamp)" >&2
+echo "Processing item '$item'" >&2
 
 # Return a Cleanup task with the result
 echo "[{\"kind\": \"Cleanup\", \"value\": {\"result\": \"processed-$item\"}}]"

@@ -37,20 +37,6 @@ const Options = z.object({
   timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Timeout in seconds for each task (None = no timeout)."),
 }).strict().describe("Global runtime options for task execution. All fields have sensible defaults.");
 
-const PostHook = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute."),
-  }).describe("Run a shell command as the post hook."),
-]).describe("Post-action hook. Inspects or modifies the action's outcome.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./post-hook.sh\"}`\n\n**stdin:** Tagged JSON describing the outcome (`\"kind\": \"Success\"`, `\"Timeout\"`, `\"Error\"`, or `\"PreHookError\"`). On success, includes an `input`, `output`, and `next` (follow-up tasks) field. **stdout:** Same tagged JSON, possibly modified (e.g., filtering `next`).");
-
-const PreHook = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("Command"),
-    script: z.string().describe("Shell script to execute."),
-  }).describe("Run a shell command as the pre hook."),
-]).describe("Pre-action hook. Transforms the task value before the action runs.\n\nIn JSON: `{\"kind\": \"Command\", \"script\": \"./pre-hook.sh\"}`\n\n**stdin:** Task value payload (e.g., `{\"path\": \"/src\"}`). **stdout:** Modified value payload (same shape).");
-
 const SchemaLink = z.object({
   link: z.string().describe("Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`)."),
 }).describe("Reference to an external JSON Schema file.");
@@ -73,10 +59,8 @@ const StepFile = z.object({
   name: z.string().describe("Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`."),
   next: z.array(z.string()).optional().default([]).describe("Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups)."),
   options: StepOptions.optional().default({"max_retries": null, "retry_on_invalid_response": null, "retry_on_timeout": null, "timeout": null}).describe("Per-step options that override the global `options`. Only the fields you set here take effect; everything else falls through to the global defaults."),
-  post: PostHook.nullable().optional().default(null).describe("Shell script that runs **after** the action completes (or fails).\n\n**stdin:** A tagged JSON object describing the outcome. The `kind` field indicates what happened:\n\n- `{\"kind\": \"Success\", \"input\": <value>, \"output\": <agent_output>, \"next\": [<tasks>]}` — Action succeeded. `next` contains the follow-up tasks to spawn. - `{\"kind\": \"Timeout\", \"input\": <value>}` — Action timed out. - `{\"kind\": \"Error\", \"input\": <value>, \"error\": \"<message>\"}` — Action failed. - `{\"kind\": \"PreHookError\", \"input\": <value>, \"error\": \"<message>\"}` — Pre hook failed.\n\n**stdout:** The same tagged JSON object, possibly modified. Typically you modify the `next` array in `Success` to filter, rewrite, or add follow-up tasks."),
-  pre: PreHook.nullable().optional().default(null).describe("Shell script that runs **before** the action.\n\n**stdin:** The task's `value` payload as JSON (e.g., `{\"path\": \"/src\"}`). This is just the value — not the full `{\"kind\": ..., \"value\": ...}` wrapper.\n\n**stdout:** The (possibly modified) value payload as JSON. Must be the same shape. The modified value is what the action receives.\n\nUse this to enrich or transform the task before the action sees it (e.g., adding timestamps, resolving paths, fetching metadata)."),
   value_schema: SchemaRef.nullable().optional().default(null).describe("JSON Schema that validates the `value` payload for tasks on this step. When set, tasks whose `value` doesn't conform are rejected. When omitted, any JSON value is accepted."),
-}).strict().describe("A named step in the workflow. Steps are the nodes of the task graph.\n\nExecution order for each task: `pre` hook → `action` → `post` hook. The `finally` hook runs after the task **and all of its descendant tasks** complete.");
+}).strict().describe("A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.");
 
 export const configFileSchema = z.object({
   "$schema": z.string().nullable().optional().describe("Optional JSON Schema URL for editor validation (e.g., `\"./node_modules/@barnum/barnum/barnum-config-schema.json\"`). Ignored at runtime."),
@@ -90,8 +74,6 @@ export type MaybeLinked_for_String = z.infer<typeof MaybeLinked_for_String>;
 export type ActionFile = z.infer<typeof ActionFile>;
 export type FinallyHook = z.infer<typeof FinallyHook>;
 export type Options = z.infer<typeof Options>;
-export type PostHook = z.infer<typeof PostHook>;
-export type PreHook = z.infer<typeof PreHook>;
 export type SchemaLink = z.infer<typeof SchemaLink>;
 export type SchemaRef = z.infer<typeof SchemaRef>;
 export type StepOptions = z.infer<typeof StepOptions>;
