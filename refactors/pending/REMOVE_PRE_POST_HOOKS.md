@@ -6,7 +6,9 @@
 
 Pre and post hooks are unused outside a single demo config (`crates/barnum_cli/demos/hooks/config.jsonc`). They add substantial complexity: `PreHookError` variant on `SubmitResult`, `PostHookInput` enum with four variants, `process_and_finalize` wrapping the result pipeline, main-thread blocking for post-hooks, and the entire `hooks.rs` module (aside from `run_command_action` which is used by command actions).
 
-Nobody uses them. Delete them.
+Nobody uses them. The JavaScript consumers of barnum configs don't need them either — pre/post transformations are naturally expressed as separate tasks in a pipeline. A "pre-hook" is just a task whose output feeds the next task. A "post-hook" is just a task that runs after. The task graph already supports this composition without special hook primitives.
+
+Delete them.
 
 ## Current Code
 
