@@ -3,9 +3,13 @@
 **Parent:** JS_ACTION_RESOLUTION.md
 **Depends on:** Nothing (purely additive JS)
 
+## Prerequisite Rust Change
+
+Remove `skip_serializing_if = "Vec::is_empty"` from `Step.next` in `crates/barnum_config/src/resolved.rs:53`. The `next` field should always be serialized, even when empty. This keeps the JS types simple — `next` is always `string[]`, never optional.
+
 ## Motivation
 
-The JS executor needs handler implementations for each action kind, a type system for handler definitions, and a dispatch registry. This sub-refactor creates the `libs/barnum/actions/` directory and the `libs/troupe-task/` package.
+The JS executor needs handler implementations for each action kind. There are two: Pool and Command. This sub-refactor creates the handler files and the `@barnum/troupe-task` package.
 
 Troupe task submission and step docs generation are extracted into `@barnum/troupe-task` — a separate published package. This keeps `@barnum/barnum` focused on workflow orchestration and lets other tools submit troupe tasks independently.
 
@@ -21,20 +25,19 @@ libs/troupe-task/
 ├── tsconfig.json
 ├── submit.ts       # submitTask(): find binary, invoke CLI, parse response
 ├── docs.ts         # generateStepDocs(): markdown instruction generation
-├── pool.ts         # Pool action handler (validate schema + handle function)
+├── pool.ts         # Pool action handler
 ├── types.ts        # SubmitOptions, ResolvedStep, ResolvedConfig, FollowUpTask
 └── index.ts        # Public API re-exports
 ```
 
 ### `@barnum/barnum` actions (existing package: `libs/barnum/actions/`)
 
-Executor, registry, command handler, and action definition types. The pool handler is imported from `@barnum/troupe-task`.
+Executor and Command handler. The executor reads the envelope from stdin, dispatches to the correct handler based on action kind, and writes follow-up tasks to stdout.
 
 ```
 libs/barnum/actions/
-├── types.ts       # RawEnvelope, ActionContext, ActionDefinition, defineAction
+├── types.ts       # RawEnvelope
 ├── command.ts     # Command handler
-├── index.ts       # Handler registry (imports pool from @barnum/troupe-task)
 └── executor.ts    # Stdin reader, dispatcher, stdout writer
 ```
 
@@ -101,8 +104,6 @@ export interface SubmitOptions {
   pool?: string;
   /** Pool root directory. If omitted, troupe uses its default. */
   root?: string;
-  /** Agent timeout in seconds. Forwarded to troupe as timeout_seconds. */
-  timeout?: number;
 }
 
 /** A resolved step definition (from the Rust envelope). */
@@ -202,7 +203,7 @@ export function generateStepDocs(
 
 ### submit.ts
 
-Finds the troupe binary, invokes `troupe submit_task`, and parses the response.
+Finds the troupe binary, invokes `troupe submit_task`, and parses the response. The `data` argument is sent as-is — the caller builds the complete payload (including `timeout_seconds` if needed).
 
 ```typescript
 import { execFileSync } from "node:child_process";
@@ -225,6 +226,10 @@ function troupeBinary(): string {
  *
  * Calls `troupe submit_task` with --notify file, waits for the response,
  * and parses the agent's stdout as a JSON array of follow-up tasks.
+ *
+ * The `data` payload is sent as-is to the troupe CLI. The caller is
+ * responsible for building the complete payload shape (task, instructions,
+ * timeout_seconds, etc.).
  */
 export function submitTask(
   data: unknown,
@@ -235,15 +240,7 @@ export function submitTask(
 
   if (options?.root) args.push("--root", options.root);
   if (options?.pool) args.push("--pool", options.pool);
-  if (options?.timeout != null) {
-    // Inject timeout_seconds into the data payload
-    const payload = typeof data === "object" && data !== null
-      ? { ...data, timeout_seconds: options.timeout }
-      : data;
-    args.push("--notify", "file", "--data", JSON.stringify(payload));
-  } else {
-    args.push("--notify", "file", "--data", JSON.stringify(data));
-  }
+  args.push("--notify", "file", "--data", JSON.stringify(data));
 
   const result = execFileSync(troupe, args, { encoding: "utf-8" });
   const response = JSON.parse(result);
@@ -258,7 +255,7 @@ export function submitTask(
 
 ### pool.ts
 
-The Pool action handler. Generates agent instructions, constructs the troupe payload, and submits. Exported as a plain object with `validate` (Zod schema) and `handle` (async function) — structurally compatible with `ActionDefinition` in `@barnum/barnum` without importing it (no circular dependency).
+The Pool action handler. Generates agent instructions, constructs the troupe payload, and submits.
 
 ```typescript
 import { z } from "zod";
@@ -266,33 +263,34 @@ import type { ResolvedStep, ResolvedConfig, FollowUpTask } from "./types.js";
 import { submitTask } from "./submit.js";
 import { generateStepDocs } from "./docs.js";
 
-const validate = z.object({
+export const poolParamsSchema = z.object({
   instructions: z.string(),
   pool: z.string().nullable().optional(),
   root: z.string().nullable().optional(),
   timeout: z.number().nullable().optional(),
 });
 
-type Params = z.output<typeof validate>;
+export type PoolParams = z.output<typeof poolParamsSchema>;
 
-async function handle(ctx: {
-  params: Params;
+export async function handlePool(ctx: {
+  params: PoolParams;
   task: { kind: string; value: unknown };
   step: ResolvedStep;
   config: ResolvedConfig;
 }): Promise<FollowUpTask[]> {
   const { params, task, step, config } = ctx;
   const docs = generateStepDocs(task.kind, params.instructions, step, config);
-  const payload = { task, instructions: docs };
+
+  const payload: Record<string, unknown> = { task, instructions: docs };
+  if (params.timeout != null) {
+    payload.timeout_seconds = params.timeout;
+  }
 
   return submitTask(payload, {
     pool: params.pool ?? undefined,
     root: params.root ?? undefined,
-    timeout: params.timeout ?? undefined,
   });
 }
-
-export const poolAction = { validate, handle };
 ```
 
 Note: `params.instructions` is a plain `string` — Rust resolves `MaybeLinked` (Inline/Link) to a string during `ConfigFile::resolve()`.
@@ -302,7 +300,8 @@ Note: `params.instructions` is a plain `string` — Rust resolves `MaybeLinked` 
 ```typescript
 export { submitTask } from "./submit.js";
 export { generateStepDocs } from "./docs.js";
-export { poolAction } from "./pool.js";
+export { handlePool, poolParamsSchema } from "./pool.js";
+export type { PoolParams } from "./pool.js";
 export type {
   FollowUpTask,
   SubmitOptions,
@@ -347,10 +346,9 @@ export type {
 
 ### types.ts
 
-Defines the envelope shape, handler context, and action definition interface. Uses resolved types from `@barnum/troupe-task` for step/config, defines its own envelope and handler types.
+The envelope type and re-exports of resolved types from `@barnum/troupe-task`.
 
 ```typescript
-import { type ZodType, type z } from "zod";
 import type { ResolvedStep, ResolvedConfig, FollowUpTask } from "@barnum/troupe-task";
 export type { FollowUpTask, ResolvedStep, ResolvedConfig };
 
@@ -365,55 +363,6 @@ export interface RawEnvelope {
   step: ResolvedStep;
   config: ResolvedConfig;
 }
-
-/**
- * Context passed to an action's handle function.
- *
- * The params field is typed from the handler's Zod schema (if defined).
- */
-export interface ActionContext<TParams = Record<string, unknown>> {
-  params: TParams;
-  task: { kind: string; value: unknown };
-  step: ResolvedStep;
-  config: ResolvedConfig;
-}
-
-/**
- * An action definition: a handle function with an optional Zod schema
- * for params validation and type inference.
- *
- * The Zod schema does double duty:
- * 1. Runtime validation of action params before handle() is called.
- * 2. TypeScript type inference — params in handle() is typed as z.output<validate>.
- */
-export interface ActionDefinition<TParams = Record<string, unknown>> {
-  validate?: ZodType<TParams>;
-  handle: (ctx: ActionContext<TParams>) => Promise<FollowUpTask[]>;
-}
-
-/**
- * Define an action with full type inference from the Zod schema.
- *
- * With validate:
- *   defineAction({
- *     validate: z.object({ script: z.string() }),
- *     handle: async ({ params }) => { ... }  // params is { script: string }
- *   })
- *
- * Without validate:
- *   defineAction({
- *     handle: async ({ params }) => { ... }  // params is Record<string, unknown>
- *   })
- */
-export function defineAction<T extends ZodType>(
-  def: { validate: T; handle: (ctx: ActionContext<z.output<T>>) => Promise<FollowUpTask[]> },
-): ActionDefinition<z.output<T>>;
-export function defineAction(
-  def: { handle: (ctx: ActionContext<Record<string, unknown>>) => Promise<FollowUpTask[]> },
-): ActionDefinition;
-export function defineAction(def: ActionDefinition<any>): ActionDefinition<any> {
-  return def;
-}
 ```
 
 ### command.ts
@@ -422,79 +371,56 @@ The Command handler spawns the user's shell script, piping `{ kind, value }` to 
 
 ```typescript
 import { execSync } from "node:child_process";
-import { z } from "zod";
-import { defineAction } from "./types.js";
+import type { FollowUpTask } from "@barnum/troupe-task";
 
-export default defineAction({
-  validate: z.object({ script: z.string() }),
+export function handleCommand(
+  script: string,
+  task: { kind: string; value: unknown },
+): FollowUpTask[] {
+  const stdin = JSON.stringify(task);
+  const stdout = execSync(script, {
+    input: stdin,
+    encoding: "utf-8",
+    shell: "/bin/sh",
+  });
 
-  handle: async ({ params, task }) => {
-    const stdin = JSON.stringify(task);
-    const stdout = execSync(params.script, {
-      input: stdin,
-      encoding: "utf-8",
-      shell: "/bin/sh",
-    });
-
-    return JSON.parse(stdout);
-  },
-});
-```
-
-### index.ts
-
-Hardcoded handler registry. Maps action kind names to action definitions.
-
-```typescript
-import type { ActionDefinition } from "./types.js";
-import { poolAction } from "@barnum/troupe-task";
-import commandAction from "./command.js";
-
-const actions = new Map<string, ActionDefinition<any>>([
-  ["Pool", poolAction],
-  ["Command", commandAction],
-]);
-
-export function getAction(kind: string): ActionDefinition<any> {
-  const action = actions.get(kind);
-  if (!action) {
-    throw new Error(
-      `Unknown action kind: "${kind}". ` +
-      `Built-in kinds: ${[...actions.keys()].join(", ")}`,
-    );
-  }
-  return action;
+  return JSON.parse(stdout);
 }
-
-export type { ActionDefinition, ActionContext, FollowUpTask } from "./types.js";
-export { defineAction } from "./types.js";
 ```
 
 ### executor.ts
 
-The entry point that Rust spawns for every task. Reads the envelope from stdin, validates params, dispatches to the handler, and writes follow-up tasks to stdout.
+The entry point that Rust spawns for every task. Reads the envelope from stdin, dispatches to the correct handler based on action kind, and writes follow-up tasks to stdout.
 
 ```typescript
-import { getAction } from "./index.js";
+import { handlePool, poolParamsSchema } from "@barnum/troupe-task";
+import { handleCommand } from "./command.js";
 import type { RawEnvelope } from "./types.js";
 
 const chunks: Buffer[] = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const envelope: RawEnvelope = JSON.parse(Buffer.concat(chunks).toString());
 
-const action = getAction(envelope.action.kind);
+const { action, task, step, config } = envelope;
 
-const rawParams = envelope.action.params ?? {};
-const params = action.validate
-  ? action.validate.parse(rawParams)
-  : rawParams;
-
-const results = await action.handle({
-  params,
-  task: envelope.task,
-  step: envelope.step,
-  config: envelope.config,
-});
+let results;
+switch (action.kind) {
+  case "Pool": {
+    const params = poolParamsSchema.parse(action.params);
+    results = await handlePool({ params, task, step, config });
+    break;
+  }
+  case "Command": {
+    const script = action.params.script;
+    if (typeof script !== "string") {
+      throw new Error(`Command action requires a "script" string param, got: ${typeof script}`);
+    }
+    results = handleCommand(script, task);
+    break;
+  }
+  default:
+    throw new Error(`Unknown action kind: "${action.kind}". Built-in kinds: Pool, Command`);
+}
 
 process.stdout.write(JSON.stringify(results));
 ```
@@ -507,12 +433,9 @@ Add `tsx` and `@barnum/troupe-task` dependencies, include the actions directory 
   "dependencies": {
     "zod": "^3.0.0",
 +   "tsx": "^4.0.0",
-+   "@barnum/troupe-task": "workspace:*",
-+   "@barnum/troupe": "workspace:*"
++   "@barnum/troupe-task": "workspace:*"
   },
 ```
-
-`@barnum/troupe` is needed because `@barnum/troupe-task` uses `require("@barnum/troupe")` to find the troupe binary.
 
 ```diff
   "files": [
@@ -528,21 +451,8 @@ Add `tsx` and `@barnum/troupe-task` dependencies, include the actions directory 
   ],
 ```
 
-Add an export for the actions module so users can import `defineAction` and the types:
-
-```diff
-  "exports": {
-    ".": "./index.ts",
-    "./schema": "./barnum-config-schema.zod.ts",
-    "./cli-schema": "./barnum-cli-schema.zod.ts",
--   "./binary": "./index.cjs"
-+   "./binary": "./index.cjs",
-+   "./actions": "./actions/index.ts"
-  },
-```
-
 ## Testing
 
 - `pnpm typecheck` validates all TypeScript types compile.
 - Manual test: write a small script that imports executor.ts, feeds it a mock envelope on stdin, and verifies the output. This exercises the full handler pipeline without Rust.
-- Once EXECUTOR_CLI_FLAG lands, integration test: `barnum run --config ... --executor "npx tsx actions/executor.ts"`.
+- Integration test: `barnum run --config ... --executor "npx tsx actions/executor.ts"` for a full round-trip.
