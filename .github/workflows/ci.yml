@@ -143,9 +143,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Verify pnpm lockfile is up to date
+      - name: Verify pnpm lockfile is up to date (libs/barnum)
         run: pnpm install --frozen-lockfile
         working-directory: libs/barnum
+      - name: Verify pnpm lockfile is up to date (demos)
+        run: pnpm install --frozen-lockfile
+        working-directory: crates/barnum_cli/demos
 
   clippy:
     needs: gate-rust
@@ -474,6 +477,12 @@ jobs:
       - name: Type-check generated schemas
         run: pnpm typecheck
         working-directory: libs/barnum
+      - name: Install demo dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: crates/barnum_cli/demos
+      - name: Type-check demo run scripts
+        run: pnpm typecheck
+        working-directory: crates/barnum_cli/demos
       - uses: actions/upload-artifact@v4
         with:
           name: barnum-config-schema

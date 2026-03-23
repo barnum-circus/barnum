@@ -1,6 +1,7 @@
 {
   "name": "@barnum/barnum",
   "version": "0.2.4",
+  "type": "module",
   "description": "Barnum CLI - workflow engine for agents.",
   "main": "index.ts",
   "types": "index.ts",
@@ -8,10 +9,10 @@
     ".": "./index.ts",
     "./schema": "./barnum-config-schema.zod.ts",
     "./cli-schema": "./barnum-cli-schema.zod.ts",
-    "./binary": "./index.js"
+    "./binary": "./index.cjs"
   },
   "bin": {
-    "barnum": "cli.js"
+    "barnum": "cli.cjs"
   },
   "author": "Robert Balicki",
   "license": "MIT",
@@ -32,12 +33,13 @@
   ],
   "files": [
     "index.ts",
-    "index.js",
-    "cli.js",
+    "index.cjs",
+    "cli.cjs",
     "artifacts/**/*",
     "barnum-config-schema.json",
     "barnum-config-schema.zod.ts",
-    "barnum-cli-schema.zod.ts"
+    "barnum-cli-schema.zod.ts",
+    "run.ts"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
@@ -46,6 +48,7 @@
     "zod": "^3.0.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.0",
     "typescript": "^5.9.3"
   },
   "sideEffects": false
