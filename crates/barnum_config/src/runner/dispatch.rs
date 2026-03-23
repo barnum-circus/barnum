@@ -1,4 +1,4 @@
-//! Task dispatch - spawns threads to execute tasks and process results.
+//! Task dispatch types and finally dispatch.
 //!
 //! Workers run actions, sending unified results back on the channel for
 //! main-thread processing via response module functions.
@@ -30,33 +30,6 @@ pub struct WorkerResult {
     pub task: Task,
     pub kind: WorkerKind,
     pub result: ActionResult,
-}
-
-/// Execute a command task (runs in spawned thread).
-///
-/// Executes the shell command and sends the unified result back on the channel.
-pub fn dispatch_command_task(
-    task_id: LogTaskId,
-    task: Task,
-    script: &str,
-    working_dir: &Path,
-    tx: &mpsc::Sender<WorkerResult>,
-) {
-    let value = task.value.clone();
-    let task_json = serde_json::to_string(&serde_json::json!({
-        "kind": &task.step,
-        "value": &value.0,
-    }))
-    .unwrap_or_default();
-
-    let output =
-        run_shell_command(script, &task_json, Some(working_dir)).map_err(ActionError::Failed);
-    let _ = tx.send(WorkerResult {
-        task_id,
-        task,
-        kind: WorkerKind::Task,
-        result: ActionResult { value, output },
-    });
 }
 
 /// Execute a finally task (runs in spawned thread).

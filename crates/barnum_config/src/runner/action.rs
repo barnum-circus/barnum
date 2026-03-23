@@ -1,8 +1,11 @@
 //! Action trait and dispatch infrastructure.
 
 use std::fmt;
+use std::io::{Read as _, Write as _};
 use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -153,5 +156,98 @@ impl Action for PoolAction {
         });
         // No-op guard: troupe manages its own agent lifecycle.
         ActionHandle::new(rx, ())
+    }
+}
+
+// ==================== ShellAction ====================
+
+/// Guard that kills a child process on drop via `Child::kill()`.
+struct ProcessGuard {
+    child: Arc<Mutex<Child>>,
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// Shell action: runs a shell script with the task value on stdin.
+pub struct ShellAction {
+    pub script: String,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+}
+
+impl Action for ShellAction {
+    #[expect(clippy::expect_used)]
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        let (tx, rx) = mpsc::channel();
+        let task_json = serde_json::to_string(&serde_json::json!({
+            "kind": &self.step_name,
+            "value": &value,
+        }))
+        .unwrap_or_default();
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(&self.script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(&self.working_dir)
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.send(Err(e.to_string()));
+                return ActionHandle::new(rx, ());
+            }
+        };
+
+        // Write stdin, then drop to close the pipe.
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(task_json.as_bytes());
+        }
+
+        // Take pipes before sharing the child.
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let child = Arc::new(Mutex::new(child));
+
+        // Reader thread: reads pipes to completion, then waits for exit.
+        let child_for_reader = Arc::clone(&child);
+        thread::spawn(move || {
+            let stdout_data = stdout
+                .map(|mut r| {
+                    let mut s = String::new();
+                    r.read_to_string(&mut s).ok();
+                    s
+                })
+                .unwrap_or_default();
+            let stderr_data = stderr
+                .map(|mut r| {
+                    let mut s = String::new();
+                    r.read_to_string(&mut s).ok();
+                    s
+                })
+                .unwrap_or_default();
+
+            let status = child_for_reader
+                .lock()
+                .expect("[P080] child mutex poisoned")
+                .wait();
+            let result = match status {
+                Ok(s) if s.success() => Ok(stdout_data),
+                Ok(_) => Err(stderr_data),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result);
+        });
+
+        ActionHandle::new(rx, ProcessGuard { child })
     }
 }

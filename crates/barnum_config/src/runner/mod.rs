@@ -32,8 +32,8 @@ use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
-use action::{ActionError, PoolAction, spawn_worker};
-use dispatch::{WorkerResult, dispatch_command_task, dispatch_finally_task};
+use action::{ActionError, PoolAction, ShellAction, spawn_worker};
+use dispatch::{WorkerResult, dispatch_finally_task};
 use hooks::call_wake_script;
 use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
@@ -730,13 +730,20 @@ impl<'a> Engine<'a> {
                 );
             }
             ActionKind::Command(CommandAction { script }) => {
-                let script = script.clone();
-                let working_dir = self.pool.working_dir.clone();
-
                 info!(step = %task.step, script = %script, "executing command");
-                thread::spawn(move || {
-                    dispatch_command_task(task_id, task, &script, &working_dir, &tx);
+                let action = Box::new(ShellAction {
+                    script: script.clone(),
+                    step_name: task.step.clone(),
+                    working_dir: self.pool.working_dir.clone(),
                 });
+                spawn_worker(
+                    tx,
+                    action,
+                    task_id,
+                    task,
+                    dispatch::WorkerKind::Task,
+                    timeout,
+                );
             }
         }
     }
