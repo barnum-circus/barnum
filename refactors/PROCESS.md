@@ -250,6 +250,7 @@ While actively developing on the branch, feel free to:
 - Experiment and revert
 - Push work-in-progress
 - **Break CI** - it's fine, you'll fix it
+- **Use `--no-verify`** to skip the pre-commit hook and let CI validate instead. The pre-commit hook is slow (fmt, schema regen, clippy, tests, udeps). Committing with `--no-verify` and pushing keeps you working while CI runs in the background. Fix forward if CI fails.
 
 The branch is your workspace for experimentation. Push wild changes, figure out what works, debug why CI is breaking. Don't worry about commit cleanliness until you're ready to merge.
 
