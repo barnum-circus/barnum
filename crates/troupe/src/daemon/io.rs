@@ -25,7 +25,11 @@ use crate::Transport;
 use crate::constants::{REQUEST_SUFFIX, RESPONSE_FILE, RESPONSE_SUFFIX, TASK_FILE};
 use crate::response::{NotProcessedReason, Response};
 
-use super::core::{Effect, Event, SubmissionId, TaskId, WorkerId};
+use super::core::{
+    AssignHeartbeatIfIdleEvent, Effect, Event, SubmissionId, TaskAssignedEffect,
+    TaskCompletedEffect, TaskFailedEffect, TaskId, WorkerId, WorkerRemovedEffect,
+    WorkerTimedOutEvent, WorkerWaitingEffect,
+};
 
 // =============================================================================
 // Stop Notifier
@@ -421,7 +425,7 @@ pub(super) fn execute_effect(
     stop_notifier: &Arc<StopNotifier>,
 ) -> io::Result<()> {
     match effect {
-        Effect::TaskAssigned { worker_id, task_id } => {
+        Effect::TaskAssigned(TaskAssignedEffect { worker_id, task_id }) => {
             match task_id {
                 TaskId::External(submission_id) => {
                     let submission_data = submission_map
@@ -463,7 +467,7 @@ pub(super) fn execute_effect(
                 }
             }
         }
-        Effect::WorkerWaiting { worker_id } => {
+        Effect::WorkerWaiting(WorkerWaitingEffect { worker_id }) => {
             if config.heartbeat_enabled {
                 start_idle_timer(
                     events_tx.clone(),
@@ -473,7 +477,7 @@ pub(super) fn execute_effect(
                 );
             }
         }
-        Effect::TaskCompleted { worker_id, task_id } => {
+        Effect::TaskCompleted(TaskCompletedEffect { worker_id, task_id }) => {
             let worker_path = worker_map
                 .get_path(worker_id)
                 .expect("[P009] TaskCompleted for unknown worker - core bug");
@@ -499,7 +503,7 @@ pub(super) fn execute_effect(
                 }
             }
         }
-        Effect::TaskFailed { submission_id } => {
+        Effect::TaskFailed(TaskFailedEffect { submission_id }) => {
             let response = Response::not_processed(NotProcessedReason::Timeout);
             let response_json = serde_json::to_string(&response)
                 .expect("[P012] Response serialization cannot fail");
@@ -507,7 +511,7 @@ pub(super) fn execute_effect(
 
             warn!(submission_id = submission_id.0, "task failed (timeout)");
         }
-        Effect::WorkerRemoved { worker_id } => {
+        Effect::WorkerRemoved(WorkerRemovedEffect { worker_id }) => {
             let (transport, ()) = worker_map
                 .remove(worker_id)
                 .expect("[P013] WorkerRemoved for unknown worker - core bug");
@@ -548,7 +552,7 @@ fn start_task_timeout_timer(
             );
         } else {
             // Timeout elapsed without stop - fire the event
-            let _ = events_tx.send(Event::WorkerTimedOut { worker_id });
+            let _ = events_tx.send(Event::WorkerTimedOut(WorkerTimedOutEvent { worker_id }));
         }
     });
 }
@@ -570,7 +574,9 @@ fn start_idle_timer(
             debug!(worker_id = worker_id.0, "idle timer cancelled due to stop");
         } else {
             // Timeout elapsed without stop - fire the event
-            let _ = events_tx.send(Event::AssignHeartbeatIfIdle { worker_id });
+            let _ = events_tx.send(Event::AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent {
+                worker_id,
+            }));
         }
     });
 }

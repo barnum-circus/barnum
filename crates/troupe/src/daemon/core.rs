@@ -132,6 +132,37 @@ impl PoolState {
 // Events (Inputs)
 // =============================================================================
 
+/// A task was submitted by a client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TaskSubmittedEvent {
+    pub(super) submission_id: SubmissionId,
+}
+
+/// A worker registered (wrote ready.json).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WorkerReadyEvent {
+    pub(super) worker_id: WorkerId,
+}
+
+/// A worker completed its task (wrote response.json).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WorkerRespondedEvent {
+    pub(super) worker_id: WorkerId,
+}
+
+/// A worker timed out while processing a task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WorkerTimedOutEvent {
+    pub(super) worker_id: WorkerId,
+}
+
+/// Request to assign a heartbeat task to an idle worker.
+/// Only succeeds if the worker is still idle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct AssignHeartbeatIfIdleEvent {
+    pub(super) worker_id: WorkerId,
+}
+
 /// Events that can affect pool state.
 ///
 /// Named in past tense - these are things that HAPPENED.
@@ -139,54 +170,85 @@ impl PoolState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Event {
     /// A task was submitted by a client.
-    TaskSubmitted { submission_id: SubmissionId },
+    TaskSubmitted(TaskSubmittedEvent),
 
     /// A worker registered (wrote ready.json).
-    WorkerReady { worker_id: WorkerId },
+    WorkerReady(WorkerReadyEvent),
 
     /// A worker completed its task (wrote response.json).
-    WorkerResponded { worker_id: WorkerId },
+    WorkerResponded(WorkerRespondedEvent),
 
     /// A worker timed out while processing a task.
-    WorkerTimedOut { worker_id: WorkerId },
+    WorkerTimedOut(WorkerTimedOutEvent),
 
     /// Request to assign a heartbeat task to an idle worker.
     /// Only succeeds if the worker is still idle.
-    AssignHeartbeatIfIdle { worker_id: WorkerId },
+    AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent),
 }
 
 // =============================================================================
 // Effects (Outputs)
 // =============================================================================
 
+/// A task was assigned to a worker.
+/// I/O layer: write task.json, start timeout timer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TaskAssignedEffect {
+    pub(super) worker_id: WorkerId,
+    pub(super) task_id: TaskId,
+}
+
+/// A worker is idle and waiting for work.
+/// I/O layer: start idle timeout timer for heartbeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WorkerWaitingEffect {
+    pub(super) worker_id: WorkerId,
+}
+
+/// A task was completed successfully.
+/// I/O layer: read response, send to submitter, clean up files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TaskCompletedEffect {
+    pub(super) worker_id: WorkerId,
+    pub(super) task_id: TaskId,
+}
+
+/// A task failed (worker timed out).
+/// I/O layer: send error response to submitter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TaskFailedEffect {
+    pub(super) submission_id: SubmissionId,
+}
+
+/// A worker was removed (timed out or after completing task).
+/// I/O layer: clean up worker files, cancel timers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WorkerRemovedEffect {
+    pub(super) worker_id: WorkerId,
+}
+
 /// Effects that I/O layer should execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Effect {
     /// A task was assigned to a worker.
     /// I/O layer: write task.json, start timeout timer.
-    TaskAssigned {
-        worker_id: WorkerId,
-        task_id: TaskId,
-    },
+    TaskAssigned(TaskAssignedEffect),
 
     /// A worker is idle and waiting for work.
     /// I/O layer: start idle timeout timer for heartbeat.
-    WorkerWaiting { worker_id: WorkerId },
+    WorkerWaiting(WorkerWaitingEffect),
 
     /// A task was completed successfully.
     /// I/O layer: read response, send to submitter, clean up files.
-    TaskCompleted {
-        worker_id: WorkerId,
-        task_id: TaskId,
-    },
+    TaskCompleted(TaskCompletedEffect),
 
     /// A task failed (worker timed out).
     /// I/O layer: send error response to submitter.
-    TaskFailed { submission_id: SubmissionId },
+    TaskFailed(TaskFailedEffect),
 
     /// A worker was removed (timed out or after completing task).
     /// I/O layer: clean up worker files, cancel timers.
-    WorkerRemoved { worker_id: WorkerId },
+    WorkerRemoved(WorkerRemovedEffect),
 }
 
 // =============================================================================
@@ -199,11 +261,17 @@ pub(super) enum Effect {
 #[must_use]
 pub(super) fn step(state: PoolState, event: Event) -> (PoolState, Vec<Effect>) {
     match event {
-        Event::TaskSubmitted { submission_id } => handle_task_submitted(state, submission_id),
-        Event::WorkerReady { worker_id } => handle_worker_ready(state, worker_id),
-        Event::WorkerResponded { worker_id } => handle_worker_responded(state, worker_id),
-        Event::WorkerTimedOut { worker_id } => handle_worker_timed_out(state, worker_id),
-        Event::AssignHeartbeatIfIdle { worker_id } => {
+        Event::TaskSubmitted(TaskSubmittedEvent { submission_id }) => {
+            handle_task_submitted(state, submission_id)
+        }
+        Event::WorkerReady(WorkerReadyEvent { worker_id }) => handle_worker_ready(state, worker_id),
+        Event::WorkerResponded(WorkerRespondedEvent { worker_id }) => {
+            handle_worker_responded(state, worker_id)
+        }
+        Event::WorkerTimedOut(WorkerTimedOutEvent { worker_id }) => {
+            handle_worker_timed_out(state, worker_id)
+        }
+        Event::AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent { worker_id }) => {
             handle_assign_heartbeat_if_idle(state, worker_id)
         }
     }
@@ -232,10 +300,10 @@ fn handle_task_submitted(
                 .insert(worker_id, TaskId::External(submission_id));
             (
                 state,
-                vec![Effect::TaskAssigned {
+                vec![Effect::TaskAssigned(TaskAssignedEffect {
                     worker_id,
                     task_id: TaskId::External(submission_id),
-                }],
+                })],
             )
         }
         Waiting::Tasks(submission_ids) => {
@@ -273,10 +341,10 @@ fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState,
                 .insert(worker_id, TaskId::External(submission_id));
             (
                 state,
-                vec![Effect::TaskAssigned {
+                vec![Effect::TaskAssigned(TaskAssignedEffect {
                     worker_id,
                     task_id: TaskId::External(submission_id),
-                }],
+                })],
             )
         }
         Waiting::Workers(worker_ids) => {
@@ -286,12 +354,18 @@ fn handle_worker_ready(mut state: PoolState, worker_id: WorkerId) -> (PoolState,
                 "Same worker appearing twice in waiting queue - IO layer bug"
             );
             worker_ids.push_back(worker_id);
-            (state, vec![Effect::WorkerWaiting { worker_id }])
+            (
+                state,
+                vec![Effect::WorkerWaiting(WorkerWaitingEffect { worker_id })],
+            )
         }
         Waiting::None => {
             // Nothing waiting - start worker queue
             state.waiting = Waiting::Workers(VecDeque::from([worker_id]));
-            (state, vec![Effect::WorkerWaiting { worker_id }])
+            (
+                state,
+                vec![Effect::WorkerWaiting(WorkerWaitingEffect { worker_id })],
+            )
         }
     }
 }
@@ -307,8 +381,8 @@ fn handle_worker_responded(mut state: PoolState, worker_id: WorkerId) -> (PoolSt
     (
         state,
         vec![
-            Effect::TaskCompleted { worker_id, task_id },
-            Effect::WorkerRemoved { worker_id },
+            Effect::TaskCompleted(TaskCompletedEffect { worker_id, task_id }),
+            Effect::WorkerRemoved(WorkerRemovedEffect { worker_id }),
         ],
     )
 }
@@ -319,9 +393,9 @@ fn handle_worker_timed_out(mut state: PoolState, worker_id: WorkerId) -> (PoolSt
         return (state, vec![]);
     };
 
-    let mut effects = vec![Effect::WorkerRemoved { worker_id }];
+    let mut effects = vec![Effect::WorkerRemoved(WorkerRemovedEffect { worker_id })];
     if let TaskId::External(submission_id) = task_id {
-        effects.push(Effect::TaskFailed { submission_id });
+        effects.push(Effect::TaskFailed(TaskFailedEffect { submission_id }));
     }
     (state, effects)
 }
@@ -345,10 +419,10 @@ fn handle_assign_heartbeat_if_idle(
     state.busy_workers.insert(worker_id, TaskId::Heartbeat);
     (
         state,
-        vec![Effect::TaskAssigned {
+        vec![Effect::TaskAssigned(TaskAssignedEffect {
             worker_id,
             task_id: TaskId::Heartbeat,
-        }],
+        })],
     )
 }
 
@@ -381,9 +455,9 @@ mod tests {
         let state = PoolState::new();
         let (state, effects) = step(
             state,
-            Event::TaskSubmitted {
+            Event::TaskSubmitted(TaskSubmittedEvent {
                 submission_id: sub(1),
-            },
+            }),
         );
 
         assert_eq!(state.pending_count(), 1);
@@ -397,9 +471,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::TaskSubmitted {
+            Event::TaskSubmitted(TaskSubmittedEvent {
                 submission_id: sub(42),
-            },
+            }),
         );
 
         assert_eq!(state.pending_count(), 0);
@@ -409,7 +483,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { worker_id, task_id }
+            Effect::TaskAssigned(TaskAssignedEffect { worker_id, task_id })
                 if *worker_id == worker(1) && *task_id == ext(42)
         ));
     }
@@ -421,9 +495,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::TaskSubmitted {
+            Event::TaskSubmitted(TaskSubmittedEvent {
                 submission_id: sub(42),
-            },
+            }),
         );
 
         assert_eq!(state.pending_count(), 1);
@@ -441,9 +515,9 @@ mod tests {
         let state = PoolState::new();
         let (state, effects) = step(
             state,
-            Event::WorkerReady {
+            Event::WorkerReady(WorkerReadyEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert_eq!(state.idle_count(), 1);
@@ -452,7 +526,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::WorkerWaiting { worker_id } if *worker_id == worker(1)
+            Effect::WorkerWaiting(WorkerWaitingEffect { worker_id }) if *worker_id == worker(1)
         ));
     }
 
@@ -463,9 +537,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::WorkerReady {
+            Event::WorkerReady(WorkerReadyEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert_eq!(state.pending_count(), 0);
@@ -474,7 +548,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { worker_id, task_id }
+            Effect::TaskAssigned(TaskAssignedEffect { worker_id, task_id })
                 if *worker_id == worker(1) && *task_id == ext(42)
         ));
     }
@@ -490,9 +564,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::WorkerResponded {
+            Event::WorkerResponded(WorkerRespondedEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert_eq!(state.busy_count(), 0);
@@ -501,12 +575,12 @@ mod tests {
         assert_eq!(effects.len(), 2);
         assert!(matches!(
             &effects[0],
-            Effect::TaskCompleted { worker_id, task_id }
+            Effect::TaskCompleted(TaskCompletedEffect { worker_id, task_id })
                 if *worker_id == worker(1) && *task_id == ext(42)
         ));
         assert!(matches!(
             &effects[1],
-            Effect::WorkerRemoved { worker_id } if *worker_id == worker(1)
+            Effect::WorkerRemoved(WorkerRemovedEffect { worker_id }) if *worker_id == worker(1)
         ));
     }
 
@@ -515,9 +589,9 @@ mod tests {
         let state = PoolState::new();
         let (state, effects) = step(
             state,
-            Event::WorkerResponded {
+            Event::WorkerResponded(WorkerRespondedEvent {
                 worker_id: worker(999),
-            },
+            }),
         );
 
         assert!(effects.is_empty());
@@ -535,9 +609,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::WorkerTimedOut {
+            Event::WorkerTimedOut(WorkerTimedOutEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert_eq!(state.busy_count(), 0);
@@ -545,11 +619,11 @@ mod tests {
         assert_eq!(effects.len(), 2);
         assert!(matches!(
             &effects[0],
-            Effect::WorkerRemoved { worker_id } if *worker_id == worker(1)
+            Effect::WorkerRemoved(WorkerRemovedEffect { worker_id }) if *worker_id == worker(1)
         ));
         assert!(matches!(
             &effects[1],
-            Effect::TaskFailed { submission_id } if *submission_id == sub(42)
+            Effect::TaskFailed(TaskFailedEffect { submission_id }) if *submission_id == sub(42)
         ));
     }
 
@@ -558,9 +632,9 @@ mod tests {
         let state = PoolState::new();
         let (state, effects) = step(
             state,
-            Event::WorkerTimedOut {
+            Event::WorkerTimedOut(WorkerTimedOutEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert!(effects.is_empty());
@@ -578,9 +652,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::AssignHeartbeatIfIdle {
+            Event::AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert_eq!(state.idle_count(), 0);
@@ -590,7 +664,7 @@ mod tests {
         assert_eq!(effects.len(), 1);
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { worker_id, task_id }
+            Effect::TaskAssigned(TaskAssignedEffect { worker_id, task_id })
                 if *worker_id == worker(1) && *task_id == TaskId::Heartbeat
         ));
     }
@@ -602,9 +676,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::AssignHeartbeatIfIdle {
+            Event::AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         // Worker still busy with original task
@@ -617,9 +691,9 @@ mod tests {
         let state = PoolState::new();
         let (state, effects) = step(
             state,
-            Event::AssignHeartbeatIfIdle {
+            Event::AssignHeartbeatIfIdle(AssignHeartbeatIfIdleEvent {
                 worker_id: worker(1),
-            },
+            }),
         );
 
         assert!(effects.is_empty());
@@ -637,9 +711,9 @@ mod tests {
 
         let (state, effects) = step(
             state,
-            Event::TaskSubmitted {
+            Event::TaskSubmitted(TaskSubmittedEvent {
                 submission_id: sub(1),
-            },
+            }),
         );
 
         // Should dispatch to worker(3) - first in queue (FIFO)
@@ -648,7 +722,7 @@ mod tests {
 
         assert!(matches!(
             &effects[0],
-            Effect::TaskAssigned { worker_id, .. } if *worker_id == worker(3)
+            Effect::TaskAssigned(TaskAssignedEffect { worker_id, .. }) if *worker_id == worker(3)
         ));
     }
 }

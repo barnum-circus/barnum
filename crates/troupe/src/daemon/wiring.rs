@@ -28,7 +28,10 @@ use crate::lock::{LockGuard, acquire_lock};
 use crate::submit::Payload;
 use crate::verified_watcher::VerifiedWatcher;
 
-use super::core::{Effect, Event, WorkerId};
+use super::core::{
+    Effect, Event, TaskCompletedEffect, TaskSubmittedEvent, WorkerId, WorkerReadyEvent,
+    WorkerRespondedEvent,
+};
 use super::io::{
     IdAllocator, IoConfig, StopNotifier, SubmissionData, SubmissionMap, WorkerMap, execute_effect,
 };
@@ -442,7 +445,7 @@ fn io_loop(
                         timeout: io_config.default_task_timeout,
                     },
                 );
-                let _ = events_tx.send(Event::TaskSubmitted { submission_id });
+                let _ = events_tx.send(Event::TaskSubmitted(TaskSubmittedEvent { submission_id }));
             }
             recv(effect_rx) -> effect => {
                 let Ok(effect) = effect else {
@@ -451,7 +454,7 @@ fn io_loop(
                 };
                 debug!(?effect, "executing effect");
                 // Clear pending response tracking when TaskCompleted cleans up the response file
-                if let Effect::TaskCompleted { worker_id, .. } = &effect {
+                if let Effect::TaskCompleted(TaskCompletedEffect { worker_id, .. }) = &effect {
                     pending_responses.remove(worker_id);
                 }
                 execute_effect(
@@ -586,7 +589,7 @@ fn handle_worker_ready_file(
         (),
     ) {
         debug!(uuid = %uuid, worker_id = worker_id.0, "WorkerReady: registered");
-        let _ = events_tx.send(Event::WorkerReady { worker_id });
+        let _ = events_tx.send(Event::WorkerReady(WorkerReadyEvent { worker_id }));
     }
 }
 
@@ -631,7 +634,7 @@ fn handle_worker_response_file(
     // Send response event (deduplicated)
     if pending_responses.insert(worker_id) {
         debug!(uuid = %uuid, worker_id = worker_id.0, "WorkerResponse: sending event");
-        let _ = events_tx.send(Event::WorkerResponded { worker_id });
+        let _ = events_tx.send(Event::WorkerResponded(WorkerRespondedEvent { worker_id }));
     } else {
         trace!(uuid = %uuid, "WorkerResponse: duplicate event");
     }
@@ -677,7 +680,7 @@ fn register_submission(
             timeout: io_config.default_task_timeout,
         },
     ) {
-        let _ = events_tx.send(Event::TaskSubmitted { submission_id });
+        let _ = events_tx.send(Event::TaskSubmitted(TaskSubmittedEvent { submission_id }));
     }
 }
 
@@ -923,7 +926,9 @@ mod tests {
         );
 
         let event = events_rx.try_recv().unwrap();
-        assert!(matches!(event, Event::TaskSubmitted { submission_id } if submission_id == sub(0)));
+        assert!(
+            matches!(event, Event::TaskSubmitted(TaskSubmittedEvent { submission_id }) if submission_id == sub(0))
+        );
         let request_path = submissions_dir.join(format!("{id}.request.json"));
         assert!(submission_map.get_id_by_path(&request_path).is_some());
     }
@@ -932,7 +937,9 @@ mod tests {
     // Event loop tests (events → step → effects)
     // =========================================================================
 
-    use super::super::core::{Effect, PoolState, SubmissionId, TaskId, step};
+    use super::super::core::{
+        Effect, PoolState, SubmissionId, TaskAssignedEffect, TaskId, WorkerWaitingEffect, step,
+    };
     use std::thread;
     use tracing::{debug, info};
 
@@ -979,24 +986,27 @@ mod tests {
         let handle = thread::spawn(move || run_test_event_loop(events_rx, effects_tx));
 
         events_tx
-            .send(Event::WorkerReady {
+            .send(Event::WorkerReady(WorkerReadyEvent {
                 worker_id: worker(1),
-            })
-            .unwrap();
-
-        let effect = effects_rx.recv().unwrap();
-        assert!(matches!(effect, Effect::WorkerWaiting { .. }));
-
-        events_tx
-            .send(Event::TaskSubmitted {
-                submission_id: sub(42),
-            })
+            }))
             .unwrap();
 
         let effect = effects_rx.recv().unwrap();
         assert!(matches!(
             effect,
-            Effect::TaskAssigned { task_id: TaskId::External(sub_id), .. } if sub_id == sub(42)
+            Effect::WorkerWaiting(WorkerWaitingEffect { .. })
+        ));
+
+        events_tx
+            .send(Event::TaskSubmitted(TaskSubmittedEvent {
+                submission_id: sub(42),
+            }))
+            .unwrap();
+
+        let effect = effects_rx.recv().unwrap();
+        assert!(matches!(
+            effect,
+            Effect::TaskAssigned(TaskAssignedEffect { task_id: TaskId::External(sub_id), .. }) if sub_id == sub(42)
         ));
 
         drop(events_tx);
@@ -1016,9 +1026,9 @@ mod tests {
         drop(effects_rx);
 
         events_tx
-            .send(Event::WorkerReady {
+            .send(Event::WorkerReady(WorkerReadyEvent {
                 worker_id: worker(1),
-            })
+            }))
             .unwrap();
 
         drop(events_tx);
@@ -1039,9 +1049,9 @@ mod tests {
         });
 
         events_tx
-            .send(Event::WorkerReady {
+            .send(Event::WorkerReady(WorkerReadyEvent {
                 worker_id: worker(1),
-            })
+            }))
             .unwrap();
 
         let _ = effects_rx.recv().unwrap();
