@@ -119,7 +119,6 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
 - `cli_invoker` and `troupe_cli` dependencies from `barnum_config`
 - `generate_step_docs` in `docs.rs` (moves to JS; `generate_full_docs` stays for `barnum config docs`)
 - `Config::has_pool_actions()` in `resolved.rs`
-- `PoolActionFile.timeout` field — the pool handler uses `step.options.timeout` (resolved against global) instead. One timeout source of truth.
 
 ## Proposed Changes
 
@@ -378,10 +377,11 @@ export default defineAction({
     instructions: instructionsSchema,
     pool: z.string().optional(),
     root: z.string().optional(),
+    timeout: z.number().optional(),
   }),
 
   handle: async ({ params, task, step, config }) => {
-    // params is fully typed: { instructions: ..., pool?: string, root?: string }
+    // params is fully typed: { instructions: ..., pool?: string, root?: string, timeout?: number }
     const troupe = troupeBinary();
 
     const instructions = params.instructions.kind === "Inline"
@@ -390,12 +390,11 @@ export default defineAction({
 
     const docs = generateStepDocs(task.kind, instructions, step, config);
 
-    // Build troupe payload — timeout comes from step options (global overridden by per-step),
-    // not from pool params. One timeout, one source of truth.
+    // Build troupe payload — params.timeout is the agent timeout passed to troupe (opaque).
+    // Barnum's worker kill deadline is separate (step.options.timeout, handled by Rust).
     const payload: Record<string, unknown> = { task, instructions: docs };
-    const effectiveTimeout = step.options?.timeout ?? config.options?.timeout;
-    if (effectiveTimeout != null) {
-      payload.timeout_seconds = effectiveTimeout;
+    if (params.timeout != null) {
+      payload.timeout_seconds = params.timeout;
     }
 
     // Submit to troupe
