@@ -150,16 +150,22 @@ Each action provides its own guard type. The guard is boxed as `Box<dyn Send>` i
 **`ProcessGuard`** (for `ShellAction`):
 
 ```rust
-struct ProcessGuard(u32); // child PID
+struct ProcessGuard {
+    child: Arc<Mutex<Child>>,
+}
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.0 as i32, libc::SIGKILL); }
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+        }
     }
 }
 ```
 
-Sends SIGKILL to the child process. If the process already exited, `kill` returns an error that we ignore. PID recycling is theoretically possible but negligible for a CLI tool with short-lived children — the window between child exit and guard drop is typically microseconds. If subprocesses are a concern, `Command::pre_exec` + `setsid` + negative-PID kill can be added to `ShellAction::start` without changing the trait.
+Uses `Child::kill()` (cross-platform, no `libc` dependency). The `Arc<Mutex<Child>>` is shared between the reader thread (which calls `wait()` after reading pipes) and the guard (which calls `kill()` on drop). If the process already exited, `kill()` returns an error that we ignore.
+
+**Why `Arc<Mutex<Child>>`**: `wait_with_output()` consumes `Child`, so we can't use it with shared ownership. Instead, we take stdout/stderr from the child before sharing, read the pipes in the reader thread, then lock the mutex for `wait()`. The guard locks the mutex for `kill()`. In the normal case (child already exited), `wait()` returns immediately and the guard's `kill()` is a no-op. In the timeout case, the reader is still blocked reading pipes, so the guard can lock the mutex and kill the child — the pipes close, the reader finishes, and `wait()` returns immediately.
 
 **No-op guard** (for `PoolAction`):
 
@@ -263,7 +269,7 @@ pub fn spawn_worker(
 2. **Conversion**: `dispatch_task` and `dispatch_finally` convert to `Option<Duration>` via `step.options.timeout.map(Duration::from_secs)` and pass to `spawn_worker`.
 3. **Start**: `spawn_worker`'s thread calls `run_action`, which calls `action.start(value)`. The action spawns its work thread and returns an `ActionHandle`.
 4. **Wait**: `run_action` calls `handle.rx.recv_timeout(duration)` (or `recv()` if no timeout).
-5. **On timeout**: `recv_timeout` returns `Err(Timeout)`. `run_action` returns `Err(ActionError::TimedOut)`. The `ActionHandle` drops, triggering the guard's `Drop` — for shell actions, this sends SIGKILL to the child process. The action's work thread eventually sees the child exit (or its `tx.send()` fails on the closed channel) and exits.
+5. **On timeout**: `recv_timeout` returns `Err(Timeout)`. `run_action` returns `Err(ActionError::TimedOut)`. The `ActionHandle` drops, triggering the guard's `Drop` — for shell actions, this calls `Child::kill()` on the child process. The action's reader thread sees the pipes close, calls `wait()` (returns immediately), and its `tx.send()` fails on the closed channel. The thread exits.
 6. **Result routing**: `spawn_worker` sends `WorkerResult` with `output: Err(ActionError::TimedOut)`. The engine's main loop receives it via `rx.recv()`.
 7. **Retry**: `process_submit_result` maps `ActionError::TimedOut` → `FailureKind::Timeout`. `process_retry` checks `options.retry_on_timeout` to decide whether to retry or drop.
 
@@ -272,6 +278,8 @@ For Pool actions specifically: `pool_timeout` (troupe's agent lifecycle timeout,
 ### Concurrency stays in the engine
 
 `in_flight` is managed by `Engine::flush_dispatches` (increment before spawn) and `Engine::process_worker_result` (decrement on completion). Both run on the main thread. Actions run in spawned threads with no access to `Engine`.
+
+Both `dispatch_task` and `dispatch_finally` go through `flush_dispatches`, sharing the same `pending_dispatches` queue and `in_flight` counter. Tasks and finally workers are counted together against `max_concurrency`. This means the unified `spawn_worker` path doesn't change concurrency semantics — it already flows through the same throttling mechanism.
 
 ## Phased Implementation
 
@@ -500,18 +508,23 @@ Compile, run full suite.
 
 #### 2a. Add `ShellAction` and `ProcessGuard` to `runner/action.rs`
 
-`ShellAction::start` spawns the child process, writes stdin, spawns a reader thread, and returns a handle with a `ProcessGuard` that kills the child on drop:
+`ShellAction::start` spawns the child process, writes stdin, takes the pipes, wraps the child in `Arc<Mutex<Child>>`, spawns a reader thread, and returns a handle with a `ProcessGuard` that kills the child on drop:
 
 ```rust
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::io::{Read as _, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
-/// Guard that kills a child process on drop.
-struct ProcessGuard(u32);
+/// Guard that kills a child process on drop via `Child::kill()`.
+struct ProcessGuard {
+    child: Arc<Mutex<Child>>,
+}
 
 impl Drop for ProcessGuard {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.0 as i32, libc::SIGKILL); }
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+        }
     }
 }
 
@@ -548,26 +561,44 @@ impl Action for ShellAction {
             }
         };
 
-        let pid = child.id();
-
         // Write stdin, then drop to close the pipe.
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(task_json.as_bytes());
         }
 
-        // Reader thread: waits for child, sends result.
+        // Take pipes before sharing the child.
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let child = Arc::new(Mutex::new(child));
+
+        // Reader thread: reads pipes to completion, then waits for exit.
+        let child_for_reader = Arc::clone(&child);
         thread::spawn(move || {
-            let result = match child.wait_with_output() {
-                Ok(out) if out.status.success() => {
-                    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-                }
-                Ok(out) => Err(String::from_utf8_lossy(&out.stderr).into_owned()),
+            let stdout_data = stdout
+                .map(|mut r| {
+                    let mut s = String::new();
+                    r.read_to_string(&mut s).ok();
+                    s
+                })
+                .unwrap_or_default();
+            let stderr_data = stderr
+                .map(|mut r| {
+                    let mut s = String::new();
+                    r.read_to_string(&mut s).ok();
+                    s
+                })
+                .unwrap_or_default();
+
+            let status = child_for_reader.lock().unwrap().wait();
+            let result = match status {
+                Ok(s) if s.success() => Ok(stdout_data),
+                Ok(_) => Err(stderr_data),
                 Err(e) => Err(e.to_string()),
             };
             let _ = tx.send(result);
         });
 
-        ActionHandle::new(rx, ProcessGuard(pid))
+        ActionHandle::new(rx, ProcessGuard { child })
     }
 }
 ```
@@ -576,7 +607,7 @@ This replaces `run_shell_command` for the action path. The key difference from t
 
 `run_shell_command` (`runner/shell.rs`) stays for now — `dispatch_finally_task` still uses it until Phase 3. It will be deleted once all callers go through the trait.
 
-**New dependency**: `libc` (for `kill` in `ProcessGuard::Drop`). Add to `Cargo.toml` for `barnum_config`.
+**No new dependencies.** `ProcessGuard` uses `std::process::Child::kill()` — cross-platform, no `libc` needed.
 
 #### 2b. Update `dispatch_task` Command branch
 
@@ -714,7 +745,7 @@ All dispatch sites call `spawn_worker`. Compile, run full suite.
 | Phase | What | Deletes | Adds |
 |-------|------|---------|------|
 | 1 | Trait + dispatch infra + Pool | `dispatch_pool_task` | `Action` trait, `ActionHandle`, `run_action`, `spawn_worker`, `PoolAction` |
-| 2 | Command through trait | `dispatch_command_task` | `ShellAction`, `ProcessGuard`, `libc` dep |
+| 2 | Command through trait | `dispatch_command_task` | `ShellAction`, `ProcessGuard` |
 | 3 | Finally + cleanup | `dispatch_finally_task`, `runner/dispatch.rs`, `runner/shell.rs` | (reuses `ShellAction` + `WorkerKind::Finally`) |
 
 Each phase compiles and passes tests before moving to the next.
@@ -723,10 +754,10 @@ Each phase compiles and passes tests before moving to the next.
 
 `ActionKind` enum variants stay as-is (already renamed from `Action`). State logging and retry logic are unchanged.
 
-**Timeout**: `run_action` enforces `step.options.timeout` for all action kinds via `handle.rx.recv_timeout()`. Commands and finally hooks, which previously blocked forever, now timeout when configured. On timeout, the `ActionHandle` drops — for shell actions, the `ProcessGuard` sends SIGKILL to the child process. For pool actions, the guard is a no-op (troupe manages its own lifecycle). The engine treats the action as failed and moves on.
+**Timeout**: `run_action` enforces `step.options.timeout` for all action kinds via `handle.rx.recv_timeout()`. Commands and finally hooks, which previously blocked forever, now timeout when configured. On timeout, the `ActionHandle` drops — for shell actions, the `ProcessGuard` calls `Child::kill()` (cross-platform, no `libc` needed). For pool actions, the guard is a no-op (troupe manages its own lifecycle). The engine treats the action as failed and moves on.
 
 **Retry classification for `NotProcessed`** (already landed in Phase 0): maps to `ActionError::Failed` → `FailureKind::SubmitError` (always retries), instead of the old `FailureKind::Timeout`.
 
 **Finally hook stdin** (Phase 3 complication): The stdin format for finally hooks changes from raw JSON value to `{"kind": "step_name", "value": ...}` envelope, because `ShellAction` uses the same envelope as command actions. Must verify existing finally hooks aren't broken by this.
 
-**New dependency**: `libc` is added in Phase 2 for `ProcessGuard`'s SIGKILL. This is contained to `ShellAction`'s guard implementation.
+**No new dependencies.** `ProcessGuard` uses `std::process::Child::kill()`, which is cross-platform (works on Windows, macOS, Linux) with no external crate.
