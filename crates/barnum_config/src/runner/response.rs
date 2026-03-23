@@ -1,13 +1,13 @@
 //! Response processing and retry logic.
 
 use tracing::{debug, error, info, warn};
-use troupe::Response;
 
 use crate::resolved::{Options, Step};
 use crate::types::StepInputValue;
 use crate::value_schema::{CompiledSchemas, Task, validate_response};
 
-use super::dispatch::{CommandResult, FinallyResult, PoolResult, SubmitResult};
+use super::action::ActionError;
+use super::dispatch::ActionResult;
 
 /// Task succeeded, may have spawned children.
 pub struct TaskSuccess {
@@ -38,94 +38,24 @@ pub enum FailureKind {
     SubmitError,
 }
 
-/// Process a submit result into a task outcome.
+/// Process a unified action result into a task outcome.
 pub fn process_submit_result(
-    result: SubmitResult,
+    result: ActionResult,
     task: &Task,
     step: &Step,
     schemas: &CompiledSchemas,
 ) -> TaskOutcome {
-    match result {
-        SubmitResult::Pool(PoolResult { value, response }) => match response {
-            Ok(response) => process_pool_response(response, task, &value, step, schemas),
-            Err(e) => {
-                error!(step = %task.step, error = %e, "submit failed");
-                process_retry(task, &step.options, FailureKind::SubmitError)
-            }
-        },
-        SubmitResult::Command(CommandResult { value, output }) => match output {
-            Ok(stdout) => process_command_response(&stdout, task, &value, step, schemas),
-            Err(e) => {
-                error!(step = %task.step, error = %e, "command failed");
-                process_retry(task, &step.options, FailureKind::SubmitError)
-            }
-        },
-        SubmitResult::Finally(FinallyResult { value, output }) => match output {
-            Ok(stdout) => process_finally_response(&stdout, task, &value),
-            Err(e) => {
-                error!(step = %task.step, error = %e, "finally hook failed");
-                process_retry(task, &step.options, FailureKind::SubmitError)
-            }
-        },
-    }
-}
-
-/// Process stdout from a finally task.
-///
-/// Finally hook output is parsed as a JSON array of tasks.
-/// Unlike regular tasks, there's no schema validation - finally hooks return raw task objects.
-fn process_finally_response(stdout: &str, task: &Task, value: &StepInputValue) -> TaskOutcome {
-    debug!(stdout = %stdout, "finally hook output");
-
-    match json5::from_str::<Vec<Task>>(stdout) {
-        Ok(tasks) => {
-            info!(step = %task.step, count = tasks.len(), "finally hook completed");
-            TaskOutcome::Success(TaskSuccess {
-                spawned: tasks,
-                finally_value: value.clone(),
-            })
-        }
-        Err(e) => {
-            // If output can't be parsed as task array, treat as empty (backwards compatible)
-            warn!(step = %task.step, error = %e, "finally hook output is not valid JSONC task array");
-            TaskOutcome::Success(TaskSuccess {
-                spawned: vec![],
-                finally_value: value.clone(),
-            })
-        }
-    }
-}
-
-/// Process a response from the agent pool.
-fn process_pool_response(
-    response: Response,
-    task: &Task,
-    value: &StepInputValue,
-    step: &Step,
-    schemas: &CompiledSchemas,
-) -> TaskOutcome {
-    match response {
-        Response::Processed { stdout, .. } => {
-            debug!(stdout = %stdout, "agent response");
-            process_stdout(&stdout, task, value, step, schemas)
-        }
-        Response::NotProcessed { reason } => {
-            warn!(step = %task.step, ?reason, "task outcome unknown");
+    match result.output {
+        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, schemas),
+        Err(ActionError::TimedOut) => {
+            warn!(step = %task.step, "action timed out");
             process_retry(task, &step.options, FailureKind::Timeout)
         }
+        Err(ActionError::Failed(error)) => {
+            error!(step = %task.step, %error, "action failed");
+            process_retry(task, &step.options, FailureKind::SubmitError)
+        }
     }
-}
-
-/// Process stdout from a command action.
-fn process_command_response(
-    stdout: &str,
-    task: &Task,
-    value: &StepInputValue,
-    step: &Step,
-    schemas: &CompiledSchemas,
-) -> TaskOutcome {
-    debug!(stdout = %stdout, "command output");
-    process_stdout(stdout, task, value, step, schemas)
 }
 
 /// Process stdout from either pool or command action.
@@ -136,6 +66,7 @@ fn process_stdout(
     step: &Step,
     schemas: &CompiledSchemas,
 ) -> TaskOutcome {
+    debug!(stdout = %stdout, "action output");
     match json5::from_str::<serde_json::Value>(stdout) {
         Ok(output_value) => match validate_response(&output_value, step, schemas) {
             Ok(new_tasks) => {

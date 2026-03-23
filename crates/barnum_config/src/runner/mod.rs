@@ -4,6 +4,7 @@
 //! The Engine processes worker results, converts them to state log entries,
 //! and dispatches new work. A log writer persists every entry for resume.
 
+mod action;
 mod dispatch;
 mod hooks;
 mod response;
@@ -30,6 +31,7 @@ use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName};
 use crate::value_schema::{CompiledSchemas, Task};
 
+use action::ActionError;
 use dispatch::{WorkerResult, dispatch_command_task, dispatch_finally_task, dispatch_pool_task};
 use hooks::call_wake_script;
 use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
@@ -509,19 +511,15 @@ impl<'a> Engine<'a> {
 
     /// Process a raw worker result. Returns entries to write to the log.
     fn process_worker_result(&mut self, result: WorkerResult) -> Vec<StateLogEntry> {
-        let WorkerResult {
-            task_id,
-            task,
-            result: submit_result,
-        } = result;
-
         self.in_flight = self.in_flight.saturating_sub(1);
 
-        let entries = match submit_result {
-            dispatch::SubmitResult::Finally(dispatch::FinallyResult { value, output }) => {
-                self.convert_finally_result(task_id, value, output)
+        let entries = match result.kind {
+            dispatch::WorkerKind::Task => {
+                self.convert_task_result(result.task_id, &result.task, result.result)
             }
-            other => self.convert_task_result(task_id, &task, other),
+            dispatch::WorkerKind::Finally { parent_id } => {
+                self.convert_finally_result(parent_id, result.result.output)
+            }
         };
 
         for entry in &entries {
@@ -537,14 +535,14 @@ impl<'a> Engine<'a> {
         &mut self,
         task_id: LogTaskId,
         task: &Task,
-        submit_result: dispatch::SubmitResult,
+        action_result: dispatch::ActionResult,
     ) -> Vec<StateLogEntry> {
         let step = self
             .step_map
             .get(&task.step)
             .expect("[P015] task step must exist");
 
-        let outcome = process_submit_result(submit_result, task, step, self.schemas);
+        let outcome = process_submit_result(action_result, task, step, self.schemas);
 
         match outcome {
             TaskOutcome::Success(TaskSuccess {
@@ -607,8 +605,7 @@ impl<'a> Engine<'a> {
     fn convert_finally_result(
         &mut self,
         parent_id: LogTaskId,
-        _value: StepInputValue,
-        output: Result<String, String>,
+        output: Result<String, ActionError>,
     ) -> Vec<StateLogEntry> {
         let raw_children = match output {
             Ok(stdout) => match json5::from_str::<Vec<Task>>(&stdout) {
