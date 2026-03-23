@@ -2,159 +2,143 @@
 
 ## Motivation
 
-ACTION_REGISTRY moves the kind-specific match out of Engine into a Rust-side factory registry. But the end goal is for action kinds to be defined and resolved in JavaScript, with Rust acting as a dumb executor. This doc explores how JS-driven action resolution would work and whether the Rust registry is a useful intermediate step or a detour.
+The Engine's `dispatch_task` matches on `ActionKind` variants to construct the appropriate `Action` impl. Every new action kind (Claude, Git, custom user kinds) requires adding a Rust enum variant, a match arm, and a new `Action` impl. This coupling is unnecessary — both `Pool` and `Command` ultimately just "run a subprocess, pipe stdin, read stdout."
+
+The JS layer (`BarnumConfig`) already validates config, constructs CLI args, and spawns the Rust binary. This refactor extends JS to also resolve each step's action kind into a concrete execution command. Rust receives a config where every step has a `{ command, args }` descriptor. Rust spawns the command, manages the state machine, handles timeouts. It never needs to know what "Pool" or "Command" means.
+
+This supersedes ACTION_REGISTRY.md. Instead of building a Rust-side factory registry (which would be deleted when JS takes over), we go directly to JS resolution.
 
 ## Architecture
 
-The JS layer (`BarnumConfig`) already validates config, constructs CLI args, and spawns the Rust binary. The proposal: extend this layer to also resolve each step's action kind into a concrete execution command. Rust receives a config where every step has a command string instead of a typed `ActionKind`. Rust spawns the command, pipes the task value on stdin, reads the result from stdout.
-
 ```
 User config (kind: "Pool", kind: "Command", kind: "Claude")
-  → JS resolution (each kind resolved to a command)
-    → Resolved config (every step has a command string)
+  → JS resolution (each kind resolved to a { command, args })
+    → Resolved config (every step has a command + args)
       → Rust (spawns commands, manages state tree, handles timeouts)
 ```
 
-## The JS module interface
+## Current State
 
-Each action kind is a JS module with a default export. The function receives the action's parameters and runtime context, and returns an execution spec.
-
-```typescript
-// Type definitions
-interface ActionContext {
-  /** Troupe root directory */
-  root: string;
-  /** Pool name (if applicable) */
-  pool: string;
-  /** Working directory for the barnum config file */
-  workingDir: string;
-  /** The full resolved config */
-  config: ResolvedConfig;
-  /** The step this action belongs to */
-  step: ResolvedStep;
-}
-
-interface ExecutionSpec {
-  /** Command to spawn (receives task value as JSON on stdin, writes result JSON to stdout) */
-  command: string;
-  /** Arguments to the command */
-  args: string[];
-}
-
-// Module interface
-type ActionModule = (params: unknown, context: ActionContext) => ExecutionSpec;
-```
-
-The function runs once per step at config time (inside `BarnumConfig.run()`). It returns the command that Rust will spawn at dispatch time. The command receives `{"kind": "<StepName>", "value": <payload>}` on stdin and writes a JSON array of follow-up tasks to stdout.
-
-## Built-in action modules
-
-### Pool
-
-The pool module returns a command that invokes a bundled executor script. The executor handles troupe submission, including step docs generation and payload formatting.
-
-```typescript
-// @barnum/barnum/actions/pool.ts
-import { resolve } from "node:path";
-
-const executorPath = resolve(import.meta.dirname, "pool-executor.js");
-
-export default function pool(
-  params: { instructions: string },
-  context: ActionContext
-): ExecutionSpec {
-  const docs = generateStepDocs(context.step, context.config);
-  const docsBase64 = Buffer.from(docs).toString("base64");
-
-  return {
-    command: "node",
-    args: [
-      executorPath,
-      "--root", context.root,
-      "--pool", context.pool,
-      "--docs", docsBase64,
-      ...(context.step.options.timeout
-        ? ["--timeout", String(context.step.options.timeout)]
-        : []),
-    ],
-  };
-}
-```
-
-The executor script (`pool-executor.js`) reads stdin, builds the troupe payload, invokes `troupe submit_task`, and writes the result to stdout. This is a self-contained Node.js script bundled with the package.
-
-```typescript
-// @barnum/barnum/actions/pool-executor.ts (compiled to pool-executor.js)
-import { parseArgs } from "node:util";
-import { execFileSync } from "node:child_process";
-
-const { values } = parseArgs({
-  options: {
-    root: { type: "string" },
-    pool: { type: "string" },
-    docs: { type: "string" },
-    timeout: { type: "string" },
-  },
-});
-
-// Read task value from stdin
-const chunks: Buffer[] = [];
-for await (const chunk of process.stdin) chunks.push(chunk);
-const input = JSON.parse(Buffer.concat(chunks).toString());
-
-// Build troupe payload
-const docs = Buffer.from(values.docs!, "base64").toString();
-const payload = JSON.stringify({
-  kind: "Task",
-  task: { instructions: docs, data: input },
-  ...(values.timeout && { timeout_seconds: parseInt(values.timeout) }),
-});
-
-// Submit to troupe
-const result = execFileSync("troupe", [
-  "submit_task",
-  "--pool", values.pool!,
-  "--root", values.root!,
-  "--notify", "file",
-  "--timeout-secs", "86400",
-  "--data", payload,
-], { encoding: "utf-8" });
-
-const response = JSON.parse(result);
-if (response.kind === "Processed") {
-  process.stdout.write(response.stdout);
-} else {
-  process.stderr.write("not processed by pool");
-  process.exit(1);
-}
-```
-
-### Command
-
-The command module returns the user's script directly, wrapped in `sh -c`.
-
-```typescript
-// @barnum/barnum/actions/command.ts
-export default function command(
-  params: { script: string },
-  _context: ActionContext
-): ExecutionSpec {
-  return {
-    command: "sh",
-    args: ["-c", params.script],
-  };
-}
-```
-
-## What changes in Rust
-
-Rust's resolved config replaces `ActionKind` with a flat execution descriptor:
+### dispatch_task (`crates/barnum_config/src/runner/mod.rs:696-730`)
 
 ```rust
-// resolved.rs — replaces ActionKind enum
+fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
+    let step = self.step_map.get(&task.step).expect("[P015] unknown step");
+    let timeout = step.options.timeout.map(Duration::from_secs);
+    let tx = self.tx.clone();
+
+    match &step.action {
+        ActionKind::Pool(PoolActionConfig {
+            pool,
+            root,
+            timeout: pool_timeout,
+            ..
+        }) => {
+            let docs = generate_step_docs(step, self.config);
+            info!(step = %task.step, "submitting task to pool");
+            let action = Box::new(PoolAction {
+                root: root.clone(),
+                pool: pool.clone(),
+                invoker: self.invoker.clone(),
+                docs,
+                step_name: task.step.clone(),
+                pool_timeout: *pool_timeout,
+            });
+            spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
+        }
+        ActionKind::Command(CommandAction { script }) => {
+            info!(step = %task.step, script = %script, "executing command");
+            let action = Box::new(ShellAction {
+                script: script.clone(),
+                step_name: task.step.clone(),
+                working_dir: self.working_dir.clone(),
+            });
+            spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
+        }
+    }
+}
+```
+
+### Engine fields (`mod.rs:454-465`)
+
+```rust
+struct Engine<'a> {
+    config: &'a Config,
+    schemas: &'a CompiledSchemas,
+    step_map: HashMap<&'a StepName, &'a Step>,
+    state: RunState,
+    invoker: Invoker<TroupeCli>,
+    working_dir: PathBuf,
+    tx: mpsc::Sender<WorkerResult>,
+    max_concurrency: usize,
+    in_flight: usize,
+    dropped_count: u32,
+}
+```
+
+### RunnerConfig (`mod.rs:39-48`)
+
+```rust
+pub struct RunnerConfig<'a> {
+    pub working_dir: &'a Path,
+    pub wake_script: Option<&'a str>,
+    pub invoker: &'a Invoker<TroupeCli>,
+    pub state_log_path: &'a Path,
+}
+```
+
+### Resolved types (`resolved.rs`)
+
+```rust
+pub struct PoolAction {
+    pub instructions: String,
+    pub pool: Option<String>,
+    pub root: Option<PathBuf>,
+    pub timeout: Option<u64>,
+}
+
+pub struct CommandAction {
+    pub script: String,
+}
+
+#[serde(tag = "kind")]
+pub enum ActionKind {
+    Pool(PoolAction),
+    Command(CommandAction),
+}
+```
+
+### JS layer (`libs/barnum/run.ts`)
+
+`BarnumConfig.run()` serializes the user config as JSON and passes it to `barnum run --config`. No action resolution happens in JS today.
+
+### What gets deleted
+
+- `PoolAction` struct in `runner/action.rs` (the runtime Action impl)
+- `submit.rs` (troupe submission logic — `build_agent_payload`, `submit_via_cli`)
+- `ActionKind` enum in `resolved.rs`
+- `PoolAction` and `CommandAction` structs in `resolved.rs`
+- `Invoker<TroupeCli>` from `Engine` and `RunnerConfig`
+- `cli_invoker` and `troupe_cli` dependencies from `barnum_config`
+- `generate_step_docs` in `docs.rs` (moves to JS; `generate_full_docs` stays for `barnum config docs`)
+- `Config::has_pool_actions()` in `resolved.rs`
+
+## Proposed Changes
+
+### 1. New resolved type: `ActionExecution`
+
+**File:** `crates/barnum_config/src/resolved.rs`
+
+Replace `ActionKind` with a flat execution descriptor:
+
+```rust
+/// Pre-resolved action: command + args to spawn at dispatch time.
+/// JS resolves action kinds into this at config time.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ActionExecution {
+    /// Command to spawn (e.g., "node", "sh").
     pub command: String,
+    /// Arguments to the command.
     pub args: Vec<String>,
 }
 ```
@@ -172,7 +156,9 @@ pub struct Step {
 }
 ```
 
-`dispatch_task` becomes trivial:
+### 2. dispatch_task becomes trivial
+
+**File:** `crates/barnum_config/src/runner/mod.rs`
 
 ```rust
 fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
@@ -189,42 +175,207 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
 }
 ```
 
-`ShellAction` changes to spawn the command directly instead of wrapping in `sh -c`:
+### 3. ShellAction changes
+
+**File:** `crates/barnum_config/src/runner/action.rs`
+
+Currently ShellAction wraps everything in `sh -c`. It changes to spawn commands directly:
 
 ```rust
-// Before: Command::new("sh").arg("-c").arg(&self.script)
-// After:
-Command::new(&self.command)
-    .args(&self.args)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .current_dir(&self.working_dir)
-    .spawn()
+pub struct ShellAction {
+    pub command: String,
+    pub args: Vec<String>,
+    pub step_name: StepName,
+    pub working_dir: PathBuf,
+}
+
+impl Action for ShellAction {
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        // ...
+        let child = Command::new(&self.command)
+            .args(&self.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(&self.working_dir)
+            .spawn();
+        // rest unchanged: pipe stdin, read stdout/stderr, ProcessGuard
+    }
+}
 ```
 
-`PoolAction` and the `PoolConnection` type are deleted from Rust entirely. The `submit.rs` module (troupe submission) is also deleted — that logic moves to the JS pool executor.
+### 4. Engine simplification
 
-## What changes in JS
+**File:** `crates/barnum_config/src/runner/mod.rs`
 
-`BarnumConfig.run()` resolves actions before passing the config to Rust:
+Engine drops `invoker`:
+
+```rust
+struct Engine<'a> {
+    config: &'a Config,
+    schemas: &'a CompiledSchemas,
+    step_map: HashMap<&'a StepName, &'a Step>,
+    state: RunState,
+    working_dir: PathBuf,
+    tx: mpsc::Sender<WorkerResult>,
+    max_concurrency: usize,
+    in_flight: usize,
+    dropped_count: u32,
+}
+```
+
+`RunnerConfig` drops `invoker`:
+
+```rust
+pub struct RunnerConfig<'a> {
+    pub working_dir: &'a Path,
+    pub wake_script: Option<&'a str>,
+    pub state_log_path: &'a Path,
+}
+```
+
+### 5. Config resolution path splits
+
+Currently `ConfigFile::resolve()` resolves `ActionFile` → `ActionKind`. With JS resolution, there are two paths:
+
+**Path A: JS-driven (primary).** JS resolves actions into `ActionExecution` before passing config to Rust. The config Rust receives already has `{ command, args }` per step. `ConfigFile::resolve()` no longer needs to resolve actions — it just passes through the execution spec.
+
+**Path B: CLI-only (fallback).** When using `barnum run --config` directly (without the JS layer), the Rust CLI needs to resolve actions itself. This is the escape hatch for users who don't want to use the npm package. The CLI would have hardcoded resolution for `Pool` and `Command` — similar to today but happening in the CLI binary, not in `barnum_config`.
+
+This means `ActionFile` stays as the user-facing config type (with `Pool`, `Command` variants), and the resolved type is `ActionExecution`. The resolution logic lives in either JS (primary path) or the CLI binary (fallback path), not in `barnum_config`.
+
+### 6. JS action modules
+
+**File:** `libs/barnum/actions/pool.ts`
+
+Each action kind is a function that takes action params + context and returns `{ command, args }`.
+
+```typescript
+interface ActionContext {
+  workingDir: string;
+  config: ResolvedConfig;
+  step: ResolvedStep;
+}
+
+interface ExecutionSpec {
+  command: string;
+  args: string[];
+}
+```
+
+**Pool resolver:**
+
+```typescript
+// libs/barnum/actions/pool.ts
+const executorPath = resolve(import.meta.dirname, "pool-executor.js");
+
+export function resolvePool(
+  params: { instructions: string; pool?: string; root?: string; timeout?: number },
+  context: ActionContext
+): ExecutionSpec {
+  const docs = generateStepDocs(context.step, context.config);
+  const docsBase64 = Buffer.from(docs).toString("base64");
+
+  return {
+    command: "node",
+    args: [
+      executorPath,
+      "--docs", docsBase64,
+      ...(params.pool ? ["--pool", params.pool] : []),
+      ...(params.root ? ["--root", params.root] : []),
+      ...(params.timeout ? ["--timeout", String(params.timeout)] : []),
+    ],
+  };
+}
+```
+
+The pool executor script (`pool-executor.ts`, compiled to `pool-executor.js`) reads stdin, builds the troupe payload, invokes `troupe submit_task`, and writes the result to stdout:
+
+```typescript
+// libs/barnum/actions/pool-executor.ts
+import { parseArgs } from "node:util";
+import { execFileSync } from "node:child_process";
+
+const { values } = parseArgs({
+  options: {
+    pool: { type: "string" },
+    root: { type: "string" },
+    docs: { type: "string" },
+    timeout: { type: "string" },
+  },
+});
+
+// Read task from stdin
+const chunks: Buffer[] = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString());
+
+// Build troupe payload
+const docs = Buffer.from(values.docs!, "base64").toString();
+const payload = JSON.stringify({
+  kind: "Task",
+  task: { instructions: docs, data: input },
+  ...(values.timeout && { timeout_seconds: parseInt(values.timeout) }),
+});
+
+// Submit to troupe
+const troupeBin = process.env.TROUPE ?? "troupe";
+const args = ["submit_task"];
+if (values.root) args.push("--root", values.root);
+if (values.pool) args.push("--pool", values.pool);
+args.push("--notify", "file", "--data", payload);
+
+const result = execFileSync(troupeBin, args, { encoding: "utf-8" });
+const response = JSON.parse(result);
+if (response.kind === "Processed") {
+  process.stdout.write(response.stdout);
+} else {
+  process.stderr.write("not processed by pool\n");
+  process.exit(1);
+}
+```
+
+**Command resolver:**
+
+```typescript
+// libs/barnum/actions/command.ts
+export function resolveCommand(
+  params: { script: string },
+  _context: ActionContext
+): ExecutionSpec {
+  return {
+    command: "sh",
+    args: ["-c", params.script],
+  };
+}
+```
+
+### 7. BarnumConfig.run() resolves actions
+
+**File:** `libs/barnum/run.ts`
 
 ```typescript
 run(opts?: RunOptions): ChildProcess {
-  const resolvedConfig = this.resolveActions(opts);
-  const args = ["run", "--config", JSON.stringify(resolvedConfig)];
-  // ... rest of args
+  const resolvedConfig = this.resolveActions();
+  const args = opts?.resumeFrom
+    ? ["run", "--resume-from", opts.resumeFrom]
+    : ["run", "--config", JSON.stringify(resolvedConfig)];
+  // ... rest unchanged
   return spawnBarnum(args);
 }
 
-private resolveActions(opts?: RunOptions): ResolvedConfig {
+private resolveActions(): ResolvedConfig {
+  const resolvers = new Map([
+    ["Pool", resolvePool],
+    ["Command", resolveCommand],
+  ]);
+
   return {
     ...this.config,
     steps: this.config.steps.map((step) => {
-      const resolver = this.resolvers.get(step.action.kind);
+      const resolver = resolvers.get(step.action.kind);
+      if (!resolver) throw new Error(`Unknown action kind: ${step.action.kind}`);
       const context: ActionContext = {
-        root: opts?.root ?? "",
-        pool: opts?.pool ?? "",
         workingDir: process.cwd(),
         config: this.config,
         step,
@@ -239,65 +390,63 @@ private resolveActions(opts?: RunOptions): ResolvedConfig {
 }
 ```
 
-The built-in resolvers are registered in the constructor:
+### 8. Step docs generation moves to JS
 
-```typescript
-private resolvers = new Map<string, ActionModule>([
-  ["Pool", poolAction],
-  ["Command", commandAction],
-]);
-```
+`generate_step_docs` currently lives in Rust (`crates/barnum_config/src/docs.rs`). It generates markdown instructions for pool agents. With JS resolution:
 
-## Step docs generation
-
-`generate_step_docs` currently lives in Rust (`crates/barnum_config/src/docs.rs`). It generates markdown instructions for pool agents based on the step config (valid next steps, schemas, etc.). With JS action resolution, this logic moves to JS:
-
-- The pool action module calls `generateStepDocs(step, config)` at resolution time
-- The result is base64-encoded and passed as an argument to the pool executor
+- The pool resolver calls `generateStepDocs(step, config)` at resolution time
+- The result is base64-encoded and passed as a CLI arg to the pool executor
 - The executor decodes it and includes it in the troupe payload
 
-The Rust `docs.rs` module continues to exist for `generate_full_docs` (used by the `docs` CLI subcommand) but `generate_step_docs` gets a JS equivalent. Alternatively, `generate_step_docs` could be removed from Rust and the `docs` subcommand could also be driven by JS.
+`generate_full_docs` stays in Rust for the `barnum config docs` subcommand. `write_instructions` and `generate_step_docs` can be deleted from Rust once JS resolution is the only path, or kept for `barnum config docs`.
 
-## "Returns a command" vs "does the work itself"
+### 9. Config types for Rust input
 
-The design above uses "returns a command" — the JS function runs at config time and returns an `ExecutionSpec`. Rust spawns the command at dispatch time.
+Rust needs a way to accept the resolved config (with `ActionExecution` instead of `ActionKind`). Two options:
 
-The alternative ("does the work itself") means the JS function runs at dispatch time. For this to work, Rust would need to invoke JS per dispatch, which means either:
+**Option A: Two config formats.** `barnum_config` accepts both user-facing config (`ActionFile` with `Pool`/`Command`) and resolved config (`ActionExecution`). The user-facing config has a `resolve()` method that produces the resolved config. JS calls `resolve()` on its side and passes the result.
 
-1. Spawning `node <module>` per dispatch (high overhead — Node startup per task)
-2. A persistent Node process that Rust communicates with over a socket or pipe
-3. Inverting the relationship so JS is the outer process managing dispatch
+**Option B: Resolved-only.** Rust only accepts the resolved format. The CLI binary handles `ActionFile` → `ActionExecution` resolution for the direct-use case. `barnum_config` never sees `ActionFile`.
 
-Option 1 is too slow. Option 2 adds substantial complexity. Option 3 is a major architectural change (Rust becomes a library, JS becomes the runtime).
+Option B is cleaner — `barnum_config` has one format, and the CLI is responsible for bridging from user-facing config to resolved config. But it means `barnum config validate` and `barnum config docs` need to work on `ActionFile` config (before resolution), which lives in the CLI binary, not in the library.
 
-"Returns a command" sidesteps all of this. If an action kind needs dynamic dispatch-time behavior, its command points to a script that has that logic. The script starts once per dispatch, reads stdin, does its work, writes stdout. This is exactly what the pool executor does. So "returns a command" and "does the work itself" converge: in both cases, a process runs at dispatch time. The question is just whether the process is a pre-known script path or an inline function.
+**Recommendation: Option A.** Keep both formats in `barnum_config`. The resolved config is what the runner consumes. `ConfigFile::resolve()` produces it by resolving `ActionFile` variants into `ActionExecution`. JS can also produce resolved configs directly. The `barnum_config` library remains self-contained.
 
-For pragmatic purposes, "returns a command" is the right model. It keeps Rust simple, avoids Rust-JS communication overhead, and handles all current use cases.
+### 10. Troupe binary discovery
 
-## Relationship to ACTION_REGISTRY
+The pool executor script needs to find `troupe`. Options:
+- `TROUPE` env var (set by the JS layer, pointing to the bundled binary)
+- Fall back to `troupe` on PATH
+- The `@barnum/troupe` npm package already bundles the binary — the JS layer can resolve its path and pass it
 
-ACTION_REGISTRY introduces a Rust-side factory registry. With JS action resolution, that registry is unnecessary — Rust receives a flat `ActionExecution` per step and has one execution path. There are two possible orderings:
+The JS layer already does binary resolution for `barnum` itself (`process.env.BARNUM ?? require("./index.cjs")`). The same pattern works for troupe.
 
-**Path A: ACTION_REGISTRY first, then JS resolution**
-1. ACTION_REGISTRY: Engine dispatch goes through factory registry (still typed ActionKind)
-2. JS resolution: Replace ActionKind with ActionExecution, delete the registry
+## What doesn't change
 
-The registry serves as a mechanical stepping stone that decouples Engine from specific kinds. But it gets deleted in the next step, so the total work is higher.
+- State machine logic (`RunState`, task tracking, retry logic)
+- `ActionHandle`, `run_action`, `spawn_worker` (already generic)
+- `dispatch_finally` (always ShellAction with `self.working_dir`)
+- `CompiledSchemas` and validation
+- State log format (entries are the same; config entry stores resolved config)
+- `barnum config validate`, `barnum config docs`, `barnum config graph` (operate on user-facing config)
 
-**Path B: JS resolution directly**
-1. Add `ActionExecution` to Rust resolved types
-2. JS resolves actions in `BarnumConfig.run()`
-3. Delete `ActionKind`, `PoolAction` (Rust), `PoolConnection`, `submit.rs`
-4. `ShellAction` becomes the only executor, spawning `command + args`
+## Resume behavior
 
-Path B is less total work and reaches the end state faster. The risk is that it's a bigger single change — config types, JS layer, and Rust execution all change together.
+On resume, Rust reads the state log which contains the resolved config (with `ActionExecution` fields). The JS layer doesn't run again — Rust uses the serialized execution specs directly. The command paths must still be valid at resume time. If the pool executor script moved between runs, resume would break. This is fine in practice since resume is expected to happen on the same machine.
 
-## Open questions
+## Phasing
 
-1. **Troupe binary discovery.** The pool executor script needs to invoke `troupe`. Currently Rust uses `Invoker<TroupeCli>` which embeds the binary or finds it on PATH. In JS, we'd need the troupe binary path passed as context. The `@barnum/barnum` npm package could bundle or locate it the same way it bundles the barnum binary.
+1. **Add `ActionExecution` to resolved types** alongside existing `ActionKind`. Dual-format acceptance.
+2. **Update `ShellAction`** to accept `command + args` instead of just `script`.
+3. **Add JS resolution** in `BarnumConfig.run()` with pool and command resolvers.
+4. **Add pool executor script** bundled with the npm package.
+5. **Port `generateStepDocs` to JS.**
+6. **Update `dispatch_task`** to use `ActionExecution` instead of matching on `ActionKind`.
+7. **Remove `ActionKind`**, `PoolAction` (runtime), `submit.rs`, `Invoker` from Engine/RunnerConfig.
+8. **Move CLI fallback resolution** into the barnum CLI binary for direct-use case.
 
-2. **Working directory for command actions.** Currently ShellAction uses `self.working_dir` (the config file's directory). With JS resolution, should the working directory be part of `ActionExecution` (set per-action by JS), or should Rust always use its own working directory? Per-action is more flexible (different kinds might want different working dirs) but adds a field.
+## Relationship to other docs
 
-3. **Resume behavior.** On resume, Rust reads the state log which contains the resolved config (including `ActionExecution` fields). The JS layer doesn't run again — Rust uses the serialized execution specs directly. This means the command paths must still be valid at resume time. If the pool executor script moved between runs, resume would break. This is probably fine in practice but worth noting.
-
-4. **`Config::has_pool_actions()`.** This method in `resolved.rs` checks if any step uses Pool, so the runner knows whether it needs a troupe root. With flat `ActionExecution`, there's no "Pool" concept in Rust. The JS layer would need to signal this differently (e.g., a `requires_pool: bool` flag on the config), or Rust would just always require the root path.
+- **ACTION_REGISTRY.md** — Superseded. Delete it.
+- **PLUGGABLE_ACTION_KINDS.md** — The end-state vision. JS resolution is the implementation path. User-defined kinds register JS resolver functions. The `Custom` catch-all in config types allows arbitrary kind strings that JS resolves.
+- **CLAUDE_CLI_ACTION_KIND.md** — Claude becomes a JS resolver function that returns `{ command: "claude", args: ["-p", "--model", model, ...] }`. No Rust code needed.
