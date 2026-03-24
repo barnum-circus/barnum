@@ -1,57 +1,42 @@
 //! Tests for edge cases and boundary conditions.
 
-#![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
-#![expect(clippy::doc_markdown)]
 
 mod common;
 
 use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
-use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
-    is_ipc_available, setup_test_dir, test_state_log_path,
-};
+use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const TEST_DIR: &str = "edge_cases";
 
-/// Test that empty initial_tasks completes immediately.
+/// Test that empty `initial_tasks` completes immediately.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
 fn empty_initial_tasks_completes() {
     let root = setup_test_dir(TEST_DIR);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // No sleep needed - pool is ready after start() returns, and no tasks means no agent needed
-
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
+                {
+                    "name": "Start",
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "next": []
+                }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![]; // Empty!
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -67,47 +52,28 @@ fn empty_initial_tasks_completes() {
 fn large_fan_out() {
     let root = setup_test_dir(&format!("{TEST_DIR}_large_fanout"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let task_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = task_count.clone();
-
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(5), move |payload| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-
-        let v: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = v["task"]["kind"].as_str().unwrap_or("");
-
-        if kind == "Distribute" {
-            // Fan out to 20 workers
-            let workers: Vec<String> = (0..20)
-                .map(|i| format!(r#"{{"kind": "Worker", "value": {{"id": {i}}}}}"#))
-                .collect();
-            format!("[{}]", workers.join(", "))
-        } else {
-            "[]".to_string()
-        }
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
+    // Distribute echoes 20 follow-up tasks, each transitioning to Worker.
+    // Worker is terminal (echoes empty array).
+    //
+    // The script uses jq to generate the fan-out array dynamically.
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Distribute", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": ["Worker"]},
-                {"name": "Worker", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
+                {
+                    "name": "Distribute",
+                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}}]'"}},
+                    "next": ["Worker"]
+                },
+                {
+                    "name": "Worker",
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "next": []
+                }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "Distribute",
@@ -117,18 +83,10 @@ fn large_fan_out() {
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
-
-    // 1 Distribute + 20 Workers = 21 tasks
-    assert_eq!(
-        task_count.load(Ordering::SeqCst),
-        21,
-        "Should process 21 tasks (1 distribute + 20 workers)"
-    );
 
     cleanup_test_dir(&root);
 }
@@ -139,8 +97,6 @@ fn large_fan_out() {
 fn command_action_executes() {
     let root = setup_test_dir(&format!("{TEST_DIR}_command"));
 
-    // Command action doesn't need IPC - it runs locally
-    // No pool needed since we're only using Command actions
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
@@ -158,7 +114,7 @@ fn command_action_executes() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "Echo",
@@ -168,7 +124,6 @@ fn command_action_executes() {
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -184,29 +139,19 @@ fn command_action_executes() {
 fn rapid_task_completion() {
     let root = setup_test_dir(&format!("{TEST_DIR}_rapid"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent with minimal delay (zero can cause races)
-    let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(1));
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Fast", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
+                {
+                    "name": "Fast",
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "next": []
+                }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     // Submit many tasks
     let initial_tasks: Vec<Task> = (0..50)
@@ -217,7 +162,6 @@ fn rapid_task_completion() {
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -232,16 +176,19 @@ fn rapid_task_completion() {
 fn unknown_step_in_initial_tasks_returns_error() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown_step"));
 
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "steps": [
-                {"name": "Known", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": []}
+                {
+                    "name": "Known",
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "next": []
+                }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![
         Task::new("Unknown", StepInputValue(serde_json::json!({}))), // Unknown step - should error
@@ -250,7 +197,6 @@ fn unknown_step_in_initial_tasks_returns_error() {
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 

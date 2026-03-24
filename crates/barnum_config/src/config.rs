@@ -7,7 +7,6 @@ use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// Top-level Barnum configuration file format.
 ///
@@ -89,8 +88,7 @@ pub struct StepFile {
     /// `{"kind": "ThisStepName", "value": {...}}`.
     pub name: StepName,
 
-    /// How this step processes tasks — either send to the agent pool (`Pool`)
-    /// or run a local shell command (`Command`).
+    /// How this step processes tasks.
     pub action: ActionFile,
 
     /// Step names this step is allowed to spawn follow-up tasks on.
@@ -120,37 +118,7 @@ pub struct StepFile {
     pub options: StepOptions,
 }
 
-/// Send the task to the agent pool. An AI agent receives the task's `value`
-/// along with the `instructions` (markdown prompt) and produces a JSON array
-/// of follow-up tasks.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct PoolActionFile {
-    /// Markdown prompt shown to the agent processing this task. This is
-    /// the core of what tells the agent what to do. Use
-    /// `{"kind": "Inline", "value": "..."}` to write the markdown directly, or
-    /// `{"kind": "Link", "path": "path/to/file.md"}` to reference an external file.
-    pub instructions: crate::maybe_linked::MaybeLinked<Instructions>,
-
-    /// Pool name (e.g., `"demo"`, `"reviewers"`). If omitted, the pool
-    /// infrastructure uses its own default.
-    #[serde(default)]
-    pub pool: Option<String>,
-
-    /// Pool root directory. If omitted, the pool infrastructure uses its
-    /// own default.
-    #[serde(default)]
-    pub root: Option<PathBuf>,
-
-    /// Agent timeout in seconds. Passed to the pool as `timeout_seconds`
-    /// in the task payload. Controls how long the agent gets to work.
-    /// Separate from the step-level `timeout` which controls barnum's
-    /// worker timeout.
-    #[serde(default)]
-    pub timeout: Option<u64>,
-}
-
-/// Run a local shell command instead of sending to an agent. Use this for
-/// deterministic transformations, fan-out, or glue logic.
+/// Run a shell command to process tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CommandActionFile {
     /// Shell script to execute.
@@ -164,14 +132,11 @@ pub struct CommandActionFile {
     pub script: String,
 }
 
-/// How a step processes tasks. Set `"kind": "Pool"` to send tasks to AI agents,
-/// or `"kind": "Command"` to run a local shell script.
+/// How a step processes tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "params")]
 pub enum ActionFile {
-    /// Send the task to the agent pool for processing.
-    Pool(PoolActionFile),
-    /// Run a local shell command.
+    /// Run a shell command.
     Command(CommandActionFile),
 }
 
@@ -194,17 +159,6 @@ pub struct HookCommand {
 pub enum FinallyHook {
     /// Run a shell command as the finally hook.
     Command(HookCommand),
-}
-
-impl ActionFile {
-    /// Get the instructions if this is a pool action.
-    #[must_use]
-    pub const fn instructions(&self) -> Option<&crate::maybe_linked::MaybeLinked<Instructions>> {
-        match self {
-            Self::Pool(PoolActionFile { instructions, .. }) => Some(instructions),
-            Self::Command(..) => None,
-        }
-    }
 }
 
 /// Per-step option overrides. Only set the fields you want to override;
@@ -258,25 +212,11 @@ impl EffectiveOptions {
     }
 }
 
-/// Markdown text that tells agents how to process tasks on this step.
-/// This is the prompt/instructions the agent receives alongside the task payload.
-#[derive(Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct Instructions(pub String);
-
 impl ConfigFile {
     /// Build a map of step name to step for efficient lookup.
     #[must_use]
     pub fn step_map(&self) -> HashMap<&StepName, &StepFile> {
         self.steps.iter().map(|s| (&s.name, s)).collect()
-    }
-
-    /// Check if any step uses the Pool action.
-    #[must_use]
-    pub fn has_pool_actions(&self) -> bool {
-        self.steps
-            .iter()
-            .any(|s| matches!(s.action, ActionFile::Pool(..)))
     }
 
     /// Validate the config for internal consistency.
@@ -336,22 +276,19 @@ impl ConfigFile {
     /// Resolve all file references and compute effective options.
     ///
     /// Returns a fully resolved `Config` ready for runtime use.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any linked file cannot be read.
-    pub fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::Config> {
+    #[must_use]
+    pub fn resolve(self, base_path: &std::path::Path) -> crate::resolved::Config {
         let global_options = &self.options;
         let steps = self
             .steps
             .into_iter()
             .map(|step| step.resolve(base_path, global_options))
-            .collect::<std::io::Result<Vec<_>>>()?;
+            .collect();
 
-        Ok(crate::resolved::Config {
+        crate::resolved::Config {
             max_concurrency: self.options.max_concurrency,
             steps,
-        })
+        }
     }
 }
 
@@ -361,11 +298,11 @@ impl StepFile {
         self,
         base_path: &std::path::Path,
         global_options: &Options,
-    ) -> std::io::Result<crate::resolved::Step> {
-        let action = self.action.resolve(base_path)?;
+    ) -> crate::resolved::Step {
+        let action = self.action.resolve(base_path);
         let options = EffectiveOptions::resolve(global_options, &self.options);
 
-        Ok(crate::resolved::Step {
+        crate::resolved::Step {
             name: self.name,
             action,
             next: self.next,
@@ -379,36 +316,17 @@ impl StepFile {
                 retry_on_timeout: options.retry_on_timeout,
                 retry_on_invalid_response: options.retry_on_invalid_response,
             },
-        })
+        }
     }
 }
 
 impl ActionFile {
     /// Resolve this action's file references.
-    fn resolve(self, base_path: &std::path::Path) -> std::io::Result<crate::resolved::ActionKind> {
+    fn resolve(self, _base_path: &std::path::Path) -> crate::resolved::ActionKind {
         match self {
-            Self::Pool(PoolActionFile {
-                instructions,
-                pool,
-                root,
-                timeout,
-            }) => {
-                let resolved: Instructions = instructions.resolve(base_path, |path| {
-                    let content = std::fs::read_to_string(path)?;
-                    Ok(Instructions(content))
-                })?;
-                Ok(crate::resolved::ActionKind::Pool(
-                    crate::resolved::PoolAction {
-                        instructions: resolved.0,
-                        pool,
-                        root,
-                        timeout,
-                    },
-                ))
+            Self::Command(CommandActionFile { script }) => {
+                crate::resolved::ActionKind::Command(crate::resolved::CommandAction { script })
             }
-            Self::Command(CommandActionFile { script }) => Ok(
-                crate::resolved::ActionKind::Command(crate::resolved::CommandAction { script }),
-            ),
         }
     }
 }
@@ -476,16 +394,14 @@ pub fn config_schema() -> schemars::schema::RootSchema {
 #[expect(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::maybe_linked::MaybeLinked;
 
-    const POOL: &str =
-        r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
+    const CMD: &str = r#"{"kind": "Command", "params": {"script": "echo '[]'"}}"#;
 
     /// Helper to build a step JSON with required action field.
     fn step(name: &str, next: &[&str]) -> String {
         let next_json: Vec<String> = next.iter().map(|n| format!("\"{n}\"")).collect();
         format!(
-            r#"{{"name": "{name}", "action": {POOL}, "next": [{}]}}"#,
+            r#"{{"name": "{name}", "action": {CMD}, "next": [{}]}}"#,
             next_json.join(", ")
         )
     }
@@ -514,7 +430,7 @@ mod tests {
             "steps": [
                 {{
                     "name": "Analyze",
-                    "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": "Analyze the input."}}}}}},
+                    "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                     "next": ["Done"]
                 }},
                 {}
@@ -598,7 +514,7 @@ mod tests {
             }},
             "steps": [{{
                 "name": "ExpensiveStep",
-                "action": {POOL},
+                "action": {CMD},
                 "next": [],
                 "options": {{
                     "timeout": 300,
@@ -641,40 +557,6 @@ mod tests {
         assert_eq!(effective.max_retries, 5);
         assert!(effective.retry_on_timeout);
         assert!(effective.retry_on_invalid_response);
-    }
-
-    #[test]
-    fn action_pool_inline_instructions() {
-        let json = r#"{
-            "steps": [{
-                "name": "Test",
-                "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Inline markdown here."}}},
-                "next": []
-            }]
-        }"#;
-
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
-        assert!(matches!(
-            &config.steps[0].action,
-            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Inline { value: Instructions(s) }, .. }) if s == "Inline markdown here."
-        ));
-    }
-
-    #[test]
-    fn action_pool_link_instructions() {
-        let json = r#"{
-            "steps": [{
-                "name": "Test",
-                "action": {"kind": "Pool", "params": {"instructions": {"kind": "Link", "path": "path/to/instructions.md"}}},
-                "next": []
-            }]
-        }"#;
-
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
-        assert!(matches!(
-            &config.steps[0].action,
-            ActionFile::Pool(PoolActionFile { instructions: MaybeLinked::Link { path }, .. }) if path == "path/to/instructions.md"
-        ));
     }
 
     #[test]

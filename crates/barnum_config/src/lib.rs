@@ -19,7 +19,6 @@
 
 mod config;
 mod docs;
-mod maybe_linked;
 mod resolved;
 mod runner;
 mod types;

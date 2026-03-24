@@ -7,7 +7,6 @@ use crate::types::{HookScript, StepName};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// Fully resolved Barnum configuration.
 ///
@@ -26,14 +25,6 @@ impl Config {
     #[must_use]
     pub fn step_map(&self) -> HashMap<&StepName, &Step> {
         self.steps.iter().map(|s| (&s.name, s)).collect()
-    }
-
-    /// Check if any step uses the Pool action.
-    #[must_use]
-    pub fn has_pool_actions(&self) -> bool {
-        self.steps
-            .iter()
-            .any(|s| matches!(s.action, ActionKind::Pool(..)))
     }
 }
 
@@ -58,27 +49,7 @@ pub struct Step {
     pub options: Options,
 }
 
-/// Send to the agent pool for processing.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct PoolAction {
-    /// Resolved markdown instructions.
-    pub instructions: String,
-
-    /// Pool name. If `None`, the pool infrastructure uses its own default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pool: Option<String>,
-
-    /// Pool root directory. If `None`, the pool infrastructure uses its own default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<PathBuf>,
-
-    /// Agent timeout in seconds. Passed to the pool as `timeout_seconds`.
-    /// Separate from the step-level timeout which controls barnum's worker timeout.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout: Option<u64>,
-}
-
-/// Run a local command.
+/// Run a shell command.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CommandAction {
     /// Shell script to execute.
@@ -89,9 +60,7 @@ pub struct CommandAction {
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "params")]
 pub enum ActionKind {
-    /// Send to the agent pool for processing.
-    Pool(PoolAction),
-    /// Run a local command.
+    /// Run a shell command.
     Command(CommandAction),
 }
 

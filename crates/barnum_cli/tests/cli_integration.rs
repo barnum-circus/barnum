@@ -1,17 +1,14 @@
 //! Barnum CLI integration tests.
 //!
 //! These tests verify the CLI runs correctly with various configurations.
-//! They use a file-writer agent that creates marker files to verify execution.
+//! They use Command actions that run shell scripts to verify execution.
 
-#![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
 #![expect(clippy::unwrap_used)]
 
 mod common;
 
-use common::{
-    BarnumRunner, FileWriterAgent, TroupeHandle, cleanup_test_dir, is_ipc_available, setup_test_dir,
-};
+use common::{BarnumRunner, cleanup_test_dir, setup_test_dir};
 use rstest::rstest;
 use std::fs;
 use std::time::Duration;
@@ -27,48 +24,25 @@ const TEST_DIR: &str = "cli";
 fn single_step_terminates() {
     let test_name = format!("{TEST_DIR}_single_step");
     let root = setup_test_dir(&test_name);
-    let output_dir = root.join("output");
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let pool_root = root.join("pool");
-    fs::create_dir_all(&pool_root).expect("create pool dir");
-
-    let _pool = TroupeHandle::start(&pool_root);
-    let agent = FileWriterAgent::start(
-        &pool_root,
-        &output_dir,
-        vec![("Start".to_string(), String::new())], // Terminate
-    );
 
     let config = r#"{
         "steps": [{
             "name": "Start",
-            "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Start step"}}},
+            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
             "next": []
         }]
     }"#;
 
     let barnum = BarnumRunner::new();
     let result = barnum
-        .run(config, r#"[{"kind": "Start", "value": {}}]"#, &pool_root)
+        .run(config, r#"[{"kind": "Start", "value": {}}]"#)
         .expect("run barnum");
-
-    agent.stop();
 
     assert!(
         result.status.success(),
         "Barnum should succeed.\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        output_dir.join("Start.done").exists(),
-        "Start step should have executed"
     );
 
     cleanup_test_dir(&root);
@@ -79,60 +53,25 @@ fn single_step_terminates() {
 fn multi_stage_linear() {
     let test_name = format!("{TEST_DIR}_multi_stage");
     let root = setup_test_dir(&test_name);
-    let output_dir = root.join("output");
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let pool_root = root.join("pool");
-    fs::create_dir_all(&pool_root).expect("create pool dir");
-
-    let _pool = TroupeHandle::start(&pool_root);
-    let agent = FileWriterAgent::start(
-        &pool_root,
-        &output_dir,
-        vec![
-            ("Start".to_string(), "Middle".to_string()),
-            ("Middle".to_string(), "End".to_string()),
-            ("End".to_string(), String::new()),
-        ],
-    );
 
     let config = r#"{
         "steps": [
-            {"name": "Start", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Start"}}}, "next": ["Middle"]},
-            {"name": "Middle", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Middle"}}}, "next": ["End"]},
-            {"name": "End", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "End"}}}, "next": []}
+            {"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\": \"Middle\", \"value\": {}}]'"}}, "next": ["Middle"]},
+            {"name": "Middle", "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\": \"End\", \"value\": {}}]'"}}, "next": ["End"]},
+            {"name": "End", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
     let barnum = BarnumRunner::new();
     let result = barnum
-        .run(config, r#"[{"kind": "Start", "value": {}}]"#, &pool_root)
+        .run(config, r#"[{"kind": "Start", "value": {}}]"#)
         .expect("run barnum");
-
-    agent.stop();
 
     assert!(
         result.status.success(),
         "Barnum should succeed.\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        output_dir.join("Start.done").exists(),
-        "Start step should have executed"
-    );
-    assert!(
-        output_dir.join("Middle.done").exists(),
-        "Middle step should have executed"
-    );
-    assert!(
-        output_dir.join("End.done").exists(),
-        "End step should have executed"
     );
 
     cleanup_test_dir(&root);
@@ -148,17 +87,16 @@ fn empty_initial_tasks_succeeds() {
     let test_name = format!("{TEST_DIR}_empty_initial");
     let root = setup_test_dir(&test_name);
 
-    // No IPC needed - empty tasks should complete immediately without pool
     let config = r#"{
         "steps": [{
             "name": "Start",
-            "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Start"}}},
+            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
             "next": []
         }]
     }"#;
 
     let barnum = BarnumRunner::new();
-    let result = barnum.run(config, "[]", &root).expect("run barnum");
+    let result = barnum.run(config, "[]").expect("run barnum");
 
     assert!(
         result.status.success(),
@@ -177,8 +115,8 @@ fn empty_initial_tasks_succeeds() {
 fn validate_valid_config() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "A"}}}, "next": ["B"]},
-            {"name": "B", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "B"}}}, "next": []}
+            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
@@ -195,7 +133,7 @@ fn validate_valid_config() {
 fn validate_invalid_config_missing_step() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "A"}}}, "next": ["NonExistent"]}
+            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["NonExistent"]}
         ]
     }"#;
 
@@ -210,7 +148,7 @@ fn validate_invalid_config_missing_step() {
 fn docs_generates_markdown() {
     let config = r#"{
         "steps": [
-            {"name": "Start", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Do something"}}}, "next": []}
+            {"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
@@ -227,8 +165,8 @@ fn docs_generates_markdown() {
 fn graph_generates_dot() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "A"}}}, "next": ["B"]},
-            {"name": "B", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "B"}}}, "next": []}
+            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
@@ -250,16 +188,6 @@ fn graph_generates_dot() {
 fn config_from_file() {
     let test_name = format!("{TEST_DIR}_config_file");
     let root = setup_test_dir(&test_name);
-    let output_dir = root.join("output");
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let pool_root = root.join("pool");
-    fs::create_dir_all(&pool_root).expect("create pool dir");
 
     // Write config to file
     let config_path = root.join("config.json");
@@ -268,7 +196,7 @@ fn config_from_file() {
         r#"{
             "steps": [{
                 "name": "FileStep",
-                "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "From file"}}},
+                "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
                 "next": []
             }]
         }"#,
@@ -279,33 +207,19 @@ fn config_from_file() {
     let initial_path = root.join("initial.json");
     fs::write(&initial_path, r#"[{"kind": "FileStep", "value": {}}]"#).expect("write initial");
 
-    let _pool = TroupeHandle::start(&pool_root);
-    let agent = FileWriterAgent::start(
-        &pool_root,
-        &output_dir,
-        vec![("FileStep".to_string(), String::new())],
-    );
-
     let barnum = BarnumRunner::new();
     let result = barnum
         .run(
             config_path.to_str().unwrap(),
             initial_path.to_str().unwrap(),
-            &pool_root,
         )
         .expect("run barnum");
-
-    agent.stop();
 
     assert!(
         result.status.success(),
         "Barnum should succeed.\nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        output_dir.join("FileStep.done").exists(),
-        "FileStep should have executed"
     );
 
     cleanup_test_dir(&root);

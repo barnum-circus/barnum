@@ -11,8 +11,6 @@ categories = ["command-line-utilities"]
 
 [dependencies]
 troupe = { path = "../troupe" }
-troupe_cli = { path = "../troupe_cli" }
-cli_invoker = { path = "../cli_invoker" }
 barnum_config = { path = "../barnum_config" }
 clap = { workspace = true }
 json5 = { workspace = true }
@@ -30,6 +28,7 @@ name = "build_schemas"
 path = "src/bin/build_schemas.rs"
 
 [dev-dependencies]
+troupe = { path = "../troupe" }
 interprocess = { workspace = true }
 rstest = { workspace = true }
 

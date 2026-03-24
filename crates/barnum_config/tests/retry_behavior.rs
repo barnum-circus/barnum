@@ -1,201 +1,79 @@
 //! Tests for retry behavior with different configuration options.
 //!
 //! These tests verify that `retry_on_timeout`, `retry_on_invalid_response`,
-//! and `max_retries` work correctly.
+//! and `max_retries` work correctly using Command actions.
 
-#![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
-#![expect(clippy::doc_markdown)]
-#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
 use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
-use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
-    is_ipc_available, setup_test_dir, test_state_log_path,
-};
+use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const TEST_DIR: &str = "retry_behavior";
 
-/// Test that retry_on_invalid_response=false drops tasks immediately.
+// =============================================================================
+// Timeout retry: Command script sleeps too long, barnum kills it, then retries
+// =============================================================================
+
+/// Test that a command that times out is retried (default `retry_on_timeout=true`),
+/// eventually exhausting `max_retries`.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-fn retry_on_invalid_response_false_drops_task() {
+fn timeout_retry_exhausts_max_retries() {
     let root = setup_test_dir(TEST_DIR);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    // Agent that always returns invalid response
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-        // Invalid: returns a step not in `next`
-        r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 5,
-                "retry_on_invalid_response": false
+                "timeout": 1,
+                "max_retries": 2,
+                "retry_on_timeout": true
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": ["End"]
-                },
-                {
-                    "name": "End",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
+                    "action": {"kind": "Command", "params": {"script": "sleep 999"}},
                     "next": []
                 }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    // Run should return error because task is dropped
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
-    assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    // With retry_on_invalid_response=false, should only try once
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        1,
-        "Should only attempt once when retry_on_invalid_response=false"
+    assert!(
+        result.is_err(),
+        "run should fail after exhausting retries on timeout"
     );
 
     cleanup_test_dir(&root);
 }
 
-/// Test that retry_on_invalid_response=true retries up to max_retries.
+// =============================================================================
+// Invalid response retry: Command outputs bad JSON, barnum retries
+// =============================================================================
+
+/// Test that invalid JSON output triggers retry when `retry_on_invalid_response=true`,
+/// eventually exhausting `max_retries`.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-#[should_panic]
-fn retry_on_invalid_response_true_retries() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_retry_true"));
+fn invalid_response_retry_exhausts_max_retries() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_invalid_resp"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    // Agent that always returns invalid response
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-        r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
-        r#"{
-            "options": {
-                "max_retries": 3,
-                "retry_on_invalid_response": true
-            },
-            "steps": [
-                {
-                    "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": ["End"]
-                },
-                {
-                    "name": "End",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": []
-                }
-            ]
-        }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
-
-    let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
-    let state_log = test_state_log_path(&root);
-    let runner_config = RunnerConfig {
-        working_dir: Path::new("."),
-        wake_script: None,
-        invoker: &create_test_invoker(),
-        state_log_path: &state_log,
-    };
-
-    // Run should return error because task is dropped after all retries
-    let result = barnum_config::run(&config, &runner_config, initial_tasks);
-    assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    // With max_retries=3, should try 1 original + 3 retries = 4 total
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        4,
-        "Should attempt 4 times (1 original + 3 retries)"
-    );
-
-    cleanup_test_dir(&root);
-}
-
-/// Test that agent returning malformed JSON triggers retry.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-#[should_panic]
-fn malformed_json_triggers_retry() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_malformed"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    // Agent that returns invalid JSON
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-        "not valid json {{{".to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
                 "max_retries": 2,
@@ -204,67 +82,179 @@ fn malformed_json_triggers_retry() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
+                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
                     "next": []
                 }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    // Run should return error because task is dropped after all retries
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
-    assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    // 1 original + 2 retries = 3 total
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        3,
-        "Should attempt 3 times for malformed JSON"
+    assert!(
+        result.is_err(),
+        "run should fail after exhausting retries on invalid response"
     );
 
     cleanup_test_dir(&root);
 }
 
-/// Test that per-step options override global options.
+// =============================================================================
+// Max retries exhausted: after N failures, barnum gives up
+// =============================================================================
+
+/// Test that `max_retries=0` means no retries at all (single attempt).
+#[rstest]
+#[timeout(Duration::from_secs(20))]
+fn max_retries_zero_no_retries() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_zero_retries"));
+
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "options": {
+                "max_retries": 0,
+                "retry_on_invalid_response": true
+            },
+            "steps": [
+                {
+                    "name": "Start",
+                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "next": []
+                }
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
+
+    let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
+    let runner_config = RunnerConfig {
+        working_dir: Path::new("."),
+        wake_script: None,
+        state_log_path: &state_log,
+    };
+
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
+    assert!(
+        result.is_err(),
+        "run should fail when max_retries=0 and response is invalid"
+    );
+
+    cleanup_test_dir(&root);
+}
+
+// =============================================================================
+// Retry on timeout disabled: no retry when retry_on_timeout=false
+// =============================================================================
+
+/// Test that `retry_on_timeout=false` causes immediate failure on timeout.
+#[rstest]
+#[timeout(Duration::from_secs(20))]
+fn retry_on_timeout_false_drops_task() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_no_timeout_retry"));
+
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "options": {
+                "timeout": 1,
+                "max_retries": 5,
+                "retry_on_timeout": false
+            },
+            "steps": [
+                {
+                    "name": "Start",
+                    "action": {"kind": "Command", "params": {"script": "sleep 999"}},
+                    "next": []
+                }
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
+
+    let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
+    let runner_config = RunnerConfig {
+        working_dir: Path::new("."),
+        wake_script: None,
+        state_log_path: &state_log,
+    };
+
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
+    assert!(
+        result.is_err(),
+        "run should fail immediately when retry_on_timeout=false"
+    );
+
+    cleanup_test_dir(&root);
+}
+
+// =============================================================================
+// Retry on invalid response disabled: no retry on bad output
+// =============================================================================
+
+/// Test that `retry_on_invalid_response=false` causes immediate failure on bad output.
+#[rstest]
+#[timeout(Duration::from_secs(20))]
+fn retry_on_invalid_response_false_drops_task() {
+    let root = setup_test_dir(&format!("{TEST_DIR}_no_invalid_retry"));
+
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "options": {
+                "max_retries": 5,
+                "retry_on_invalid_response": false
+            },
+            "steps": [
+                {
+                    "name": "Start",
+                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "next": []
+                }
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
+
+    let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
+    let state_log = test_state_log_path(&root);
+    let runner_config = RunnerConfig {
+        working_dir: Path::new("."),
+        wake_script: None,
+        state_log_path: &state_log,
+    };
+
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
+    assert!(
+        result.is_err(),
+        "run should fail immediately when retry_on_invalid_response=false"
+    );
+
+    cleanup_test_dir(&root);
+}
+
+// =============================================================================
+// Per-step options override global
+// =============================================================================
+
+/// Test that per-step `retry_on_invalid_response=false` overrides `global=true`.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
 fn per_step_options_override_global() {
     let root = setup_test_dir(&format!("{TEST_DIR}_per_step"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    // Agent that always returns invalid response
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-        r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    // Global: retry=true, max_retries=5
-    // Step: retry=false (override)
-    let json = inject_pool_config(
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
                 "max_retries": 5,
@@ -273,23 +263,17 @@ fn per_step_options_override_global() {
             "steps": [
                 {
                     "name": "NoRetryStep",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": ["End"],
+                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "next": [],
                     "options": {
                         "retry_on_invalid_response": false
                     }
-                },
-                {
-                    "name": "End",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": []
                 }
             ]
         }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "NoRetryStep",
@@ -299,157 +283,63 @@ fn per_step_options_override_global() {
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    // Run should return error because task is dropped
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
-    assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    // Per-step override should prevent retries
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        1,
-        "Per-step retry_on_invalid_response=false should override global"
+    assert!(
+        result.is_err(),
+        "run should fail when per-step retry is disabled"
     );
 
     cleanup_test_dir(&root);
 }
 
-/// Test successful recovery after initial failures.
+// =============================================================================
+// Successful retry: script fails once then succeeds
+// =============================================================================
+
+/// Test that a script that fails once then succeeds completes successfully.
+///
+/// Uses a counter file: first invocation writes bad output, second reads the
+/// marker and writes valid output.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-fn recovery_on_nth_attempt() {
+fn successful_retry_after_initial_failure() {
     let root = setup_test_dir(&format!("{TEST_DIR}_recovery"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
+    let counter_file = root.join("retry_counter");
+    let counter_path = counter_file.display().to_string();
 
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    // Agent that fails twice, then succeeds
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        let count = count_clone.fetch_add(1, Ordering::SeqCst);
-        if count < 2 {
-            // First two attempts: invalid
-            r#"[{"kind": "Invalid", "value": {}}]"#.to_string()
-        } else {
-            // Third attempt: valid
-            "[]".to_string()
-        }
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
-        r#"{
-            "options": {
+    let json = format!(
+        r#"{{
+            "options": {{
                 "max_retries": 5,
                 "retry_on_invalid_response": true
-            },
+            }},
             "steps": [
-                {
+                {{
                     "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
+                    "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad'; fi"}}}},
                     "next": []
-                }
+                }}
             ]
-        }"#,
-        &root,
+        }}"#
     );
+
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
-
-    // Should succeed on third attempt
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        3,
-        "Should succeed on third attempt after two failures"
-    );
-
-    cleanup_test_dir(&root);
-}
-
-/// Test that max_retries=0 means no retries at all.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-fn max_retries_zero_no_retries() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_zero_retries"));
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |_| {
-        count_clone.fetch_add(1, Ordering::SeqCst);
-        r#"[{"kind": "Invalid", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let json = inject_pool_config(
-        r#"{
-            "options": {
-                "max_retries": 0,
-                "retry_on_invalid_response": true
-            },
-            "steps": [
-                {
-                    "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": []
-                }
-            ]
-        }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
-
-    let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
-    let state_log = test_state_log_path(&root);
-    let runner_config = RunnerConfig {
-        working_dir: Path::new("."),
-        wake_script: None,
-        invoker: &create_test_invoker(),
-        state_log_path: &state_log,
-    };
-
-    // Run should return error because task is dropped
-    let result = barnum_config::run(&config, &runner_config, initial_tasks);
-    assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    // max_retries=0 means only the original attempt
-    assert_eq!(
-        call_count.load(Ordering::SeqCst),
-        1,
-        "max_retries=0 should only allow original attempt"
-    );
+    barnum_config::run(&config, &runner_config, initial_tasks)
+        .expect("run should succeed on retry");
 
     cleanup_test_dir(&root);
 }

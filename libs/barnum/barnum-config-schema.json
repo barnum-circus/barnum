@@ -49,29 +49,10 @@
   "additionalProperties": false,
   "definitions": {
     "ActionFile": {
-      "description": "How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.",
+      "description": "How a step processes tasks.",
       "oneOf": [
         {
-          "description": "Send the task to the agent pool for processing.",
-          "type": "object",
-          "required": [
-            "kind",
-            "params"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Pool"
-              ]
-            },
-            "params": {
-              "$ref": "#/definitions/PoolActionFile"
-            }
-          }
-        },
-        {
-          "description": "Run a local shell command.",
+          "description": "Run a shell command.",
           "type": "object",
           "required": [
             "kind",
@@ -92,7 +73,7 @@
       ]
     },
     "CommandActionFile": {
-      "description": "Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.",
+      "description": "Run a shell command to process tasks.",
       "type": "object",
       "required": [
         "script"
@@ -141,51 +122,6 @@
         }
       }
     },
-    "MaybeLinked_for_String": {
-      "description": "Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)",
-      "oneOf": [
-        {
-          "description": "Inline content.",
-          "type": "object",
-          "required": [
-            "kind",
-            "value"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Inline"
-              ]
-            },
-            "value": {
-              "description": "The content value, provided directly in the config file.",
-              "type": "string"
-            }
-          }
-        },
-        {
-          "description": "Link to a file whose contents will be loaded at runtime.",
-          "type": "object",
-          "required": [
-            "kind",
-            "path"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "Link"
-              ]
-            },
-            "path": {
-              "description": "Relative path to the file (resolved relative to the config file's directory).",
-              "type": "string"
-            }
-          }
-        }
-      ]
-    },
     "Options": {
       "description": "Global runtime options for task execution. All fields have sensible defaults.",
       "type": "object",
@@ -230,49 +166,6 @@
       },
       "additionalProperties": false
     },
-    "PoolActionFile": {
-      "description": "Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.",
-      "type": "object",
-      "required": [
-        "instructions"
-      ],
-      "properties": {
-        "instructions": {
-          "description": "Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/MaybeLinked_for_String"
-            }
-          ]
-        },
-        "pool": {
-          "description": "Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default.",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "root": {
-          "description": "Pool root directory. If omitted, the pool infrastructure uses its own default.",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "timeout": {
-          "description": "Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout.",
-          "default": null,
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
-    },
     "StepFile": {
       "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.",
       "type": "object",
@@ -282,7 +175,7 @@
       ],
       "properties": {
         "action": {
-          "description": "How this step processes tasks — either send to the agent pool (`Pool`) or run a local shell command (`Command`).",
+          "description": "How this step processes tasks.",
           "allOf": [
             {
               "$ref": "#/definitions/ActionFile"

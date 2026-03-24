@@ -2,6 +2,7 @@
 
 // Test utilities can be more relaxed
 #![allow(dead_code)]
+#![allow(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
 
 /// Default number of concurrent workers for ordered agent mode.
@@ -9,7 +10,6 @@
 /// due to `FSEvents` batching/coalescing behavior.
 const ORDERED_AGENT_WORKER_COUNT: usize = 4;
 
-use cli_invoker::Invoker;
 use std::fs;
 use std::io::{BufRead, BufReader};
 #[cfg(unix)]
@@ -22,34 +22,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use troupe::{STATUS_FILE, TaskAssignment, VerifiedWatcher, wait_for_task, write_response};
-use troupe_cli::TroupeCli;
-
-/// Inject pool root and pool name into all Pool actions in a config JSON string.
-///
-/// Decomposes `pool_root` (e.g., `.td/test_name`) into:
-/// - root = parent directory (troupe root)
-/// - pool = basename (pool name)
-pub fn inject_pool_config(config_json: &str, pool_root: &Path) -> String {
-    let cli_root = pool_root.parent().unwrap_or(pool_root);
-    let pool_name = pool_root
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("default");
-    let mut val: serde_json::Value =
-        serde_json::from_str(config_json).expect("invalid config JSON");
-    if let Some(steps) = val.get_mut("steps").and_then(|s| s.as_array_mut()) {
-        for step in steps {
-            if let Some(action) = step.get_mut("action")
-                && action.get("kind").and_then(|k| k.as_str()) == Some("Pool")
-                && let Some(params) = action.get_mut("params")
-            {
-                params["root"] = serde_json::json!(cli_root);
-                params["pool"] = serde_json::json!(pool_name);
-            }
-        }
-    }
-    serde_json::to_string(&val).expect("serialize config")
-}
 
 /// Get the path to the test data directory for a given test file.
 ///
@@ -575,11 +547,6 @@ pub fn find_troupe_binary() -> PathBuf {
         .expect("Could not find workspace root");
 
     workspace_root.join("target/debug/troupe")
-}
-
-/// Create an invoker for the troupe CLI using the test binary.
-pub fn create_test_invoker() -> Invoker<TroupeCli> {
-    Invoker::from_binary(find_troupe_binary())
 }
 
 /// Wrapper that starts the daemon via CLI subprocess.

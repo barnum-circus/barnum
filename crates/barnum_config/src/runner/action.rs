@@ -9,14 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use cli_invoker::Invoker;
-use tracing::debug;
-use troupe::Response;
-use troupe_cli::TroupeCli;
-
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
-
-use super::submit::{build_agent_payload, submit_via_cli};
 
 // ==================== Worker types ====================
 
@@ -146,43 +139,6 @@ pub fn spawn_worker(
             result: ActionResult { value, output },
         });
     });
-}
-
-// ==================== PoolAction ====================
-
-/// Pool action: submits a task to the troupe agent pool.
-pub struct PoolAction {
-    pub root: Option<PathBuf>,
-    pub pool: Option<String>,
-    pub invoker: Invoker<TroupeCli>,
-    pub docs: String,
-    pub step_name: StepName,
-    /// Agent lifecycle timeout (seconds) from the pool action config.
-    pub pool_timeout: Option<u64>,
-}
-
-impl Action for PoolAction {
-    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let payload =
-                build_agent_payload(&self.step_name, &value, &self.docs, self.pool_timeout);
-            debug!(payload = %payload, "task payload");
-            let result = match submit_via_cli(
-                self.root.as_deref(),
-                self.pool.as_deref(),
-                &payload,
-                &self.invoker,
-            ) {
-                Ok(Response::Processed { stdout, .. }) => Ok(stdout),
-                Ok(Response::NotProcessed { .. }) => Err("not processed by pool".into()),
-                Err(e) => Err(e.to_string()),
-            };
-            let _ = tx.send(result);
-        });
-        // No-op guard: troupe manages its own agent lifecycle.
-        ActionHandle::new(rx, ())
-    }
 }
 
 // ==================== ShellAction ====================

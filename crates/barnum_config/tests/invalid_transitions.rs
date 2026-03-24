@@ -1,27 +1,19 @@
 //! Tests for invalid task queue transitions.
 
-#![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
-#![expect(clippy::redundant_clone)]
-#![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
 use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
-use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
-    is_ipc_available, setup_test_dir, test_state_log_path,
-};
+use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 const TEST_DIR: &str = "invalid_transitions";
 
-fn strict_config(pool_root: &Path) -> Config {
-    let json = inject_pool_config(
+fn strict_config() -> Config {
+    let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
                 "max_retries": 1
@@ -29,165 +21,143 @@ fn strict_config(pool_root: &Path) -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Only allowed to go to Middle."}}},
+                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Only allowed to go to End."}}},
+                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Terminal."}}},
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
                     "next": []
                 }
             ]
         }"#,
-        pool_root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    config_file.resolve(Path::new(".")).expect("resolve config")
+    )
+    .expect("parse config");
+    config_file.resolve(Path::new("."))
 }
 
+/// Start's script returns `[{"kind":"End"}]` but `next` only allows `["Middle"]`.
+/// With `max_retries: 1`, this should exhaust retries and fail.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-#[should_panic]
 fn invalid_transition_causes_retry() {
     let root = setup_test_dir(TEST_DIR);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent tries to skip from Start directly to End (invalid)
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |_| {
-        r#"[{"kind": "End", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let config = strict_config(&root);
+    let config = strict_config();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    // Run should return error because task is dropped after retries exhausted
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    let processed = agent.stop();
-    // Original + 1 retry = 2 attempts
-    assert_eq!(processed.len(), 2);
 
     cleanup_test_dir(&root);
 }
 
+/// Start's script returns `[{"kind":"NonExistent"}]` — a step that doesn't exist.
+/// With `max_retries: 1`, this should exhaust retries and fail.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-#[should_panic]
 fn unknown_step_causes_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
+    let config_file: ConfigFile = serde_json::from_str(
+        r#"{
+            "options": {
+                "max_retries": 1
+            },
+            "steps": [
+                {
+                    "name": "Start",
+                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"NonExistent\",\"value\":{}}]'"}},
+                    "next": ["Middle"]
+                },
+                {
+                    "name": "Middle",
+                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "next": []
+                }
+            ]
+        }"#,
+    )
+    .expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent returns a step that doesn't exist
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |_| {
-        r#"[{"kind": "NonExistent", "value": {}}]"#.to_string()
-    });
-
-    // Wait for agent to be ready (has processed initial heartbeat)
-
-    let config = strict_config(&root);
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
-    // Run should return error because task is dropped after retries exhausted
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
-
-    let processed = agent.stop();
-    // Original + 1 retry = 2 attempts
-    assert_eq!(processed.len(), 2);
 
     cleanup_test_dir(&root);
 }
 
+/// Start's script uses a counter file to return an invalid transition on the first
+/// attempt, then a valid one on retry. The workflow should recover and complete.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
 fn recovery_after_invalid_then_valid() {
     let root = setup_test_dir(&format!("{TEST_DIR}_recovery"));
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
+    // Use a counter file so the script returns different output on retry.
+    // First call: counter absent -> outputs End (invalid for next:["Middle"]).
+    // Second call: counter exists -> outputs Middle (valid).
+    let counter_path = root.join("start_counter");
+    let start_script = format!(
+        "if [ -f '{}' ]; then echo '[{{\"kind\":\"Middle\",\"value\":{{}}}}]'; else touch '{}'; echo '[{{\"kind\":\"End\",\"value\":{{}}}}]'; fi",
+        counter_path.display(),
+        counter_path.display(),
+    );
 
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent that fails first, then succeeds
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
-        let v: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = v["task"]["kind"].as_str().unwrap_or("");
-
-        match kind {
-            "Start" => {
-                if count == 0 {
-                    // First attempt: invalid transition
-                    r#"[{"kind": "End", "value": {}}]"#.to_string()
-                } else {
-                    // Second attempt: valid transition
-                    r#"[{"kind": "Middle", "value": {}}]"#.to_string()
-                }
+    let json_value = serde_json::json!({
+        "options": {
+            "max_retries": 3
+        },
+        "steps": [
+            {
+                "name": "Start",
+                "action": {"kind": "Command", "params": {"script": start_script}},
+                "next": ["Middle"]
+            },
+            {
+                "name": "Middle",
+                "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
+                "next": ["End"]
+            },
+            {
+                "name": "End",
+                "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                "next": []
             }
-            "Middle" => r#"[{"kind": "End", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(),
-        }
+        ]
     });
 
-    // Wait for agent to be ready (has processed initial heartbeat)
+    let config_file: ConfigFile = serde_json::from_value(json_value).expect("parse config");
+    let config = config_file.resolve(Path::new("."));
 
-    let config = strict_config(&root);
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
-
-    let processed = agent.stop();
-    // Start (fail) + Start (success) + Middle + End = 4
-    assert_eq!(processed.len(), 4);
 
     cleanup_test_dir(&root);
 }

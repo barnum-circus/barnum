@@ -11,12 +11,10 @@ use barnum_config::{
     generate_full_docs, resume, run,
 };
 use clap::Parser;
-use cli_invoker::Invoker;
 use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
-use troupe_cli::TroupeCli;
 
 const VERSION: &str = env!("BARNUM_VERSION");
 
@@ -78,7 +76,7 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
     match command {
         ConfigCommand::Docs { config } => {
             let (config_file, config_dir) = parse_config(&config)?;
-            let cfg = config_file.resolve(&config_dir)?;
+            let cfg = config_file.resolve(&config_dir);
             let docs = generate_full_docs(&cfg);
             print!("{docs}");
         }
@@ -87,7 +85,7 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
             let (config_file, config_dir) = parse_config(&config)?;
             match config_file.validate() {
                 Ok(()) => {
-                    let cfg = config_file.resolve(&config_dir)?;
+                    let cfg = config_file.resolve(&config_dir);
                     println!("Config is valid.");
                     println!("Steps: {}", cfg.steps.len());
                     for step in &cfg.steps {
@@ -120,7 +118,7 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
                     format!("[E053] config validation failed: {e}"),
                 )
             })?;
-            let cfg = config_file.resolve(&config_dir)?;
+            let cfg = config_file.resolve(&config_dir);
             let dot = generate_graphviz(&cfg);
             print!("{dot}");
         }
@@ -161,10 +159,6 @@ fn run_command(
     // Initialize tracing with optional log file
     init_tracing(log_file, log_level)?;
 
-    // Detect how to invoke the troupe CLI (returns helpful error if not found).
-    // Pin to our version so dlx fetches the matching troupe release.
-    let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
-
     let (config_file, config_dir) = parse_config(config)?;
     config_file.validate().map_err(|e| {
         io::Error::new(
@@ -177,7 +171,7 @@ fn run_command(
     let entrypoint = config_file.entrypoint.clone();
 
     // Resolve to runtime config (loads linked files, computes effective options)
-    let cfg = config_file.resolve(&config_dir)?;
+    let cfg = config_file.resolve(&config_dir);
 
     // Resolve initial tasks based on entrypoint or initial_state
     let initial_tasks =
@@ -192,7 +186,6 @@ fn run_command(
     let runner_config = RunnerConfig {
         working_dir: &config_dir,
         wake_script: wake,
-        invoker: &invoker,
         state_log_path: &state_log_path,
     };
 
@@ -207,8 +200,6 @@ fn resume_command(
     log_level: LogLevel,
 ) -> io::Result<()> {
     init_tracing(log_file, log_level)?;
-
-    let invoker = Invoker::<TroupeCli>::detect(Some(VERSION))?;
 
     // State log: use explicit path or generate default
     let state_log_path = match state_log {
@@ -235,7 +226,6 @@ fn resume_command(
     let runner_config = RunnerConfig {
         working_dir: &working_dir,
         wake_script: wake,
-        invoker: &invoker,
         state_log_path: &state_log_path,
     };
 
@@ -427,8 +417,7 @@ fn generate_graphviz(config: &Config) -> String {
 
         // Shape and color based on action type
         let (shape, fill_color) = match &step.action {
-            ActionKind::Pool(..) => ("box", "#e3f2fd"),
-            ActionKind::Command(..) => ("diamond", "#fff3e0"),
+            ActionKind::Command(..) => ("box", "#e3f2fd"),
         };
         attrs.push(format!("shape={shape}"));
 
@@ -475,20 +464,19 @@ mod tests {
 
     fn resolve_config(json: &str) -> Config {
         let config_file: ConfigFile = serde_json::from_str(json).unwrap();
-        config_file.resolve(Path::new(".")).unwrap()
+        config_file.resolve(Path::new("."))
     }
 
-    const POOL: &str =
-        r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
+    const CMD: &str = r#"{"kind": "Command", "params": {"script": "echo '[]'"}}"#;
 
     #[test]
     fn graphviz_basic() {
         let json = format!(
             r#"{{
                 "steps": [
-                    {{"name": "Start", "action": {POOL}, "next": ["Middle"]}},
-                    {{"name": "Middle", "action": {POOL}, "next": ["End"]}},
-                    {{"name": "End", "action": {POOL}, "next": []}}
+                    {{"name": "Start", "action": {CMD}, "next": ["Middle"]}},
+                    {{"name": "Middle", "action": {CMD}, "next": ["End"]}},
+                    {{"name": "End", "action": {CMD}, "next": []}}
                 ]
             }}"#
         );
@@ -512,12 +500,12 @@ mod tests {
         let mut config_file: ConfigFile = serde_json::from_str(json).unwrap();
         config_file.entrypoint = entrypoint.map(|s| s.to_string().into());
         let ep = config_file.entrypoint.clone();
-        let cfg = config_file.resolve(Path::new(".")).unwrap();
+        let cfg = config_file.resolve(Path::new("."));
         (cfg, ep)
     }
 
     fn simple_config() -> String {
-        format!(r#"{{"steps": [{{"name": "Start", "action": {POOL}, "next": []}}]}}"#)
+        format!(r#"{{"steps": [{{"name": "Start", "action": {CMD}, "next": []}}]}}"#)
     }
 
     #[test]

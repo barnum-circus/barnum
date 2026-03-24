@@ -1,25 +1,14 @@
 import { z } from "zod";
 
-const PoolAction = z.object({
-  instructions: z.string().describe("Resolved markdown instructions."),
-  pool: z.string().nullable().optional().describe("Pool name. If `None`, the pool infrastructure uses its own default."),
-  root: z.string().nullable().optional().describe("Pool root directory. If `None`, the pool infrastructure uses its own default."),
-  timeout: z.number().int().nonnegative().nullable().optional().describe("Agent timeout in seconds. Passed to the pool as `timeout_seconds`. Separate from the step-level timeout which controls barnum's worker timeout."),
-}).describe("Send to the agent pool for processing.");
-
 const CommandAction = z.object({
   script: z.string().describe("Shell script to execute."),
-}).describe("Run a local command.");
+}).describe("Run a shell command.");
 
 const ActionKind = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("Pool"),
-    params: PoolAction,
-  }).describe("Send to the agent pool for processing."),
-  z.object({
     kind: z.literal("Command"),
     params: CommandAction,
-  }).describe("Run a local command."),
+  }).describe("Run a shell command."),
 ]).describe("How a resolved step processes tasks.");
 
 const Options = z.object({
@@ -53,7 +42,6 @@ export const resolvedTypesSchema = z.object({
 }).describe("Root type for generating the resolved schema.\n\nGroups the resolved config and task types so `schema_for!` produces a single schema containing all resolved runtime types. This struct exists only for schema generation — it's never constructed at runtime.");
 
 export type ResolvedTypes = z.infer<typeof resolvedTypesSchema>;
-export type PoolAction = z.infer<typeof PoolAction>;
 export type CommandAction = z.infer<typeof CommandAction>;
 export type ActionKind = z.infer<typeof ActionKind>;
 export type Options = z.infer<typeof Options>;
