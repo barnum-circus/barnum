@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
 // ==================== Worker types ====================
@@ -156,10 +158,20 @@ impl Drop for ProcessGuard {
     }
 }
 
+/// JSON envelope piped to the shell script's stdin.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Envelope<'a> {
+    value: &'a serde_json::Value,
+    config: &'a serde_json::Value,
+    step_name: &'a StepName,
+}
+
 /// Shell action: runs a shell script with the task value on stdin.
 pub struct ShellAction {
     pub script: String,
     pub step_name: StepName,
+    pub config: Arc<serde_json::Value>,
     pub working_dir: PathBuf,
 }
 
@@ -167,10 +179,11 @@ impl Action for ShellAction {
     #[expect(clippy::expect_used)]
     fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
         let (tx, rx) = mpsc::channel();
-        let task_json = serde_json::to_string(&serde_json::json!({
-            "kind": &self.step_name,
-            "value": &value,
-        }))
+        let task_json = serde_json::to_string(&Envelope {
+            value: &value,
+            config: &self.config,
+            step_name: &self.step_name,
+        })
         .unwrap_or_default();
 
         let child = Command::new("sh")

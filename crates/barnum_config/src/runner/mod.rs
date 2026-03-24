@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write as _};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -449,6 +450,7 @@ impl RunState {
 /// the coordinator writes entries returned by `process_worker_result`.
 struct Engine<'a> {
     config: &'a Config,
+    config_json: Arc<serde_json::Value>,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
     working_dir: PathBuf,
@@ -461,12 +463,14 @@ struct Engine<'a> {
 impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
+        config_json: Arc<serde_json::Value>,
         working_dir: PathBuf,
         tx: mpsc::Sender<WorkerResult>,
         max_concurrency: usize,
     ) -> Self {
         Self {
             config,
+            config_json,
             step_map: config.step_map(),
             state: RunState::new(),
             working_dir,
@@ -696,6 +700,7 @@ impl<'a> Engine<'a> {
                 let action = Box::new(ShellAction {
                     script: script.clone(),
                     step_name: task.step.clone(),
+                    config: Arc::clone(&self.config_json),
                     working_dir: self.working_dir.clone(),
                 });
                 spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
@@ -717,6 +722,7 @@ impl<'a> Engine<'a> {
         let action = Box::new(ShellAction {
             script: script.as_str().to_owned(),
             step_name: task.step.clone(),
+            config: Arc::clone(&self.config_json),
             working_dir: self.working_dir.clone(),
         });
         spawn_worker(
@@ -807,13 +813,14 @@ pub fn run(
     let config_json =
         serde_json::to_value(config).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let config_entry = StateLogEntry::Config(StateLogConfig {
-        config: config_json,
+        config: config_json.clone(),
     });
     write_log(&mut log_writer, &config_entry);
 
     // Create engine
     let mut engine = Engine::new(
         config,
+        Arc::new(config_json),
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,
@@ -871,7 +878,7 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
         StateLogEntry::Config(c) => c.config.clone(),
         _ => return Err(io::Error::other("[E070] first entry must be Config")),
     };
-    let config: Config = serde_json::from_value(config_json).map_err(|e| {
+    let config: Config = serde_json::from_value(config_json.clone()).map_err(|e| {
         io::Error::other(format!("[E071] failed to deserialize config from log: {e}"))
     })?;
 
@@ -901,6 +908,7 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     // 4. Create engine and replay old entries
     let mut engine = Engine::new(
         &config,
+        Arc::new(config_json),
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,
