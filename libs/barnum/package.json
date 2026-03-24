@@ -40,13 +40,15 @@
     "barnum-config-schema.zod.ts",
     "barnum-cli-schema.zod.ts",
     "run.ts",
+    "types.ts",
     "actions/**/*.ts"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "zod": "^3.0.0"
+    "zod": "^3.0.0",
+    "zod-to-json-schema": "^3.25.1"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
