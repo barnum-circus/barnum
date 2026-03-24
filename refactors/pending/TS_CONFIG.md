@@ -114,25 +114,32 @@ The stdin formats differ because Bash targets user-written shell scripts (simple
 
 ## Handler interface
 
-A TypeScript handler is a module that exports an async function:
+A TypeScript handler module exports an object with an optional `validator` and a `handle` function:
 
 ```typescript
 // handlers/analyze.ts
-import type { HandlerContext, FollowUpTask } from "@barnum/barnum";
+import { z } from "zod";
+import type { HandlerDefinition } from "@barnum/barnum";
 
-export default async function handle(ctx: HandlerContext): Promise<FollowUpTask[]> {
-  // ctx.params — action.params from the envelope (handler-specific config)
-  // ctx.task — { kind: string, value: unknown }
-  // ctx.step — { name, next, options, ... }
-  // ctx.config — full resolved config
-  return [{ kind: "Implement", value: { plan: "..." } }];
-}
+export default {
+  validator: z.object({ file: z.string() }),
+  async handle(ctx) {
+    ctx.value.file; // string — typed by validator
+    return [{ kind: "Implement", value: { plan: "..." } }];
+  },
+} satisfies HandlerDefinition;
 ```
 
-`HandlerContext` is:
+The types:
 
 ```typescript
-interface HandlerContext {
+interface HandlerDefinition<V = unknown> {
+  validator?: z.ZodType<V>;
+  handle: (ctx: HandlerContext<V>) => Promise<FollowUpTask[]>;
+}
+
+interface HandlerContext<V = unknown> {
+  value: V;
   params: Record<string, unknown>;
   task: Task;
   step: Step;
@@ -140,7 +147,20 @@ interface HandlerContext {
 }
 ```
 
-`params` is `action.params` from the envelope with `path` and `export` stripped (the handler doesn't need dispatch metadata). The types `Task`, `Step`, `Config` come from the generated `barnum-resolved-schema.zod.ts`.
+`validator` is a Zod schema for the task value. When present, `run-handler.ts` validates `task.value` against it before calling `handle`, and `ctx.value` is the validated, typed result. When absent, `ctx.value` is `unknown`.
+
+`params` is `action.params` from the envelope with `path` and `export` stripped. The types `Task`, `Step`, `Config` come from `barnum-resolved-schema.zod.ts`.
+
+Without a validator:
+
+```typescript
+export default {
+  async handle(ctx) {
+    ctx.value; // unknown
+    return [];
+  },
+} satisfies HandlerDefinition;
+```
 
 The handler is re-invoked as a fresh process for every task. No state persists between invocations.
 
@@ -159,10 +179,15 @@ for await (const chunk of process.stdin) chunks.push(chunk);
 const envelope = JSON.parse(Buffer.concat(chunks).toString());
 
 const mod = await import(handlerPath);
-const handler = mod[exportName];
+const definition = mod[exportName];
 
 const { path: _, export: __, ...handlerParams } = envelope.action.params;
-const results: FollowUpTask[] = await handler({
+const value = definition.validator
+  ? definition.validator.parse(envelope.task.value)
+  : envelope.task.value;
+
+const results: FollowUpTask[] = await definition.handle({
+  value,
   params: handlerParams,
   task: envelope.task,
   step: envelope.step,
