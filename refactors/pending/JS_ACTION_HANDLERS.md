@@ -26,35 +26,19 @@ libs/troupe-task/
 ├── submit.ts       # submitTask(): find binary, invoke CLI, parse response
 ├── docs.ts         # generateStepDocs(): markdown instruction generation
 ├── pool.ts         # Pool action handler
-├── types.ts        # SubmitOptions, ResolvedStep, ResolvedConfig, FollowUpTask
+├── types.ts        # FollowUpTask
 └── index.ts        # Public API re-exports
 ```
 
 ### `@barnum/barnum` actions (existing package: `libs/barnum/actions/`)
 
-Executor and Command handler. The executor reads the envelope from stdin, dispatches to the correct handler based on action kind, and writes follow-up tasks to stdout.
+Executor and Command handler. executor.ts reads the full Rust envelope and extracts only the data each handler needs — handlers never see barnum internals like resolved options, config, or step definitions.
 
 ```
 libs/barnum/actions/
-├── types.ts       # RawEnvelope
 ├── command.ts     # Command handler
 └── executor.ts    # Stdin reader, dispatcher, stdout writer
 ```
-
-## Resolved Types
-
-The envelope contains Rust's **resolved** types, NOT the config file types from the generated Zod schema. Key differences:
-
-| Field | Config file type (`*File`) | Resolved type (envelope) |
-|-------|---------------------------|-------------------------|
-| `PoolAction.instructions` | `MaybeLinked` (Inline/Link union) | `string` (already resolved) |
-| `Step.options` | `StepOptions` (all nullable) | `Options` (concrete values, merged with global) |
-| `Config` | Has `$schema`, `entrypoint`, `options` | Only `max_concurrency` + `steps` |
-| `Step.finally` | `FinallyHook \| null` | `string \| undefined` (just the script) |
-| `Options.max_retries` | `number \| null` (default 0) | `number` (always present) |
-| `Options.retry_on_timeout` | `boolean \| null` (default true) | `boolean` (always present) |
-
-types.ts defines these resolved shapes directly instead of importing from the generated schema.
 
 ## `@barnum/troupe-task`
 
@@ -66,44 +50,17 @@ export interface FollowUpTask {
   kind: string;
   value: unknown;
 }
-
-/** A resolved step definition (from the Rust envelope). */
-export interface ResolvedStep {
-  name: string;
-  value_schema?: unknown;
-  action: { kind: string; params: Record<string, unknown> };
-  next: string[];
-  finally?: string;
-  options: ResolvedOptions;
-}
-
-/** Resolved runtime options (all fields concrete, no nulls). */
-export interface ResolvedOptions {
-  timeout?: number;
-  max_retries: number;
-  retry_on_timeout: boolean;
-  retry_on_invalid_response: boolean;
-}
-
-/** A resolved config (from the Rust envelope). */
-export interface ResolvedConfig {
-  max_concurrency?: number;
-  steps: ResolvedStep[];
-}
 ```
 
 ### docs.ts
 
-JS port of `generate_step_docs` (`crates/barnum_config/src/docs.rs:23-90`). Takes the step name, instructions text, step definition, and config. Produces the markdown that the Pool handler sends to the agent.
+JS port of `generate_step_docs` (`crates/barnum_config/src/docs.rs:23-90`). Takes the step name, instructions text, and valid next step names. Produces the markdown that the Pool handler sends to the agent.
 
 ```typescript
-import type { ResolvedStep, ResolvedConfig } from "./types.js";
-
 export function generateStepDocs(
   stepName: string,
   instructions: string,
-  step: ResolvedStep,
-  config: ResolvedConfig,
+  nextSteps: string[],
 ): string {
   const lines: string[] = [];
 
@@ -120,7 +77,7 @@ export function generateStepDocs(
     lines.push(instructions, "");
   }
 
-  if (step.next.length === 0) {
+  if (nextSteps.length === 0) {
     lines.push("## Terminal Step", "", "This is a terminal step. Return an empty array: `[]`");
   } else {
     lines.push(
@@ -129,32 +86,14 @@ export function generateStepDocs(
       "Valid next steps:", "",
     );
 
-    for (const nextName of step.next) {
-      const nextStep = config.steps.find((s) => s.name === nextName);
-      if (!nextStep) continue;
-
-      lines.push(`### ${nextName}`, "");
-
-      if (!nextStep.value_schema) {
-        lines.push(
-          "Accepts any JSON value.", "",
-          "```json",
-          `{"kind": "${nextName}", "value": <any>}`,
-          "```",
-        );
-      } else {
-        lines.push(
-          "Value must match schema:", "",
-          "```json",
-          JSON.stringify(nextStep.value_schema, null, 2),
-          "```", "",
-          "Example:",
-          "```json",
-          `{"kind": "${nextName}", "value": {...}}`,
-          "```",
-        );
-      }
-      lines.push("");
+    for (const name of nextSteps) {
+      lines.push(
+        `### ${name}`, "",
+        "Accepts any JSON value.", "",
+        "```json",
+        `{"kind": "${name}", "value": <any>}`,
+        "```", "",
+      );
     }
   }
 
@@ -182,16 +121,6 @@ function troupeBinary(): string {
   }
 }
 
-/**
- * Submit a task to a troupe pool and return the follow-up tasks.
- *
- * Calls `troupe submit_task` with --notify file, waits for the response,
- * and parses the agent's stdout as a JSON array of follow-up tasks.
- *
- * The `data` payload is sent as-is to the troupe CLI. The caller is
- * responsible for building the complete payload shape (task, instructions,
- * timeout_seconds, etc.).
- */
 export function submitTask(
   data: unknown,
   options?: { pool?: string; root?: string },
@@ -220,7 +149,7 @@ The Pool action handler. Generates agent instructions, constructs the troupe pay
 
 ```typescript
 import { z } from "zod";
-import type { ResolvedStep, ResolvedConfig, FollowUpTask } from "./types.js";
+import type { FollowUpTask } from "./types.js";
 import { submitTask } from "./submit.js";
 import { generateStepDocs } from "./docs.js";
 
@@ -231,16 +160,13 @@ export const poolParamsSchema = z.object({
   timeout: z.number().nullable().optional(),
 });
 
-export type PoolParams = z.output<typeof poolParamsSchema>;
-
-export async function handlePool(ctx: {
-  params: PoolParams;
+export function handlePool(ctx: {
+  params: z.output<typeof poolParamsSchema>;
   task: { kind: string; value: unknown };
-  step: ResolvedStep;
-  config: ResolvedConfig;
-}): Promise<FollowUpTask[]> {
-  const { params, task, step, config } = ctx;
-  const docs = generateStepDocs(task.kind, params.instructions, step, config);
+  nextSteps: string[];
+}): FollowUpTask[] {
+  const { params, task } = ctx;
+  const docs = generateStepDocs(task.kind, params.instructions, ctx.nextSteps);
 
   const payload: Record<string, unknown> = { task, instructions: docs };
   if (params.timeout != null) {
@@ -262,13 +188,7 @@ Note: `params.instructions` is a plain `string` — Rust resolves `MaybeLinked` 
 export { submitTask } from "./submit.js";
 export { generateStepDocs } from "./docs.js";
 export { handlePool, poolParamsSchema } from "./pool.js";
-export type { PoolParams } from "./pool.js";
-export type {
-  FollowUpTask,
-  ResolvedStep,
-  ResolvedOptions,
-  ResolvedConfig,
-} from "./types.js";
+export type { FollowUpTask } from "./types.js";
 ```
 
 ### package.json
@@ -304,27 +224,6 @@ export type {
 
 ## `@barnum/barnum` actions
 
-### types.ts
-
-The envelope type and re-exports of resolved types from `@barnum/troupe-task`.
-
-```typescript
-import type { ResolvedStep, ResolvedConfig, FollowUpTask } from "@barnum/troupe-task";
-export type { FollowUpTask, ResolvedStep, ResolvedConfig };
-
-/**
- * The raw envelope piped to the JS executor's stdin by Rust.
- *
- * Fields are Rust's resolved types, not config file types.
- */
-export interface RawEnvelope {
-  action: { kind: string; params: Record<string, unknown> };
-  task: { kind: string; value: unknown };
-  step: ResolvedStep;
-  config: ResolvedConfig;
-}
-```
-
 ### command.ts
 
 The Command handler spawns the user's shell script, piping `{ kind, value }` to stdin. Backward compatible with today's Command action.
@@ -350,24 +249,30 @@ export function handleCommand(
 
 ### executor.ts
 
-The entry point that Rust spawns for every task. Reads the envelope from stdin, dispatches to the correct handler based on action kind, and writes follow-up tasks to stdout.
+The entry point that Rust spawns for every task. Reads the full Rust envelope from stdin and extracts only the data each handler needs. Handlers never see barnum internals (resolved options, config shape, step definitions).
 
 ```typescript
 import { handlePool, poolParamsSchema } from "@barnum/troupe-task";
 import { handleCommand } from "./command.js";
-import type { RawEnvelope } from "./types.js";
+
+interface Envelope {
+  action: { kind: string; params: Record<string, unknown> };
+  task: { kind: string; value: unknown };
+  step: { next: string[] };
+  config: unknown;
+}
 
 const chunks: Buffer[] = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
-const envelope: RawEnvelope = JSON.parse(Buffer.concat(chunks).toString());
+const envelope: Envelope = JSON.parse(Buffer.concat(chunks).toString());
 
-const { action, task, step, config } = envelope;
+const { action, task, step } = envelope;
 
 let results;
 switch (action.kind) {
   case "Pool": {
     const params = poolParamsSchema.parse(action.params);
-    results = await handlePool({ params, task, step, config });
+    results = handlePool({ params, task, nextSteps: step.next });
     break;
   }
   case "Command": {
