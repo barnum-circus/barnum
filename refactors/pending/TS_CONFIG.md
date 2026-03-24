@@ -10,14 +10,14 @@ There are two action kinds: Bash and TypeScript. A Bash action is a shell script
 
 ## Config file format
 
-The config is a TypeScript module with a default export:
+The config file is a TypeScript script that creates a config and calls `.run()`:
 
 ```typescript
 // barnum.config.ts
-import { defineConfig, createTroupeStep, createBashStep } from "@barnum/barnum";
+import { BarnumConfig, createTroupeStep, createBashStep } from "@barnum/barnum";
 import { z } from "zod";
 
-export default defineConfig({
+const config = BarnumConfig.fromConfig({
   entrypoint: "Analyze",
   steps: [
     createTroupeStep({
@@ -33,19 +33,21 @@ export default defineConfig({
     }),
   ],
 });
+
+config.run({ entrypointValue: '{"file": "src/main.rs"}' });
 ```
 
-`defineConfig` is the existing function from `barnum-config-schema.zod.ts` — it Zod-parses and returns the config. The constructors (`createTroupeStep`, `createBashStep`) produce `StepFile` objects with the action pre-filled.
+The user runs this file directly: `tsx barnum.config.ts`. The file IS the entry point — it creates the config, calls `.run()`, and `.run()` spawns Rust.
+
+`BarnumConfig.fromConfig()` Zod-parses and returns a `BarnumConfig` instance. The constructors (`createTroupeStep`, `createBashStep`) produce `StepFile` objects with the action pre-filled.
 
 ### How the config reaches Rust
 
-`cli.cjs` is the entry point for both the CLI and `BarnumConfig.run()`. When the config argument is a `.ts` or `.js` file:
+`BarnumConfig.run()` (defined in `libs/barnum/run.ts`) serializes the config to JSON and passes it to the Rust binary via `--config`. This is the existing behavior — `run()` already calls `JSON.stringify(this.config)` and spawns the binary with `["run", "--config", <json>]`.
 
-1. cli.cjs spawns tsx (or the native runtime for Bun/Deno) to evaluate the config module and print the default export as JSON
-2. cli.cjs passes the JSON string to the Rust binary via `--config`
-3. Rust parses the JSON as `ConfigFile` — identical to today's JSON config path
+The change: `.run()` also injects the `--executor` flag (runtime-aware executor command, resolved from cli.cjs). This is the EXECUTOR_CLI_FLAG work from JS_ACTION_RESOLUTION.md.
 
-When the config argument is a `.json` or `.jsonc` file, Rust parses it directly (no tsx involved). Both paths produce the same `ConfigFile` type.
+JSON configs (`.json`/`.jsonc`) still work via the CLI: `barnum run --config config.json`. Rust parses those directly.
 
 ## Action kinds
 
@@ -309,24 +311,25 @@ Without a validator, `V` defaults to `never` and `value_schema` is omitted.
 
 JSON configs can write JSON Schema directly in the `value_schema` field.
 
-## CLI commands
+## Invocation
 
-### barnum run
-
-```bash
-barnum run barnum.config.ts
-barnum run barnum.config.ts --entrypoint-value '{"file": "src/main.rs"}'
-```
-
-cli.cjs detects the `.ts` extension, evaluates the file via tsx, serializes the config, passes to Rust.
-
-### barnum validate
+The config file is a TypeScript script. The user runs it directly:
 
 ```bash
-barnum validate barnum.config.ts
+tsx barnum.config.ts
 ```
 
-Structural validation (Zod parse) happens during config evaluation — `defineConfig` already does this. `barnum validate` can additionally:
+`.run()` accepts options for entrypoint value, resume, logging, etc. CLI argument parsing (if desired) is the user's responsibility — they control the script.
+
+### Validation
+
+`BarnumConfig` can also expose a `.validate()` method that checks the config without running the workflow:
+
+```typescript
+const errors = config.validate();
+```
+
+Structural validation (Zod parse) already happens in `fromConfig()`. `.validate()` can additionally:
 
 1. Verify all handler paths resolve (TypeScript actions point to existing files)
 2. Verify all handler modules export the expected function
