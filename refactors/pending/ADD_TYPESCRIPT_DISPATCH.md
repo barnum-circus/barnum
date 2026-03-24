@@ -72,23 +72,26 @@ pub enum Action {
 
 Config `{"kind": "TypeScript", "path": "./handlers/analyze.ts", "stepConfig": {...}}` deserializes with `exported_as = "default"` (serde default).
 
-### 2. Config resolution
+### 2. Path resolution (JS layer)
 
-**File:** `crates/barnum_config/src/config.rs`
+**File:** `libs/barnum/run.ts`
 
-Resolution canonicalizes `path` relative to the config directory. This validates the handler file exists at config load time — a typo fails immediately, not at dispatch time. After INLINE_RESOLVED_CONFIG, resolution happens in JS, but path canonicalization for TypeScript handlers can happen in either layer. If resolution is in JS, the JS layer canonicalizes the path before passing the config to Rust. If resolution remains in Rust for this specific concern:
+Rust receives config as a JSON string via `--config` — it has no concept of "config file directory." The JS layer canonicalizes `path` relative to the caller's directory before passing the config to Rust. This validates the handler file exists at config load time — a typo fails immediately, not at dispatch time.
 
-```rust
-// In the JS layer's config preprocessing, or in Rust if resolution isn't fully moved yet:
-let resolved_path = base_path.join(&ts.path);
-let canonical = resolved_path.canonicalize().map_err(|e| {
-    std::io::Error::new(
-        e.kind(),
-        format!("TypeScript handler not found: {}: {e}", resolved_path.display()),
-    )
-})?;
-ts.path = canonical.to_string_lossy().into_owned();
+In `BarnumConfig.fromConfig()` or `.run()`, resolve TypeScript action paths:
+
+```typescript
+import { resolve } from "node:path";
+
+// Before passing config to Rust, canonicalize TypeScript handler paths
+for (const step of config.steps) {
+  if (step.action.kind === "TypeScript") {
+    step.action.path = resolve(step.action.path);
+  }
+}
 ```
+
+Rust receives absolute paths and passes them through to the subprocess invocation unchanged.
 
 ### 3. Add `step_config` to Envelope and ShellAction
 
