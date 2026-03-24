@@ -1,7 +1,7 @@
 import { BarnumConfig } from "@barnum/barnum";
 import { resolve } from "node:path";
 
-BarnumConfig.fromConfig({
+const child = await BarnumConfig.fromConfig({
   entrypoint: "Greet",
   steps: [
     {
@@ -21,9 +21,8 @@ BarnumConfig.fromConfig({
       next: [],
     },
   ],
-})
-  .run({
-    entrypointValue: JSON.stringify({ name: "World" }),
-    wake: process.env.BARNUM_WAKE,
-  })
-  .on("exit", (code) => process.exit(code ?? 1));
+}).run({
+  entrypointValue: JSON.stringify({ name: "World" }),
+  wake: process.env.BARNUM_WAKE,
+});
+child.on("exit", (code) => process.exit(code ?? 1));
