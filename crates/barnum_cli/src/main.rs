@@ -38,9 +38,7 @@ fn main() -> io::Result<()> {
             if !std::path::Path::new(&run_handler_path).exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!(
-                        "[E074] --run-handler-path does not exist: {run_handler_path}"
-                    ),
+                    format!("[E074] --run-handler-path does not exist: {run_handler_path}"),
                 ));
             }
             match (resume_from, config) {
