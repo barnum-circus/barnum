@@ -134,8 +134,11 @@ private async resolveConfig(): Promise<z.output<typeof configSchema>> {
     const handler = mod[action.exportedAs ?? "default"];
 
     if (!handler?.stepConfigValidator || !handler?.getStepValueValidator) {
-      // No validators — skip (handler may not define them yet)
-      continue;
+      throw new Error(
+        `Step "${step.name}": handler at "${action.path}" is missing required ` +
+        `"stepConfigValidator" or "getStepValueValidator". ` +
+        `See HandlerDefinition interface.`
+      );
     }
 
     // 2. Validate step config
