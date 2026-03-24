@@ -285,24 +285,31 @@ export function submitTask(
 
 The Pool action handler (internal) and `createTroupeStep` constructor (public).
 
-The handler generates step docs from the instructions and next steps, then submits the task to the troupe agent pool.
+The handler generates step docs from the resolved instructions and next steps, then submits the task to the troupe agent pool. The inline param types structurally match the generated `PoolAction` type from `barnum-resolved-schema.zod.ts` — no import needed, no circular dependency.
 
 ```typescript
-import { z } from "zod";
 import type { FollowUpTask } from "./types.js";
 import { submitTask } from "./submit.js";
 import { generateStepDocs } from "./docs.js";
 
 // --- Internal: handler used by executor ---
 
-export function handlePool(ctx: {
-  params: { instructions: string; pool?: string | null; root?: string | null; timeout?: number | null };
+export async function handlePool(ctx: {
+  params: {
+    instructions: string;
+    pool?: string | null;
+    root?: string | null;
+    timeout?: number | null;
+  };
   task: { kind: string; value: unknown };
-  step: { next: string[] };
-  config: unknown;
-}): FollowUpTask[] {
-  const { params, task, step } = ctx;
-  const docs = generateStepDocs(task.kind, params.instructions, step.next);
+  nextSteps: string[];
+}): Promise<FollowUpTask[]> {
+  const { params, task, nextSteps } = ctx;
+
+  // params.instructions is the resolved text — Rust resolved MaybeLinked
+  // before sending the envelope, so this is always a plain string, even if
+  // the config used { kind: "Link", path: "./file.md" }.
+  const docs = generateStepDocs(task.kind, params.instructions, nextSteps);
 
   const payload: Record<string, unknown> = { task, instructions: docs };
   if (params.timeout != null) {
@@ -369,7 +376,7 @@ export { handlePool } from "./pool.js";
 
 The Command handler (internal) and `createBashStep` constructor (public).
 
-The handler spawns the user's shell script, piping `{ kind, value }` to stdin. Backward compatible with today's Command action.
+The handler spawns the user's shell script, piping `{ kind, value }` to stdin.
 
 ```typescript
 import { execSync } from "node:child_process";
@@ -377,10 +384,11 @@ import type { FollowUpTask } from "@barnum/troupe-task";
 
 // --- Internal: handler used by executor ---
 
-export function handleCommand(
-  params: { script: string },
-  task: { kind: string; value: unknown },
-): FollowUpTask[] {
+export async function handleCommand(ctx: {
+  params: { script: string };
+  task: { kind: string; value: unknown };
+}): Promise<FollowUpTask[]> {
+  const { params, task } = ctx;
   const stdin = JSON.stringify(task);
   const stdout = execSync(params.script, {
     input: stdin,
@@ -396,14 +404,15 @@ export function handleCommand(
 
 ### executor.ts
 
-The entry point that Rust spawns for every task. Reads the Rust envelope from stdin, dispatches to the correct handler based on action kind. The envelope's `step` and `config` are passed through to handlers as-is.
+The entry point that Rust spawns for every task. Reads the envelope from stdin, dispatches to the correct handler, writes results to stdout.
 
-The envelope type is composed from individual TypeScript types exported by `barnum-resolved-schema.zod.ts` (generated from Rust resolved types by `build_schemas`).
+The envelope type is composed from individual TypeScript types exported by `barnum-resolved-schema.zod.ts` (generated from Rust resolved types by `build_schemas`). The critical type-level feature: `ActionKind` is a discriminated union on `kind`, so `switch (action.kind)` narrows `action.params` to `PoolAction` or `CommandAction` in each branch — zero casts needed.
 
 ```typescript
 import { handlePool } from "@barnum/troupe-task";
 import { handleCommand } from "./command.js";
 import type { ActionKind, Task, Step, Config } from "../barnum-resolved-schema.zod.js";
+import type { FollowUpTask } from "@barnum/troupe-task";
 
 interface Envelope {
   action: ActionKind;
@@ -418,24 +427,43 @@ const envelope: Envelope = JSON.parse(Buffer.concat(chunks).toString());
 
 const { action, task, step, config } = envelope;
 
-let results;
+let results: FollowUpTask[];
 switch (action.kind) {
-  case "Pool": {
-    results = handlePool({ params: action.params, task, step, config });
+  case "Pool":
+    // action.params narrows to PoolAction: { instructions: string, pool, root, timeout }
+    results = await handlePool({
+      params: action.params,
+      task,
+      nextSteps: step.next,
+    });
     break;
-  }
-  case "Command": {
-    results = handleCommand(action.params, task);
+  case "Command":
+    // action.params narrows to CommandAction: { script: string }
+    results = await handleCommand({
+      params: action.params,
+      task,
+    });
     break;
-  }
   default:
-    throw new Error(`Unknown action kind: "${action.kind}". Built-in kinds: Pool, Command`);
+    throw new Error(`Unknown action kind. Built-in kinds: Pool, Command`);
 }
 
 process.stdout.write(JSON.stringify(results));
 ```
 
-Note: the executor no longer does Zod `.parse()` on action params — the params come from Rust (trusted), and the handler types match the generated `ActionKind` discriminated union. The `action.params` type narrows correctly in each `case` branch via TypeScript's discriminated union narrowing.
+### Type flow through the serialization boundary
+
+The complete data path, showing where types come from at each stage:
+
+1. **Config time (JS)**: User calls `createTroupeStep({ instructions: "Analyze the code.", ... })`. Constructor returns `StepFile` with `action: { kind: "Pool", params: { instructions: { kind: "Inline", value: "Analyze the code." }, ... } }`. The `instructions` field is `MaybeLinked_for_String` at this stage.
+
+2. **Resolution (Rust)**: Rust parses the config, resolves `MaybeLinked` references (loading file contents for `Link` variants), and produces resolved `Step` with `action: { kind: "Pool", params: { instructions: "Analyze the code." } }`. The `instructions` field is now a plain `string`.
+
+3. **Dispatch (Rust → JS)**: Rust sends the envelope as JSON to the executor's stdin. The envelope contains the resolved action (with `ActionKind` discriminated union), the task, the step, and the full config.
+
+4. **Executor (JS)**: `JSON.parse` produces the envelope. TypeScript types it as `Envelope` using the generated `ActionKind` type. The `switch` on `action.kind` narrows params to the concrete type. Handler receives fully typed params — `handlePool` gets `params.instructions` as `string`.
+
+No casts anywhere in this path. Config-time types (`MaybeLinked_for_String`) and runtime types (`string`) are different but both fully typed. The generated Zod schemas ensure the TypeScript types match the Rust types.
 
 ## package.json changes (`@barnum/barnum`)
 
