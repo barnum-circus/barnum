@@ -7,9 +7,9 @@
     {
       "name": "ListFiles",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Link", "path": "list-files.md"}
+          "script": "TASK=$(cat); INST=$(cat list-files.md); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst \"$INST\" --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["AnalyzeFile"]
@@ -17,9 +17,9 @@
     {
       "name": "AnalyzeFile",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Link", "path": "analyze-file.md"}
+          "script": "TASK=$(cat); INST=$(cat analyze-file.md); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst \"$INST\" --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["ProcessRefactorList"]
@@ -27,9 +27,9 @@
     {
       "name": "ProcessRefactorList",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Link", "path": "process-refactor-list.md"}
+          "script": "TASK=$(cat); INST=$(cat process-refactor-list.md); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst \"$INST\" --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["ProcessRefactorList", "CommitFile"]
@@ -37,9 +37,9 @@
     {
       "name": "CommitFile",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Link", "path": "commit-file.md"}
+          "script": "TASK=$(cat); INST=$(cat commit-file.md); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst \"$INST\" --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": []
