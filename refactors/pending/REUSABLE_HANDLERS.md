@@ -267,6 +267,49 @@ export interface ValueHandlerDefinition<C = unknown, V = unknown, R = unknown> {
 
 Regenerated. `ActionKind` gains a `Sequence` variant with an `actions` array.
 
+## Future: deriving `next` from the handler's return schema
+
+Long-term, the `next` array on a step shouldn't need to be manually specified. It should be derivable from the handler's return type.
+
+A handler already declares a Zod schema for its input value via `getStepValueValidator()`. If the handler (or the final action in a sequence) also declares a Zod schema for its *return* type, the engine can introspect that schema to discover step references. The rule: any `kind` field anywhere in the return schema is a step reference. The set of possible values for that field (literal strings, enum members) is the set of reachable steps.
+
+### Example
+
+A handler returns one of two task shapes:
+
+```ts
+const returnSchema = z.array(z.union([
+  z.object({ kind: z.literal("Fix"), value: z.object({ files: z.array(z.string()) }) }),
+  z.object({ kind: z.literal("Done"), value: z.object({}) }),
+]));
+```
+
+The engine walks `returnSchema`, finds `kind` fields with values `"Fix"` and `"Done"`, and derives `next: ["Fix", "Done"]`. If the config manually specifies `next`, it's validated against the derived set. If the config omits `next`, the derived set is used.
+
+### How it works
+
+`resolveConfig()` already imports handlers and walks their Zod schemas (via `assertSerializableZod`). A second walk — `extractStepReferences(schema)` — would:
+
+1. Recursively traverse the Zod schema tree.
+2. When it finds a `ZodObject` with a property named `kind`, inspect that property's schema.
+3. If the `kind` property is a `ZodLiteral`, extract the string value.
+4. If the `kind` property is a `ZodEnum`, extract all members.
+5. If the `kind` property is wrapped in a `ZodUnion` of literals, extract all literal values.
+6. Collect all discovered values — these are the reachable step names.
+
+This also enables validation: if the return schema references a step name that doesn't exist in the config, that's an error at `resolveConfig()` time, before the workflow runs. And `deny_unknown_fields`-style checking comes for free — the Zod schema defines exactly what shapes are valid, so any output not matching the schema is rejected by JSON Schema validation on the Rust side (which we already do for input values via `valueSchema`).
+
+### What this enables
+
+- **No manual `next` array** for TypeScript handlers — derived from the return schema.
+- **Config-time validation** that all referenced steps exist.
+- **Output validation** — the Rust side can validate handler output against the return schema's JSON Schema, same as it validates input values today.
+- **Self-documenting handlers** — the return schema is the handler's contract. It declares exactly what steps it can route to and what data it passes.
+
+### When to implement
+
+JS rewrite. The Zod tree walking is straightforward, but it needs to happen in JS (where the Zod objects live). The current architecture could support it in `resolveConfig()`, but the derived `next` would need to be passed to the Rust side as part of the resolved config. This is doable but adds complexity to the JS-Rust boundary. In a pure JS engine, the return schema lives alongside the step graph and validation is trivial.
+
 ## Open questions
 
 1. **Nested sequences.** Allow `Sequence` inside `Sequence`? Simplest answer: allow it, flatten at runtime. No reason to forbid it, and it means the type system stays simple (actions are always `ActionKind`).
