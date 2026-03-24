@@ -32,7 +32,7 @@ libs/troupe-task/
 
 ### `@barnum/barnum` actions (existing package: `libs/barnum/actions/`)
 
-Executor and Command handler. executor.ts reads the full Rust envelope and extracts only the data each handler needs — handlers never see barnum internals like resolved options, config, or step definitions.
+Executor and Command handler. executor.ts reads the Rust envelope from stdin, validates action params, and dispatches to the correct handler with the envelope's step and config passed through.
 
 ```
 libs/barnum/actions/
@@ -163,10 +163,11 @@ export const poolParamsSchema = z.object({
 export function handlePool(ctx: {
   params: z.output<typeof poolParamsSchema>;
   task: { kind: string; value: unknown };
-  nextSteps: string[];
+  step: { next: string[] };
+  config: unknown;
 }): FollowUpTask[] {
-  const { params, task } = ctx;
-  const docs = generateStepDocs(task.kind, params.instructions, ctx.nextSteps);
+  const { params, task, step } = ctx;
+  const docs = generateStepDocs(task.kind, params.instructions, step.next);
 
   const payload: Record<string, unknown> = { task, instructions: docs };
   if (params.timeout != null) {
@@ -249,7 +250,7 @@ export function handleCommand(
 
 ### executor.ts
 
-The entry point that Rust spawns for every task. Reads the full Rust envelope from stdin and extracts only the data each handler needs. Handlers never see barnum internals (resolved options, config shape, step definitions).
+The entry point that Rust spawns for every task. Reads the Rust envelope from stdin, validates action params, and dispatches to the correct handler. The envelope's `step` and `config` are passed through to handlers as-is.
 
 ```typescript
 import { handlePool, poolParamsSchema } from "@barnum/troupe-task";
@@ -266,13 +267,13 @@ const chunks: Buffer[] = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const envelope: Envelope = JSON.parse(Buffer.concat(chunks).toString());
 
-const { action, task, step } = envelope;
+const { action, task, step, config } = envelope;
 
 let results;
 switch (action.kind) {
   case "Pool": {
     const params = poolParamsSchema.parse(action.params);
-    results = handlePool({ params, task, nextSteps: step.next });
+    results = handlePool({ params, task, step, config });
     break;
   }
   case "Command": {
