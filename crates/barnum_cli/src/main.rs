@@ -7,8 +7,8 @@
 
 use barnum_cli::{Cli, Command, ConfigCommand, LogLevel, SchemaType};
 use barnum_config::{
-    ActionKind, CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task,
-    config_schema, generate_full_docs, resume, run,
+    ActionKind, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
+    generate_full_docs, resume, run,
 };
 use clap::Parser;
 use cli_invoker::Invoker;
@@ -178,15 +178,10 @@ fn run_command(
 
     // Resolve to runtime config (loads linked files, computes effective options)
     let cfg = config_file.resolve(&config_dir)?;
-    let schemas = CompiledSchemas::compile(&cfg)?;
 
     // Resolve initial tasks based on entrypoint or initial_state
-    let initial_tasks = resolve_initial_tasks(
-        &schemas,
-        initial_state,
-        entrypoint_value,
-        entrypoint.as_ref(),
-    )?;
+    let initial_tasks =
+        resolve_initial_tasks(&cfg, initial_state, entrypoint_value, entrypoint.as_ref())?;
 
     // State log: use explicit path or generate default
     let state_log_path = match state_log {
@@ -201,7 +196,7 @@ fn run_command(
         state_log_path: &state_log_path,
     };
 
-    run(&cfg, &schemas, &runner_config, initial_tasks)
+    run(&cfg, &runner_config, initial_tasks)
 }
 
 fn resume_command(
@@ -302,14 +297,23 @@ fn parse_config(input: &str) -> io::Result<(ConfigFile, PathBuf)> {
 
 /// Resolve initial tasks from either --initial-state or entrypoint + --entrypoint-value.
 fn resolve_initial_tasks(
-    schemas: &CompiledSchemas,
+    config: &Config,
     initial_state: Option<&str>,
     entrypoint_value: Option<&str>,
     entrypoint: Option<&barnum_config::StepName>,
 ) -> io::Result<Vec<Task>> {
+    let step_map = config.step_map();
     match (entrypoint, initial_state, entrypoint_value) {
         // Config has entrypoint
         (Some(entrypoint), None, ev) => {
+            // Verify entrypoint step exists
+            if !step_map.contains_key(entrypoint) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("[E061] entrypoint step '{entrypoint}' not found in config"),
+                ));
+            }
+
             // Parse entrypoint value (default to empty object)
             let value = StepInputValue(match ev {
                 Some(v) => parse_json_input(v).map_err(|e| {
@@ -320,14 +324,6 @@ fn resolve_initial_tasks(
                 })?,
                 None => serde_json::json!({}),
             });
-
-            // Validate the value against the entrypoint step's schema
-            if let Err(e) = schemas.validate(entrypoint, &value) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("[E061] entrypoint value validation failed: {e}"),
-                ));
-            }
 
             Ok(vec![Task::new(entrypoint.clone(), value)])
         }
@@ -509,16 +505,15 @@ mod tests {
     // resolve_initial_tasks tests
     // =========================================================================
 
-    fn make_config_and_schemas(
+    fn make_config(
         json: &str,
         entrypoint: Option<&str>,
-    ) -> (Config, CompiledSchemas, Option<barnum_config::StepName>) {
+    ) -> (Config, Option<barnum_config::StepName>) {
         let mut config_file: ConfigFile = serde_json::from_str(json).unwrap();
         config_file.entrypoint = entrypoint.map(|s| s.to_string().into());
         let ep = config_file.entrypoint.clone();
         let cfg = config_file.resolve(Path::new(".")).unwrap();
-        let schemas = CompiledSchemas::compile(&cfg).unwrap();
-        (cfg, schemas, ep)
+        (cfg, ep)
     }
 
     fn simple_config() -> String {
@@ -528,9 +523,9 @@ mod tests {
     #[test]
     fn resolve_with_entrypoint_and_no_flags() {
         // Config has entrypoint, no flags provided -> uses {} as value
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), Some("Start"));
+        let (cfg, ep) = make_config(&simple_config(), Some("Start"));
 
-        let result = resolve_initial_tasks(&schemas, None, None, ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, None, ep.as_ref());
         assert!(result.is_ok());
         let tasks = result.unwrap();
         assert_eq!(tasks.len(), 1);
@@ -540,9 +535,9 @@ mod tests {
     #[test]
     fn resolve_with_entrypoint_and_entrypoint_value() {
         // Config has entrypoint, --entrypoint-value provided
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), Some("Start"));
+        let (cfg, ep) = make_config(&simple_config(), Some("Start"));
 
-        let result = resolve_initial_tasks(&schemas, None, Some(r#"{"foo": 1}"#), ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, Some(r#"{"foo": 1}"#), ep.as_ref());
         assert!(result.is_ok());
         let tasks = result.unwrap();
         assert_eq!(tasks.len(), 1);
@@ -552,10 +547,10 @@ mod tests {
     #[test]
     fn resolve_with_entrypoint_and_initial_state_uses_initial_state() {
         // Config has entrypoint but --initial-state provided -> initial-state takes precedence
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), Some("Start"));
+        let (cfg, ep) = make_config(&simple_config(), Some("Start"));
 
         let result = resolve_initial_tasks(
-            &schemas,
+            &cfg,
             Some(r#"[{"kind": "Start", "value": {}}]"#),
             None,
             ep.as_ref(),
@@ -568,10 +563,10 @@ mod tests {
     #[test]
     fn resolve_without_entrypoint_and_initial_state() {
         // No entrypoint, --initial-state provided -> works
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), None);
+        let (cfg, ep) = make_config(&simple_config(), None);
 
         let result = resolve_initial_tasks(
-            &schemas,
+            &cfg,
             Some(r#"[{"kind": "Start", "value": {}}]"#),
             None,
             ep.as_ref(),
@@ -584,9 +579,9 @@ mod tests {
     #[test]
     fn resolve_without_entrypoint_and_entrypoint_value_errors_e063() {
         // No entrypoint but --entrypoint-value provided -> error
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), None);
+        let (cfg, ep) = make_config(&simple_config(), None);
 
-        let result = resolve_initial_tasks(&schemas, None, Some(r"{}"), ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, Some(r"{}"), ep.as_ref());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("E063"));
@@ -595,9 +590,9 @@ mod tests {
     #[test]
     fn resolve_without_entrypoint_and_no_flags_errors_e064() {
         // No entrypoint, no flags -> error
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), None);
+        let (cfg, ep) = make_config(&simple_config(), None);
 
-        let result = resolve_initial_tasks(&schemas, None, None, ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, None, ep.as_ref());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("E064"));
@@ -606,65 +601,20 @@ mod tests {
     #[test]
     fn resolve_with_invalid_entrypoint_value_json_errors_e060() {
         // Config has entrypoint, invalid JSON in --entrypoint-value
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), Some("Start"));
+        let (cfg, ep) = make_config(&simple_config(), Some("Start"));
 
-        let result = resolve_initial_tasks(&schemas, None, Some("not json"), ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, Some("not json"), ep.as_ref());
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("E060"));
     }
 
     #[test]
-    fn resolve_validates_entrypoint_value_against_schema_e061() {
-        // Config has entrypoint with schema, value doesn't match -> error
-        let config_with_schema = format!(
-            r#"{{
-            "steps": [{{
-                "name": "Start",
-                "action": {POOL},
-                "value_schema": {{
-                    "type": "object",
-                    "required": ["path"],
-                    "properties": {{"path": {{"type": "string"}}}}
-                }},
-                "next": []
-            }}]
-        }}"#
-        );
-        let (_cfg, schemas, ep) = make_config_and_schemas(&config_with_schema, Some("Start"));
-
-        // Empty object doesn't satisfy required "path"
-        let result = resolve_initial_tasks(&schemas, None, None, ep.as_ref());
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("E061"));
-    }
-
-    #[test]
     fn resolve_allows_empty_value_when_no_schema() {
         // Config has entrypoint without schema -> {} is allowed
-        let (_cfg, schemas, ep) = make_config_and_schemas(&simple_config(), Some("Start"));
+        let (cfg, ep) = make_config(&simple_config(), Some("Start"));
 
-        let result = resolve_initial_tasks(&schemas, None, None, ep.as_ref());
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn resolve_allows_empty_value_when_schema_is_empty_object() {
-        // Config has entrypoint with schema that accepts empty object
-        let config_with_empty_schema = format!(
-            r#"{{
-            "steps": [{{
-                "name": "Start",
-                "action": {POOL},
-                "value_schema": {{"type": "object"}},
-                "next": []
-            }}]
-        }}"#
-        );
-        let (_cfg, schemas, ep) = make_config_and_schemas(&config_with_empty_schema, Some("Start"));
-
-        let result = resolve_initial_tasks(&schemas, None, None, ep.as_ref());
+        let result = resolve_initial_tasks(&cfg, None, None, ep.as_ref());
         assert!(result.is_ok());
     }
 }

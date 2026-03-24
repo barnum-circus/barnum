@@ -16,7 +16,6 @@ cli_invoker = { path = "../cli_invoker" }
 barnum_state = { path = "../barnum_state" }
 barnum_types = { workspace = true }
 string_id = { workspace = true }
-jsonschema = "0.29"
 schemars = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }

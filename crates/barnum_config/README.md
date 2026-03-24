@@ -16,8 +16,8 @@ If you're writing configs by hand, use `barnum config validate` to check them.
 ## Overview
 
 Define task task queues via declarative config:
-- Validates tasks against JSON schemas at runtime
 - Generates markdown documentation for agents
+- Validates transitions between steps
 - Handles timeouts and retries with per-step options
 
 The config format is serialization-agnostic (uses serde). The CLI handles parsing from JSON (other formats could be added).
@@ -35,10 +35,9 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
   "steps": [
     {
       "name": "Analyze",
-      "value_schema": { "type": "object" },
       "action": {
         "kind": "Pool",
-        "instructions": {"kind": "Inline", "value": "Analyze the given file."}
+        "params": {"instructions": {"kind": "Inline", "value": "Analyze the given file."}}
       },
       "next": ["Implement", "Done"]
     },
@@ -46,7 +45,7 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
       "name": "Implement",
       "action": {
         "kind": "Pool",
-        "instructions": { "kind": "Link", "path": "implement-instructions.md" }
+        "params": {"instructions": {"kind": "Link", "link": "implement-instructions.md"}}
       },
       "next": ["Test"],
       "options": {
@@ -60,12 +59,13 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
       "name": "Transform",
       "action": {
         "kind": "Command",
-        "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"
+        "params": {"script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}
       },
       "next": ["Done"]
     },
     {
       "name": "Done",
+      "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
       "next": []
     }
   ]
@@ -83,26 +83,22 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
 ### Step Fields
 
 - `name`: Step identifier
-- `value_schema`: JSON Schema for validating the task's `value` field (optional)
-  - Omitted → accepts any value
-  - Object → inline JSON schema (e.g., `{"type": "object"}`)
-  - `{"link": "path"}` → link to external schema file
 - `action`: How the step processes tasks
-  - `{"kind": "Pool", "instructions": "..."}` → send to agent pool (default)
-  - `{"kind": "Command", "script": "..."}` → run local command
+  - `{"kind": "Pool", "params": {"instructions": "..."}}` → send to agent pool
+  - `{"kind": "Command", "params": {"script": "..."}}` → run local command
 - `next`: Valid next step names (empty = terminal)
 - `options`: Per-step overrides for global options
 
 ### Action Types
 
-**Pool** (default): Sends tasks to the agent pool for processing by LLM agents.
+**Pool**: Sends tasks to the agent pool for processing by LLM agents.
 ```json
-{"kind": "Pool", "instructions": {"kind": "Inline", "value": "Analyze the input."}}
+{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Analyze the input."}}}
 ```
 
 **Command**: Runs a local shell script. The task JSON is piped to stdin, and the script must output a JSON array of next tasks on stdout.
 ```json
-{"kind": "Command", "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}
+{"kind": "Command", "params": {"script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}}
 ```
 
 ## Task Format
@@ -150,12 +146,10 @@ barnum config validate --config config.json
 
 ## Runtime Validation
 
-1. Incoming task validated against step's schema
-2. Agent response validated:
+1. Agent response validated:
    - Must be JSON array
    - Each item's `kind` must be a valid `next` step
-   - Each item's `value` validated against target step's schema
-3. Invalid responses requeued if `retry_on_invalid_response` is true
+2. Invalid responses requeued if `retry_on_invalid_response` is true
 
 ## Agent Documentation
 
@@ -171,5 +165,5 @@ Barnum auto-generates markdown for agents. The payload sent to agents includes:
 
 The instructions include:
 - Step name and instructions
-- Valid next steps with schema info
+- Valid next steps
 - Example response format

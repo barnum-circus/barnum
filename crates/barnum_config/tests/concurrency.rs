@@ -10,7 +10,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -65,7 +65,6 @@ fn tasks_execute_in_parallel() {
     let _agent3 = BarnumTestAgent::terminator(&root, processing_delay);
 
     let config = worker_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let initial_tasks: Vec<Task> = (0..6)
         .map(|i| Task::new("Worker", StepInputValue(serde_json::json!({"id": i}))))
@@ -79,7 +78,7 @@ fn tasks_execute_in_parallel() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     cleanup_test_dir(&root);
 }
@@ -148,8 +147,6 @@ fn max_concurrency_limits_parallel_tasks() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-
     let initial_tasks: Vec<Task> = (0..6)
         .map(|i| Task::new("Worker", StepInputValue(serde_json::json!({"id": i}))))
         .collect();
@@ -162,7 +159,7 @@ fn max_concurrency_limits_parallel_tasks() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     // With max_concurrency=2 and 1 agent, max should be 1 (single agent)
     // But if we had 3 agents, max should not exceed 2
@@ -229,8 +226,6 @@ fn nested_fan_out() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-
     let initial_tasks = vec![Task::new("Root", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -240,7 +235,7 @@ fn nested_fan_out() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     {
         let kinds = processed_kinds.lock().unwrap();

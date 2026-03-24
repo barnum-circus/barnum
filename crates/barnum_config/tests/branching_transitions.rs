@@ -6,7 +6,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -72,7 +72,6 @@ fn branch_to_path_a() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = branching_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -82,7 +81,7 @@ fn branch_to_path_a() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     let kinds: Vec<String> = processed
@@ -119,7 +118,6 @@ fn branch_to_path_b() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = branching_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -129,7 +127,7 @@ fn branch_to_path_b() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     let kinds: Vec<String> = processed
@@ -180,7 +178,6 @@ fn fan_out_multiple_tasks() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = branching_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -190,7 +187,7 @@ fn fan_out_multiple_tasks() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     agent.stop();
 

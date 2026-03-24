@@ -52,15 +52,6 @@ const Options = z.object({
   timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Timeout in seconds for each task (None = no timeout)."),
 }).strict().describe("Global runtime options for task execution. All fields have sensible defaults.");
 
-const SchemaLink = z.object({
-  link: z.string().describe("Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`)."),
-}).describe("Reference to an external JSON Schema file.");
-
-const SchemaRef = z.union([
-  SchemaLink.describe("Reference to an external JSON Schema file. The path is relative to the config file's directory."),
-  z.any().describe("Inline JSON Schema object (any valid JSON Schema)."),
-]).describe("A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)");
-
 const StepOptions = z.object({
   max_retries: z.number().int().nonnegative().nullable().optional().default(null).describe("Maximum retries for tasks on this step (overrides global `max_retries`)."),
   retry_on_invalid_response: z.boolean().nullable().optional().default(null).describe("Whether to retry when an agent returns an invalid response on this step (overrides global `retry_on_invalid_response`)."),
@@ -74,7 +65,6 @@ const StepFile = z.object({
   name: z.string().describe("Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`."),
   next: z.array(z.string()).optional().default([]).describe("Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups)."),
   options: StepOptions.optional().default({"max_retries": null, "retry_on_invalid_response": null, "retry_on_timeout": null, "timeout": null}).describe("Per-step options that override the global `options`. Only the fields you set here take effect; everything else falls through to the global defaults."),
-  value_schema: SchemaRef.nullable().optional().default(null).describe("JSON Schema that validates the `value` payload for tasks on this step. When set, tasks whose `value` doesn't conform are rejected. When omitted, any JSON value is accepted."),
 }).strict().describe("A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.");
 
 export const configFileSchema = z.object({
@@ -92,8 +82,6 @@ export type ActionFile = z.infer<typeof ActionFile>;
 export type HookCommand = z.infer<typeof HookCommand>;
 export type FinallyHook = z.infer<typeof FinallyHook>;
 export type Options = z.infer<typeof Options>;
-export type SchemaLink = z.infer<typeof SchemaLink>;
-export type SchemaRef = z.infer<typeof SchemaRef>;
 export type StepOptions = z.infer<typeof StepOptions>;
 export type StepFile = z.infer<typeof StepFile>;
 

@@ -20,7 +20,7 @@ fn write_instructions(doc: &mut String, action: &ActionKind) {
 ///
 /// This creates instructions for an agent about what responses are valid.
 #[must_use]
-pub fn generate_step_docs(step: &Step, config: &Config) -> String {
+pub fn generate_step_docs(step: &Step) -> String {
     let mut doc = String::new();
 
     // Task isolation preamble
@@ -53,36 +53,14 @@ pub fn generate_step_docs(step: &Step, config: &Config) -> String {
         writeln!(doc).ok();
 
         for next_name in &step.next {
-            if let Some(next_step) = config.steps.iter().find(|s| &s.name == next_name) {
-                writeln!(doc, "### {next_name}").ok();
-                writeln!(doc).ok();
-
-                // Show schema info
-                match &next_step.value_schema {
-                    None => {
-                        writeln!(doc, "Accepts any JSON value.").ok();
-                        writeln!(doc).ok();
-                        writeln!(doc, "```json").ok();
-                        writeln!(doc, r#"{{"kind": "{next_name}", "value": <any>}}"#).ok();
-                        writeln!(doc, "```").ok();
-                    }
-                    Some(schema) => {
-                        writeln!(doc, "Value must match schema:").ok();
-                        writeln!(doc).ok();
-                        writeln!(doc, "```json").ok();
-                        if let Ok(pretty) = serde_json::to_string_pretty(schema) {
-                            writeln!(doc, "{pretty}").ok();
-                        }
-                        writeln!(doc, "```").ok();
-                        writeln!(doc).ok();
-                        writeln!(doc, "Example:").ok();
-                        writeln!(doc, "```json").ok();
-                        writeln!(doc, r#"{{"kind": "{next_name}", "value": {{...}}}}"#).ok();
-                        writeln!(doc, "```").ok();
-                    }
-                }
-                writeln!(doc).ok();
-            }
+            writeln!(doc, "### {next_name}").ok();
+            writeln!(doc).ok();
+            writeln!(doc, "Accepts any JSON value.").ok();
+            writeln!(doc).ok();
+            writeln!(doc, "```json").ok();
+            writeln!(doc, r#"{{"kind": "{next_name}", "value": <any>}}"#).ok();
+            writeln!(doc, "```").ok();
+            writeln!(doc).ok();
         }
     }
 
@@ -156,7 +134,7 @@ mod tests {
         .unwrap();
 
         let config = config_file.resolve(Path::new(".")).unwrap();
-        let docs = generate_step_docs(&config.steps[0], &config);
+        let docs = generate_step_docs(&config.steps[0]);
         assert!(docs.contains("Current Step: Start"));
         assert!(docs.contains("Begin here."));
         assert!(docs.contains("### End"));
@@ -174,7 +152,7 @@ mod tests {
         .unwrap();
 
         let config = config_file.resolve(Path::new(".")).unwrap();
-        let docs = generate_step_docs(&config.steps[0], &config);
+        let docs = generate_step_docs(&config.steps[0]);
         assert!(docs.contains("Terminal Step"));
         assert!(docs.contains("empty array"));
     }

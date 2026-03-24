@@ -3,11 +3,6 @@
   "steps": [
     {
       "name": "Start",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -18,11 +13,6 @@
     },
     {
       "name": "Middle",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -33,11 +23,6 @@
     },
     {
       "name": "End",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {

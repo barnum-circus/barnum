@@ -89,12 +89,6 @@ pub struct StepFile {
     /// `{"kind": "ThisStepName", "value": {...}}`.
     pub name: StepName,
 
-    /// JSON Schema that validates the `value` payload for tasks on this step.
-    /// When set, tasks whose `value` doesn't conform are rejected.
-    /// When omitted, any JSON value is accepted.
-    #[serde(default)]
-    pub value_schema: Option<SchemaRef>,
-
     /// How this step processes tasks — either send to the agent pool (`Pool`)
     /// or run a local shell command (`Command`).
     pub action: ActionFile,
@@ -264,28 +258,6 @@ impl EffectiveOptions {
     }
 }
 
-/// Reference to an external JSON Schema file.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct SchemaLink {
-    /// Relative path to the JSON Schema file (e.g., `"schemas/task.json"`).
-    pub link: String,
-}
-
-/// A JSON Schema for validating task payloads. Can be provided inline or
-/// loaded from a file.
-///
-/// - Inline: write the JSON Schema object directly, e.g. `{"type": "object", "properties": {...}}`
-/// - Linked: `{"link": "path/to/schema.json"}` to load from a file (path relative to config file)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum SchemaRef {
-    /// Reference to an external JSON Schema file. The path is relative to
-    /// the config file's directory.
-    Link(SchemaLink),
-    /// Inline JSON Schema object (any valid JSON Schema).
-    Inline(serde_json::Value),
-}
-
 /// Markdown text that tells agents how to process tasks on this step.
 /// This is the prompt/instructions the agent receives alongside the task payload.
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
@@ -391,15 +363,10 @@ impl StepFile {
         global_options: &Options,
     ) -> std::io::Result<crate::resolved::Step> {
         let action = self.action.resolve(base_path)?;
-        let value_schema = self
-            .value_schema
-            .map(|s| resolve_schema(s, base_path))
-            .transpose()?;
         let options = EffectiveOptions::resolve(global_options, &self.options);
 
         Ok(crate::resolved::Step {
             name: self.name,
-            value_schema,
             action,
             next: self.next,
             finally_hook: self.finally_hook.map(|h| {
@@ -442,31 +409,6 @@ impl ActionFile {
             Self::Command(CommandActionFile { script }) => Ok(
                 crate::resolved::ActionKind::Command(crate::resolved::CommandAction { script }),
             ),
-        }
-    }
-}
-
-/// Resolve a schema reference to its JSON value.
-fn resolve_schema(
-    schema: SchemaRef,
-    base_path: &std::path::Path,
-) -> std::io::Result<serde_json::Value> {
-    match schema {
-        SchemaRef::Inline(value) => Ok(value),
-        SchemaRef::Link(SchemaLink { link }) => {
-            let path = base_path.join(&link);
-            let content = std::fs::read_to_string(&path).map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("failed to read schema '{}': {e}", path.display()),
-                )
-            })?;
-            serde_json::from_str(&content).map_err(|e| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("invalid JSON in schema '{}': {e}", path.display()),
-                )
-            })
         }
     }
 }
@@ -572,7 +514,6 @@ mod tests {
             "steps": [
                 {{
                     "name": "Analyze",
-                    "value_schema": {{"type": "object"}},
                     "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": "Analyze the input."}}}}}},
                     "next": ["Done"]
                 }},
@@ -764,45 +705,5 @@ mod tests {
 
         let result = serde_json::from_str::<ConfigFile>(json);
         assert!(result.is_err(), "Omitting action should fail to parse");
-    }
-
-    #[test]
-    fn schema_inline_object() {
-        let json = format!(
-            r#"{{
-            "steps": [{{
-                "name": "Test",
-                "action": {POOL},
-                "value_schema": {{"type": "object"}},
-                "next": []
-            }}]
-        }}"#
-        );
-
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
-        assert!(matches!(
-            &config.steps[0].value_schema,
-            Some(SchemaRef::Inline(_))
-        ));
-    }
-
-    #[test]
-    fn schema_link_object() {
-        let json = format!(
-            r#"{{
-            "steps": [{{
-                "name": "Test",
-                "action": {POOL},
-                "value_schema": {{"link": "schemas/test.json"}},
-                "next": []
-            }}]
-        }}"#
-        );
-
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
-        assert!(matches!(
-            &config.steps[0].value_schema,
-            Some(SchemaRef::Link(SchemaLink { link })) if link == "schemas/test.json"
-        ));
     }
 }

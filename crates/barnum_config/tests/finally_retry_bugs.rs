@@ -9,7 +9,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -134,7 +134,6 @@ echo "finally_ran" > "{}"
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let initial_tasks = vec![Task::new("StepA", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -146,7 +145,7 @@ echo "finally_ran" > "{}"
     };
 
     // Run the task queue
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
 
     // Stop agent and get call counts
     let _processed = agent.stop();
@@ -270,7 +269,6 @@ echo "finally_executed" > "{}"
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -282,7 +280,6 @@ echo "finally_executed" > "{}"
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
@@ -432,7 +429,6 @@ echo "child_finally" >> "{}"
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -444,7 +440,6 @@ echo "child_finally" >> "{}"
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
@@ -550,7 +545,6 @@ echo "finally_executed" > "{}"
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -563,7 +557,6 @@ echo "finally_executed" > "{}"
     // This should fail because Child is dropped after max retries
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
@@ -697,7 +690,6 @@ echo "B_finally" >> "{}"
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -709,7 +701,6 @@ echo "B_finally" >> "{}"
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -848,7 +839,6 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -860,7 +850,6 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -985,7 +974,6 @@ fn deeply_nested_finally_chain() {
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -997,7 +985,6 @@ fn deeply_nested_finally_chain() {
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -1111,7 +1098,6 @@ fn multiple_children_with_finally() {
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1123,7 +1109,6 @@ fn multiple_children_with_finally() {
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -1233,7 +1218,6 @@ fn finally_spawns_multiple_tasks() {
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1245,7 +1229,6 @@ fn finally_spawns_multiple_tasks() {
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -1340,7 +1323,6 @@ exit 0
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1352,7 +1334,6 @@ exit 0
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -1430,7 +1411,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1442,7 +1422,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
@@ -1538,7 +1517,6 @@ echo '[{"kind": "Cleanup", "value": {}}]'
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1550,7 +1528,6 @@ echo '[{"kind": "Cleanup", "value": {}}]'
 
     let result = barnum_config::run(
         &config,
-        &schemas,
         &runner_config,
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );

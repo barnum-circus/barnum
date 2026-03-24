@@ -555,17 +555,13 @@ fn validate_invalid_entrypoint_fails() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn validate_entrypoint_with_schema() {
+fn validate_entrypoint() {
     let config = format!(
         r#"{{
         "entrypoint": "Start",
         "steps": [{{
             "name": "Start",
             "action": {POOL},
-            "value_schema": {{
-                "type": "object",
-                "properties": {{"path": {{"type": "string"}}}}
-            }},
             "next": []
         }}]
     }}"#
@@ -574,8 +570,5 @@ fn validate_entrypoint_with_schema() {
     let barnum = BarnumRunner::new();
     let result = barnum.validate(&config).expect("validate");
 
-    assert!(
-        result.status.success(),
-        "Entrypoint with schema should be valid"
-    );
+    assert!(result.status.success(), "Entrypoint should be valid");
 }

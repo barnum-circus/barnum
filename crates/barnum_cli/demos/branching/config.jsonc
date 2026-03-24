@@ -8,11 +8,6 @@
   "steps": [
     {
       "name": "Decide",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -23,11 +18,6 @@
     },
     {
       "name": "PathA",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -38,11 +28,6 @@
     },
     {
       "name": "PathB",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -53,11 +38,6 @@
     },
     {
       "name": "Done",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {

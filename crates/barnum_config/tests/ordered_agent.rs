@@ -5,7 +5,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -68,14 +68,13 @@ fn run_barnum_background(
     let state_log = test_state_log_path(root);
 
     thread::spawn(move || {
-        let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
         let runner_config = RunnerConfig {
             working_dir: Path::new("."),
             wake_script: None,
             invoker: &invoker,
             state_log_path: &state_log,
         };
-        barnum_config::run(&config, &schemas, &runner_config, initial_tasks)
+        barnum_config::run(&config, &runner_config, initial_tasks)
     })
 }
 
