@@ -4,7 +4,7 @@
 
 mod common;
 
-use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -13,11 +13,10 @@ use std::time::Duration;
 const TEST_DIR: &str = "simple_termination";
 
 fn simple_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+    serde_json::from_str(
         r#"{"steps": [{"name": "Start", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}]}"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 #[rstest]

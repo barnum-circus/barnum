@@ -7,7 +7,7 @@
 
 mod common;
 
-use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -26,7 +26,7 @@ const TEST_DIR: &str = "retry_behavior";
 fn timeout_retry_exhausts_max_retries() {
     let root = setup_test_dir(TEST_DIR);
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "timeout": 1,
@@ -43,7 +43,6 @@ fn timeout_retry_exhausts_max_retries() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -73,7 +72,7 @@ fn timeout_retry_exhausts_max_retries() {
 fn invalid_response_retry_exhausts_max_retries() {
     let root = setup_test_dir(&format!("{TEST_DIR}_invalid_resp"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 2,
@@ -89,7 +88,6 @@ fn invalid_response_retry_exhausts_max_retries() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -118,7 +116,7 @@ fn invalid_response_retry_exhausts_max_retries() {
 fn max_retries_zero_no_retries() {
     let root = setup_test_dir(&format!("{TEST_DIR}_zero_retries"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 0,
@@ -134,7 +132,6 @@ fn max_retries_zero_no_retries() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -163,7 +160,7 @@ fn max_retries_zero_no_retries() {
 fn retry_on_timeout_false_drops_task() {
     let root = setup_test_dir(&format!("{TEST_DIR}_no_timeout_retry"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "timeout": 1,
@@ -180,7 +177,6 @@ fn retry_on_timeout_false_drops_task() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -209,7 +205,7 @@ fn retry_on_timeout_false_drops_task() {
 fn retry_on_invalid_response_false_drops_task() {
     let root = setup_test_dir(&format!("{TEST_DIR}_no_invalid_retry"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 5,
@@ -225,7 +221,6 @@ fn retry_on_invalid_response_false_drops_task() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -254,7 +249,7 @@ fn retry_on_invalid_response_false_drops_task() {
 fn per_step_options_override_global() {
     let root = setup_test_dir(&format!("{TEST_DIR}_per_step"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 5,
@@ -273,7 +268,6 @@ fn per_step_options_override_global() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "NoRetryStep",
@@ -327,8 +321,7 @@ fn successful_retry_after_initial_failure() {
         }}"#
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&json).expect("parse config");
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);

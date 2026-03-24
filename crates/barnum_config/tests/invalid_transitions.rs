@@ -4,7 +4,7 @@
 
 mod common;
 
-use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -13,7 +13,7 @@ use std::time::Duration;
 const TEST_DIR: &str = "invalid_transitions";
 
 fn strict_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+    serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 1
@@ -37,8 +37,7 @@ fn strict_config() -> Config {
             ]
         }"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 /// Start's script returns `[{"kind":"End"}]` but `next` only allows `["Middle"]`.
@@ -70,7 +69,7 @@ fn invalid_transition_causes_retry() {
 fn unknown_step_causes_retry() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": {
                 "maxRetries": 1
@@ -90,7 +89,6 @@ fn unknown_step_causes_retry() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -146,8 +144,7 @@ fn recovery_after_invalid_then_valid() {
         ]
     });
 
-    let config_file: ConfigFile = serde_json::from_value(json_value).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_value(json_value).expect("parse config");
 
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);

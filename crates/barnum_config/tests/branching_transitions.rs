@@ -4,7 +4,7 @@
 
 mod common;
 
-use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -13,8 +13,8 @@ use std::time::Duration;
 const TEST_DIR: &str = "branching_transitions";
 
 /// Config where Decide always branches to `PathA`.
-fn branching_config_path_a() -> barnum_config::Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn branching_config_path_a() -> Config {
+    serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -40,13 +40,12 @@ fn branching_config_path_a() -> barnum_config::Config {
             ]
         }"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 /// Config where Decide always branches to `PathB`.
-fn branching_config_path_b() -> barnum_config::Config {
-    let config_file: ConfigFile = serde_json::from_str(
+fn branching_config_path_b() -> Config {
+    serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -72,8 +71,7 @@ fn branching_config_path_b() -> barnum_config::Config {
             ]
         }"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 #[rstest]
@@ -120,7 +118,7 @@ fn invalid_transition_from_branch() {
     let root = setup_test_dir(&format!("{TEST_DIR}_invalid"));
 
     // Decide tries to transition to Done directly (not a valid next step).
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "options": { "maxRetries": 0 },
             "steps": [
@@ -148,7 +146,6 @@ fn invalid_transition_from_branch() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("Decide", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);

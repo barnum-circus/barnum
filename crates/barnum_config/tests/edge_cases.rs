@@ -4,7 +4,7 @@
 
 mod common;
 
-use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -18,7 +18,7 @@ const TEST_DIR: &str = "edge_cases";
 fn empty_initial_tasks_completes() {
     let root = setup_test_dir(TEST_DIR);
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -30,7 +30,6 @@ fn empty_initial_tasks_completes() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![]; // Empty!
     let state_log = test_state_log_path(&root);
@@ -56,7 +55,7 @@ fn large_fan_out() {
     // Worker is terminal (echoes empty array).
     //
     // The script uses jq to generate the fan-out array dynamically.
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -73,7 +72,6 @@ fn large_fan_out() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "Distribute",
@@ -97,7 +95,7 @@ fn large_fan_out() {
 fn command_action_executes() {
     let root = setup_test_dir(&format!("{TEST_DIR}_command"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -114,7 +112,6 @@ fn command_action_executes() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new(
         "Echo",
@@ -139,7 +136,7 @@ fn command_action_executes() {
 fn rapid_task_completion() {
     let root = setup_test_dir(&format!("{TEST_DIR}_rapid"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -151,7 +148,6 @@ fn rapid_task_completion() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     // Submit many tasks
     let initial_tasks: Vec<Task> = (0..50)
@@ -176,7 +172,7 @@ fn rapid_task_completion() {
 fn unknown_step_in_initial_tasks_returns_error() {
     let root = setup_test_dir(&format!("{TEST_DIR}_unknown_step"));
 
-    let config_file: ConfigFile = serde_json::from_str(
+    let config: Config = serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -188,7 +184,6 @@ fn unknown_step_in_initial_tasks_returns_error() {
         }"#,
     )
     .expect("parse config");
-    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![
         Task::new("Unknown", StepInputValue(serde_json::json!({}))), // Unknown step - should error

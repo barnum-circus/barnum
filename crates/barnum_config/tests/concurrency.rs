@@ -7,7 +7,7 @@
 
 mod common;
 
-use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::path::Path;
@@ -17,7 +17,7 @@ const TEST_DIR: &str = "concurrency";
 
 /// Config with `max_concurrency=2` and a fan-out step that spawns two terminal workers.
 fn max_concurrency_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+    serde_json::from_str(
         r#"{
             "options": {
                 "maxConcurrency": 2
@@ -36,8 +36,7 @@ fn max_concurrency_config() -> Config {
             ]
         }"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 /// Verify that a workflow with `max_concurrency=2` completes successfully.
@@ -64,7 +63,7 @@ fn max_concurrency_limits_parallel_tasks() {
 ///
 /// Verifies that nested fan-out completes without deadlock or lost tasks.
 fn fan_out_tree_config() -> Config {
-    let config_file: ConfigFile = serde_json::from_str(
+    serde_json::from_str(
         r#"{
             "steps": [
                 {
@@ -105,8 +104,7 @@ fn fan_out_tree_config() -> Config {
             ]
         }"#,
     )
-    .expect("parse config");
-    config_file.resolve(Path::new("."))
+    .expect("parse config")
 }
 
 /// Verify that a deep fan-out tree completes successfully.

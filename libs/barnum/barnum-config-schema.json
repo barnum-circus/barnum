@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ConfigFile",
-  "description": "Top-level Barnum configuration file format.\n\nDefines a workflow as a directed graph of steps. Each step processes tasks and can spawn follow-up tasks on other steps.",
+  "title": "Config",
+  "description": "Top-level Barnum configuration.\n\nDefines a workflow as a directed graph of steps. Each step processes tasks and can spawn follow-up tasks on other steps.",
   "type": "object",
   "required": [
     "steps"
@@ -34,13 +34,13 @@
       "description": "The steps that make up this workflow. Each step defines how to process a task and which steps it can spawn follow-up tasks on.",
       "type": "array",
       "items": {
-        "$ref": "#/definitions/StepFile"
+        "$ref": "#/definitions/Step"
       }
     }
   },
   "additionalProperties": false,
   "definitions": {
-    "ActionFile": {
+    "ActionKind": {
       "description": "How a step processes tasks.",
       "oneOf": [
         {
@@ -134,7 +134,7 @@
       },
       "additionalProperties": false
     },
-    "StepFile": {
+    "Step": {
       "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.",
       "type": "object",
       "required": [
@@ -146,7 +146,7 @@
           "description": "How this step processes tasks.",
           "allOf": [
             {
-              "$ref": "#/definitions/ActionFile"
+              "$ref": "#/definitions/ActionKind"
             }
           ]
         },

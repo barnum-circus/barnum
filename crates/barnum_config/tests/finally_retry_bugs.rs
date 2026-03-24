@@ -8,7 +8,7 @@
 
 mod common;
 
-use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, RunnerConfig, StepInputValue, Task};
 use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::fs;
@@ -81,8 +81,7 @@ echo "finally_ran" > "{}"
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let initial_tasks = vec![Task::new("StepA", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -165,8 +164,7 @@ echo "finally_executed" > "{}"
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -276,8 +274,7 @@ echo "child_finally" >> "{}"
         child_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -361,8 +358,7 @@ echo "finally_executed" > "{}"
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -475,8 +471,7 @@ echo "B_finally" >> "{}"
         b_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -594,8 +589,7 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
         b_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -696,8 +690,7 @@ fn deeply_nested_finally_chain() {
         c_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -786,8 +779,7 @@ fn multiple_children_with_finally() {
         b_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -876,8 +868,7 @@ fn finally_spawns_multiple_tasks() {
         b_finally.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -965,8 +956,7 @@ exit 0
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1038,8 +1028,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -1117,8 +1106,7 @@ echo '[{"kind": "Cleanup", "value": {}}]'
         finally_script.display()
     );
 
-    let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new("."));
+    let config: Config = serde_json::from_str(&config_json).expect("parse config");
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
