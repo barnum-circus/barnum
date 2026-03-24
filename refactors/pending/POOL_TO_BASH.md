@@ -42,12 +42,12 @@ Becomes a Bash action whose script calls `troupe submit_task`:
 {
   "kind": "Command",
   "params": {
-    "script": "TASK=$(cat); $TROUPE submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'Make a decision. Choose PathA or PathB.' --argjson task \"$TASK\" '{kind: \"Task\", task: {instructions: $inst, data: $task}}')\""
+    "script": "TASK=$(cat); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'Make a decision. Choose PathA or PathB.' --argjson task \"$TASK\" '{kind: \"Task\", task: {instructions: $inst, data: $task}}')\""
   }
 }
 ```
 
-The instructions are embedded in the script string. Pool name and root come from environment variables (`$BARNUM_POOL`, `$BARNUM_ROOT`) — demo.sh sets these before running barnum. The `$TROUPE` env var points to the troupe binary (already used by demos).
+The instructions are embedded in the script string. Pool name and root come from environment variables (`$BARNUM_POOL`, `$BARNUM_ROOT`) — demo.sh sets these before running barnum. `$TROUPE` defaults to `pnpm dlx @barnum/troupe` so configs work without demo.sh setup.
 
 Note: this keeps `"kind": "Command"` (the current Rust name) rather than renaming to `"Bash"`. The rename happens in REMOVE_POOL_ACTION.md alongside the Rust changes.
 
