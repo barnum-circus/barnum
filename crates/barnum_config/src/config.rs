@@ -127,12 +127,35 @@ pub struct BashAction {
     pub script: String,
 }
 
+/// Run a TypeScript handler file as a subprocess.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeScriptAction {
+    /// Path to the handler file (absolute — JS layer resolves before passing to Rust).
+    pub path: String,
+
+    /// Named export to invoke from the handler module.
+    #[serde(default = "default_exported_as")]
+    pub exported_as: String,
+
+    /// Step configuration passed through to the handler.
+    /// Rust stores this as-is and includes it in the envelope.
+    #[serde(default)]
+    pub step_config: serde_json::Value,
+}
+
+fn default_exported_as() -> String {
+    "default".to_string()
+}
+
 /// How a step processes tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum ActionKind {
     /// Run a shell command.
     Bash(BashAction),
+    /// Run a TypeScript handler.
+    TypeScript(TypeScriptAction),
 }
 
 /// A shell command used as a hook.

@@ -23,6 +23,7 @@ use tracing::{error, info};
 
 use crate::config::{
     ActionKind, BashAction, Config, EffectiveOptions, FinallyHook, HookCommand, Step,
+    TypeScriptAction,
 };
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
@@ -40,6 +41,10 @@ pub struct RunnerConfig<'a> {
     pub wake_script: Option<&'a str>,
     /// Path for state log (NDJSON file for persistence/resume).
     pub state_log_path: &'a Path,
+    /// Executor command for TypeScript handlers (e.g. "pnpm dlx tsx").
+    pub executor: &'a str,
+    /// Path to run-handler.ts.
+    pub run_handler_path: &'a str,
 }
 
 // ==================== Internal Types ====================
@@ -455,6 +460,8 @@ struct Engine<'a> {
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
     working_dir: PathBuf,
+    executor: String,
+    run_handler_path: String,
     tx: mpsc::Sender<WorkerResult>,
     max_concurrency: usize,
     in_flight: usize,
@@ -466,6 +473,8 @@ impl<'a> Engine<'a> {
         config: &'a Config,
         config_json: serde_json::Value,
         working_dir: PathBuf,
+        executor: &str,
+        run_handler_path: &str,
         tx: mpsc::Sender<WorkerResult>,
         max_concurrency: usize,
     ) -> Self {
@@ -475,6 +484,8 @@ impl<'a> Engine<'a> {
             step_map: config.step_map(),
             state: RunState::new(),
             working_dir,
+            executor: executor.to_string(),
+            run_handler_path: run_handler_path.to_string(),
             tx,
             max_concurrency,
             in_flight: 0,
@@ -695,20 +706,41 @@ impl<'a> Engine<'a> {
         let step = self.step_map.get(&task.step).expect("[P015] unknown step");
         let effective = EffectiveOptions::resolve(&self.config.options, &step.options);
         let timeout = effective.timeout.map(Duration::from_secs);
-        let tx = self.tx.clone();
 
-        match &step.action {
+        let (script, step_config) = match &step.action {
             ActionKind::Bash(BashAction { script }) => {
                 info!(step = %task.step, script = %script, "executing command");
-                let action = Box::new(ShellAction {
-                    script: script.clone(),
-                    step_name: task.step.clone(),
-                    config: self.config_json.clone(),
-                    working_dir: self.working_dir.clone(),
-                });
-                spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
+                (script.clone(), None)
             }
-        }
+            ActionKind::TypeScript(TypeScriptAction {
+                path,
+                exported_as,
+                step_config,
+            }) => {
+                let script = format!(
+                    "{} '{}' '{}' '{}'",
+                    self.executor, self.run_handler_path, path, exported_as,
+                );
+                info!(step = %task.step, handler = %path, "dispatching TypeScript handler");
+                (script, Some(step_config.clone()))
+            }
+        };
+
+        let action = Box::new(ShellAction {
+            script,
+            step_name: task.step.clone(),
+            config: self.config_json.clone(),
+            working_dir: self.working_dir.clone(),
+            step_config,
+        });
+        spawn_worker(
+            self.tx.clone(),
+            action,
+            task_id,
+            task,
+            WorkerKind::Task,
+            timeout,
+        );
     }
 
     /// Spawn a finally worker thread.
@@ -728,6 +760,7 @@ impl<'a> Engine<'a> {
             step_name: task.step.clone(),
             config: self.config_json.clone(),
             working_dir: self.working_dir.clone(),
+            step_config: None,
         });
         spawn_worker(
             self.tx.clone(),
@@ -829,6 +862,8 @@ pub fn run(
         config,
         config_json,
         runner_config.working_dir.to_path_buf(),
+        runner_config.executor,
+        runner_config.run_handler_path,
         tx,
         max_concurrency,
     );
@@ -920,6 +955,8 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
         &config,
         config_json,
         runner_config.working_dir.to_path_buf(),
+        runner_config.executor,
+        runner_config.run_handler_path,
         tx,
         max_concurrency,
     );

@@ -438,6 +438,10 @@ impl BarnumRunner {
             .arg(config)
             .arg("--initial-state")
             .arg(initial_tasks)
+            .arg("--executor")
+            .arg("pnpm dlx tsx")
+            .arg("--run-handler-path")
+            .arg("/dev/null")
             .output()
     }
 

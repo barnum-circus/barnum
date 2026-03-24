@@ -86,6 +86,8 @@ fn branch_to_path_a() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -105,6 +107,8 @@ fn branch_to_path_b() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -153,6 +157,8 @@ fn invalid_transition_from_branch() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);

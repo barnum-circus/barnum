@@ -37,6 +37,8 @@ fn empty_initial_tasks_completes() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // Should complete immediately without error
@@ -82,6 +84,8 @@ fn large_fan_out() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -122,6 +126,8 @@ fn command_action_executes() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // Should complete without error
@@ -159,6 +165,8 @@ fn rapid_task_completion() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -193,6 +201,8 @@ fn unknown_step_in_initial_tasks_returns_error() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // Should return an error for unknown step

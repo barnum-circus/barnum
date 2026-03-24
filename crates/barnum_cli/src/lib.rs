@@ -81,15 +81,13 @@ pub enum Command {
         #[arg(long, conflicts_with = "config")]
         resume_from: Option<PathBuf>,
 
-        /// Internal: executor command injected by cli.cjs and run.ts.
-        /// Not user-facing — hidden from --help.
+        /// Executor command for TypeScript handlers, injected by cli.cjs and run.ts.
         #[arg(long, hide = true)]
-        executor: Option<String>,
+        executor: String,
 
-        /// Internal: path to run-handler.ts, injected by cli.cjs and run.ts.
-        /// Not user-facing — hidden from --help.
+        /// Path to run-handler.ts, injected by cli.cjs and run.ts.
         #[arg(long, hide = true)]
-        run_handler_path: Option<String>,
+        run_handler_path: String,
     },
 
     /// Config file operations (docs, validate, graph, schema)

@@ -52,6 +52,8 @@ fn max_concurrency_limits_parallel_tasks() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -120,6 +122,8 @@ fn fan_out_tree() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");

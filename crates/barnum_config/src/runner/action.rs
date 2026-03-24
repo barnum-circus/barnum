@@ -165,6 +165,8 @@ struct Envelope<'a> {
     value: &'a serde_json::Value,
     config: &'a serde_json::Value,
     step_name: &'a StepName,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step_config: Option<&'a serde_json::Value>,
 }
 
 /// Shell action: runs a shell script with the task value on stdin.
@@ -173,6 +175,7 @@ pub struct ShellAction {
     pub step_name: StepName,
     pub config: serde_json::Value,
     pub working_dir: PathBuf,
+    pub step_config: Option<serde_json::Value>,
 }
 
 impl Action for ShellAction {
@@ -183,6 +186,7 @@ impl Action for ShellAction {
             value: &value,
             config: &self.config,
             step_name: &self.step_name,
+            step_config: self.step_config.as_ref(),
         })
         .unwrap_or_default();
 
