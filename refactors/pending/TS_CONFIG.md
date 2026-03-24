@@ -262,24 +262,26 @@ Replace `Pool` and `Command` with `Bash` and `TypeScript`:
 ```rust
 pub struct BashActionFile { pub script: String }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeScriptActionFile {
+pub struct TypeScriptAction {
     pub path: String,
-    #[serde(default)]
-    pub export: Option<String>,
+    #[serde(default = "default_export")]
+    pub export: String,
     #[serde(default)]
     pub step_config: serde_json::Value,
 }
 
+fn default_export() -> String { "default".to_string() }
+
 #[serde(tag = "kind")]
 pub enum ActionFile {
     Bash(BashActionFile),
-    TypeScript(TypeScriptActionFile),
+    TypeScript(TypeScriptAction),
 }
 ```
 
-All fields sit at the same level as `kind` (internally tagged enum, no `params` wrapper). `rename_all = "camelCase"` on the struct maps `step_config` to `stepConfig` in JSON automatically.
+`TypeScriptAction` is a single type shared between config and resolved enums — resolution canonicalizes `path` in place, no separate resolved type needed. `export` defaults to `"default"` via serde.
 
 ### Dispatch changes
 

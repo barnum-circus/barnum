@@ -33,21 +33,21 @@ Config shape: `{"kind": "Bash", "script": "echo hello"}`. All structs use `renam
 
 ## Add TypeScript action kind
 
-### Config types
+### TypeScriptAction type
 
-**File:** `crates/barnum_config/src/config.rs`
+**File:** `crates/barnum_config/src/config.rs` (shared between config and resolved)
 
 ```rust
 /// Run a TypeScript handler file as a subprocess.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct TypeScriptActionFile {
-    /// Path to the handler file (relative to config directory).
+pub struct TypeScriptAction {
+    /// Path to the handler file.
     pub path: String,
 
-    /// Named export to use (default: "default").
-    #[serde(default)]
-    pub export: Option<String>,
+    /// Named export to use.
+    #[serde(default = "default_export")]
+    pub export: String,
 
     /// Step configuration passed through to the handler.
     /// Rust stores this as-is and includes it in the envelope.
@@ -55,47 +55,20 @@ pub struct TypeScriptActionFile {
     pub step_config: serde_json::Value,
 }
 
+fn default_export() -> String { "default".to_string() }
+```
+
+One type used in both enums:
+
+```rust
+// config.rs
 #[serde(tag = "kind")]
 pub enum ActionFile {
     Bash(BashActionFile),
-    TypeScript(TypeScriptActionFile),
-}
-```
-
-A config like:
-
-```json
-{
-  "kind": "TypeScript",
-  "path": "./handlers/analyze.ts",
-  "stepConfig": {
-    "instructions": "Analyze the code.",
-    "pool": "demo"
-  }
-}
-```
-
-Deserializes with `path = "./handlers/analyze.ts"`, `export = None`, and `step_config = {"instructions": "Analyze the code.", "pool": "demo"}`. All fields sit at the same level as `kind` — no `params` wrapper.
-
-### Resolved types
-
-**File:** `crates/barnum_config/src/resolved.rs`
-
-```rust
-/// Resolved TypeScript action.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TypeScriptAction {
-    /// Path to the handler file (resolved to absolute path).
-    pub path: String,
-
-    /// Named export (defaults to "default").
-    pub export: String,
-
-    /// Step configuration passed through to the handler. Opaque to Rust.
-    pub step_config: serde_json::Value,
+    TypeScript(TypeScriptAction),
 }
 
+// resolved.rs
 #[serde(tag = "kind")]
 pub enum ActionKind {
     Bash(BashAction),
@@ -103,31 +76,28 @@ pub enum ActionKind {
 }
 ```
 
-In the resolved type, `export` is a non-optional `String` (defaulted to `"default"` during resolution). The `path` is resolved to an absolute path. `step_config` is passed through unchanged.
+Config `{"kind": "TypeScript", "path": "./handlers/analyze.ts", "stepConfig": {...}}` deserializes with `export = "default"` (serde default). Resolution canonicalizes `path` in place — no separate resolved type needed.
 
 ### Config resolution
 
 **File:** `crates/barnum_config/src/config.rs` (in `ActionFile::resolve`)
 
 ```rust
-Self::TypeScript(TypeScriptActionFile { path, export, step_config }) => {
+Self::TypeScript(mut ts) => {
     // Resolve path relative to config directory
-    let resolved_path = base_path.join(&path);
+    let resolved_path = base_path.join(&ts.path);
     let canonical = resolved_path.canonicalize().map_err(|e| {
         std::io::Error::new(
             e.kind(),
             format!("TypeScript handler not found: {}: {e}", resolved_path.display()),
         )
     })?;
-    Ok(ActionKind::TypeScript(TypeScriptAction {
-        path: canonical.to_string_lossy().into_owned(),
-        export: export.unwrap_or_else(|| "default".to_string()),
-        step_config,
-    }))
+    ts.path = canonical.to_string_lossy().into_owned();
+    Ok(ActionKind::TypeScript(ts))
 }
 ```
 
-Resolution validates the handler file exists at config load time — a typo in the path fails immediately, not at dispatch time.
+Resolution canonicalizes `path` in place on the same struct. The `export` field is already defaulted to `"default"` by serde. Resolution validates the handler file exists at config load time — a typo in the path fails immediately, not at dispatch time.
 
 ### Dispatch
 
