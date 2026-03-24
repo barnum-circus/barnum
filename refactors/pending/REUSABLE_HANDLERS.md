@@ -34,113 +34,100 @@ The Rust runner reads stdout as `Vec<Task>` and validates each task's step again
 
 The coupling chain: handler returns step names -> bridge passes them through -> Rust validates against `next`. The handler must know the graph.
 
-## Proposed approach: action pipelines
+## Action kind taxonomy
 
-A step's `action` becomes a pipeline of actions. Each action in the pipeline receives the previous action's stdout on its stdin. Only the final action in the pipeline produces `[{kind, value}]` tasks for routing. All earlier actions return plain values.
+Currently Barnum has two action kinds: `Bash` and `TypeScript`. Thinking about what workflow engines like Temporal and Inngest express, and what primitives are needed for composition:
 
-### Single action (unchanged)
+| Kind | What it does | Status |
+|------|-------------|--------|
+| **Bash** | Run a shell script. stdin = envelope, stdout = tasks. | Exists |
+| **TypeScript** | Run a handler module. stdin = envelope, stdout = tasks. | Exists |
+| **Sequence** | Run actions in order, piping data between them. Only the last action produces tasks. | Proposed (this doc) |
+| **Try** | Run an action. On success, produce `{ ok: true, value }`. On failure, produce `{ ok: false, error }`. Turns failures into routable data. | Future (JS rewrite) |
+| **Parallel** | Run actions concurrently, collect all results into an array. | Future (JS rewrite) |
 
-```ts
-{
-  name: "Print",
-  action: { kind: "Bash", script: "jq -r '.value.message'; echo '[]'" },
-  next: [],
-}
-```
+`Sequence` is the immediate need — it decouples TypeScript handlers from routing. `Try` and `Parallel` are dramatically easier to implement in a JS runtime than in Rust subprocess piping, so they wait for the JS rewrite.
 
-A single action works exactly as today. No change needed for existing configs.
+### What's missing from this taxonomy
 
-### Pipeline action (new)
+**Error handling / routing on failure.** Currently a step either succeeds or retries until it drops. There's no way to route to a recovery step on failure. `Try` solves this: wrap an action in `Try`, and failures become a value `{ ok: false, error: "..." }` that the next action in a `Sequence` can inspect and route accordingly. Without `Try`, the only error handling is retries and `finally` hooks.
+
+**Compensation / rollback.** If step 3 fails, undo steps 1 and 2. Temporal has sagas for this. In Barnum's model, `finally` hooks partially cover this (they run after a subtree completes), but they don't have access to the success/failure status of descendants. This is a JS-rewrite concern.
+
+**Wait for external signal.** Pause a workflow until an event arrives (webhook, human approval, timer). Temporal's signals and Inngest's `step.waitForEvent()`. Not in scope for the current Rust engine.
+
+## Proposed approach: Sequence action kind
+
+`Sequence` is a new action kind that contains an ordered list of actions. Each action's stdout feeds the next action's stdin. Only the last action's stdout is parsed as `[{kind, value}]` follow-up tasks.
+
+### Config shape
 
 ```ts
 {
   name: "Check",
-  action: [
-    { kind: "TypeScript", path: "@barnum/ts-check" },
-    { kind: "Bash", script: `jq 'if .failedFiles | length > 0
-      then [{kind: "Fix", value: .}]
-      else [{kind: "Done", value: {}}]
-      end'` },
-  ],
+  action: {
+    kind: "Sequence",
+    actions: [
+      { kind: "TypeScript", path: "@barnum/ts-check" },
+      { kind: "Bash", script: `jq 'if .failedFiles | length > 0
+        then [{kind: "Fix", value: .}]
+        else [{kind: "Done", value: {}}]
+        end'` },
+    ],
+  },
   next: ["Fix", "Done"],
 }
 ```
 
-When `action` is an array, the engine runs each action in sequence:
+`Bash` and `TypeScript` work exactly as today when used as the sole action on a step. `Sequence` composes them. A `Sequence` with one action is equivalent to that action alone.
 
-1. The first action receives the task envelope on stdin (as today).
-2. Each subsequent action receives the previous action's stdout on its stdin.
-3. Only the last action's stdout is parsed as `[{kind, value}]` tasks.
-
-The TypeScript handler becomes a pure function: value in, value out. The routing bash script at the end is the only thing that knows about step names.
-
-### Hypothetical config: reusable ts-check
+### Hypothetical configs
 
 ```ts
 import { BarnumConfig } from "@barnum/barnum";
-import { resolve } from "node:path";
 
-// Workflow 1: check -> fix -> commit (single next, routing is trivial)
+// Workflow 1: reusable handler with simple routing
 await BarnumConfig.fromConfig({
   entrypoint: "Check",
   steps: [
     {
       name: "Check",
-      action: [
-        { kind: "TypeScript", path: "@barnum/ts-check" },
-        { kind: "Bash", script: "jq '[{kind: \"Fix\", value: .}]'" },
-      ],
+      action: {
+        kind: "Sequence",
+        actions: [
+          { kind: "TypeScript", path: "@barnum/ts-check" },
+          { kind: "Bash", script: "jq '[{kind: \"Fix\", value: .}]'" },
+        ],
+      },
       next: ["Fix"],
     },
     {
       name: "Fix",
       action: { kind: "Bash", script: "..." },
-      next: ["Commit"],
-    },
-    {
-      name: "Commit",
-      action: { kind: "Bash", script: "cat > /dev/null; echo '[]'" },
       next: [],
     },
   ],
 }).run();
 
-// Workflow 2: same handler, different routing
+// Workflow 2: same handler, conditional branching
 await BarnumConfig.fromConfig({
   entrypoint: "Check",
   steps: [
     {
       name: "Check",
-      action: [
-        { kind: "TypeScript", path: "@barnum/ts-check" },
-        { kind: "Bash", script: "jq '[{kind: \"Report\", value: .}]'" },
-      ],
-      next: ["Report"],
-    },
-    {
-      name: "Report",
-      action: { kind: "Bash", script: "..." },
-      next: [],
-    },
-  ],
-}).run();
-
-// Workflow 3: conditional branching
-await BarnumConfig.fromConfig({
-  entrypoint: "Check",
-  steps: [
-    {
-      name: "Check",
-      action: [
-        { kind: "TypeScript", path: "@barnum/ts-check" },
-        {
-          kind: "Bash",
-          script: `jq 'if .failedFiles | length > 0
-            then [{kind: "Fix", value: .}]
-            else [{kind: "Done", value: {}}]
-            end'`,
-        },
-      ],
+      action: {
+        kind: "Sequence",
+        actions: [
+          { kind: "TypeScript", path: "@barnum/ts-check" },
+          {
+            kind: "Bash",
+            script: `jq 'if .failedFiles | length > 0
+              then [{kind: "Fix", value: .}]
+              else [{kind: "Done", value: {}}]
+              end'`,
+          },
+        ],
+      },
       next: ["Fix", "Done"],
     },
     {
@@ -156,16 +143,19 @@ await BarnumConfig.fromConfig({
   ],
 }).run();
 
-// Workflow 4: fan-out from a handler
+// Workflow 3: fan-out from a reusable handler
 await BarnumConfig.fromConfig({
   entrypoint: "Discover",
   steps: [
     {
       name: "Discover",
-      action: [
-        { kind: "TypeScript", path: "@barnum/ts-check" },
-        { kind: "Bash", script: "jq '.failedFiles | map({kind: \"FixFile\", value: {file: .}})'" },
-      ],
+      action: {
+        kind: "Sequence",
+        actions: [
+          { kind: "TypeScript", path: "@barnum/ts-check" },
+          { kind: "Bash", script: "jq '.failedFiles | map({kind: \"FixFile\", value: {file: .}})'" },
+        ],
+      },
       next: ["FixFile"],
     },
     {
@@ -177,79 +167,112 @@ await BarnumConfig.fromConfig({
 }).run();
 ```
 
-The same `@barnum/ts-check` handler is used in all four workflows with different routing.
+## What to ship now vs later
 
-## Changes required
+### Ship now (current branch)
+
+The current state is already useful and shippable:
+- TypeScript handler support with validation
+- Synchronous `run()` API
+- Troupe decoupled from barnum_cli
+
+People are using Barnum internally. Ship this, let them switch to the new version.
+
+### Ship soon (Rust, before JS rewrite)
+
+`Sequence` action kind. Requires:
+- New `ActionKind::Sequence` variant in `config.rs`
+- Piping logic in `runner/mod.rs` (capture intermediate stdout, feed to next action)
+- Schema regeneration
+
+The Rust implementation is straightforward: for a Sequence, spawn each action as a subprocess sequentially, capturing stdout and feeding it as stdin to the next. Only the final action's stdout goes through response parsing.
+
+### Ship with JS rewrite
+
+- `Try` — wraps an action, catches failures, produces `{ ok, value/error }`. In JS this is just try/catch around an async function call. In Rust subprocess land it's awkward because "failure" means non-zero exit, stderr parsing, etc.
+- `Parallel` — runs actions concurrently. In JS this is `Promise.all`. In Rust it's managing multiple child processes with their own stdio.
+- Error routing — step-level `onError` config that routes to a recovery step instead of retrying.
+- Compensation — structured undo when downstream steps fail.
+- Wait/signal — pause until external event.
+
+## Changes required for Sequence
 
 ### Rust side (`crates/barnum_config`)
 
-**config.rs** — `action` becomes `ActionKind | Vec<ActionKind>`:
+**config.rs** — New variant:
 
 ```rust
-/// A step's action: either a single action or a pipeline of actions.
-/// When a pipeline, each action's stdout feeds the next action's stdin.
-/// Only the final action's output is parsed as follow-up tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(untagged)]
-pub enum Action {
-    Single(ActionKind),
-    Pipeline(Vec<ActionKind>),
+#[serde(tag = "kind")]
+pub enum ActionKind {
+    Bash(BashAction),
+    TypeScript(TypeScriptAction),
+    Sequence(SequenceAction),
+}
+
+/// Run a sequence of actions, piping each one's stdout to the next's stdin.
+/// Only the final action's stdout is parsed as follow-up tasks.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SequenceAction {
+    /// The actions to run in order. Must contain at least one action.
+    pub actions: Vec<ActionKind>,
 }
 ```
 
-The `Step` struct changes `action: ActionKind` to `action: Action`.
+Note: `SequenceAction.actions` contains `ActionKind`, so a Sequence could theoretically nest another Sequence. Whether to allow or forbid nesting is a validation question. Allowing it is simpler (just flatten at runtime) and causes no harm.
 
-**config.rs validation** — A pipeline must have at least one action. (An empty pipeline is a config error.)
+**config.rs validation** — Sequence must have at least one action. Empty sequence is a config error.
 
-**runner/mod.rs** — Dispatch logic changes:
+**runner/mod.rs** — Dispatch for Sequence:
 
-- `Action::Single(action)`: dispatch as today.
-- `Action::Pipeline(actions)`: run each action in sequence. The first action gets the task envelope on stdin. Each subsequent action gets the previous one's stdout. Only the last action's stdout is parsed as `[{kind, value}]`.
+```
+fn dispatch_action(action, envelope_stdin) -> stdout:
+  match action:
+    Bash(bash)     -> spawn bash, pipe envelope_stdin, return stdout
+    TypeScript(ts) -> spawn ts handler, pipe envelope_stdin, return stdout
+    Sequence(seq)  ->
+      let data = envelope_stdin
+      for action in seq.actions[..len-1]:
+        data = dispatch_action(action, data)  // capture intermediate stdout
+      dispatch_action(seq.actions.last(), data)  // final action: parse as tasks
+```
 
-The piping between actions happens in the Rust runner. Each non-final action spawns a subprocess, captures its stdout, and feeds it as stdin to the next subprocess. The final subprocess's stdout goes through the existing response parsing and validation.
-
-**runner/response.rs** — No changes. Response validation only sees the final action's output.
+The existing `dispatch_action` already spawns a subprocess and captures stdout. For non-final actions in a sequence, we capture stdout instead of parsing it. For the final action, we parse normally.
 
 ### TypeScript side (`libs/barnum`)
 
-**types.ts** — `HandlerDefinition.handle` return type becomes `Promise<unknown>` instead of `Promise<FollowUpTask[]>`. The handler can return anything JSON-serializable. When used as the last action in a pipeline (or as the only action), the old `[{kind, value}]` format still works. When used as a non-final action in a pipeline, the return value is piped to the next action.
-
-Actually — `FollowUpTask[]` is still the right return type when the handler is the sole action (backward compat). The pipeline is a config-level concern, not a type-level concern. `HandlerDefinition` stays as-is. A handler that's designed for pipeline use just happens to return a plain value, and its type would use a different interface:
+**types.ts** — Two handler interfaces coexist:
 
 ```ts
+// Self-routing handler: returns [{kind, value}] tasks directly
+export interface HandlerDefinition<C = unknown, V = unknown> {
+  stepConfigValidator: z.ZodType<C, z.ZodTypeDef, unknown>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V, z.ZodTypeDef, unknown>;
+  handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
+}
+
+// Pipeline handler: returns a plain value for the next action to consume
 export interface ValueHandlerDefinition<C = unknown, V = unknown, R = unknown> {
-  stepConfigValidator: z.ZodType<C>;
-  getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
+  stepConfigValidator: z.ZodType<C, z.ZodTypeDef, unknown>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V, z.ZodTypeDef, unknown>;
   handle: (context: HandlerContext<C, V>) => Promise<R>;
 }
 ```
 
-Both interfaces coexist. `HandlerDefinition` is for self-routing handlers. `ValueHandlerDefinition` is for pipeline-compatible handlers that return plain values.
+`HandlerDefinition` is for handlers used as the sole action or as the last action in a sequence. `ValueHandlerDefinition` is for handlers used in non-final positions.
 
-**run.ts** — `resolveConfig()` iterates pipeline actions the same way it iterates single actions. If any action in the pipeline is `TypeScript`, it imports the handler and validates schemas.
-
-**barnum-config-schema.zod.ts** — Regenerated. The `action` field becomes a union of `ActionKind | ActionKind[]`.
+**run.ts** — `resolveConfig()` walks into Sequence actions to find and validate TypeScript handlers.
 
 ### Generated schemas
 
-Regenerate after changing the `Step.action` type. The JSON schema will show `action` as `oneOf: [ActionKind, array of ActionKind]`.
-
-## How the Rust runner pipes actions
-
-For a pipeline `[A, B, C]` processing task `T`:
-
-1. Spawn `A` with `T`'s envelope on stdin. Capture `A`'s stdout as `output_a`.
-2. Spawn `B` with `output_a` on stdin. Capture `B`'s stdout as `output_b`.
-3. Spawn `C` with `output_b` on stdin. Parse `C`'s stdout as `[{kind, value}]`.
-
-Each intermediate action runs as a subprocess (same as today), but its stdout is captured instead of parsed as tasks. Only the final action's stdout goes through `process_stdout` / `validate_response`.
-
-If any intermediate action fails (non-zero exit, timeout), the whole pipeline fails and follows the same retry/error logic as a single action failure.
+Regenerated. `ActionKind` gains a `Sequence` variant with an `actions` array.
 
 ## Open questions
 
-1. **Should non-final actions in a pipeline get the raw handler output, or a wrapped envelope?** The first action gets the standard envelope `{kind, value, config, stepName}`. Subsequent actions get raw stdout from the previous action. This means the second action in a pipeline doesn't get `kind`/`stepName` context — it just gets the data. Is that sufficient?
+1. **Nested sequences.** Allow `Sequence` inside `Sequence`? Simplest answer: allow it, flatten at runtime. No reason to forbid it, and it means the type system stays simple (actions are always `ActionKind`).
 
-2. **Should `finally` hooks see the final action's output or the original task?** Currently `finally` gets the original task envelope. With pipelines, the task still has the same `kind` and `value`, so this doesn't change.
+2. **Sequence + finally.** Does `finally` still make sense on a step with a Sequence action? Yes — `finally` runs after the task and its descendants complete, regardless of how the task's action is structured internally.
 
-3. **Pipeline of length 1** is equivalent to `Action::Single`. Should we canonicalize? Probably yes — `[X]` and `X` should behave identically, and serde's `untagged` enum handles this naturally (it tries `Single` first).
+3. **Sequence + retries.** If the final action in a sequence fails, does the entire sequence retry from the beginning? Yes — the sequence is one atomic action from the retry system's perspective. An intermediate action failing also retries the whole sequence.
+
+4. **Sequence + timeout.** The step-level timeout applies to the entire sequence execution, not individual actions within it. This is correct — the sequence is one unit of work.
