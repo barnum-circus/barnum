@@ -142,6 +142,11 @@ pub struct TypeScriptAction {
     /// Rust stores this as-is and includes it in the envelope.
     #[serde(default)]
     pub step_config: serde_json::Value,
+
+    /// JSON Schema for this step's input value. Produced by JS from Zod.
+    /// Used to validate transition values targeting this step.
+    #[serde(default)]
+    pub value_schema: Option<serde_json::Value>,
 }
 
 fn default_exported_as() -> String {

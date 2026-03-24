@@ -10,6 +10,7 @@ const ActionKind = z.discriminatedUnion("kind", [
     kind: z.literal("TypeScript"),
     path: z.string().describe("Path to the handler file (absolute — JS layer resolves before passing to Rust)."),
     stepConfig: z.any().optional().default(null).describe("Step configuration passed through to the handler. Rust stores this as-is and includes it in the envelope."),
+    valueSchema: z.any().optional().default(null).describe("JSON Schema for this step's input value. Produced by JS from Zod. Used to validate transition values targeting this step."),
   }).describe("Run a TypeScript handler."),
 ]).describe("How a step processes tasks.");
 

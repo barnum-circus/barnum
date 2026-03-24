@@ -89,6 +89,10 @@
             "stepConfig": {
               "description": "Step configuration passed through to the handler. Rust stores this as-is and includes it in the envelope.",
               "default": null
+            },
+            "valueSchema": {
+              "description": "JSON Schema for this step's input value. Produced by JS from Zod. Used to validate transition values targeting this step.",
+              "default": null
             }
           }
         }

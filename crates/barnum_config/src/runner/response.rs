@@ -2,7 +2,9 @@
 
 use tracing::{debug, error, info, warn};
 
-use crate::config::{EffectiveOptions, Step};
+use std::collections::HashMap;
+
+use crate::config::{ActionKind, EffectiveOptions, Step};
 use crate::types::{StepInputValue, StepName, Task};
 
 use super::action::{ActionError, ActionResult};
@@ -42,9 +44,10 @@ pub fn process_submit_result(
     task: &Task,
     step: &Step,
     options: &EffectiveOptions,
+    step_map: &HashMap<&StepName, &Step>,
 ) -> TaskOutcome {
     match result.output {
-        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, options),
+        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, options, step_map),
         Err(ActionError::TimedOut) => {
             warn!(step = %task.step, "action timed out");
             process_retry(task, options, FailureKind::Timeout)
@@ -63,10 +66,11 @@ fn process_stdout(
     value: &StepInputValue,
     step: &Step,
     options: &EffectiveOptions,
+    step_map: &HashMap<&StepName, &Step>,
 ) -> TaskOutcome {
     debug!(stdout = %stdout, "action output");
     match json5::from_str::<serde_json::Value>(stdout) {
-        Ok(output_value) => match validate_response(&output_value, step) {
+        Ok(output_value) => match validate_response(&output_value, step, step_map) {
             Ok(new_tasks) => {
                 info!(from = %task.step, new_tasks = new_tasks.len(), "task completed");
                 TaskOutcome::Success(TaskSuccess {
@@ -123,14 +127,16 @@ pub fn process_retry(
 
 // ==================== Response Validation ====================
 
-/// Validate an agent's response: check format and transition validity.
+/// Validate an agent's response: check format, transition validity, and value schemas.
 ///
 /// Checks that:
 /// - Response is a JSON array
 /// - Each task's kind is a valid next step from the current step
+/// - Each task's value matches the target step's JSON Schema (if present)
 pub fn validate_response(
     response: &serde_json::Value,
     current_step: &Step,
+    step_map: &HashMap<&StepName, &Step>,
 ) -> Result<Vec<Task>, ResponseValidationError> {
     let serde_json::Value::Array(items) = response else {
         return Err(ResponseValidationError::NotAnArray);
@@ -155,10 +161,39 @@ pub fn validate_response(
             });
         }
 
+        // Validate value against target step's JSON Schema
+        if let Some(target_step) = step_map.get(&task.step)
+            && let ActionKind::TypeScript(ts) = &target_step.action
+            && let Some(schema) = &ts.value_schema
+        {
+            validate_value_schema(&task.value.0, schema).map_err(|msg| {
+                ResponseValidationError::ValueSchemaViolation {
+                    index: i,
+                    target_step: task.step.clone(),
+                    error: msg,
+                }
+            })?;
+        }
+
         tasks.push(task);
     }
 
     Ok(tasks)
+}
+
+/// Validate a task value against a JSON Schema.
+fn validate_value_schema(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+) -> Result<(), String> {
+    let compiled =
+        jsonschema::validator_for(schema).map_err(|e| format!("invalid JSON Schema: {e}"))?;
+    let errors: Vec<String> = compiled.iter_errors(value).map(|e| e.to_string()).collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
 }
 
 /// Errors that can occur when validating an agent response.
@@ -182,6 +217,15 @@ pub enum ResponseValidationError {
         /// List of valid next steps.
         valid: Vec<StepName>,
     },
+    /// Task value doesn't match the target step's JSON Schema.
+    ValueSchemaViolation {
+        /// Index of the invalid task.
+        index: usize,
+        /// Target step name.
+        target_step: StepName,
+        /// Validation error message.
+        error: String,
+    },
 }
 
 impl std::fmt::Display for ResponseValidationError {
@@ -197,6 +241,16 @@ impl std::fmt::Display for ResponseValidationError {
                     f,
                     "invalid transition from '{from}' to '{to}' (valid: {})",
                     valid_str.join(", ")
+                )
+            }
+            Self::ValueSchemaViolation {
+                index,
+                target_step,
+                error,
+            } => {
+                write!(
+                    f,
+                    "task at index {index} targeting '{target_step}' failed schema validation: {error}"
                 )
             }
         }

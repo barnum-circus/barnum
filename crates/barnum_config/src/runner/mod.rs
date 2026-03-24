@@ -539,7 +539,7 @@ impl<'a> Engine<'a> {
             .expect("[P015] task step must exist");
         let effective = EffectiveOptions::resolve(&self.config.options, &step.options);
 
-        let outcome = process_submit_result(action_result, task, step, &effective);
+        let outcome = process_submit_result(action_result, task, step, &effective, &self.step_map);
 
         match outcome {
             TaskOutcome::Success(TaskSuccess {
@@ -716,6 +716,7 @@ impl<'a> Engine<'a> {
                 path,
                 exported_as,
                 step_config,
+                ..
             }) => {
                 let script = format!(
                     "{} '{}' '{}' '{}'",
