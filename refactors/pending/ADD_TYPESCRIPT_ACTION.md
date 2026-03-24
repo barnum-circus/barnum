@@ -45,9 +45,9 @@ pub struct TypeScriptAction {
     /// Path to the handler file.
     pub path: String,
 
-    /// Named export to use.
-    #[serde(default = "default_export")]
-    pub export: String,
+    /// Named export to invoke from the handler module.
+    #[serde(default = "default_exported_as")]
+    pub exported_as: String,
 
     /// Step configuration passed through to the handler.
     /// Rust stores this as-is and includes it in the envelope.
@@ -55,7 +55,7 @@ pub struct TypeScriptAction {
     pub step_config: serde_json::Value,
 }
 
-fn default_export() -> String { "default".to_string() }
+fn default_exported_as() -> String { "default".to_string() }
 ```
 
 One type used in both enums:
@@ -76,7 +76,7 @@ pub enum ActionKind {
 }
 ```
 
-Config `{"kind": "TypeScript", "path": "./handlers/analyze.ts", "stepConfig": {...}}` deserializes with `export = "default"` (serde default). Resolution canonicalizes `path` in place — no separate resolved type needed.
+Config `{"kind": "TypeScript", "path": "./handlers/analyze.ts", "stepConfig": {...}}` deserializes with `exported_as = "default"` (serde default). Resolution canonicalizes `path` in place — no separate resolved type needed.
 
 ### Config resolution
 
@@ -97,20 +97,20 @@ Self::TypeScript(mut ts) => {
 }
 ```
 
-Resolution canonicalizes `path` in place on the same struct. The `export` field is already defaulted to `"default"` by serde. Resolution validates the handler file exists at config load time — a typo in the path fails immediately, not at dispatch time.
+Resolution canonicalizes `path` in place on the same struct. The `exported_as` field is already defaulted to `"default"` by serde. Resolution validates the handler file exists at config load time — a typo in the path fails immediately, not at dispatch time.
 
 ### Dispatch
 
 **File:** `crates/barnum_config/src/runner/mod.rs`
 
 ```rust
-ActionKind::TypeScript(TypeScriptAction { path, export, ref step_config }) => {
+ActionKind::TypeScript(TypeScriptAction { path, exported_as, ref step_config }) => {
     let executor = self.executor.as_deref().unwrap_or("pnpm dlx tsx");
     let run_handler = self.run_handler_path.as_deref()
         .unwrap_or("node_modules/@barnum/barnum/actions/run-handler.ts");
 
     let script = format!(
-        "{executor} {run_handler} {path} {export}",
+        "{executor} {run_handler} {path} {exported_as}",
     );
 
     info!(step = %task.step, handler = %path, "dispatching TypeScript handler");
@@ -287,7 +287,7 @@ interface HandlerDefinition<
 }
 
 interface HandlerContext<C = unknown, V = unknown> {
-  /** The validated step configuration (action.params minus path/export). */
+  /** The validated step configuration. */
   stepConfig: C;
   /** The validated task value. */
   value: V;
@@ -421,7 +421,7 @@ fn action_typescript_with_step_config() {
     match &config.steps[0].action {
         ActionFile::TypeScript(ts) => {
             assert_eq!(ts.path, "./handler.ts");
-            assert_eq!(ts.export, None);
+            assert_eq!(ts.exported_as, "default");
             assert_eq!(ts.step_config["instructions"], "Do stuff");
             assert_eq!(ts.step_config["pool"], "demo");
         }
@@ -432,7 +432,7 @@ fn action_typescript_with_step_config() {
 
 ### Resolution tests
 
-Test that resolution resolves the handler path and defaults export:
+Test that resolution resolves the handler path and defaults exported_as:
 
 ```rust
 #[test]

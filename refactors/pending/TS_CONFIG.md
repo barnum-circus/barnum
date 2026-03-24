@@ -97,16 +97,16 @@ Config shape:
 }
 ```
 
-`path` and `export` are dispatch params — Rust uses them to construct the subprocess command. `stepConfig` is the handler's configuration — Rust stores it as opaque JSON and passes it through in the envelope.
+`path` and `exportedAs` are dispatch params — Rust uses them to construct the subprocess command. `stepConfig` is the handler's configuration — Rust stores it as opaque JSON and passes it through in the envelope.
 
-`export` defaults to `"default"`. Named exports are supported for modules that export multiple handlers.
+`exportedAs` defaults to `"default"`. Named exports are supported for modules that export multiple handlers.
 
 ### Dispatch
 
 From Rust's perspective, both action kinds produce a subprocess command:
 
 - Bash: `sh -c <script>`, stdin = `{ kind, value }`
-- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [export]`, stdin = `{ stepConfig, task, step, config }`
+- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [exportedAs]`, stdin = `{ stepConfig, task, step, config }`
 
 The stdin formats differ because Bash targets user-written shell scripts (simple contract) while TypeScript targets handler modules (rich context). `run-handler.ts` is a thin wrapper that imports the handler module, calls the exported function with the parsed envelope, and writes the result to stdout.
 
@@ -155,7 +155,7 @@ interface HandlerDefinition<
 }
 
 interface HandlerContext<C = unknown, V = unknown> {
-  /** The validated step configuration (action.params minus path/export). */
+  /** The validated step configuration. */
   stepConfig: C;
   /** The validated task value. */
   value: V;
@@ -266,13 +266,13 @@ pub struct BashActionFile { pub script: String }
 #[serde(rename_all = "camelCase")]
 pub struct TypeScriptAction {
     pub path: String,
-    #[serde(default = "default_export")]
-    pub export: String,
+    #[serde(default = "default_exported_as")]
+    pub exported_as: String,
     #[serde(default)]
     pub step_config: serde_json::Value,
 }
 
-fn default_export() -> String { "default".to_string() }
+fn default_exported_as() -> String { "default".to_string() }
 
 #[serde(tag = "kind")]
 pub enum ActionFile {
@@ -281,11 +281,11 @@ pub enum ActionFile {
 }
 ```
 
-`TypeScriptAction` is a single type shared between config and resolved enums — resolution canonicalizes `path` in place, no separate resolved type needed. `export` defaults to `"default"` via serde.
+`TypeScriptAction` is a single type shared between config and resolved enums — resolution canonicalizes `path` in place, no separate resolved type needed. `exported_as` defaults to `"default"` via serde.
 
 ### Dispatch changes
 
-`dispatch_task` no longer matches on action kind. For Bash, it constructs a `ShellAction` with `sh -c <script>`. For TypeScript, it constructs a `ShellAction` with `<executor> run-handler.ts <path> [export]`. Both produce `ShellAction` — the existing action dispatch infrastructure (`spawn_worker`, `run_action`, `ActionHandle`, `ProcessGuard`) is unchanged.
+`dispatch_task` no longer matches on action kind. For Bash, it constructs a `ShellAction` with `sh -c <script>`. For TypeScript, it constructs a `ShellAction` with `<executor> run-handler.ts <path> [exportedAs]`. Both produce `ShellAction` — the existing action dispatch infrastructure (`spawn_worker`, `run_action`, `ActionHandle`, `ProcessGuard`) is unchanged.
 
 ### Config loading
 
