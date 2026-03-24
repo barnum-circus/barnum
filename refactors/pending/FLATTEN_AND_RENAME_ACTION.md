@@ -40,7 +40,7 @@ pub enum ActionKind {
 
 | Struct | File | Snake_case fields |
 |--------|------|-------------------|
-| `ConfigFile` | `config.rs:17` | `schema_ref` |
+| `ConfigFile` | `config.rs:17` | — (no snake_case fields after `schema_ref` is deleted) |
 | `Options` | `config.rs:42` | `max_retries`, `max_concurrency`, `retry_on_timeout`, `retry_on_invalid_response` |
 | `StepFile` | `config.rs:85` | `finally_hook` (has explicit rename to `finally`) |
 | `StepOptions` | `config.rs:168` | `max_retries`, `retry_on_timeout`, `retry_on_invalid_response` |
@@ -86,7 +86,7 @@ pub enum ActionKind {
 
 ### 3. Add rename_all = "camelCase" to all serialized structs
 
-Every struct that derives `Serialize`/`Deserialize` and has snake_case fields gets `#[serde(rename_all = "camelCase")]`. Fields with explicit `#[serde(rename = "...")]` (like `finally_hook` → `finally` and `schema_ref` → `$schema`) keep their per-field renames — those override the container rule.
+Every struct that derives `Serialize`/`Deserialize` and has snake_case fields gets `#[serde(rename_all = "camelCase")]`. Fields with explicit `#[serde(rename = "...")]` (like `finally_hook` → `finally`) keep their per-field renames — those override the container rule. Delete `schema_ref` entirely — JSON configs are going away, so the `$schema` editor hint is dead code.
 
 ```rust
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

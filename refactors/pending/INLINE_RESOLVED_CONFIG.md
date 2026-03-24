@@ -10,7 +10,7 @@ The codebase has two parallel type hierarchies: "file" types (`ConfigFile`, `Ste
 1. Merging global options with per-step overrides into flat `EffectiveOptions`
 2. Canonicalizing TypeScript handler paths (after ADD_TYPESCRIPT_ACTION)
 3. Wrapping finally hook scripts in `HookScript`
-4. Dropping `$schema` and `entrypoint` (consumed before resolution)
+4. Dropping `entrypoint` (consumed before resolution)
 
 After DEMOS_TO_TYPESCRIPT, the TypeScript entry point (`BarnumConfig.fromConfig(...)`) is the primary config path. The JS layer can handle option merging and path resolution before passing config to Rust. The two-tier type system in Rust becomes unnecessary overhead — every struct and enum exists twice for no reason.
 
@@ -20,7 +20,7 @@ After DEMOS_TO_TYPESCRIPT, the TypeScript entry point (`BarnumConfig.fromConfig(
 
 | Type | Purpose |
 |------|---------|
-| `ConfigFile` | Top-level: `schema_ref`, `options`, `entrypoint`, `steps` |
+| `ConfigFile` | Top-level: `options`, `entrypoint`, `steps` (after FLATTEN_AND_RENAME_ACTION deletes `schema_ref`) |
 | `Options` | Global defaults: `timeout`, `max_retries`, `max_concurrency`, `retry_on_timeout`, `retry_on_invalid_response` |
 | `StepFile` | Step: `name`, `action`, `next`, `finally_hook`, `options` |
 | `StepOptions` | Per-step overrides (all fields `Option<T>`) |
@@ -110,8 +110,7 @@ These existed solely to support per-step option overrides with `Option<T>` field
 
 ### 6. Delete ConfigFile
 
-`ConfigFile` held `schema_ref`, `entrypoint`, and the unresolved steps. After this refactor:
-- `schema_ref` is stripped by JS before serializing (it's a JSON Schema editor hint, not runtime config)
+`ConfigFile` held `entrypoint` and the unresolved steps (`schema_ref` is already deleted by FLATTEN_AND_RENAME_ACTION). After this refactor:
 - `entrypoint` is handled by JS (it determines the initial tasks before calling `.run()`)
 - Steps are already resolved
 
@@ -139,7 +138,7 @@ Rust tests that construct `ConfigFile` and call `.resolve()` change to construct
 
 - Option merging (global + per-step overrides)
 - Path resolution (TypeScript handler paths)
-- `$schema` and `entrypoint` handling
+- `entrypoint` handling
 - Config-level validation (`.validate()` method on `BarnumConfig`)
 
 ## What this does NOT do
