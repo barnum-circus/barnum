@@ -27,12 +27,7 @@ const envelope = JSON.parse(Buffer.concat(chunks).toString());
 const mod = await import(handlerPath);
 const handler = mod[exportName];
 
-const results = await handler.handle({
-  value: envelope.value,
-  config: envelope.config,
-  stepName: envelope.stepName,
-  stepConfig: envelope.stepConfig ?? {},
-});
+const results = await handler.handle(envelope);
 
 process.stdout.write(JSON.stringify(results));
 ```

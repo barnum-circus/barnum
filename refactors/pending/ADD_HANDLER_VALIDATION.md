@@ -22,19 +22,27 @@ A handler exports an object with three parts:
 import { z } from "zod";
 import type { HandlerDefinition } from "@barnum/barnum";
 
-export default {
-  stepConfigValidator: z.object({
-    instructions: z.string(),
-  }),
+const stepConfigValidator = z.object({
+  instructions: z.string(),
+});
 
-  getStepValueValidator(stepConfig) {
-    return z.object({ file: z.string() });
+type StepConfig = z.infer<typeof stepConfigValidator>;
+
+const stepValueValidator = z.object({ file: z.string() });
+
+type StepValue = z.infer<typeof stepValueValidator>;
+
+export default {
+  stepConfigValidator,
+
+  getStepValueValidator(_stepConfig) {
+    return stepValueValidator;
   },
 
   async handle({ stepConfig, value, config, stepName }) {
     return [{ kind: "Implement", value: { plan: "..." } }];
   },
-} satisfies HandlerDefinition;
+} satisfies HandlerDefinition<StepConfig, StepValue>;
 ```
 
 - **`stepConfigValidator`**: Zod schema for `stepConfig`. Validated in JS at `run()` time.
