@@ -4,6 +4,7 @@
 //! They're the runtime representation after loading a config file.
 
 use crate::types::{HookScript, StepName};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -11,7 +12,7 @@ use std::path::PathBuf;
 /// Fully resolved Barnum configuration.
 ///
 /// All file references have been resolved and options computed per-step.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Config {
     /// Maximum concurrent tasks (None = use default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -37,7 +38,7 @@ impl Config {
 }
 
 /// A fully resolved step.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Step {
     /// Step name.
     pub name: StepName,
@@ -58,7 +59,7 @@ pub struct Step {
 }
 
 /// Send to the agent pool for processing.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct PoolAction {
     /// Resolved markdown instructions.
     pub instructions: String,
@@ -78,14 +79,14 @@ pub struct PoolAction {
 }
 
 /// Run a local command.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct CommandAction {
     /// Shell script to execute.
     pub script: String,
 }
 
 /// How a resolved step processes tasks.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "params")]
 pub enum ActionKind {
     /// Send to the agent pool for processing.
@@ -95,7 +96,7 @@ pub enum ActionKind {
 }
 
 /// Resolved options for a step.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 pub struct Options {
     /// Timeout in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,4 +125,26 @@ impl Default for Options {
             retry_on_invalid_response: true,
         }
     }
+}
+
+/// Root type for generating the resolved schema.
+///
+/// Groups the resolved config and task types so `schema_for!` produces
+/// a single schema containing all resolved runtime types. This struct
+/// exists only for schema generation — it's never constructed at runtime.
+#[derive(Debug, JsonSchema)]
+#[expect(dead_code)]
+pub struct ResolvedTypes {
+    /// The resolved configuration.
+    config: Config,
+    /// A task (agent response element).
+    task: crate::types::Task,
+}
+
+/// Generate the schemars `RootSchema` for all resolved runtime types.
+///
+/// This feeds into `emit_zod` to produce TypeScript types for resolved configs and tasks.
+#[must_use]
+pub fn resolved_schema() -> schemars::schema::RootSchema {
+    schemars::schema_for!(ResolvedTypes)
 }
