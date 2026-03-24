@@ -12,7 +12,6 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write as _};
 use std::num::NonZeroU16;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -452,7 +451,7 @@ impl RunState {
 /// the coordinator writes entries returned by `process_worker_result`.
 struct Engine<'a> {
     config: &'a Config,
-    config_json: Arc<serde_json::Value>,
+    config_json: serde_json::Value,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
     working_dir: PathBuf,
@@ -465,7 +464,7 @@ struct Engine<'a> {
 impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
-        config_json: Arc<serde_json::Value>,
+        config_json: serde_json::Value,
         working_dir: PathBuf,
         tx: mpsc::Sender<WorkerResult>,
         max_concurrency: usize,
@@ -704,7 +703,7 @@ impl<'a> Engine<'a> {
                 let action = Box::new(ShellAction {
                     script: script.clone(),
                     step_name: task.step.clone(),
-                    config: Arc::clone(&self.config_json),
+                    config: self.config_json.clone(),
                     working_dir: self.working_dir.clone(),
                 });
                 spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
@@ -727,7 +726,7 @@ impl<'a> Engine<'a> {
         let action = Box::new(ShellAction {
             script: script.clone(),
             step_name: task.step.clone(),
-            config: Arc::clone(&self.config_json),
+            config: self.config_json.clone(),
             working_dir: self.working_dir.clone(),
         });
         spawn_worker(
@@ -828,7 +827,7 @@ pub fn run(
     // Create engine
     let mut engine = Engine::new(
         config,
-        Arc::new(config_json),
+        config_json,
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,
@@ -919,7 +918,7 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     // 4. Create engine and replay old entries
     let mut engine = Engine::new(
         &config,
-        Arc::new(config_json),
+        config_json,
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,

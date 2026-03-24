@@ -171,7 +171,7 @@ struct Envelope<'a> {
 pub struct ShellAction {
     pub script: String,
     pub step_name: StepName,
-    pub config: Arc<serde_json::Value>,
+    pub config: serde_json::Value,
     pub working_dir: PathBuf,
 }
 
