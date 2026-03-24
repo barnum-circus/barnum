@@ -15,11 +15,127 @@ The JS executor needs handler implementations for each action kind. There are tw
 
 Troupe task submission and step docs generation are extracted into `@barnum/troupe-task` — a separate published package. This keeps `@barnum/barnum` focused on workflow orchestration and lets other tools submit troupe tasks independently.
 
+The public API is **step constructors** — `createTroupeStep()` and `createBashStep()`. These produce step config objects with the action pre-filled. The raw handler functions (`handlePool`, `handleCommand`) are internal to the executor, not user-facing.
+
+## Step constructors
+
+Each constructor is generic over `V`, the task value type. The optional `validator` parameter is a Zod schema that validates the task `value` at runtime and provides TypeScript type inference. Without a validator, `V` defaults to `never` — the step can't access any properties on the incoming task value.
+
+### `createTroupeStep<V>`
+
+Exported from `@barnum/troupe-task`. Creates a Pool step that sends tasks to the agent pool.
+
+```typescript
+import { z } from "zod";
+import type { StepFile } from "@barnum/barnum/barnum-config-schema.zod.js";
+
+export function createTroupeStep<V = never>(config: {
+  name: string;
+  instructions: string | { kind: "Link"; path: string };
+  next?: string[];
+  pool?: string;
+  root?: string;
+  timeout?: number;
+  validator?: z.ZodType<V>;
+  options?: {
+    timeout?: number;
+    max_retries?: number;
+    retry_on_timeout?: boolean;
+    retry_on_invalid_response?: boolean;
+  };
+  finally?: { kind: "Command"; params: { script: string } };
+}): StepFile {
+  const instructions =
+    typeof config.instructions === "string"
+      ? { kind: "Inline" as const, value: config.instructions }
+      : config.instructions;
+
+  return {
+    name: config.name,
+    action: {
+      kind: "Pool",
+      params: {
+        instructions,
+        pool: config.pool ?? null,
+        root: config.root ?? null,
+        timeout: config.timeout ?? null,
+      },
+    },
+    next: config.next ?? [],
+    options: config.options ?? {},
+    finally: config.finally ?? null,
+  };
+}
+```
+
+Usage:
+
+```typescript
+// With validator — task.value is typed as { file: string }
+createTroupeStep({
+  name: "Analyze",
+  instructions: "Analyze the file.",
+  next: ["Implement"],
+  validator: z.object({ file: z.string() }),
+});
+
+// Without validator — task.value is never (can't access properties)
+createTroupeStep({
+  name: "Summarize",
+  instructions: { kind: "Link", path: "./summarize.md" },
+  next: [],
+});
+```
+
+### `createBashStep<V>`
+
+Exported from `@barnum/barnum`. Creates a Command step that runs a local shell script.
+
+```typescript
+import { z } from "zod";
+import type { StepFile } from "./barnum-config-schema.zod.js";
+
+export function createBashStep<V = never>(config: {
+  name: string;
+  script: string;
+  next?: string[];
+  validator?: z.ZodType<V>;
+  options?: {
+    timeout?: number;
+    max_retries?: number;
+    retry_on_timeout?: boolean;
+    retry_on_invalid_response?: boolean;
+  };
+  finally?: { kind: "Command"; params: { script: string } };
+}): StepFile {
+  return {
+    name: config.name,
+    action: {
+      kind: "Command",
+      params: { script: config.script },
+    },
+    next: config.next ?? [],
+    options: config.options ?? {},
+    finally: config.finally ?? null,
+  };
+}
+```
+
+### Validator semantics
+
+The `validator` has two roles:
+
+1. **TypeScript type inference** (compile-time): `V` is inferred from the validator, so downstream code that references this step's task value gets type-checked. This matters when building typed config APIs (e.g., `config.run({ entrypointValue: { file: "foo.rs" } })` type-checks against the entrypoint step's validator).
+
+2. **Runtime validation** (executor-time): When the executor dispatches a task, it validates `task.value` against the step's validator before passing it to the handler. If the step has no validator, the value passes through unvalidated.
+
+The runtime validation requires the executor to have access to the validators. This happens through the handler registry — each step's action kind maps to a handler, and the handler receives the validated value. For built-in kinds (Pool, Command), the validators are registered when constructing the config via the step constructors. For future user-defined kinds, `BarnumConfig.builder().action(kind, handler)` registers the validator.
+
 ## Packages
 
 ### `@barnum/troupe-task` (new package: `libs/troupe-task/`)
 
-Troupe task submission, step docs generation, and the Pool action handler.
+Troupe task submission, step docs generation, Pool handler (internal), and `createTroupeStep` constructor (public).
 
 ```
 libs/troupe-task/
@@ -27,18 +143,18 @@ libs/troupe-task/
 ├── tsconfig.json
 ├── submit.ts       # submitTask(): find binary, invoke CLI, parse response
 ├── docs.ts         # generateStepDocs(): markdown instruction generation
-├── pool.ts         # Pool action handler
+├── pool.ts         # Pool handler (internal) + createTroupeStep (public)
 ├── types.ts        # FollowUpTask
 └── index.ts        # Public API re-exports
 ```
 
 ### `@barnum/barnum` actions (existing package: `libs/barnum/actions/`)
 
-Executor and Command handler. executor.ts reads the Rust envelope from stdin, validates action params, and dispatches to the correct handler with the envelope's step and config passed through.
+Executor, Command handler (internal), and `createBashStep` constructor (public).
 
 ```
 libs/barnum/actions/
-├── command.ts     # Command handler
+├── command.ts     # Command handler (internal) + createBashStep (public)
 └── executor.ts    # Stdin reader, dispatcher, stdout writer
 ```
 
@@ -147,12 +263,9 @@ export function submitTask(
 
 ### pool.ts
 
-The Pool action handler. Each handler exports two Zod schemas:
+The Pool action handler (internal) and `createTroupeStep` constructor (public).
 
-- **stepConfigurationSchema** — validates action params as written in the config file. Used for config validation and schema generation.
-- **stepParameterSchema** — validates resolved action params received at runtime in the envelope.
-
-For Pool, these differ on `instructions`: the config allows `MaybeLinked` (inline string or file link), while the runtime always receives a resolved `string`.
+The handler generates step docs from the instructions and next steps, then submits the task to the troupe agent pool.
 
 ```typescript
 import { z } from "zod";
@@ -160,27 +273,10 @@ import type { FollowUpTask } from "./types.js";
 import { submitTask } from "./submit.js";
 import { generateStepDocs } from "./docs.js";
 
-const maybeLinked = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("Inline"), value: z.string() }),
-  z.object({ kind: z.literal("Link"), path: z.string() }),
-]);
-
-export const stepConfigurationSchema = z.object({
-  instructions: maybeLinked,
-  pool: z.string().nullable().optional(),
-  root: z.string().nullable().optional(),
-  timeout: z.number().nullable().optional(),
-});
-
-export const stepParameterSchema = z.object({
-  instructions: z.string(),
-  pool: z.string().nullable().optional(),
-  root: z.string().nullable().optional(),
-  timeout: z.number().nullable().optional(),
-});
+// --- Internal: handler used by executor ---
 
 export function handlePool(ctx: {
-  params: z.output<typeof stepParameterSchema>;
+  params: { instructions: string; pool?: string | null; root?: string | null; timeout?: number | null };
   task: { kind: string; value: unknown };
   step: { next: string[] };
   config: unknown;
@@ -200,17 +296,19 @@ export function handlePool(ctx: {
 }
 ```
 
+`createTroupeStep` is defined here (shown in the "Step constructors" section above) and re-exported from index.ts.
+
 ### index.ts
 
 ```typescript
+// Public API
+export { createTroupeStep } from "./pool.js";
 export { submitTask } from "./submit.js";
 export { generateStepDocs } from "./docs.js";
-export {
-  handlePool,
-  stepConfigurationSchema as poolStepConfigurationSchema,
-  stepParameterSchema as poolStepParameterSchema,
-} from "./pool.js";
 export type { FollowUpTask } from "./types.js";
+
+// Internal — used by executor, not user-facing
+export { handlePool } from "./pool.js";
 ```
 
 ### package.json
@@ -248,20 +346,18 @@ export type { FollowUpTask } from "./types.js";
 
 ### command.ts
 
-The Command handler spawns the user's shell script, piping `{ kind, value }` to stdin. Backward compatible with today's Command action.
+The Command handler (internal) and `createBashStep` constructor (public).
 
-Both schemas are identical for Command — there's nothing to resolve.
+The handler spawns the user's shell script, piping `{ kind, value }` to stdin. Backward compatible with today's Command action.
 
 ```typescript
 import { execSync } from "node:child_process";
-import { z } from "zod";
 import type { FollowUpTask } from "@barnum/troupe-task";
 
-export const stepConfigurationSchema = z.object({ script: z.string() });
-export const stepParameterSchema = z.object({ script: z.string() });
+// --- Internal: handler used by executor ---
 
 export function handleCommand(
-  params: z.output<typeof stepParameterSchema>,
+  params: { script: string },
   task: { kind: string; value: unknown },
 ): FollowUpTask[] {
   const stdin = JSON.stringify(task);
@@ -275,15 +371,17 @@ export function handleCommand(
 }
 ```
 
+`createBashStep` is defined here (shown in the "Step constructors" section above) and exported from `@barnum/barnum`'s main entry point.
+
 ### executor.ts
 
-The entry point that Rust spawns for every task. Reads the Rust envelope from stdin, validates action params, and dispatches to the correct handler. The envelope's `step` and `config` are passed through to handlers as-is.
+The entry point that Rust spawns for every task. Reads the Rust envelope from stdin, dispatches to the correct handler based on action kind. The envelope's `step` and `config` are passed through to handlers as-is.
 
 The envelope type is composed from individual TypeScript types exported by `barnum-resolved-schema.zod.ts` (generated from Rust resolved types by `build_schemas`).
 
 ```typescript
-import { handlePool, poolStepParameterSchema } from "@barnum/troupe-task";
-import { handleCommand, stepParameterSchema as commandStepParameterSchema } from "./command.js";
+import { handlePool } from "@barnum/troupe-task";
+import { handleCommand } from "./command.js";
 import type { ActionKind, Task, Step, Config } from "../barnum-resolved-schema.zod.js";
 
 interface Envelope {
@@ -302,13 +400,11 @@ const { action, task, step, config } = envelope;
 let results;
 switch (action.kind) {
   case "Pool": {
-    const params = poolStepParameterSchema.parse(action.params);
-    results = handlePool({ params, task, step, config });
+    results = handlePool({ params: action.params, task, step, config });
     break;
   }
   case "Command": {
-    const params = commandStepParameterSchema.parse(action.params);
-    results = handleCommand(params, task);
+    results = handleCommand(action.params, task);
     break;
   }
   default:
@@ -317,6 +413,8 @@ switch (action.kind) {
 
 process.stdout.write(JSON.stringify(results));
 ```
+
+Note: the executor no longer does Zod `.parse()` on action params — the params come from Rust (trusted), and the handler types match the generated `ActionKind` discriminated union. The `action.params` type narrows correctly in each `case` branch via TypeScript's discriminated union narrowing.
 
 ## package.json changes (`@barnum/barnum`)
 
