@@ -288,9 +288,103 @@ After: stop ignoring `executor`, destructure `run_handler_path`, pass both throu
 
 Run `cargo run -p barnum_cli --bin build_schemas` to regenerate all schema artifacts. The TypeScript variant and new CLI flags appear in the generated output.
 
-## Follow-up: remove `Action` trait
+### 7. Remove `Action` trait
 
-The `Action` trait is vestigial from the removed Pool action. `ShellAction` is the only implementor, so `Box<dyn Action>` through `run_action`/`spawn_worker` is pointless indirection. After the main work lands, remove the trait and make these functions take `ShellAction` directly.
+**File:** `crates/barnum_config/src/runner/action.rs`
+
+The `Action` trait is vestigial from the removed Pool action. `ShellAction` is the only implementor, so `Box<dyn Action>` is pointless indirection.
+
+Remove the trait, move `start` to an inherent method on `ShellAction`:
+
+Before:
+
+```rust
+pub trait Action: Send {
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle;
+}
+
+impl Action for ShellAction {
+    #[expect(clippy::expect_used)]
+    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+        // ...
+    }
+}
+```
+
+After:
+
+```rust
+impl ShellAction {
+    #[expect(clippy::expect_used)]
+    fn start(self, value: serde_json::Value) -> ActionHandle {
+        // ... body unchanged
+    }
+}
+```
+
+Update `run_action` to take `ShellAction` directly:
+
+Before:
+
+```rust
+pub fn run_action(
+    action: Box<dyn Action>,
+    value: &serde_json::Value,
+    timeout: Option<Duration>,
+) -> Result<String, ActionError> {
+    let deadline = timeout.map(|d| Instant::now() + d);
+    let handle = action.start(value.clone());
+    // ...
+}
+```
+
+After:
+
+```rust
+pub fn run_action(
+    action: ShellAction,
+    value: &serde_json::Value,
+    timeout: Option<Duration>,
+) -> Result<String, ActionError> {
+    let deadline = timeout.map(|d| Instant::now() + d);
+    let handle = action.start(value.clone());
+    // ...
+}
+```
+
+Update `spawn_worker` to take `ShellAction` directly:
+
+Before:
+
+```rust
+pub fn spawn_worker(
+    tx: mpsc::Sender<WorkerResult>,
+    action: Box<dyn Action>,
+    task_id: LogTaskId,
+    task: Task,
+    kind: WorkerKind,
+    timeout: Option<Duration>,
+) {
+    // ...
+}
+```
+
+After:
+
+```rust
+pub fn spawn_worker(
+    tx: mpsc::Sender<WorkerResult>,
+    action: ShellAction,
+    task_id: LogTaskId,
+    task: Task,
+    kind: WorkerKind,
+    timeout: Option<Duration>,
+) {
+    // ...
+}
+```
+
+Update callers in `mod.rs` (`dispatch_task`, `dispatch_finally`) to pass `ShellAction { ... }` instead of `Box::new(ShellAction { ... })`.
 
 ## What this does NOT do
 
