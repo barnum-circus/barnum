@@ -25,8 +25,7 @@ echo "Running Barnum with command-script config..."
 echo "This will list files in the demo directory and analyze each one."
 echo ""
 
-$BARNUM run --config "$SCRIPT_DIR/config.json" \
-    --entrypoint-value "{\"folder\": \"$SCRIPT_DIR\"}"
+pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
 echo ""
 echo "=== Success! ==="

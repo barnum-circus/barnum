@@ -23,8 +23,7 @@ echo "Running Barnum with hooks config..."
 echo "Watch for hook messages in the output."
 echo ""
 
-$BARNUM run --config "$SCRIPT_DIR/config.json" \
-    --entrypoint-value '{"item": "test-item"}'
+pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
 echo ""
 echo "=== Success! ==="

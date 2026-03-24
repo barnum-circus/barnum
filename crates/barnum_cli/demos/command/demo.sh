@@ -36,8 +36,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-$BARNUM run --config "$SCRIPT_DIR/config.json" \
-    --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}'
+pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
 echo ""
 echo "=== Success! ==="

@@ -49,16 +49,14 @@ if [ -n "$EXISTING_POOL" ]; then
     fi
     echo ""
 
-    # Build wake argument if provided
-    WAKE_ARG=""
+    # Pass wake script via env var (read by barnum.config.ts)
     if [ -n "$WAKE_SCRIPT" ]; then
-        WAKE_ARG="--wake $WAKE_SCRIPT"
+        export BARNUM_WAKE="$WAKE_SCRIPT"
     fi
 
     # Run Barnum
     echo "Running Barnum with fan-out config..."
-    $BARNUM run --config "$SCRIPT_DIR/config.json" \
-        $WAKE_ARG
+    pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
     echo ""
     echo "=== Success! ==="
@@ -121,7 +119,7 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $BARNUM run --config "$SCRIPT_DIR/config.json"
+    pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
     END_TIME=$(date +%s.%N)
     ELAPSED=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "?")
