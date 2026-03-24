@@ -39,7 +39,8 @@
     "barnum-config-schema.json",
     "barnum-config-schema.zod.ts",
     "barnum-cli-schema.zod.ts",
-    "run.ts"
+    "run.ts",
+    "actions/**/*.ts"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit"

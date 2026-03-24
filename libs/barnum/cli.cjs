@@ -23,14 +23,18 @@ if (process.platform === 'darwin' && process.arch === 'x64') {
   );
 }
 
-// --executor is internal. Error if the user passed it directly.
+// --executor and --run-handler-path are internal. Error if the user passed them directly.
 var userArgs = process.argv.slice(2);
-if (userArgs.includes('--executor')) {
-  console.error('Error: --executor is an internal flag and cannot be passed directly.');
-  process.exit(1);
+var internalFlags = ['--executor', '--run-handler-path'];
+for (var flag of internalFlags) {
+  if (userArgs.includes(flag)) {
+    console.error('Error: ' + flag + ' is an internal flag and cannot be passed directly.');
+    process.exit(1);
+  }
 }
 
 var executorPath = path.resolve(__dirname, 'actions', 'executor.ts');
+var runHandlerPath = path.resolve(__dirname, 'actions', 'run-handler.ts');
 
 function resolveExecutorCommand() {
   if (typeof Bun !== 'undefined') {
@@ -43,7 +47,7 @@ function resolveExecutorCommand() {
 }
 
 var executor = resolveExecutorCommand();
-var args = userArgs.concat('--executor', executor);
+var args = userArgs.concat('--executor', executor, '--run-handler-path', runHandlerPath);
 
 try {
   chmodSync(bin, 0o755);

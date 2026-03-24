@@ -32,31 +32,43 @@ fn main() -> io::Result<()> {
             state_log,
             resume_from,
             executor: _,
-        } => match (resume_from, config) {
-            (Some(resume_path), _) => resume_command(
-                &resume_path,
-                wake.as_deref(),
-                log_file.as_ref(),
-                state_log.as_ref(),
-                log_level,
-            )?,
-            (None, Some(config)) => run_command(
-                &config,
-                initial_state.as_deref(),
-                entrypoint_value.as_deref(),
-                wake.as_deref(),
-                log_file.as_ref(),
-                state_log.as_ref(),
-                log_level,
-            )?,
-            (None, None) => {
-                // Unreachable: clap's required_unless_present prevents this
+            run_handler_path,
+        } => {
+            // Validate run-handler-path exists if provided
+            if let Some(ref path) = run_handler_path
+                && !std::path::Path::new(path).exists()
+            {
                 return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "[E073] --config is required when not using --resume-from",
+                    io::ErrorKind::NotFound,
+                    format!("[E074] --run-handler-path does not exist: {path}"),
                 ));
             }
-        },
+            match (resume_from, config) {
+                (Some(resume_path), _) => resume_command(
+                    &resume_path,
+                    wake.as_deref(),
+                    log_file.as_ref(),
+                    state_log.as_ref(),
+                    log_level,
+                )?,
+                (None, Some(config)) => run_command(
+                    &config,
+                    initial_state.as_deref(),
+                    entrypoint_value.as_deref(),
+                    wake.as_deref(),
+                    log_file.as_ref(),
+                    state_log.as_ref(),
+                    log_level,
+                )?,
+                (None, None) => {
+                    // Unreachable: clap's required_unless_present prevents this
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "[E073] --config is required when not using --resume-from",
+                    ));
+                }
+            }
+        }
 
         Command::Config { command } => handle_config_command(command)?,
 
