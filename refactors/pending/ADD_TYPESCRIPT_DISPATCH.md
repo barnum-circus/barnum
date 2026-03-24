@@ -1,11 +1,13 @@
-# Add TypeScript Action Dispatch
+# Add TypeScript Action Dispatch (Rust)
 
 **Parent:** TS_CONFIG.md
 **Depends on:** UNIFY_STDIN_ENVELOPE, INLINE_RESOLVED_CONFIG
 
 ## Motivation
 
-After FLATTEN_AND_RENAME_ACTION and UNIFY_STDIN_ENVELOPE, Rust has one action kind (`Bash`) with a unified envelope `{value, config, stepName}`. This refactor adds the TypeScript action kind on the Rust side: a new config type, config resolution (path canonicalization), and dispatch logic. From Rust's perspective, a TypeScript action is a shell command (`<executor> <run-handler.ts> <handler-path> <export>`) that receives an enriched envelope with `stepConfig` included.
+After FLATTEN_AND_RENAME_ACTION and UNIFY_STDIN_ENVELOPE, Rust has one action kind (`Bash`) with a unified envelope `{value, config, stepName}`. This refactor adds the TypeScript action kind on the Rust side: a new config type, dispatch logic, and CLI flags. From Rust's perspective, a TypeScript action is a shell command (`<executor> <run-handler.ts> <handler-path> <export>`) that receives an enriched envelope with `stepConfig` included.
+
+Path resolution (canonicalizing relative handler paths) happens in the JS layer before passing config to Rust. That's covered by ADD_RUN_HANDLER.
 
 ## Current state (after UNIFY_STDIN_ENVELOPE)
 
@@ -44,7 +46,7 @@ struct Envelope<'a> {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct TypeScriptAction {
-    /// Path to the handler file.
+    /// Path to the handler file (absolute — JS layer resolves before passing to Rust).
     pub path: String,
 
     /// Named export to invoke from the handler module.
@@ -60,40 +62,17 @@ pub struct TypeScriptAction {
 fn default_exported_as() -> String { "default".to_string() }
 ```
 
-One type used in the unified enum (after INLINE_RESOLVED_CONFIG, there's one enum, not two):
+Add the variant to the unified enum:
 
 ```rust
 #[serde(tag = "kind")]
-pub enum Action {
+pub enum ActionKind {
     Bash(BashAction),
     TypeScript(TypeScriptAction),
 }
 ```
 
-Config `{"kind": "TypeScript", "path": "./handlers/analyze.ts", "stepConfig": {...}}` deserializes with `exported_as = "default"` (serde default).
-
-### 2. Path resolution (JS layer)
-
-**File:** `libs/barnum/run.ts`
-
-Rust receives config as a JSON string via `--config` — it has no concept of "config file directory." The JS layer canonicalizes `path` relative to the caller's directory before passing the config to Rust. This validates the handler file exists at config load time — a typo fails immediately, not at dispatch time.
-
-In `BarnumConfig.fromConfig()` or `.run()`, resolve TypeScript action paths:
-
-```typescript
-import { resolve } from "node:path";
-
-// Before passing config to Rust, canonicalize TypeScript handler paths
-for (const step of config.steps) {
-  if (step.action.kind === "TypeScript") {
-    step.action.path = resolve(step.action.path);
-  }
-}
-```
-
-Rust receives absolute paths and passes them through to the subprocess invocation unchanged.
-
-### 3. Add `step_config` to Envelope and ShellAction
+### 2. Add `step_config` to Envelope and ShellAction
 
 **File:** `crates/barnum_config/src/runner/action.rs`
 
@@ -139,7 +118,7 @@ fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
 }
 ```
 
-### 4. Dispatch
+### 3. Dispatch
 
 **File:** `crates/barnum_config/src/runner/mod.rs`
 
@@ -149,7 +128,7 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
     let timeout = step.options.timeout.map(Duration::from_secs);
 
     match &step.action {
-        Action::Bash(BashAction { script }) => {
+        ActionKind::Bash(BashAction { script }) => {
             info!(step = %task.step, script = %script, "executing command");
             let action = Box::new(ShellAction {
                 script: script.clone(),
@@ -160,7 +139,7 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
             });
             spawn_worker(self.tx.clone(), action, task_id, task, WorkerKind::Task, timeout);
         }
-        Action::TypeScript(TypeScriptAction { path, exported_as, ref step_config }) => {
+        ActionKind::TypeScript(TypeScriptAction { path, exported_as, ref step_config }) => {
             let script = format!(
                 "{} {} {path} {exported_as}",
                 self.executor, self.run_handler_path,
@@ -179,7 +158,7 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
 }
 ```
 
-### 5. RunnerConfig changes
+### 4. RunnerConfig and Engine
 
 **File:** `crates/barnum_config/src/runner/mod.rs`
 
@@ -195,12 +174,6 @@ pub struct RunnerConfig<'a> {
 }
 ```
 
-Both fields are required. The JS layer (`run.ts`) always provides both via CLI flags.
-
-### 6. Engine changes
-
-**File:** `crates/barnum_config/src/runner/mod.rs`
-
 ```rust
 struct Engine<'a> {
     // ... existing fields ...
@@ -211,11 +184,11 @@ struct Engine<'a> {
 
 `Engine::new` takes the executor and run_handler_path from `RunnerConfig`.
 
-### 7. CLI changes
+### 5. CLI flags
 
 **File:** `crates/barnum_cli/src/main.rs`
 
-Wire `--executor` and `--run-handler-path` CLI flags through to `RunnerConfig`:
+Add `--executor` and `--run-handler-path` to the `run` subcommand and wire through to `RunnerConfig`:
 
 ```rust
 let runner_config = RunnerConfig {
@@ -227,7 +200,9 @@ let runner_config = RunnerConfig {
 };
 ```
 
-### 8. Schemas
+These flags are required when the config contains TypeScript actions. The JS layer (ADD_RUN_HANDLER) always provides them.
+
+### 6. Schemas
 
 Regenerate all schema artifacts. The TypeScript variant appears in the generated schemas. `stepConfig` is typed as an arbitrary JSON value.
 
@@ -255,7 +230,7 @@ fn action_typescript_with_step_config() {
     }"#;
     let config: Config = serde_json::from_str(json).expect("parse");
     match &config.steps[0].action {
-        Action::TypeScript(ts) => {
+        ActionKind::TypeScript(ts) => {
             assert_eq!(ts.path, "./handler.ts");
             assert_eq!(ts.exported_as, "default");
             assert_eq!(ts.step_config["instructions"], "Do stuff");
@@ -309,5 +284,5 @@ fn envelope_omits_step_config_for_bash() {
 
 - Does not define the TypeScript handler interface (ADD_HANDLER_VALIDATION)
 - Does not implement run-handler.ts (ADD_RUN_HANDLER)
-- Does not change run.ts or inject --executor from JS (ADD_RUN_HANDLER)
+- Does not change run.ts, inject --executor from JS, or resolve paths (ADD_RUN_HANDLER)
 - Does not implement step constructors or `.validate()`
