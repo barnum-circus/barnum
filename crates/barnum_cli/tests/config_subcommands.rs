@@ -39,7 +39,7 @@ fn schema_outputs_valid_json() {
 
     // Verify key schema properties
     assert_eq!(schema["$schema"], "http://json-schema.org/draft-07/schema#");
-    assert_eq!(schema["title"], "ConfigFile");
+    assert_eq!(schema["title"], "Config");
     assert_eq!(schema["type"], "object");
 }
 
@@ -69,12 +69,12 @@ fn schema_defines_step_type() {
     let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
     assert!(
-        schema["definitions"]["StepFile"].is_object(),
-        "Should define StepFile type"
+        schema["definitions"]["Step"].is_object(),
+        "Should define Step type"
     );
     assert!(
-        schema["definitions"]["ActionFile"].is_object(),
-        "Should define ActionFile type"
+        schema["definitions"]["ActionKind"].is_object(),
+        "Should define ActionKind type"
     );
     assert!(
         schema["definitions"]["Options"].is_object(),
@@ -90,10 +90,10 @@ fn schema_action_has_bash_variant() {
     let stdout = String::from_utf8_lossy(&result.stdout);
     let schema: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    let action = &schema["definitions"]["ActionFile"];
+    let action = &schema["definitions"]["ActionKind"];
     let variants = action["oneOf"]
         .as_array()
-        .expect("ActionFile should have oneOf");
+        .expect("ActionKind should have oneOf");
 
     // Find Bash variant
     let has_bash = variants.iter().any(|v| {
@@ -125,12 +125,12 @@ fn schema_defaults_to_zod() {
         "Default output should be Zod"
     );
     assert!(
-        stdout.contains("export const configFileSchema ="),
-        "Should export configFileSchema"
+        stdout.contains("export const configSchema ="),
+        "Should export configSchema"
     );
     assert!(
-        stdout.contains("export type ConfigFile ="),
-        "Should export ConfigFile type"
+        stdout.contains("export type Config ="),
+        "Should export Config type"
     );
     assert!(
         stdout.contains("export function defineConfig("),

@@ -17,8 +17,8 @@ type Defs = BTreeMap<String, Schema>;
 ///
 /// The root type name is read from `root.schema.metadata.title` (set by
 /// schemars from the Rust type name). For example, `schema_for!(ConfigFile)`
-/// produces title `"ConfigFile"`, which yields exports `configFileSchema` and
-/// `type ConfigFile`.
+/// produces title `"Config"`, which yields exports `configSchema` and
+/// `type Config`.
 #[must_use]
 pub fn emit_zod(root: &RootSchema) -> String {
     let Some(type_name) = root
@@ -602,12 +602,12 @@ mod tests {
             "must start with zod import"
         );
         assert!(
-            output.contains("export const configFileSchema ="),
-            "must export configFileSchema"
+            output.contains("export const configSchema ="),
+            "must export configSchema"
         );
         assert!(
-            output.contains("export type ConfigFile ="),
-            "must export ConfigFile type"
+            output.contains("export type Config ="),
+            "must export Config type"
         );
         // All definitions emitted
         for name in root.definitions.keys() {
