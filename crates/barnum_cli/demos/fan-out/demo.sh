@@ -35,17 +35,13 @@ NUM_WORKERS=20
 NUM_AGENTS=3
 WORKER_SLEEP=0.3
 
-# Inject pool root and pool name into config Pool actions
-inject_pool_config() {
-    jq --arg root "$1" --arg pool "$2" \
-        '.steps |= map(if .action.kind == "Pool" then .action.params.root = $root | .action.params.pool = $pool else . end)' \
-        "$3"
-}
-
 if [ -n "$EXISTING_POOL" ]; then
     # Use existing pool — decompose path into root (parent) and pool (basename)
     POOL_ROOT="$(dirname "$EXISTING_POOL")"
     POOL_ID="$(basename "$EXISTING_POOL")"
+    export BARNUM_POOL="$POOL_ID"
+    export BARNUM_ROOT="$POOL_ROOT"
+
     echo "=== Demo: Fan-Out (using existing pool) ==="
     echo "Pool directory: $EXISTING_POOL"
     if [ -n "$WAKE_SCRIPT" ]; then
@@ -59,10 +55,9 @@ if [ -n "$EXISTING_POOL" ]; then
         WAKE_ARG="--wake $WAKE_SCRIPT"
     fi
 
-    # Run Barnum against existing pool
-    CONFIG_JSON=$(inject_pool_config "$POOL_ROOT" "$POOL_ID" "$SCRIPT_DIR/config.json")
+    # Run Barnum
     echo "Running Barnum with fan-out config..."
-    $BARNUM run --config "$CONFIG_JSON" \
+    $BARNUM run --config "$SCRIPT_DIR/config.json" \
         $WAKE_ARG
 
     echo ""
@@ -73,6 +68,9 @@ else
     # Create demo pool
     POOL_ROOT=$(mktemp -d)
     POOL_ID="demo"
+    export BARNUM_POOL="$POOL_ID"
+    export BARNUM_ROOT="$POOL_ROOT"
+
     echo "=== Demo: Fan-Out with Multiple Agents ==="
     echo "Working directory: $POOL_ROOT"
     echo ""
@@ -116,7 +114,6 @@ else
     sleep 0.3
 
     # Run Barnum
-    CONFIG_JSON=$(inject_pool_config "$POOL_ROOT" "$POOL_ID" "$SCRIPT_DIR/config.json")
     echo ""
     echo "Running Barnum with fan-out config..."
     echo "  Distribute -> $NUM_WORKERS Worker tasks -> done"
@@ -124,7 +121,7 @@ else
 
     START_TIME=$(date +%s.%N)
 
-    $BARNUM run --config "$CONFIG_JSON"
+    $BARNUM run --config "$SCRIPT_DIR/config.json"
 
     END_TIME=$(date +%s.%N)
     ELAPSED=$(echo "$END_TIME - $START_TIME" | bc 2>/dev/null || echo "?")

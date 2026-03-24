@@ -9,9 +9,9 @@
     {
       "name": "Decide",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Inline", "value": "Make a decision. Choose either PathA or PathB.\n\nReturn one of:\n- `[{\"kind\": \"PathA\", \"value\": {}}]`\n- `[{\"kind\": \"PathB\", \"value\": {}}]`"}
+          "script": "TASK=$(cat); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'Make a decision. Choose either PathA or PathB.\n\nReturn one of:\n- `[{\"kind\": \"PathA\", \"value\": {}}]`\n- `[{\"kind\": \"PathB\", \"value\": {}}]`' --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["PathA", "PathB"]
@@ -19,9 +19,9 @@
     {
       "name": "PathA",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Inline", "value": "You chose path A. Proceed to Done.\n\nReturn: `[{\"kind\": \"Done\", \"value\": {}}]`"}
+          "script": "TASK=$(cat); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'You chose path A. Proceed to Done.\n\nReturn: `[{\"kind\": \"Done\", \"value\": {}}]`' --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["Done"]
@@ -29,9 +29,9 @@
     {
       "name": "PathB",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Inline", "value": "You chose path B. Proceed to Done.\n\nReturn: `[{\"kind\": \"Done\", \"value\": {}}]`"}
+          "script": "TASK=$(cat); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'You chose path B. Proceed to Done.\n\nReturn: `[{\"kind\": \"Done\", \"value\": {}}]`' --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": ["Done"]
@@ -39,9 +39,9 @@
     {
       "name": "Done",
       "action": {
-        "kind": "Pool",
+        "kind": "Command",
         "params": {
-          "instructions": {"kind": "Inline", "value": "All done. Return an empty array.\n\nReturn: `[]`"}
+          "script": "TASK=$(cat); ${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data \"$(jq -n --arg inst 'All done. Return an empty array.\n\nReturn: `[]`' --argjson task \"$TASK\" '{task: $task, instructions: $inst}')\" | jq -r '.stdout'"
         }
       },
       "next": []
