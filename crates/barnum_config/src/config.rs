@@ -3,18 +3,18 @@
 //! Defines the task queue with steps, schemas, and transitions.
 //! These types are serialization-format agnostic (use serde).
 
-use crate::types::{HookScript, StepName};
+use crate::types::StepName;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Top-level Barnum configuration file format.
+/// Top-level Barnum configuration.
 ///
 /// Defines a workflow as a directed graph of steps. Each step processes tasks
 /// and can spawn follow-up tasks on other steps.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ConfigFile {
+pub struct Config {
     /// Global runtime options (timeout, retries, concurrency). Individual steps
     /// can override these via their own `options` field.
     #[serde(default)]
@@ -28,7 +28,7 @@ pub struct ConfigFile {
 
     /// The steps that make up this workflow. Each step defines how to process
     /// a task and which steps it can spawn follow-up tasks on.
-    pub steps: Vec<StepFile>,
+    pub steps: Vec<Step>,
 }
 
 /// Global runtime options for task execution. All fields have sensible defaults.
@@ -77,14 +77,14 @@ const fn default_true() -> bool {
 /// The `finally` hook runs after the task **and all of its descendant tasks** complete.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct StepFile {
+pub struct Step {
     /// Unique name for this step (e.g., `"Analyze"`, `"Implement"`, `"Review"`).
     /// This is the string used as `kind` when creating tasks:
     /// `{"kind": "ThisStepName", "value": {...}}`.
     pub name: StepName,
 
     /// How this step processes tasks.
-    pub action: ActionFile,
+    pub action: ActionKind,
 
     /// Step names this step is allowed to spawn follow-up tasks on.
     /// Each string must match the `name` of another step in this config.
@@ -115,7 +115,7 @@ pub struct StepFile {
 
 /// Run a shell command to process tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct BashActionFile {
+pub struct BashAction {
     /// Shell script to execute.
     ///
     /// **Input (stdin):** JSON object: `{"kind": "<step name>", "value": <payload>}`.
@@ -130,9 +130,9 @@ pub struct BashActionFile {
 /// How a step processes tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
-pub enum ActionFile {
+pub enum ActionKind {
     /// Run a shell command.
-    Bash(BashActionFile),
+    Bash(BashAction),
 }
 
 /// A shell command used as a hook.
@@ -207,10 +207,10 @@ impl EffectiveOptions {
     }
 }
 
-impl ConfigFile {
+impl Config {
     /// Build a map of step name to step for efficient lookup.
     #[must_use]
-    pub fn step_map(&self) -> HashMap<&StepName, &StepFile> {
+    pub fn step_map(&self) -> HashMap<&StepName, &Step> {
         self.steps.iter().map(|s| (&s.name, s)).collect()
     }
 
@@ -267,63 +267,6 @@ impl ConfigFile {
 
         Ok(())
     }
-
-    /// Resolve all file references and compute effective options.
-    ///
-    /// Returns a fully resolved `Config` ready for runtime use.
-    #[must_use]
-    pub fn resolve(self, base_path: &std::path::Path) -> crate::resolved::Config {
-        let global_options = &self.options;
-        let steps = self
-            .steps
-            .into_iter()
-            .map(|step| step.resolve(base_path, global_options))
-            .collect();
-
-        crate::resolved::Config {
-            max_concurrency: self.options.max_concurrency,
-            steps,
-        }
-    }
-}
-
-impl StepFile {
-    /// Resolve this step's file references and compute effective options.
-    fn resolve(
-        self,
-        base_path: &std::path::Path,
-        global_options: &Options,
-    ) -> crate::resolved::Step {
-        let action = self.action.resolve(base_path);
-        let options = EffectiveOptions::resolve(global_options, &self.options);
-
-        crate::resolved::Step {
-            name: self.name,
-            action,
-            next: self.next,
-            finally_hook: self.finally_hook.map(|h| {
-                let FinallyHook::Bash(HookCommand { script }) = h;
-                HookScript::new(script)
-            }),
-            options: crate::resolved::Options {
-                timeout: options.timeout,
-                max_retries: options.max_retries,
-                retry_on_timeout: options.retry_on_timeout,
-                retry_on_invalid_response: options.retry_on_invalid_response,
-            },
-        }
-    }
-}
-
-impl ActionFile {
-    /// Resolve this action's file references.
-    fn resolve(self, _base_path: &std::path::Path) -> crate::resolved::ActionKind {
-        match self {
-            Self::Bash(BashActionFile { script }) => {
-                crate::resolved::ActionKind::Bash(crate::resolved::BashAction { script })
-            }
-        }
-    }
 }
 
 /// Two or more steps have the same name.
@@ -379,10 +322,10 @@ impl std::fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
-/// Generate JSON Schema for the `ConfigFile` type.
+/// Generate JSON Schema for the `Config` type.
 #[must_use]
 pub fn config_schema() -> schemars::schema::RootSchema {
-    schemars::schema_for!(ConfigFile)
+    schemars::schema_for!(Config)
 }
 
 #[cfg(test)]
@@ -409,7 +352,7 @@ mod tests {
             step("End", &[])
         );
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         assert_eq!(config.steps.len(), 2);
         assert!(config.options.timeout.is_none());
     }
@@ -434,7 +377,7 @@ mod tests {
             step("Done", &[])
         );
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         assert_eq!(config.options.timeout, Some(120));
         assert_eq!(config.options.max_retries, 3);
         assert!(config.validate().is_ok());
@@ -444,7 +387,7 @@ mod tests {
     fn validate_catches_invalid_next() {
         let json = format!(r#"{{"steps": [{}]}}"#, step("Start", &["NonExistent"]));
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         assert!(config.validate().is_err());
     }
 
@@ -452,7 +395,7 @@ mod tests {
     fn empty_steps_is_valid() {
         let json = r#"{"steps": []}"#;
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: Config = serde_json::from_str(json).expect("parse failed");
         assert!(config.validate().is_ok());
         assert_eq!(config.steps.len(), 0);
     }
@@ -465,7 +408,7 @@ mod tests {
             step("Start", &[])
         );
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         let result = config.validate();
         assert!(result.is_err());
         assert!(matches!(
@@ -477,7 +420,7 @@ mod tests {
     #[test]
     fn retry_options_default_to_true() {
         let json = r#"{"steps": []}"#;
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: Config = serde_json::from_str(json).expect("parse failed");
 
         assert!(config.options.retry_on_timeout);
         assert!(config.options.retry_on_invalid_response);
@@ -493,7 +436,7 @@ mod tests {
             "steps": []
         }"#;
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: Config = serde_json::from_str(json).expect("parse failed");
         assert!(!config.options.retry_on_timeout);
         assert!(!config.options.retry_on_invalid_response);
     }
@@ -520,7 +463,7 @@ mod tests {
         }}"#
         );
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         let step = &config.steps[0];
         let effective = EffectiveOptions::resolve(&config.options, &step.options);
 
@@ -544,7 +487,7 @@ mod tests {
             step("BasicStep", &[])
         );
 
-        let config: ConfigFile = serde_json::from_str(&json).expect("parse failed");
+        let config: Config = serde_json::from_str(&json).expect("parse failed");
         let step = &config.steps[0];
         let effective = EffectiveOptions::resolve(&config.options, &step.options);
 
@@ -564,10 +507,10 @@ mod tests {
             }]
         }"#;
 
-        let config: ConfigFile = serde_json::from_str(json).expect("parse failed");
+        let config: Config = serde_json::from_str(json).expect("parse failed");
         assert!(matches!(
             &config.steps[0].action,
-            ActionFile::Bash(BashActionFile { script }) if script == "jq '.value'"
+            ActionKind::Bash(BashAction { script }) if script == "jq '.value'"
         ));
     }
 
@@ -580,7 +523,7 @@ mod tests {
             }]
         }"#;
 
-        let result = serde_json::from_str::<ConfigFile>(json);
+        let result = serde_json::from_str::<Config>(json);
         assert!(result.is_err(), "Omitting action should fail to parse");
     }
 }

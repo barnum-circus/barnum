@@ -2,7 +2,7 @@
 //!
 //! Generates instructions that tell agents what they can do at each step.
 
-use crate::resolved::{Config, Step};
+use crate::config::{Config, Step};
 use std::fmt::Write;
 
 /// Generate a complete markdown document describing all steps.
@@ -59,12 +59,10 @@ fn write_step(doc: &mut String, step: &Step) {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::config::ConfigFile;
-    use std::path::Path;
 
     #[test]
     fn generates_full_docs() {
-        let config_file: ConfigFile = serde_json::from_str(
+        let config: Config = serde_json::from_str(
             r#"{
             "steps": [
                 {"name": "Start", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["End"]},
@@ -74,7 +72,6 @@ mod tests {
         )
         .unwrap();
 
-        let config = config_file.resolve(Path::new("."));
         let docs = generate_full_docs(&config);
         assert!(docs.contains("Barnum Task Queue Documentation"));
         assert!(docs.contains("State Diagram"));

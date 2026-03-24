@@ -2,7 +2,7 @@
 //!
 //! Re-exports types from `barnum_types` for use within this crate.
 
-pub use barnum_types::{HookScript, LogTaskId, StepInputValue, StepName};
+pub use barnum_types::{LogTaskId, StepInputValue, StepName};
 
 /// A task with its kind (step name) and value.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]

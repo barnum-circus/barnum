@@ -469,7 +469,7 @@ jobs:
         run: cargo run --locked -p barnum_cli --bin build_schemas
       - name: Check schemas are up to date
         run: |
-          if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts libs/barnum/barnum-cli-schema.zod.ts libs/barnum/barnum-resolved-schema.zod.ts; then
+          if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts libs/barnum/barnum-cli-schema.zod.ts; then
             echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_cli --bin build_schemas' and commit."
             exit 1
           fi
@@ -498,7 +498,6 @@ jobs:
             libs/barnum/barnum-config-schema.json
             libs/barnum/barnum-config-schema.zod.ts
             libs/barnum/barnum-cli-schema.zod.ts
-            libs/barnum/barnum-resolved-schema.zod.ts
 
   build-website:
     needs: gate-docs

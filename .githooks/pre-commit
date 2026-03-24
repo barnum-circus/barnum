@@ -25,7 +25,6 @@ echo "$STAGED_FILES" | xargs git add
 git add libs/barnum/barnum-config-schema.json
 git add libs/barnum/barnum-config-schema.zod.ts
 git add libs/barnum/barnum-cli-schema.zod.ts
-git add libs/barnum/barnum-resolved-schema.zod.ts
 
 # Create temp directory for output files
 TEMP_DIR=$(mktemp -d)

@@ -22,7 +22,9 @@ use barnum_state::{
 };
 use tracing::{error, info};
 
-use crate::resolved::{ActionKind, BashAction, Config, Step};
+use crate::config::{
+    ActionKind, BashAction, Config, EffectiveOptions, FinallyHook, HookCommand, Step,
+};
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
 use action::{ActionError, ShellAction, WorkerKind, WorkerResult, spawn_worker};
@@ -525,8 +527,9 @@ impl<'a> Engine<'a> {
             .step_map
             .get(&task.step)
             .expect("[P015] task step must exist");
+        let effective = EffectiveOptions::resolve(&self.config.options, &step.options);
 
-        let outcome = process_submit_result(action_result, task, step);
+        let outcome = process_submit_result(action_result, task, step, &effective);
 
         match outcome {
             TaskOutcome::Success(TaskSuccess {
@@ -691,7 +694,8 @@ impl<'a> Engine<'a> {
     #[expect(clippy::expect_used)]
     fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
         let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-        let timeout = step.options.timeout.map(Duration::from_secs);
+        let effective = EffectiveOptions::resolve(&self.config.options, &step.options);
+        let timeout = effective.timeout.map(Duration::from_secs);
         let tx = self.tx.clone();
 
         match &step.action {
@@ -712,15 +716,16 @@ impl<'a> Engine<'a> {
     #[expect(clippy::expect_used)]
     fn dispatch_finally(&self, parent_id: LogTaskId, task: Task) {
         let step = self.step_map.get(&task.step).expect("[P015] unknown step");
-        let script = step
+        let FinallyHook::Bash(HookCommand { script }) = step
             .finally_hook
-            .clone()
+            .as_ref()
             .expect("[P073] finally parent's step must have finally_hook");
-        let timeout = step.options.timeout.map(Duration::from_secs);
+        let effective = EffectiveOptions::resolve(&self.config.options, &step.options);
+        let timeout = effective.timeout.map(Duration::from_secs);
 
         info!(step = %task.step, parent = ?parent_id, "dispatching finally worker");
         let action = Box::new(ShellAction {
-            script: script.as_str().to_owned(),
+            script: script.clone(),
             step_name: task.step.clone(),
             config: Arc::clone(&self.config_json),
             working_dir: self.working_dir.clone(),
@@ -793,7 +798,10 @@ pub fn run(
         call_wake_script(script)?;
     }
 
-    let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+    let max_concurrency = config
+        .options
+        .max_concurrency
+        .unwrap_or(DEFAULT_MAX_CONCURRENCY);
 
     info!(
         tasks = initial_tasks.len(),
@@ -886,7 +894,10 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
         call_wake_script(script)?;
     }
 
-    let max_concurrency = config.max_concurrency.unwrap_or(DEFAULT_MAX_CONCURRENCY);
+    let max_concurrency = config
+        .options
+        .max_concurrency
+        .unwrap_or(DEFAULT_MAX_CONCURRENCY);
 
     info!(
         entries = old_entries.len(),
@@ -967,8 +978,10 @@ mod run_state_tests {
         TaskSubmitted,
     };
 
-    use crate::resolved::{ActionKind, BashAction, Config, Options, Step};
-    use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
+    use crate::config::{
+        ActionKind, BashAction, Config, FinallyHook, HookCommand, Options, Step, StepOptions,
+    };
+    use crate::types::{LogTaskId, StepInputValue, StepName};
 
     use super::{PendingDispatch, PendingFinally, PendingTask, RunState, TaskState};
 
@@ -982,20 +995,23 @@ mod run_state_tests {
             }),
             next: vec![],
             finally_hook: None,
-            options: Options::default(),
+            options: StepOptions::default(),
         }
     }
 
     fn step_with_finally(name: &str) -> Step {
         Step {
-            finally_hook: Some(HookScript::new("echo done")),
+            finally_hook: Some(FinallyHook::Bash(HookCommand {
+                script: "echo done".into(),
+            })),
             ..step(name)
         }
     }
 
     fn config(steps: Vec<Step>) -> Config {
         Config {
-            max_concurrency: None,
+            options: Options::default(),
+            entrypoint: None,
             steps,
         }
     }

@@ -19,14 +19,12 @@
 
 mod config;
 mod docs;
-mod resolved;
 mod runner;
 mod types;
 pub mod zod;
 
 // Public API - only what barnum_cli actually uses
-pub use config::{ConfigFile, config_schema};
+pub use config::{ActionKind, Config, EffectiveOptions, config_schema};
 pub use docs::generate_full_docs;
-pub use resolved::{ActionKind, Config, resolved_schema};
 pub use runner::{RunnerConfig, resume, run};
 pub use types::{StepInputValue, StepName, Task};

@@ -7,8 +7,8 @@
 
 use barnum_cli::{Cli, Command, ConfigCommand, LogLevel, SchemaType};
 use barnum_config::{
-    ActionKind, Config, ConfigFile, RunnerConfig, StepInputValue, Task, config_schema,
-    generate_full_docs, resume, run,
+    ActionKind, Config, RunnerConfig, StepInputValue, Task, config_schema, generate_full_docs,
+    resume, run,
 };
 use clap::Parser;
 use std::fs::File;
@@ -75,17 +75,15 @@ fn main() -> io::Result<()> {
 fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
     match command {
         ConfigCommand::Docs { config } => {
-            let (config_file, config_dir) = parse_config(&config)?;
-            let cfg = config_file.resolve(&config_dir);
+            let (cfg, _config_dir) = parse_config(&config)?;
             let docs = generate_full_docs(&cfg);
             print!("{docs}");
         }
 
         ConfigCommand::Validate { config } => {
-            let (config_file, config_dir) = parse_config(&config)?;
-            match config_file.validate() {
+            let (cfg, _config_dir) = parse_config(&config)?;
+            match cfg.validate() {
                 Ok(()) => {
-                    let cfg = config_file.resolve(&config_dir);
                     println!("Config is valid.");
                     println!("Steps: {}", cfg.steps.len());
                     for step in &cfg.steps {
@@ -111,14 +109,13 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
         }
 
         ConfigCommand::Graph { config } => {
-            let (config_file, config_dir) = parse_config(&config)?;
-            config_file.validate().map_err(|e| {
+            let (cfg, _config_dir) = parse_config(&config)?;
+            cfg.validate().map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("[E053] config validation failed: {e}"),
                 )
             })?;
-            let cfg = config_file.resolve(&config_dir);
             let dot = generate_graphviz(&cfg);
             print!("{dot}");
         }
@@ -130,8 +127,8 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
                     let mut zod = barnum_config::zod::emit_zod(&root);
                     zod.push_str(
                         "\nexport function defineConfig(config: z.input<typeof \
-                         configFileSchema>): ConfigFile {\n  return \
-                         configFileSchema.parse(config);\n}\n",
+                         configSchema>): Config {\n  return \
+                         configSchema.parse(config);\n}\n",
                     );
                     print!("{zod}");
                 }
@@ -159,23 +156,21 @@ fn run_command(
     // Initialize tracing with optional log file
     init_tracing(log_file, log_level)?;
 
-    let (config_file, config_dir) = parse_config(config)?;
-    config_file.validate().map_err(|e| {
+    let (cfg, config_dir) = parse_config(config)?;
+    cfg.validate().map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("[E051] config validation failed: {e}"),
         )
     })?;
 
-    // Extract entrypoint before resolve consumes config_file
-    let entrypoint = config_file.entrypoint.clone();
-
-    // Resolve to runtime config (loads linked files, computes effective options)
-    let cfg = config_file.resolve(&config_dir);
-
     // Resolve initial tasks based on entrypoint or initial_state
-    let initial_tasks =
-        resolve_initial_tasks(&cfg, initial_state, entrypoint_value, entrypoint.as_ref())?;
+    let initial_tasks = resolve_initial_tasks(
+        &cfg,
+        initial_state,
+        entrypoint_value,
+        cfg.entrypoint.as_ref(),
+    )?;
 
     // State log: use explicit path or generate default
     let state_log_path = match state_log {
@@ -243,9 +238,9 @@ fn default_state_log_path() -> io::Result<PathBuf> {
 }
 
 /// Parse config from either inline JSON/JSONC or a file path.
-/// Returns the config file and the directory for resolving relative paths.
+/// Returns the config and the directory for resolving relative paths.
 /// Supports JSONC (JSON with comments) in both cases.
-fn parse_config(input: &str) -> io::Result<(ConfigFile, PathBuf)> {
+fn parse_config(input: &str) -> io::Result<(Config, PathBuf)> {
     let path = PathBuf::from(input);
     if path.exists() {
         let content = std::fs::read_to_string(&path).map_err(|e| {
@@ -254,7 +249,7 @@ fn parse_config(input: &str) -> io::Result<(ConfigFile, PathBuf)> {
                 format!("[E054] failed to read config file {}: {e}", path.display()),
             )
         })?;
-        let cfg: ConfigFile = json5::from_str(&content).map_err(|e| {
+        let cfg: Config = json5::from_str(&content).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("[E055] invalid config in {}: {e}", path.display()),
@@ -275,7 +270,7 @@ fn parse_config(input: &str) -> io::Result<(ConfigFile, PathBuf)> {
         Ok((cfg, dir.to_path_buf()))
     } else {
         // Assume inline JSON/JSONC
-        let cfg: ConfigFile = json5::from_str(input).map_err(|e| {
+        let cfg: Config = json5::from_str(input).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("[E056] invalid inline config: {e}"),
@@ -460,11 +455,9 @@ fn generate_graphviz(config: &Config) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
-    fn resolve_config(json: &str) -> Config {
-        let config_file: ConfigFile = serde_json::from_str(json).unwrap();
-        config_file.resolve(Path::new("."))
+    fn parse_test_config(json: &str) -> Config {
+        serde_json::from_str(json).unwrap()
     }
 
     const CMD: &str = r#"{"kind": "Bash", "script": "echo '[]'"}"#;
@@ -480,7 +473,7 @@ mod tests {
                 ]
             }}"#
         );
-        let config = resolve_config(&json);
+        let config = parse_test_config(&json);
 
         let dot = generate_graphviz(&config);
         assert!(dot.contains("digraph Barnum"));
@@ -497,10 +490,9 @@ mod tests {
         json: &str,
         entrypoint: Option<&str>,
     ) -> (Config, Option<barnum_config::StepName>) {
-        let mut config_file: ConfigFile = serde_json::from_str(json).unwrap();
-        config_file.entrypoint = entrypoint.map(|s| s.to_string().into());
-        let ep = config_file.entrypoint.clone();
-        let cfg = config_file.resolve(Path::new("."));
+        let mut cfg: Config = serde_json::from_str(json).unwrap();
+        cfg.entrypoint = entrypoint.map(|s| s.to_string().into());
+        let ep = cfg.entrypoint.clone();
         (cfg, ep)
     }
 

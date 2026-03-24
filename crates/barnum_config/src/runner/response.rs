@@ -2,7 +2,7 @@
 
 use tracing::{debug, error, info, warn};
 
-use crate::resolved::{Options, Step};
+use crate::config::{EffectiveOptions, Step};
 use crate::types::{StepInputValue, StepName, Task};
 
 use super::action::{ActionError, ActionResult};
@@ -37,22 +37,33 @@ pub enum FailureKind {
 }
 
 /// Process a unified action result into a task outcome.
-pub fn process_submit_result(result: ActionResult, task: &Task, step: &Step) -> TaskOutcome {
+pub fn process_submit_result(
+    result: ActionResult,
+    task: &Task,
+    step: &Step,
+    options: &EffectiveOptions,
+) -> TaskOutcome {
     match result.output {
-        Ok(stdout) => process_stdout(&stdout, task, &result.value, step),
+        Ok(stdout) => process_stdout(&stdout, task, &result.value, step, options),
         Err(ActionError::TimedOut) => {
             warn!(step = %task.step, "action timed out");
-            process_retry(task, &step.options, FailureKind::Timeout)
+            process_retry(task, options, FailureKind::Timeout)
         }
         Err(ActionError::Failed(error)) => {
             error!(step = %task.step, %error, "action failed");
-            process_retry(task, &step.options, FailureKind::SubmitError)
+            process_retry(task, options, FailureKind::SubmitError)
         }
     }
 }
 
 /// Process stdout from either pool or command action.
-fn process_stdout(stdout: &str, task: &Task, value: &StepInputValue, step: &Step) -> TaskOutcome {
+fn process_stdout(
+    stdout: &str,
+    task: &Task,
+    value: &StepInputValue,
+    step: &Step,
+    options: &EffectiveOptions,
+) -> TaskOutcome {
     debug!(stdout = %stdout, "action output");
     match json5::from_str::<serde_json::Value>(stdout) {
         Ok(output_value) => match validate_response(&output_value, step) {
@@ -65,18 +76,22 @@ fn process_stdout(stdout: &str, task: &Task, value: &StepInputValue, step: &Step
             }
             Err(e) => {
                 warn!(step = %task.step, error = %e, "invalid response");
-                process_retry(task, &step.options, FailureKind::InvalidResponse)
+                process_retry(task, options, FailureKind::InvalidResponse)
             }
         },
         Err(e) => {
             warn!(step = %task.step, error = %e, stdout = %stdout, "failed to parse response JSONC");
-            process_retry(task, &step.options, FailureKind::InvalidResponse)
+            process_retry(task, options, FailureKind::InvalidResponse)
         }
     }
 }
 
 /// Process a task failure, returning the appropriate outcome.
-pub fn process_retry(task: &Task, options: &Options, failure_kind: FailureKind) -> TaskOutcome {
+pub fn process_retry(
+    task: &Task,
+    options: &EffectiveOptions,
+    failure_kind: FailureKind,
+) -> TaskOutcome {
     let retry_allowed = match failure_kind {
         FailureKind::Timeout => options.retry_on_timeout,
         FailureKind::InvalidResponse => options.retry_on_invalid_response,

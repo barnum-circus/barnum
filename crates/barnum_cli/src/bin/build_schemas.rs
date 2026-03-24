@@ -2,9 +2,8 @@
 //!
 //! Generates all schema files in libs/barnum/ for inclusion in the npm package:
 //! - barnum-config-schema.json (JSON Schema for editor `$schema` validation)
-//! - barnum-config-schema.zod.ts (Zod schema for config file types)
+//! - barnum-config-schema.zod.ts (Zod schema for config types)
 //! - barnum-cli-schema.zod.ts (Zod schema for CLI argument types)
-//! - barnum-resolved-schema.zod.ts (Zod schema for resolved runtime types)
 //!
 //! Run with: `cargo run -p barnum_cli --bin build_schemas`
 
@@ -12,7 +11,7 @@
 #![expect(clippy::print_stderr)]
 
 use barnum_cli::Cli;
-use barnum_config::{config_schema, resolved_schema, zod::emit_zod};
+use barnum_config::{config_schema, zod::emit_zod};
 use std::fs;
 use std::path::Path;
 
@@ -39,8 +38,8 @@ fn main() {
     // Config: Zod TypeScript schema
     let mut config_zod = emit_zod(&config_root);
     config_zod.push_str(
-        "\nexport function defineConfig(config: z.input<typeof configFileSchema>): ConfigFile {\n  \
-         return configFileSchema.parse(config);\n}\n",
+        "\nexport function defineConfig(config: z.input<typeof configSchema>): Config {\n  return \
+         configSchema.parse(config);\n}\n",
     );
     write_file(&libs.join("barnum-config-schema.zod.ts"), &config_zod);
 
@@ -48,11 +47,6 @@ fn main() {
     let cli_root = schemars::schema_for!(Cli);
     let cli_zod = emit_zod(&cli_root);
     write_file(&libs.join("barnum-cli-schema.zod.ts"), &cli_zod);
-
-    // Resolved: Zod TypeScript schema (runtime types after config resolution)
-    let resolved_root = resolved_schema();
-    let resolved_zod = emit_zod(&resolved_root);
-    write_file(&libs.join("barnum-resolved-schema.zod.ts"), &resolved_zod);
 }
 
 fn write_file(path: &Path, content: &str) {

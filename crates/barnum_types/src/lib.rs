@@ -24,15 +24,6 @@ define_string_id! {
     pub struct StepName;
 }
 
-define_string_id! {
-    /// A shell script for lifecycle hooks (`pre`, `post`, `finally`).
-    ///
-    /// The script is executed via the system shell. It receives JSON on stdin
-    /// and must produce JSON on stdout (see each hook's documentation for the
-    /// specific input/output contract).
-    pub struct HookScript;
-}
-
 /// A step's input value - the JSON payload passed to/from steps.
 ///
 /// All step values in the system use this type, whether they've been
