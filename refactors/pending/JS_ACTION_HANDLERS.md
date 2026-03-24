@@ -67,14 +67,6 @@ export interface FollowUpTask {
   value: unknown;
 }
 
-/** Options for submitting a task to a troupe pool. */
-export interface SubmitOptions {
-  /** Pool name. If omitted, troupe uses its default. */
-  pool?: string;
-  /** Pool root directory. If omitted, troupe uses its default. */
-  root?: string;
-}
-
 /** A resolved step definition (from the Rust envelope). */
 export interface ResolvedStep {
   name: string;
@@ -177,7 +169,7 @@ Finds the troupe binary, invokes `troupe submit_task`, and parses the response. 
 ```typescript
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import type { SubmitOptions, FollowUpTask } from "./types.js";
+import type { FollowUpTask } from "./types.js";
 
 const require = createRequire(import.meta.url);
 
@@ -202,7 +194,7 @@ function troupeBinary(): string {
  */
 export function submitTask(
   data: unknown,
-  options?: SubmitOptions,
+  options?: { pool?: string; root?: string },
 ): FollowUpTask[] {
   const troupe = troupeBinary();
   const args = ["submit_task"];
@@ -273,7 +265,6 @@ export { handlePool, poolParamsSchema } from "./pool.js";
 export type { PoolParams } from "./pool.js";
 export type {
   FollowUpTask,
-  SubmitOptions,
   ResolvedStep,
   ResolvedOptions,
   ResolvedConfig,
