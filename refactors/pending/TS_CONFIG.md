@@ -114,7 +114,7 @@ The stdin formats differ because Bash targets user-written shell scripts (simple
 
 ## Handler interface
 
-A TypeScript handler module exports an object with an optional `validator` and a `handle` function:
+A TypeScript handler module exports a `HandlerDefinition` — an object with up to three concerns: validating the step's configuration from the config file, validating the task value, and handling the task.
 
 ```typescript
 // handlers/analyze.ts
@@ -122,9 +122,18 @@ import { z } from "zod";
 import type { HandlerDefinition } from "@barnum/barnum";
 
 export default {
-  validator: z.object({ file: z.string() }),
-  async handle(ctx) {
-    ctx.value.file; // string — typed by validator
+  stepConfigValidator: z.object({
+    instructions: z.string(),
+    pool: z.string(),
+  }),
+
+  getStepValueValidator(stepConfig) {
+    return z.object({ file: z.string() });
+  },
+
+  async handle({ stepConfig, value, config, stepName }) {
+    stepConfig.instructions; // string — typed by stepConfigValidator
+    value.file;              // string — typed by getStepValueValidator
     return [{ kind: "Implement", value: { plan: "..." } }];
   },
 } satisfies HandlerDefinition;
@@ -133,30 +142,47 @@ export default {
 The types:
 
 ```typescript
-interface HandlerDefinition<V = unknown> {
-  validator?: z.ZodType<V>;
-  handle: (ctx: HandlerContext<V>) => Promise<FollowUpTask[]>;
+interface HandlerDefinition<
+  C = unknown,
+  V = unknown,
+> {
+  /** Validates action.params from the config (the step configuration). */
+  stepConfigValidator?: z.ZodType<C>;
+
+  /** Returns a validator for the task value, given the validated step config. */
+  getStepValueValidator?: (stepConfig: C) => z.ZodType<V>;
+
+  /** Process the task. Returns follow-up tasks. */
+  handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
-interface HandlerContext<V = unknown> {
+interface HandlerContext<C = unknown, V = unknown> {
+  /** The validated step configuration (action.params minus path/export). */
+  stepConfig: C;
+  /** The validated task value. */
   value: V;
-  params: Record<string, unknown>;
-  task: Task;
-  step: Step;
+  /** The full resolved Barnum config. */
   config: Config;
+  /** The name of the step this handler is processing. */
+  stepName: string;
+}
+
+interface FollowUpTask {
+  kind: string;
+  value: unknown;
 }
 ```
 
-`validator` is a Zod schema for the task value. When present, `run-handler.ts` validates `task.value` against it before calling `handle`, and `ctx.value` is the validated, typed result. When absent, `ctx.value` is `unknown`.
+`stepConfigValidator` validates the action's `params` from the config file (the opaque `handler_params` that Rust stores via `#[serde(flatten)]`). `getStepValueValidator` receives the validated step config and returns a Zod schema for the task value, allowing the value schema to depend on the step configuration. Both validators are optional.
 
-`params` is `action.params` from the envelope with `path` and `export` stripped. The types `Task`, `Step`, `Config` come from `barnum-resolved-schema.zod.ts`.
+Inputs (`stepConfig` and `value`) can be fully typed via Zod validators. The output (`FollowUpTask[]`) is untyped — which steps a handler can transition to is determined by the config's `next` array, and the handler has no compile-time knowledge of that. Invalid transitions are caught at runtime by Rust's response validator.
 
-Without a validator:
+A minimal handler can skip both validators:
 
 ```typescript
 export default {
-  async handle(ctx) {
-    ctx.value; // unknown
+  async handle({ stepConfig, value }) {
+    // stepConfig: unknown, value: unknown
     return [];
   },
 } satisfies HandlerDefinition;
@@ -170,8 +196,6 @@ The thin wrapper that bridges the subprocess boundary:
 
 ```typescript
 // libs/barnum/actions/run-handler.ts
-import type { FollowUpTask } from "./types.js";
-
 const [handlerPath, exportName = "default"] = process.argv.slice(2);
 
 const chunks: Buffer[] = [];
@@ -181,17 +205,25 @@ const envelope = JSON.parse(Buffer.concat(chunks).toString());
 const mod = await import(handlerPath);
 const definition = mod[exportName];
 
-const { path: _, export: __, ...handlerParams } = envelope.action.params;
-const value = definition.validator
-  ? definition.validator.parse(envelope.task.value)
+// 1. Extract handler params (strip dispatch-only fields)
+const { path: _, export: __, ...rawParams } = envelope.action.params;
+
+// 2. Validate step config
+const stepConfig = definition.stepConfigValidator
+  ? definition.stepConfigValidator.parse(rawParams)
+  : rawParams;
+
+// 3. Validate value, potentially dependent on step config
+const value = definition.getStepValueValidator
+  ? definition.getStepValueValidator(stepConfig).parse(envelope.task.value)
   : envelope.task.value;
 
-const results: FollowUpTask[] = await definition.handle({
+// 4. Call handler
+const results = await definition.handle({
+  stepConfig,
   value,
-  params: handlerParams,
-  task: envelope.task,
-  step: envelope.step,
   config: envelope.config,
+  stepName: envelope.step.name,
 });
 
 process.stdout.write(JSON.stringify(results));
