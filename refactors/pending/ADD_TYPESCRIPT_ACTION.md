@@ -389,7 +389,13 @@ let runner_config = RunnerConfig {
 
 ## Handler interface
 
-A TypeScript handler module exports a `HandlerDefinition`:
+A TypeScript handler module exports a `HandlerDefinition` — an object with three concerns:
+
+1. **Step configuration validator** (`stepConfigValidator`): Validates the action's `params` from the config file. This is the "step configuration" — the opaque `handler_params` that Rust stores via `#[serde(flatten)]`. Validated at handler load time. Named `stepConfig` (not just `config`) because "config" is overloaded — it could mean the whole Barnum config.
+
+2. **Step value validator** (`getStepValueValidator`): A function that receives the validated step config and returns a Zod schema for the task value. This allows the value schema to depend on the step configuration (e.g., different fields based on config options). Called per-task.
+
+3. **Handler function** (`handle`): Takes the validated step config, validated value, and context (config + step name) as parameters. Returns follow-up tasks.
 
 ```typescript
 // handlers/analyze.ts
@@ -397,10 +403,21 @@ import { z } from "zod";
 import type { HandlerDefinition } from "@barnum/barnum";
 
 export default {
-  validator: z.object({ file: z.string() }),
-  async handle(ctx) {
-    ctx.value.file; // string — typed by validator
-    ctx.params.instructions; // unknown — from action.params
+  stepConfigValidator: z.object({
+    instructions: z.string(),
+    pool: z.string(),
+  }),
+
+  getStepValueValidator(stepConfig) {
+    // stepConfig is already validated by stepConfigValidator — fully typed
+    return z.object({ file: z.string() });
+  },
+
+  async handle(stepConfig, value, { config, stepName }) {
+    stepConfig.instructions; // string — typed by stepConfigValidator
+    value.file;              // string — typed by getStepValueValidator
+    config;                  // full resolved Barnum config
+    stepName;                // "Analyze"
     return [{ kind: "Implement", value: { plan: "..." } }];
   },
 } satisfies HandlerDefinition;
@@ -409,21 +426,56 @@ export default {
 Types:
 
 ```typescript
-interface HandlerDefinition<V = unknown> {
-  validator?: z.ZodType<V>;
-  handle: (ctx: HandlerContext<V>) => Promise<FollowUpTask[]>;
+interface HandlerDefinition<
+  C = unknown,
+  V = unknown,
+> {
+  /** Validates action.params from the config (the step configuration). */
+  stepConfigValidator?: z.ZodType<C>;
+
+  /** Returns a validator for the task value, given the validated step config. */
+  getStepValueValidator?: (stepConfig: C) => z.ZodType<V>;
+
+  /** Process the task. Returns follow-up tasks. */
+  handle: (stepConfig: C, value: V, context: HandlerContext) => Promise<FollowUpTask[]>;
 }
 
-interface HandlerContext<V = unknown> {
-  value: V;
-  params: Record<string, unknown>;
-  task: Task;
-  step: Step;
+interface HandlerContext {
+  /** The full resolved Barnum config. */
   config: Config;
+  /** The name of the step this handler is processing. */
+  stepName: string;
+}
+
+/** A follow-up task to spawn. */
+interface FollowUpTask {
+  /** Step name — must be one of this step's `next` entries. Untyped: the
+   *  handler doesn't know the config's `next` array at compile time. */
+  kind: string;
+  /** Task payload — opaque to the framework. */
+  value: unknown;
 }
 ```
 
-When `validator` is present, `run-handler.ts` Zod-parses the task value against it before calling `handle`. This provides both runtime validation and compile-time type inference (`ctx.value` is `V`, not `unknown`).
+**Type safety boundary:** Inputs (`stepConfig` and `value`) can be fully typed via Zod validators. The output (`FollowUpTask[]`) is necessarily untyped — which steps a handler can transition to is determined by the config's `next` array, and the handler has no compile-time knowledge of that. This is a fundamental consequence of separating handler logic (per-step) from transition topology (config-level). Invalid transitions are caught at runtime by Rust's response validator.
+
+**Validation flow** (in `run-handler.ts`):
+
+1. Strip `path` and `export` from `action.params` → raw handler params
+2. If `stepConfigValidator` exists, parse raw params → validated step config `C`. Otherwise, pass raw params as `unknown`.
+3. If `getStepValueValidator` exists, call it with the validated step config to get the value schema, then parse `task.value` → validated value `V`. Otherwise, pass `task.value` as `unknown`.
+4. Call `handle(stepConfig, value, { config, stepName })`.
+
+This design gives handlers full type safety on inputs (step config and value), while accepting that outputs (follow-up tasks) are untyped. The handler also receives the full config and step name as context for workflows that need global awareness. A minimal handler can skip both validators:
+
+```typescript
+export default {
+  async handle(stepConfig, value) {
+    // stepConfig: unknown, value: unknown
+    return [];
+  },
+} satisfies HandlerDefinition;
+```
 
 ## run-handler.ts
 
@@ -439,18 +491,22 @@ const envelope = JSON.parse(Buffer.concat(chunks).toString());
 const mod = await import(handlerPath);
 const definition = mod[exportName];
 
-const { path: _, export: __, ...handlerParams } = envelope.action.params;
-const value = definition.validator
-  ? definition.validator.parse(envelope.task.value)
+// 1. Extract handler params (strip dispatch-only fields)
+const { path: _, export: __, ...rawParams } = envelope.action.params;
+
+// 2. Validate step config (step params)
+const stepConfig = definition.stepConfigValidator
+  ? definition.stepConfigValidator.parse(rawParams)
+  : rawParams;
+
+// 3. Validate value (task payload), potentially dependent on step config
+const value = definition.getStepValueValidator
+  ? definition.getStepValueValidator(stepConfig).parse(envelope.task.value)
   : envelope.task.value;
 
-const results = await definition.handle({
-  value,
-  params: handlerParams,
-  task: envelope.task,
-  step: envelope.step,
-  config: envelope.config,
-});
+// 4. Call handler with validated step config, value, and context
+const context = { config: envelope.config, stepName: envelope.step.name };
+const results = await definition.handle(stepConfig, value, context);
 
 process.stdout.write(JSON.stringify(results));
 ```
@@ -459,9 +515,10 @@ This file is the bridge between Rust's subprocess and the user's handler module.
 1. Reads the envelope from stdin (piped by Rust)
 2. Dynamically imports the handler module
 3. Strips dispatch params (`path`, `export`) from action params
-4. Validates the task value if a validator is defined
-5. Calls the handler with the full context
-6. Writes follow-up tasks to stdout (read by Rust)
+4. Validates step config if `stepConfigValidator` is defined
+5. Validates the task value if `getStepValueValidator` is defined (may depend on validated step config)
+6. Calls the handler with validated step config, value, and context
+7. Writes follow-up tasks to stdout (read by Rust)
 
 ## run.ts changes
 
