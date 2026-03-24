@@ -28,44 +28,22 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
 {
   "options": {
     "timeout": 120,
-    "max_retries": 3,
-    "retry_on_timeout": true,
-    "retry_on_invalid_response": false
+    "maxRetries": 3,
+    "retryOnTimeout": true,
+    "retryOnInvalidResponse": false
   },
   "steps": [
     {
-      "name": "Analyze",
-      "action": {
-        "kind": "Pool",
-        "params": {"instructions": {"kind": "Inline", "value": "Analyze the given file."}}
-      },
-      "next": ["Implement", "Done"]
-    },
-    {
-      "name": "Implement",
-      "action": {
-        "kind": "Pool",
-        "params": {"instructions": {"kind": "Link", "link": "implement-instructions.md"}}
-      },
-      "next": ["Test"],
-      "options": {
-        "timeout": 300,
-        "max_retries": 5,
-        "retry_on_timeout": true,
-        "retry_on_invalid_response": false
-      }
-    },
-    {
       "name": "Transform",
       "action": {
-        "kind": "Command",
-        "params": {"script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}
+        "kind": "Bash",
+        "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"
       },
       "next": ["Done"]
     },
     {
       "name": "Done",
-      "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
+      "action": {"kind": "Bash", "script": "echo '[]'"},
       "next": []
     }
   ]
@@ -75,30 +53,24 @@ The config format is serialization-agnostic (uses serde). The CLI handles parsin
 ### Global Options
 
 - `timeout`: Seconds before a task times out (default: none)
-- `max_retries`: Max retry attempts (default: 0)
-- `max_concurrency`: Maximum concurrent tasks (default: unlimited)
-- `retry_on_timeout`: Whether to retry timed-out tasks (default: true)
-- `retry_on_invalid_response`: Whether to retry invalid responses (default: true)
+- `maxRetries`: Max retry attempts (default: 0)
+- `maxConcurrency`: Maximum concurrent tasks (default: unlimited)
+- `retryOnTimeout`: Whether to retry timed-out tasks (default: true)
+- `retryOnInvalidResponse`: Whether to retry invalid responses (default: true)
 
 ### Step Fields
 
 - `name`: Step identifier
 - `action`: How the step processes tasks
-  - `{"kind": "Pool", "params": {"instructions": "..."}}` → send to agent pool
-  - `{"kind": "Command", "params": {"script": "..."}}` → run local command
+  - `{"kind": "Bash", "script": "..."}` → run local shell script
 - `next`: Valid next step names (empty = terminal)
 - `options`: Per-step overrides for global options
 
 ### Action Types
 
-**Pool**: Sends tasks to the agent pool for processing by LLM agents.
+**Bash**: Runs a local shell script. The task JSON is piped to stdin, and the script must output a JSON array of next tasks on stdout.
 ```json
-{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Analyze the input."}}}
-```
-
-**Command**: Runs a local shell script. The task JSON is piped to stdin, and the script must output a JSON array of next tasks on stdout.
-```json
-{"kind": "Command", "params": {"script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}}
+{"kind": "Bash", "script": "jq '.value | {kind: \"Done\", value: .}' | jq -s"}
 ```
 
 ## Task Format
@@ -142,14 +114,14 @@ barnum config validate --config config.json
 1. Task dispatched to agent
 2. If no response within `timeout` seconds:
    - Submit cancelled
-   - Task requeued if `retry_on_timeout` is true and `max_retries` not exceeded
+   - Task requeued if `retryOnTimeout` is true and `maxRetries` not exceeded
 
 ## Runtime Validation
 
 1. Agent response validated:
    - Must be JSON array
    - Each item's `kind` must be a valid `next` step
-2. Invalid responses requeued if `retry_on_invalid_response` is true
+2. Invalid responses requeued if `retryOnInvalidResponse` is true
 
 ## Agent Documentation
 

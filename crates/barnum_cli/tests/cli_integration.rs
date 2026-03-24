@@ -1,7 +1,7 @@
 //! Barnum CLI integration tests.
 //!
 //! These tests verify the CLI runs correctly with various configurations.
-//! They use Command actions that run shell scripts to verify execution.
+//! They use Bash actions that run shell scripts to verify execution.
 
 #![expect(clippy::expect_used)]
 #![expect(clippy::unwrap_used)]
@@ -28,7 +28,7 @@ fn single_step_terminates() {
     let config = r#"{
         "steps": [{
             "name": "Start",
-            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+            "action": {"kind": "Bash", "script": "echo '[]'"},
             "next": []
         }]
     }"#;
@@ -56,9 +56,9 @@ fn multi_stage_linear() {
 
     let config = r#"{
         "steps": [
-            {"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\": \"Middle\", \"value\": {}}]'"}}, "next": ["Middle"]},
-            {"name": "Middle", "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\": \"End\", \"value\": {}}]'"}}, "next": ["End"]},
-            {"name": "End", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "Start", "action": {"kind": "Bash", "script": "echo '[{\"kind\": \"Middle\", \"value\": {}}]'"}, "next": ["Middle"]},
+            {"name": "Middle", "action": {"kind": "Bash", "script": "echo '[{\"kind\": \"End\", \"value\": {}}]'"}, "next": ["End"]},
+            {"name": "End", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -90,7 +90,7 @@ fn empty_initial_tasks_succeeds() {
     let config = r#"{
         "steps": [{
             "name": "Start",
-            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+            "action": {"kind": "Bash", "script": "echo '[]'"},
             "next": []
         }]
     }"#;
@@ -115,8 +115,8 @@ fn empty_initial_tasks_succeeds() {
 fn validate_valid_config() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["B"]},
-            {"name": "B", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "A", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -133,7 +133,7 @@ fn validate_valid_config() {
 fn validate_invalid_config_missing_step() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["NonExistent"]}
+            {"name": "A", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["NonExistent"]}
         ]
     }"#;
 
@@ -148,7 +148,7 @@ fn validate_invalid_config_missing_step() {
 fn docs_generates_markdown() {
     let config = r#"{
         "steps": [
-            {"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "Start", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -165,8 +165,8 @@ fn docs_generates_markdown() {
 fn graph_generates_dot() {
     let config = r#"{
         "steps": [
-            {"name": "A", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["B"]},
-            {"name": "B", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "A", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["B"]},
+            {"name": "B", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -196,7 +196,7 @@ fn config_from_file() {
         r#"{
             "steps": [{
                 "name": "FileStep",
-                "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                "action": {"kind": "Bash", "script": "echo '[]'"},
                 "next": []
             }]
         }"#,

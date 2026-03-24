@@ -417,7 +417,7 @@ fn generate_graphviz(config: &Config) -> String {
 
         // Shape and color based on action type
         let (shape, fill_color) = match &step.action {
-            ActionKind::Command(..) => ("box", "#e3f2fd"),
+            ActionKind::Bash(..) => ("box", "#e3f2fd"),
         };
         attrs.push(format!("shape={shape}"));
 
@@ -467,7 +467,7 @@ mod tests {
         config_file.resolve(Path::new("."))
     }
 
-    const CMD: &str = r#"{"kind": "Command", "params": {"script": "echo '[]'"}}"#;
+    const CMD: &str = r#"{"kind": "Bash", "script": "echo '[]'"}"#;
 
     #[test]
     fn graphviz_basic() {

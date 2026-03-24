@@ -12,6 +12,7 @@ use std::collections::HashMap;
 ///
 /// All file references have been resolved and options computed per-step.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Config {
     /// Maximum concurrent tasks (None = use default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,6 +31,7 @@ impl Config {
 
 /// A fully resolved step.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Step {
     /// Step name.
     pub name: StepName,
@@ -51,21 +53,22 @@ pub struct Step {
 
 /// Run a shell command.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct CommandAction {
+pub struct BashAction {
     /// Shell script to execute.
     pub script: String,
 }
 
 /// How a resolved step processes tasks.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", content = "params")]
+#[serde(tag = "kind")]
 pub enum ActionKind {
     /// Run a shell command.
-    Command(CommandAction),
+    Bash(BashAction),
 }
 
 /// Resolved options for a step.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct Options {
     /// Timeout in seconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]

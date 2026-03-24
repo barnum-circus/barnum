@@ -1,20 +1,16 @@
 import { z } from "zod";
 
-const CommandAction = z.object({
-  script: z.string().describe("Shell script to execute."),
-}).describe("Run a shell command.");
-
 const ActionKind = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("Command"),
-    params: CommandAction,
+    kind: z.literal("Bash"),
+    script: z.string().describe("Shell script to execute."),
   }).describe("Run a shell command."),
 ]).describe("How a resolved step processes tasks.");
 
 const Options = z.object({
-  max_retries: z.number().int().nonnegative().optional().default(0).describe("Maximum retries."),
-  retry_on_invalid_response: z.boolean().optional().default(true).describe("Whether to retry on invalid response."),
-  retry_on_timeout: z.boolean().optional().default(true).describe("Whether to retry on timeout."),
+  maxRetries: z.number().int().nonnegative().optional().default(0).describe("Maximum retries."),
+  retryOnInvalidResponse: z.boolean().optional().default(true).describe("Whether to retry on invalid response."),
+  retryOnTimeout: z.boolean().optional().default(true).describe("Whether to retry on timeout."),
   timeout: z.number().int().nonnegative().nullable().optional().describe("Timeout in seconds."),
 }).describe("Resolved options for a step.");
 
@@ -27,7 +23,7 @@ const Step = z.object({
 }).describe("A fully resolved step.");
 
 const Config = z.object({
-  max_concurrency: z.number().int().nonnegative().nullable().optional().describe("Maximum concurrent tasks (None = use default)."),
+  maxConcurrency: z.number().int().nonnegative().nullable().optional().describe("Maximum concurrent tasks (None = use default)."),
   steps: z.array(Step).describe("Resolved step definitions."),
 }).describe("Fully resolved Barnum configuration.\n\nAll file references have been resolved and options computed per-step.");
 
@@ -42,7 +38,6 @@ export const resolvedTypesSchema = z.object({
 }).describe("Root type for generating the resolved schema.\n\nGroups the resolved config and task types so `schema_for!` produces a single schema containing all resolved runtime types. This struct exists only for schema generation — it's never constructed at runtime.");
 
 export type ResolvedTypes = z.infer<typeof resolvedTypesSchema>;
-export type CommandAction = z.infer<typeof CommandAction>;
 export type ActionKind = z.infer<typeof ActionKind>;
 export type Options = z.infer<typeof Options>;
 export type Step = z.infer<typeof Step>;

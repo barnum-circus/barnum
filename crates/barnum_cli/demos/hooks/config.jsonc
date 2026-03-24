@@ -1,28 +1,24 @@
 {
   "entrypoint": "Process",
   "options": {
-    "max_retries": 0
+    "maxRetries": 0
   },
   "steps": [
     {
       "name": "Process",
       "action": {
-        "kind": "Command",
-        "params": {
-          "script": "./process.sh"
-        }
+        "kind": "Bash",
+        "script": "./process.sh"
       },
       // Finally: runs after task and all its children complete
-      "finally": { "kind": "Command", "params": { "script": "./finally-hook.sh" } },
+      "finally": { "kind": "Bash", "script": "./finally-hook.sh" },
       "next": ["Cleanup"]
     },
     {
       "name": "Cleanup",
       "action": {
-        "kind": "Command",
-        "params": {
-          "script": "echo '[]'"
-        }
+        "kind": "Bash",
+        "script": "echo '[]'"
       },
       "next": []
     }

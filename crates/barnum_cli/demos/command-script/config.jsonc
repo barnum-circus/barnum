@@ -1,26 +1,22 @@
 {
   "entrypoint": "ListFiles",
   "options": {
-    "max_retries": 1
+    "maxRetries": 1
   },
   "steps": [
     {
       "name": "ListFiles",
       "action": {
-        "kind": "Command",
-        "params": {
-          "script": "./list-files.sh"
-        }
+        "kind": "Bash",
+        "script": "./list-files.sh"
       },
       "next": ["AnalyzeFile"]
     },
     {
       "name": "AnalyzeFile",
       "action": {
-        "kind": "Command",
-        "params": {
-          "script": "echo '[]'"
-        }
+        "kind": "Bash",
+        "script": "echo '[]'"
       },
       "next": []
     }

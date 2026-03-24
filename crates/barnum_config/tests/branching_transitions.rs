@@ -19,22 +19,22 @@ fn branching_config_path_a() -> barnum_config::Config {
             "steps": [
                 {
                     "name": "Decide",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"PathA\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"PathA\",\"value\":{}}]'"},
                     "next": ["PathA", "PathB"]
                 },
                 {
                     "name": "PathA",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "PathB",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -51,22 +51,22 @@ fn branching_config_path_b() -> barnum_config::Config {
             "steps": [
                 {
                     "name": "Decide",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"PathB\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"PathB\",\"value\":{}}]'"},
                     "next": ["PathA", "PathB"]
                 },
                 {
                     "name": "PathA",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "PathB",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -122,26 +122,26 @@ fn invalid_transition_from_branch() {
     // Decide tries to transition to Done directly (not a valid next step).
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
-            "options": { "max_retries": 0 },
+            "options": { "maxRetries": 0 },
             "steps": [
                 {
                     "name": "Decide",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["PathA", "PathB"]
                 },
                 {
                     "name": "PathA",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "PathB",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Done\",\"value\":{}}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]

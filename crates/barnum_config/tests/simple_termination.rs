@@ -14,7 +14,7 @@ const TEST_DIR: &str = "simple_termination";
 
 fn simple_config() -> Config {
     let config_file: ConfigFile = serde_json::from_str(
-        r#"{"steps": [{"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}]}"#,
+        r#"{"steps": [{"name": "Start", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}]}"#,
     )
     .expect("parse config");
     config_file.resolve(Path::new("."))

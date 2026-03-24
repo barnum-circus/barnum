@@ -61,19 +61,19 @@ echo "finally_ran" > "{}"
     let config_json = format!(
         r#"{{
         "options": {{
-            "max_retries": 3,
-            "retry_on_invalid_response": true
+            "maxRetries": 3,
+            "retryOnInvalidResponse": true
         }},
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}},
                 "next": ["StepB"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}}}},
+                "action": {{"kind": "Bash", "script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}},
                 "next": []
             }}
         ]
@@ -145,19 +145,19 @@ echo "finally_executed" > "{}"
     let config_json = format!(
         r#"{{
         "options": {{
-            "max_retries": 3,
-            "retry_on_invalid_response": true
+            "maxRetries": 3,
+            "retryOnInvalidResponse": true
         }},
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}},
                 "next": ["Child"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'invalid json!!!'; fi"}}}},
+                "action": {{"kind": "Bash", "script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'invalid json!!!'; fi"}},
                 "next": []
             }}
         ]
@@ -254,21 +254,21 @@ echo "child_finally" >> "{}"
     let config_json = format!(
         r#"{{
         "options": {{
-            "max_retries": 3,
-            "retry_on_invalid_response": true
+            "maxRetries": 3,
+            "retryOnInvalidResponse": true
         }},
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}},
                 "next": ["Child"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}}}},
+                "action": {{"kind": "Bash", "script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}},
                 "next": [],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }}
         ]
     }}"#,
@@ -341,19 +341,19 @@ echo "finally_executed" > "{}"
     let config_json = format!(
         r#"{{
         "options": {{
-            "max_retries": 2,
-            "retry_on_invalid_response": true
+            "maxRetries": 2,
+            "retryOnInvalidResponse": true
         }},
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}},
                 "next": ["Child"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Command", "params": {{"script": "echo 'always invalid json'"}}}},
+                "action": {{"kind": "Bash", "script": "echo 'always invalid json'"}},
                 "next": []
             }}
         ]
@@ -454,19 +454,19 @@ echo "B_finally" >> "{}"
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}},
                 "next": ["StepB"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}},
                 "next": ["StepC"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "StepC",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": []
             }}
         ]
@@ -573,19 +573,19 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}},
                 "next": ["StepB"],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": [],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
+                "finally": {{"kind": "Bash", "script": "{}"}}
             }},
             {{
                 "name": "Cleanup",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": []
             }}
         ]
@@ -685,10 +685,10 @@ fn deeply_nested_finally_chain() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepC", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}, "next": ["StepB"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}, "next": ["StepC"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}, "next": ["StepD"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepD", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": []}}
         ]
     }}"#,
         a_finally.display(),
@@ -776,10 +776,10 @@ fn multiple_children_with_finally() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}, {{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepC", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}},
-            {{"name": "StepD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}, {{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}, "next": ["StepD"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepC", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": []}},
+            {{"name": "StepD", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": []}}
         ]
     }}"#,
         a_finally.display(),
@@ -866,10 +866,10 @@ fn finally_spawns_multiple_tasks() {
     let config_json = format!(
         r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": [], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "CleanupC", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}},
-            {{"name": "CleanupD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Bash", "script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}, "next": ["StepB"], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "StepB", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": [], "finally": {{"kind": "Bash", "script": "{}"}}}},
+            {{"name": "CleanupC", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": []}},
+            {{"name": "CleanupD", "action": {{"kind": "Bash", "script": "echo '[]'"}}, "next": []}}
         ]
     }}"#,
         a_finally.display(),
@@ -955,10 +955,10 @@ exit 0
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": [],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
-                "options": {{"max_retries": 3}}
+                "finally": {{"kind": "Bash", "script": "{}"}},
+                "options": {{"maxRetries": 3}}
             }}
         ]
     }}"#,
@@ -1028,10 +1028,10 @@ fn finally_failure_propagates_after_retries_exhausted() {
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": [],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
-                "options": {{"max_retries": 2}}
+                "finally": {{"kind": "Bash", "script": "{}"}},
+                "options": {{"maxRetries": 2}}
             }}
         ]
     }}"#,
@@ -1101,16 +1101,16 @@ echo '[{"kind": "Cleanup", "value": {}}]'
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
+                "action": {{"kind": "Bash", "script": "echo '[]'"}},
                 "next": [],
-                "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
-                "options": {{"max_retries": 0}}
+                "finally": {{"kind": "Bash", "script": "{}"}},
+                "options": {{"maxRetries": 0}}
             }},
             {{
                 "name": "Cleanup",
-                "action": {{"kind": "Command", "params": {{"script": "echo 'INVALID JSON - FAIL'"}}}},
+                "action": {{"kind": "Bash", "script": "echo 'INVALID JSON - FAIL'"}},
                 "next": [],
-                "options": {{"max_retries": 0}}
+                "options": {{"maxRetries": 0}}
             }}
         ]
     }}"#,

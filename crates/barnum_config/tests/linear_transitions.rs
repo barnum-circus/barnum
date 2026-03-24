@@ -18,17 +18,17 @@ fn linear_config() -> Config {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Middle\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Middle\",\"value\":{}}]'"},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]

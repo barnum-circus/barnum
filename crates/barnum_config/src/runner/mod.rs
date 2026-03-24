@@ -21,7 +21,7 @@ use barnum_state::{
 };
 use tracing::{error, info};
 
-use crate::resolved::{ActionKind, CommandAction, Config, Step};
+use crate::resolved::{ActionKind, BashAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
 use action::{ActionError, ShellAction, WorkerKind, WorkerResult, spawn_worker};
@@ -691,7 +691,7 @@ impl<'a> Engine<'a> {
         let tx = self.tx.clone();
 
         match &step.action {
-            ActionKind::Command(CommandAction { script }) => {
+            ActionKind::Bash(BashAction { script }) => {
                 info!(step = %task.step, script = %script, "executing command");
                 let action = Box::new(ShellAction {
                     script: script.clone(),
@@ -959,7 +959,7 @@ mod run_state_tests {
         TaskSubmitted,
     };
 
-    use crate::resolved::{ActionKind, CommandAction, Config, Options, Step};
+    use crate::resolved::{ActionKind, BashAction, Config, Options, Step};
     use crate::types::{HookScript, LogTaskId, StepInputValue, StepName};
 
     use super::{PendingDispatch, PendingFinally, PendingTask, RunState, TaskState};
@@ -969,7 +969,7 @@ mod run_state_tests {
     fn step(name: &str) -> Step {
         Step {
             name: StepName::new(name),
-            action: ActionKind::Command(CommandAction {
+            action: ActionKind::Bash(BashAction {
                 script: "true".into(),
             }),
             next: vec![],

@@ -20,17 +20,17 @@ fn max_concurrency_config() -> Config {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_concurrency": 2
+                "maxConcurrency": 2
             },
             "steps": [
                 {
                     "name": "FanOut",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}}]'"},
                     "next": ["Worker"]
                 },
                 {
                     "name": "Worker",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -69,37 +69,37 @@ fn fan_out_tree_config() -> Config {
             "steps": [
                 {
                     "name": "Root",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Branch1\",\"value\":{}},{\"kind\":\"Branch2\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Branch1\",\"value\":{}},{\"kind\":\"Branch2\",\"value\":{}}]'"},
                     "next": ["Branch1", "Branch2"]
                 },
                 {
                     "name": "Branch1",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Leaf1A\",\"value\":{}},{\"kind\":\"Leaf1B\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Leaf1A\",\"value\":{}},{\"kind\":\"Leaf1B\",\"value\":{}}]'"},
                     "next": ["Leaf1A", "Leaf1B"]
                 },
                 {
                     "name": "Branch2",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Leaf2A\",\"value\":{}},{\"kind\":\"Leaf2B\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Leaf2A\",\"value\":{}},{\"kind\":\"Leaf2B\",\"value\":{}}]'"},
                     "next": ["Leaf2A", "Leaf2B"]
                 },
                 {
                     "name": "Leaf1A",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 },
                 {
                     "name": "Leaf1B",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 },
                 {
                     "name": "Leaf2A",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 },
                 {
                     "name": "Leaf2B",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]

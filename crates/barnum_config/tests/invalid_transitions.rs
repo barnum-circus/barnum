@@ -16,22 +16,22 @@ fn strict_config() -> Config {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 1
+                "maxRetries": 1
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"},
                     "next": ["End"]
                 },
                 {
                     "name": "End",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -73,17 +73,17 @@ fn unknown_step_causes_retry() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 1
+                "maxRetries": 1
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"NonExistent\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"NonExistent\",\"value\":{}}]'"},
                     "next": ["Middle"]
                 },
                 {
                     "name": "Middle",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -125,22 +125,22 @@ fn recovery_after_invalid_then_valid() {
 
     let json_value = serde_json::json!({
         "options": {
-            "max_retries": 3
+            "maxRetries": 3
         },
         "steps": [
             {
                 "name": "Start",
-                "action": {"kind": "Command", "params": {"script": start_script}},
+                "action": {"kind": "Bash", "script": start_script},
                 "next": ["Middle"]
             },
             {
                 "name": "Middle",
-                "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"}},
+                "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"End\",\"value\":{}}]'"},
                 "next": ["End"]
             },
             {
                 "name": "End",
-                "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                "action": {"kind": "Bash", "script": "echo '[]'"},
                 "next": []
             }
         ]

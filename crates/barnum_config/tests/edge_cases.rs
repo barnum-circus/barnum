@@ -23,7 +23,7 @@ fn empty_initial_tasks_completes() {
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -61,12 +61,12 @@ fn large_fan_out() {
             "steps": [
                 {
                     "name": "Distribute",
-                    "action": {"kind": "Command", "params": {"script": "echo '[{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}}]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}},{\"kind\":\"Worker\",\"value\":{}}]'"},
                     "next": ["Worker"]
                 },
                 {
                     "name": "Worker",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -102,12 +102,12 @@ fn command_action_executes() {
             "steps": [
                 {
                     "name": "Echo",
-                    "action": {"kind": "Command", "params": {"script": "jq -c '[{kind: \"Done\", value: .value}]'"}},
+                    "action": {"kind": "Bash", "script": "jq -c '[{kind: \"Done\", value: .value}]'"},
                     "next": ["Done"]
                 },
                 {
                     "name": "Done",
-                    "action": {"kind": "Command", "params": {"script": "jq -c '[]'"}},
+                    "action": {"kind": "Bash", "script": "jq -c '[]'"},
                     "next": []
                 }
             ]
@@ -144,7 +144,7 @@ fn rapid_task_completion() {
             "steps": [
                 {
                     "name": "Fast",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]
@@ -181,7 +181,7 @@ fn unknown_step_in_initial_tasks_returns_error() {
             "steps": [
                 {
                     "name": "Known",
-                    "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+                    "action": {"kind": "Bash", "script": "echo '[]'"},
                     "next": []
                 }
             ]

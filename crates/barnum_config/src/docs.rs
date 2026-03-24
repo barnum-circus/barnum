@@ -67,8 +67,8 @@ mod tests {
         let config_file: ConfigFile = serde_json::from_str(
             r#"{
             "steps": [
-                {"name": "Start", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["End"]},
-                {"name": "End", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+                {"name": "Start", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["End"]},
+                {"name": "End", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
             ]
         }"#,
         )

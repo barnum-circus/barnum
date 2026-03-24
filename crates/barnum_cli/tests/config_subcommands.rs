@@ -11,13 +11,13 @@ use common::BarnumRunner;
 use rstest::rstest;
 use std::time::Duration;
 
-const COMMAND: &str = r#"{"kind": "Command", "params": {"script": "echo '[]'"}}"#;
+const BASH_ACTION: &str = r#"{"kind": "Bash", "script": "echo '[]'"}"#;
 
 /// Build a step JSON string with the required action field.
 fn step(name: &str, next: &[&str]) -> String {
     let next_json: Vec<String> = next.iter().map(|n| format!("\"{n}\"")).collect();
     format!(
-        r#"{{"name": "{name}", "action": {COMMAND}, "next": [{}]}}"#,
+        r#"{{"name": "{name}", "action": {BASH_ACTION}, "next": [{}]}}"#,
         next_json.join(", ")
     )
 }
@@ -84,7 +84,7 @@ fn schema_defines_step_type() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn schema_action_has_command_variant() {
+fn schema_action_has_bash_variant() {
     let barnum = BarnumRunner::new();
     let result = barnum.schema_json().expect("schema");
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -95,13 +95,13 @@ fn schema_action_has_command_variant() {
         .as_array()
         .expect("ActionFile should have oneOf");
 
-    // Find Command variant
-    let has_command = variants.iter().any(|v| {
+    // Find Bash variant
+    let has_bash = variants.iter().any(|v| {
         v["properties"]["kind"]["enum"]
             .as_array()
-            .is_some_and(|e| e.iter().any(|k| k == "Command"))
+            .is_some_and(|e| e.iter().any(|k| k == "Bash"))
     });
-    assert!(has_command, "Action should have Command variant");
+    assert!(has_bash, "Action should have Bash variant");
 
     // Verify Pool variant does not exist
     let has_pool = variants.iter().any(|v| {
@@ -213,7 +213,7 @@ fn validate_branching_config() {
 #[timeout(Duration::from_secs(5))]
 fn validate_config_with_options() {
     let config = format!(
-        r#"{{"options": {{"timeout": 60, "max_retries": 3, "max_concurrency": 5}}, "steps": [{}]}}"#,
+        r#"{{"options": {{"timeout": 60, "maxRetries": 3, "maxConcurrency": 5}}, "steps": [{}]}}"#,
         step("Task", &[])
     );
 
@@ -318,8 +318,8 @@ fn docs_generates_markdown_header() {
 fn docs_includes_step_names() {
     let config = r#"{
         "steps": [
-            {"name": "Analyze", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["Implement"]},
-            {"name": "Implement", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "Analyze", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["Implement"]},
+            {"name": "Implement", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -341,7 +341,7 @@ fn docs_includes_terminal_step_info() {
     let config = r#"{
         "steps": [{
             "name": "Task",
-            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
+            "action": {"kind": "Bash", "script": "echo '[]'"},
             "next": []
         }]
     }"#;
@@ -413,11 +413,11 @@ fn graph_marks_terminal_steps() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn graph_command_uses_box_shape() {
+fn graph_bash_uses_box_shape() {
     let config = r#"{
         "steps": [
-            {"name": "StepA", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["StepB"]},
-            {"name": "StepB", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
+            {"name": "StepA", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": ["StepB"]},
+            {"name": "StepB", "action": {"kind": "Bash", "script": "echo '[]'"}, "next": []}
         ]
     }"#;
 
@@ -428,7 +428,7 @@ fn graph_command_uses_box_shape() {
     let stdout = String::from_utf8_lossy(&result.stdout);
     assert!(
         stdout.contains("shape=box"),
-        "Command steps should use box shape"
+        "Bash steps should use box shape"
     );
 }
 
@@ -452,8 +452,8 @@ fn graph_shows_hooks() {
     let config = format!(
         r#"{{"steps": [{{
             "name": "WithHooks",
-            "action": {COMMAND},
-            "finally": {{"kind": "Command", "params": {{"script": "echo finally"}}}},
+            "action": {BASH_ACTION},
+            "finally": {{"kind": "Bash", "script": "echo finally"}},
             "next": []
         }}]}}"#
     );
@@ -542,7 +542,7 @@ fn validate_entrypoint() {
         "entrypoint": "Start",
         "steps": [{{
             "name": "Start",
-            "action": {COMMAND},
+            "action": {BASH_ACTION},
             "next": []
         }}]
     }}"#

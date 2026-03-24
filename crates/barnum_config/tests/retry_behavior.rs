@@ -30,13 +30,13 @@ fn timeout_retry_exhausts_max_retries() {
         r#"{
             "options": {
                 "timeout": 1,
-                "max_retries": 2,
-                "retry_on_timeout": true
+                "maxRetries": 2,
+                "retryOnTimeout": true
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "sleep 999"}},
+                    "action": {"kind": "Bash", "script": "sleep 999"},
                     "next": []
                 }
             ]
@@ -76,13 +76,13 @@ fn invalid_response_retry_exhausts_max_retries() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 2,
-                "retry_on_invalid_response": true
+                "maxRetries": 2,
+                "retryOnInvalidResponse": true
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "action": {"kind": "Bash", "script": "echo 'not json'"},
                     "next": []
                 }
             ]
@@ -121,13 +121,13 @@ fn max_retries_zero_no_retries() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 0,
-                "retry_on_invalid_response": true
+                "maxRetries": 0,
+                "retryOnInvalidResponse": true
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "action": {"kind": "Bash", "script": "echo 'not json'"},
                     "next": []
                 }
             ]
@@ -167,13 +167,13 @@ fn retry_on_timeout_false_drops_task() {
         r#"{
             "options": {
                 "timeout": 1,
-                "max_retries": 5,
-                "retry_on_timeout": false
+                "maxRetries": 5,
+                "retryOnTimeout": false
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "sleep 999"}},
+                    "action": {"kind": "Bash", "script": "sleep 999"},
                     "next": []
                 }
             ]
@@ -212,13 +212,13 @@ fn retry_on_invalid_response_false_drops_task() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 5,
-                "retry_on_invalid_response": false
+                "maxRetries": 5,
+                "retryOnInvalidResponse": false
             },
             "steps": [
                 {
                     "name": "Start",
-                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "action": {"kind": "Bash", "script": "echo 'not json'"},
                     "next": []
                 }
             ]
@@ -257,16 +257,16 @@ fn per_step_options_override_global() {
     let config_file: ConfigFile = serde_json::from_str(
         r#"{
             "options": {
-                "max_retries": 5,
-                "retry_on_invalid_response": true
+                "maxRetries": 5,
+                "retryOnInvalidResponse": true
             },
             "steps": [
                 {
                     "name": "NoRetryStep",
-                    "action": {"kind": "Command", "params": {"script": "echo 'not json'"}},
+                    "action": {"kind": "Bash", "script": "echo 'not json'"},
                     "next": [],
                     "options": {
-                        "retry_on_invalid_response": false
+                        "retryOnInvalidResponse": false
                     }
                 }
             ]
@@ -314,13 +314,13 @@ fn successful_retry_after_initial_failure() {
     let json = format!(
         r#"{{
             "options": {{
-                "max_retries": 5,
-                "retry_on_invalid_response": true
+                "maxRetries": 5,
+                "retryOnInvalidResponse": true
             }},
             "steps": [
                 {{
                     "name": "Start",
-                    "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad'; fi"}}}},
+                    "action": {{"kind": "Bash", "script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad'; fi"}},
                     "next": []
                 }}
             ]
