@@ -15,7 +15,7 @@ let captured: unknown;
 BarnumConfig.fromConfig = ((config: unknown) => {
   captured = config;
   return { run: () => ({ on: () => {} }) };
-}) as typeof BarnumConfig.fromConfig;
+}) as unknown as typeof BarnumConfig.fromConfig;
 
 await import(configPath);
 
