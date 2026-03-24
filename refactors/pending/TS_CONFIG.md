@@ -36,7 +36,7 @@ const config = BarnumConfig.fromConfig({
       name: "FanOut",
       action: {
         kind: "Bash",
-        params: { script: "./fan-out.sh" },
+        params: { script: "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s ." },
       },
       next: ["Analyze"],
     },
@@ -66,7 +66,7 @@ Runs a shell script. Rust handles this directly — `sh -c <script>`, piping `{ 
 
 Config shape:
 ```json
-{ "kind": "Bash", "params": { "script": "./fan-out.sh" } }
+{ "kind": "Bash", "params": { "script": "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s ." } }
 ```
 
 Stdin (what the script receives):
