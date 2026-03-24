@@ -726,13 +726,13 @@ impl<'a> Engine<'a> {
             }
         };
 
-        let action = Box::new(ShellAction {
+        let action = ShellAction {
             script,
             step_name: task.step.clone(),
             config: self.config_json.clone(),
             working_dir: self.working_dir.clone(),
             step_config,
-        });
+        };
         spawn_worker(
             self.tx.clone(),
             action,
@@ -755,13 +755,13 @@ impl<'a> Engine<'a> {
         let timeout = effective.timeout.map(Duration::from_secs);
 
         info!(step = %task.step, parent = ?parent_id, "dispatching finally worker");
-        let action = Box::new(ShellAction {
+        let action = ShellAction {
             script: script.clone(),
             step_name: task.step.clone(),
             config: self.config_json.clone(),
             working_dir: self.working_dir.clone(),
             step_config: None,
-        });
+        };
         spawn_worker(
             self.tx.clone(),
             action,

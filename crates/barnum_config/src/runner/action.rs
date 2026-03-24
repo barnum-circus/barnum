@@ -1,4 +1,4 @@
-//! Action trait and dispatch infrastructure.
+//! Action dispatch infrastructure.
 
 use std::fmt;
 use std::io::{Read as _, Write as _};
@@ -54,9 +54,9 @@ impl fmt::Display for ActionError {
     }
 }
 
-// ==================== Action trait ====================
+// ==================== ActionHandle ====================
 
-/// Handle returned by `Action::start`. Dropping this handle cancels the action.
+/// Handle returned by `ShellAction::start`. Dropping this handle cancels the action.
 ///
 /// - Call `rx.recv()` or `rx.recv_timeout()` to get the result.
 /// - Drop the handle to cancel the action (best-effort via guard's `Drop`).
@@ -78,14 +78,6 @@ impl ActionHandle {
     }
 }
 
-/// An executable action. Constructed per dispatch, consumed once by `start`.
-///
-/// `start` kicks off work (typically by spawning a thread) and returns an
-/// `ActionHandle` immediately. It does not block.
-pub trait Action: Send {
-    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle;
-}
-
 // ==================== run_action ====================
 
 /// Run an action with an optional timeout.
@@ -94,12 +86,12 @@ pub trait Action: Send {
 /// counts against the timeout. On timeout, the handle drops — the guard's
 /// `Drop` kills the underlying work.
 pub fn run_action(
-    action: Box<dyn Action>,
+    action: ShellAction,
     value: &serde_json::Value,
     timeout: Option<Duration>,
 ) -> Result<String, ActionError> {
     let deadline = timeout.map(|d| Instant::now() + d);
-    let handle = action.start(value.clone());
+    let handle = action.start(value);
     let channel_result = match deadline {
         None => handle
             .rx
@@ -125,7 +117,7 @@ pub fn run_action(
 /// Spawn a worker thread that runs an action and sends the result to the engine.
 pub fn spawn_worker(
     tx: mpsc::Sender<WorkerResult>,
-    action: Box<dyn Action>,
+    action: ShellAction,
     task_id: LogTaskId,
     task: Task,
     kind: WorkerKind,
@@ -178,12 +170,12 @@ pub struct ShellAction {
     pub step_config: Option<serde_json::Value>,
 }
 
-impl Action for ShellAction {
+impl ShellAction {
     #[expect(clippy::expect_used)]
-    fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
+    fn start(self, value: &serde_json::Value) -> ActionHandle {
         let (tx, rx) = mpsc::channel();
         let task_json = serde_json::to_string(&Envelope {
-            value: &value,
+            value,
             config: &self.config,
             step_name: &self.step_name,
             step_config: self.step_config.as_ref(),

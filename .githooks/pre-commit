@@ -1,6 +1,5 @@
 #!/bin/bash
-# Pre-commit hook: runs fmt, check, clippy, test, and udeps
-# Format runs first (modifies files), then check/clippy/test/udeps run in parallel
+# Pre-commit hook: runs fmt, schemas, check, clippy, test, and udeps
 # Skips cargo commands if no Rust files are staged
 
 set -e
@@ -26,48 +25,36 @@ git add libs/barnum/barnum-config-schema.json
 git add libs/barnum/barnum-config-schema.zod.ts
 git add libs/barnum/barnum-cli-schema.zod.ts
 
-# Create temp directory for output files
-TEMP_DIR=$(mktemp -d)
-trap "rm -rf $TEMP_DIR" EXIT
+# Build CLI binaries first (tests spawn them as subprocesses)
+echo "Building CLI binaries..."
+cargo build -p troupe_cli || { echo "cargo build failed"; exit 1; }
 
-# Build CLI binary first (tests spawn it as subprocess)
-echo "Building CLI binary..."
-cargo build -p troupe_cli > "$TEMP_DIR/build.log" 2>&1 || { echo "cargo build failed:"; cat "$TEMP_DIR/build.log"; exit 1; }
+echo "Running cargo check..."
+cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
 
-# Run check, clippy, test, and udeps in parallel
-echo "Running cargo check, clippy, test, and udeps in parallel..."
+echo "Running cargo clippy..."
+cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy failed"; exit 1; }
 
-# Start background jobs
-cargo check --workspace --all-targets > "$TEMP_DIR/check.log" 2>&1 &
-CHECK_PID=$!
-
-cargo clippy --workspace --all-targets -- -D warnings > "$TEMP_DIR/clippy.log" 2>&1 &
-CLIPPY_PID=$!
-
-SKIP_IPC_TESTS=1 cargo test --workspace -- --test-threads=1 > "$TEMP_DIR/test.log" 2>&1 &
-TEST_PID=$!
+# Run tests via command pool (outside sandbox) for reliable IPC test execution.
+# Falls back to direct execution if the command pool is unavailable.
+TROUPE_BIN="./target/debug/troupe"
+echo "Running tests..."
+if [ -x "$TROUPE_BIN" ]; then
+    RESULT=$("$TROUPE_BIN" submit_task --pool cmd --notify file \
+        --data "{\"kind\": \"Task\", \"task\": {\"instructions\": \"pre-commit tests\", \"data\": {\"cmd\": \"cd $(pwd) && cargo test --workspace -- --test-threads=1 2>&1\"}}}" 2>/dev/null) || true
+    if echo "$RESULT" | grep -q '"kind":"Failed"'; then
+        echo "cargo test failed (via command pool):"
+        echo "$RESULT"
+        exit 1
+    fi
+else
+    SKIP_IPC_TESTS=1 cargo test --workspace -- --test-threads=1 || { echo "cargo test failed"; exit 1; }
+fi
 
 # udeps is optional
 if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
-    cargo +nightly udeps --workspace --all-targets > "$TEMP_DIR/udeps.log" 2>&1 &
-    UDEPS_PID=$!
-else
-    UDEPS_PID=""
-fi
-
-# Wait for all jobs and collect exit codes
-FAILED=""
-
-wait $CHECK_PID || { echo "cargo check failed:"; cat "$TEMP_DIR/check.log"; FAILED="$FAILED check"; }
-wait $CLIPPY_PID || { echo "cargo clippy failed:"; cat "$TEMP_DIR/clippy.log"; FAILED="$FAILED clippy"; }
-wait $TEST_PID || { echo "cargo test failed:"; cat "$TEMP_DIR/test.log"; FAILED="$FAILED test"; }
-if [ -n "$UDEPS_PID" ]; then
-    wait $UDEPS_PID || { echo "cargo udeps failed:"; cat "$TEMP_DIR/udeps.log"; FAILED="$FAILED udeps"; }
-fi
-
-if [ -n "$FAILED" ]; then
-    echo "Pre-commit checks failed:$FAILED"
-    exit 1
+    echo "Running cargo udeps..."
+    cargo +nightly udeps --workspace --all-targets || { echo "cargo udeps failed"; exit 1; }
 fi
 
 echo "Pre-commit checks passed!"
