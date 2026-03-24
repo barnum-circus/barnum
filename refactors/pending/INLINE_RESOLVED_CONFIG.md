@@ -1,6 +1,7 @@
 # Inline Resolved Config Types
 
-**Depends on:** DEMOS_TO_TYPESCRIPT (JSON configs deprecated, TypeScript is the entry point)
+**Depends on:** DEMOS_TO_TYPESCRIPT
+**Blocks:** ADD_TYPESCRIPT_ACTION
 
 ## Motivation
 

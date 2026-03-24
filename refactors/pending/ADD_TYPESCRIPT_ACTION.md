@@ -1,7 +1,7 @@
 # Add TypeScript Action Kind
 
 **Parent:** TS_CONFIG.md
-**Depends on:** FLATTEN_AND_RENAME_ACTION (Command renamed to Bash, params nesting removed, camelCase fields)
+**Depends on:** INLINE_RESOLVED_CONFIG (single type hierarchy, option merging in JS)
 
 ## Motivation
 
@@ -105,12 +105,9 @@ Resolution canonicalizes `path` in place on the same struct. The `exported_as` f
 
 ```rust
 ActionKind::TypeScript(TypeScriptAction { path, exported_as, ref step_config }) => {
-    let executor = self.executor.as_deref().unwrap_or("pnpm dlx tsx");
-    let run_handler = self.run_handler_path.as_deref()
-        .unwrap_or("node_modules/@barnum/barnum/actions/run-handler.ts");
-
     let script = format!(
-        "{executor} {run_handler} {path} {exported_as}",
+        "{} {} {path} {exported_as}",
+        self.executor, self.run_handler_path,
     );
 
     info!(step = %task.step, handler = %path, "dispatching TypeScript handler");
@@ -189,14 +186,14 @@ pub struct RunnerConfig<'a> {
     pub wake_script: Option<&'a str>,
     pub state_log_path: &'a Path,
     /// Executor command for TypeScript handlers (e.g., "pnpm dlx tsx").
-    /// Injected by cli.cjs via --executor. None means TypeScript actions are unavailable.
-    pub executor: Option<&'a str>,
-    /// Path to run-handler.ts. Defaults to looking in node_modules.
-    pub run_handler_path: Option<&'a str>,
+    /// Injected by the JS layer via --executor.
+    pub executor: &'a str,
+    /// Path to run-handler.ts.
+    pub run_handler_path: &'a str,
 }
 ```
 
-The `executor` is the TypeScript runtime command (e.g., `pnpm dlx tsx`, `bun`, `node --import tsx`). It's optional because JSON configs (without a JS entry point) may not have a TS runtime available. If a config uses TypeScript actions but no executor is provided, dispatch fails with a clear error.
+Both fields are required. By the time ADD_TYPESCRIPT_ACTION lands, the JS layer (`run.ts`) always provides both via CLI flags. There's no scenario where TypeScript actions exist but no executor is available — the JS entry point that spawns Rust is itself running in a TS runtime.
 
 ### Engine changes
 
@@ -207,8 +204,8 @@ The `Engine` struct gains `executor`, `run_handler_path`, and `config` (an `Arc<
 ```rust
 struct Engine {
     // ... existing fields ...
-    executor: Option<String>,
-    run_handler_path: Option<String>,
+    executor: String,
+    run_handler_path: String,
     config: Arc<Config>,
 }
 ```
@@ -220,18 +217,16 @@ struct Engine {
 Wire the existing `--executor` flag through to `RunnerConfig`:
 
 ```rust
-// Before (currently unused)
-executor: _,
-
-// After
 let runner_config = RunnerConfig {
     working_dir: &config_dir,
     wake_script: wake.as_deref(),
     state_log_path: &state_log_path,
-    executor: executor.as_deref(),
-    run_handler_path: None,
+    executor: &executor,
+    run_handler_path: &run_handler_path,
 };
 ```
+
+The `--executor` and `--run-handler-path` CLI flags are required (no defaults, no optionality). The JS layer provides them.
 
 ## Handler interface
 

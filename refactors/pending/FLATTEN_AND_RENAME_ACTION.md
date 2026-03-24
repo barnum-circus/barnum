@@ -1,6 +1,6 @@
 # Flatten Action Params and Rename Command to Bash
 
-**Blocks:** ADD_TYPESCRIPT_ACTION (this must land first)
+**Blocks:** DEMOS_TO_TYPESCRIPT (this must land first)
 
 ## Motivation
 

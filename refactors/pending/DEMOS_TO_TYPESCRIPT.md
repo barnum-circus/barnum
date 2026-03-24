@@ -1,14 +1,14 @@
 # Convert Demos and Tests to TypeScript Configs
 
-**Depends on:** FLATTEN_AND_RENAME_ACTION, ADD_TYPESCRIPT_ACTION
+**Depends on:** FLATTEN_AND_RENAME_ACTION
 
 ## Motivation
 
-Every demo has three config representations: `config.jsonc` (human-readable), `config.json` (machine-readable copy), and `run-demo.ts` (loads the JSON and calls `.run()`). The JSONC and JSON files are redundant with each other and will become redundant with the TypeScript config once ADD_TYPESCRIPT_ACTION lands. The `demo.sh` scripts duplicate pool setup logic.
+Every demo has three config representations: `config.jsonc` (human-readable), `config.json` (machine-readable copy), and `run-demo.ts` (loads the JSON and calls `.run()`). The JSONC and JSON files are redundant with each other. The `demo.sh` scripts duplicate pool setup logic.
 
 The target: each demo is a single `barnum.config.ts` file that defines the config inline and calls `.run()`. No JSONC, no JSON, no shell wrapper. The TypeScript file IS the demo. Users run `tsx crates/barnum_cli/demos/simple/barnum.config.ts`.
 
-CLI integration tests similarly construct configs as JSON strings. After this refactor, the Rust tests still use JSON (they test the Rust binary), but the demo configs are TypeScript-first.
+All demos continue to use `kind: "Bash"` actions — this refactor changes the config format (JSONC to inline TypeScript), not the action kind. The TypeScript action kind (ADD_TYPESCRIPT_ACTION) comes later and is independent.
 
 ## Current state
 
@@ -51,11 +51,8 @@ BarnumConfig.fromConfig({
     {
       name: "Start",
       action: {
-        kind: "TypeScript",
-        path: "./handlers/start.ts",
-        stepConfig: {
-          instructions: "This is the starting step. Return an empty array to finish.",
-        },
+        kind: "Bash",
+        script: `TASK=$(cat); \${TROUPE:-pnpm dlx @barnum/troupe} submit_task --pool $BARNUM_POOL --root $BARNUM_ROOT --notify file --data "$(jq -n --arg inst 'This is the starting step. Return an empty array to finish.' --argjson task "$TASK" '{task: $task, instructions: $inst}')" | jq -r '.stdout'`,
       },
       next: [],
     },
@@ -64,35 +61,9 @@ BarnumConfig.fromConfig({
   .on("exit", (code) => process.exit(code ?? 1));
 ```
 
-Demos that currently use Bash `Command` actions with inline troupe `submit_task` scripts convert to TypeScript actions with handler files. This is the whole point — the TypeScript handler interface replaces the gnarly jq/troupe shell one-liners.
+The Bash scripts are the same as before — this refactor changes how the config is defined (inline TypeScript instead of JSONC files), not what the actions do.
 
-### 2. Create shared handler for troupe-backed steps
-
-Most demo steps follow the same pattern: submit a task to a troupe pool with instructions, get back follow-up tasks. A shared handler captures this:
-
-**File:** `crates/barnum_cli/demos/handlers/troupe-step.ts`
-
-```typescript
-import { z } from "zod";
-import type { HandlerDefinition } from "@barnum/barnum";
-// troupe client import TBD
-
-export default {
-  stepConfigValidator: z.object({
-    instructions: z.string(),
-    pool: z.string(),
-  }),
-
-  async handle({ stepConfig, value }) {
-    // Submit task to troupe pool with instructions
-    // Return follow-up tasks from agent response
-  },
-} satisfies HandlerDefinition;
-```
-
-The exact troupe submission mechanism (subprocess call to `troupe submit_task` vs a JS client) is an implementation detail. The handler encapsulates it.
-
-### 3. Delete redundant files per demo
+### 2. Delete redundant files
 
 For each demo, delete:
 - `config.json` — replaced by inline TypeScript config
@@ -101,7 +72,7 @@ For each demo, delete:
 
 Keep `demo.sh` for now — it handles pool setup and agent lifecycle, which the TypeScript config doesn't manage. `demo.sh` changes to invoke `tsx barnum.config.ts` instead of `$BARNUM run --config config.json`.
 
-### 4. Update demo.sh scripts
+### 3. Update demo.sh scripts
 
 Each `demo.sh` currently runs:
 ```bash
@@ -115,17 +86,11 @@ pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
 
 The TypeScript file calls `.run()` internally, which spawns the barnum binary.
 
-### 5. Keep config.jsonc as documentation (optional)
+### 4. Keep config.jsonc as documentation (optional)
 
 The JSONC files serve as readable documentation of the config shape. If we want to preserve them as reference, they stay but are not loaded by anything. Otherwise, delete them — the TypeScript config IS the documentation.
 
-### 6. Demos that use Bash actions
-
-Some demos (`command`, `command-script`, `hooks`) demonstrate Bash-specific patterns (jq piping, shell scripts). These keep `kind: "Bash"` actions in their TypeScript configs — the point is to show both action kinds.
-
-The `hooks` demo also demonstrates `finally` hooks, which remain Bash actions (finally hooks don't use TypeScript handlers).
-
-### 7. CLI integration tests
+### 5. CLI integration tests
 
 The CLI tests in `crates/barnum_cli/tests/` construct configs as JSON strings and invoke the barnum binary via subprocess. These tests remain JSON-based — they test the Rust CLI's ability to parse and run JSON configs. Converting them to TypeScript would test the JS layer, not Rust.
 
@@ -136,36 +101,38 @@ Tests that need updating:
 
 These test changes happen in FLATTEN_AND_RENAME_ACTION, not here.
 
-### 8. Config crate tests
+### 6. Config crate tests
 
 The `barnum_config` tests construct configs in Rust using struct literals. No TypeScript involved. They continue to work as-is after FLATTEN_AND_RENAME_ACTION updates the struct/variant names.
 
 ## Per-demo conversion
 
+All demos keep their existing `Bash` actions — the inline shell scripts are unchanged. The conversion is purely structural: JSONC file → inline TypeScript object.
+
 ### simple
-- Single terminal step. Convert inline troupe command to TypeScript handler.
+- Single terminal step with Bash action.
 
 ### linear
-- Three-step chain: Start → Middle → End. Each step becomes a TypeScript action pointing to the shared troupe handler with different instructions.
+- Three-step chain: Start → Middle → End. Three Bash actions.
 
 ### branching
-- Decision step fans to PathA or PathB, both converge to Done. Same handler, different instructions per step. Shows `next: ["PathA", "PathB"]`.
+- Decision step fans to PathA or PathB, both converge to Done. Shows `next: ["PathA", "PathB"]`.
 
 ### fan-out
-- Distribute step spawns 20 Worker tasks. The Distribute step uses a Bash action (jq to generate the array), Workers use TypeScript handlers.
+- Distribute step spawns 20 Worker tasks. All Bash actions.
 
 ### command / command-script
-- These demos exist to showcase Bash/Command actions specifically. Keep them as Bash actions in the TypeScript config. They demonstrate `kind: "Bash"` alongside `kind: "TypeScript"`.
+- Bash actions demonstrating data transformation with jq.
 
 ### hooks
-- Demonstrates `finally` hooks. The main action converts to TypeScript; the finally hook stays as a Bash action (finally hooks are always Bash).
+- Demonstrates `finally` hooks. Bash actions for both the main action and the finally hook.
 
 ### refactor-workflow
-- Complex multi-step workflow with self-loops. Each step reads instructions from .md files. Convert to TypeScript handlers that read the instruction files.
+- Complex multi-step workflow with self-loops. Bash actions that read instructions from .md files.
 
 ## What this does NOT do
 
+- Does not change action kinds — all demos remain `Bash` actions (TypeScript action kind is ADD_TYPESCRIPT_ACTION)
 - Does not change the Rust CLI or barnum_config crate (beyond what FLATTEN_AND_RENAME_ACTION handles)
 - Does not add new TypeScript library APIs (BarnumConfig.fromConfig and .run() already exist)
-- Does not implement a troupe JS client — the handler shells out to the troupe CLI
 - Does not remove demo.sh scripts — they manage pool/agent lifecycle which is orthogonal
