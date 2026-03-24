@@ -5,7 +5,7 @@
 
 ## Motivation
 
-After FLATTEN_AND_RENAME_ACTION and UNIFY_STDIN_ENVELOPE, Rust has one action kind (`Bash`) with an envelope `{value, stepName}`. This refactor adds the TypeScript action kind on the Rust side: a new config type, dispatch logic, and CLI flags. From Rust's perspective, a TypeScript action is a shell command (`<executor> <run-handler.ts> <handler-path> <export>`) that receives an envelope with `stepConfig` included.
+After FLATTEN_AND_RENAME_ACTION and UNIFY_STDIN_ENVELOPE, Rust has one action kind (`Bash`) with an envelope `{value, config, stepName}`. This refactor adds the TypeScript action kind on the Rust side: a new config type, dispatch logic, and CLI flags. From Rust's perspective, a TypeScript action is a shell command (`<executor> <run-handler.ts> <handler-path> <export>`) that receives the same envelope with `stepConfig` added.
 
 Path resolution (canonicalizing relative handler paths) happens in the JS layer before passing config to Rust. That's covered by ADD_RUN_HANDLER.
 
@@ -28,11 +28,12 @@ The `Envelope` struct (from UNIFY_STDIN_ENVELOPE):
 #[serde(rename_all = "camelCase")]
 struct Envelope<'a> {
     value: &'a serde_json::Value,
+    config: &'a serde_json::Value,
     step_name: &'a StepName,
 }
 ```
 
-`ShellAction` stores `script`, `step_name`, and `working_dir`. (The `config` field was removed as a prerequisite cleanup — no action type uses the full workflow config.)
+`ShellAction` stores `script`, `step_name`, `working_dir`, and `config: serde_json::Value`.
 
 ## Changes
 
@@ -80,6 +81,7 @@ pub enum ActionKind {
 #[serde(rename_all = "camelCase")]
 struct Envelope<'a> {
     value: &'a serde_json::Value,
+    config: &'a serde_json::Value,
     step_name: &'a StepName,
     #[serde(skip_serializing_if = "Option::is_none")]
     step_config: Option<&'a serde_json::Value>,
@@ -91,6 +93,7 @@ pub struct ShellAction {
     pub script: String,
     pub step_name: StepName,
     pub working_dir: PathBuf,
+    pub config: serde_json::Value,
     pub step_config: Option<serde_json::Value>,
 }
 ```
@@ -106,6 +109,7 @@ Both Bash and TypeScript use the same `ShellAction` struct. The differences:
 fn start(self: Box<Self>, value: serde_json::Value) -> ActionHandle {
     let envelope = Envelope {
         value: &value,
+        config: &self.config,
         step_name: &self.step_name,
         step_config: self.step_config.as_ref(),
     };
@@ -130,6 +134,7 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
                 script: script.clone(),
                 step_name: task.step.clone(),
                 working_dir: self.working_dir.clone(),
+                config: self.config_json.clone(),
                 step_config: None,
             });
             spawn_worker(self.tx.clone(), action, task_id, task, WorkerKind::Task, timeout);
@@ -144,6 +149,7 @@ fn dispatch_task(&self, task_id: LogTaskId, task: Task) {
                 script,
                 step_name: task.step.clone(),
                 working_dir: self.working_dir.clone(),
+                config: self.config_json.clone(),
                 step_config: Some(step_config.clone()),
             });
             spawn_worker(self.tx.clone(), action, task_id, task, WorkerKind::Task, timeout);
@@ -239,12 +245,14 @@ fn action_typescript_with_step_config() {
 ```rust
 #[test]
 fn envelope_includes_step_config_for_typescript() {
+    let config = serde_json::json!({"steps": []});
     let value = serde_json::json!({"file": "src/main.rs"});
     let step_config = serde_json::json!({"instructions": "Analyze"});
     let step_name = StepName::new("Analyze");
 
     let envelope = Envelope {
         value: &value,
+        config: &config,
         step_name: &step_name,
         step_config: Some(&step_config),
     };
@@ -252,23 +260,25 @@ fn envelope_includes_step_config_for_typescript() {
     let json: serde_json::Value = serde_json::to_value(&envelope).unwrap();
     assert_eq!(json["stepConfig"]["instructions"], "Analyze");
     assert_eq!(json["stepName"], "Analyze");
-    assert!(json.get("config").is_none());
+    assert!(json.get("config").is_some());
 }
 
 #[test]
 fn envelope_omits_step_config_for_bash() {
+    let config = serde_json::json!({"steps": []});
     let value = serde_json::json!({"file": "src/main.rs"});
     let step_name = StepName::new("Start");
 
     let envelope = Envelope {
         value: &value,
+        config: &config,
         step_name: &step_name,
         step_config: None,
     };
 
     let json: serde_json::Value = serde_json::to_value(&envelope).unwrap();
     assert!(json.get("stepConfig").is_none());
-    assert!(json.get("config").is_none());
+    assert!(json.get("config").is_some());
 }
 ```
 
