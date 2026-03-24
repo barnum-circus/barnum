@@ -1,6 +1,6 @@
 //! Barnum Config - Declarative Task Orchestration
 //!
-//! Config-based task orchestrator that sits on top of `troupe`.
+//! Config-based declarative task orchestrator for agents.
 //!
 //! # Overview
 //!

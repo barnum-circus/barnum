@@ -256,8 +256,35 @@ fn resume_command(
 fn default_state_log_path() -> io::Result<PathBuf> {
     let logs_dir = PathBuf::from("/tmp/barnum/logs");
     std::fs::create_dir_all(&logs_dir)?;
-    let run_id = troupe::generate_id();
+    let run_id = generate_run_id();
     Ok(logs_dir.join(format!("{run_id}.ndjson")))
+}
+
+/// Generate a short random run ID for state log filenames.
+#[expect(clippy::cast_possible_truncation)]
+fn generate_run_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    const LEN: usize = 8;
+    const CHARS: &[u8] = b"abcdefghjkmnpqrstuvwxyz23456789";
+
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0) as u64
+        ^ u64::from(std::process::id());
+
+    let mut id = String::with_capacity(LEN);
+    let mut state = seed;
+
+    for _ in 0..LEN {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        id.push(CHARS[(state as usize) % CHARS.len()] as char);
+    }
+
+    id
 }
 
 /// Parse config from either inline JSON/JSONC or a file path.

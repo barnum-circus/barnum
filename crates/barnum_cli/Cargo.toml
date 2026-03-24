@@ -10,7 +10,6 @@ keywords = ["cli", "task", "orchestrator", "state-machine"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-troupe = { path = "../troupe" }
 barnum_config = { path = "../barnum_config" }
 clap = { workspace = true }
 json5 = { workspace = true }
