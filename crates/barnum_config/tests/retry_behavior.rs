@@ -10,7 +10,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -73,7 +73,6 @@ fn retry_on_invalid_response_false_drops_task() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -84,7 +83,7 @@ fn retry_on_invalid_response_false_drops_task() {
     };
 
     // Run should return error because task is dropped
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     // With retry_on_invalid_response=false, should only try once
@@ -147,7 +146,6 @@ fn retry_on_invalid_response_true_retries() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -158,7 +156,7 @@ fn retry_on_invalid_response_true_retries() {
     };
 
     // Run should return error because task is dropped after all retries
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     // With max_retries=3, should try 1 original + 3 retries = 4 total
@@ -216,7 +214,6 @@ fn malformed_json_triggers_retry() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -227,7 +224,7 @@ fn malformed_json_triggers_retry() {
     };
 
     // Run should return error because task is dropped after all retries
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     // 1 original + 2 retries = 3 total
@@ -294,7 +291,6 @@ fn per_step_options_override_global() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new(
         "NoRetryStep",
         StepInputValue(serde_json::json!({})),
@@ -308,7 +304,7 @@ fn per_step_options_override_global() {
     };
 
     // Run should return error because task is dropped
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     // Per-step override should prevent retries
@@ -371,7 +367,6 @@ fn recovery_on_nth_attempt() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -381,7 +376,7 @@ fn recovery_on_nth_attempt() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     // Should succeed on third attempt
     assert_eq!(
@@ -436,7 +431,6 @@ fn max_retries_zero_no_retries() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -447,7 +441,7 @@ fn max_retries_zero_no_retries() {
     };
 
     // Run should return error because task is dropped
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     // max_retries=0 means only the original attempt

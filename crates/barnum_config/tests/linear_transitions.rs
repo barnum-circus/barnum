@@ -6,7 +6,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -65,7 +65,6 @@ fn three_step_linear_machine() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = linear_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -76,7 +75,7 @@ fn three_step_linear_machine() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     assert_eq!(processed.len(), 3);
@@ -111,7 +110,6 @@ fn instructions_included_in_payload() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = linear_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -122,7 +120,7 @@ fn instructions_included_in_payload() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);

@@ -5,7 +5,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -50,7 +50,7 @@ fn single_step_terminates() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = simple_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
     let invoker = create_test_invoker();
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
@@ -61,7 +61,7 @@ fn single_step_terminates() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     assert_eq!(processed.len(), 1);
@@ -81,7 +81,7 @@ fn empty_initial_tasks_does_nothing() {
     // No IPC needed - we're not even starting the pool
     // With no initial tasks, the runner completes immediately without connecting to the pool
     let config = simple_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
+
     let invoker = create_test_invoker();
     let initial_tasks = vec![];
     let state_log = test_state_log_path(&root);
@@ -93,7 +93,7 @@ fn empty_initial_tasks_does_nothing() {
     };
 
     // Should complete immediately without error
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     cleanup_test_dir(&root);
 }

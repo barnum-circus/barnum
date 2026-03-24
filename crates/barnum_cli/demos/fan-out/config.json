@@ -3,11 +3,6 @@
   "steps": [
     {
       "name": "Distribute",
-      "value_schema": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -18,17 +13,6 @@
     },
     {
       "name": "Worker",
-      "value_schema": {
-        "type": "object",
-        "required": ["id"],
-        "properties": {
-          "id": {
-            "type": "integer",
-            "description": "Worker ID"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {

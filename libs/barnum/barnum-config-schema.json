@@ -273,35 +273,6 @@
         }
       }
     },
-    "SchemaLink": {
-      "description": "Reference to an external JSON Schema file.",
-      "type": "object",
-      "required": [
-        "link"
-      ],
-      "properties": {
-        "link": {
-          "description": "Relative path to the JSON Schema file (e.g., `\"schemas/task.json\"`).",
-          "type": "string"
-        }
-      }
-    },
-    "SchemaRef": {
-      "description": "A JSON Schema for validating task payloads. Can be provided inline or loaded from a file.\n\n- Inline: write the JSON Schema object directly, e.g. `{\"type\": \"object\", \"properties\": {...}}` - Linked: `{\"link\": \"path/to/schema.json\"}` to load from a file (path relative to config file)",
-      "anyOf": [
-        {
-          "description": "Reference to an external JSON Schema file. The path is relative to the config file's directory.",
-          "allOf": [
-            {
-              "$ref": "#/definitions/SchemaLink"
-            }
-          ]
-        },
-        {
-          "description": "Inline JSON Schema object (any valid JSON Schema)."
-        }
-      ]
-    },
     "StepFile": {
       "description": "A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.",
       "type": "object",
@@ -353,18 +324,6 @@
           "allOf": [
             {
               "$ref": "#/definitions/StepOptions"
-            }
-          ]
-        },
-        "value_schema": {
-          "description": "JSON Schema that validates the `value` payload for tasks on this step. When set, tasks whose `value` doesn't conform are rejected. When omitted, any JSON value is accepted.",
-          "default": null,
-          "anyOf": [
-            {
-              "$ref": "#/definitions/SchemaRef"
-            },
-            {
-              "type": "null"
             }
           ]
         }

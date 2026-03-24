@@ -6,24 +6,6 @@
   "steps": [
     {
       "name": "Split",
-      "value_schema": {
-        "type": "object",
-        "required": ["items"],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["n"],
-              "properties": {
-                "n": { "type": "integer" }
-              }
-            },
-            "description": "Array of items to process"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Command",
         "params": {
@@ -34,17 +16,6 @@
     },
     {
       "name": "Process",
-      "value_schema": {
-        "type": "object",
-        "required": ["n"],
-        "properties": {
-          "n": {
-            "type": "integer",
-            "description": "Number to process"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Command",
         "params": {
@@ -55,21 +26,6 @@
     },
     {
       "name": "Collect",
-      "value_schema": {
-        "type": "object",
-        "required": ["processed", "doubled"],
-        "properties": {
-          "processed": {
-            "type": "object",
-            "description": "Original input"
-          },
-          "doubled": {
-            "type": "integer",
-            "description": "Doubled value"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Command",
         "params": {

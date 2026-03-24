@@ -7,7 +7,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, Config, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{Config, ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -72,7 +72,6 @@ fn invalid_transition_causes_retry() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = strict_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -83,7 +82,7 @@ fn invalid_transition_causes_retry() {
     };
 
     // Run should return error because task is dropped after retries exhausted
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     let processed = agent.stop();
@@ -115,7 +114,6 @@ fn unknown_step_causes_retry() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = strict_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -126,7 +124,7 @@ fn unknown_step_causes_retry() {
     };
 
     // Run should return error because task is dropped after retries exhausted
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "run should fail when tasks are dropped");
 
     let processed = agent.stop();
@@ -176,7 +174,6 @@ fn recovery_after_invalid_then_valid() {
     // Wait for agent to be ready (has processed initial heartbeat)
 
     let config = strict_config(&root);
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new("Start", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -186,7 +183,7 @@ fn recovery_after_invalid_then_valid() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     let processed = agent.stop();
     // Start (fail) + Start (success) + Middle + End = 4

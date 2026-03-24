@@ -5,8 +5,8 @@
 //! # Overview
 //!
 //! Define task workflows via a declarative config. This crate:
-//! - Validates tasks against JSON schemas
 //! - Generates markdown documentation for agents
+//! - Validates transitions between steps
 //! - Handles timeouts and retries with per-step options
 //!
 //! The config format is serialization-agnostic (uses serde). The CLI
@@ -23,7 +23,6 @@ mod maybe_linked;
 mod resolved;
 mod runner;
 mod types;
-mod value_schema;
 pub mod zod;
 
 // Public API - only what barnum_cli actually uses
@@ -31,5 +30,4 @@ pub use config::{ConfigFile, config_schema};
 pub use docs::generate_full_docs;
 pub use resolved::{ActionKind, Config};
 pub use runner::{RunnerConfig, resume, run};
-pub use types::{StepInputValue, StepName};
-pub use value_schema::{CompiledSchemas, Task};
+pub use types::{StepInputValue, StepName, Task};

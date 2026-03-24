@@ -6,7 +6,7 @@
 
 mod common;
 
-use barnum_config::{CompiledSchemas, ConfigFile, RunnerConfig, StepInputValue, Task};
+use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
 use common::{
     BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
     is_ipc_available, setup_test_dir, test_state_log_path,
@@ -46,7 +46,6 @@ fn empty_initial_tasks_completes() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![]; // Empty!
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
@@ -57,7 +56,7 @@ fn empty_initial_tasks_completes() {
     };
 
     // Should complete immediately without error
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     cleanup_test_dir(&root);
 }
@@ -110,7 +109,6 @@ fn large_fan_out() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new(
         "Distribute",
         StepInputValue(serde_json::json!({})),
@@ -123,7 +121,7 @@ fn large_fan_out() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     // 1 Distribute + 20 Workers = 21 tasks
     assert_eq!(
@@ -162,7 +160,6 @@ fn command_action_executes() {
     .expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![Task::new(
         "Echo",
         StepInputValue(serde_json::json!({"message": "hello"})),
@@ -176,7 +173,7 @@ fn command_action_executes() {
     };
 
     // Should complete without error
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     cleanup_test_dir(&root);
 }
@@ -211,8 +208,6 @@ fn rapid_task_completion() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-
     // Submit many tasks
     let initial_tasks: Vec<Task> = (0..50)
         .map(|i| Task::new("Fast", StepInputValue(serde_json::json!({"id": i}))))
@@ -226,7 +221,7 @@ fn rapid_task_completion() {
         state_log_path: &state_log,
     };
 
-    barnum_config::run(&config, &schemas, &runner_config, initial_tasks).expect("run failed");
+    barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
 
     cleanup_test_dir(&root);
 }
@@ -248,7 +243,6 @@ fn unknown_step_in_initial_tasks_returns_error() {
     let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
     let config = config_file.resolve(Path::new(".")).expect("resolve config");
 
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
     let initial_tasks = vec![
         Task::new("Unknown", StepInputValue(serde_json::json!({}))), // Unknown step - should error
     ];
@@ -261,63 +255,12 @@ fn unknown_step_in_initial_tasks_returns_error() {
     };
 
     // Should return an error for unknown step
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
+    let result = barnum_config::run(&config, &runner_config, initial_tasks);
     assert!(result.is_err(), "should error for unknown step");
     let err = result.expect_err("should error").to_string();
     assert!(
         err.contains("E019") && err.contains("Unknown"),
         "error should mention unknown step: {err}"
-    );
-
-    cleanup_test_dir(&root);
-}
-
-/// Test that invalid value schema in initial tasks returns an error.
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-fn invalid_value_schema_in_initial_tasks_returns_error() {
-    let root = setup_test_dir(&format!("{TEST_DIR}_invalid_schema"));
-
-    // Config with schema requiring "name" field
-    let json = inject_pool_config(
-        r#"{
-            "steps": [
-                {
-                    "name": "Validated",
-                    "value_schema": {
-                        "type": "object",
-                        "required": ["name"],
-                        "properties": {"name": {"type": "string"}}
-                    },
-                    "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}},
-                    "next": []
-                }
-            ]
-        }"#,
-        &root,
-    );
-    let config_file: ConfigFile = serde_json::from_str(&json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
-
-    let schemas = CompiledSchemas::compile(&config).expect("compile schemas");
-    let initial_tasks = vec![
-        Task::new("Validated", StepInputValue(serde_json::json!({}))), // Missing required "name" - should error
-    ];
-    let state_log = test_state_log_path(&root);
-    let runner_config = RunnerConfig {
-        working_dir: Path::new("."),
-        wake_script: None,
-        invoker: &create_test_invoker(),
-        state_log_path: &state_log,
-    };
-
-    // Should return an error for invalid value schema
-    let result = barnum_config::run(&config, &schemas, &runner_config, initial_tasks);
-    assert!(result.is_err(), "should error for invalid value schema");
-    let err = result.expect_err("should error").to_string();
-    assert!(
-        err.contains("E020"),
-        "error should mention validation failure: {err}"
     );
 
     cleanup_test_dir(&root);

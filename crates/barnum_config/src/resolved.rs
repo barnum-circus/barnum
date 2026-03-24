@@ -42,10 +42,6 @@ pub struct Step {
     /// Step name.
     pub name: StepName,
 
-    /// Resolved JSON Schema for validating the step's value payload.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_schema: Option<serde_json::Value>,
-
     /// How to execute the step.
     pub action: ActionKind,
 

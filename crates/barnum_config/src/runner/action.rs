@@ -14,8 +14,7 @@ use tracing::debug;
 use troupe::Response;
 use troupe_cli::TroupeCli;
 
-use crate::types::{LogTaskId, StepInputValue, StepName};
-use crate::value_schema::Task;
+use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
 use super::submit::{build_agent_payload, submit_via_cli};
 

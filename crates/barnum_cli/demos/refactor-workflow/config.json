@@ -6,17 +6,6 @@
   "steps": [
     {
       "name": "ListFiles",
-      "value_schema": {
-        "type": "object",
-        "required": ["folder"],
-        "properties": {
-          "folder": {
-            "type": "string",
-            "description": "Path to folder to scan for files"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -27,17 +16,6 @@
     },
     {
       "name": "AnalyzeFile",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": {
-            "type": "string",
-            "description": "Path to the file to analyze"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -48,22 +26,6 @@
     },
     {
       "name": "ProcessRefactorList",
-      "value_schema": {
-        "type": "object",
-        "required": ["file", "refactors"],
-        "properties": {
-          "file": {
-            "type": "string",
-            "description": "Path to the file being refactored"
-          },
-          "refactors": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "List of refactoring operations to apply"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {
@@ -74,17 +36,6 @@
     },
     {
       "name": "CommitFile",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": {
-            "type": "string",
-            "description": "Path to the file to commit"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Pool",
         "params": {

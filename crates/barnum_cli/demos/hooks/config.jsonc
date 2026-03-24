@@ -6,17 +6,6 @@
   "steps": [
     {
       "name": "Process",
-      "value_schema": {
-        "type": "object",
-        "required": ["item"],
-        "properties": {
-          "item": {
-            "type": "string",
-            "description": "Item to process"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Command",
         "params": {
@@ -29,17 +18,6 @@
     },
     {
       "name": "Cleanup",
-      "value_schema": {
-        "type": "object",
-        "required": ["result"],
-        "properties": {
-          "result": {
-            "type": "string",
-            "description": "Result from parent task"
-          }
-        },
-        "additionalProperties": false
-      },
       "action": {
         "kind": "Command",
         "params": {

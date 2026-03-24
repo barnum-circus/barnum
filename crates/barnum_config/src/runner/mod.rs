@@ -26,8 +26,7 @@ use troupe_cli::TroupeCli;
 
 use crate::docs::generate_step_docs;
 use crate::resolved::{ActionKind, CommandAction, Config, PoolAction as PoolActionConfig, Step};
-use crate::types::{LogTaskId, StepInputValue, StepName};
-use crate::value_schema::{CompiledSchemas, Task};
+use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
 use action::{ActionError, PoolAction, ShellAction, WorkerKind, WorkerResult, spawn_worker};
 use hooks::call_wake_script;
@@ -453,7 +452,6 @@ impl RunState {
 /// the coordinator writes entries returned by `process_worker_result`.
 struct Engine<'a> {
     config: &'a Config,
-    schemas: &'a CompiledSchemas,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
     invoker: Invoker<TroupeCli>,
@@ -467,7 +465,6 @@ struct Engine<'a> {
 impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
-        schemas: &'a CompiledSchemas,
         invoker: Invoker<TroupeCli>,
         working_dir: PathBuf,
         tx: mpsc::Sender<WorkerResult>,
@@ -475,7 +472,6 @@ impl<'a> Engine<'a> {
     ) -> Self {
         Self {
             config,
-            schemas,
             step_map: config.step_map(),
             state: RunState::new(),
             invoker,
@@ -532,7 +528,7 @@ impl<'a> Engine<'a> {
             .get(&task.step)
             .expect("[P015] task step must exist");
 
-        let outcome = process_submit_result(action_result, task, step, self.schemas);
+        let outcome = process_submit_result(action_result, task, step);
 
         match outcome {
             TaskOutcome::Success(TaskSuccess {
@@ -705,7 +701,7 @@ impl<'a> Engine<'a> {
                 timeout: pool_timeout,
                 ..
             }) => {
-                let docs = generate_step_docs(step, self.config);
+                let docs = generate_step_docs(step);
                 info!(step = %task.step, "submitting task to pool");
                 let action = Box::new(PoolAction {
                     root: root.clone(),
@@ -806,7 +802,6 @@ fn write_log(writer: &mut io::BufWriter<std::fs::File>, entry: &StateLogEntry) {
 /// Returns an error if the wake script fails or I/O errors occur.
 pub fn run(
     config: &Config,
-    schemas: &CompiledSchemas,
     runner_config: &RunnerConfig<'_>,
     initial_tasks: Vec<Task>,
 ) -> io::Result<()> {
@@ -843,7 +838,6 @@ pub fn run(
     // Create engine
     let mut engine = Engine::new(
         config,
-        schemas,
         Clone::clone(runner_config.invoker),
         runner_config.working_dir.to_path_buf(),
         tx,
@@ -857,12 +851,6 @@ pub fn run(
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("[E019] unknown step '{}' in initial tasks", task.step),
-            ));
-        }
-        if let Err(e) = schemas.validate(&task.step, &task.value) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("[E020] initial task validation failed: {e}"),
             ));
         }
 
@@ -911,7 +899,6 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     let config: Config = serde_json::from_value(config_json).map_err(|e| {
         io::Error::other(format!("[E071] failed to deserialize config from log: {e}"))
     })?;
-    let schemas = CompiledSchemas::compile(&config)?;
 
     if let Some(script) = runner_config.wake_script {
         call_wake_script(script)?;
@@ -939,7 +926,6 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     // 4. Create engine and replay old entries
     let mut engine = Engine::new(
         &config,
-        &schemas,
         Clone::clone(runner_config.invoker),
         runner_config.working_dir.to_path_buf(),
         tx,
@@ -1035,7 +1021,6 @@ mod run_state_tests {
     fn step(name: &str) -> Step {
         Step {
             name: StepName::new(name),
-            value_schema: None,
             action: ActionKind::Command(CommandAction {
                 script: "true".into(),
             }),
