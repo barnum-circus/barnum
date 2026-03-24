@@ -1,102 +1,26 @@
 # Add TypeScript Action Kind
 
 **Parent:** TS_CONFIG.md
-**Depends on:** REMOVE_POOL_ACTION (Pool removed, only Command remains)
+**Depends on:** FLATTEN_AND_RENAME_ACTION (Command renamed to Bash, params nesting removed, camelCase fields)
 
 ## Motivation
 
-After REMOVE_POOL_ACTION lands, Rust has one action kind: `Command` (a shell script). TS_CONFIG describes two: `Bash` (renamed Command) and `TypeScript` (a handler file). This refactor renames Command to Bash and adds the TypeScript action kind.
+After FLATTEN_AND_RENAME_ACTION lands, Rust has one action kind: `Bash` (a shell script) with flat config shape (`{"kind": "Bash", "script": "..."}`). This refactor adds the TypeScript action kind.
 
 TypeScript actions point to a handler file. Rust dispatches them as subprocesses — the same `ShellAction` infrastructure used by Bash, but with a richer stdin envelope and a different subprocess command. From Rust's perspective, a TypeScript action is just a Bash command that happens to invoke a TypeScript runtime.
 
-## Current state
-
-**Config types** (`crates/barnum_config/src/config.rs:169-176`):
-```rust
-#[serde(tag = "kind", content = "params")]
-pub enum ActionFile {
-    Command(CommandActionFile),
-}
-```
-
-**Resolved types** (`crates/barnum_config/src/resolved.rs:89-96`):
-```rust
-#[serde(tag = "kind", content = "params")]
-pub enum ActionKind {
-    Command(CommandAction),
-}
-```
-
-Both use adjacently tagged enums (`tag = "kind", content = "params"`), producing config like `{"kind": "Command", "params": {"script": "..."}}`. The `params` wrapper is unnecessary — fields should sit alongside `kind` at the top level.
-
-**Dispatch** (`crates/barnum_config/src/runner/mod.rs:716-724`):
-```rust
-ActionKind::Command(CommandAction { script }) => {
-    let action = Box::new(ShellAction {
-        script: script.clone(),
-        step_name: task.step.clone(),
-        working_dir: self.working_dir.clone(),
-    });
-    spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
-}
-```
-
-**ShellAction** (`crates/barnum_config/src/runner/action.rs`): Runs `sh -c <script>`, pipes `{"kind": step_name, "value": value}` to stdin, reads stdout as follow-up tasks JSON. This infrastructure is unchanged.
-
-**RunnerConfig** (`crates/barnum_config/src/runner/mod.rs`): Currently holds `working_dir`, `wake_script`, `invoker`, `state_log_path`. The `invoker` field (for troupe CLI) is removed by REMOVE_POOL_ACTION.
-
-**CLI** (`crates/barnum_cli/src/lib.rs:85-87`): Already has the `--executor` flag (hidden from help):
-```rust
-#[arg(long, hide = true)]
-executor: Option<String>,
-```
-
-Currently unused — `main.rs:37` destructures it as `executor: _`.
-
-**run.ts** (`libs/barnum/run.ts`): Serializes config to JSON and spawns the Rust binary. Does not currently pass `--executor`.
-
-## Rename Command → Bash
-
-Before adding TypeScript, rename the existing Command variant to Bash. This is a mechanical rename across all files.
-
-### Config types
-
-**File:** `crates/barnum_config/src/config.rs`
+## Current state (after FLATTEN_AND_RENAME_ACTION)
 
 ```rust
-// Before
-pub struct CommandActionFile { pub script: String }
-
-#[serde(tag = "kind", content = "params")]
-pub enum ActionFile {
-    Command(CommandActionFile),
-}
-// produces: {"kind": "Command", "params": {"script": "..."}}
-
-// After
+// config.rs
 pub struct BashActionFile { pub script: String }
 
 #[serde(tag = "kind")]
 pub enum ActionFile {
     Bash(BashActionFile),
 }
-// produces: {"kind": "Bash", "script": "..."}
-```
 
-### Resolved types
-
-**File:** `crates/barnum_config/src/resolved.rs`
-
-```rust
-// Before
-pub struct CommandAction { pub script: String }
-
-#[serde(tag = "kind", content = "params")]
-pub enum ActionKind {
-    Command(CommandAction),
-}
-
-// After
+// resolved.rs
 pub struct BashAction { pub script: String }
 
 #[serde(tag = "kind")]
@@ -105,46 +29,7 @@ pub enum ActionKind {
 }
 ```
 
-### Config resolution
-
-**File:** `crates/barnum_config/src/config.rs` (in `ActionFile::resolve`)
-
-```rust
-// Before
-Self::Command(CommandActionFile { script }) =>
-    Ok(ActionKind::Command(CommandAction { script }))
-
-// After
-Self::Bash(BashActionFile { script }) =>
-    Ok(ActionKind::Bash(BashAction { script }))
-```
-
-### Dispatch
-
-**File:** `crates/barnum_config/src/runner/mod.rs`
-
-```rust
-// Before
-ActionKind::Command(CommandAction { script }) => { ... }
-
-// After
-ActionKind::Bash(BashAction { script }) => { ... }
-```
-
-### Tests
-
-All test helpers that construct `ActionFile::Command(CommandActionFile { .. })` change to `ActionFile::Bash(BashActionFile { .. })`. Grep for `CommandActionFile`, `CommandAction`, `ActionFile::Command`, `ActionKind::Command` — update every occurrence.
-
-### Demo configs
-
-All demo configs already use `"kind": "Command"`. Change to `"kind": "Bash"`. This is a find-replace across `*.json` and `*.jsonc` in `crates/barnum_cli/demos/`.
-
-### Schemas
-
-Regenerate after the rename:
-- `libs/barnum/barnum-config-schema.json`
-- `libs/barnum/barnum-config-schema.zod.ts`
-- `libs/barnum/barnum-resolved-schema.zod.ts`
+Config shape: `{"kind": "Bash", "script": "echo hello"}`. All structs use `rename_all = "camelCase"`. The `--executor` CLI flag exists but is unused.
 
 ## Add TypeScript action kind
 
@@ -250,7 +135,7 @@ Resolution validates the handler file exists at config load time — a typo in t
 
 ```rust
 ActionKind::TypeScript(TypeScriptAction { path, export, ref step_config }) => {
-    let executor = self.executor.as_deref().unwrap_or("npx tsx");
+    let executor = self.executor.as_deref().unwrap_or("pnpm dlx tsx");
     let run_handler = self.run_handler_path.as_deref()
         .unwrap_or("node_modules/@barnum/barnum/actions/run-handler.ts");
 
@@ -333,7 +218,7 @@ pub struct RunnerConfig<'a> {
     pub working_dir: &'a Path,
     pub wake_script: Option<&'a str>,
     pub state_log_path: &'a Path,
-    /// Executor command for TypeScript handlers (e.g., "npx tsx").
+    /// Executor command for TypeScript handlers (e.g., "pnpm dlx tsx").
     /// Injected by cli.cjs via --executor. None means TypeScript actions are unavailable.
     pub executor: Option<&'a str>,
     /// Path to run-handler.ts. Defaults to looking in node_modules.
@@ -341,7 +226,7 @@ pub struct RunnerConfig<'a> {
 }
 ```
 
-The `executor` is the TypeScript runtime command (e.g., `npx tsx`, `bun`, `node --import tsx`). It's optional because JSON configs (without a JS entry point) may not have a TS runtime available. If a config uses TypeScript actions but no executor is provided, dispatch fails with a clear error.
+The `executor` is the TypeScript runtime command (e.g., `pnpm dlx tsx`, `bun`, `node --import tsx`). It's optional because JSON configs (without a JS entry point) may not have a TS runtime available. If a config uses TypeScript actions but no executor is provided, dispatch fails with a clear error.
 
 ### Engine changes
 
@@ -520,7 +405,7 @@ run(opts?: RunOptions): ChildProcess {
 
   // Inject executor for TypeScript handler dispatch
   const runHandlerPath = new URL("./actions/run-handler.ts", import.meta.url).pathname;
-  args.push("--executor", "npx tsx");
+  args.push("--executor", "pnpm dlx tsx");
   // run-handler.ts path could also be passed, or resolved by the executor
 
   // ... rest of opts handling
@@ -528,7 +413,7 @@ run(opts?: RunOptions): ChildProcess {
 }
 ```
 
-The executor command is `npx tsx` by default. When invoked via `tsx barnum.config.ts`, the TS runtime is already available. The exact executor discovery logic (tsx vs bun vs node) is an implementation detail — start with `npx tsx` and refine later.
+The executor command is `pnpm dlx tsx` by default. When invoked via `tsx barnum.config.ts`, the TS runtime is already available. The exact executor discovery logic (tsx vs bun vs node) is an implementation detail — start with `pnpm dlx tsx` and refine later.
 
 ## Schemas
 
@@ -597,12 +482,7 @@ Integration tests for TypeScript dispatch require a TS runtime (tsx/node) and ar
 
 ## Sequencing
 
-This refactor has two independent parts that can land as separate branches:
-
-1. **Rename Command → Bash**: Mechanical rename across Rust types, demo configs, tests, and schemas. No new functionality.
-2. **Add TypeScript variant**: New types, dispatch logic, run-handler.ts, run.ts changes.
-
-The rename lands first, then the TypeScript variant builds on top.
+FLATTEN_AND_RENAME_ACTION lands first (rename Command → Bash, remove params nesting, add camelCase). Then this refactor adds the TypeScript variant on top.
 
 ## What this does NOT do
 
