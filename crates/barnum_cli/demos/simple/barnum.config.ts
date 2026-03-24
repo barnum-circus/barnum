@@ -1,6 +1,6 @@
 import { BarnumConfig } from "@barnum/barnum";
 
-const child = await BarnumConfig.fromConfig({
+await BarnumConfig.fromConfig({
   entrypoint: "Start",
   steps: [
     {
@@ -14,4 +14,3 @@ const child = await BarnumConfig.fromConfig({
     },
   ],
 }).run({ wake: process.env.BARNUM_WAKE });
-child.on("exit", (code) => process.exit(code ?? 1));

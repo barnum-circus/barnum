@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -152,7 +152,7 @@ export class BarnumConfig {
     return config;
   }
 
-  async run(opts?: RunOptions): Promise<ChildProcess> {
+  async run(opts?: RunOptions): Promise<void> {
     const config = await this.resolveConfig();
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
@@ -165,6 +165,11 @@ export class BarnumConfig {
     if (opts?.wake) args.push("--wake", opts.wake);
     args.push("--executor", resolveExecutor());
     args.push("--run-handler-path", runHandlerPath);
-    return spawnBarnum(args, opts?.cwd);
+    const child = spawnBarnum(args, opts?.cwd);
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.on("exit", resolve);
+      child.on("error", reject);
+    });
+    process.exit(code ?? 1);
   }
 }

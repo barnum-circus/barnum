@@ -1,6 +1,6 @@
 import { BarnumConfig } from "@barnum/barnum";
 
-const child = await BarnumConfig.fromConfig({
+await BarnumConfig.fromConfig({
   entrypoint: "Split",
   steps: [
     {
@@ -31,4 +31,3 @@ const child = await BarnumConfig.fromConfig({
     },
   ],
 }).run({ entrypointValue: '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}' });
-child.on("exit", (code) => process.exit(code ?? 1));
