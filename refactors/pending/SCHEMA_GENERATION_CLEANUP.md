@@ -2,13 +2,13 @@
 
 ## Motivation
 
-The codebase generates TypeScript types and JSON schemas from Rust types, but the current system has two problems:
+The codebase generates TypeScript types and JSON schemas from Rust types, but the current system has gaps:
 
-1. **Missing resolved type schemas.** Config-file types (`ConfigFile`, `StepFile`, `ActionFile`) have JSON Schema + Zod output. The resolved types (`Config`, `Step`, `ActionKind`, `PoolAction`, `CommandAction`, `Options`) have no schema output at all. The resolved types are what the runner actually operates on after file references are resolved and options are merged. TypeScript code that interacts with resolved configs (e.g. state log entries, debugging tools) has no generated types to work with.
+1. **Missing resolved type schemas.** Config-file types (`ConfigFile`, `StepFile`, `ActionFile`) have JSON Schema + Zod output. The resolved types (`Config`, `Step`, `ActionKind`, `PoolAction`, `CommandAction`, `Options`) have nothing. These are the runtime types after file references are resolved and options are merged. TypeScript code that interacts with resolved configs (e.g. state log entries, debugging tools) has no generated types.
 
 2. **Redundant generator binary.** `build_cli_schema.rs` generates only `barnum-cli-schema.zod.ts`, but `build_schemas.rs` already generates that same file along with the other two. `build_cli_schema.rs` is dead code.
 
-3. **No single inventory of what gets generated.** A newcomer has to read `build_schemas.rs`, the pre-commit hook, and the CI workflow to piece together the full picture. The `build_schemas.rs` binary is the canonical source, but the existence of `build_cli_schema.rs` muddies this.
+3. **No single inventory of what gets generated.** The `build_schemas.rs` binary is the canonical source, but the existence of `build_cli_schema.rs` muddies this.
 
 ## Current state
 
@@ -22,7 +22,7 @@ The codebase generates TypeScript types and JSON schemas from Rust types, but th
 | `libs/barnum/barnum-config-schema.zod.ts` | `config_schema()` → `emit_zod` + `defineConfig()` append | `zod.rs` Zod renderer |
 | `libs/barnum/barnum-cli-schema.zod.ts` | `schemars::schema_for!(Cli)` → `emit_zod` | `zod.rs` Zod renderer |
 
-`crates/barnum_cli/src/bin/build_cli_schema.rs` (38 lines) generates only `barnum-cli-schema.zod.ts`. It duplicates the logic in `build_schemas.rs` lines 47-49. Nothing invokes it.
+`crates/barnum_cli/src/bin/build_cli_schema.rs` (38 lines) generates only `barnum-cli-schema.zod.ts`. It duplicates `build_schemas.rs` lines 47-49. Nothing invokes it.
 
 ### Resolved types without schemas
 
@@ -78,16 +78,17 @@ pub fn resolved_schema() -> schemars::schema::RootSchema {
 
 Export it from `lib.rs` alongside the existing `config_schema()`.
 
-### 3. Generate resolved type artifacts
+### 3. Generate resolved type Zod schema
 
-Add two new generated files to `build_schemas.rs`:
+Add one new generated file to `build_schemas.rs`:
 
 | New artifact | Source | Renderer |
 |---|---|---|
-| `libs/barnum/barnum-resolved-schema.json` | `resolved_schema()` → `serde_json::to_string_pretty` | JSON serialization |
 | `libs/barnum/barnum-resolved-schema.zod.ts` | `resolved_schema()` → `emit_zod` | Zod renderer |
 
-Update the pre-commit hook to re-stage these two new files. Update CI to include them in the diff check.
+No JSON Schema file for resolved types — JSON Schema is only needed for editor validation of config files, which doesn't apply here. The Zod schema provides TypeScript types and runtime validation.
+
+Update the pre-commit hook to re-stage the new file. Update CI to include it in the diff check.
 
 ### 4. Delete `build_cli_schema.rs`
 
@@ -95,7 +96,7 @@ Remove `crates/barnum_cli/src/bin/build_cli_schema.rs`. Nothing references it.
 
 ### 5. Add `Task` schema
 
-The `Task` type in `types.rs` is the agent response format — agents return `[{"kind": "StepName", "value": {...}}]`. This type doesn't derive `JsonSchema` either. It should, and its schema should be included in the resolved schema output (since `Task` is the runtime type agents produce, not a config-file type).
+The `Task` type in `types.rs` is the agent response format — agents return `[{"kind": "StepName", "value": {...}}]`. This type doesn't derive `JsonSchema` either. It should, and its schema should be included in the resolved Zod output (since `Task` is the runtime type agents produce, not a config-file type).
 
 `Task` uses `StepName` and `StepInputValue` from `barnum_types`, so the same `JsonSchema` question from section 1 applies here.
 
@@ -121,9 +122,9 @@ Add `#[derive(JsonSchema)]` to `Config`, `Step`, `PoolAction`, `CommandAction`, 
 
 Add `#[derive(JsonSchema)]` to `Task` in `types.rs`. Decide how to include it in generated output.
 
-### Task 4: Generate resolved schema artifacts
+### Task 4: Generate resolved Zod schema
 
-Update `build_schemas.rs` to generate `barnum-resolved-schema.json` and `barnum-resolved-schema.zod.ts`. Update pre-commit hook and CI.
+Update `build_schemas.rs` to generate `barnum-resolved-schema.zod.ts` (Zod only, no JSON Schema). Update pre-commit hook and CI.
 
 ### Task 5: Delete `build_cli_schema.rs`
 
