@@ -14,6 +14,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEMOS_DIR="$SCRIPT_DIR/.."
 WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Build the binary
@@ -36,7 +37,7 @@ echo ""
 echo "Initial task: Split with items [{n:1}, {n:2}, {n:3}]"
 echo ""
 
-pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
+"$DEMOS_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/barnum.config.ts"
 
 echo ""
 echo "=== Success! ==="

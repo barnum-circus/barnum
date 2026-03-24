@@ -6,6 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEMOS_DIR="$SCRIPT_DIR/.."
 WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Build the binaries first
@@ -25,7 +26,7 @@ echo "Running Barnum with command-script config..."
 echo "This will list files in the demo directory and analyze each one."
 echo ""
 
-pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
+"$DEMOS_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/barnum.config.ts"
 
 echo ""
 echo "=== Success! ==="

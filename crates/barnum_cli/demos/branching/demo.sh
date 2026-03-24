@@ -16,6 +16,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DEMOS_DIR="$SCRIPT_DIR/.."
 WORKSPACE_ROOT="$SCRIPT_DIR/../../../.."
 
 # Check if user provided an existing pool path and wake script
@@ -52,7 +53,7 @@ if [ -n "$EXISTING_POOL" ]; then
 
     # Run Barnum
     echo "Running Barnum with branching config..."
-    pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
+    "$DEMOS_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/barnum.config.ts"
 
     echo ""
     echo "=== Success! ==="
@@ -96,7 +97,7 @@ else
     # Run Barnum
     echo ""
     echo "Running Barnum with branching config..."
-    pnpm dlx tsx "$SCRIPT_DIR/barnum.config.ts"
+    "$DEMOS_DIR/node_modules/.bin/tsx" "$SCRIPT_DIR/barnum.config.ts"
 
     echo ""
     echo "=== Success! ==="

@@ -1,5 +1,8 @@
 #!/bin/bash
-# Generate GraphViz DOT files for all Barnum configs.
+# Generate GraphViz DOT files for all Barnum demo configs.
+#
+# Each demo has a barnum.config.ts that defines the config inline.
+# This script extracts the config JSON from each and generates a .dot file.
 #
 # Usage:
 #   ./scripts/generate-graphs.sh        # Regenerate all .dot files
@@ -18,38 +21,48 @@ if [ -z "$BARNUM" ]; then
     BARNUM="$WORKSPACE_ROOT/target/debug/barnum"
 fi
 
-CONFIGS_DIR="$WORKSPACE_ROOT/crates/barnum_cli/demos/configs"
+DEMOS_DIR="$WORKSPACE_ROOT/crates/barnum_cli/demos"
+TSX="$DEMOS_DIR/node_modules/.bin/tsx"
+EXTRACT="$DEMOS_DIR/extract-config.ts"
 CHECK_MODE=false
 
 if [ "$1" = "--check" ]; then
     CHECK_MODE=true
 fi
 
-# Find all JSON config files
-CONFIGS=$(find "$CONFIGS_DIR" -name "*.json" | sort)
+if [ ! -x "$TSX" ]; then
+    echo "ERROR: tsx not found at $TSX"
+    echo "Run: pnpm install (in $DEMOS_DIR)"
+    exit 1
+fi
 
+# Find all demo directories that have both barnum.config.ts and graph.dot
 FAILED=false
 
-for config in $CONFIGS; do
-    name=$(basename "$config" .json)
-    dot_file="$CONFIGS_DIR/$name.dot"
+for dot_file in $(find "$DEMOS_DIR" -name "graph.dot" | sort); do
+    demo_dir=$(dirname "$dot_file")
+    config_ts="$demo_dir/barnum.config.ts"
+    name=$(basename "$demo_dir")
 
-    # Generate new content
-    new_content=$("$BARNUM" graph "$config")
+    if [ ! -f "$config_ts" ]; then
+        echo "SKIP: $name (no barnum.config.ts)"
+        continue
+    fi
+
+    # Extract config JSON from the TypeScript file
+    config_json=$("$TSX" "$EXTRACT" "$config_ts")
+
+    # Generate new DOT content
+    new_content=$("$BARNUM" config graph --config "$config_json")
 
     if [ "$CHECK_MODE" = true ]; then
-        # Check mode: compare with existing
-        if [ ! -f "$dot_file" ]; then
-            echo "MISSING: $dot_file"
-            FAILED=true
-        elif [ "$(cat "$dot_file")" != "$new_content" ]; then
+        if [ "$(cat "$dot_file")" != "$new_content" ]; then
             echo "OUTDATED: $dot_file"
             FAILED=true
         else
             echo "OK: $dot_file"
         fi
     else
-        # Generate mode: write file
         echo "$new_content" > "$dot_file"
         echo "Generated: $dot_file"
     fi

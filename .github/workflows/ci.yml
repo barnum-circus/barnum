@@ -221,8 +221,17 @@ jobs:
           path: bin
       - name: Make binaries executable
         run: chmod +x bin/troupe bin/barnum
-      - name: Install dependencies
+      - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y jq bc
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install demo npm dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: crates/barnum_cli/demos
       - name: Check .dot files are up-to-date
         env:
           BARNUM: ${{ github.workspace }}/bin/barnum
