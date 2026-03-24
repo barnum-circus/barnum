@@ -23,8 +23,8 @@ const config = BarnumConfig.fromConfig({
       name: "Analyze",
       action: {
         kind: "TypeScript",
-        params: {
-          path: "./handlers/analyze.ts",
+        path: "./handlers/analyze.ts",
+        stepConfig: {
           instructions: "Analyze the code.",
           pool: "demo",
         },
@@ -36,7 +36,7 @@ const config = BarnumConfig.fromConfig({
       name: "FanOut",
       action: {
         kind: "Bash",
-        params: { script: "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s ." },
+        script: "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s .",
       },
       next: ["Analyze"],
     },
@@ -66,7 +66,7 @@ Runs a shell script. Rust handles this directly — `sh -c <script>`, piping `{ 
 
 Config shape:
 ```json
-{ "kind": "Bash", "params": { "script": "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s ." } }
+{ "kind": "Bash", "script": "jq -r '.value.files[]' | xargs -I{} echo '{\"kind\": \"Analyze\", \"value\": {\"file\": \"'{}'\"}}'  | jq -s ." }
 ```
 
 Stdin (what the script receives):
@@ -89,17 +89,15 @@ Config shape:
 ```json
 {
   "kind": "TypeScript",
-  "params": {
-    "path": "./handlers/analyze.ts",
-    "export": "default",
+  "path": "./handlers/analyze.ts",
+  "stepConfig": {
     "instructions": "Analyze the code.",
-    "pool": "demo",
-    "timeout": 300
+    "pool": "demo"
   }
 }
 ```
 
-`path` and `export` are dispatch params — Rust uses them to construct the subprocess command. Everything else is handler config — Rust stores it as opaque JSON and passes it through in the envelope. The handler reads what it needs from `action.params`.
+`path` and `export` are dispatch params — Rust uses them to construct the subprocess command. `stepConfig` is the handler's configuration — Rust stores it as opaque JSON and passes it through in the envelope.
 
 `export` defaults to `"default"`. Named exports are supported for modules that export multiple handlers.
 
@@ -108,7 +106,7 @@ Config shape:
 From Rust's perspective, both action kinds produce a subprocess command:
 
 - Bash: `sh -c <script>`, stdin = `{ kind, value }`
-- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [export]`, stdin = `{ action, task, step, config }`
+- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [export]`, stdin = `{ stepConfig, task, step, config }`
 
 The stdin formats differ because Bash targets user-written shell scripts (simple contract) while TypeScript targets handler modules (rich context). `run-handler.ts` is a thin wrapper that imports the handler module, calls the exported function with the parsed envelope, and writes the result to stdout.
 
@@ -173,7 +171,7 @@ interface FollowUpTask {
 }
 ```
 
-`stepConfigValidator` validates the action's `params` from the config file (the opaque `handler_params` that Rust stores via `#[serde(flatten)]`). `getStepValueValidator` receives the validated step config and returns a Zod schema for the task value, allowing the value schema to depend on the step configuration. Both validators are optional.
+`stepConfigValidator` validates `stepConfig` from the envelope — the step-specific configuration from the config file that Rust passes through as opaque JSON. `getStepValueValidator` receives the validated step config and returns a Zod schema for the task value, allowing the value schema to depend on the step configuration. Both validators are optional.
 
 Inputs (`stepConfig` and `value`) can be fully typed via Zod validators. The output (`FollowUpTask[]`) is untyped — which steps a handler can transition to is determined by the config's `next` array, and the handler has no compile-time knowledge of that. Invalid transitions are caught at runtime by Rust's response validator.
 
@@ -205,20 +203,17 @@ const envelope = JSON.parse(Buffer.concat(chunks).toString());
 const mod = await import(handlerPath);
 const definition = mod[exportName];
 
-// 1. Extract handler params (strip dispatch-only fields)
-const { path: _, export: __, ...rawParams } = envelope.action.params;
-
-// 2. Validate step config
+// 1. Validate step config
 const stepConfig = definition.stepConfigValidator
-  ? definition.stepConfigValidator.parse(rawParams)
-  : rawParams;
+  ? definition.stepConfigValidator.parse(envelope.stepConfig)
+  : envelope.stepConfig;
 
-// 3. Validate value, potentially dependent on step config
+// 2. Validate value, potentially dependent on step config
 const value = definition.getStepValueValidator
   ? definition.getStepValueValidator(stepConfig).parse(envelope.task.value)
   : envelope.task.value;
 
-// 4. Call handler
+// 3. Call handler
 const results = await definition.handle({
   stepConfig,
   value,
@@ -265,19 +260,26 @@ The TypeScript-level validation (point 3) is a future capability. The basic stru
 Replace `Pool` and `Command` with `Bash` and `TypeScript`:
 
 ```rust
+pub struct BashActionFile { pub script: String }
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TypeScriptActionFile {
+    pub path: String,
+    #[serde(default)]
+    pub export: Option<String>,
+    #[serde(default)]
+    pub step_config: serde_json::Value,
+}
+
+#[serde(tag = "kind")]
 pub enum ActionFile {
-    Bash { script: String },
-    TypeScript {
-        path: String,
-        #[serde(default)]
-        export: Option<String>,
-        #[serde(flatten)]
-        handler_config: serde_json::Map<String, serde_json::Value>,
-    },
+    Bash(BashActionFile),
+    TypeScript(TypeScriptActionFile),
 }
 ```
 
-In the resolved config, the same structure. `handler_config` is opaque — Rust stores it and passes it through in the envelope.
+All fields sit at the same level as `kind` (internally tagged enum, no `params` wrapper). `rename_all = "camelCase"` on the struct maps `step_config` to `stepConfig` in JSON automatically.
 
 ### Dispatch changes
 

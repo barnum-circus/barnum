@@ -15,21 +15,19 @@ TypeScript actions point to a handler file. Rust dispatches them as subprocesses
 ```rust
 #[serde(tag = "kind", content = "params")]
 pub enum ActionFile {
-    Pool(PoolActionFile),     // removed by REMOVE_POOL_ACTION
     Command(CommandActionFile),
 }
 ```
-
-After REMOVE_POOL_ACTION, only `Command(CommandActionFile)` remains.
 
 **Resolved types** (`crates/barnum_config/src/resolved.rs:89-96`):
 ```rust
 #[serde(tag = "kind", content = "params")]
 pub enum ActionKind {
-    Pool(PoolAction),         // removed by REMOVE_POOL_ACTION
     Command(CommandAction),
 }
 ```
+
+Both use adjacently tagged enums (`tag = "kind", content = "params"`), producing config like `{"kind": "Command", "params": {"script": "..."}}`. The `params` wrapper is unnecessary — fields should sit alongside `kind` at the top level.
 
 **Dispatch** (`crates/barnum_config/src/runner/mod.rs:716-724`):
 ```rust
@@ -73,14 +71,16 @@ pub struct CommandActionFile { pub script: String }
 pub enum ActionFile {
     Command(CommandActionFile),
 }
+// produces: {"kind": "Command", "params": {"script": "..."}}
 
 // After
 pub struct BashActionFile { pub script: String }
 
-#[serde(tag = "kind", content = "params")]
+#[serde(tag = "kind")]
 pub enum ActionFile {
     Bash(BashActionFile),
 }
+// produces: {"kind": "Bash", "script": "..."}
 ```
 
 ### Resolved types
@@ -99,7 +99,7 @@ pub enum ActionKind {
 // After
 pub struct BashAction { pub script: String }
 
-#[serde(tag = "kind", content = "params")]
+#[serde(tag = "kind")]
 pub enum ActionKind {
     Bash(BashAction),
 }
@@ -155,6 +155,7 @@ Regenerate after the rename:
 ```rust
 /// Run a TypeScript handler file as a subprocess.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TypeScriptActionFile {
     /// Path to the handler file (relative to config directory).
     pub path: String,
@@ -163,35 +164,33 @@ pub struct TypeScriptActionFile {
     #[serde(default)]
     pub export: Option<String>,
 
-    /// Opaque handler configuration passed through to the handler.
+    /// Step configuration passed through to the handler.
     /// Rust stores this as-is and includes it in the envelope.
-    #[serde(flatten)]
-    pub handler_params: serde_json::Map<String, serde_json::Value>,
+    #[serde(default)]
+    pub step_config: serde_json::Value,
 }
 
-#[serde(tag = "kind", content = "params")]
+#[serde(tag = "kind")]
 pub enum ActionFile {
     Bash(BashActionFile),
     TypeScript(TypeScriptActionFile),
 }
 ```
 
-The `handler_params` field uses `#[serde(flatten)]` to absorb any extra keys beyond `path` and `export`. A config like:
+A config like:
 
 ```json
 {
   "kind": "TypeScript",
-  "params": {
-    "path": "./handlers/analyze.ts",
+  "path": "./handlers/analyze.ts",
+  "stepConfig": {
     "instructions": "Analyze the code.",
     "pool": "demo"
   }
 }
 ```
 
-Deserializes with `path = "./handlers/analyze.ts"`, `export = None`, and `handler_params = {"instructions": "Analyze the code.", "pool": "demo"}`.
-
-**Note on `deny_unknown_fields`:** The parent `StepFile` uses `#[serde(deny_unknown_fields)]`, but `deny_unknown_fields` applies to the struct it's on, not to nested structs. `TypeScriptActionFile` deliberately does NOT use `deny_unknown_fields` because `#[serde(flatten)]` absorbs the extra fields. This is correct serde behavior — `flatten` and `deny_unknown_fields` are incompatible.
+Deserializes with `path = "./handlers/analyze.ts"`, `export = None`, and `step_config = {"instructions": "Analyze the code.", "pool": "demo"}`. All fields sit at the same level as `kind` — no `params` wrapper.
 
 ### Resolved types
 
@@ -200,6 +199,7 @@ Deserializes with `path = "./handlers/analyze.ts"`, `export = None`, and `handle
 ```rust
 /// Resolved TypeScript action.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct TypeScriptAction {
     /// Path to the handler file (resolved to absolute path).
     pub path: String,
@@ -207,26 +207,25 @@ pub struct TypeScriptAction {
     /// Named export (defaults to "default").
     pub export: String,
 
-    /// Opaque handler params (everything except path and export).
-    #[serde(flatten)]
-    pub handler_params: serde_json::Map<String, serde_json::Value>,
+    /// Step configuration passed through to the handler. Opaque to Rust.
+    pub step_config: serde_json::Value,
 }
 
-#[serde(tag = "kind", content = "params")]
+#[serde(tag = "kind")]
 pub enum ActionKind {
     Bash(BashAction),
     TypeScript(TypeScriptAction),
 }
 ```
 
-In the resolved type, `export` is a non-optional `String` (defaulted to `"default"` during resolution). The `path` is resolved to an absolute path.
+In the resolved type, `export` is a non-optional `String` (defaulted to `"default"` during resolution). The `path` is resolved to an absolute path. `step_config` is passed through unchanged.
 
 ### Config resolution
 
 **File:** `crates/barnum_config/src/config.rs` (in `ActionFile::resolve`)
 
 ```rust
-Self::TypeScript(TypeScriptActionFile { path, export, handler_params }) => {
+Self::TypeScript(TypeScriptActionFile { path, export, step_config }) => {
     // Resolve path relative to config directory
     let resolved_path = base_path.join(&path);
     let canonical = resolved_path.canonicalize().map_err(|e| {
@@ -238,7 +237,7 @@ Self::TypeScript(TypeScriptActionFile { path, export, handler_params }) => {
     Ok(ActionKind::TypeScript(TypeScriptAction {
         path: canonical.to_string_lossy().into_owned(),
         export: export.unwrap_or_else(|| "default".to_string()),
-        handler_params,
+        step_config,
     }))
 }
 ```
@@ -250,7 +249,7 @@ Resolution validates the handler file exists at config load time — a typo in t
 **File:** `crates/barnum_config/src/runner/mod.rs`
 
 ```rust
-ActionKind::TypeScript(TypeScriptAction { path, export, ref handler_params }) => {
+ActionKind::TypeScript(TypeScriptAction { path, export, ref step_config }) => {
     let executor = self.executor.as_deref().unwrap_or("npx tsx");
     let run_handler = self.run_handler_path.as_deref()
         .unwrap_or("node_modules/@barnum/barnum/actions/run-handler.ts");
@@ -264,7 +263,7 @@ ActionKind::TypeScript(TypeScriptAction { path, export, ref handler_params }) =>
         script,
         step_name: task.step.clone(),
         working_dir: self.working_dir.clone(),
-        action_params: handler_params.clone(),
+        step_config: step_config.clone(),
         step: step.clone(),
         config: self.config.clone(),
     });
@@ -283,7 +282,7 @@ pub struct TypeScriptShellAction {
     pub script: String,
     pub step_name: StepName,
     pub working_dir: PathBuf,
-    pub action_params: serde_json::Map<String, serde_json::Value>,
+    pub step_config: serde_json::Value,
     pub step: Step,
     pub config: Config,
 }
@@ -314,22 +313,14 @@ The key difference from `ShellAction` is the stdin envelope:
 **TypeScript (TypeScriptShellAction) stdin:**
 ```json
 {
-  "action": {
-    "kind": "TypeScript",
-    "params": {
-      "path": "/abs/path/to/handlers/analyze.ts",
-      "export": "default",
-      "instructions": "Analyze the code.",
-      "pool": "demo"
-    }
-  },
+  "stepConfig": {"instructions": "Analyze the code.", "pool": "demo"},
   "task": {"kind": "Analyze", "value": {"file": "src/main.rs"}},
   "step": {"name": "Analyze", "next": ["Implement"], ...},
   "config": { ... }
 }
 ```
 
-The envelope gives the handler full context: its own action params, the task being processed, the step definition (including `next` steps and options), and the whole config (for workflows that need global awareness). `run-handler.ts` strips `path` and `export` from `action.params` before passing `params` to the handler.
+The envelope gives the handler its step configuration, the task being processed, the step definition (including `next` steps and options), and the whole config. No stripping needed — `stepConfig` is already separate from dispatch params.
 
 ### RunnerConfig changes
 
@@ -391,11 +382,11 @@ let runner_config = RunnerConfig {
 
 A TypeScript handler module exports a `HandlerDefinition` — an object with three concerns:
 
-1. **Step configuration validator** (`stepConfigValidator`): Validates the action's `params` from the config file. This is the "step configuration" — the opaque `handler_params` that Rust stores via `#[serde(flatten)]`. Validated at handler load time. Named `stepConfig` (not just `config`) because "config" is overloaded — it could mean the whole Barnum config.
+1. **Step configuration validator** (`stepConfigValidator`): Validates `stepConfig` from the envelope — the step-specific configuration from the config file. Rust passes it through as opaque JSON.
 
 2. **Step value validator** (`getStepValueValidator`): A function that receives the validated step config and returns a Zod schema for the task value. This allows the value schema to depend on the step configuration (e.g., different fields based on config options). Called per-task.
 
-3. **Handler function** (`handle`): Takes the validated step config, validated value, and context (config + step name) as parameters. Returns follow-up tasks.
+3. **Handler function** (`handle`): Takes a single context object with four keys (`stepConfig`, `value`, `config`, `stepName`). Returns follow-up tasks.
 
 ```typescript
 // handlers/analyze.ts
@@ -430,7 +421,7 @@ interface HandlerDefinition<
   C = unknown,
   V = unknown,
 > {
-  /** Validates action.params from the config (the step configuration). */
+  /** Validates stepConfig from the envelope. */
   stepConfigValidator?: z.ZodType<C>;
 
   /** Returns a validator for the task value, given the validated step config. */
@@ -465,10 +456,9 @@ interface FollowUpTask {
 
 **Validation flow** (in `run-handler.ts`):
 
-1. Strip `path` and `export` from `action.params` → raw handler params
-2. If `stepConfigValidator` exists, parse raw params → validated step config `C`. Otherwise, pass raw params as `unknown`.
-3. If `getStepValueValidator` exists, call it with the validated step config to get the value schema, then parse `task.value` → validated value `V`. Otherwise, pass `task.value` as `unknown`.
-4. Call `handle({ stepConfig, value, config, stepName })`.
+1. If `stepConfigValidator` exists, parse `envelope.stepConfig` → validated step config `C`. Otherwise, pass `envelope.stepConfig` as `unknown`.
+2. If `getStepValueValidator` exists, call it with the validated step config to get the value schema, then parse `envelope.task.value` → validated value `V`. Otherwise, pass `envelope.task.value` as `unknown`.
+3. Call `handle({ stepConfig, value, config, stepName })`.
 
 A minimal handler can skip both validators:
 
@@ -495,20 +485,17 @@ const envelope = JSON.parse(Buffer.concat(chunks).toString());
 const mod = await import(handlerPath);
 const definition = mod[exportName];
 
-// 1. Extract handler params (strip dispatch-only fields)
-const { path: _, export: __, ...rawParams } = envelope.action.params;
-
-// 2. Validate step config (step params)
+// 1. Validate step config
 const stepConfig = definition.stepConfigValidator
-  ? definition.stepConfigValidator.parse(rawParams)
-  : rawParams;
+  ? definition.stepConfigValidator.parse(envelope.stepConfig)
+  : envelope.stepConfig;
 
-// 3. Validate value (task payload), potentially dependent on step config
+// 2. Validate value, potentially dependent on step config
 const value = definition.getStepValueValidator
   ? definition.getStepValueValidator(stepConfig).parse(envelope.task.value)
   : envelope.task.value;
 
-// 4. Call handler
+// 3. Call handler
 const results = await definition.handle({
   stepConfig,
   value,
@@ -518,8 +505,6 @@ const results = await definition.handle({
 
 process.stdout.write(JSON.stringify(results));
 ```
-
-This file is the bridge between Rust's subprocess and the user's handler module. It reads the envelope from stdin, dynamically imports the handler module, validates step config and task value through the handler's optional validators, calls `handle` with a context object containing all four fields, and writes the returned follow-up tasks to stdout.
 
 ## run.ts changes
 
@@ -552,7 +537,7 @@ After all type changes, regenerate:
 - `libs/barnum/barnum-config-schema.zod.ts`
 - `libs/barnum/barnum-resolved-schema.zod.ts`
 
-The TypeScript variant appears in the generated schemas. The `handler_params` flatten means the schema allows arbitrary additional properties on TypeScript action params (beyond `path` and `export`).
+The TypeScript variant appears in the generated schemas. `stepConfig` is typed as an arbitrary JSON value.
 
 ## Tests
 
@@ -562,14 +547,14 @@ Test that TypeScript action configs parse correctly:
 
 ```rust
 #[test]
-fn action_typescript_with_handler_params() {
+fn action_typescript_with_step_config() {
     let json = r#"{
         "steps": [{
             "name": "Test",
             "action": {
                 "kind": "TypeScript",
-                "params": {
-                    "path": "./handler.ts",
+                "path": "./handler.ts",
+                "stepConfig": {
                     "instructions": "Do stuff",
                     "pool": "demo"
                 }
@@ -582,8 +567,8 @@ fn action_typescript_with_handler_params() {
         ActionFile::TypeScript(ts) => {
             assert_eq!(ts.path, "./handler.ts");
             assert_eq!(ts.export, None);
-            assert_eq!(ts.handler_params.get("instructions").unwrap(), "Do stuff");
-            assert_eq!(ts.handler_params.get("pool").unwrap(), "demo");
+            assert_eq!(ts.step_config["instructions"], "Do stuff");
+            assert_eq!(ts.step_config["pool"], "demo");
         }
         _ => panic!("expected TypeScript action"),
     }
