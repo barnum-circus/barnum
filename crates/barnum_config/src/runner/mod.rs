@@ -7,7 +7,6 @@
 mod action;
 mod hooks;
 mod response;
-mod submit;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io::{self, Write as _};
@@ -20,15 +19,12 @@ use barnum_state::{
     FailureReason, FinallyRun, InvalidResponseReason, RetryOrigin, SpawnedOrigin, StateLogConfig,
     StateLogEntry, TaskCompleted, TaskOrigin, TaskSubmitted,
 };
-use cli_invoker::Invoker;
 use tracing::{error, info};
-use troupe_cli::TroupeCli;
 
-use crate::docs::generate_step_docs;
-use crate::resolved::{ActionKind, CommandAction, Config, PoolAction as PoolActionConfig, Step};
+use crate::resolved::{ActionKind, CommandAction, Config, Step};
 use crate::types::{LogTaskId, StepInputValue, StepName, Task};
 
-use action::{ActionError, PoolAction, ShellAction, WorkerKind, WorkerResult, spawn_worker};
+use action::{ActionError, ShellAction, WorkerKind, WorkerResult, spawn_worker};
 use hooks::call_wake_script;
 use response::{FailureKind, TaskOutcome, TaskSuccess, process_submit_result};
 
@@ -40,8 +36,6 @@ pub struct RunnerConfig<'a> {
     pub working_dir: &'a Path,
     /// Optional wake script to call before starting.
     pub wake_script: Option<&'a str>,
-    /// Invoker for the `troupe` CLI.
-    pub invoker: &'a Invoker<TroupeCli>,
     /// Path for state log (NDJSON file for persistence/resume).
     pub state_log_path: &'a Path,
 }
@@ -55,6 +49,8 @@ const DEFAULT_MAX_CONCURRENCY: usize = 20;
 struct TaskEntry {
     step: StepName,
     parent_id: Option<LogTaskId>,
+    /// How many times this task has been retried (0 for the original attempt).
+    retries: u32,
     state: TaskState,
 }
 
@@ -140,8 +136,8 @@ impl RunState {
     /// - `Retry { replaces }` → inherited from replaced task (removed from map)
     #[expect(clippy::expect_used)]
     fn apply_submitted(&mut self, submitted: &TaskSubmitted) {
-        let parent_id = match &submitted.origin {
-            TaskOrigin::Seed => None,
+        let (parent_id, retries) = match &submitted.origin {
+            TaskOrigin::Seed => (None, 0),
             TaskOrigin::Spawned(spawned) => {
                 if let Some(pid) = &spawned.parent_id {
                     let parent = self
@@ -153,7 +149,7 @@ impl RunState {
                         "[P049] spawned child's parent not in WaitingForChildren state"
                     );
                 }
-                spawned.parent_id
+                (spawned.parent_id, 0)
             }
             TaskOrigin::Retry(retry) => {
                 let old = self
@@ -164,7 +160,7 @@ impl RunState {
                     matches!(old.state, TaskState::Failed),
                     "[P045] retry target not in Failed state"
                 );
-                old.parent_id
+                (old.parent_id, old.retries + 1)
             }
         };
 
@@ -173,6 +169,7 @@ impl RunState {
             TaskEntry {
                 step: submitted.step.clone(),
                 parent_id,
+                retries,
                 state: TaskState::Pending(PendingState {
                     value: submitted.value.clone(),
                 }),
@@ -454,7 +451,6 @@ struct Engine<'a> {
     config: &'a Config,
     step_map: HashMap<&'a StepName, &'a Step>,
     state: RunState,
-    invoker: Invoker<TroupeCli>,
     working_dir: PathBuf,
     tx: mpsc::Sender<WorkerResult>,
     max_concurrency: usize,
@@ -465,7 +461,6 @@ struct Engine<'a> {
 impl<'a> Engine<'a> {
     fn new(
         config: &'a Config,
-        invoker: Invoker<TroupeCli>,
         working_dir: PathBuf,
         tx: mpsc::Sender<WorkerResult>,
         max_concurrency: usize,
@@ -474,7 +469,6 @@ impl<'a> Engine<'a> {
             config,
             step_map: config.step_map(),
             state: RunState::new(),
-            invoker,
             working_dir,
             tx,
             max_concurrency,
@@ -662,7 +656,9 @@ impl<'a> Engine<'a> {
                         StepInputValue(serde_json::Value::Null),
                     );
                     let step_name = entry.step.clone();
-                    let task = Task::new(step_name.as_str(), value);
+                    let retries = entry.retries;
+                    let mut task = Task::new(step_name.as_str(), value);
+                    task.retries = retries;
 
                     self.in_flight += 1;
                     self.dispatch_task(task_id, task);
@@ -695,24 +691,6 @@ impl<'a> Engine<'a> {
         let tx = self.tx.clone();
 
         match &step.action {
-            ActionKind::Pool(PoolActionConfig {
-                pool,
-                root,
-                timeout: pool_timeout,
-                ..
-            }) => {
-                let docs = generate_step_docs(step);
-                info!(step = %task.step, "submitting task to pool");
-                let action = Box::new(PoolAction {
-                    root: root.clone(),
-                    pool: pool.clone(),
-                    invoker: self.invoker.clone(),
-                    docs,
-                    step_name: task.step.clone(),
-                    pool_timeout: *pool_timeout,
-                });
-                spawn_worker(tx, action, task_id, task, WorkerKind::Task, timeout);
-            }
             ActionKind::Command(CommandAction { script }) => {
                 info!(step = %task.step, script = %script, "executing command");
                 let action = Box::new(ShellAction {
@@ -813,9 +791,7 @@ pub fn run(
 
     info!(
         tasks = initial_tasks.len(),
-        invoker = %runner_config.invoker.description(),
-        max_concurrency,
-        "starting task queue"
+        max_concurrency, "starting task queue"
     );
 
     let (tx, rx) = mpsc::channel();
@@ -838,7 +814,6 @@ pub fn run(
     // Create engine
     let mut engine = Engine::new(
         config,
-        Clone::clone(runner_config.invoker),
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,
@@ -926,7 +901,6 @@ pub fn resume(old_log_path: &Path, runner_config: &RunnerConfig<'_>) -> io::Resu
     // 4. Create engine and replay old entries
     let mut engine = Engine::new(
         &config,
-        Clone::clone(runner_config.invoker),
         runner_config.working_dir.to_path_buf(),
         tx,
         max_concurrency,
@@ -976,32 +950,6 @@ fn run_loop(
         info!(total = completed_count, "task queue complete");
     }
     result
-}
-
-#[cfg(test)]
-#[expect(clippy::unwrap_used)]
-mod tests {
-    use super::submit::build_agent_payload;
-    use crate::types::StepName;
-
-    #[test]
-    fn build_payload_includes_task_and_docs() {
-        let step_name = StepName::new("Test");
-        let value = serde_json::json!({"x": 1});
-        let docs = "# Test Step";
-
-        let payload = build_agent_payload(&step_name, &value, docs, Some(60));
-        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
-
-        assert_eq!(parsed["task"]["kind"], "Test");
-        assert_eq!(parsed["timeout_seconds"], 60);
-        assert!(
-            parsed["instructions"]
-                .as_str()
-                .unwrap()
-                .contains("Test Step")
-        );
-    }
 }
 
 #[cfg(test)]
@@ -1292,6 +1240,21 @@ mod run_state_tests {
         assert!(state.tasks.contains_key(&LogTaskId(1)));
         assert_eq!(state.pending_dispatches.len(), 1);
         assert!(has_task_dispatch(&state, 1));
+    }
+
+    #[test]
+    fn retry_tracks_retry_count() {
+        let cfg = config(vec![step("A")]);
+        let mut state = RunState::new();
+
+        state.apply_entry(&seed(0, "A"), &cfg);
+        assert_eq!(state.tasks[&LogTaskId(0)].retries, 0);
+
+        state.apply_entry(&failed_with_retry(0, retry_task(1, "A", 0)), &cfg);
+        assert_eq!(state.tasks[&LogTaskId(1)].retries, 1);
+
+        state.apply_entry(&failed_with_retry(1, retry_task(2, "A", 1)), &cfg);
+        assert_eq!(state.tasks[&LogTaskId(2)].retries, 2);
     }
 
     #[test]

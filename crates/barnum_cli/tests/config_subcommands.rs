@@ -11,14 +11,13 @@ use common::BarnumRunner;
 use rstest::rstest;
 use std::time::Duration;
 
-const POOL: &str =
-    r#"{"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}"#;
+const COMMAND: &str = r#"{"kind": "Command", "params": {"script": "echo '[]'"}}"#;
 
 /// Build a step JSON string with the required action field.
 fn step(name: &str, next: &[&str]) -> String {
     let next_json: Vec<String> = next.iter().map(|n| format!("\"{n}\"")).collect();
     format!(
-        r#"{{"name": "{name}", "action": {POOL}, "next": [{}]}}"#,
+        r#"{{"name": "{name}", "action": {COMMAND}, "next": [{}]}}"#,
         next_json.join(", ")
     )
 }
@@ -85,7 +84,7 @@ fn schema_defines_step_type() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn schema_action_has_pool_and_command_variants() {
+fn schema_action_has_command_variant() {
     let barnum = BarnumRunner::new();
     let result = barnum.schema_json().expect("schema");
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -96,14 +95,6 @@ fn schema_action_has_pool_and_command_variants() {
         .as_array()
         .expect("ActionFile should have oneOf");
 
-    // Find Pool variant
-    let has_pool = variants.iter().any(|v| {
-        v["properties"]["kind"]["enum"]
-            .as_array()
-            .is_some_and(|e| e.iter().any(|k| k == "Pool"))
-    });
-    assert!(has_pool, "Action should have Pool variant");
-
     // Find Command variant
     let has_command = variants.iter().any(|v| {
         v["properties"]["kind"]["enum"]
@@ -111,6 +102,14 @@ fn schema_action_has_pool_and_command_variants() {
             .is_some_and(|e| e.iter().any(|k| k == "Command"))
     });
     assert!(has_command, "Action should have Command variant");
+
+    // Verify Pool variant does not exist
+    let has_pool = variants.iter().any(|v| {
+        v["properties"]["kind"]["enum"]
+            .as_array()
+            .is_some_and(|e| e.iter().any(|k| k == "Pool"))
+    });
+    assert!(!has_pool, "Action should not have Pool variant");
 }
 
 #[rstest]
@@ -333,8 +332,8 @@ fn docs_generates_markdown_header() {
 fn docs_includes_step_names() {
     let config = r#"{
         "steps": [
-            {"name": "Analyze", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Analyze code"}}}, "next": ["Implement"]},
-            {"name": "Implement", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Write code"}}}, "next": []}
+            {"name": "Analyze", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["Implement"]},
+            {"name": "Implement", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
@@ -352,11 +351,11 @@ fn docs_includes_step_names() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn docs_includes_instructions() {
+fn docs_includes_terminal_step_info() {
     let config = r#"{
         "steps": [{
             "name": "Task",
-            "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": "Do the important thing"}}},
+            "action": {"kind": "Command", "params": {"script": "echo '[]'"}},
             "next": []
         }]
     }"#;
@@ -366,10 +365,8 @@ fn docs_includes_instructions() {
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
-    assert!(
-        stdout.contains("Do the important thing"),
-        "Should include instructions"
-    );
+    assert!(stdout.contains("Task"), "Should include step name");
+    assert!(stdout.contains("terminal"), "Should indicate terminal step");
 }
 
 #[rstest]
@@ -430,11 +427,11 @@ fn graph_marks_terminal_steps() {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-fn graph_distinguishes_pool_and_command() {
+fn graph_command_uses_box_shape() {
     let config = r#"{
         "steps": [
-            {"name": "PoolStep", "action": {"kind": "Pool", "params": {"instructions": {"kind": "Inline", "value": ""}}}, "next": ["CmdStep"]},
-            {"name": "CmdStep", "action": {"kind": "Command", "params": {"script": "echo"}}, "next": []}
+            {"name": "StepA", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": ["StepB"]},
+            {"name": "StepB", "action": {"kind": "Command", "params": {"script": "echo '[]'"}}, "next": []}
         ]
     }"#;
 
@@ -443,11 +440,9 @@ fn graph_distinguishes_pool_and_command() {
 
     assert!(result.status.success());
     let stdout = String::from_utf8_lossy(&result.stdout);
-    // Pool steps are boxes, Command steps are diamonds
-    assert!(stdout.contains("shape=box"), "Pool should be box");
     assert!(
-        stdout.contains("shape=diamond"),
-        "Command should be diamond"
+        stdout.contains("shape=box"),
+        "Command steps should use box shape"
     );
 }
 
@@ -471,7 +466,7 @@ fn graph_shows_hooks() {
     let config = format!(
         r#"{{"steps": [{{
             "name": "WithHooks",
-            "action": {POOL},
+            "action": {COMMAND},
             "finally": {{"kind": "Command", "params": {{"script": "echo finally"}}}},
             "next": []
         }}]}}"#
@@ -561,7 +556,7 @@ fn validate_entrypoint() {
         "entrypoint": "Start",
         "steps": [{{
             "name": "Start",
-            "action": {POOL},
+            "action": {COMMAND},
             "next": []
         }}]
     }}"#

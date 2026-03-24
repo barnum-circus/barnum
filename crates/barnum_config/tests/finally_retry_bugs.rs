@@ -3,22 +3,16 @@
 //! These tests demonstrate bugs in the current implementation where
 //! finally hooks run too early when child tasks retry.
 
-#![expect(clippy::print_stderr)]
 #![expect(clippy::expect_used)]
 #![expect(clippy::should_panic_without_expect)]
 
 mod common;
 
 use barnum_config::{ConfigFile, RunnerConfig, StepInputValue, Task};
-use common::{
-    BarnumTestAgent, TroupeHandle, cleanup_test_dir, create_test_invoker, inject_pool_config,
-    is_ipc_available, setup_test_dir, test_state_log_path,
-};
+use common::{cleanup_test_dir, setup_test_dir, test_state_log_path};
 use rstest::rstest;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 /// Test that demonstrates the bug: A's finally hook runs when B fails,
@@ -26,8 +20,8 @@ use std::time::Duration;
 ///
 /// Setup:
 /// - Step A has a finally hook that writes `finally_ran` to a log file
-/// - A's agent returns a child task B
-/// - B's agent fails on first call (returns invalid JSON), succeeds on second
+/// - A transitions to child task B
+/// - B's script fails on first call (invalid JSON), succeeds on second via counter file
 ///
 /// Bug behavior (current):
 /// - A's finally runs after B fails (wrong!)
@@ -41,51 +35,7 @@ fn finally_runs_too_early_on_retry() {
     let test_name = "finally_retry_bugs_too_early";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Track how many times B's agent is called
-    let b_call_count = Arc::new(AtomicUsize::new(0));
-    let b_count_clone = b_call_count.clone();
-
-    // Track when finally hook runs relative to B's agent calls
     let finally_log = root.join("finally.log");
-    let finally_log_for_hook = finally_log.clone();
-
-    // Agent behavior:
-    // - Step A: return child task B
-    // - Step B: fail first call (invalid JSON), succeed second call
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "StepA" => {
-                // Return child task B
-                r#"[{"kind": "StepB", "value": {}}]"#.to_string()
-            }
-            "StepB" => {
-                let count = b_count_clone.fetch_add(1, Ordering::SeqCst);
-                if count == 0 {
-                    // First call: fail with invalid JSON
-                    "not valid json {{{".to_string()
-                } else {
-                    // Second call: succeed
-                    "[]".to_string()
-                }
-            }
-            _ => "[]".to_string(),
-        }
-    });
 
     // Create the finally hook script - just writes a marker
     let finally_script = root.join("finally.sh");
@@ -93,11 +43,10 @@ fn finally_runs_too_early_on_retry() {
         r#"#!/bin/bash
 echo "finally_ran" > "{}"
 "#,
-        finally_log_for_hook.display()
+        finally_log.display()
     );
     fs::write(&finally_script, &script_content).expect("write finally script");
 
-    // Make it executable
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -105,10 +54,12 @@ echo "finally_ran" > "{}"
             .expect("chmod finally script");
     }
 
-    // Config: A has finally hook, spawns B. B has retries enabled.
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // B uses counter file: fail first call (bad JSON), succeed on retry
+    let counter_file = root.join("b_counter");
+    let counter_path = counter_file.display().to_string();
+
+    let config_json = format!(
+        r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -116,46 +67,36 @@ echo "finally_ran" > "{}"
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": "Step A"}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
                 "next": ["StepB"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": "Step B"}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}}}},
                 "next": []
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let initial_tasks = vec![Task::new("StepA", StepInputValue(serde_json::json!({})))];
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
     // Run the task queue
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
 
-    // Stop agent and get call counts
-    let _processed = agent.stop();
-    let final_b_count = b_call_count.load(Ordering::SeqCst);
-
     // Should succeed (B eventually succeeds on retry)
     assert!(result.is_ok(), "run should succeed: {result:?}");
-
-    // B should have been called twice (fail once, succeed once)
-    assert_eq!(final_b_count, 2, "B should be called twice (fail + retry)");
 
     // Finally hook should have run exactly once, after B succeeded
     assert!(
@@ -166,71 +107,27 @@ echo "finally_ran" > "{}"
     cleanup_test_dir(&root);
 }
 
-/// Simpler test: track timing via atomic counters instead of files.
+/// Simpler test: verify finally ran after the run completes successfully,
+/// including a child that retries.
 ///
-/// This version uses a more robust detection mechanism:
-/// - Track total B agent calls at the moment finally runs
-/// - Assert finally ran after ALL B calls, not after the failure
+/// Parent spawns Child. Child fails first, succeeds on retry.
+/// Parent has a finally hook.
 #[rstest]
 #[timeout(Duration::from_secs(20))]
 fn finally_timing_via_counters() {
     let test_name = "finally_retry_bugs_counters";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Counters for B's agent calls
-    let b_call_count = Arc::new(AtomicUsize::new(0));
-    let b_count_clone = b_call_count.clone();
-
-    // We'll detect timing by having the finally hook write the current B count
-    // to a file, which we read after the run.
     let marker_file = root.join("finally_marker.txt");
-    let marker_for_script = marker_file.clone();
 
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "Parent" => {
-                // Spawn one child
-                r#"[{"kind": "Child", "value": {}}]"#.to_string()
-            }
-            "Child" => {
-                let count = b_count_clone.fetch_add(1, Ordering::SeqCst);
-                if count == 0 {
-                    // First call: fail
-                    "invalid json!!!".to_string()
-                } else {
-                    // Retry: succeed
-                    "[]".to_string()
-                }
-            }
-            _ => "[]".to_string(),
-        }
-    });
-
-    // Create finally script that records the B call count at execution time
+    // Create finally script that records execution
     let finally_script = root.join("finally.sh");
-    // The script writes the current value to a file
     let script = format!(
         r#"#!/bin/bash
 # This runs when finally hook is triggered
-# We detect timing by checking if child succeeded yet
 echo "finally_executed" > "{}"
 "#,
-        marker_for_script.display()
+        marker_file.display()
     );
     fs::write(&finally_script, &script).expect("write script");
 
@@ -241,9 +138,12 @@ echo "finally_executed" > "{}"
             .expect("chmod script");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // Child uses counter file: fail first, succeed on retry
+    let counter_file = root.join("child_counter");
+    let counter_path = counter_file.display().to_string();
+
+    let config_json = format!(
+        r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -251,30 +151,27 @@ echo "finally_executed" > "{}"
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
                 "next": ["Child"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'invalid json!!!'; fi"}}}},
                 "next": []
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -284,27 +181,14 @@ echo "finally_executed" > "{}"
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-    let total_child_calls = b_call_count.load(Ordering::SeqCst);
-
     // Run should succeed
     assert!(result.is_ok(), "run should succeed: {result:?}");
-
-    // Child should be called twice
-    assert_eq!(
-        total_child_calls, 2,
-        "Child should be called twice (fail + retry)"
-    );
 
     // Finally should have run
     assert!(
         marker_file.exists(),
         "Finally hook should have executed and created marker file"
     );
-
-    // The key question: did finally run too early?
-    // We can't directly check timing from the file, but we can verify
-    // the run completed successfully, which means the retry succeeded.
 
     cleanup_test_dir(&root);
 }
@@ -331,44 +215,8 @@ fn nested_finally_with_retry_ordering() {
     let test_name = "finally_retry_bugs_nested";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     // Log file to track ordering
     let order_log = root.join("order.log");
-    let order_log_parent = order_log.clone();
-    let order_log_child = order_log.clone();
-
-    let child_call_count = Arc::new(AtomicUsize::new(0));
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), {
-        let child_call_count = Arc::clone(&child_call_count);
-        move |payload| {
-            let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-            let kind = parsed
-                .get("task")
-                .and_then(|t| t.get("kind"))
-                .and_then(|k| k.as_str())
-                .unwrap_or("");
-
-            match kind {
-                "Parent" => r#"[{"kind": "Child", "value": {}}]"#.to_string(),
-                "Child" => {
-                    let count = child_call_count.fetch_add(1, Ordering::SeqCst);
-                    if count == 0 {
-                        "bad json".to_string()
-                    } else {
-                        "[]".to_string()
-                    }
-                }
-                _ => "[]".to_string(),
-            }
-        }
-    });
 
     // Parent's finally hook
     let parent_finally = root.join("parent_finally.sh");
@@ -376,7 +224,7 @@ fn nested_finally_with_retry_ordering() {
         r#"#!/bin/bash
 echo "parent_finally" >> "{}"
 "#,
-        order_log_parent.display()
+        order_log.display()
     );
     fs::write(&parent_finally, &script).expect("write parent finally");
 
@@ -386,7 +234,7 @@ echo "parent_finally" >> "{}"
         r#"#!/bin/bash
 echo "child_finally" >> "{}"
 "#,
-        order_log_child.display()
+        order_log.display()
     );
     fs::write(&child_finally, &script).expect("write child finally");
 
@@ -399,9 +247,12 @@ echo "child_finally" >> "{}"
             .expect("chmod child finally");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // Child uses counter file: fail first (bad json), succeed on retry
+    let counter_file = root.join("child_counter");
+    let counter_path = counter_file.display().to_string();
+
+    let config_json = format!(
+        r#"{{
         "options": {{
             "max_retries": 3,
             "retry_on_invalid_response": true
@@ -409,32 +260,29 @@ echo "child_finally" >> "{}"
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
                 "next": ["Child"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "F={counter_path}; if [ -f \"$F\" ]; then echo '[]'; else touch \"$F\"; echo 'bad json'; fi"}}}},
                 "next": [],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }}
         ]
     }}"#,
-            parent_finally.display(),
-            child_finally.display()
-        ),
-        &root,
+        parent_finally.display(),
+        child_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -443,8 +291,6 @@ echo "child_finally" >> "{}"
         &runner_config,
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
-
-    let _processed = agent.stop();
 
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
@@ -469,44 +315,18 @@ echo "child_finally" >> "{}"
 /// still run (the descendant is "done" even though it failed).
 #[rstest]
 #[timeout(Duration::from_secs(20))]
-#[should_panic]
 fn finally_runs_when_retries_exhausted() {
     let test_name = "finally_retry_bugs_exhausted";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "Parent" => r#"[{"kind": "Child", "value": {}}]"#.to_string(),
-            // Child always fails
-            "Child" => "always invalid json".to_string(),
-            _ => "[]".to_string(),
-        }
-    });
-
     let finally_marker = root.join("finally_ran.txt");
-    let marker_for_script = finally_marker.clone();
 
     let finally_script = root.join("finally.sh");
     let script = format!(
         r#"#!/bin/bash
 echo "finally_executed" > "{}"
 "#,
-        marker_for_script.display()
+        finally_marker.display()
     );
     fs::write(&finally_script, &script).expect("write script");
 
@@ -517,9 +337,9 @@ echo "finally_executed" > "{}"
             .expect("chmod script");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // Parent spawns Child; Child always outputs invalid JSON
+    let config_json = format!(
+        r#"{{
         "options": {{
             "max_retries": 2,
             "retry_on_invalid_response": true
@@ -527,30 +347,27 @@ echo "finally_executed" > "{}"
         "steps": [
             {{
                 "name": "Parent",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"Child\",\"value\":{{}}}}]'"}}}},
                 "next": ["Child"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "Child",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo 'always invalid json'"}}}},
                 "next": []
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -560,8 +377,6 @@ echo "finally_executed" > "{}"
         &runner_config,
         vec![Task::new("Parent", StepInputValue(serde_json::json!({})))],
     );
-
-    let _processed = agent.stop();
 
     // Run fails because task was dropped
     assert!(result.is_err(), "run should fail when child is dropped");
@@ -580,15 +395,15 @@ echo "finally_executed" > "{}"
 ///
 /// Setup:
 /// - A (with finally) spawns B (with finally)
-/// - B spawns C (leaf, no finally — finally hooks don't fire on leaf steps)
+/// - B spawns C (leaf, no finally -- finally hooks don't fire on leaf steps)
 /// - C completes
 ///
 /// Expected order:
 /// 1. A runs, spawns B
 /// 2. B runs, spawns C
 /// 3. C runs, completes
-/// 4. B's finally runs (B's subtree done) → writes `B_finally`
-/// 5. A's finally runs (A's subtree done, including B's finally) → writes `A_finally`
+/// 4. B's finally runs (B's subtree done)
+/// 5. A's finally runs (A's subtree done, including B's finally)
 ///
 /// Bug behavior:
 /// - A's finally runs when B succeeds (before C completes, before B's finally)
@@ -599,33 +414,8 @@ fn subtree_finally_waits_for_grandchildren() {
     let test_name = "finally_subtree_grandchildren";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     // Log file to track ordering
     let order_log = root.join("order.log");
-    let order_log_a = order_log.clone();
-    let order_log_b = order_log.clone();
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
-            "StepB" => r#"[{"kind": "StepC", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(), // StepC and all others return empty
-        }
-    });
 
     // A's finally hook
     let a_finally = root.join("a_finally.sh");
@@ -633,7 +423,7 @@ fn subtree_finally_waits_for_grandchildren() {
         r#"#!/bin/bash
 echo "A_finally" >> "{}"
 "#,
-        order_log_a.display()
+        order_log.display()
     );
     fs::write(&a_finally, &script).expect("write A finally");
 
@@ -643,11 +433,11 @@ echo "A_finally" >> "{}"
         r#"#!/bin/bash
 echo "B_finally" >> "{}"
 "#,
-        order_log_b.display()
+        order_log.display()
     );
     fs::write(&b_finally, &script).expect("write B finally");
 
-    // C is a leaf step — finally hooks don't fire on leaves (walk_up_for_finally
+    // C is a leaf step -- finally hooks don't fire on leaves (walk_up_for_finally
     // starts from the parent, never the completing task itself).
 
     #[cfg(unix)]
@@ -659,43 +449,39 @@ echo "B_finally" >> "{}"
             .expect("chmod B finally");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
                 "next": ["StepB"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}},
                 "next": ["StepC"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "StepC",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": []
             }}
         ]
     }}"#,
-            a_finally.display(),
-            b_finally.display()
-        ),
-        &root,
+        a_finally.display(),
+        b_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -705,15 +491,13 @@ echo "B_finally" >> "{}"
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
     // Read the order log
     let order_content = fs::read_to_string(&order_log).unwrap_or_default();
     let lines: Vec<&str> = order_content.lines().collect();
 
-    // C is a leaf — no finally hook fires for it.
+    // C is a leaf -- no finally hook fires for it.
     // B's finally fires after C completes, then A's finally fires after B's subtree completes.
     assert_eq!(
         lines,
@@ -734,9 +518,9 @@ echo "B_finally" >> "{}"
 /// Expected order:
 /// 1. A runs, spawns B
 /// 2. B runs, completes
-/// 3. B's finally runs → spawns C, writes `B_finally`
-/// 4. C runs, completes → writes `C_done`
-/// 5. A's finally runs (A's subtree done, including B's finally-spawned tasks) → writes `A_finally`
+/// 3. B's finally runs -> spawns C, writes `B_finally`
+/// 4. C runs, completes
+/// 5. A's finally runs (A's subtree done, including B's finally-spawned tasks)
 ///
 /// Bug behavior:
 /// - B's finally spawns C as a "new root" with `finally_origin_id: None`
@@ -749,32 +533,8 @@ fn finally_waits_for_finally_spawned_tasks() {
     let test_name = "finally_spawned_tasks";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     // Log file to track ordering
     let order_log = root.join("order.log");
-    let order_log_a = order_log.clone();
-    let order_log_b = order_log.clone();
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(), // StepB and Cleanup return empty
-        }
-    });
 
     // A's finally hook - just writes marker
     let a_finally = root.join("a_finally.sh");
@@ -782,7 +542,7 @@ fn finally_waits_for_finally_spawned_tasks() {
         r#"#!/bin/bash
 echo "A_finally" >> "{}"
 "#,
-        order_log_a.display()
+        order_log.display()
     );
     fs::write(&a_finally, &script).expect("write A finally");
 
@@ -793,11 +553,11 @@ echo "A_finally" >> "{}"
 echo "B_finally" >> "{}"
 echo '[{{"kind": "Cleanup", "value": {{}}}}]'
 "#,
-        order_log_b.display()
+        order_log.display()
     );
     fs::write(&b_finally, &script).expect("write B finally");
 
-    // Cleanup is a leaf step — no finally hook (they don't fire on leaves).
+    // Cleanup is a leaf step -- no finally hook (they don't fire on leaves).
 
     #[cfg(unix)]
     {
@@ -808,43 +568,39 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
             .expect("chmod B finally");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}},
                 "next": ["StepB"],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "StepB",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": [],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}
             }},
             {{
                 "name": "Cleanup",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": []
             }}
         ]
     }}"#,
-            a_finally.display(),
-            b_finally.display()
-        ),
-        &root,
+        a_finally.display(),
+        b_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -854,8 +610,6 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
     // Read the order log
@@ -863,7 +617,7 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
     let lines: Vec<&str> = order_content.lines().collect();
 
     // Correct order: B's finally runs and spawns Cleanup, Cleanup completes, then A's finally.
-    // Cleanup is a leaf step so it has no finally hook — we can't observe its completion directly.
+    // Cleanup is a leaf step so it has no finally hook -- we can't observe its completion directly.
     // A waits for entire subtree (including tasks spawned by B's finally) before running its finally.
     assert_eq!(
         lines,
@@ -874,7 +628,7 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
     cleanup_test_dir(&root);
 }
 
-/// Test deeply nested finally chain: A→B→C→D where A, B, C have finally hooks.
+/// Test deeply nested finally chain: A->B->C->D where A, B, C have finally hooks.
 /// D is a leaf step so it has no finally hook (they don't fire on leaves).
 ///
 /// Expected order: D completes, `C_finally`, `B_finally`, `A_finally`
@@ -887,42 +641,15 @@ fn deeply_nested_finally_chain() {
     let test_name = "finally_deeply_nested";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     let order_log = root.join("order.log");
-    let order_log_a = order_log.clone();
-    let order_log_b = order_log.clone();
-    let order_log_c = order_log.clone();
 
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
-            "StepB" => r#"[{"kind": "StepC", "value": {}}]"#.to_string(),
-            "StepC" => r#"[{"kind": "StepD", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(),
-        }
-    });
-
-    // Create finally hooks for A, B, C (D is a leaf — finally hooks don't fire on leaves)
+    // Create finally hooks for A, B, C (D is a leaf -- finally hooks don't fire on leaves)
     let a_finally = root.join("a_finally.sh");
     fs::write(
         &a_finally,
         format!(
             "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
-            order_log_a.display()
+            order_log.display()
         ),
     )
     .expect("write A finally");
@@ -932,7 +659,7 @@ fn deeply_nested_finally_chain() {
         &b_finally,
         format!(
             "#!/bin/bash\necho \"B_finally\" >> \"{}\"\n",
-            order_log_b.display()
+            order_log.display()
         ),
     )
     .expect("write B finally");
@@ -942,7 +669,7 @@ fn deeply_nested_finally_chain() {
         &c_finally,
         format!(
             "#!/bin/bash\necho \"C_finally\" >> \"{}\"\n",
-            order_log_c.display()
+            order_log.display()
         ),
     )
     .expect("write C finally");
@@ -955,31 +682,27 @@ fn deeply_nested_finally_chain() {
         fs::set_permissions(&c_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}}, "next": ["StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepC", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
         ]
     }}"#,
-            a_finally.display(),
-            b_finally.display(),
-            c_finally.display()
-        ),
-        &root,
+        a_finally.display(),
+        b_finally.display(),
+        c_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -989,14 +712,12 @@ fn deeply_nested_finally_chain() {
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
     let order_content = fs::read_to_string(&order_log).unwrap_or_default();
     let lines: Vec<&str> = order_content.lines().collect();
 
-    // D is a leaf — its finally hook never fires. Only C, B, A finally hooks run.
+    // D is a leaf -- its finally hook never fires. Only C, B, A finally hooks run.
     assert_eq!(
         lines,
         vec!["C_finally", "B_finally", "A_finally"],
@@ -1009,7 +730,7 @@ fn deeply_nested_finally_chain() {
 /// Test multiple children where one has a grandchild.
 ///
 /// Setup: A spawns B and C. B spawns D. A and B have finally hooks.
-/// C and D are leaf steps — finally hooks don't fire on leaves.
+/// C and D are leaf steps -- finally hooks don't fire on leaves.
 ///
 /// Expected order: `B_finally`, `A_finally`
 ///
@@ -1020,43 +741,14 @@ fn multiple_children_with_finally() {
     let test_name = "finally_multiple_children";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     let order_log = root.join("order.log");
-    let order_log_a = order_log.clone();
-    let order_log_b = order_log.clone();
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            // A spawns both B and C
-            "StepA" => {
-                r#"[{"kind": "StepB", "value": {}}, {"kind": "StepC", "value": {}}]"#.to_string()
-            }
-            // B spawns D (grandchild)
-            "StepB" => r#"[{"kind": "StepD", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(),
-        }
-    });
 
     let a_finally = root.join("a_finally.sh");
     fs::write(
         &a_finally,
         format!(
             "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
-            order_log_a.display()
+            order_log.display()
         ),
     )
     .expect("write");
@@ -1066,7 +758,7 @@ fn multiple_children_with_finally() {
         &b_finally,
         format!(
             "#!/bin/bash\necho \"B_finally\" >> \"{}\"\n",
-            order_log_b.display()
+            order_log.display()
         ),
     )
     .expect("write");
@@ -1078,32 +770,29 @@ fn multiple_children_with_finally() {
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    // C and D are leaf steps — finally hooks only fire on steps with descendants,
+    // A spawns B and C. B spawns D.
+    // C and D are leaf steps -- finally hooks only fire on steps with descendants,
     // so only A and B get finally hooks.
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepC", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": []}},
-            {{"name": "StepD", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}, {{\"kind\":\"StepC\",\"value\":{{}}}}]'"}}}}, "next": ["StepB", "StepC"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepD\",\"value\":{{}}}}]'"}}}}, "next": ["StepD"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepC", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}},
+            {{"name": "StepD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
         ]
     }}"#,
-            a_finally.display(),
-            b_finally.display()
-        ),
-        &root,
+        a_finally.display(),
+        b_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -1113,15 +802,13 @@ fn multiple_children_with_finally() {
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
     let order_content = fs::read_to_string(&order_log).unwrap_or_default();
     let lines: Vec<&str> = order_content.lines().collect();
 
     // Only non-leaf steps (A and B) have finally hooks that fire.
-    // C and D are leaf steps — their finally hooks would never fire.
+    // C and D are leaf steps -- their finally hooks would never fire.
     // B_finally must come before A_finally.
     assert_eq!(
         lines,
@@ -1146,38 +833,14 @@ fn finally_spawns_multiple_tasks() {
     let test_name = "finally_spawns_multiple";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
     let order_log = root.join("order.log");
-    let order_log_a = order_log.clone();
-    let order_log_b = order_log.clone();
-
-    let agent = BarnumTestAgent::start(&root, Duration::from_millis(10), move |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        match kind {
-            "StepA" => r#"[{"kind": "StepB", "value": {}}]"#.to_string(),
-            _ => "[]".to_string(),
-        }
-    });
 
     let a_finally = root.join("a_finally.sh");
     fs::write(
         &a_finally,
         format!(
             "#!/bin/bash\necho \"A_finally\" >> \"{}\"\n",
-            order_log_a.display()
+            order_log.display()
         ),
     )
     .expect("write");
@@ -1188,7 +851,7 @@ fn finally_spawns_multiple_tasks() {
         &b_finally,
         format!(
             "#!/bin/bash\necho \"B_finally\" >> \"{}\"\necho '[{{\"kind\": \"CleanupC\", \"value\": {{}}}}, {{\"kind\": \"CleanupD\", \"value\": {{}}}}]'\n",
-            order_log_b.display()
+            order_log.display()
         ),
     )
     .expect("write");
@@ -1200,30 +863,26 @@ fn finally_spawns_multiple_tasks() {
         fs::set_permissions(&b_finally, fs::Permissions::from_mode(0o755)).expect("chmod");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
-            {{"name": "StepA", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "StepB", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": [], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
-            {{"name": "CleanupC", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": []}},
-            {{"name": "CleanupD", "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}}, "next": []}}
+            {{"name": "StepA", "action": {{"kind": "Command", "params": {{"script": "echo '[{{\"kind\":\"StepB\",\"value\":{{}}}}]'"}}}}, "next": ["StepB"], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "StepB", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": [], "finally": {{"kind": "Command", "params": {{"script": "{}"}}}}}},
+            {{"name": "CleanupC", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}},
+            {{"name": "CleanupD", "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}}, "next": []}}
         ]
     }}"#,
-            a_finally.display(),
-            b_finally.display()
-        ),
-        &root,
+        a_finally.display(),
+        b_finally.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -1233,15 +892,13 @@ fn finally_spawns_multiple_tasks() {
         vec![Task::new("StepA", StepInputValue(serde_json::json!({})))],
     );
 
-    let _processed = agent.stop();
-
     assert!(result.is_ok(), "run should succeed: {result:?}");
 
     let order_content = fs::read_to_string(&order_log).unwrap_or_default();
     let lines: Vec<&str> = order_content.lines().collect();
 
     // B_finally must come first (it spawns C and D), A_finally must be last.
-    // CleanupC and CleanupD are leaf steps so they have no finally hooks —
+    // CleanupC and CleanupD are leaf steps so they have no finally hooks --
     // we can only observe the finally hooks on non-leaf steps.
     assert_eq!(
         lines,
@@ -1266,17 +923,6 @@ fn finally_spawns_multiple_tasks() {
 fn finally_retries_on_failure() {
     let test_name = "finally_retries_failure";
     let root = setup_test_dir(test_name);
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent just returns empty (no children)
-    let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
 
     // Finally hook that fails first 2 times, succeeds on 3rd
     let call_count_file = root.join("finally_calls.txt");
@@ -1303,32 +949,29 @@ exit 0
             .expect("chmod finally script");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // StepA is a terminal step (no children). Its finally hook retries.
+    let config_json = format!(
+        r#"{{
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": [],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
                 "options": {{"max_retries": 3}}
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -1369,17 +1012,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
     let test_name = "finally_failure_propagates";
     let root = setup_test_dir(test_name);
 
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent just returns empty (no children)
-    let _agent = BarnumTestAgent::terminator(&root, Duration::from_millis(10));
-
     // Finally hook that always fails
     let finally_script = root.join("finally.sh");
     fs::write(&finally_script, "#!/bin/bash\nexit 1\n").expect("write finally script");
@@ -1391,32 +1023,28 @@ fn finally_failure_propagates_after_retries_exhausted() {
             .expect("chmod finally script");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    let config_json = format!(
+        r#"{{
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": [],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
                 "options": {{"max_retries": 2}}
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 
@@ -1439,7 +1067,7 @@ fn finally_failure_propagates_after_retries_exhausted() {
 ///
 /// Setup:
 /// - `StepA` has a finally hook that spawns Cleanup task
-/// - Cleanup task always fails
+/// - Cleanup task always fails (outputs invalid JSON)
 ///
 /// Expected: `run()` returns error (child of finally failed)
 /// Bug behavior: Unknown - need to verify
@@ -1449,30 +1077,6 @@ fn finally_failure_propagates_after_retries_exhausted() {
 fn finally_child_failure_propagates() {
     let test_name = "finally_child_failure";
     let root = setup_test_dir(test_name);
-
-    if !is_ipc_available(&root) {
-        eprintln!("SKIP: IPC not available");
-        cleanup_test_dir(&root);
-        return;
-    }
-
-    let _pool = TroupeHandle::start(&root);
-
-    // Agent: StepA returns empty, Cleanup always fails
-    let _agent = BarnumTestAgent::start(&root, Duration::from_millis(10), |payload| {
-        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap_or_default();
-        let kind = parsed
-            .get("task")
-            .and_then(|t| t.get("kind"))
-            .and_then(|k| k.as_str())
-            .unwrap_or("");
-
-        if kind == "Cleanup" {
-            "INVALID JSON - FAIL".to_string() // Invalid response = failure
-        } else {
-            "[]".to_string()
-        }
-    });
 
     // Finally hook that spawns a Cleanup task
     let finally_script = root.join("finally.sh");
@@ -1491,38 +1095,35 @@ echo '[{"kind": "Cleanup", "value": {}}]'
             .expect("chmod finally script");
     }
 
-    let config_json = inject_pool_config(
-        &format!(
-            r#"{{
+    // Cleanup always outputs invalid JSON (failure)
+    let config_json = format!(
+        r#"{{
         "steps": [
             {{
                 "name": "StepA",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo '[]'"}}}},
                 "next": [],
                 "finally": {{"kind": "Command", "params": {{"script": "{}"}}}},
                 "options": {{"max_retries": 0}}
             }},
             {{
                 "name": "Cleanup",
-                "action": {{"kind": "Pool", "params": {{"instructions": {{"kind": "Inline", "value": ""}}}}}},
+                "action": {{"kind": "Command", "params": {{"script": "echo 'INVALID JSON - FAIL'"}}}},
                 "next": [],
                 "options": {{"max_retries": 0}}
             }}
         ]
     }}"#,
-            finally_script.display()
-        ),
-        &root,
+        finally_script.display()
     );
 
     let config_file: ConfigFile = serde_json::from_str(&config_json).expect("parse config");
-    let config = config_file.resolve(Path::new(".")).expect("resolve config");
+    let config = config_file.resolve(Path::new("."));
 
     let state_log = test_state_log_path(&root);
     let runner_config = RunnerConfig {
         working_dir: Path::new("."),
         wake_script: None,
-        invoker: &create_test_invoker(),
         state_log_path: &state_log,
     };
 

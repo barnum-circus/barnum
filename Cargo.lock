@@ -73,7 +73,6 @@ version = "0.2.4"
 dependencies = [
  "barnum_config",
  "clap",
- "cli_invoker",
  "interprocess",
  "json5",
  "rstest",
@@ -82,7 +81,6 @@ dependencies = [
  "serde_json",
  "tracing-subscriber",
  "troupe",
- "troupe_cli",
 ]
 
 [[package]]
@@ -91,7 +89,6 @@ version = "0.2.4"
 dependencies = [
  "barnum_state",
  "barnum_types",
- "cli_invoker",
  "interprocess",
  "json5",
  "rstest",
@@ -101,7 +98,6 @@ dependencies = [
  "string_id",
  "tracing",
  "troupe",
- "troupe_cli",
 ]
 
 [[package]]

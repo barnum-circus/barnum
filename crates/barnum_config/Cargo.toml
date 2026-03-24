@@ -10,9 +10,6 @@ keywords = ["task", "orchestrator", "state-machine", "config", "agent"]
 categories = ["development-tools"]
 
 [dependencies]
-troupe = { path = "../troupe" }
-troupe_cli = { path = "../troupe_cli" }
-cli_invoker = { path = "../cli_invoker" }
 barnum_state = { path = "../barnum_state" }
 barnum_types = { workspace = true }
 string_id = { workspace = true }
@@ -23,6 +20,7 @@ json5 = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+troupe = { path = "../troupe" }
 interprocess = { workspace = true }
 rstest = { workspace = true }
 

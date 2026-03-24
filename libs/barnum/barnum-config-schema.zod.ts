@@ -1,37 +1,15 @@
 import { z } from "zod";
 
-const MaybeLinked_for_String = z.discriminatedUnion("kind", [
-  z.object({
-    kind: z.literal("Inline"),
-    value: z.string().describe("The content value, provided directly in the config file."),
-  }).describe("Inline content."),
-  z.object({
-    kind: z.literal("Link"),
-    path: z.string().describe("Relative path to the file (resolved relative to the config file's directory)."),
-  }).describe("Link to a file whose contents will be loaded at runtime."),
-]).describe("Content that can be inline or linked to a file.\n\nIn config files: - `{\"kind\": \"Inline\", \"value\": <content>}` → content provided directly in the config - `{\"kind\": \"Link\", \"path\": \"file.md\"}` → content loaded from a file (path relative to the config file)");
-
-const PoolActionFile = z.object({
-  instructions: MaybeLinked_for_String.describe("Markdown prompt shown to the agent processing this task. This is the core of what tells the agent what to do. Use `{\"kind\": \"Inline\", \"value\": \"...\"}` to write the markdown directly, or `{\"kind\": \"Link\", \"path\": \"path/to/file.md\"}` to reference an external file."),
-  pool: z.string().nullable().optional().default(null).describe("Pool name (e.g., `\"demo\"`, `\"reviewers\"`). If omitted, the pool infrastructure uses its own default."),
-  root: z.string().nullable().optional().default(null).describe("Pool root directory. If omitted, the pool infrastructure uses its own default."),
-  timeout: z.number().int().nonnegative().nullable().optional().default(null).describe("Agent timeout in seconds. Passed to the pool as `timeout_seconds` in the task payload. Controls how long the agent gets to work. Separate from the step-level `timeout` which controls barnum's worker timeout."),
-}).describe("Send the task to the agent pool. An AI agent receives the task's `value` along with the `instructions` (markdown prompt) and produces a JSON array of follow-up tasks.");
-
 const CommandActionFile = z.object({
   script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
-}).describe("Run a local shell command instead of sending to an agent. Use this for deterministic transformations, fan-out, or glue logic.");
+}).describe("Run a shell command to process tasks.");
 
 const ActionFile = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("Pool"),
-    params: PoolActionFile,
-  }).describe("Send the task to the agent pool for processing."),
-  z.object({
     kind: z.literal("Command"),
     params: CommandActionFile,
-  }).describe("Run a local shell command."),
-]).describe("How a step processes tasks. Set `\"kind\": \"Pool\"` to send tasks to AI agents, or `\"kind\": \"Command\"` to run a local shell script.");
+  }).describe("Run a shell command."),
+]).describe("How a step processes tasks.");
 
 const HookCommand = z.object({
   script: z.string().describe("Shell script to execute."),
@@ -60,7 +38,7 @@ const StepOptions = z.object({
 }).strict().describe("Per-step option overrides. Only set the fields you want to override; omitted fields inherit from the global `options`.");
 
 const StepFile = z.object({
-  action: ActionFile.describe("How this step processes tasks — either send to the agent pool (`Pool`) or run a local shell command (`Command`)."),
+  action: ActionFile.describe("How this step processes tasks."),
   finally: FinallyHook.nullable().optional().default(null).describe("Shell script that runs after this task **and all tasks it spawned (recursively)** have completed.\n\n**stdin:** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Same envelope format as command action scripts.\n\n**stdout:** A JSON array of follow-up tasks to spawn: `[{\"kind\": \"StepName\", \"value\": {...}}, ...]`. Each `kind` must be a valid step name. Return `[]` to spawn no follow-ups.\n\nUse this for cleanup, aggregation, or spawning a final summarization step after an entire subtree of work completes."),
   name: z.string().describe("Unique name for this step (e.g., `\"Analyze\"`, `\"Implement\"`, `\"Review\"`). This is the string used as `kind` when creating tasks: `{\"kind\": \"ThisStepName\", \"value\": {...}}`."),
   next: z.array(z.string()).optional().default([]).describe("Step names this step is allowed to spawn follow-up tasks on. Each string must match the `name` of another step in this config. An empty array means this is a terminal step (no follow-ups)."),
@@ -75,8 +53,6 @@ export const configFileSchema = z.object({
 }).strict().describe("Top-level Barnum configuration file format.\n\nDefines a workflow as a directed graph of steps. Each step processes tasks and can spawn follow-up tasks on other steps.");
 
 export type ConfigFile = z.infer<typeof configFileSchema>;
-export type MaybeLinked_for_String = z.infer<typeof MaybeLinked_for_String>;
-export type PoolActionFile = z.infer<typeof PoolActionFile>;
 export type CommandActionFile = z.infer<typeof CommandActionFile>;
 export type ActionFile = z.infer<typeof ActionFile>;
 export type HookCommand = z.infer<typeof HookCommand>;
