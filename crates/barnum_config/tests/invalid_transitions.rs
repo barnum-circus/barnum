@@ -54,6 +54,8 @@ fn invalid_transition_causes_retry() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -96,6 +98,8 @@ fn unknown_step_causes_retry() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -152,6 +156,8 @@ fn recovery_after_invalid_then_valid() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");

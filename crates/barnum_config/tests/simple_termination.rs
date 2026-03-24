@@ -32,6 +32,8 @@ fn single_step_terminates() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks).expect("run failed");
@@ -52,6 +54,8 @@ fn empty_initial_tasks_does_nothing() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // Should complete immediately without error

@@ -50,6 +50,8 @@ fn timeout_retry_exhausts_max_retries() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -95,6 +97,8 @@ fn invalid_response_retry_exhausts_max_retries() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -139,6 +143,8 @@ fn max_retries_zero_no_retries() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -184,6 +190,8 @@ fn retry_on_timeout_false_drops_task() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -228,6 +236,8 @@ fn retry_on_invalid_response_false_drops_task() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -278,6 +288,8 @@ fn per_step_options_override_global() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(&config, &runner_config, initial_tasks);
@@ -329,6 +341,8 @@ fn successful_retry_after_initial_failure() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     barnum_config::run(&config, &runner_config, initial_tasks)

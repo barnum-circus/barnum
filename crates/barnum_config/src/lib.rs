@@ -24,7 +24,7 @@ mod types;
 pub mod zod;
 
 // Public API - only what barnum_cli actually uses
-pub use config::{ActionKind, Config, EffectiveOptions, config_schema};
+pub use config::{ActionKind, Config, EffectiveOptions, TypeScriptAction, config_schema};
 pub use docs::generate_full_docs;
 pub use runner::{RunnerConfig, resume, run};
 pub use types::{StepInputValue, StepName, Task};

@@ -89,6 +89,8 @@ echo "finally_ran" > "{}"
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // Run the task queue
@@ -171,6 +173,8 @@ echo "finally_executed" > "{}"
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -281,6 +285,8 @@ echo "child_finally" >> "{}"
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -365,6 +371,8 @@ echo "finally_executed" > "{}"
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     // This should fail because Child is dropped after max retries
@@ -478,6 +486,8 @@ echo "B_finally" >> "{}"
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -596,6 +606,8 @@ echo '[{{"kind": "Cleanup", "value": {{}}}}]'
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -697,6 +709,8 @@ fn deeply_nested_finally_chain() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -786,6 +800,8 @@ fn multiple_children_with_finally() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -875,6 +891,8 @@ fn finally_spawns_multiple_tasks() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -963,6 +981,8 @@ exit 0
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -1035,6 +1055,8 @@ fn finally_failure_propagates_after_retries_exhausted() {
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(
@@ -1113,6 +1135,8 @@ echo '[{"kind": "Cleanup", "value": {}}]'
         working_dir: Path::new("."),
         wake_script: None,
         state_log_path: &state_log,
+        executor: "unused",
+        run_handler_path: "unused",
     };
 
     let result = barnum_config::run(

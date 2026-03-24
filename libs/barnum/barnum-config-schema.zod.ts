@@ -5,6 +5,12 @@ const ActionKind = z.discriminatedUnion("kind", [
     kind: z.literal("Bash"),
     script: z.string().describe("Shell script to execute.\n\n**Input (stdin):** JSON object: `{\"kind\": \"<step name>\", \"value\": <payload>}`. Use `jq '.value'` to extract the payload, or `jq -r '.value.fieldName'` for a specific field.\n\n**Output (stdout):** JSON array of follow-up tasks to spawn: `[{\"kind\": \"NextStep\", \"value\": {...}}, ...]`. Each `kind` must be a step name listed in this step's `next` array. Return `[]` to spawn no follow-ups."),
   }).describe("Run a shell command."),
+  z.object({
+    exportedAs: z.string().optional().default("default").describe("Named export to invoke from the handler module."),
+    kind: z.literal("TypeScript"),
+    path: z.string().describe("Path to the handler file (absolute — JS layer resolves before passing to Rust)."),
+    stepConfig: z.any().optional().default(null).describe("Step configuration passed through to the handler. Rust stores this as-is and includes it in the envelope."),
+  }).describe("Run a TypeScript handler."),
 ]).describe("How a step processes tasks.");
 
 const FinallyHook = z.discriminatedUnion("kind", [

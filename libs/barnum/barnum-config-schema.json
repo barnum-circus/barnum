@@ -62,6 +62,35 @@
               "type": "string"
             }
           }
+        },
+        {
+          "description": "Run a TypeScript handler.",
+          "type": "object",
+          "required": [
+            "kind",
+            "path"
+          ],
+          "properties": {
+            "exportedAs": {
+              "description": "Named export to invoke from the handler module.",
+              "default": "default",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "TypeScript"
+              ]
+            },
+            "path": {
+              "description": "Path to the handler file (absolute — JS layer resolves before passing to Rust).",
+              "type": "string"
+            },
+            "stepConfig": {
+              "description": "Step configuration passed through to the handler. Rust stores this as-is and includes it in the envelope.",
+              "default": null
+            }
+          }
         }
       ]
     },

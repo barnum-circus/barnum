@@ -31,16 +31,14 @@ fn main() -> io::Result<()> {
             log_file,
             state_log,
             resume_from,
-            executor: _,
+            executor,
             run_handler_path,
         } => {
-            // Validate run-handler-path exists if provided
-            if let Some(ref path) = run_handler_path
-                && !std::path::Path::new(path).exists()
-            {
+            // Validate run-handler-path exists
+            if !std::path::Path::new(&run_handler_path).exists() {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("[E074] --run-handler-path does not exist: {path}"),
+                    format!("[E074] --run-handler-path does not exist: {run_handler_path}"),
                 ));
             }
             match (resume_from, config) {
@@ -50,6 +48,8 @@ fn main() -> io::Result<()> {
                     log_file.as_ref(),
                     state_log.as_ref(),
                     log_level,
+                    &executor,
+                    &run_handler_path,
                 )?,
                 (None, Some(config)) => run_command(
                     &config,
@@ -59,6 +59,8 @@ fn main() -> io::Result<()> {
                     log_file.as_ref(),
                     state_log.as_ref(),
                     log_level,
+                    &executor,
+                    &run_handler_path,
                 )?,
                 (None, None) => {
                     // Unreachable: clap's required_unless_present prevents this
@@ -156,6 +158,7 @@ fn handle_config_command(command: ConfigCommand) -> io::Result<()> {
     Ok(())
 }
 
+#[expect(clippy::too_many_arguments)]
 fn run_command(
     config: &str,
     initial_state: Option<&str>,
@@ -164,6 +167,8 @@ fn run_command(
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
     log_level: LogLevel,
+    executor: &str,
+    run_handler_path: &str,
 ) -> io::Result<()> {
     // Initialize tracing with optional log file
     init_tracing(log_file, log_level)?;
@@ -194,6 +199,8 @@ fn run_command(
         working_dir: &config_dir,
         wake_script: wake,
         state_log_path: &state_log_path,
+        executor,
+        run_handler_path,
     };
 
     run(&cfg, &runner_config, initial_tasks)
@@ -205,6 +212,8 @@ fn resume_command(
     log_file: Option<&PathBuf>,
     state_log: Option<&PathBuf>,
     log_level: LogLevel,
+    executor: &str,
+    run_handler_path: &str,
 ) -> io::Result<()> {
     init_tracing(log_file, log_level)?;
 
@@ -234,6 +243,8 @@ fn resume_command(
         working_dir: &working_dir,
         wake_script: wake,
         state_log_path: &state_log_path,
+        executor,
+        run_handler_path,
     };
 
     resume(resume_from, &runner_config)
@@ -425,6 +436,7 @@ fn generate_graphviz(config: &Config) -> String {
         // Shape and color based on action type
         let (shape, fill_color) = match &step.action {
             ActionKind::Bash(..) => ("box", "#e3f2fd"),
+            ActionKind::TypeScript(..) => ("box", "#fff3e0"),
         };
         attrs.push(format!("shape={shape}"));
 
