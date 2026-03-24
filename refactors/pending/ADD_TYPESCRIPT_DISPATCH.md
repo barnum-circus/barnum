@@ -288,6 +288,10 @@ After: stop ignoring `executor`, destructure `run_handler_path`, pass both throu
 
 Run `cargo run -p barnum_cli --bin build_schemas` to regenerate all schema artifacts. The TypeScript variant and new CLI flags appear in the generated output.
 
+## Follow-up: remove `Action` trait
+
+The `Action` trait is vestigial from the removed Pool action. `ShellAction` is the only implementor, so `Box<dyn Action>` through `run_action`/`spawn_worker` is pointless indirection. After the main work lands, remove the trait and make these functions take `ShellAction` directly.
+
 ## What this does NOT do
 
 - TypeScript handler interface (ADD_HANDLER_VALIDATION)
