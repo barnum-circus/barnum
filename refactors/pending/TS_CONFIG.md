@@ -14,23 +14,32 @@ The config file is a TypeScript script that creates a config and calls `.run()`:
 
 ```typescript
 // barnum.config.ts
-import { BarnumConfig, createTroupeStep, createBashStep } from "@barnum/barnum";
-import { z } from "zod";
+import { BarnumConfig } from "@barnum/barnum";
 
 const config = BarnumConfig.fromConfig({
   entrypoint: "Analyze",
   steps: [
-    createTroupeStep({
+    {
       name: "Analyze",
-      instructions: "Analyze the code.",
-      next: ["Implement"],
-      validator: z.object({ file: z.string() }),
-    }),
-    createBashStep({
+      action: {
+        kind: "TypeScript",
+        params: {
+          path: "./handlers/analyze.ts",
+          instructions: "Analyze the code.",
+          pool: "demo",
+        },
+      },
+      next: ["FanOut"],
+      value_schema: { type: "object", properties: { file: { type: "string" } }, required: ["file"] },
+    },
+    {
       name: "FanOut",
-      script: "./fan-out.sh",
+      action: {
+        kind: "Bash",
+        params: { script: "./fan-out.sh" },
+      },
       next: ["Analyze"],
-    }),
+    },
   ],
 });
 
@@ -39,7 +48,7 @@ config.run({ entrypointValue: '{"file": "src/main.rs"}' });
 
 The user runs this file directly: `tsx barnum.config.ts`. The file IS the entry point — it creates the config, calls `.run()`, and `.run()` spawns Rust.
 
-`BarnumConfig.fromConfig()` Zod-parses and returns a `BarnumConfig` instance. The constructors (`createTroupeStep`, `createBashStep`) produce `StepFile` objects with the action pre-filled.
+`BarnumConfig.fromConfig()` Zod-parses and returns a `BarnumConfig` instance. Step constructors (like `createTroupeStep` and `createBashStep`) are convenience helpers defined elsewhere — they produce `StepFile` objects with the action pre-filled. This doc describes the underlying config shape they produce, not the constructors themselves.
 
 ### How the config reaches Rust
 
@@ -103,36 +112,6 @@ From Rust's perspective, both action kinds produce a subprocess command:
 
 The stdin formats differ because Bash targets user-written shell scripts (simple contract) while TypeScript targets handler modules (rich context). `run-handler.ts` is a thin wrapper that imports the handler module, calls the exported function with the parsed envelope, and writes the result to stdout.
 
-### Pool is a TypeScript handler
-
-The current Pool action kind (submit to troupe agent pool) becomes a TypeScript handler shipped with `@barnum/troupe-task`. `createTroupeStep` generates a TypeScript action pointing to this bundled handler:
-
-```typescript
-createTroupeStep({
-  name: "Analyze",
-  instructions: "Analyze the code.",
-  pool: "demo",
-  next: ["Implement"],
-});
-// produces:
-{
-  name: "Analyze",
-  action: {
-    kind: "TypeScript",
-    params: {
-      path: "<resolved path to @barnum/troupe-task/pool-handler.ts>",
-      instructions: "Analyze the code.",
-      pool: "demo",
-    },
-  },
-  next: ["Implement"],
-}
-```
-
-The constructor resolves the handler path to an absolute path (via `import.meta.resolve` or `require.resolve`). Rust receives an absolute path and doesn't need to know it's a bundled handler.
-
-For `instructions` with `{ kind: "Link", path: "./file.md" }`, the constructor resolves the file reference at config evaluation time (`fs.readFileSync`). The JSON that Rust receives has the resolved text. MaybeLinked resolution moves from Rust to JS for TypeScript configs.
-
 ## Handler interface
 
 A TypeScript handler is a module that exports an async function:
@@ -194,122 +173,6 @@ process.stdout.write(JSON.stringify(results));
 ```
 
 This replaces the `executor.ts` from JS_ACTION_HANDLERS.md. The difference: instead of a hardcoded handler registry with a switch statement, it dynamically imports the handler module specified by the action params. Each handler file is self-contained.
-
-### Pool handler
-
-The bundled Pool handler, shipped with `@barnum/troupe-task`:
-
-```typescript
-// libs/troupe-task/pool-handler.ts
-import type { HandlerContext, FollowUpTask } from "@barnum/barnum";
-import { submitTask } from "./submit.js";
-import { generateStepDocs } from "./docs.js";
-
-export default async function handle(ctx: HandlerContext): Promise<FollowUpTask[]> {
-  const { params, task, step } = ctx;
-  const instructions = params.instructions as string;
-  const docs = generateStepDocs(task.kind, instructions, step.next);
-
-  const payload: Record<string, unknown> = { task, instructions: docs };
-  if (params.timeout != null) {
-    payload.timeout_seconds = params.timeout;
-  }
-
-  return submitTask(payload, {
-    pool: (params.pool as string) ?? undefined,
-    root: (params.root as string) ?? undefined,
-  });
-}
-```
-
-The `as string` casts are necessary because `params` is `Record<string, unknown>`. The handler knows its own config shape. A typed wrapper could validate with Zod, but for an internal handler the casts are fine.
-
-## Step constructors
-
-### createTroupeStep
-
-```typescript
-export function createTroupeStep<V = never>(config: {
-  name: string;
-  instructions: string | { kind: "Link"; path: string };
-  next?: string[];
-  pool?: string;
-  root?: string;
-  timeout?: number;
-  validator?: z.ZodType<V>;
-  options?: StepOptions;
-  finally?: FinallyHook;
-}): StepFile {
-  const resolvedInstructions =
-    typeof config.instructions === "string"
-      ? config.instructions
-      : fs.readFileSync(
-          path.resolve(path.dirname(callerFile()), config.instructions.path),
-          "utf-8",
-        );
-
-  return {
-    name: config.name,
-    action: {
-      kind: "TypeScript",
-      params: {
-        path: import.meta.resolve("@barnum/troupe-task/pool-handler.ts"),
-        instructions: resolvedInstructions,
-        pool: config.pool ?? null,
-        root: config.root ?? null,
-        timeout: config.timeout ?? null,
-      },
-    },
-    next: config.next ?? [],
-    value_schema: config.validator
-      ? zodToJsonSchema(config.validator)
-      : undefined,
-    options: config.options ?? {},
-    finally: config.finally ?? null,
-  };
-}
-```
-
-MaybeLinked resolution happens here (at config eval time), not in Rust. The `instructions` field in the serialized JSON is always a plain string.
-
-### createBashStep
-
-```typescript
-export function createBashStep<V = never>(config: {
-  name: string;
-  script: string;
-  next?: string[];
-  validator?: z.ZodType<V>;
-  options?: StepOptions;
-  finally?: FinallyHook;
-}): StepFile {
-  return {
-    name: config.name,
-    action: {
-      kind: "Bash",
-      params: { script: config.script },
-    },
-    next: config.next ?? [],
-    value_schema: config.validator
-      ? zodToJsonSchema(config.validator)
-      : undefined,
-    options: config.options ?? {},
-    finally: config.finally ?? null,
-  };
-}
-```
-
-## Value schemas
-
-Same as JS_ACTION_HANDLERS.md. The `validator` Zod schema on constructors:
-
-1. Infers `V` at compile time (TypeScript type inference)
-2. Converts to JSON Schema via `zod-to-json-schema` (stored as `value_schema` on the step)
-3. Rust validates `task.value` against the JSON Schema at dispatch time
-
-Without a validator, `V` defaults to `never` and `value_schema` is omitted.
-
-JSON configs can write JSON Schema directly in the `value_schema` field.
 
 ## Invocation
 
