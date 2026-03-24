@@ -24,7 +24,7 @@ function resolveExecutor(): string {
 
 const runHandlerPath = resolve(__dirname, "actions", "run-handler.ts");
 
-function spawnBarnum(args: string[], cwd?: string): ChildProcess {
+function spawnBarnum(args: string[], cwd?: string) {
   try {
     chmodSync(binaryPath, 0o755);
   } catch {}
