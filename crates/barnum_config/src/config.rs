@@ -15,11 +15,6 @@ use std::collections::HashMap;
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
-    /// Optional JSON Schema URL for editor validation (e.g.,
-    /// `"./node_modules/@barnum/barnum/barnum-config-schema.json"`). Ignored at runtime.
-    #[serde(rename = "$schema", default, skip_serializing)]
-    pub schema_ref: Option<String>,
-
     /// Global runtime options (timeout, retries, concurrency). Individual steps
     /// can override these via their own `options` field.
     #[serde(default)]

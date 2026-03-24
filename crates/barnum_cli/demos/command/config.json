@@ -1,5 +1,4 @@
 {
-  "$schema": "../schemas/config.schema.json",
   "entrypoint": "Split",
   "steps": [
     {

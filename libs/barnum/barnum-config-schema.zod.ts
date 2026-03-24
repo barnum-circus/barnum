@@ -46,7 +46,6 @@ const StepFile = z.object({
 }).strict().describe("A named step in the workflow. Steps are the nodes of the task graph.\n\nThe `finally` hook runs after the task **and all of its descendant tasks** complete.");
 
 export const configFileSchema = z.object({
-  "$schema": z.string().nullable().optional().describe("Optional JSON Schema URL for editor validation (e.g., `\"./node_modules/@barnum/barnum/barnum-config-schema.json\"`). Ignored at runtime."),
   entrypoint: z.string().nullable().optional().default(null).describe("Name of the step that starts the workflow. When set, the CLI accepts `--entrypoint-value` to provide the initial task value (defaults to `{}`). When omitted, `--initial-state` must provide explicit `[{\"kind\": \"StepName\", \"value\": ...}]` tasks."),
   options: Options.optional().default({"max_concurrency": null, "max_retries": 0, "retry_on_invalid_response": true, "retry_on_timeout": true, "timeout": null}).describe("Global runtime options (timeout, retries, concurrency). Individual steps can override these via their own `options` field."),
   steps: z.array(StepFile).describe("The steps that make up this workflow. Each step defines how to process a task and which steps it can spawn follow-up tasks on."),

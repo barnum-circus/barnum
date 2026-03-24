@@ -223,20 +223,6 @@ fn validate_config_with_options() {
     assert!(result.status.success());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-fn validate_config_with_schema_field() {
-    let config = format!(
-        r#"{{"$schema": "https://example.com/barnum-config-schema.json", "steps": [{}]}}"#,
-        step("Task", &[])
-    );
-
-    let barnum = BarnumRunner::new();
-    let result = barnum.validate(&config).expect("validate");
-
-    assert!(result.status.success(), "$schema field should be allowed");
-}
-
 // =============================================================================
 // barnum config validate - Invalid configs
 // =============================================================================

@@ -1,7 +1,6 @@
 // Example invocation:
 // pnpm dlx @barnum/barnum run --config simple.jsonc
 {
-  "$schema": "../schemas/config.schema.json",
   "entrypoint": "Start",
   "steps": [
     {

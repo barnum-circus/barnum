@@ -1,7 +1,6 @@
 // Example invocation:
 // pnpm dlx @barnum/barnum run --config command-demo.jsonc --entrypoint-value '{"items": [{"n": 1}, {"n": 2}, {"n": 3}]}'
 {
-  "$schema": "../schemas/config.schema.json",
   "entrypoint": "Split",
   "steps": [
     {

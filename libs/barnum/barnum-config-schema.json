@@ -7,14 +7,6 @@
     "steps"
   ],
   "properties": {
-    "$schema": {
-      "description": "Optional JSON Schema URL for editor validation (e.g., `\"./node_modules/@barnum/barnum/barnum-config-schema.json\"`). Ignored at runtime.",
-      "writeOnly": true,
-      "type": [
-        "string",
-        "null"
-      ]
-    },
     "entrypoint": {
       "description": "Name of the step that starts the workflow. When set, the CLI accepts `--entrypoint-value` to provide the initial task value (defaults to `{}`). When omitted, `--initial-state` must provide explicit `[{\"kind\": \"StepName\", \"value\": ...}]` tasks.",
       "default": null,
