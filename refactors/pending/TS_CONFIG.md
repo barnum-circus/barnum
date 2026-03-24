@@ -62,7 +62,7 @@ JSON configs (`.json`/`.jsonc`) still work via the CLI: `barnum run --config con
 
 ### Bash
 
-Runs a shell script. Rust handles this directly — `sh -c <script>`, piping `{ kind, value }` to stdin. The handler is the script string itself.
+Runs a shell script. Rust handles this directly — `sh -c <script>`, piping the envelope to stdin. The handler is the script string itself.
 
 Config shape:
 ```json
@@ -71,15 +71,13 @@ Config shape:
 
 Stdin (what the script receives):
 ```json
-{ "kind": "Analyze", "value": { "file": "src/main.rs" } }
+{ "value": { "file": "src/main.rs" }, "config": { ... }, "stepName": "Analyze" }
 ```
 
 Stdout (what the script must produce):
 ```json
 [{ "kind": "Implement", "value": { "plan": "..." } }]
 ```
-
-This is today's `Command` action renamed. The stdin/stdout contract is unchanged.
 
 ### TypeScript
 
@@ -101,18 +99,25 @@ Config shape:
 
 `exportedAs` defaults to `"default"`. Named exports are supported for modules that export multiple handlers.
 
+### Stdin envelope
+
+Both action kinds receive the same envelope shape (UNIFY_STDIN_ENVELOPE), matching `HandlerContext`:
+
+- Bash: `{ value, config, stepName }` — `stepConfig` is absent
+- TypeScript: `{ stepConfig, value, config, stepName }` — `stepConfig` included
+
 ### Dispatch
 
-From Rust's perspective, both action kinds produce a subprocess command:
+Both action kinds produce a subprocess command:
 
-- Bash: `sh -c <script>`, stdin = `{ kind, value }`
-- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [exportedAs]`, stdin = `{ stepConfig, task, step, config }`
+- Bash: `sh -c <script>`
+- TypeScript: `<executor> libs/barnum/actions/run-handler.ts <path> [exportedAs]`
 
-The stdin formats differ because Bash targets user-written shell scripts (simple contract) while TypeScript targets handler modules (rich context). `run-handler.ts` is a thin wrapper that imports the handler module, calls the exported function with the parsed envelope, and writes the result to stdout.
+`run-handler.ts` imports the handler module, validates inputs, calls the exported function, and writes the result to stdout.
 
 ## Handler interface
 
-A TypeScript handler module exports a `HandlerDefinition` — an object with up to three concerns: validating the step's configuration from the config file, validating the task value, and handling the task.
+A TypeScript handler module exports a `HandlerDefinition` — an object with three required parts: a step config validator, a step value validator, and the handler function.
 
 ```typescript
 // handlers/analyze.ts
@@ -140,21 +145,18 @@ export default {
 The types:
 
 ```typescript
-interface HandlerDefinition<
-  C = unknown,
-  V = unknown,
-> {
-  /** Validates action.params from the config (the step configuration). */
-  stepConfigValidator?: z.ZodType<C>;
+interface HandlerDefinition<C, V> {
+  /** Validates stepConfig from the envelope. */
+  stepConfigValidator: z.ZodType<C>;
 
   /** Returns a validator for the task value, given the validated step config. */
-  getStepValueValidator?: (stepConfig: C) => z.ZodType<V>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
 
   /** Process the task. Returns follow-up tasks. */
   handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
-interface HandlerContext<C = unknown, V = unknown> {
+interface HandlerContext<C, V> {
   /** The validated step configuration. */
   stepConfig: C;
   /** The validated task value. */
@@ -171,20 +173,7 @@ interface FollowUpTask {
 }
 ```
 
-`stepConfigValidator` validates `stepConfig` from the envelope — the step-specific configuration from the config file that Rust passes through as opaque JSON. `getStepValueValidator` receives the validated step config and returns a Zod schema for the task value, allowing the value schema to depend on the step configuration. Both validators are optional.
-
-Inputs (`stepConfig` and `value`) can be fully typed via Zod validators. The output (`FollowUpTask[]`) is untyped — which steps a handler can transition to is determined by the config's `next` array, and the handler has no compile-time knowledge of that. Invalid transitions are caught at runtime by Rust's response validator.
-
-A minimal handler can skip both validators:
-
-```typescript
-export default {
-  async handle({ stepConfig, value }) {
-    // stepConfig: unknown, value: unknown
-    return [];
-  },
-} satisfies HandlerDefinition;
-```
+Both validators are required. `C` and `V` are inferred from the validators — `satisfies HandlerDefinition` on the export object gives full type inference in `handle`. Inputs (`stepConfig` and `value`) are fully typed. The output (`FollowUpTask[]`) has typed `kind` but untyped `value` — which steps a handler can transition to is determined by the config's `next` array, not known at compile time. Invalid transitions are caught at runtime by Rust's response validator.
 
 The handler is re-invoked as a fresh process for every task. No state persists between invocations.
 
@@ -204,27 +193,23 @@ const mod = await import(handlerPath);
 const definition = mod[exportName];
 
 // 1. Validate step config
-const stepConfig = definition.stepConfigValidator
-  ? definition.stepConfigValidator.parse(envelope.stepConfig)
-  : envelope.stepConfig;
+const stepConfig = definition.stepConfigValidator.parse(envelope.stepConfig);
 
-// 2. Validate value, potentially dependent on step config
-const value = definition.getStepValueValidator
-  ? definition.getStepValueValidator(stepConfig).parse(envelope.task.value)
-  : envelope.task.value;
+// 2. Validate value (schema can depend on step config)
+const value = definition.getStepValueValidator(stepConfig).parse(envelope.value);
 
 // 3. Call handler
 const results = await definition.handle({
   stepConfig,
   value,
   config: envelope.config,
-  stepName: envelope.step.name,
+  stepName: envelope.stepName,
 });
 
 process.stdout.write(JSON.stringify(results));
 ```
 
-This replaces the `executor.ts` from JS_ACTION_HANDLERS.md. The difference: instead of a hardcoded handler registry with a switch statement, it dynamically imports the handler module specified by the action params. Each handler file is self-contained.
+The envelope fields map directly to `HandlerContext` — run-handler.ts validates inputs and passes the rest through unchanged.
 
 ## Invocation
 
@@ -285,7 +270,7 @@ pub enum ActionFile {
 
 ### Dispatch changes
 
-`dispatch_task` no longer matches on action kind. For Bash, it constructs a `ShellAction` with `sh -c <script>`. For TypeScript, it constructs a `ShellAction` with `<executor> run-handler.ts <path> [exportedAs]`. Both produce `ShellAction` — the existing action dispatch infrastructure (`spawn_worker`, `run_action`, `ActionHandle`, `ProcessGuard`) is unchanged.
+`dispatch_task` matches on the action kind. For Bash, it constructs a `ShellAction` with `sh -c <script>` and `step_config: None`. For TypeScript, it constructs a `ShellAction` with `<executor> run-handler.ts <path> [exportedAs]` and `step_config: Some(...)`. Both use the same `ShellAction` struct — the existing action dispatch infrastructure (`spawn_worker`, `run_action`, `ActionHandle`, `ProcessGuard`) is unchanged.
 
 ### Config loading
 
