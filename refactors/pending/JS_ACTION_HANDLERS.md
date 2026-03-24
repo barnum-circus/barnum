@@ -147,7 +147,12 @@ export function submitTask(
 
 ### pool.ts
 
-The Pool action handler. Generates agent instructions, constructs the troupe payload, and submits.
+The Pool action handler. Each handler exports two Zod schemas:
+
+- **stepConfigurationSchema** — validates action params as written in the config file. Used for config validation and schema generation.
+- **stepParameterSchema** — validates resolved action params received at runtime in the envelope.
+
+For Pool, these differ on `instructions`: the config allows `MaybeLinked` (inline string or file link), while the runtime always receives a resolved `string`.
 
 ```typescript
 import { z } from "zod";
@@ -155,7 +160,19 @@ import type { FollowUpTask } from "./types.js";
 import { submitTask } from "./submit.js";
 import { generateStepDocs } from "./docs.js";
 
-export const poolParamsSchema = z.object({
+const maybeLinked = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("Inline"), value: z.string() }),
+  z.object({ kind: z.literal("Link"), link: z.string() }),
+]);
+
+export const stepConfigurationSchema = z.object({
+  instructions: maybeLinked,
+  pool: z.string().nullable().optional(),
+  root: z.string().nullable().optional(),
+  timeout: z.number().nullable().optional(),
+});
+
+export const stepParameterSchema = z.object({
   instructions: z.string(),
   pool: z.string().nullable().optional(),
   root: z.string().nullable().optional(),
@@ -163,7 +180,7 @@ export const poolParamsSchema = z.object({
 });
 
 export function handlePool(ctx: {
-  params: z.output<typeof poolParamsSchema>;
+  params: z.output<typeof stepParameterSchema>;
   task: { kind: string; value: unknown };
   step: { next: string[] };
   config: unknown;
@@ -183,14 +200,16 @@ export function handlePool(ctx: {
 }
 ```
 
-Note: `params.instructions` is a plain `string` — Rust resolves `MaybeLinked` (Inline/Link) to a string during `ConfigFile::resolve()`.
-
 ### index.ts
 
 ```typescript
 export { submitTask } from "./submit.js";
 export { generateStepDocs } from "./docs.js";
-export { handlePool, poolParamsSchema } from "./pool.js";
+export {
+  handlePool,
+  stepConfigurationSchema as poolStepConfigurationSchema,
+  stepParameterSchema as poolStepParameterSchema,
+} from "./pool.js";
 export type { FollowUpTask } from "./types.js";
 ```
 
@@ -231,16 +250,22 @@ export type { FollowUpTask } from "./types.js";
 
 The Command handler spawns the user's shell script, piping `{ kind, value }` to stdin. Backward compatible with today's Command action.
 
+Both schemas are identical for Command — there's nothing to resolve.
+
 ```typescript
 import { execSync } from "node:child_process";
+import { z } from "zod";
 import type { FollowUpTask } from "@barnum/troupe-task";
 
+export const stepConfigurationSchema = z.object({ script: z.string() });
+export const stepParameterSchema = z.object({ script: z.string() });
+
 export function handleCommand(
-  script: string,
+  params: z.output<typeof stepParameterSchema>,
   task: { kind: string; value: unknown },
 ): FollowUpTask[] {
   const stdin = JSON.stringify(task);
-  const stdout = execSync(script, {
+  const stdout = execSync(params.script, {
     input: stdin,
     encoding: "utf-8",
     shell: "/bin/sh",
@@ -257,8 +282,8 @@ The entry point that Rust spawns for every task. Reads the Rust envelope from st
 The `Envelope` type is generated from the Rust resolved types by `build_schemas` (see prerequisites). executor.ts imports it rather than defining types manually.
 
 ```typescript
-import { handlePool, poolParamsSchema } from "@barnum/troupe-task";
-import { handleCommand } from "./command.js";
+import { handlePool, poolStepParameterSchema } from "@barnum/troupe-task";
+import { handleCommand, stepParameterSchema as commandStepParameterSchema } from "./command.js";
 import type { Envelope } from "../barnum-resolved-schema.zod.js";
 
 const chunks: Buffer[] = [];
@@ -270,16 +295,13 @@ const { action, task, step, config } = envelope;
 let results;
 switch (action.kind) {
   case "Pool": {
-    const params = poolParamsSchema.parse(action.params);
+    const params = poolStepParameterSchema.parse(action.params);
     results = handlePool({ params, task, step, config });
     break;
   }
   case "Command": {
-    const script = action.params.script;
-    if (typeof script !== "string") {
-      throw new Error(`Command action requires a "script" string param, got: ${typeof script}`);
-    }
-    results = handleCommand(script, task);
+    const params = commandStepParameterSchema.parse(action.params);
+    results = handleCommand(params, task);
     break;
   }
   default:
