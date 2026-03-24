@@ -1,4 +1,8 @@
 import { BarnumConfig } from "@barnum/barnum";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 BarnumConfig.fromConfig({
   entrypoint: "Process",
@@ -25,5 +29,5 @@ BarnumConfig.fromConfig({
     },
   ],
 })
-  .run({ entrypointValue: '{"item": "test-item"}' })
+  .run({ entrypointValue: '{"item": "test-item"}', cwd: __dirname })
   .on("exit", (code) => process.exit(code ?? 1));

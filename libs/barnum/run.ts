@@ -7,11 +7,11 @@ import type { z } from "zod";
 const require = createRequire(import.meta.url);
 const binaryPath: string = process.env.BARNUM ?? require("./index.cjs");
 
-function spawnBarnum(args: string[]): ChildProcess {
+function spawnBarnum(args: string[], cwd?: string): ChildProcess {
   try {
     chmodSync(binaryPath, 0o755);
   } catch {}
-  return spawn(binaryPath, args, { stdio: "inherit" });
+  return spawn(binaryPath, args, { stdio: "inherit", cwd });
 }
 
 export interface RunOptions {
@@ -21,6 +21,7 @@ export interface RunOptions {
   logFile?: string;
   stateLog?: string;
   wake?: string;
+  cwd?: string;
 }
 
 export class BarnumConfig {
@@ -43,6 +44,6 @@ export class BarnumConfig {
     if (opts?.logFile) args.push("--log-file", opts.logFile);
     if (opts?.stateLog) args.push("--state-log", opts.stateLog);
     if (opts?.wake) args.push("--wake", opts.wake);
-    return spawnBarnum(args);
+    return spawnBarnum(args, opts?.cwd);
   }
 }

@@ -28,5 +28,5 @@ BarnumConfig.fromConfig({
     },
   ],
 })
-  .run({ entrypointValue: JSON.stringify({ folder: __dirname }) })
+  .run({ entrypointValue: JSON.stringify({ folder: __dirname }), cwd: __dirname })
   .on("exit", (code) => process.exit(code ?? 1));
