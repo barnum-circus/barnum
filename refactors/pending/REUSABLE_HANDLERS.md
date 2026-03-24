@@ -43,18 +43,62 @@ Currently Barnum has two action kinds: `Bash` and `TypeScript`. Thinking about w
 | **Bash** | Run a shell script. stdin = envelope, stdout = tasks. | Exists |
 | **TypeScript** | Run a handler module. stdin = envelope, stdout = tasks. | Exists |
 | **Sequence** | Run actions in order, piping data between them. Only the last action produces tasks. | Proposed (this doc) |
+| **All** | Dispatch tasks to steps in parallel, wait for all subtrees to complete, collect results. | Future (JS rewrite) |
+| **Step** | Reference another step by name. Dispatch a task to it, wait for its subtree, return the result. | Future (JS rewrite) |
 | **Try** | Run an action. On success, produce `{ ok: true, value }`. On failure, produce `{ ok: false, error }`. Turns failures into routable data. | Future (JS rewrite) |
-| **Parallel** | Run actions concurrently, collect all results into an array. | Future (JS rewrite) |
 
-`Sequence` is the immediate need — it decouples TypeScript handlers from routing. `Try` and `Parallel` are dramatically easier to implement in a JS runtime than in Rust subprocess piping, so they wait for the JS rewrite.
+`Sequence` is the immediate need — it decouples TypeScript handlers from routing. The rest are JS-rewrite primitives.
 
-### What's missing from this taxonomy
+### Step references and `All` replace `finally`
 
-**Error handling / routing on failure.** Currently a step either succeeds or retries until it drops. There's no way to route to a recovery step on failure. `Try` solves this: wrap an action in `Try`, and failures become a value `{ ok: false, error: "..." }` that the next action in a `Sequence` can inspect and route accordingly. Without `Try`, the only error handling is retries and `finally` hooks.
+The current `finally` hook is a special construct: it fires after a task and all its recursive descendants complete across multiple steps. This is useful but ad-hoc — it's bolted on as a hook rather than expressed with composable primitives.
 
-**Compensation / rollback.** If step 3 fails, undo steps 1 and 2. Temporal has sagas for this. In Barnum's model, `finally` hooks partially cover this (they run after a subtree completes), but they don't have access to the success/failure status of descendants. This is a JS-rewrite concern.
+With `Step` references and `All`, the same pattern falls out naturally:
 
-**Wait for external signal.** Pause a workflow until an event arrives (webhook, human approval, timer). Temporal's signals and Inngest's `step.waitForEvent()`. Not in scope for the current Rust engine.
+```ts
+// Current: finally hook (special construct)
+{
+  name: "Process",
+  action: { kind: "Bash", script: "..." },
+  finally: { kind: "Bash", script: "./cleanup.sh" },
+  next: ["SubtaskA", "SubtaskB"],
+}
+
+// Future: Sequence + All + Step (composable primitives)
+{
+  name: "Process",
+  action: {
+    kind: "Sequence",
+    actions: [
+      { kind: "Bash", script: "..." },                  // do work, produce subtasks
+      { kind: "All", steps: ["SubtaskA", "SubtaskB"] }, // wait for all subtrees
+      { kind: "Bash", script: "./cleanup.sh" },          // runs after everything completes
+    ],
+  },
+  next: ["SubtaskA", "SubtaskB"],
+}
+```
+
+A `Step` reference in a sequence means: dispatch a task to that step, wait for that task *and all tasks it recursively spawns* to complete, then pipe the result to the next action. `All` runs multiple `Step` references in parallel and waits for all subtrees.
+
+This is more powerful than `finally` because:
+- The cleanup action gets the results of the subtrees, not just the original task envelope.
+- You can have multiple wait points in a sequence (dispatch to A, wait, dispatch to B based on A's result, wait, cleanup).
+- `Try` can wrap a `Step` reference, so you can handle subtree failures as data instead of losing the task.
+
+The execution model change is significant: actions can now *suspend* while waiting for subtrees to complete. In the current Rust runner, actions are fire-and-forget subprocesses. In a JS runtime, this is just an async function that `await`s sub-workflows. This is why `All` and `Step` are JS-rewrite primitives.
+
+### What's still missing
+
+**Error handling / routing on failure.** Currently a step either succeeds or retries until it drops. `Try` wraps an action and turns failures into routable data: `{ ok: false, error: "..." }`. Combined with `Sequence`, the next action can inspect the result and route to a recovery step.
+
+**Wait for external signal.** Pause a workflow until an event arrives (webhook, human approval, timer). Temporal's signals and Inngest's `step.waitForEvent()`. Not in scope for the current engine.
+
+### Removing `finally`
+
+With `Sequence` + `All` + `Step`, `finally` becomes expressible as a pattern rather than a special hook. In the JS rewrite, `finally` should be removed as a first-class config field and replaced by the composable primitives. The migration path: any config using `finally` can be rewritten as a `Sequence` with an `All` wait point followed by the cleanup action.
+
+For the current Rust engine, `finally` stays as-is — it works and people use it. The JS rewrite removes it.
 
 ## Proposed approach: Sequence action kind
 
