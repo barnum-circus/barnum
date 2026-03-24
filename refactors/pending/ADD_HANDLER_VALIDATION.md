@@ -1,31 +1,30 @@
-# Add Handler Validation Types
+# Add Handler Validation
 
 **Parent:** TS_CONFIG.md
-**Depends on:** ADD_TYPESCRIPT_DISPATCH
+**Depends on:** ADD_RUN_HANDLER
 
 ## Motivation
 
-TypeScript handlers need a well-defined interface: what they receive, how inputs are validated, and what they return. This refactor defines the handler type contract and validation flow. Both validators (`stepConfigValidator` and `getStepValueValidator`) are required — every handler must declare the shape of its inputs.
+TypeScript handlers declare Zod schemas for their inputs. These schemas serve two purposes:
+1. Type safety for handler authors (TypeScript inference from Zod)
+2. Runtime validation of step outputs by Rust (via JSON Schema)
+
+Validation does **not** happen in `run-handler.ts`. The handler subprocess just calls the function — it assumes all inputs are valid. Instead:
+- **JS validates step config** at `run()` time (before the Rust binary starts)
+- **JS converts Zod → JSON Schema** and embeds it in the serialized config
+- **Rust validates step outputs** at runtime using the embedded JSON Schema
 
 ## Handler interface
 
-A TypeScript handler module exports a `HandlerDefinition` — an object with three parts:
-
-1. **`stepConfigValidator`**: A Zod schema that validates `stepConfig` from the envelope. This is the step-specific configuration from the config file, which Rust passes through as opaque JSON.
-
-2. **`getStepValueValidator`**: A function that receives the validated step config and returns a Zod schema for the task value. The value schema can depend on the step configuration (e.g., different fields based on config options). Called per-task.
-
-3. **`handle`**: Takes a single `HandlerContext` object. Returns follow-up tasks.
+A handler exports an object with three parts:
 
 ```typescript
-// handlers/analyze.ts
 import { z } from "zod";
 import type { HandlerDefinition } from "@barnum/barnum";
 
 export default {
   stepConfigValidator: z.object({
     instructions: z.string(),
-    pool: z.string(),
   }),
 
   getStepValueValidator(stepConfig) {
@@ -33,85 +32,126 @@ export default {
   },
 
   async handle({ stepConfig, value, config, stepName }) {
-    stepConfig.instructions; // string — typed by stepConfigValidator
-    value.file;              // string — typed by getStepValueValidator
-    config;                  // full resolved Barnum config
-    stepName;                // "Analyze"
     return [{ kind: "Implement", value: { plan: "..." } }];
   },
 } satisfies HandlerDefinition;
 ```
 
-### Types
+- **`stepConfigValidator`**: Zod schema for `stepConfig`. Validated in JS at `run()` time.
+- **`getStepValueValidator(stepConfig)`**: Returns a Zod schema for the step's input value. Called at `run()` time after step config is validated. The returned schema is converted to JSON Schema and sent to Rust.
+- **`handle`**: Called at runtime. Receives validated inputs, returns follow-up tasks.
 
-**File:** `libs/barnum/types.ts` (or appropriate location in the `@barnum/barnum` package)
+## JS-side: config construction (`run.ts`)
+
+When `BarnumConfig.run()` is called, before serializing the config to Rust:
+
+For each TypeScript step in the config:
+
+1. **Import the handler module** (`await import(path)`)
+2. **Validate step config** against `handler.stepConfigValidator.parse(step.stepConfig)`
+3. **Get the value validator** via `handler.getStepValueValidator(stepConfig)`
+4. **Reject non-serializable Zod features** — verify the schema only uses types representable as JSON Schema (no `.transform()`, `.preprocess()`, `.refine()`, `.pipe()`, `.brand()`, etc.)
+5. **Convert Zod → JSON Schema** (using `zod-to-json-schema` or similar)
+6. **Embed the JSON Schema** in the serialized config as `valueSchema` on the step's action
+
+The serialized config sent to Rust looks like:
+
+```json
+{
+  "steps": [{
+    "name": "Analyze",
+    "action": {
+      "kind": "TypeScript",
+      "path": "/abs/path/to/handler.ts",
+      "exportedAs": "default",
+      "stepConfig": { "instructions": "analyze the file" },
+      "valueSchema": {
+        "type": "object",
+        "properties": { "file": { "type": "string" } },
+        "required": ["file"]
+      }
+    },
+    "next": ["Implement"]
+  }]
+}
+```
+
+If step config validation fails or the Zod schema uses non-serializable features, `run()` throws before the Rust binary starts.
+
+## Rust-side: output validation
+
+**File:** `crates/barnum_config/src/config.rs`
+
+Add `value_schema` to `TypeScriptAction`:
+
+```rust
+pub struct TypeScriptAction {
+    pub path: String,
+    #[serde(default = "default_exported_as")]
+    pub exported_as: String,
+    #[serde(default)]
+    pub step_config: serde_json::Value,
+    /// JSON Schema for this step's input value. Produced by JS from Zod.
+    /// Used to validate transition values targeting this step.
+    #[serde(default)]
+    pub value_schema: Option<serde_json::Value>,
+}
+```
+
+**File:** `crates/barnum_config/src/runner/mod.rs`
+
+When Rust processes a handler's response (`convert_task_result`), it validates each follow-up task:
+- Look up the target step by `kind`
+- If the target step has a `value_schema`, validate the transition's `value` against it
+- Invalid values → treat as invalid response (retry per config)
+
+Use a JSON Schema validation crate (e.g., `jsonschema`) on the Rust side.
+
+## Zod subset restriction
+
+Not all Zod features can be represented as JSON Schema. The JS side must reject schemas that use:
+- `.transform()` — arbitrary code, not representable
+- `.preprocess()` — same
+- `.refine()` / `.superRefine()` — arbitrary predicates
+- `.pipe()` — chained transforms
+- `.brand()` — TypeScript-only, no runtime meaning
+
+The check runs at `run()` time. If a handler uses unsupported features, throw with a clear error message listing the step name and the unsupported Zod method.
+
+Supported Zod types (representable as JSON Schema):
+- `z.string()`, `z.number()`, `z.boolean()`, `z.null()`
+- `z.object()`, `z.array()`, `z.tuple()`
+- `z.union()`, `z.discriminatedUnion()`, `z.intersection()`
+- `z.literal()`, `z.enum()`, `z.nativeEnum()`
+- `z.optional()`, `z.nullable()`, `z.default()`
+- `z.record()`, `z.map()`
+- `z.unknown()`, `z.any()`
+- String/number refinements (`.min()`, `.max()`, `.regex()`, `.int()`, etc.) — these map to JSON Schema keywords
+
+## TypeScript types
 
 ```typescript
-interface HandlerDefinition<C, V> {
-  /** Validates stepConfig from the envelope. */
+interface HandlerDefinition<C = unknown, V = unknown> {
   stepConfigValidator: z.ZodType<C>;
-
-  /** Returns a validator for the task value, given the validated step config. */
   getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
-
-  /** Process the task. Returns follow-up tasks. */
   handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
 interface HandlerContext<C, V> {
-  /** The validated step configuration. */
   stepConfig: C;
-  /** The validated task value. */
   value: V;
-  /** The full resolved Barnum config. */
-  config: Config;
-  /** The name of the step this handler is processing. */
+  config: unknown;
   stepName: string;
 }
 
-/** A follow-up task to spawn. */
 interface FollowUpTask {
-  /** Step name — must be one of this step's `next` entries. */
   kind: string;
-  /** Task payload — opaque to the framework. */
   value: unknown;
 }
 ```
 
-Both `C` and `V` have no default type parameters — they're determined by the validators. The `satisfies HandlerDefinition` on the export object infers `C` from `stepConfigValidator` and `V` from the return type of `getStepValueValidator`, giving full type inference in `handle`.
-
-### Validation flow
-
-The validation flow runs in `run-handler.ts` (defined in ADD_RUN_HANDLER) before calling `handle`:
-
-1. Parse `envelope.stepConfig` through `definition.stepConfigValidator` to get validated step config `C`.
-2. Call `definition.getStepValueValidator(stepConfig)` to get the value schema, then parse `envelope.value` to get validated value `V`.
-3. Call `definition.handle({ stepConfig, value, config: envelope.config, stepName: envelope.stepName })`.
-
-If either validator rejects its input, the process exits with a non-zero code and the Zod error on stderr. Rust treats this as a failed action (same as any other subprocess failure).
-
-### Type safety boundary
-
-Inputs (`stepConfig` and `value`) are fully typed via the required Zod validators. The output (`FollowUpTask[]`) has typed `kind` and untyped `value` — which steps a handler can transition to is determined by the config's `next` array, and the handler has no compile-time knowledge of that. Invalid transitions are caught at runtime by Rust's response validator.
-
-### Handlers with trivial inputs
-
-A handler that doesn't need step config or has no meaningful value schema still declares both validators:
-
-```typescript
-export default {
-  stepConfigValidator: z.object({}),
-  getStepValueValidator() {
-    return z.unknown();
-  },
-  async handle({ value }) {
-    return [];
-  },
-} satisfies HandlerDefinition;
-```
-
 ## What this does NOT do
 
-- Does not implement run-handler.ts (ADD_RUN_HANDLER)
-- Does not implement step constructors (`createTroupeStep`, `createBashStep`)
-- Does not implement `.validate()` on `BarnumConfig`
+- Does not change run-handler.ts (stays a dumb pipe)
+- Does not validate Bash action outputs (no schema to validate against)
+- Does not implement `.validate()` on `BarnumConfig` (that's a separate convenience method)
