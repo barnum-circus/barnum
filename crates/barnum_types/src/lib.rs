@@ -3,6 +3,7 @@
 //! These types are used across multiple Barnum crates (`barnum_config`, `barnum_state`, etc.)
 //! to provide semantic clarity and type safety.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use string_id::define_string_id;
 
@@ -10,7 +11,9 @@ use string_id::define_string_id;
 ///
 /// Used both at runtime (in the runner) and for serialization (in state logs).
 /// Named `LogTaskId` to avoid confusion with `troupe::TaskId` which is unrelated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 pub struct LogTaskId(pub u32);
 
@@ -35,7 +38,7 @@ define_string_id! {
 /// All step values in the system use this type, whether they've been
 /// through a pre-hook transformation or not. The transformation is optional,
 /// so there's no meaningful type distinction between "before" and "after".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(transparent)]
 pub struct StepInputValue(pub serde_json::Value);
 

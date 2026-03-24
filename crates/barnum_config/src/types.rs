@@ -5,7 +5,7 @@
 pub use barnum_types::{HookScript, LogTaskId, StepInputValue, StepName};
 
 /// A task with its kind (step name) and value.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct Task {
     /// The step name (serialized as "kind" for compatibility with agent responses).
     #[serde(rename = "kind")]
