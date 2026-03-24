@@ -5,7 +5,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@barnum/barnum": "link:../../../libs/barnum"
+    "@barnum/barnum": "link:../../../libs/barnum",
+    "zod": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
