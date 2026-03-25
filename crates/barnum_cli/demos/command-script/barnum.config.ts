@@ -27,5 +27,5 @@ const child = await BarnumConfig.fromConfig({
       next: [],
     },
   ],
-}).run({ entrypointValue: JSON.stringify({ folder: __dirname }), cwd: __dirname });
+}).run({ entrypointValue: { folder: __dirname }, cwd: __dirname });
 child.on("exit", (code) => process.exit(code ?? 1));

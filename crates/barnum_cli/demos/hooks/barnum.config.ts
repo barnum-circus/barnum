@@ -28,5 +28,5 @@ const child = await BarnumConfig.fromConfig({
       next: [],
     },
   ],
-}).run({ entrypointValue: '{"item": "test-item"}', cwd: __dirname });
+}).run({ entrypointValue: { item: "test-item" }, cwd: __dirname });
 child.on("exit", (code) => process.exit(code ?? 1));

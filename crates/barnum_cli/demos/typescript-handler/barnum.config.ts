@@ -22,7 +22,7 @@ const child = await BarnumConfig.fromConfig({
     },
   ],
 }).run({
-  entrypointValue: JSON.stringify({ name: "World" }),
+  entrypointValue: { name: "World" },
   wake: process.env.BARNUM_WAKE,
 });
 child.on("exit", (code) => process.exit(code ?? 1));
