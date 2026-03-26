@@ -83,7 +83,7 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 
 **Compensation / saga.** Expressible as `Sequence(Try(Step("charge")), route-based-on-result)`. Not a primitive.
 
-**Wait / signal.** External event ingestion (webhooks, human approval, timers). Orthogonal to action composition — it's a runtime concern, not an AST node.
+**Wait / signal.** External event ingestion (webhooks, human approval, timers). Possibly orthogonal to action composition — but the concurrency slot problem (see "Speculation: Suspend" below) suggests this isn't fully settled.
 
 ### The complete types
 
@@ -450,3 +450,100 @@ None of these are load-bearing for the architecture. Bash isn't a fundamental ex
 ### Don't act on this yet
 
 This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists. But it's worth keeping in mind: the jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture.
+
+## Speculation: Suspend
+
+### The problem
+
+A step waits for user approval. With `max_concurrency=3`, that task holds a slot indefinitely. Effective concurrency drops to 2. If three tasks all wait for approval, the entire workflow stalls — zero throughput while every slot is blocked on a human.
+
+This is the concurrency slot problem. The task isn't doing work, but the engine doesn't know that. It looks the same as a long-running computation.
+
+### Is Suspend a primitive?
+
+The irreducibility test: can Suspend be expressed as a combination of Unit, Sequence, All, Try, and Step?
+
+No. None of the existing primitives express "release your concurrency slot and wait for an external signal." Unit runs to completion. Step dispatches and waits, but it's still waiting on *computation*, not on an *external event*. Try observes errors. Sequence and All compose things that are already running.
+
+Suspend is a statement about the task's *lifecycle*, not about how computations *compose*. That's the tension. The action AST describes composition. Suspend describes resource management.
+
+### Where it could live
+
+**Option 1: Action primitive.**
+
+```ts
+type Action =
+  | { kind: "Unit"; executor: ExecutorInput }
+  | { kind: "Sequence"; actions: Action[] }
+  | { kind: "Suspend" }   // park here, resume externally
+  | ...
+```
+
+In a Sequence: `Sequence([doWork, Suspend, continueAfterResume])`. The engine checkpoints the sequence state at the Suspend point, frees the concurrency slot, and resumes from the next action when signaled.
+
+Pro: composable. You can put Suspend anywhere in a Sequence. The AST explicitly marks where suspension happens.
+
+Con: the Sequence is now stateful. The engine must persist "we're on action 2 of 4, here's the intermediate data" to resume later. Today, sequences are ephemeral — run start-to-finish in one shot. Suspend breaks that model.
+
+**Option 2: Handler return value.**
+
+The handler decides when to suspend. Instead of returning follow-up tasks, it returns a suspend signal:
+
+```ts
+// Handler result becomes a union
+type HandlerResult =
+  | FollowUpTask[]                              // done, here are next tasks
+  | { kind: "Suspend"; resumeValue?: unknown }  // park me, I'll be back
+
+// Handler code
+async handle({ value }) {
+  if (needsApproval(value)) {
+    return { kind: "Suspend" };
+  }
+  return [{ kind: "Next", value: result }];
+}
+```
+
+The engine sees the Suspend return, writes the task to the state log as suspended, frees the slot. An external signal (`barnum resume <task-id> --value '{approved: true}'`) re-queues the task with the new value. The same handler runs again, this time with the approval in the value.
+
+Pro: no change to the action AST. The handler has context to decide *when* to suspend. Simpler engine changes — suspended is just another task state alongside pending/running/completed.
+
+Con: the handler runs twice (once to suspend, once to resume). It must be idempotent or check state to know it's resuming. The "run the same handler again with new data" pattern is ad-hoc.
+
+**Option 3: Task state, not action primitive.**
+
+Suspend isn't in the AST at all. It's a task lifecycle state managed by the engine:
+
+- Any task can be suspended externally (`barnum suspend <task-id>`)
+- Suspended tasks don't count against `max_concurrency`
+- `barnum resume <task-id>` re-queues them
+- The task reruns from scratch (same step, same value, or updated value)
+
+Pro: zero changes to handlers or the action AST. Pure runtime/scheduling concern.
+
+Con: coarse-grained. You can't suspend mid-Sequence. The whole task reruns on resume. No way for the handler to say "I need to wait" — it's always an external decision.
+
+### The durable execution question
+
+Options 1 and 2 both imply **durable execution state**. If a task suspends and the engine restarts, the suspended task must survive. This is already handled by the state log — suspended tasks would be entries in the log, replayed on resume.
+
+But Option 1 (Suspend as AST primitive in a Sequence) requires persisting *mid-sequence state*: which action we're on, what intermediate data was produced. This is significantly more complex than persisting task-level state. It's the difference between "this task is parked" (simple) and "this task is paused at instruction 3 of 7 with this stack" (durable execution runtime, a la Temporal).
+
+### The resume signal
+
+All options punt on the hardest question: what triggers resume? Candidates:
+
+- **CLI command**: `barnum resume <task-id> --value '...'`. Manual, simple, works today.
+- **Webhook**: engine exposes an HTTP endpoint. External system calls it. Requires the engine to run an HTTP server.
+- **Named event**: handler suspends with `{ event: "approval-granted" }`. Something publishes that event. Requires a pub/sub system.
+- **Timer**: resume after N seconds. Engine manages a timer queue.
+
+For now, CLI command is sufficient. The others are additive.
+
+### Where this lands
+
+Probably **Option 2** (handler return value) is the right first step. It's the smallest change — suspended is a task state, handlers opt in, the state log already supports it. No AST changes, no mid-sequence checkpointing.
+
+Option 1 (AST primitive) becomes interesting once we have the JS engine and durable Sequence execution. At that point, Suspend in a Sequence is just `await externalSignal()` — the JS runtime handles the checkpointing naturally.
+
+Don't act on this yet. But the concurrency slot problem is real, and "just increase max_concurrency" is not the answer.
