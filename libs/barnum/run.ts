@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { configSchema } from "./barnum-config-schema.zod.js";
+import { Handler, isHandler } from "./types.js";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
@@ -100,6 +101,54 @@ function assertSerializableZod(schema: z.ZodType, stepName: string): void {
   if (def.valueType) assertSerializableZod(def.valueType, stepName);
 }
 
+// ==================== Config input types ====================
+
+type ZodConfigInput = z.input<typeof configSchema>;
+type ZodStepInput = ZodConfigInput["steps"][number];
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type StepInput = Omit<ZodStepInput, "action"> & {
+  action: { kind: "Bash"; script: string } | Handler<any, any>;
+  stepConfig?: unknown;
+};
+
+export type ConfigInput = Omit<ZodConfigInput, "steps"> & {
+  steps: StepInput[];
+};
+
+function resolveHandlers(config: ConfigInput): ZodConfigInput {
+  return {
+    ...config,
+    steps: config.steps.map((step) => {
+      const { stepConfig, action, ...stepRest } = step;
+
+      if (!isHandler(action)) {
+        return { ...stepRest, action } as ZodStepInput;
+      }
+
+      const def = action.__definition;
+      const parsedStepConfig = def.stepConfigValidator.parse(stepConfig ?? null);
+
+      const valueValidator = def.getStepValueValidator(parsedStepConfig);
+      assertSerializableZod(valueValidator, step.name);
+      const valueSchema = zodToJsonSchema(valueValidator, {
+        target: "jsonSchema7",
+      });
+
+      return {
+        ...stepRest,
+        action: {
+          kind: "TypeScript" as const,
+          path: action.__filePath,
+          exportedAs: "default",
+          stepConfig: parsedStepConfig,
+          valueSchema,
+        },
+      };
+    }),
+  };
+}
+
 // ==================== BarnumConfig ====================
 
 export class BarnumConfig {
@@ -109,54 +158,15 @@ export class BarnumConfig {
     this.config = config;
   }
 
-  static fromConfig(config: z.input<typeof configSchema>): BarnumConfig {
-    return new BarnumConfig(configSchema.parse(config));
+  static fromConfig(config: ConfigInput): BarnumConfig {
+    const resolved = resolveHandlers(config);
+    return new BarnumConfig(configSchema.parse(resolved));
   }
 
-  private async resolveConfig(): Promise<z.output<typeof configSchema>> {
-    const config = structuredClone(this.config);
-
-    for (const step of config.steps) {
-      if (step.action.kind !== "TypeScript") continue;
-      const action = step.action;
-
-      // Import the handler module
-      const mod = await import(action.path);
-      const handler = mod[action.exportedAs ?? "default"];
-
-      if (!handler?.stepConfigValidator || !handler?.getStepValueValidator) {
-        throw new Error(
-          `Step "${step.name}": handler at "${action.path}" is missing required ` +
-            `"stepConfigValidator" or "getStepValueValidator". ` +
-            `See HandlerDefinition interface.`,
-        );
-      }
-
-      // Validate step config
-      const parsedStepConfig = handler.stepConfigValidator.parse(
-        action.stepConfig ?? {},
-      );
-
-      // Get value validator
-      const valueValidator = handler.getStepValueValidator(parsedStepConfig);
-
-      // Reject non-serializable Zod features
-      assertSerializableZod(valueValidator, step.name);
-
-      // Convert Zod → JSON Schema and embed in config
-      action.valueSchema = zodToJsonSchema(valueValidator, {
-        target: "jsonSchema7",
-      });
-    }
-
-    return config;
-  }
-
-  async run(opts?: RunOptions): Promise<ChildProcess> {
-    const config = await this.resolveConfig();
+  run(opts?: RunOptions): ChildProcess {
     const args = opts?.resumeFrom
       ? ["run", "--resume-from", opts.resumeFrom]
-      : ["run", "--config", JSON.stringify(config)];
+      : ["run", "--config", JSON.stringify(this.config)];
     if (opts?.entrypointValue != null)
       args.push("--entrypoint-value", JSON.stringify(opts.entrypointValue));
     if (opts?.logLevel) args.push("--log-level", opts.logLevel);

@@ -1,15 +1,12 @@
 import { BarnumConfig } from "@barnum/barnum";
-import { resolve } from "node:path";
+import handler from "./handler.js";
 
-const child = await BarnumConfig.fromConfig({
+const child = BarnumConfig.fromConfig({
   entrypoint: "Greet",
   steps: [
     {
       name: "Greet",
-      action: {
-        kind: "TypeScript",
-        path: resolve(import.meta.dirname, "handler.ts"),
-      },
+      action: handler,
       next: ["Done"],
     },
     {
