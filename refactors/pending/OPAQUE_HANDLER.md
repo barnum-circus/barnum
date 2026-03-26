@@ -212,14 +212,25 @@ BarnumConfig.fromConfig({
 });
 ```
 
-The `action` field accepts either a standard `ActionKind` (for Bash or raw TypeScript path references) or a `Handler`. The TypeScript input type for the config widens the `action` field:
+The `action` field accepts either a `BashAction` (inline) or a `Handler`. Raw path-based TypeScript actions are not part of the user-facing API — they exist only in the serialized config that goes to Rust. The TypeScript input type:
 
 ```ts
-type StepInput = Omit<z.input<typeof stepSchema>, "action"> & {
-  action: z.input<typeof ActionKind> | Handler;
+type ActionInput =
+  | { kind: "Bash"; script: string }
+  | Handler;
+
+type StepInput = {
+  name: string;
+  action: ActionInput;
+  stepConfig?: unknown;
+  next?: string[];
+  options?: StepOptionsInput;
+  finally?: FinallyHookInput | null;
 };
 
-type ConfigInput = Omit<z.input<typeof configSchema>, "steps"> & {
+type ConfigInput = {
+  entrypoint?: string | null;
+  options?: OptionsInput;
   steps: StepInput[];
 };
 ```
@@ -243,9 +254,9 @@ function resolveHandlers(config: ConfigInput): z.input<typeof configSchema> {
       const handler = step.action;
       const def = handler.__definition;
 
-      // Validate step config
+      // Validate step config (from step-level field)
       const parsedStepConfig = def.stepConfigValidator.parse(
-        null, // no stepConfig for Handler-based actions (or extend Handler to carry it)
+        step.stepConfig ?? null,
       );
 
       // Generate JSON Schema from Zod value validator
@@ -270,36 +281,15 @@ function resolveHandlers(config: ConfigInput): z.input<typeof configSchema> {
 }
 ```
 
-Handler objects are always resolved as `exportedAs: "default"`. Handlers created with `createHandler` should be default exports from their files. Named exports use the raw `{ kind: "TypeScript", path: "...", exportedAs: "myExport" }` syntax.
+Handler objects are always resolved as `exportedAs: "default"`. Handlers created with `createHandler` must be default exports from their files.
 
-### `resolveConfig` simplification
+### `resolveConfig` deletion
 
-If all TypeScript actions use `createHandler`, `resolveConfig` has nothing to do — handlers were already resolved in `fromConfig`. For backwards compatibility with raw path-based TypeScript actions, `resolveConfig` still handles those:
-
-```ts
-private async resolveConfig(): Promise<z.output<typeof configSchema>> {
-  const config = structuredClone(this.config);
-  for (const step of config.steps) {
-    if (step.action.kind !== "TypeScript") continue;
-    // Handler-based actions already have valueSchema set by fromConfig.
-    // Only process raw path-based actions that still need resolution.
-    if (step.action.valueSchema != null) continue;
-
-    const mod = await import(step.action.path);
-    const handler = mod[step.action.exportedAs ?? "default"];
-    // ... existing validation and schema generation ...
-  }
-  return config;
-}
-```
+`resolveConfig` existed to dynamically import handler modules by path for validation and JSON Schema generation. With `createHandler`, the handler definition is already in memory at `fromConfig` time — there's nothing to import. `resolveConfig` is deleted. The `run()` method calls `fromConfig` (synchronous) and passes the resolved config directly to the Rust binary.
 
 ### stepConfig for Handler-based actions
 
-Currently, `stepConfig` is passed in the config: `{ kind: "TypeScript", path: "...", stepConfig: { ... } }`. With Handler objects, stepConfig needs a different mechanism since the action field is just the Handler.
-
-Two options:
-
-**Option A: Step-level field.** Add `stepConfig` as a field on the step itself (parallel to `action`):
+Currently, `stepConfig` is passed in the config alongside `path`: `{ kind: "TypeScript", path: "...", stepConfig: { ... } }`. With Handler objects replacing the action field, stepConfig moves to a step-level field:
 
 ```ts
 {
@@ -310,26 +300,18 @@ Two options:
 }
 ```
 
-**Option B: Handler carries stepConfig.** The Handler has a `.with(stepConfig)` method that returns a new Handler with the config baked in:
+`stepConfig` is parallel to `action`, not nested inside it. `resolveHandlers` reads `step.stepConfig`, validates it against `handler.__definition.stepConfigValidator`, and embeds the parsed value in the resolved TypeScript action.
+
+The `StepInput` type adds the optional field:
 
 ```ts
-{
-  name: "Greet",
-  action: handler.with({ model: "gpt-4" }),
-  next: ["Done"],
-}
+type StepInput = Omit<z.input<typeof stepSchema>, "action"> & {
+  action: z.input<typeof ActionKind> | Handler;
+  stepConfig?: unknown;
+};
 ```
 
-Option B is more ergonomic and keeps handler-specific data together. `with` returns a new Handler with the same definition and file path but a different stepConfig. The type parameter `C` constrains what `with` accepts:
-
-```ts
-class Handler<C = unknown, V = unknown> {
-  // ...
-  with(stepConfig: C): Handler<C, V> {
-    return new Handler(this.__definition, this.__filePath, stepConfig);
-  }
-}
-```
+For Bash actions or raw path-based TypeScript actions, `stepConfig` at the step level is ignored (those actions carry their own stepConfig internally).
 
 ### Runtime invocation (unchanged)
 
@@ -391,7 +373,7 @@ BarnumConfig.fromConfig({
 | Component | Change |
 |-----------|--------|
 | `libs/barnum/types.ts` | Add `Handler` class, `createHandler` function, `isHandler` helper |
-| `libs/barnum/run.ts` | `fromConfig` pre-processes Handlers before Zod validation; `resolveConfig` skips already-resolved actions |
+| `libs/barnum/run.ts` | `fromConfig` pre-processes Handlers before Zod validation; `resolveConfig` deleted |
 | `libs/barnum/index.ts` | Export `createHandler`, `Handler` |
 | `libs/barnum/barnum-config-schema.zod.ts` | No change (Rust schema unchanged) |
 | `libs/barnum/actions/run-handler.ts` | No change |
@@ -400,10 +382,4 @@ BarnumConfig.fromConfig({
 
 ## Open Questions
 
-1. **stepConfig mechanism**: Option A (step-level field) vs Option B (`handler.with(stepConfig)`). Option B is more ergonomic but adds a method to the opaque type. Recommendation: Option B.
-
-2. **Bun/Deno compatibility**: `Error.prepareStackTrace` is a V8 API. Bun supports it (V8-compatible). Deno supports it. If a runtime doesn't support it, `createHandler` falls back to string-parsing `Error().stack` or requires explicit `{ path }`.
-
-3. **Future type-safe step graph**: With Handler type parameters, we could eventually type-check that `entrypointValue` matches the entrypoint handler's value type, and that follow-up tasks' values match their target handlers' types. This requires a more sophisticated generic config type and is out of scope here but becomes possible with this foundation.
-
-4. **Deprecating raw path strings**: Should raw `{ kind: "TypeScript", path: "..." }` be deprecated in the JS API? It's still needed for the serialized config (Rust side), but users could be steered toward `createHandler` exclusively. Recommendation: keep raw paths supported but undocumented.
+None.
