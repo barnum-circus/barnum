@@ -108,6 +108,11 @@ class Handler<C = unknown, V = unknown> {
     this.__definition = definition;
     this.__filePath = filePath;
   }
+
+  /** Called by run-handler.ts at runtime. Delegates to the definition's handle. */
+  handle(context: HandlerContext<C, V>): Promise<FollowUpTask[]> {
+    return this.__definition.handle(context);
+  }
 }
 
 function isHandler(x: unknown): x is Handler {
@@ -313,9 +318,11 @@ type StepInput = Omit<z.input<typeof stepSchema>, "action"> & {
 
 For Bash actions or raw path-based TypeScript actions, `stepConfig` at the step level is ignored (those actions carry their own stepConfig internally).
 
-### Runtime invocation (unchanged)
+### Runtime invocation
 
-`run-handler.ts` still receives `[handlerPath, exportName]` as argv and imports the module. The Rust side still sees `{ kind: "TypeScript", path: "/abs/path", exportedAs: "default", ... }` in the serialized config. The Handler abstraction is JS-only.
+`run-handler.ts` still receives `[handlerPath, exportName]` as argv and imports the module. The default export is now a `Handler` instance instead of a plain object, but `Handler` exposes a `handle` method that delegates to the definition's `handle`. So `run-handler.ts` is unchanged — `handler.handle(envelope)` works on both the old plain object and the new `Handler` class.
+
+The Rust side still sees `{ kind: "TypeScript", path: "/abs/path", exportedAs: "default", ... }` in the serialized config. The Handler abstraction is JS-only.
 
 ## Before/After
 
@@ -376,9 +383,43 @@ BarnumConfig.fromConfig({
 | `libs/barnum/run.ts` | `fromConfig` pre-processes Handlers before Zod validation; `resolveConfig` deleted |
 | `libs/barnum/index.ts` | Export `createHandler`, `Handler` |
 | `libs/barnum/barnum-config-schema.zod.ts` | No change (Rust schema unchanged) |
-| `libs/barnum/actions/run-handler.ts` | No change |
+| `libs/barnum/actions/run-handler.ts` | No change (`handler.handle(envelope)` works on Handler class) |
 | Rust side | No change |
-| Demo configs | Update to use `createHandler` + direct import |
+
+## Migration scope
+
+### TypeScript handler files (migrate to `createHandler`)
+
+| File | Current pattern |
+|------|----------------|
+| `crates/barnum_cli/demos/typescript-handler/handler.ts` | `export default { ... } satisfies HandlerDefinition` |
+| `../barnum-demo/type-check.ts` | `export default { ... } satisfies HandlerDefinition` |
+
+### Config files with path-based TypeScript actions (migrate to Handler import)
+
+| File | Current pattern |
+|------|----------------|
+| `crates/barnum_cli/demos/typescript-handler/barnum.config.ts` | `path: resolve(import.meta.dirname, "handler.ts")` |
+| `../barnum-demo/barnum.config.ts` | `path: resolve(import.meta.dirname, "type-check.ts")` |
+
+### Config files with Bash-only actions (update `fromConfig` call if API changes)
+
+| File |
+|------|
+| `crates/barnum_cli/demos/simple/barnum.config.ts` |
+| `crates/barnum_cli/demos/command/barnum.config.ts` |
+| `crates/barnum_cli/demos/branching/barnum.config.ts` |
+| `crates/barnum_cli/demos/fan-out/barnum.config.ts` |
+| `crates/barnum_cli/demos/hooks/barnum.config.ts` |
+| `crates/barnum_cli/demos/linear/barnum.config.ts` |
+| `crates/barnum_cli/demos/refactor-workflow/barnum.config.ts` |
+| `crates/barnum_cli/demos/command-script/barnum.config.ts` |
+
+### Utilities
+
+| File | Notes |
+|------|-------|
+| `crates/barnum_cli/demos/extract-config.ts` | Mocks `BarnumConfig.fromConfig` — update if API signature changes |
 
 ## Open Questions
 
