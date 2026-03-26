@@ -160,10 +160,13 @@ import tsCheck from "@barnum/ts-check";
 Current `finally` is a special hook. With primitives, it's just a Sequence that waits for subtrees then runs cleanup.
 
 ```ts
-// Current: special hook
+import processHandler from "./process.js";
+import cleanupHandler from "./cleanup.js";
+
+// Current: special hook (finally only supports Bash today)
 {
   name: "Process",
-  action: { kind: "Unit", executor: { kind: "Bash", script: "..." } },
+  action: { kind: "Unit", executor: processHandler },
   finally: { kind: "Bash", script: "./cleanup.sh" },
   next: ["SubtaskA", "SubtaskB"],
 }
@@ -174,12 +177,12 @@ Current `finally` is a special hook. With primitives, it's just a Sequence that 
   action: {
     kind: "Sequence",
     actions: [
-      { kind: "Unit", executor: { kind: "Bash", script: "..." } },
+      { kind: "Unit", executor: processHandler },
       { kind: "All", actions: [
         { kind: "Step", step: "SubtaskA" },
         { kind: "Step", step: "SubtaskB" },
       ]},
-      { kind: "Unit", executor: { kind: "Bash", script: "./cleanup.sh" } },
+      { kind: "Unit", executor: cleanupHandler },
     ],
   },
   next: ["SubtaskA", "SubtaskB"],
@@ -190,7 +193,7 @@ This is strictly more powerful than `finally`: cleanup gets the subtree results,
 
 ### Error recovery
 
-Step fails → catch the error → route to recovery instead of retrying.
+Step fails → catch the error → route to recovery instead of retrying. Inline Bash is appropriate here — the routing logic is pure data transformation that doesn't warrant a separate handler file.
 
 ```ts
 {
@@ -211,17 +214,13 @@ Step fails → catch the error → route to recovery instead of retrying.
 
 ### Terminal step (no-op)
 
-Currently requires a Bash hack. With Unit + a no-op executor:
+Currently requires a Bash hack (`echo '[]'`). This should not need a subprocess. Options:
 
-```ts
-{
-  name: "Done",
-  action: { kind: "Unit", executor: { kind: "Bash", script: "echo '[]'" } },
-  next: [],
-}
-```
+1. **Optional executor on Unit.** `{ kind: "Unit" }` with no executor returns `[]` (standalone) or passes input through (in a Sequence). Cleanest user-facing API.
+2. **Noop executor.** `{ kind: "Unit", executor: { kind: "Noop" } }`. Explicit but verbose.
+3. **Dedicated Terminal action.** `{ kind: "Terminal" }`. A workflow primitive, not an executor — it means "this step consumes tasks and produces nothing."
 
-Note: Unit still requires an executor. A truly empty no-op would be a `{ kind: "Bash", script: "echo '[]'" }` executor inside Unit. This is mildly ugly — we could consider adding a `Noop` executor that returns `[]` without spawning a subprocess, or making the `executor` field optional on Unit (defaulting to the identity/passthrough). Open question.
+Option 1 is the most likely winner. Open question.
 
 ## Handler definition types
 
@@ -392,4 +391,62 @@ JS rewrite. The Zod tree walking is straightforward, but it needs to happen in J
 
 4. **Sequence + timeout.** The step-level timeout applies to the entire sequence execution, not individual actions. The sequence is one unit of work.
 
-5. **Unit without executor.** Should `Unit` allow an optional executor, defaulting to a passthrough/no-op? This would make terminal steps cleaner: `{ kind: "Unit" }` instead of `{ kind: "Unit", executor: { kind: "Bash", script: "echo '[]'" } }`. The no-executor Unit would pass its input through unchanged (in a Sequence) or produce `[]` (as a standalone step action).
+5. **Unit without executor.** Should `Unit` allow an optional executor, defaulting to a passthrough/no-op? This would make terminal steps cleaner: `{ kind: "Unit" }` instead of a Bash `echo '[]'` hack. The no-executor Unit would pass its input through unchanged (in a Sequence) or produce `[]` (as a standalone step action). See "Terminal step" section above.
+
+## Speculation: is Bash special?
+
+Every place Bash appears in this doc falls into one of two categories:
+
+1. **Real shell work.** Running `tsc`, `cargo test`, calling external tools. The shell is the right tool — you need process spawning, pipes, exit codes.
+
+2. **Inline data routing.** The `jq 'if .kind == "Ok" then ...'` patterns in Pipeline and Error Recovery. These are pure data transformations: take JSON in, produce JSON out. They use Bash only because it's the inline executor we have, not because they need a shell.
+
+Category 2 is suspicious. The routing logic is JavaScript-shaped (conditional on a field, map to a new structure), but it's written in jq-inside-Bash because that's what's available inline. Every routing snippet spawns a subprocess and shells out to jq for what amounts to an `if` statement.
+
+In a TypeScript config file, the natural inline expression is a function:
+
+```ts
+// Today: Bash + jq subprocess
+{ kind: "Bash", script: `jq 'if .kind == "Ok" then [{kind: "Continue", value: .value}] else [{kind: "Recover", value: .error}] end'` }
+
+// Alternative: inline function (no subprocess)
+(input) => input.kind === "Ok"
+  ? [{ kind: "Continue", value: input.value }]
+  : [{ kind: "Recover", value: input.error }]
+```
+
+The inline function is shorter, type-checkable, and doesn't spawn a process. The question is how it fits into the Executor model.
+
+### What would this look like?
+
+The Executor union currently has Bash and TypeScript. An inline JS executor wouldn't be a third variant — it's fundamentally different. Bash and TypeScript are *serializable* — they go over the wire to Rust as JSON. A JavaScript closure can't be serialized.
+
+This means inline functions only work in a JS-native engine where `fromConfig` can capture the closure directly, not in the current Rust subprocess model. Two possible designs:
+
+**Option A: Inline executor (JS engine only).** Add a `{ kind: "Inline", fn: (input) => output }` executor variant that only exists in the user-facing TypeScript types, never serialized. `fromConfig` captures the closure; the JS engine calls it directly. Rust never sees it.
+
+**Option B: Functions as first-class actions.** Don't wrap it in an executor at all. In the user-facing Action type, allow a bare function wherever an Action is expected:
+
+```ts
+type ActionInput =
+  | { kind: "Unit"; executor: ExecutorInput }
+  | { kind: "Sequence"; actions: ActionInput[] }
+  | ((input: unknown) => unknown)  // inline transform
+  | ...
+```
+
+Option B is more ergonomic but blurs the Executor/Action distinction. Option A keeps the levels separate.
+
+### Implications
+
+If inline JS replaces most Bash routing, then Bash's role shrinks to "run external processes" — which is exactly what TypeScript handlers already do (via `child_process`). The remaining Bash use cases are:
+
+- One-liners that are genuinely simpler as shell (`cat`, `echo`, pipes)
+- Sandboxed environments where the handler doesn't have filesystem access but the Bash executor does
+- Users who prefer shell scripting
+
+None of these are load-bearing for the architecture. Bash isn't a fundamental executor kind — it's a convenience for quick scripts. The two fundamental executor kinds might be "run a handler" (TypeScript/Python/etc.) and "evaluate an expression" (inline transform).
+
+### Don't act on this yet
+
+This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists. But it's worth keeping in mind: the jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture.
