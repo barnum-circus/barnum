@@ -13,15 +13,17 @@ The goal: TypeScript handlers return plain values. The config controls routing.
 A TypeScript handler (`crates/barnum_cli/demos/typescript-handler/handler.ts`):
 
 ```ts
-export default {
+export default createHandler({
   stepConfigValidator,
   getStepValueValidator(_stepConfig) { return stepValueValidator; },
   async handle({ value }) {
     return [{ kind: "Done", value: { greeting: `Hello, ${value.name}!` } }];
     //            ^^^^^^ hardcoded step name — handler must know the graph
   },
-} satisfies HandlerDefinition<StepConfig, StepValue>;
+});
 ```
+
+Handlers are opaque `Handler<C, V>` objects created via `createHandler()`, which captures the file path via stack trace. Configs reference handlers as imported values — no raw path strings in the user-facing API. `fromConfig` resolves Handler objects into serialized TypeScript actions (with file path, stepConfig, valueSchema) synchronously before Zod validation. See `refactors/past/OPAQUE_HANDLER.md` for the full design.
 
 The bridge script (`libs/barnum/actions/run-handler.ts`) passes the result through:
 
@@ -49,10 +51,13 @@ These two levels are orthogonal. Adding a new executor (Python, Deno) changes on
 ### Executors
 
 ```ts
+// Internal serialized form (what goes to Rust after Handler resolution)
 type Executor =
   | { kind: "Bash"; script: string }
   | { kind: "TypeScript"; path: string; exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
+
+The TypeScript executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
 Executors never appear at the action level. They are always wrapped in a workflow primitive (Unit).
 
@@ -104,14 +109,19 @@ pub enum Action {
 ```
 
 ```ts
-// TypeScript (mirrors Rust)
+// Internal serialized form (mirrors Rust, produced by fromConfig resolution)
 type Executor =
   | { kind: "Bash"; script: string }
   | { kind: "TypeScript"; path: string; exportedAs?: string;
       stepConfig?: unknown; valueSchema?: unknown }
 
+// User-facing executor input (what users write in configs)
+type ExecutorInput =
+  | { kind: "Bash"; script: string }
+  | Handler<any, any>
+
 type Action =
-  | { kind: "Unit"; executor: Executor }
+  | { kind: "Unit"; executor: ExecutorInput }
   | { kind: "Sequence"; actions: Action[] }
   | { kind: "All"; actions: Action[] }
   | { kind: "Try"; action: Action }
@@ -127,12 +137,14 @@ The point of good primitives: complex patterns fall out as compositions.
 The motivating use case. A TypeScript handler returns plain data; a Bash action converts it to `[{kind, value}]` tasks.
 
 ```ts
+import tsCheck from "@barnum/ts-check";
+
 {
   name: "Check",
   action: {
     kind: "Sequence",
     actions: [
-      { kind: "Unit", executor: { kind: "TypeScript", path: "@barnum/ts-check" } },
+      { kind: "Unit", executor: tsCheck },
       { kind: "Unit", executor: { kind: "Bash", script: `jq 'if .failedFiles | length > 0
         then [{kind: "Fix", value: .}]
         else [{kind: "Done", value: {}}]
@@ -213,25 +225,41 @@ Note: Unit still requires an executor. A truly empty no-op would be a `{ kind: "
 
 ## Handler definition types
 
-Single discriminated union on `kind`, matching the Executor/Action pattern:
+Currently, `HandlerDefinition` is a single interface. All handlers return `FollowUpTask[]` and are created via `createHandler()`:
 
 ```ts
-interface BaseHandler<C = unknown, V = unknown> {
-  stepConfigValidator: z.ZodType<C, z.ZodTypeDef, unknown>;
-  getStepValueValidator: (stepConfig: C) => z.ZodType<V, z.ZodTypeDef, unknown>;
+// Current
+interface HandlerDefinition<C = unknown, V = unknown> {
+  stepConfigValidator: z.ZodType<C>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
+  handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
+export default createHandler({
+  stepConfigValidator,
+  getStepValueValidator(_stepConfig) { return stepValueValidator; },
+  async handle({ value }) { return [{ kind: "Done", value: {} }]; },
+});
+```
+
+For Sequence support, `HandlerDefinition` should become a discriminated union on `kind`:
+
+```ts
 type HandlerDefinition<C = unknown, V = unknown> =
   | RoutingHandler<C, V>
   | ValueHandler<C, V>;
 
-interface RoutingHandler<C = unknown, V = unknown> extends BaseHandler<C, V> {
+interface RoutingHandler<C = unknown, V = unknown> {
   kind: "routing";
+  stepConfigValidator: z.ZodType<C>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
   handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
-interface ValueHandler<C = unknown, V = unknown> extends BaseHandler<C, V> {
+interface ValueHandler<C = unknown, V = unknown> {
   kind: "value";
+  stepConfigValidator: z.ZodType<C>;
+  getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
   handle: (context: HandlerContext<C, V>) => Promise<unknown>;
 }
 ```
@@ -239,11 +267,13 @@ interface ValueHandler<C = unknown, V = unknown> extends BaseHandler<C, V> {
 `RoutingHandler`: sole action or last action in a sequence — returns `[{kind, value}]` tasks.
 `ValueHandler`: non-final position in a sequence — returns plain data piped to the next action.
 
+Both are created via `createHandler()` which wraps them in an opaque `Handler<C, V>` object.
+
 ## What to ship when
 
-### Ship now (current branch)
+### Ship now (done)
 
-TypeScript handler support with validation, synchronous `run()` API, troupe decoupled. Already useful and shippable.
+TypeScript handler support with validation, synchronous `run()` API, troupe decoupled, opaque `Handler<C, V>` type via `createHandler()`. Already shipped.
 
 ### Ship soon (Rust, before JS rewrite)
 
@@ -257,7 +287,7 @@ Requires:
 - Add `Sequence` variant to `Action`
 - Piping logic in the runner
 - Schema regeneration
-- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Bash", script: "..." } }`
+- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Bash", script: "..." } }` and `handler` → `{ kind: "Unit", executor: handler }`
 
 ### Ship with JS rewrite
 
@@ -323,7 +353,7 @@ For Sequence, intermediate actions get their predecessor's stdout as stdin. All 
 
 ### TypeScript side (`libs/barnum`)
 
-**run.ts** — `resolveConfig()` unwraps Unit to find TypeScript executors, walks into Sequence actions to find nested TypeScript executors.
+**run.ts** — `resolveHandlers()` (called by `fromConfig`) unwraps Unit to find Handler objects, walks into Sequence actions to find nested Handlers, and resolves each into a serialized TypeScript executor with file path, stepConfig, and valueSchema.
 
 ### Generated schemas
 
