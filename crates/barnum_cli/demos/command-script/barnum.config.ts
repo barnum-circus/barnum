@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const child = await BarnumConfig.fromConfig({
+const child = BarnumConfig.fromConfig({
   entrypoint: "ListFiles",
   options: {
     maxRetries: 1,
