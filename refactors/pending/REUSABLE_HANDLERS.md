@@ -447,9 +447,51 @@ If inline JS replaces most Bash routing, then Bash's role shrinks to "run extern
 
 None of these are load-bearing for the architecture. Bash isn't a fundamental executor kind — it's a convenience for quick scripts. The two fundamental executor kinds might be "run a handler" (TypeScript/Python/etc.) and "evaluate an expression" (inline transform).
 
+### The closure problem
+
+Inline functions can close over local variables:
+
+```ts
+const threshold = config.threshold; // local binding
+
+BarnumConfig.fromConfig({
+  steps: [{
+    name: "Route",
+    action: {
+      kind: "Sequence",
+      actions: [
+        { kind: "Unit", executor: handler },
+        // This closure captures `threshold` — breaks if serialized
+        (input) => input.score > threshold
+          ? [{ kind: "Pass", value: input }]
+          : [{ kind: "Fail", value: input }],
+      ],
+    },
+  }],
+});
+```
+
+This type-checks. But if the function is serialized (sent to Rust, persisted for resume, executed in a different process), `threshold` doesn't exist in the new context. The function silently breaks.
+
+Bash doesn't have this problem because Bash scripts are strings — they're self-contained by construction. A Bash script can't accidentally capture a JavaScript variable.
+
+For inline JS to be safe, we need a guarantee that the function doesn't close over anything that won't be available at execution time. Options:
+
+1. **Static analysis.** Walk the function's AST and verify all free variables are globals (or module-level imports). This is a build step or a `fromConfig`-time check. Doable but adds complexity — need a JS parser, need to define what counts as "global."
+
+2. **Runtime detection.** Serialize the function to a string (`fn.toString()`), execute it in a clean scope, and check if it throws `ReferenceError`. Fragile — a closure might not reference the captured variable on every code path. Missing coverage means silent bugs.
+
+3. **Restricted syntax.** Inline functions must be arrow expressions with no free variables. The config API wraps them in a helper that validates at construction time: `inline((input) => ...)`. The helper can do `fn.toString()` analysis on the source text. Narrows the problem but doesn't eliminate it — `toString()` doesn't always produce parseable source.
+
+4. **Don't serialize them.** Inline functions only work in the in-process JS engine, never cross a serialization boundary. If the engine is pure JS (no Rust subprocess), the closure executes in the same process that created it — no serialization needed. The closure problem only exists when crossing process boundaries. This is the cleanest answer but limits inline functions to the JS engine.
+
+None of these are perfect. Option 4 is the most honest: inline functions are a JS-engine-only feature. In the Rust subprocess model, use Bash or handlers. When the JS engine ships, closures just work because there's no serialization boundary.
+
+The deeper issue: if a suspended task resumes after a restart, and the inline function was a closure, the captured variables are gone. Even Option 4 doesn't help here — the process is different. Durable execution + inline closures is fundamentally at odds. Any function that survives a restart must be self-contained.
+
 ### Don't act on this yet
 
-This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists. But it's worth keeping in mind: the jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture.
+This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists, and even then the closure problem constrains where they can be used. The jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture — but the workarounds are at least safe by construction.
 
 ## Speculation: Suspend
 
