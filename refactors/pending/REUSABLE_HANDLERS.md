@@ -489,6 +489,44 @@ None of these are perfect. Option 4 is the most honest: inline functions are a J
 
 The deeper issue: if a suspended task resumes after a restart, and the inline function was a closure, the captured variables are gone. Even Option 4 doesn't help here — the process is different. Durable execution + inline closures is fundamentally at odds. Any function that survives a restart must be self-contained.
 
+### Symmetric inline/external model
+
+Today the two executor kinds are asymmetric:
+
+- **Bash**: always inline (script string in the config). No way to point to an external `.sh` file.
+- **TypeScript**: always external (handler file via `createHandler`). No way to write inline JS in the config.
+
+A consistent model would give both languages both forms:
+
+| | Inline | External |
+|---|---|---|
+| **Bash** | `{ kind: "Bash", script: "jq ..." }` (current) | `{ kind: "Bash", path: "./process.sh" }` |
+| **TypeScript** | inline function (see above) | `createHandler({...})` (current) |
+
+External Bash (`path` field) would run the file as a shell script with the same stdin/stdout conventions as inline Bash. This is useful for non-trivial shell scripts that don't belong inline in a config — linting scripts, build scripts, cleanup jobs.
+
+The Executor enum becomes:
+
+```ts
+type Executor =
+  | { kind: "Bash"; script: string }          // inline bash
+  | { kind: "Bash"; path: string }            // external bash file
+  | { kind: "TypeScript"; path: string; ... } // external TS handler (from Handler resolution)
+  // inline TS: only in JS engine, see closure problem above
+```
+
+Or, abstracting over the language:
+
+```ts
+type Executor =
+  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
+  | { kind: "External"; path: string; ... }
+```
+
+The second form suggests that the language isn't what matters — what matters is inline vs external. An inline executor is a string of code. An external executor is a file. The language is a property of the executor, not a separate kind.
+
+This also opens the door to other languages (Python, Deno) without adding new top-level kinds — just new `language` values on the same Inline/External executors.
+
 ### Don't act on this yet
 
 This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists, and even then the closure problem constrains where they can be used. The jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture — but the workarounds are at least safe by construction.
