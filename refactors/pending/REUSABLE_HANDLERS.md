@@ -216,11 +216,13 @@ Step fails → catch the error → route to recovery instead of retrying. Inline
 
 Currently requires a Bash hack (`echo '[]'`). This should not need a subprocess. Options:
 
-1. **Optional executor on Unit.** `{ kind: "Unit" }` with no executor returns `[]` (standalone) or passes input through (in a Sequence). Cleanest user-facing API.
-2. **Noop executor.** `{ kind: "Unit", executor: { kind: "Noop" } }`. Explicit but verbose.
-3. **Dedicated Terminal action.** `{ kind: "Terminal" }`. A workflow primitive, not an executor — it means "this step consumes tasks and produces nothing."
+1. **Optional executor on Unit.** `{ kind: "Unit" }` with no executor. But what does it do? As a standalone step action, it should produce `[]` (consume the task, spawn nothing). In a Sequence, it should pass input through (identity). Context-dependent behavior from the same AST node is a design smell — the meaning of the node changes based on where it appears.
 
-Option 1 is the most likely winner. Open question.
+2. **Noop executor.** `{ kind: "Unit", executor: { kind: "Noop" } }`. Always produces `[]`, regardless of context. Explicit, no ambiguity. Slightly verbose, but terminal steps are a small fraction of configs.
+
+3. **Dedicated Terminal action.** `{ kind: "Terminal" }`. A workflow primitive, not an executor — it means "this step consumes tasks and produces nothing." Cleanly separates "do nothing and return empty" (Terminal) from "do nothing and pass through" (which would be a separate Identity primitive or optional executor on Unit).
+
+Option 2 is the safest — unambiguous semantics, no context-dependence. Option 3 is cleaner if we also need an identity/passthrough (which Sequence would want). Option 1 is tempting but the dual behavior is a trap. Open question.
 
 ## Handler definition types
 
@@ -391,7 +393,7 @@ JS rewrite. The Zod tree walking is straightforward, but it needs to happen in J
 
 4. **Sequence + timeout.** The step-level timeout applies to the entire sequence execution, not individual actions. The sequence is one unit of work.
 
-5. **Unit without executor.** Should `Unit` allow an optional executor, defaulting to a passthrough/no-op? This would make terminal steps cleaner: `{ kind: "Unit" }` instead of a Bash `echo '[]'` hack. The no-executor Unit would pass its input through unchanged (in a Sequence) or produce `[]` (as a standalone step action). See "Terminal step" section above.
+5. **Terminal steps.** How should no-op terminal steps work without a Bash `echo '[]'` hack? Options: optional executor on Unit (context-dependent semantics — design smell), Noop executor (explicit), or dedicated Terminal primitive. See "Terminal step" section above.
 
 ## Speculation: is Bash special?
 
@@ -487,6 +489,8 @@ For inline JS to be safe, we need a guarantee that the function doesn't close ov
 
 None of these are perfect. Option 4 is the most honest: inline functions are a JS-engine-only feature. In the Rust subprocess model, use Bash or handlers. When the JS engine ships, closures just work because there's no serialization boundary.
 
+Even Option 4 has a gap: **shadowed globals.** Static analysis can verify that a function's free variables are all globals, but it can't verify that those globals haven't been monkey-patched. If the config file does `const JSON = { parse: () => "lol" }` before defining an inline function that calls `JSON.parse`, the function appears safe (all free variables are "global") but behaves differently depending on execution context. In the same process, the shadow is captured. In a different process (after resume), it's not. This is an edge case, but it means even "closure-free" functions aren't guaranteed safe across process boundaries unless you also verify no globals are shadowed. There's no good answer for this beyond documentation and convention.
+
 The deeper issue: if a suspended task resumes after a restart, and the inline function was a closure, the captured variables are gone. Even Option 4 doesn't help here — the process is different. Durable execution + inline closures is fundamentally at odds. Any function that survives a restart must be self-contained.
 
 ### Symmetric inline/external model
@@ -505,27 +509,31 @@ A consistent model would give both languages both forms:
 
 External Bash (`path` field) would run the file as a shell script with the same stdin/stdout conventions as inline Bash. This is useful for non-trivial shell scripts that don't belong inline in a config — linting scripts, build scripts, cleanup jobs.
 
-The Executor enum becomes:
+Note: naively adding `{ kind: "Bash"; path: string }` alongside `{ kind: "Bash"; script: string }` breaks the `kind`-discriminated-union convention — both share `kind: "Bash"` and differ only on a second field. This is the same pattern we explicitly avoid elsewhere (see `todos.md` on `MaybeLinked`). Two cleaner options:
 
-```ts
-type Executor =
-  | { kind: "Bash"; script: string }          // inline bash
-  | { kind: "Bash"; path: string }            // external bash file
-  | { kind: "TypeScript"; path: string; ... } // external TS handler (from Handler resolution)
-  // inline TS: only in JS engine, see closure problem above
-```
-
-Or, abstracting over the language:
+**Option 1: Inline/External as the top-level discriminant.** The language is a property, not the kind:
 
 ```ts
 type Executor =
   | { kind: "Inline"; language: "bash" | "javascript"; source: string }
-  | { kind: "External"; path: string; ... }
+  | { kind: "Handler"; path: string; exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-The second form suggests that the language isn't what matters — what matters is inline vs external. An inline executor is a string of code. An external executor is a file. The language is a property of the executor, not a separate kind.
+This separates the two fundamental concepts: inline code (a string, executed by an interpreter) vs handler (a file, loaded and invoked). The `language` field on Inline selects the interpreter. Handler is always a module with a known entry point.
 
-This also opens the door to other languages (Python, Deno) without adding new top-level kinds — just new `language` values on the same Inline/External executors.
+**Option 2: Four distinct kinds.** Each combination gets its own `kind`:
+
+```ts
+type Executor =
+  | { kind: "BashInline"; script: string }
+  | { kind: "BashFile"; path: string }
+  | { kind: "TypeScript"; path: string; ... }
+  // inline TS: only in JS engine, see closure problem above
+```
+
+Explicit but doesn't scale — each new language doubles the kinds.
+
+Option 1 is better. It also opens the door to other languages (Python, Deno) without adding new top-level kinds — just new `language` values on Inline. And it correctly models the Handler → TypeScript executor resolution: `fromConfig` resolves `Handler` objects into `{ kind: "Handler", path, ... }` entries.
 
 ### Don't act on this yet
 
@@ -584,11 +592,36 @@ async handle({ value }) {
 }
 ```
 
-The engine sees the Suspend return, writes the task to the state log as suspended, frees the slot. An external signal (`barnum resume <task-id> --value '{approved: true}'`) re-queues the task with the new value. The same handler runs again, this time with the approval in the value.
+The engine sees the Suspend return, writes the task to the state log as suspended, frees the slot. An external signal (`barnum resume <task-id> --value '{approved: true}'`) re-queues the task. On resume, the handler's context includes the resume signal:
 
-Pro: no change to the action AST. The handler has context to decide *when* to suspend. Simpler engine changes — suspended is just another task state alongside pending/running/completed.
+```ts
+interface HandlerContext<C, V> {
+  stepConfig: C;
+  value: V;
+  config: unknown;
+  stepName: string;
+  resumeValue?: unknown;  // present only on resume, contains the value from `barnum resume`
+}
+```
 
-Con: the handler runs twice (once to suspend, once to resume). It must be idempotent or check state to know it's resuming. The "run the same handler again with new data" pattern is ad-hoc.
+The handler checks `resumeValue` to distinguish first run from resume:
+
+```ts
+async handle({ value, resumeValue }) {
+  if (resumeValue) {
+    // Resumed — approval decision is in resumeValue
+    return resumeValue.approved
+      ? [{ kind: "Next", value: result }]
+      : [{ kind: "Rejected", value: {} }];
+  }
+  // First run — need approval
+  return { kind: "Suspend" };
+}
+```
+
+Pro: no change to the action AST. The handler has context to decide *when* to suspend. Simpler engine changes — suspended is just another task state alongside pending/running/completed. The `resumeValue` field makes first-run vs resume unambiguous.
+
+Con: the handler runs twice. The original `value` is preserved across suspend/resume, but the handler must handle both code paths. If the handler has side effects on first run (e.g., sent an email requesting approval), it must not re-trigger them on resume.
 
 **Option 3: Task state, not action primitive.**
 
