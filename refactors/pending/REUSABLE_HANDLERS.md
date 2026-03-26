@@ -50,14 +50,21 @@ These two levels are orthogonal. Adding a new executor (Python, Deno) changes on
 
 ### Executors
 
+Two fundamental kinds: inline code (a string, interpreted) and handlers (a file, loaded and invoked).
+
 ```ts
-// Internal serialized form (what goes to Rust after Handler resolution)
+// Internal serialized form (what goes to Rust)
 type Executor =
-  | { kind: "Bash"; script: string }
-  | { kind: "TypeScript"; path: string; exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
+  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
+  | { kind: "Handler"; language: "bash" | "typescript"; path: string;
+      exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-The TypeScript executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
+The outer discriminant (`kind`) is how code is loaded: inline source string vs external file. The inner property (`language`) selects the interpreter. This is a 2×2: `{Inline, Handler} × {bash, typescript/javascript}`.
+
+The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
+
+Currently only inline Bash and TypeScript handlers are implemented. Inline JavaScript (serialized via `fn.toString()`) and external Bash files are future additions — see "Speculation: the full 2×2" below.
 
 Executors never appear at the action level. They are always wrapped in a workflow primitive (Unit).
 
@@ -88,12 +95,21 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 ### The complete types
 
 ```rust
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub enum Language {
+    Bash,
+    TypeScript,
+    JavaScript,
+}
+
 /// How computation runs. Always wrapped in a workflow primitive.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Executor {
-    Bash(BashAction),
-    TypeScript(TypeScriptAction),
+    /// Inline code, interpreted by the specified language runtime.
+    Inline(InlineAction),    // { language, source }
+    /// External handler module, loaded and invoked.
+    Handler(HandlerAction),  // { language, path, ... }
 }
 
 /// How computations compose. The AST of the workflow language.
@@ -111,13 +127,13 @@ pub enum Action {
 ```ts
 // Internal serialized form (mirrors Rust, produced by fromConfig resolution)
 type Executor =
-  | { kind: "Bash"; script: string }
-  | { kind: "TypeScript"; path: string; exportedAs?: string;
-      stepConfig?: unknown; valueSchema?: unknown }
+  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
+  | { kind: "Handler"; language: "bash" | "typescript"; path: string;
+      exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 
 // User-facing executor input (what users write in configs)
 type ExecutorInput =
-  | { kind: "Bash"; script: string }
+  | { kind: "Inline"; language: "bash"; source: string }
   | Handler<any, any>
 
 type Action =
@@ -145,7 +161,7 @@ import tsCheck from "@barnum/ts-check";
     kind: "Sequence",
     actions: [
       { kind: "Unit", executor: tsCheck },
-      { kind: "Unit", executor: { kind: "Bash", script: `jq 'if .failedFiles | length > 0
+      { kind: "Unit", executor: { kind: "Inline", language: "bash", source: `jq 'if .failedFiles | length > 0
         then [{kind: "Fix", value: .}]
         else [{kind: "Done", value: {}}]
         end'` } },
@@ -155,23 +171,14 @@ import tsCheck from "@barnum/ts-check";
 }
 ```
 
-### Finally / cleanup after subtree
+### Cleanup after subtree (replacing `finally`)
 
-Current `finally` is a special hook. With primitives, it's just a Sequence that waits for subtrees then runs cleanup.
+The `finally` hook is being removed. It's a special-case mechanism that becomes unnecessary once the primitives exist. Sequence + All + Step express cleanup as a composition:
 
 ```ts
 import processHandler from "./process.js";
 import cleanupHandler from "./cleanup.js";
 
-// Current: special hook (finally only supports Bash today)
-{
-  name: "Process",
-  action: { kind: "Unit", executor: processHandler },
-  finally: { kind: "Bash", script: "./cleanup.sh" },
-  next: ["SubtaskA", "SubtaskB"],
-}
-
-// With primitives: Sequence + All + Step
 {
   name: "Process",
   action: {
@@ -189,7 +196,7 @@ import cleanupHandler from "./cleanup.js";
 }
 ```
 
-This is strictly more powerful than `finally`: cleanup gets the subtree results, you can have multiple wait points, and you can compose with Try.
+This is strictly more powerful: cleanup gets the subtree results, you can have multiple wait points, and you can compose with Try.
 
 ### Error recovery
 
@@ -202,7 +209,7 @@ Step fails → catch the error → route to recovery instead of retrying. Inline
     kind: "Sequence",
     actions: [
       { kind: "Try", action: { kind: "Step", step: "RiskyWork" } },
-      { kind: "Unit", executor: { kind: "Bash", script: `jq 'if .kind == "Ok"
+      { kind: "Unit", executor: { kind: "Inline", language: "bash", source: `jq 'if .kind == "Ok"
         then [{kind: "Continue", value: .value}]
         else [{kind: "Recover", value: .error}]
         end'` } },
@@ -288,7 +295,7 @@ Requires:
 - Add `Sequence` variant to `Action`
 - Piping logic in the runner
 - Schema regeneration
-- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Bash", script: "..." } }` and `handler` → `{ kind: "Unit", executor: handler }`
+- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Inline", language: "bash", source: "..." } }` and `handler` → `{ kind: "Unit", executor: handler }`
 
 ### Ship with JS rewrite
 
@@ -298,7 +305,7 @@ Requires:
 - **Try**: `try { await run(action) } catch (e) { ... }`
 - **Step**: `await dispatch(stepName, value)` — dispatch a task to the named step, wait for its entire subtree
 
-Once All + Step ship, `finally` becomes a pattern (Sequence + All + Step) and can be removed as a special-case hook.
+`finally` is removed when All + Step ship — it's just Sequence + All + Step.
 
 ## Changes required for Unit + Sequence
 
@@ -311,8 +318,8 @@ Once All + Step ship, `finally` becomes a pattern (Sequence + All + Step) and ca
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Executor {
-    Bash(BashAction),
-    TypeScript(TypeScriptAction),
+    Inline(InlineAction),    // { language, source }
+    Handler(HandlerAction),  // { language, path, ... }
 }
 
 /// How computations compose.
@@ -341,8 +348,8 @@ pub struct SequenceAction {
 match action:
   Unit { executor } ->
     match executor:
-      Bash(bash)     -> spawn bash, pipe stdin, return stdout
-      TypeScript(ts) -> spawn ts handler, pipe stdin, return stdout
+      Inline(inline) -> spawn interpreter (bash, etc.), pipe stdin, return stdout
+      Handler(handler) -> spawn ts handler, pipe stdin, return stdout
   Sequence(seq) ->
     let data = envelope_stdin
     for action in seq.actions:
@@ -387,7 +394,7 @@ JS rewrite. The Zod tree walking is straightforward, but it needs to happen in J
 
 1. **Nested sequences.** Allow `Sequence` inside `Sequence`? Yes — flatten at runtime. No reason to forbid it, keeps the type system simple.
 
-2. **Sequence + finally.** Does `finally` still make sense on a step with a Sequence action? Yes — `finally` runs after the task and its descendants complete, regardless of internal structure. Once All + Step ship, `finally` is removed entirely.
+2. ~~**Sequence + finally.**~~ Removed. `finally` is being deleted — see "Cleanup after subtree" section.
 
 3. **Sequence + retries.** If any action in a sequence fails, does the entire sequence retry from the beginning? Yes — the sequence is one atomic action from the retry system's perspective.
 
@@ -395,149 +402,20 @@ JS rewrite. The Zod tree walking is straightforward, but it needs to happen in J
 
 5. **Terminal steps.** How should no-op terminal steps work without a Bash `echo '[]'` hack? Options: optional executor on Unit (context-dependent semantics — design smell), Noop executor (explicit), or dedicated Terminal primitive. See "Terminal step" section above.
 
-## Speculation: is Bash special?
+## Speculation: the full 2×2
 
-Every place Bash appears in this doc falls into one of two categories:
+The Executor type has two axes: `{Inline, Handler} × {bash, typescript/javascript}`. Today only two cells are implemented:
 
-1. **Real shell work.** Running `tsc`, `cargo test`, calling external tools. The shell is the right tool — you need process spawning, pipes, exit codes.
-
-2. **Inline data routing.** The `jq 'if .kind == "Ok" then ...'` patterns in Pipeline and Error Recovery. These are pure data transformations: take JSON in, produce JSON out. They use Bash only because it's the inline executor we have, not because they need a shell.
-
-Category 2 is suspicious. The routing logic is JavaScript-shaped (conditional on a field, map to a new structure), but it's written in jq-inside-Bash because that's what's available inline. Every routing snippet spawns a subprocess and shells out to jq for what amounts to an `if` statement.
-
-In a TypeScript config file, the natural inline expression is a function:
-
-```ts
-// Today: Bash + jq subprocess
-{ kind: "Bash", script: `jq 'if .kind == "Ok" then [{kind: "Continue", value: .value}] else [{kind: "Recover", value: .error}] end'` }
-
-// Alternative: inline function (no subprocess)
-(input) => input.kind === "Ok"
-  ? [{ kind: "Continue", value: input.value }]
-  : [{ kind: "Recover", value: input.error }]
-```
-
-The inline function is shorter, type-checkable, and doesn't spawn a process. The question is how it fits into the Executor model.
-
-### What would this look like?
-
-The Executor union currently has Bash and TypeScript. An inline JS executor wouldn't be a third variant — it's fundamentally different. Bash and TypeScript are *serializable* — they go over the wire to Rust as JSON. A JavaScript closure can't be serialized.
-
-This means inline functions only work in a JS-native engine where `fromConfig` can capture the closure directly, not in the current Rust subprocess model. Two possible designs:
-
-**Option A: Inline executor (JS engine only).** Add a `{ kind: "Inline", fn: (input) => output }` executor variant that only exists in the user-facing TypeScript types, never serialized. `fromConfig` captures the closure; the JS engine calls it directly. Rust never sees it.
-
-**Option B: Functions as first-class actions.** Don't wrap it in an executor at all. In the user-facing Action type, allow a bare function wherever an Action is expected:
-
-```ts
-type ActionInput =
-  | { kind: "Unit"; executor: ExecutorInput }
-  | { kind: "Sequence"; actions: ActionInput[] }
-  | ((input: unknown) => unknown)  // inline transform
-  | ...
-```
-
-Option B is more ergonomic but blurs the Executor/Action distinction. Option A keeps the levels separate.
-
-### Implications
-
-If inline JS replaces most Bash routing, then Bash's role shrinks to "run external processes" — which is exactly what TypeScript handlers already do (via `child_process`). The remaining Bash use cases are:
-
-- One-liners that are genuinely simpler as shell (`cat`, `echo`, pipes)
-- Sandboxed environments where the handler doesn't have filesystem access but the Bash executor does
-- Users who prefer shell scripting
-
-None of these are load-bearing for the architecture. Bash isn't a fundamental executor kind — it's a convenience for quick scripts. The two fundamental executor kinds might be "run a handler" (TypeScript/Python/etc.) and "evaluate an expression" (inline transform).
-
-### The closure problem
-
-Inline functions can close over local variables:
-
-```ts
-const threshold = config.threshold; // local binding
-
-BarnumConfig.fromConfig({
-  steps: [{
-    name: "Route",
-    action: {
-      kind: "Sequence",
-      actions: [
-        { kind: "Unit", executor: handler },
-        // This closure captures `threshold` — breaks if serialized
-        (input) => input.score > threshold
-          ? [{ kind: "Pass", value: input }]
-          : [{ kind: "Fail", value: input }],
-      ],
-    },
-  }],
-});
-```
-
-This type-checks. But if the function is serialized (sent to Rust, persisted for resume, executed in a different process), `threshold` doesn't exist in the new context. The function silently breaks.
-
-Bash doesn't have this problem because Bash scripts are strings — they're self-contained by construction. A Bash script can't accidentally capture a JavaScript variable.
-
-For inline JS to be safe, we need a guarantee that the function doesn't close over anything that won't be available at execution time. Options:
-
-1. **Static analysis.** Walk the function's AST and verify all free variables are globals (or module-level imports). This is a build step or a `fromConfig`-time check. Doable but adds complexity — need a JS parser, need to define what counts as "global."
-
-2. **Runtime detection.** Serialize the function to a string (`fn.toString()`), execute it in a clean scope, and check if it throws `ReferenceError`. Fragile — a closure might not reference the captured variable on every code path. Missing coverage means silent bugs.
-
-3. **Restricted syntax.** Inline functions must be arrow expressions with no free variables. The config API wraps them in a helper that validates at construction time: `inline((input) => ...)`. The helper can do `fn.toString()` analysis on the source text. Narrows the problem but doesn't eliminate it — `toString()` doesn't always produce parseable source.
-
-4. **Don't serialize them.** Inline functions only work in the in-process JS engine, never cross a serialization boundary. If the engine is pure JS (no Rust subprocess), the closure executes in the same process that created it — no serialization needed. The closure problem only exists when crossing process boundaries. This is the cleanest answer but limits inline functions to the JS engine.
-
-None of these are perfect. Option 4 is the most honest: inline functions are a JS-engine-only feature. In the Rust subprocess model, use Bash or handlers. When the JS engine ships, closures just work because there's no serialization boundary.
-
-Even Option 4 has a gap: **shadowed globals.** Static analysis can verify that a function's free variables are all globals, but it can't verify that those globals haven't been monkey-patched. If the config file does `const JSON = { parse: () => "lol" }` before defining an inline function that calls `JSON.parse`, the function appears safe (all free variables are "global") but behaves differently depending on execution context. In the same process, the shadow is captured. In a different process (after resume), it's not. This is an edge case, but it means even "closure-free" functions aren't guaranteed safe across process boundaries unless you also verify no globals are shadowed. There's no good answer for this beyond documentation and convention.
-
-The deeper issue: if a suspended task resumes after a restart, and the inline function was a closure, the captured variables are gone. Even Option 4 doesn't help here — the process is different. Durable execution + inline closures is fundamentally at odds. Any function that survives a restart must be self-contained.
-
-### Symmetric inline/external model
-
-Today the two executor kinds are asymmetric:
-
-- **Bash**: always inline (script string in the config). No way to point to an external `.sh` file.
-- **TypeScript**: always external (handler file via `createHandler`). No way to write inline JS in the config.
-
-A consistent model would give both languages both forms:
-
-| | Inline | External |
+| | Inline | Handler |
 |---|---|---|
-| **Bash** | `{ kind: "Bash", script: "jq ..." }` (current) | `{ kind: "Bash", path: "./process.sh" }` |
-| **TypeScript** | inline function (see above) | `createHandler({...})` (current) |
+| **Bash** | `{ kind: "Inline", language: "bash", source: "..." }` | `{ kind: "Handler", language: "bash", path: "./process.sh" }` |
+| **TypeScript / JS** | `{ kind: "Inline", language: "javascript", source: "..." }` | `{ kind: "Handler", language: "typescript", path: "..." }` (via `createHandler`) |
 
-External Bash (`path` field) would run the file as a shell script with the same stdin/stdout conventions as inline Bash. This is useful for non-trivial shell scripts that don't belong inline in a config — linting scripts, build scripts, cleanup jobs.
+**Implemented now**: Inline Bash, TypeScript Handler.
 
-Note: naively adding `{ kind: "Bash"; path: string }` alongside `{ kind: "Bash"; script: string }` breaks the `kind`-discriminated-union convention — both share `kind: "Bash"` and differ only on a second field. This is the same pattern we explicitly avoid elsewhere (see `todos.md` on `MaybeLinked`). Two cleaner options:
+**Future**: Inline JavaScript (serialized via `fn.toString()` — closures that capture locals will break, use a Handler instead). Bash Handler (external `.sh` file — useful for non-trivial shell scripts that don't belong inline in a config).
 
-**Option 1: Inline/External as the top-level discriminant.** The language is a property, not the kind:
-
-```ts
-type Executor =
-  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
-  | { kind: "Handler"; path: string; exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
-```
-
-This separates the two fundamental concepts: inline code (a string, executed by an interpreter) vs handler (a file, loaded and invoked). The `language` field on Inline selects the interpreter. Handler is always a module with a known entry point.
-
-**Option 2: Four distinct kinds.** Each combination gets its own `kind`:
-
-```ts
-type Executor =
-  | { kind: "BashInline"; script: string }
-  | { kind: "BashFile"; path: string }
-  | { kind: "TypeScript"; path: string; ... }
-  // inline TS: only in JS engine, see closure problem above
-```
-
-Explicit but doesn't scale — each new language doubles the kinds.
-
-Option 1 is better. It also opens the door to other languages (Python, Deno) without adding new top-level kinds — just new `language` values on Inline. And it correctly models the Handler → TypeScript executor resolution: `fromConfig` resolves `Handler` objects into `{ kind: "Handler", path, ... }` entries.
-
-### Don't act on this yet
-
-This is speculative. The current Bash executor works, and the Rust subprocess model requires serializable executors. Inline functions only make sense once the JS engine exists, and even then the closure problem constrains where they can be used. The jq routing patterns in this doc are workarounds for the absence of inline JS, not inherent features of the architecture — but the workarounds are at least safe by construction.
+The `kind` (Inline vs Handler) is the structural distinction: string interpreted at runtime vs file loaded and invoked. The `language` selects the interpreter. New languages (Python, etc.) are additional `language` values, not new top-level kinds.
 
 ## Speculation: Suspend
 
