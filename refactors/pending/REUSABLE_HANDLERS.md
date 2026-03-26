@@ -56,11 +56,12 @@ Two fundamental kinds: inline code (a string, interpreted) and handlers (a file,
 // Internal serialized form (what goes to Rust)
 type Executor =
   | { kind: "Inline"; language: "bash" | "javascript"; source: string }
-  | { kind: "Handler"; language: "bash" | "typescript"; path: string;
+  | { kind: "Handler"; language: "bash"; path: string }
+  | { kind: "Handler"; language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-The outer discriminant (`kind`) is how code is loaded: inline source string vs external file. The inner property (`language`) selects the interpreter. This is a 2×2: `{Inline, Handler} × {bash, typescript/javascript}`.
+The outer discriminant (`kind`) is how code is loaded: inline source string vs external file. Inline is symmetric across languages (always `{ language, source }`). Handler is discriminated by `language` because different languages have different shapes — TypeScript handlers carry `stepConfig`, `valueSchema`, `exportedAs`; Bash handlers just have a `path`.
 
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
@@ -95,21 +96,28 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 ### The complete types
 
 ```rust
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub enum Language {
-    Bash,
-    TypeScript,
-    JavaScript,
-}
-
 /// How computation runs. Always wrapped in a workflow primitive.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Executor {
     /// Inline code, interpreted by the specified language runtime.
-    Inline(InlineAction),    // { language, source }
+    /// Symmetric across languages: always { language, source }.
+    Inline(InlineAction),
     /// External handler module, loaded and invoked.
-    Handler(HandlerAction),  // { language, path, ... }
+    /// Nested enum on language — different languages have different shapes.
+    Handler(HandlerAction),
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "language")]
+pub enum HandlerAction {
+    Bash { path: String },
+    TypeScript {
+        path: String,
+        exported_as: Option<String>,
+        step_config: Option<Value>,
+        value_schema: Option<Value>,
+    },
 }
 
 /// How computations compose. The AST of the workflow language.
@@ -128,7 +136,8 @@ pub enum Action {
 // Internal serialized form (mirrors Rust, produced by fromConfig resolution)
 type Executor =
   | { kind: "Inline"; language: "bash" | "javascript"; source: string }
-  | { kind: "Handler"; language: "bash" | "typescript"; path: string;
+  | { kind: "Handler"; language: "bash"; path: string }
+  | { kind: "Handler"; language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 
 // User-facing executor input (what users write in configs)
@@ -318,8 +327,8 @@ Requires:
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Executor {
-    Inline(InlineAction),    // { language, source }
-    Handler(HandlerAction),  // { language, path, ... }
+    Inline(InlineAction),
+    Handler(HandlerAction),  // nested enum on language
 }
 
 /// How computations compose.
@@ -408,8 +417,8 @@ The Executor type has two axes: `{Inline, Handler} × {bash, typescript/javascri
 
 | | Inline | Handler |
 |---|---|---|
-| **Bash** | `{ kind: "Inline", language: "bash", source: "..." }` | `{ kind: "Handler", language: "bash", path: "./process.sh" }` |
-| **TypeScript / JS** | `{ kind: "Inline", language: "javascript", source: "..." }` | `{ kind: "Handler", language: "typescript", path: "..." }` (via `createHandler`) |
+| **Bash** | `{ kind: "Inline", language: "bash", source: "..." }` | `{ kind: "Handler", language: "bash", path: "..." }` |
+| **TypeScript / JS** | `{ kind: "Inline", language: "javascript", source: "..." }` | `{ kind: "Handler", language: "typescript", path: "...", stepConfig, ... }` (via `createHandler`) |
 
 **Implemented now**: Inline Bash, TypeScript Handler.
 
