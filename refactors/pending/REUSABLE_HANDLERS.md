@@ -70,7 +70,7 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 | **Unit** | Execute a single handler. Takes an executor, runs it, returns its output. | The atom of computation. Without it, there's no way to actually do work. |
 | **Sequence** | Run actions in order. Each action's output feeds the next's input. | Sequential composition is irreducible. No other primitive gives "A then B with A's result". |
 | **All** | Run actions in parallel. Wait for all to complete. Collect results. | Parallel composition is irreducible. No combination of sequential primitives produces concurrency. |
-| **Try** | Run an action. On success: `{ ok: true, value }`. On failure: `{ ok: false, error }`. | Error observation is irreducible. Without it, failures are invisible — the only responses are retry or drop. |
+| **Try** | Run an action. On success: `{ kind: "Ok", value }`. On failure: `{ kind: "Err", error }`. | Error observation is irreducible. Without it, failures are invisible — the only responses are retry or drop. |
 | **Step** | Dispatch a task to a named step. Wait for that task and all its recursive descendants. Return the result. | Named invocation is irreducible. Without it, there's no way to reference the step graph from within a composition. |
 
 ### What's NOT a primitive
@@ -199,7 +199,7 @@ Step fails → catch the error → route to recovery instead of retrying.
     kind: "Sequence",
     actions: [
       { kind: "Try", action: { kind: "Step", step: "RiskyWork" } },
-      { kind: "Unit", executor: { kind: "Bash", script: `jq 'if .ok
+      { kind: "Unit", executor: { kind: "Bash", script: `jq 'if .kind == "Ok"
         then [{kind: "Continue", value: .value}]
         else [{kind: "Recover", value: .error}]
         end'` } },
