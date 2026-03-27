@@ -49,7 +49,7 @@ enum FlatEntry<T> {
     /// root entry (ChildRef or inlined).
     Branch { count: Count },
 
-    /// Fixed-point iteration.
+    /// Loop: runs body, inspects result variant to break or continue.
     Loop { body: ActionId },
 
     /// Error materialization.
