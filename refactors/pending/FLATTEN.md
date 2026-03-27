@@ -4,7 +4,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId` is a `u32` newtype (indexes the entries array, which can be large). `HandlerId`, `BranchTableId`, and `ChildrenTableId` are `u16` newtypes (side-table indices — 65k unique handlers/tables is more than sufficient). All via a newtype macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId`, `HandlerId`, `BranchTableId`, and `ChildrenTableId` are all `u16` newtypes. 65k entries is more than sufficient for any realistic workflow. All via a newtype macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
 /// An entry in the flat action table.
@@ -51,7 +51,7 @@ enum FlatEntry<T> {
 }
 ```
 
-Every variant payload is at most `u32`. Step uses `ActionId` (u32); all others use a `u16` newtype. Discriminant + payload fits in 8 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
+Every variant payload is a single `u16`. Discriminant + payload fits in 4 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 4)`.
 
 ```rust
 impl<T> FlatEntry<T> {
@@ -135,7 +135,7 @@ struct Flattener {
 
 impl Flattener {
     fn alloc(&mut self) -> ActionId {
-        let id = ActionId(self.entries.len() as u32);
+        let id = ActionId(self.entries.len() as u16);
         self.entries.push(None);
         id
     }
@@ -523,6 +523,6 @@ fn flatten_deterministic()
 /// Handler interning: identical handlers share the same HandlerId.
 fn flatten_handler_interning()
 
-/// Static assert: FlatEntry<ActionId> fits in 8 bytes.
+/// Static assert: FlatEntry<ActionId> fits in 4 bytes.
 fn flat_entry_size()
 ```
