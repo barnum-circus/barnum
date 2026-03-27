@@ -74,12 +74,12 @@ pub enum Action {
     /// Loop signal: exit the loop with the current value.
     Break,
 
-    /// Error recovery. Runs `action`; on failure, runs `fallback`.
-    Recover {
-        /// Primary action to attempt.
+    /// Error materialization. Executes the action and reifies success/failure
+    /// into `{kind: "Success", value}` or `{kind: "Failure", error, input}`.
+    /// Always infallible from the VM's perspective.
+    Attempt {
+        /// The action to attempt.
         action: Box<Action>,
-        /// Fallback action if primary fails.
-        fallback: Box<Action>,
     },
 
     /// Named step reference for mutual recursion and DAG topologies.
@@ -91,7 +91,8 @@ pub enum Action {
 
 /// Top-level workflow configuration.
 ///
-/// Pairs a workflow entry point with an optional map of named steps.
+/// Pairs a workflow entry point with an optional map of named steps and
+/// a read-only context available to all handlers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
     /// The workflow entry point.
@@ -100,6 +101,15 @@ pub struct Config {
     /// Named steps, referenced by [`Action::Step`] nodes.
     #[serde(default)]
     pub steps: HashMap<String, Action>,
+
+    /// Read-only environment passed to all handlers. Carries API keys,
+    /// workflow IDs, tenant config, etc.
+    #[serde(default = "default_context")]
+    pub context: Value,
+}
+
+const fn default_context() -> Value {
+    Value::Null
 }
 
 #[cfg(test)]
@@ -205,14 +215,13 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_recover() {
+    fn deserialize_attempt() {
         let json = r#"{
-            "kind": "Recover",
-            "action": {"kind": "Call", "module": "./risky.ts", "func": "try_it"},
-            "fallback": {"kind": "Call", "module": "./safe.ts", "func": "default"}
+            "kind": "Attempt",
+            "action": {"kind": "Call", "module": "./risky.ts", "func": "try_it"}
         }"#;
         let action: Action = serde_json::from_str(json).unwrap();
-        assert!(matches!(action, Action::Recover { .. }));
+        assert!(matches!(action, Action::Attempt { .. }));
     }
 
     #[test]

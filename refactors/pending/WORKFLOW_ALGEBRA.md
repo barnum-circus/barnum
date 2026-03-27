@@ -12,7 +12,7 @@ Leaf nodes reference exported functions by module path and name—the same patte
 
 ## Primitives
 
-Ten AST node types. One leaf computation (Call). Three compositional (Sequence, Traverse, All). One routing (Match). One iteration (Loop) with two signal nodes (Continue, Break). One error handling (Recover). One named reference (Step).
+Ten AST node types. One leaf computation (Call). Three compositional (Sequence, Traverse, All). One routing (Match). One iteration (Loop) with two signal nodes (Continue, Break). One error materialization (Attempt). One named reference (Step).
 
 Each primitive is specified in four dimensions: concept, TypeScript builder API, serialized JSON form, and Rust evaluation semantics.
 
@@ -281,45 +281,57 @@ Action::Continue => Ok(json!({ "kind": "Continue", "value": input })),
 Action::Break => Ok(json!({ "kind": "Break", "value": input })),
 ```
 
-### Recover
+### Attempt
 
-Localized error handling. Runs an action; on failure, runs a fallback.
+Error materialization. Executes an action and reifies both success and failure into a discriminated union, making the node infallible from the VM's perspective. The output is always `{kind: "Success", value}` or `{kind: "Failure", error, input}`.
 
-Categorically: catchE from MonadError.
+This separates error handling (catching) from error routing (branching). Attempt catches; Match routes. The previous `Recover` design conflated both by embedding a fallback action, duplicating the branching responsibility that belongs to Match.
+
+Categorically: `attempt` / `materialize` / `either` from effect systems.
 
 **TS builder:**
 
 ```ts
-recover(action, fallback)
+attempt(action)
 ```
 
 **Serialized:**
 
 ```json
-{ "kind": "Recover", "action": mainAction, "fallback": fallbackAction }
+{ "kind": "Attempt", "action": innerAction }
 ```
 
 **Rust evaluation:**
 
 ```rust
-Action::Recover { action, fallback } => {
-    let saved = input.clone();
-    match evaluate(action, input, context, steps).await {
-        Ok(result) => Ok(result),
-        Err(error) => {
-            let fallback_input = json!({
-                "error": error.to_string(),
-                "input": saved,
-            });
-            evaluate(fallback, fallback_input, context, steps).await
-        }
+Action::Attempt { action } => {
+    match evaluate(action, input.clone(), context, steps).await {
+        Ok(result) => Ok(json!({
+            "kind": "Success",
+            "value": result,
+        })),
+        Err(error) => Ok(json!({
+            "kind": "Failure",
+            "error": error.to_string(),
+            "input": input,
+        })),
     }
 }
 ```
 
-The fallback receives both the error and the original input.
+Composed with Match for error routing:
 
-As currently defined, Recover is a blind catch-all. It will swallow infrastructure failures (V8 OOM, module load crash, IPC timeout) alongside domain errors (expected HTTP 404, validation failure). Production implementation must distinguish these — either via an error discriminator on the Recover node or by classifying errors into kinds that Recover can filter on.
+```ts
+sequence(
+  attempt(fetchOrders),
+  match({
+    Success: processOrders,
+    Failure: defaultOrders,
+  }),
+)
+```
+
+The developer must explicitly handle both branches via Match's exhaustive cases. No errors silently vanish into a catch-all.
 
 ### Step
 
@@ -364,7 +376,7 @@ type Action =
   | { kind: "Loop"; body: Action }
   | { kind: "Continue" }
   | { kind: "Break" }
-  | { kind: "Recover"; action: Action; fallback: Action }
+  | { kind: "Attempt"; action: Action }
   | { kind: "Step"; step: string }
 ```
 
@@ -389,9 +401,8 @@ pub enum Action {
     Loop { body: Box<Action> },
     Continue,
     Break,
-    Recover {
+    Attempt {
         action: Box<Action>,
-        fallback: Box<Action>,
     },
     Step { step: String },
 }
@@ -552,9 +563,9 @@ Data flow through the loop:
    - Clean: `done()` wraps as `{kind: "Break", value: {kind: "Clean"}}`.
 4. Loop checks `kind`. Continue: feed `value` back as next iteration's input. Break: return `value`.
 
-### 4. Parallel branches with error recovery
+### 4. Parallel branches with error materialization
 
-Fetch user data and order data in parallel. If orders fetch fails, use a default.
+Fetch user data and order data in parallel. If orders fetch fails, route to a default.
 
 ```ts
 import fetchUser from "./handlers/fetch-user.js";
@@ -566,14 +577,20 @@ BarnumConfig.fromConfig({
   workflow: sequence(
     all(
       fetchUser,
-      recover(fetchOrders, defaultOrders),
+      sequence(
+        attempt(fetchOrders),
+        match({
+          Success: extractValue,
+          Failure: defaultOrders,
+        }),
+      ),
     ),
     generateReport,
   ),
 });
 ```
 
-`all` passes the same input to both branches. `generateReport` receives `[UserData, OrderData]`.
+`all` passes the same input to both branches. `attempt` wraps the result of `fetchOrders` as `{kind: "Success", value}` or `{kind: "Failure", error, input}`. Match routes explicitly. `generateReport` receives `[UserData, OrderData]`.
 
 ### 5. Recursive review loop (named steps)
 
@@ -659,6 +676,6 @@ BarnumConfig.fromConfig({
 
 5. **Rust-native builtins.** A `Builtin` AST node for synchronous, FFI-free JSON transformations (`Flatten`, `ExtractField`, `Merge`, `IsNotEmpty`). These execute entirely in the Rust VM, bypassing Node IPC. Eliminates the need for trivial adapter handlers that exist only to reshape data. Also resolves FlatMap (item 3) and predicate convenience (item 4) without FFI overhead. Deferred — V1 is TypeScript-only.
 
-6. **Recover error discrimination.** Recover currently catches all errors indiscriminately. Should accept an error filter — either a list of catchable error kinds or a predicate — so infrastructure failures (V8 OOM, IPC timeout) bypass recovery and propagate to a supervisor.
+6. **Attempt error classification.** Attempt materializes all errors into `{kind: "Failure"}`. Should the `error` field be a structured object (with `code`, `message`, `category`) rather than a flat string, so Match branches can discriminate infrastructure failures from domain errors?
 
-7. **Handler idempotency.** Loop, Recover, and Step enable re-execution of Call nodes. The engine provides deterministic control flow but cannot enforce pure functions. Handlers that mutate external state (database writes, file deletes) must be idempotent at the domain level, or the engine must provide at-most-once delivery guarantees via checkpointing.
+7. **Handler idempotency.** Loop, Attempt, and Step enable re-execution of Call nodes. The engine provides deterministic control flow but cannot enforce pure functions. Handlers that mutate external state (database writes, file deletes) must be idempotent at the domain level, or the engine must provide at-most-once delivery guarantees via checkpointing.
