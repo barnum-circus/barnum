@@ -1,0 +1,11 @@
+[package]
+name = "u32_newtype"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+description = "Macro for defining u32 newtype wrappers"
+
+# The macro expands into code in the caller's crate, so lint
+# settings here don't affect macro-generated code.
+[lints]
+workspace = true

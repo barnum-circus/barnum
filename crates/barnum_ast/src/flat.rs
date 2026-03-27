@@ -11,28 +11,11 @@
 use std::collections::HashMap;
 use std::ops::Add;
 
+use u32_newtype::u32_newtype;
+
 use crate::{
     Action, BranchAction, Config, HandlerKind, InvokeAction, KindDiscriminator, StepName, StepRef,
 };
-
-// ---------------------------------------------------------------------------
-// u32 newtypes
-// ---------------------------------------------------------------------------
-
-/// Define a `u32` newtype with standard derives.
-macro_rules! u32_newtype {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub struct $name(pub u32);
-
-        impl std::fmt::Display for $name {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.0)
-            }
-        }
-    };
-}
 
 u32_newtype!(
     /// Index into [`FlatConfig::entries`]. Guaranteed to point to an action entry
