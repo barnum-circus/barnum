@@ -15,6 +15,14 @@ Operations:
 
 Without Builtin, loop signals and structural transforms must be implemented in handler code (TypeScript).
 
+## Handler Validator Ergonomics
+
+Reconsider the `createHandler` validator design:
+
+- **Optional `stepValueValidator`**: When omitted, the value type could default to `never` or `{}`, signaling "this handler doesn't consume pipeline input." Currently required.
+- **`stepConfigValidator` as a type parameter instead of a runtime validator**: Instead of `stepConfigValidator?: z.ZodType<TStepConfig>`, allow passing `TStepConfig` as a generic type parameter directly (e.g., `createHandler<{ timeout: number }>({...})`). The runtime validator is needed for serialization, but the type parameter approach is more ergonomic for handlers where config shape is known statically.
+- General question: should validators be the only way to specify types, or should explicit type parameters remain an option?
+
 ## Context
 
 Read-only environment (`context: Value`) on `Config`, passed to all handlers. Carries API keys, workflow IDs, tenant config, etc.
