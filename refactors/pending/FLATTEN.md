@@ -4,7 +4,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId`, `HandlerId`, `BranchTableId`, and `ChildrenTableId` are all `u16` newtypes. 65k entries is more than sufficient for any realistic workflow. All via a newtype macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId`, `HandlerId`, `BranchTableId`, and `ChildrenTableId` are all `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
 /// An entry in the flat action table.
@@ -51,7 +51,7 @@ enum FlatEntry<T> {
 }
 ```
 
-Every variant payload is a single `u16`. Discriminant + payload fits in 4 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 4)`.
+Every variant has at most one `u32` field. Discriminant + payload fits in 8 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
 
 ```rust
 impl<T> FlatEntry<T> {
@@ -135,14 +135,14 @@ struct Flattener {
 
 impl Flattener {
     fn alloc(&mut self) -> ActionId {
-        let id = ActionId(self.entries.len() as u16);
+        let id = ActionId(self.entries.len() as u32);
         self.entries.push(None);
         id
     }
 
     fn intern_handler(&mut self, handler: HandlerKind) -> HandlerId {
         let (index, _) = self.handlers.insert_full(handler);
-        HandlerId(index as u16)
+        HandlerId(index as u32)
     }
 
     fn flatten_node(&mut self, node: &Action) -> ActionId {
@@ -162,7 +162,7 @@ impl Flattener {
                     child_roots.push(self.flatten_node(child));
                 }
                 let table_id =
-                    ChildrenTableId(self.children_tables.len() as u16);
+                    ChildrenTableId(self.children_tables.len() as u32);
                 self.children_tables.push(child_roots);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Pipe { children: table_id });
@@ -176,7 +176,7 @@ impl Flattener {
                     child_roots.push(self.flatten_node(child));
                 }
                 let table_id =
-                    ChildrenTableId(self.children_tables.len() as u16);
+                    ChildrenTableId(self.children_tables.len() as u32);
                 self.children_tables.push(child_roots);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Parallel { children: table_id });
@@ -200,7 +200,7 @@ impl Flattener {
                     table.insert(key.clone(), case_root);
                 }
                 let table_id =
-                    BranchTableId(self.branch_tables.len() as u16);
+                    BranchTableId(self.branch_tables.len() as u32);
                 self.branch_tables.push(table);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Branch { table: table_id });
@@ -523,6 +523,6 @@ fn flatten_deterministic()
 /// Handler interning: identical handlers share the same HandlerId.
 fn flatten_handler_interning()
 
-/// Static assert: FlatEntry<ActionId> fits in 4 bytes.
+/// Static assert: FlatEntry<ActionId> fits in 8 bytes.
 fn flat_entry_size()
 ```
