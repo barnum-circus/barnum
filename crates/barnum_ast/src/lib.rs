@@ -31,8 +31,8 @@ string_key_newtype!(
     FuncName
 );
 string_key_newtype!(
-    /// Discriminant value for a [`BranchAction`] case.
-    BranchCase
+    /// Value of the `kind` field used to discriminate tagged union variants.
+    KindDiscriminator
 );
 
 // ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ pub struct ParallelAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BranchAction {
     /// Map from variant `kind` values to actions.
-    pub cases: HashMap<BranchCase, Action>,
+    pub cases: HashMap<KindDiscriminator, Action>,
 }
 
 /// Monadic fixed-point iteration.
