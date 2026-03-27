@@ -7,7 +7,8 @@
     "barnum": "cli.cjs"
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
   },
   "author": "Robert Balicki",
   "license": "MIT",
