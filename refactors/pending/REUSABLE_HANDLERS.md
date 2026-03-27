@@ -46,7 +46,7 @@ The AST has two separate levels:
 
 **Workflow primitives** define *how computations compose*. A workflow primitive is a structural operator: run things in sequence, in parallel, with error boundaries, etc. Workflow primitives are the control flow of the language.
 
-These two levels are orthogonal. Adding a new executor (Python, Deno) changes only the Executor union. Adding a new workflow primitive (All, Try) changes only the Action union.
+These two levels are orthogonal.
 
 ### Executors
 
@@ -68,8 +68,6 @@ type HandlerExecutor =
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-Three unions, each with two variants. `stepConfig` only exists on `HandlerExecutor::TypeScript`.
-
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
 Currently only inline Bash and TypeScript handlers are implemented. Inline TypeScript (serialized via `fn.toString()`) and Bash handlers (external `.sh` files) are future additions — see "Speculation: the full 2×2" below.
@@ -78,15 +76,13 @@ Executors never appear at the action level. They are always wrapped in a workflo
 
 ### Workflow primitives
 
-Each primitive is irreducible — it cannot be expressed as a combination of other primitives.
-
-| Primitive | Semantics | Why irreducible |
-|-----------|-----------|-----------------|
-| **Unit** | Execute a single handler. Takes an executor, runs it, returns its output. | The atom of computation. Without it, there's no way to actually do work. |
-| **Sequence** | Run actions in order. Each action's output feeds the next's input. | Sequential composition is irreducible. No other primitive gives "A then B with A's result". |
-| **All** | Run actions in parallel. Wait for all to complete. Collect results. | Parallel composition is irreducible. No combination of sequential primitives produces concurrency. |
-| **Try** | Run an action. On success: `{ kind: "Ok", value }`. On failure: `{ kind: "Err", error }`. | Error observation is irreducible. Without it, failures are invisible — the only responses are retry or drop. |
-| **Step** | Dispatch a task to a named step. Wait for that task and all its recursive descendants. Return the result. | Named invocation is irreducible. Without it, there's no way to reference the step graph from within a composition. |
+| Primitive | Semantics |
+|-----------|-----------|
+| **Unit** | Execute a single executor. The leaf — actually does work. |
+| **Sequence** | Function composition. `Sequence([A, B, C])` = `C(B(A(input)))`. Syntactic sugar for chained maps — expressible via step routing, but avoids polluting the graph with intermediate steps. |
+| **All** | Run actions in parallel. Wait for all to complete. Collect results. |
+| **Try** | Run an action. On success: `{ kind: "Ok", value }`. On failure: `{ kind: "Err", error }`. |
+| **Step** | Dispatch a task to a named step. Wait for that task and all its recursive descendants. Return the result. |
 
 ### What's NOT a primitive
 
@@ -223,7 +219,7 @@ This is strictly more powerful: cleanup gets the subtree results, you can have m
 
 ### Error recovery
 
-Step fails → catch the error → route to recovery instead of retrying. Inline Bash is appropriate here — the routing logic is pure data transformation that doesn't warrant a separate handler file.
+Step fails → catch the error → route to recovery instead of retrying.
 
 ```ts
 {
