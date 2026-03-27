@@ -1,22 +1,40 @@
 # Workflow Algebra
 
-## Motivation
+## Mental Model
 
-Handlers today return `[{kind: "StepName", value: ...}]`, coupling them to the graph topology of the calling workflow. A reusable `ts-check` handler can't be shared between workflows that route differently.
+TypeScript is the compiler. Rust is the VM.
 
-Handlers should return plain values. Routing, composition, and control flow are expressed as an AST. The combinators are AST constructors (builder pattern) that produce a JSON data structure, not closures. JavaScript closures cannot cross the serialization boundary to Rust. The output of a workflow declaration is a JSON object.
+TypeScript combinators are AST constructors (builder pattern) that produce a JSON data structure—a program in a small DSL. JavaScript closures cannot cross the serialization boundary to Rust, so the combinators build data, not functions. The output of a workflow declaration is a JSON object.
 
-Leaf nodes reference exported functions by module path and name, the same pattern used by Temporal and Cadence for distributed execution. `fromConfig` resolves imported Handler objects into these references. See `refactors/past/OPAQUE_HANDLER.md`.
+Rust reads this AST and interprets it: dispatching to handlers, threading data between nodes, managing concurrency, and enforcing the loop protocol.
+
+Leaf nodes reference exported functions by module path and name—the same pattern used by Temporal and Cadence for distributed execution. `fromConfig` resolves imported Handler objects into these references. See `refactors/past/OPAQUE_HANDLER.md`.
 
 ## Primitives
 
-Twelve AST node types. Six are compositional (Sequence, Map, FlatMap, All, Match, Loop). Two are leaf computations (Call, Inline). Two are loop signals (Recur, Done). One handles errors (Recover). One provides named references (Step).
+Ten AST node types. One leaf computation (Call). Three compositional (Sequence, Traverse, All). One routing (Match). One iteration (Loop) with two signal nodes (Continue, Break). One error handling (Recover). One named reference (Step).
 
-Each primitive is specified in three dimensions: the TypeScript builder API, the serialized JSON form, and the Rust evaluation semantics.
+Each primitive is specified in four dimensions: concept, TypeScript builder API, serialized JSON form, and Rust evaluation semantics.
+
+The Rust evaluator has this shape:
+
+```rust
+async fn evaluate(
+    action: &Action,
+    input: Value,
+    steps: &HashMap<String, Action>,
+) -> Result<Value> {
+    match action {
+        // ... one arm per primitive
+    }
+}
+```
 
 ### Call
 
-Reference to an exported function in a module. The runtime loads the module and invokes the named export.
+Leaf node. The only primitive that executes external code. References an exported function in a module by path and name. The runtime loads the module and invokes the named export.
+
+Categorically: a morphism in the Kleisli category (A → M B).
 
 **TS builder:**
 
@@ -38,33 +56,17 @@ Optional fields `stepConfig` and `valueSchema` for TypeScript handlers (see OPAQ
 
 **Rust evaluation:**
 
-Load module, invoke `func` with input. For `.ts` modules: V8 isolate or bridge script. For `.sh` modules: spawn bash. Return stdout as JSON.
-
-### Inline
-
-Inline source code. A string, not a closure. Serializes trivially.
-
-**TS builder:**
-
-```ts
-bash(`jq '.errors'`)
-ts(`(input) => input.errors`)
+```rust
+Action::Call { module, func, .. } => {
+    node_runner::execute(module, func, input).await
+}
 ```
-
-**Serialized:**
-
-```json
-{ "kind": "Inline", "language": "Bash", "source": "jq '.errors'" }
-{ "kind": "Inline", "language": "TypeScript", "source": "(input) => input.errors" }
-```
-
-**Rust evaluation:**
-
-Bash: `bash -c <source>` with input on stdin, capture stdout. TypeScript: evaluate source in V8 isolate with input as argument.
 
 ### Sequence
 
-Sequential composition (Kleisli composition). Each action receives the previous action's output.
+Sequential composition. Each action receives the previous action's output.
+
+Categorically: Kleisli composition (>=>).
 
 **TS builder:**
 
@@ -80,64 +82,55 @@ sequence(a, b, c)
 
 **Rust evaluation:**
 
-```
-let data = input
-for action in actions:
-  data = evaluate(action, data)
-return data
+```rust
+Action::Sequence { actions } => {
+    let mut state = input;
+    for action in actions {
+        state = evaluate(action, state, steps).await?;
+    }
+    Ok(state)
+}
 ```
 
 Failure at any point aborts the sequence.
 
-### Map
+### Traverse
 
-Parallel map over an array. Applies an action to each element concurrently, preserving order. Categorically: traverse over List with the Promise applicative.
+Parallel map over an array. Applies an action to each element concurrently, preserving order. Input must be a JSON array.
+
+Categorically: traverse over List with the Promise applicative. `List(A)` → (via `A → M(B)`) → `M(List(B))`.
 
 **TS builder:**
 
 ```ts
-map(action)
+traverse(action)
 ```
 
 **Serialized:**
 
 ```json
-{ "kind": "Map", "action": action }
+{ "kind": "Traverse", "action": action }
 ```
 
 **Rust evaluation:**
 
+```rust
+Action::Traverse { action } => {
+    let items = input.as_array()
+        .expect("Traverse input must be an array");
+    let futures: Vec<_> = items.iter()
+        .map(|item| evaluate(action, item.clone(), steps))
+        .collect();
+    let results = futures::future::try_join_all(futures).await?;
+    Ok(Value::Array(results))
+}
 ```
-let items = parse_array(input)
-let results = parallel_map(items, |item| evaluate(action, item))
-return json_array(results)
-```
-
-Input must be a JSON array.
-
-### FlatMap
-
-Like Map, but the action returns an array per element. Results are concatenated.
-
-**TS builder:**
-
-```ts
-flatMap(action)
-```
-
-**Serialized:**
-
-```json
-{ "kind": "FlatMap", "action": action }
-```
-
-**Rust evaluation:**
-
-Same as Map, then flatten the resulting array of arrays into a single array.
 
 ### All
 
-Passes the same input to multiple independent actions in parallel. Collects results as a tuple (JSON array). Categorically: applicative zip / arrow fanout.
+Passes the same input to multiple independent actions in parallel. Collects results as a JSON array.
+
+Categorically: applicative zip / arrow fanout.
 
 **TS builder:**
 
@@ -153,16 +146,29 @@ all(a, b, c)
 
 **Rust evaluation:**
 
-```
-let results = parallel_map(actions, |action| evaluate(action, input.clone()))
-return json_array(results)
+```rust
+Action::All { actions } => {
+    let futures: Vec<_> = actions.iter()
+        .map(|action| evaluate(action, input.clone(), steps))
+        .collect();
+    let results = futures::future::try_join_all(futures).await?;
+    Ok(Value::Array(results))
+}
 ```
 
-Each action receives the same input.
+Each action receives the same input. Output is a JSON array of results in the same order as the actions.
 
 ### Match
 
-N-ary coproduct eliminator. Routes execution based on the `kind` field of a discriminated union. The cases map provides a handler for each variant. TypeScript's type system enforces exhaustive handling via distributive conditional types over the union's `kind` literals.
+N-ary coproduct eliminator. Routes execution based on the `kind` field of a discriminated union. The `cases` map provides an action for each variant.
+
+TypeScript enforces exhaustive handling via distributive conditional types over the union's `kind` literals:
+
+```ts
+type MatchCases<U extends { kind: string }, Out> = {
+  [K in U['kind']]: Action  // must cover every variant
+};
+```
 
 **TS builder:**
 
@@ -173,39 +179,38 @@ match({
 })
 ```
 
-The type signature enforces exhaustiveness:
-
-```ts
-type MatchCases<U extends { kind: string }, Out> = {
-  [K in U['kind']]: Action  // must cover every variant
-};
-```
-
 **Serialized:**
 
 ```json
 {
   "kind": "Match",
   "cases": {
-    "HasErrors": { ... action ... },
-    "Clean": { ... action ... }
+    "HasErrors": { "kind": "Call", "module": "...", "func": "..." },
+    "Clean": { "kind": "Call", "module": "...", "func": "..." }
   }
 }
 ```
 
 **Rust evaluation:**
 
-```
-let variant_kind = input["kind"].as_str()
-let handler = cases[variant_kind]
-return evaluate(handler, input)
+```rust
+Action::Match { cases } => {
+    let variant_kind = input.get("kind")
+        .and_then(|v| v.as_str())
+        .expect("Match input must have a 'kind' field");
+    let action = cases.get(variant_kind)
+        .unwrap_or_else(|| panic!("No match case for kind '{}'", variant_kind));
+    evaluate(action, input, steps).await
+}
 ```
 
-The handler receives the full variant object (including its `kind` field). If the `kind` value has no matching case, evaluation fails.
+The action receives the full variant object (including its `kind` field). If the `kind` value has no matching case, evaluation fails.
 
 ### Loop
 
-Repeatedly executes a body action. The body must produce output with `kind: "Recur"` (continue with new state) or `kind: "Done"` (exit with result). Both carry a `value` field containing the payload. Categorically: tailRecM (monadic fixed-point).
+Monadic fixed-point. Repeatedly executes a body action until it signals completion. The body must produce output with `kind: "Continue"` (iterate with new state) or `kind: "Break"` (exit with result). Both carry a `value` field. This mirrors Rust's `ControlFlow` enum.
+
+Categorically: tailRecM from MonadRec. Stack-safe monadic iteration.
 
 **TS builder:**
 
@@ -221,48 +226,60 @@ loop(body)
 
 **Rust evaluation:**
 
+```rust
+Action::Loop { body } => {
+    let mut state = input;
+    loop {
+        let result = evaluate(body, state, steps).await?;
+        let signal = result.get("kind")
+            .and_then(|v| v.as_str())
+            .expect("Loop body must produce {kind: \"Continue\"|\"Break\", value}");
+        let value = result.get("value")
+            .expect("Loop body must produce {kind, value}")
+            .clone();
+        match signal {
+            "Break" => return Ok(value),
+            "Continue" => state = value,
+            other => panic!("Loop body produced unknown kind '{}'", other),
+        }
+    }
+}
 ```
-let state = input
-loop:
-  let result = evaluate(body, state)
-  match result["kind"]:
-    "Recur" => state = result["value"]; continue
-    "Done"  => return result["value"]
-```
 
-The loop's initial state is its pipeline input. `Recur`'s value becomes the next iteration's input. `Done`'s value is the loop's output.
+The loop's initial state is its pipeline input. Continue's value becomes the next iteration's input. Break's value is the loop's output.
 
-### Recur / Done
+#### Continue / Break
 
-Loop signal constructors. Wrap their input in the tagged format that Loop expects.
+Loop signal constructors. Wrap their input in the format that Loop expects. These exist so that handlers don't need to know the loop protocol—the AST handles the wrapping.
+
+`continue` and `break` are reserved words in TypeScript, so the builder functions are `recur()` and `done()`.
 
 **TS builder:**
 
 ```ts
-recur()   // wraps input as { kind: "Recur", value: input }
-done()    // wraps input as { kind: "Done", value: input }
+recur()   // wraps input as { kind: "Continue", value: input }
+done()    // wraps input as { kind: "Break", value: input }
 ```
 
 **Serialized:**
 
 ```json
-{ "kind": "Recur" }
-{ "kind": "Done" }
+{ "kind": "Continue" }
+{ "kind": "Break" }
 ```
 
 **Rust evaluation:**
 
-```
-// Recur
-return { "kind": "Recur", "value": input }
-
-// Done
-return { "kind": "Done", "value": input }
+```rust
+Action::Continue => Ok(json!({ "kind": "Continue", "value": input })),
+Action::Break => Ok(json!({ "kind": "Break", "value": input })),
 ```
 
 ### Recover
 
-Localized error handling. Runs an action; on failure, runs a fallback. Categorically: catchE from MonadError.
+Localized error handling. Runs an action; on failure, runs a fallback.
+
+Categorically: catchE from MonadError.
 
 **TS builder:**
 
@@ -278,18 +295,29 @@ recover(action, fallback)
 
 **Rust evaluation:**
 
-```
-let saved = input.clone()
-match evaluate(action, input):
-  Ok(result) => return result
-  Err(error) => return evaluate(fallback, { "error": error, "input": saved })
+```rust
+Action::Recover { action, fallback } => {
+    let saved = input.clone();
+    match evaluate(action, input, steps).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let fallback_input = json!({
+                "error": error.to_string(),
+                "input": saved,
+            });
+            evaluate(fallback, fallback_input, steps).await
+        }
+    }
+}
 ```
 
 The fallback receives both the error and the original input.
 
 ### Step
 
-Invokes a named step. Dispatches the current value to the step's action, waits for it and all recursive descendants. Returns the result. Named steps are Kleisli arrows with names, callable from multiple points in the AST.
+Invokes a named step. Dispatches the current value to the step's action, evaluates it, and returns the result. Named steps are Kleisli arrows with names, callable from multiple points in the AST.
+
+Needed for mutual recursion and DAG topologies where tree-shaped composition breaks down.
 
 **TS builder:**
 
@@ -305,12 +333,15 @@ step("TypeCheck")
 
 **Rust evaluation:**
 
-```
-let step_action = steps[step_name]
-return evaluate(step_action, input)
+```rust
+Action::Step { step: step_name } => {
+    let action = steps.get(step_name)
+        .unwrap_or_else(|| panic!("Undefined step '{}'", step_name));
+    evaluate(action, input, steps).await
+}
 ```
 
-## Complete types
+## Complete Types
 
 ### TypeScript (serialized form)
 
@@ -318,15 +349,13 @@ return evaluate(step_action, input)
 type Action =
   | { kind: "Call"; module: string; func: string;
       stepConfig?: unknown; valueSchema?: unknown }
-  | { kind: "Inline"; language: "Bash" | "TypeScript"; source: string }
   | { kind: "Sequence"; actions: Action[] }
-  | { kind: "Map"; action: Action }
-  | { kind: "FlatMap"; action: Action }
+  | { kind: "Traverse"; action: Action }
   | { kind: "All"; actions: Action[] }
   | { kind: "Match"; cases: Record<string, Action> }
   | { kind: "Loop"; body: Action }
-  | { kind: "Recur" }
-  | { kind: "Done" }
+  | { kind: "Continue" }
+  | { kind: "Break" }
   | { kind: "Recover"; action: Action; fallback: Action }
   | { kind: "Step"; step: string }
 ```
@@ -340,32 +369,23 @@ pub enum Action {
     Call {
         module: String,
         func: String,
+        #[serde(rename = "stepConfig")]
         step_config: Option<Value>,
+        #[serde(rename = "valueSchema")]
         value_schema: Option<Value>,
     },
-    Inline {
-        language: Language,
-        source: String,
-    },
     Sequence { actions: Vec<Action> },
-    Map { action: Box<Action> },
-    FlatMap { action: Box<Action> },
+    Traverse { action: Box<Action> },
     All { actions: Vec<Action> },
     Match { cases: HashMap<String, Action> },
     Loop { body: Box<Action> },
-    Recur,
-    Done,
+    Continue,
+    Break,
     Recover {
         action: Box<Action>,
         fallback: Box<Action>,
     },
     Step { step: String },
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub enum Language {
-    Bash,
-    TypeScript,
 }
 ```
 
@@ -373,8 +393,8 @@ pub enum Language {
 
 ```ts
 import {
-  BarnumConfig, sequence, map, flatMap, loop, match, all,
-  recover, step, recur, done, bash, call,
+  BarnumConfig, sequence, traverse, all, loop, match,
+  recover, step, recur, done, call,
 } from "@barnum/workflow";
 
 // Fully anonymous workflow
@@ -382,7 +402,7 @@ BarnumConfig.fromConfig({
   workflow: sequence(
     call("./handlers.ts", "setup"),
     call("./handlers.ts", "listFiles"),
-    map(call("./handlers.ts", "migrate")),
+    traverse(call("./handlers.ts", "migrate")),
   ),
 });
 
@@ -409,69 +429,58 @@ The `next` array on steps is eliminated. Routing is expressed in the AST. The se
 
 ## Examples
 
-### 1. Linear pipeline (fully anonymous)
+### 1. Linear pipeline
 
 Fetch, transform, report.
 
 ```ts
-import { sequence, bash } from "@barnum/workflow";
-import fetchHandler from "./handlers/fetch.js";
-import reportHandler from "./handlers/report.js";
+import fetchData from "./handlers/fetch-data.js";
+import transform from "./handlers/transform.js";
+import report from "./handlers/report.js";
 
 BarnumConfig.fromConfig({
-  workflow: sequence(
-    fetchHandler,
-    bash(`jq '{summary: .data | length, items: .data}'`),
-    reportHandler,
-  ),
+  workflow: sequence(fetchData, transform, report),
 });
 ```
 
-### 2. Fan-out with map (fully anonymous)
+### 2. Fan-out with traverse
 
 List files, process each in parallel.
 
 ```ts
-import { sequence, map } from "@barnum/workflow";
-import listFilesHandler from "./handlers/list-files.js";
-import migrateHandler from "./handlers/migrate.js";
+import listFiles from "./handlers/list-files.js";
+import migrate from "./handlers/migrate.js";
 
 BarnumConfig.fromConfig({
-  workflow: sequence(
-    listFilesHandler,
-    map(migrateHandler),
-  ),
+  workflow: sequence(listFiles, traverse(migrate)),
 });
 ```
 
-### 3. Type-check loop (fully anonymous)
+### 3. Type-check loop
 
-Setup, list files, migrate each, then type-check/fix until clean. This is the motivating example from the design discussion.
+Setup, list files, migrate each, then type-check/fix until clean.
 
-`typeCheckHandler` returns `TypeError[]`. The classification step projects this into a discriminated union for the match.
+`typeCheck` returns `TypeError[]`. `classifyErrors` projects this into a discriminated union. `extractErrors` extracts the `.errors` field from the `HasErrors` variant.
 
 ```ts
-import { sequence, map, loop, match, recur, done, bash } from "@barnum/workflow";
-import setupHandler from "./handlers/setup.js";
-import listFilesHandler from "./handlers/list-files.js";
-import migrateHandler from "./handlers/migrate.js";
-import typeCheckHandler from "./handlers/type-check.js";
-import fixHandler from "./handlers/fix.js";
-
-const classifyErrors = bash(
-  `jq 'if length > 0 then {kind: "HasErrors", errors: .} else {kind: "Clean"} end'`
-);
+import setup from "./handlers/setup.js";
+import listFiles from "./handlers/list-files.js";
+import migrate from "./handlers/migrate.js";
+import typeCheck from "./handlers/type-check.js";
+import classifyErrors from "./handlers/classify-errors.js";
+import extractErrors from "./handlers/extract-errors.js";
+import fix from "./handlers/fix.js";
 
 BarnumConfig.fromConfig({
   workflow: sequence(
-    setupHandler,
-    listFilesHandler,
-    map(migrateHandler),
+    setup,
+    listFiles,
+    traverse(migrate),
     loop(sequence(
-      typeCheckHandler,
+      typeCheck,
       classifyErrors,
       match({
-        HasErrors: sequence(bash(`jq '.errors'`), map(fixHandler), recur()),
+        HasErrors: sequence(extractErrors, traverse(fix), recur()),
         Clean: done(),
       }),
     )),
@@ -481,28 +490,28 @@ BarnumConfig.fromConfig({
 
 Data flow through the loop:
 
-1. `typeCheckHandler` receives `MigrateResult[]` (ignores), returns `TypeError[]`.
-2. `classifyErrors` wraps as `{kind: "HasErrors", errors: [...]}` or `{kind: "Clean"}`.
+1. `typeCheck` receives prior output, returns `TypeError[]`.
+2. `classifyErrors` receives `TypeError[]`, returns `{kind: "HasErrors", errors: [...]}` or `{kind: "Clean"}`.
 3. Match routes on `kind`:
-   - HasErrors: extract `.errors` array, map `fixHandler` over each, `recur()` wraps result as `{kind: "Recur", value: FixResult[]}`.
-   - Clean: `done()` wraps as `{kind: "Done", value: {kind: "Clean"}}`.
-4. Loop checks output `kind`. Recur: feed `value` back as next iteration's input. Done: return `value`.
+   - HasErrors: `extractErrors` returns `TypeError[]`. `traverse(fix)` maps `fix` over each. `recur()` wraps result as `{kind: "Continue", value: FixResult[]}`.
+   - Clean: `done()` wraps as `{kind: "Break", value: {kind: "Clean"}}`.
+4. Loop checks `kind`. Continue: feed `value` back as next iteration's input. Break: return `value`.
 
-### 4. Parallel branches with error recovery (fully anonymous)
+### 4. Parallel branches with error recovery
 
 Fetch user data and order data in parallel. If orders fetch fails, use a default.
 
 ```ts
-import { sequence, all, recover, bash } from "@barnum/workflow";
 import fetchUser from "./handlers/fetch-user.js";
 import fetchOrders from "./handlers/fetch-orders.js";
+import defaultOrders from "./handlers/default-orders.js";
 import generateReport from "./handlers/generate-report.js";
 
 BarnumConfig.fromConfig({
   workflow: sequence(
     all(
       fetchUser,
-      recover(fetchOrders, bash(`jq '{orders: [], error: .error}'`)),
+      recover(fetchOrders, defaultOrders),
     ),
     generateReport,
   ),
@@ -516,25 +525,22 @@ BarnumConfig.fromConfig({
 Submit, review, publish or revise. The review step calls itself on rejection.
 
 ```ts
-import { sequence, step, match, bash } from "@barnum/workflow";
-import submitHandler from "./handlers/submit.js";
-import reviewHandler from "./handlers/review.js";
-import reviseHandler from "./handlers/revise.js";
-import publishHandler from "./handlers/publish.js";
-
-const classifyReview = bash(
-  `jq 'if .approved then {kind: "Approved"} else {kind: "Rejected", feedback: .feedback} end'`
-);
+import submit from "./handlers/submit.js";
+import review from "./handlers/review.js";
+import classifyReview from "./handlers/classify-review.js";
+import extractFeedback from "./handlers/extract-feedback.js";
+import revise from "./handlers/revise.js";
+import publish from "./handlers/publish.js";
 
 BarnumConfig.fromConfig({
-  workflow: sequence(submitHandler, step("Review")),
+  workflow: sequence(submit, step("Review")),
   steps: {
     Review: sequence(
-      reviewHandler,
+      review,
       classifyReview,
       match({
-        Rejected: sequence(bash(`jq '.feedback'`), reviseHandler, step("Review")),
-        Approved: publishHandler,
+        Rejected: sequence(extractFeedback, revise, step("Review")),
+        Approved: publish,
       }),
     ),
   },
@@ -546,13 +552,13 @@ Equivalent without named steps, using `loop`:
 ```ts
 BarnumConfig.fromConfig({
   workflow: sequence(
-    submitHandler,
+    submit,
     loop(sequence(
-      reviewHandler,
+      review,
       classifyReview,
       match({
-        Rejected: sequence(bash(`jq '.feedback'`), reviseHandler, recur()),
-        Approved: sequence(publishHandler, done()),
+        Rejected: sequence(extractFeedback, revise, recur()),
+        Approved: sequence(publish, done()),
       }),
     )),
   ),
@@ -564,25 +570,22 @@ BarnumConfig.fromConfig({
 Writer produces content, Reviewer evaluates. Reviewer may send back to Writer. This is mutual recursion and cannot be expressed with `loop`.
 
 ```ts
-import { sequence, step, match, bash } from "@barnum/workflow";
-import writeHandler from "./handlers/write.js";
-import reviewHandler from "./handlers/review.js";
-import publishHandler from "./handlers/publish.js";
-
-const classifyReview = bash(
-  `jq 'if .needsRevision then {kind: "Revise", feedback: .feedback} else {kind: "Ship", content: .content} end'`
-);
+import write from "./handlers/write.js";
+import review from "./handlers/review.js";
+import classifyReview from "./handlers/classify-review.js";
+import extractFeedback from "./handlers/extract-feedback.js";
+import publish from "./handlers/publish.js";
 
 BarnumConfig.fromConfig({
   workflow: step("Writer"),
   steps: {
-    Writer: sequence(writeHandler, step("Reviewer")),
+    Writer: sequence(write, step("Reviewer")),
     Reviewer: sequence(
-      reviewHandler,
+      review,
       classifyReview,
       match({
-        Revise: sequence(bash(`jq '.feedback'`), step("Writer")),
-        Ship: publishHandler,
+        Revise: sequence(extractFeedback, step("Writer")),
+        Ship: publish,
       }),
     ),
   },
@@ -593,6 +596,8 @@ BarnumConfig.fromConfig({
 
 1. **Step-level configuration.** Named steps currently have `maxRetries`, `timeout`, `maxConcurrency`. Where do these live? On the step definition alongside the action? As action wrappers (`withRetries(3, action)`)? Both?
 
-2. **Predicate convenience.** Match requires the input to be a discriminated union. Producing the union requires an explicit classification step (like `classifyErrors`). A `branch(predicate, ifTrue, ifFalse)` combinator that bundles predicate evaluation + binary match would reduce boilerplate at the cost of categorical purity.
+2. **Inline computation.** Inline Bash and inline TypeScript are useful for lightweight data transformations that don't warrant a separate handler file. Deferred—every leaf is a Call for now. Can be added as an `Inline` AST node later.
 
-3. **Handlers returning discriminated unions directly.** If a handler's return type is a Zod discriminated union, `fromConfig` could derive the match cases from the schema automatically. The handler already knows its possible outputs; the config shouldn't need to repeat them.
+3. **FlatMap.** Traverse followed by flatten. Useful when each element produces an array and results should be concatenated. Can be expressed as `sequence(traverse(action), flattenHandler)` but a dedicated node would avoid the utility handler. Deferred.
+
+4. **Predicate convenience.** Match requires the input to be a discriminated union. Producing the union requires an explicit classification handler. A `branch(predicate, ifTrue, ifFalse)` combinator that bundles predicate evaluation + binary match would reduce boilerplate at the cost of a less general primitive.
