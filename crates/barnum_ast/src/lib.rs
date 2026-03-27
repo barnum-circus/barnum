@@ -50,10 +50,6 @@ pub enum Action {
     /// Always infallible from the VM's perspective.
     Attempt(AttemptAction),
 
-    /// Rust-native data transformation. Executes entirely in the VM without
-    /// FFI.
-    Builtin(BuiltinAction),
-
     /// Named step reference for mutual recursion and DAG topologies.
     Step(StepAction),
 }
@@ -113,13 +109,6 @@ pub struct AttemptAction {
     pub action: Box<Action>,
 }
 
-/// Rust-native data transformation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BuiltinAction {
-    /// The specific operation to perform.
-    pub op: BuiltinOp,
-}
-
 /// Named step reference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepAction {
@@ -148,58 +137,11 @@ pub struct TypeScriptHandler {
     /// Exported function name.
     pub func: String,
     /// Optional per-step configuration forwarded to the handler.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub step_config: Option<Value>,
     /// Optional JSON Schema describing the handler's expected input.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_schema: Option<Value>,
-}
-
-// ---------------------------------------------------------------------------
-// BuiltinOp
-// ---------------------------------------------------------------------------
-
-/// A Rust-native operation executed without FFI overhead.
-///
-/// These are the "structural glue" operations that shape data between
-/// handler calls. The TypeScript builder provides semantic aliases
-/// (e.g., `recur()` compiles to `Tag { kind: "Continue" }`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum BuiltinOp {
-    /// Wraps input as `{ kind, value: input }`. Used for loop signals
-    /// (`recur()` = Tag "Continue", `done()` = Tag "Break") and any
-    /// discriminated union construction.
-    Tag(TagOp),
-
-    /// Passes input through unchanged.
-    Identity,
-
-    /// Merges an array of objects into a single object.
-    /// `[{a: 1}, {b: 2}]` becomes `{a: 1, b: 2}`.
-    Merge,
-
-    /// Flattens a nested array one level.
-    /// `[[1, 2], [3]]` becomes `[1, 2, 3]`.
-    Flatten,
-
-    /// Extracts a single field from an object.
-    /// `{a: 1, b: 2}` with field "a" becomes `1`.
-    ExtractField(ExtractFieldOp),
-}
-
-/// Wraps input as `{ kind, value: input }`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TagOp {
-    /// The `kind` value to tag with.
-    pub kind: String,
-}
-
-/// Extracts a single field from an object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExtractFieldOp {
-    /// The field name to extract.
-    pub field: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,82 +150,13 @@ pub struct ExtractFieldOp {
 
 /// Top-level workflow configuration.
 ///
-/// Pairs a workflow entry point with an optional map of named steps and
-/// a read-only context available to all handlers.
+/// Pairs a workflow entry point with an optional map of named steps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     /// The workflow entry point.
     pub workflow: Action,
 
     /// Named steps, referenced by [`Action::Step`] nodes.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub steps: HashMap<String, Action>,
-
-    /// Read-only environment passed to all handlers. Carries API keys,
-    /// workflow IDs, tenant config, etc.
-    #[serde(default = "default_context")]
-    pub context: Value,
-}
-
-const fn default_context() -> Value {
-    Value::Null
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-#[expect(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    /// Exercises every AST variant in a single workflow. Verifies JSON
-    /// round-trip fidelity.
-    #[test]
-    fn round_trip_full_workflow() {
-        let json = r#"{
-            "workflow": {
-                "kind": "Sequence",
-                "actions": [
-                    {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./setup.ts", "func": "setup", "stepConfig": {"model": "gpt-4"}}},
-                    {"kind": "All", "actions": [
-                        {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./list.ts", "func": "listFiles"}},
-                        {"kind": "Builtin", "op": {"type": "Identity"}}
-                    ]},
-                    {"kind": "Builtin", "op": {"type": "Merge"}},
-                    {"kind": "Traverse", "action": {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./migrate.ts", "func": "migrate"}}},
-                    {"kind": "Builtin", "op": {"type": "Flatten"}},
-                    {"kind": "Builtin", "op": {"type": "ExtractField", "field": "errors"}},
-                    {"kind": "Attempt", "action": {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./risky.ts", "func": "try_it"}}},
-                    {"kind": "Match", "cases": {
-                        "Success": {"kind": "Step", "step": "Process"},
-                        "Failure": {"kind": "Builtin", "op": {"type": "Tag", "kind": "Break"}}
-                    }},
-                    {"kind": "Loop", "body": {
-                        "kind": "Sequence",
-                        "actions": [
-                            {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./check.ts", "func": "typeCheck"}},
-                            {"kind": "Builtin", "op": {"type": "Tag", "kind": "Continue"}}
-                        ]
-                    }}
-                ]
-            },
-            "steps": {
-                "Process": {"kind": "Call", "handler": {"kind": "TypeScript", "module": "./process.ts", "func": "run"}}
-            },
-            "context": {"apiKey": "sk-test"}
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-
-        // Verify structural properties
-        assert_eq!(config.steps.len(), 1);
-        assert!(config.steps.contains_key("Process"));
-        assert_eq!(config.context, serde_json::json!({"apiKey": "sk-test"}));
-
-        // Round-trip through serialize/deserialize
-        let serialized = serde_json::to_string(&config).unwrap();
-        let deserialized: Config = serde_json::from_str(&serialized).unwrap();
-        assert_eq!(config, deserialized);
-    }
 }

@@ -18,8 +18,5 @@ barnum_ast = { path = "../barnum_ast" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 
-[dev-dependencies]
-rstest.workspace = true
-
 [lints]
 workspace = true
