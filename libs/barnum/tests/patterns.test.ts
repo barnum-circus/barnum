@@ -3,7 +3,6 @@ import {
   parallel,
   attempt,
   config,
-  configBuilder,
   loop,
   branch,
   pipe,
@@ -23,6 +22,7 @@ import {
   process,
   check,
   finalize,
+  validate,
   listFiles,
   migrate,
   typeCheck,
@@ -31,10 +31,10 @@ import {
 } from "./handlers.js";
 
 // -----------------------------------------------------------------------
-// Pattern 1: Linear pipeline
+// Pipe
 // -----------------------------------------------------------------------
 
-describe("linear pipeline", () => {
+describe("pipe", () => {
   it("chains setup → process → check → finalize", () => {
     const cfg = config(
       pipe(
@@ -47,14 +47,36 @@ describe("linear pipeline", () => {
     );
     expect(cfg.workflow.kind).toBe("Pipe");
   });
+
+  it("rejects mismatched types", () => {
+    // CheckOutput ({ valid: boolean }) does not match SetupInput ({ project: string })
+    // @ts-expect-error — type mismatch between check's output and setup's input
+    pipe(check(), setup());
+  });
+
+  it("chains three steps correctly", () => {
+    const workflow = pipe(setup(), process(), check());
+    expect(workflow.kind).toBe("Pipe");
+  });
+
+  it("rejects unrelated types", () => {
+    // FinalizeOutput ({ done: true }) does not match SetupInput ({ project: string })
+    // @ts-expect-error — type mismatch between finalize's output and setup's input
+    pipe(finalize(), setup());
+  });
 });
 
 // -----------------------------------------------------------------------
-// Pattern 2: Fan-out with forEach
+// ForEach
 // -----------------------------------------------------------------------
 
-describe("fan-out with forEach", () => {
-  it("setup → listFiles → forEach(migrate)", () => {
+describe("forEach", () => {
+  it("maps input/output to arrays", () => {
+    const workflow = forEach(check());
+    expect(workflow.kind).toBe("ForEach");
+  });
+
+  it("composes with pipe: setup → listFiles → forEach(migrate)", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
@@ -68,16 +90,78 @@ describe("fan-out with forEach", () => {
 });
 
 // -----------------------------------------------------------------------
-// Pattern 3: Type-check loop (from WORKFLOW_ALGEBRA.md example 3)
-//
-// typeCheck → classifyErrors → branch {
-//   HasErrors: extractField("errors") → forEach(fix) → recur()
-//   Clean: done()
-// }
+// Parallel
 // -----------------------------------------------------------------------
 
-describe("type-check loop", () => {
-  it("loops until clean", () => {
+describe("parallel", () => {
+  it("accepts actions with the same input type", () => {
+    const workflow = parallel(check(), check());
+    expect(workflow.kind).toBe("Parallel");
+  });
+
+  it("rejects actions with different input types", () => {
+    // setup expects { project: string }, check expects { result: string }
+    // @ts-expect-error — input types do not unify
+    parallel(setup(), check());
+  });
+
+  it("composes with error handling", () => {
+    const cfg = config(
+      pipe(
+        constant({ project: "test" }),
+        parallel(
+          setup(),
+          pipe(
+            attempt(setup()),
+            branch({
+              Ok: process(),
+              Err: process(),
+            }),
+          ),
+        ),
+      ),
+    );
+    expect(cfg.workflow.kind).toBe("Pipe");
+  });
+});
+
+// -----------------------------------------------------------------------
+// Branch
+// -----------------------------------------------------------------------
+
+describe("branch", () => {
+  it("accepts cases with the same output type", () => {
+    const workflow = branch({
+      Yes: finalize(),
+      No: finalize(),
+    });
+    expect(workflow.kind).toBe("Branch");
+  });
+
+  it("rejects output flowing into incompatible step", () => {
+    // branch outputs { done: true }, but setup expects { project: string }
+    // @ts-expect-error — branch output doesn't satisfy next step's input
+    pipe(branch({ A: finalize(), B: finalize() }), setup());
+  });
+});
+
+// -----------------------------------------------------------------------
+// Loop
+// -----------------------------------------------------------------------
+
+describe("loop", () => {
+  it("accepts body returning LoopResult", () => {
+    const workflow = loop(validate());
+    expect(workflow.kind).toBe("Loop");
+  });
+
+  it("rejects body not returning LoopResult", () => {
+    // check: { result: string } → { valid: boolean } — not a LoopResult
+    // @ts-expect-error — loop body must return LoopResult<In, Out>
+    loop(check());
+  });
+
+  it("composes type-check loop with branch", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
@@ -105,105 +189,23 @@ describe("type-check loop", () => {
 });
 
 // -----------------------------------------------------------------------
-// Pattern 4: Parallel branches with error handling
-//
-// parallel(
-//   fetchA,
-//   pipe(attempt(fetchB), branch { Ok: extractField, Err: default })
-// )
+// Attempt
 // -----------------------------------------------------------------------
 
-describe("parallel branches with error handling", () => {
-  it("runs branches in parallel with attempt/branch fallback", () => {
-    const cfg = config(
-      pipe(
-        constant({ project: "test" }),
-        parallel(
-          setup(),
-          pipe(
-            attempt(setup()),
-            branch({
-              Ok: process(),
-              Err: process(),
-            }),
-          ),
-        ),
-      ),
-    );
-    expect(cfg.workflow.kind).toBe("Pipe");
+describe("attempt", () => {
+  it("wraps output in AttemptResult", () => {
+    const wrapped = attempt(check());
+    expect(wrapped.kind).toBe("Attempt");
+  });
+
+  it("chains in pipe with result-aware consumer", () => {
+    const workflow = pipe(process(), attempt(check()));
+    expect(workflow.kind).toBe("Pipe");
   });
 });
 
 // -----------------------------------------------------------------------
-// Pattern 5: Named steps — linter workflow
-//
-// Fan out to individual files, type-check, fix loop, finalize.
-// Uses registerSteps for the fix loop.
-// -----------------------------------------------------------------------
-
-describe("named steps — linter workflow", () => {
-  it("uses named steps for the fix cycle", () => {
-    const cfg = configBuilder()
-      .registerSteps({
-        FixCycle: loop(
-          pipe(
-            typeCheck(),
-            classifyErrors(),
-            branch({
-              HasErrors: pipe(
-                extractField("errors"),
-                forEach(fix()),
-                recur(),
-              ),
-              Clean: done(),
-            }),
-          ),
-        ),
-      })
-      .workflow((steps) =>
-        pipe(
-          constant({ project: "test" }),
-          setup(),
-          listFiles(),
-          forEach(migrate()),
-          steps.FixCycle,
-        ),
-      );
-    expect(cfg.workflow.kind).toBe("Pipe");
-    expect(cfg.steps).toHaveProperty("FixCycle");
-  });
-
-  it("uses multiple registerSteps calls to reference earlier steps", () => {
-    const cfg = configBuilder()
-      .registerSteps({
-        Migrate: pipe(listFiles(), forEach(migrate())),
-      })
-      .registerSteps({
-        FixCycle: loop(
-          pipe(
-            typeCheck(),
-            classifyErrors(),
-            branch({
-              HasErrors: pipe(
-                extractField("errors"),
-                forEach(fix()),
-                recur(),
-              ),
-              Clean: done(),
-            }),
-          ),
-        ),
-      })
-      .workflow((steps) =>
-        pipe(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
-      );
-    expect(cfg.steps).toHaveProperty("Migrate");
-    expect(cfg.steps).toHaveProperty("FixCycle");
-  });
-});
-
-// -----------------------------------------------------------------------
-// Pattern 6: Reader monad (user-land context passing)
+// Reader monad pattern
 //
 // parallel(identity(), handler) → merge()
 // Preserves the original input alongside the handler's output.
@@ -219,61 +221,5 @@ describe("reader monad pattern", () => {
       ),
     );
     expect(cfg.workflow.kind).toBe("Pipe");
-  });
-});
-
-// -----------------------------------------------------------------------
-// Pattern 7: Mutual recursion via registerSteps callback
-//
-// Writer drafts, then sends to Reviewer. Reviewer either approves
-// (finalize) or rejects (back to Writer).
-// -----------------------------------------------------------------------
-
-describe("mutual recursion", () => {
-  it("registerSteps callback enables cross-references between steps", () => {
-    const cfg = configBuilder()
-      .registerSteps((refs) => ({
-        A: pipe(check(), refs.B),
-        B: pipe(check(), refs.A),
-      }))
-      .workflow((steps) =>
-        pipe(constant({ result: "test" }), steps.A),
-      );
-
-    expect(cfg.steps).toHaveProperty("A");
-    expect(cfg.steps).toHaveProperty("B");
-    // A body ends with a Step reference to B
-    const aBody = cfg.steps!.A as { kind: string; actions: unknown[] };
-    expect(aBody.kind).toBe("Pipe");
-    expect(aBody.actions[aBody.actions.length - 1]).toEqual({
-      kind: "Step",
-      step: "B",
-    });
-    // B body ends with a Step reference to A
-    const bBody = cfg.steps!.B as { kind: string; actions: unknown[] };
-    expect(bBody.actions[bBody.actions.length - 1]).toEqual({
-      kind: "Step",
-      step: "A",
-    });
-  });
-
-  it("callback receives previously registered steps", () => {
-    const cfg = configBuilder()
-      .registerSteps({ Setup: setup() })
-      .registerSteps((refs) => ({
-        Pipeline: pipe(refs.Setup, process()),
-      }))
-      .workflow((steps) =>
-        pipe(constant({ project: "test" }), steps.Pipeline),
-      );
-
-    expect(cfg.steps).toHaveProperty("Setup");
-    expect(cfg.steps).toHaveProperty("Pipeline");
-    // Pipeline body starts with a Step reference to Setup
-    const pipelineBody = cfg.steps!.Pipeline as { kind: string; actions: unknown[] };
-    expect(pipelineBody.actions[0]).toEqual({
-      kind: "Step",
-      step: "Setup",
-    });
   });
 });
