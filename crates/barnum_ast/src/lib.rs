@@ -129,11 +129,24 @@ pub struct AttemptAction {
     pub action: Box<Action>,
 }
 
-/// Named step reference.
+/// Step reference — either a named step or the workflow root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepAction {
-    /// Name of the step to invoke.
-    pub step: StepName,
+    /// Which step to jump to.
+    pub step: StepRef,
+}
+
+/// Target of a step reference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum StepRef {
+    /// Reference to a named step in [`Config::steps`].
+    Named {
+        /// The step name.
+        name: StepName,
+    },
+    /// Reference to the workflow entry point (self-recursion).
+    Root,
 }
 
 // ---------------------------------------------------------------------------

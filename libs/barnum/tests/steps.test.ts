@@ -134,7 +134,7 @@ describe("workflow self-reference", () => {
     const workflow = cfg.workflow as { kind: string; actions: unknown[] };
     expect(workflow.actions[workflow.actions.length - 1]).toEqual({
       kind: "Step",
-      step: "__self__",
+      step: { kind: "Root" },
     });
   });
 });
@@ -161,13 +161,13 @@ describe("mutual recursion", () => {
     expect(aBody.kind).toBe("Pipe");
     expect(aBody.actions[aBody.actions.length - 1]).toEqual({
       kind: "Step",
-      step: "B",
+      step: { kind: "Named", name: "B" },
     });
     // B body ends with a Step reference to A
     const bBody = cfg.steps!.B as { kind: string; actions: unknown[] };
     expect(bBody.actions[bBody.actions.length - 1]).toEqual({
       kind: "Step",
-      step: "A",
+      step: { kind: "Named", name: "A" },
     });
   });
 
@@ -187,7 +187,7 @@ describe("mutual recursion", () => {
     const pipelineBody = cfg.steps!.Pipeline as { kind: string; actions: unknown[] };
     expect(pipelineBody.actions[0]).toEqual({
       kind: "Step",
-      step: "Setup",
+      step: { kind: "Named", name: "Setup" },
     });
   });
 });

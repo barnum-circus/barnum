@@ -51,8 +51,10 @@ export type AttemptAction = {
 
 export type StepAction = {
   kind: "Step";
-  step: string;
+  step: StepRef;
 };
+
+export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
 
 // ---------------------------------------------------------------------------
 // HandlerKind
@@ -217,15 +219,24 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
    *
    * @param build - receives step references and a `self` reference for
    *   workflow-level recursion (re-runs the workflow from the top).
+   *   `self` has input `unknown` (accepts any value, which the engine
+   *   discards on restart) and output `never` (the current execution
+   *   path doesn't produce a value — it jumps).
    */
   workflow<Out>(
-    build: (steps: TSteps, self: AnyAction) => TypedAction<never, Out>,
+    build: (
+      steps: TSteps,
+      self: TypedAction<unknown, never>,
+    ) => TypedAction<never, Out>,
   ): Config<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
-      stepRefs[name] = { kind: "Step", step: name };
+      stepRefs[name] = { kind: "Step", step: { kind: "Named", name } };
     }
-    const self: AnyAction = { kind: "Step", step: "__self__" } as AnyAction;
+    const self = {
+      kind: "Step",
+      step: { kind: "Root" },
+    } as TypedAction<unknown, never>;
     const workflow = build(stepRefs as TSteps, self);
     const result: Config<Out> = { workflow };
     if (Object.keys(this._steps).length > 0) {
@@ -236,14 +247,14 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
 }
 
 /**
- * Creates a Proxy that returns `{ kind: "Step", step: name }` for any
- * property access. Used to provide step references for mutual recursion.
+ * Creates a Proxy that returns `{ kind: "Step", step: { kind: "Named", name } }`
+ * for any property access. Used to provide step references for mutual recursion.
  */
 function stepRefProxy<T extends Record<string, AnyAction>>(): T {
   return new Proxy(Object.create(null) as T, {
     get(_target, prop: string | symbol) {
       if (typeof prop === "symbol") return undefined;
-      return { kind: "Step", step: prop } as AnyAction;
+      return { kind: "Step", step: { kind: "Named", name: prop } } as AnyAction;
     },
   });
 }
