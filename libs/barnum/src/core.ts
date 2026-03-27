@@ -137,6 +137,7 @@ export type CallableHandler<
 ) => TypedAction<TValue, TOutput>) & {
   readonly [HANDLER_BRAND]: true;
   readonly __filePath: string;
+  readonly __exportName: string;
   readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
   readonly __phantom_in: (input: TValue) => void;
   readonly __phantom_out: () => TOutput;
@@ -179,8 +180,10 @@ function getCallerFilePath(): string {
 
 export function createHandler<TValue, TOutput, TStepConfig = unknown>(
   definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
+  exportName?: string,
 ): CallableHandler<TValue, TOutput, TStepConfig> {
   const filePath = getCallerFilePath();
+  const funcName = exportName ?? "default";
 
   const fn = ((
     options?: { stepConfig?: TStepConfig },
@@ -189,13 +192,14 @@ export function createHandler<TValue, TOutput, TStepConfig = unknown>(
     handler: {
       kind: "TypeScript",
       module: filePath,
-      func: "default",
+      func: funcName,
       stepConfig: options?.stepConfig,
     },
   })) as CallableHandler<TValue, TOutput, TStepConfig>;
 
   Object.defineProperty(fn, HANDLER_BRAND, { value: true });
   Object.defineProperty(fn, "__filePath", { value: filePath });
+  Object.defineProperty(fn, "__exportName", { value: funcName });
   Object.defineProperty(fn, "__definition", { value: definition });
 
   return fn;
@@ -217,7 +221,7 @@ export function call<TValue, TOutput, TStepConfig>(
     handler: {
       kind: "TypeScript",
       module: handler.__filePath,
-      func: "default",
+      func: handler.__exportName,
       stepConfig: options?.stepConfig,
     },
   };

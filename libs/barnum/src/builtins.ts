@@ -1,4 +1,8 @@
 import type { TypedAction, LoopResult } from "./core.js";
+import {
+  constant as constantHandler,
+  range as rangeHandler,
+} from "./handlers/builtins.js";
 
 /**
  * Typed combinators for structural data transformations.
@@ -98,14 +102,7 @@ export function extractField<
 // ---------------------------------------------------------------------------
 
 export function constant<T>(value: T): TypedAction<unknown, T> {
-  return {
-    kind: "Call",
-    handler: {
-      kind: "TypeScript",
-      module: "__builtin__",
-      func: `constant:${JSON.stringify(value)}`,
-    },
-  };
+  return constantHandler({ stepConfig: { value } }) as TypedAction<unknown, T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,5 +113,7 @@ export function range(
   start: number,
   end: number,
 ): TypedAction<unknown, number[]> {
-  return builtin(`range:${start}:${end}`);
+  return rangeHandler({
+    stepConfig: { start, end },
+  }) as TypedAction<unknown, number[]>;
 }
