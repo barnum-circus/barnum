@@ -1,4 +1,5 @@
 import { execFileSync } from "child_process";
+import { fileURLToPath } from "url";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
@@ -15,7 +16,8 @@ import {
   typescript,
 } from "./core.js";
 
-const BINARY = path.resolve(__dirname, "../../../target/debug/barnum");
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
 
 /** Pipe JSON through `barnum run` and parse the output. */
 function roundTrip(input: unknown): unknown {

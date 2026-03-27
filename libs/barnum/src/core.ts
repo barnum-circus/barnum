@@ -12,45 +12,45 @@ export type Action =
   | AttemptAction
   | StepAction;
 
-export interface CallAction {
+export type CallAction = {
   kind: "Call";
   handler: HandlerKind;
-}
+};
 
-export interface SequenceAction {
+export type SequenceAction = {
   kind: "Sequence";
   actions: Action[];
-}
+};
 
-export interface TraverseAction {
+export type TraverseAction = {
   kind: "Traverse";
   action: Action;
-}
+};
 
-export interface AllAction {
+export type AllAction = {
   kind: "All";
   actions: Action[];
-}
+};
 
-export interface MatchAction {
+export type MatchAction = {
   kind: "Match";
   cases: Record<string, Action>;
-}
+};
 
-export interface LoopAction {
+export type LoopAction = {
   kind: "Loop";
   body: Action;
-}
+};
 
-export interface AttemptAction {
+export type AttemptAction = {
   kind: "Attempt";
   action: Action;
-}
+};
 
-export interface StepAction {
+export type StepAction = {
   kind: "Step";
   step: string;
-}
+};
 
 // ---------------------------------------------------------------------------
 // HandlerKind
@@ -58,22 +58,22 @@ export interface StepAction {
 
 export type HandlerKind = TypeScriptHandler;
 
-export interface TypeScriptHandler {
+export type TypeScriptHandler = {
   kind: "TypeScript";
   module: string;
   func: string;
   stepConfig?: unknown;
   valueSchema?: unknown;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
-export interface Config {
+export type Config = {
   workflow: Action;
   steps?: Record<string, Action>;
-}
+};
 
 // ---------------------------------------------------------------------------
 // Builders
