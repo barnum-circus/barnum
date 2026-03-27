@@ -4,18 +4,18 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId`, `HandlerId`, and `BranchTableId` will be `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId`, `HandlerId`, and `DiscriminatorId` will be `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
 /// An entry in the flat action table.
 ///
-/// Multi-child instructions (Pipe, Parallel) are followed by
-/// `count` inline Item entries at self+1..self+1+count.
+/// Multi-child instructions (Pipe, Parallel, Branch) are followed by
+/// inline operand entries at self+1.
+///   - Pipe, Parallel: `count` Item entries.
+///   - Branch: `count` (BranchKey, Item) pairs = 2*count entries.
 ///
 /// Single-child instructions (ForEach, Loop, Attempt) have their child
 /// at self+1 unconditionally. No ActionId field needed.
-///
-/// Branch uses a side-table lookup (no inline entries).
 ///
 /// Generic over `T`: the Step target type. During pass 1, `T = StepTarget`
 /// (may contain unresolved step names). After pass 2, `T = ActionId`
@@ -23,7 +23,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 enum FlatEntry<T> {
     // -- Instructions --
 
-    /// Leaf: invoke a handler. HandlerId indexes FlatConfig::handlers.
+    /// Leaf: invoke a handler. `handler` indexes into `FlatConfig::handlers`.
     Invoke { handler: HandlerId },
 
     /// Sequential composition.
@@ -38,8 +38,8 @@ enum FlatEntry<T> {
     ForEach,
 
     /// Case analysis on value["kind"].
-    /// BranchTableId indexes FlatConfig::branch_tables for O(1) lookup.
-    Branch { table: BranchTableId },
+    /// Followed by `count` alternating (BranchKey, Item) pairs = 2*count entries.
+    Branch { count: u16 },
 
     /// Fixed-point iteration. Body at self+1.
     Loop,
@@ -52,12 +52,22 @@ enum FlatEntry<T> {
 
     // -- Inline operands (always read in context of a parent instruction) --
 
-    /// Child reference for Pipe or Parallel. Points to a child's root entry.
+    /// Child reference for Pipe, Parallel, or Branch. Points to a child's root entry.
     Item { action: ActionId },
+
+    /// Discriminator key for a Branch case. `key` indexes into `FlatConfig::discriminators`.
+    BranchKey { key: DiscriminatorId },
 }
 ```
 
-Every variant payload is at most `u32`. Discriminant + payload fits in 8 bytes. Add `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
+### Entry size
+
+Every variant payload is at most `u32` (4 bytes). With a 1-byte discriminant, each entry fits in 8 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
+
+Heap types are stored in side tables:
+
+1. **Handler pool.** `Invoke` stores a `HandlerId` (u32 index) into `FlatConfig::handlers: Vec<HandlerKind>`. Handlers are interned: identical `HandlerKind` values share the same `HandlerId`.
+2. **Discriminator interning.** `BranchKey` stores a `DiscriminatorId` (u32 index) into `FlatConfig::discriminators: Vec<KindDiscriminator>`. Discriminators are interned: identical strings share the same `DiscriminatorId`.
 
 ```rust
 /// The fully-resolved flat configuration.
@@ -65,29 +75,28 @@ struct FlatConfig {
     /// The entry array. ActionIds are indices into this vec.
     entries: Vec<FlatEntry<ActionId>>,
 
+    /// Entry point for execution.
+    workflow_root: ActionId,
+
     /// Handler pool. HandlerIds are indices into this vec.
     handlers: Vec<HandlerKind>,
 
-    /// Branch dispatch tables. BranchTableIds are indices into this vec.
-    /// Each table maps a discriminator to the ActionId of the matching case.
-    branch_tables: Vec<HashMap<KindDiscriminator, ActionId>>,
-
-    /// Entry point for execution.
-    workflow_root: ActionId,
+    /// Discriminator pool. DiscriminatorIds are indices into this vec.
+    discriminators: Vec<KindDiscriminator>,
 }
 ```
 
-Pipe and Parallel store `count`. Their Item entries are always at `self+1` through `self+count`. Single-child instructions have their child unconditionally at `self+1`. Branch uses a side-table for O(1) dispatch.
+Multi-child instructions store only `count`. Pipe and Parallel operand entries are at `self+1` through `self+count`. Branch operand entries are alternating (BranchKey, Item) pairs at `self+1` through `self+2*count`. Single-child instructions have their child unconditionally at `self+1`. No offset fields.
+
+Branch key lookup: read the `count` (BranchKey, Item) pairs following the Branch instruction, linear scan: check `entries[self + 1 + 2*i]` (BranchKey) for a match, take `entries[self + 1 + 2*i + 1]` (Item) as the target.
 
 ## Algorithm
 
 ### DFS with pre-allocated operand slots
 
-DFS flattening. Multi-child nodes (Pipe, Parallel): pre-allocate the instruction slot and `count` operand slots, then DFS into each child and backpatch the Item entries with the child's root ActionId.
+DFS flattening. Multi-child nodes: pre-allocate the instruction slot and operand slots, then DFS into each child and backpatch the operand entries with the child's root ActionId.
 
 Single-child nodes (ForEach, Loop, Attempt): allocate the instruction slot, then immediately DFS into the child. Since no other allocation happens between the instruction and the child, the child's root is guaranteed to be at self+1.
-
-Branch: allocate the instruction slot, DFS into each case subtree, build a HashMap mapping discriminator keys to case root ActionIds, push it to the branch_tables pool.
 
 Step(Named(name)) stores the name, resolved in pass 2. Step(Root) resolves immediately since the workflow root is always the first ActionId allocated.
 
@@ -104,17 +113,35 @@ enum StepTarget {
 }
 ```
 
+### Interning
+
+Pass 1 maintains two intern tables (HashMap from value to id). When a handler or discriminator is encountered, look it up; if absent, push to the pool and assign the next id.
+
+```
+intern_handler(handler: &HandlerKind) -> HandlerId:
+    if let Some(id) = handler_map.get(handler):
+        return *id
+    let id = HandlerId(handlers.len() as u32)
+    handlers.push(handler.clone())
+    handler_map.insert(handler.clone(), id)
+    id
+
+intern_discriminator(key: &KindDiscriminator) -> DiscriminatorId:
+    // same pattern
+```
+
 ### Pass 1: DFS flatten
 
 ```
-flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId>,
-                          Vec<HandlerKind>, Vec<HashMap<KindDiscriminator, ActionId>>,
-                          ActionId):
+flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId>, ActionId,
+                          Vec<HandlerKind>, Vec<KindDiscriminator>):
     let entries: Vec<Option<FlatEntry<StepTarget>>> = Vec::new()
     let step_roots = HashMap::new()
-    let handlers: Vec<HandlerKind> = Vec::new()
-    let branch_tables: Vec<HashMap<KindDiscriminator, ActionId>> = Vec::new()
     let next_id: u32 = 0
+    let handlers: Vec<HandlerKind> = Vec::new()
+    let handler_map: HashMap<HandlerKind, HandlerId> = HashMap::new()
+    let discriminators: Vec<KindDiscriminator> = Vec::new()
+    let discriminator_map: HashMap<KindDiscriminator, DiscriminatorId> = HashMap::new()
 
     fn alloc() -> ActionId:
         let id = ActionId(next_id)
@@ -133,8 +160,7 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
         match node:
             Invoke { handler } =>
                 let id = alloc()
-                let handler_id = HandlerId(handlers.len() as u32)
-                handlers.push(handler.clone())
+                let handler_id = intern_handler(handler)
                 entries[id] = Some(Invoke { handler: handler_id })
                 id
 
@@ -167,13 +193,13 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
                 let sorted: Vec<_> = cases.iter()
                     .sorted_by_key(|(k, _)| k)
                     .collect()
-                let mut table = HashMap::new()
-                for (key, case_action) in sorted:
+                let pairs_start = alloc_n(2 * sorted.len())
+                entries[id] = Some(Branch { count: sorted.len() as u16 })
+                for (i, (key, case_action)) in sorted.iter().enumerate():
+                    let disc_id = intern_discriminator(key)
                     let case_root = flatten_node(case_action)
-                    table.insert(key.clone(), case_root)
-                let table_id = BranchTableId(branch_tables.len() as u32)
-                branch_tables.push(table)
-                entries[id] = Some(Branch { table: table_id })
+                    entries[pairs_start + 2*i] = Some(BranchKey { key: disc_id })
+                    entries[pairs_start + 2*i + 1] = Some(Item { action: case_root })
                 id
 
             Loop { body } =>
@@ -207,10 +233,10 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
         step_roots.insert(name, step_root)
 
     let entries = entries.into_iter().map(Option::unwrap).collect()
-    (entries, step_roots, handlers, branch_tables, workflow_root)
+    (entries, step_roots, workflow_root, handlers, discriminators)
 ```
 
-Branch cases are sorted by key for deterministic ActionId assignment.
+Branch cases are sorted by key for deterministic output.
 
 ### Pass 2: resolve step names
 
@@ -239,9 +265,9 @@ Input:  Pipe([Invoke(a), Invoke(b), Invoke(c)])
   1: Item { action: 4 }
   2: Item { action: 5 }
   3: Item { action: 6 }
-  4: Invoke(handler: 0)        -- handlers[0] = a
-  5: Invoke(handler: 1)        -- handlers[1] = b
-  6: Invoke(handler: 2)        -- handlers[2] = c
+  4: Invoke(a)
+  5: Invoke(b)
+  6: Invoke(c)
 ```
 
 ### Nested pipe
@@ -253,13 +279,13 @@ Input:  Pipe([Invoke(a), Pipe([Invoke(b), Invoke(c)]), Invoke(d)])
   1: Item { action: 4 }       -- child 0: Invoke(a)
   2: Item { action: 5 }       -- child 1: inner Pipe
   3: Item { action: 10 }      -- child 2: Invoke(d)
-  4: Invoke(handler: 0)       -- a
+  4: Invoke(a)
   5: Pipe { count: 2 }
   6: Item { action: 8 }
   7: Item { action: 9 }
-  8: Invoke(handler: 1)       -- b
-  9: Invoke(handler: 2)       -- c
-  10: Invoke(handler: 3)      -- d
+  8: Invoke(b)
+  9: Invoke(c)
+  10: Invoke(d)
 ```
 
 ### Single-child nodes
@@ -270,7 +296,7 @@ Input:  Loop(Attempt(ForEach(Invoke(process))))
   0: Loop                      -- body at 1
   1: Attempt                   -- child at 2
   2: ForEach                   -- body at 3
-  3: Invoke(handler: 0)        -- process
+  3: Invoke(process)
 ```
 
 ### Branch
@@ -278,11 +304,13 @@ Input:  Loop(Attempt(ForEach(Invoke(process))))
 ```
 Input:  Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
 
-  0: Branch { table: 0 }
-  1: Invoke(handler: 0)        -- handle_err
-  2: Invoke(handler: 1)        -- handle_ok
-
-  branch_tables[0]: { "Err" => 1, "Ok" => 2 }
+  0: Branch { count: 2 }
+  1: BranchKey { key: "Err" }
+  2: Item { action: 5 }
+  3: BranchKey { key: "Ok" }
+  4: Item { action: 6 }
+  5: Invoke(handle_err)
+  6: Invoke(handle_ok)
 ```
 
 ### Step resolution
@@ -296,10 +324,10 @@ Pass 1:
   0: Pipe { count: 2 }
   1: Item { action: 3 }
   2: Item { action: 4 }
-  3: Invoke(handler: 0)              -- setup
+  3: Invoke(setup)
   4: Step { target: Named("Fix") }
-  5: Loop                            -- step "Fix" root
-  6: Invoke(handler: 1)              -- check, Loop body at 5+1
+  5: Loop                          -- step "Fix" root
+  6: Invoke(check)                 -- Loop body at 5+1
 
   step_roots: { "Fix" => 5 }
 
@@ -333,7 +361,7 @@ fn invoke(name: &str) -> Action { Action::Invoke(InvokeAction { handler: ts_hand
 fn pipe(actions: Vec<Action>) -> Action { ... }
 fn parallel(actions: Vec<Action>) -> Action { ... }
 fn for_each(action: Action) -> Action { ... }
-fn branch(cases: Vec<(&str, Action)>) -> Action { ... }
+fn branch(cases: Vec<(&str, Action)>) -> Action { /* sorted by key */ }
 fn loop_(body: Action) -> Action { ... }
 fn attempt(action: Action) -> Action { ... }
 fn step_named(name: &str) -> Action { ... }
@@ -348,31 +376,34 @@ fn flatten(config: Config) -> FlatConfig { /* pass 1 + pass 2 */ }
 ```rust
 /// Single invoke: one entry, root = 0.
 fn flatten_single_invoke()
-// [0: Invoke(0)]
+// [0: Invoke(handler)]
 
 /// Pipe: instruction + count Items + count children.
 fn flatten_pipe()
-// [0: Pipe{3}, 1: Item{4}, 2: Item{5}, 3: Item{6}, 4: Invoke(0), 5: Invoke(1), 6: Invoke(2)]
+// [0: Pipe{3}, 1: Item{4}, 2: Item{5}, 3: Item{6}, 4: Invoke(a), 5: Invoke(b), 6: Invoke(c)]
 
 /// Parallel: same layout as Pipe but with Parallel instruction.
 fn flatten_parallel()
 
 /// ForEach: body at self+1.
 fn flatten_foreach()
-// [0: ForEach, 1: Invoke(0)]
+// [0: ForEach, 1: Invoke(process)]
 
-/// Branch: single entry + side-table. Case subtrees follow.
+/// Branch: instruction + count (BranchKey, Item) pairs + case subtrees.
 fn flatten_branch()
-// [0: Branch{table:0}, 1: Invoke(0), 2: Invoke(1)]
-// branch_tables[0]: { "Err" => 1, "Ok" => 2 }
+// [0: Branch{2}, 1: BranchKey{"Err"}, 2: Item{5}, 3: BranchKey{"Ok"}, 4: Item{6},
+//  5: Invoke(err), 6: Invoke(ok)]
+
+/// Branch cases sorted by key for determinism.
+fn flatten_branch_deterministic()
 
 /// Loop: body at self+1.
 fn flatten_loop()
-// [0: Loop, 1: Invoke(0)]
+// [0: Loop, 1: Invoke(check)]
 
 /// Attempt: child at self+1.
 fn flatten_attempt()
-// [0: Attempt, 1: Invoke(0)]
+// [0: Attempt, 1: Invoke(risky)]
 ```
 
 ### Nesting
@@ -383,7 +414,7 @@ fn flatten_nested_pipe()
 
 /// Single-child chain: Loop > Attempt > ForEach.
 fn flatten_single_child_chain()
-// [0: Loop, 1: Attempt, 2: ForEach, 3: Invoke(0)]
+// [0: Loop, 1: Attempt, 2: ForEach, 3: Invoke(x)]
 
 /// Deep nesting: Attempt > Loop > Pipe.
 fn flatten_deep_nesting()
@@ -448,4 +479,13 @@ fn flatten_unknown_step_panics()
 
 /// Deterministic: flatten twice, assert identical.
 fn flatten_deterministic()
+
+/// Handler interning: identical handlers share the same HandlerId.
+fn flatten_handler_interning()
+
+/// Discriminator interning: identical keys share the same DiscriminatorId.
+fn flatten_discriminator_interning()
+
+/// Static assert: FlatEntry<ActionId> fits in 8 bytes.
+fn flat_entry_size()
 ```
