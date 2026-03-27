@@ -59,16 +59,16 @@ type Executor =
   | { kind: "Handler"; executor: HandlerExecutor }
 
 type InlineExecutor =
-  | { language: "bash"; source: string }
-  | { language: "typescript"; source: string }
+  | { kind: "Bash"; source: string }
+  | { kind: "TypeScript"; source: string }
 
 type HandlerExecutor =
-  | { language: "bash"; path: string }
-  | { language: "typescript"; path: string;
+  | { kind: "Bash"; path: string }
+  | { kind: "TypeScript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-Three unions, each with two variants. `kind` discriminates how code is loaded; `language` discriminates the interpreter within each kind. `stepConfig` only exists on `HandlerExecutor::TypeScript`. Impossible states are unrepresentable.
+Three unions, each with two variants. Every union discriminates on `kind` with upper camel case. `stepConfig` only exists on `HandlerExecutor::TypeScript`. Impossible states are unrepresentable.
 
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
@@ -110,13 +110,13 @@ pub enum Executor {
     Handler(HandlerExecutor),
 }
 
-#[serde(tag = "language")]
+#[serde(tag = "kind")]
 pub enum InlineExecutor {
     Bash { source: String },
     TypeScript { source: String },
 }
 
-#[serde(tag = "language")]
+#[serde(tag = "kind")]
 pub enum HandlerExecutor {
     Bash { path: String },
     TypeScript {
@@ -146,17 +146,17 @@ type Executor =
   | { kind: "Handler"; executor: HandlerExecutor }
 
 type InlineExecutor =
-  | { language: "bash"; source: string }
-  | { language: "typescript"; source: string }
+  | { kind: "Bash"; source: string }
+  | { kind: "TypeScript"; source: string }
 
 type HandlerExecutor =
-  | { language: "bash"; path: string }
-  | { language: "typescript"; path: string;
+  | { kind: "Bash"; path: string }
+  | { kind: "TypeScript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 
 // User-facing executor input (what users write in configs)
 type ExecutorInput =
-  | { kind: "Inline"; language: "bash"; source: string }
+  | { kind: "Inline"; executor: { kind: "Bash"; source: string } }
   | Handler<any, any>
 
 type Action =
@@ -184,7 +184,7 @@ import tsCheck from "@barnum/ts-check";
     kind: "Sequence",
     actions: [
       { kind: "Unit", executor: tsCheck },
-      { kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: `jq 'if .failedFiles | length > 0
+      { kind: "Unit", executor: { kind: "Inline", executor: { kind: "Bash", source: `jq 'if .failedFiles | length > 0
         then [{kind: "Fix", value: .}]
         else [{kind: "Done", value: {}}]
         end'` } } },
@@ -232,7 +232,7 @@ Step fails → catch the error → route to recovery instead of retrying. Inline
     kind: "Sequence",
     actions: [
       { kind: "Try", action: { kind: "Step", step: "RiskyWork" } },
-      { kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: `jq 'if .kind == "Ok"
+      { kind: "Unit", executor: { kind: "Inline", executor: { kind: "Bash", source: `jq 'if .kind == "Ok"
         then [{kind: "Continue", value: .value}]
         else [{kind: "Recover", value: .error}]
         end'` } } },
@@ -281,14 +281,14 @@ type HandlerDefinition<C = unknown, V = unknown> =
   | ValueHandler<C, V>;
 
 interface RoutingHandler<C = unknown, V = unknown> {
-  kind: "routing";
+  kind: "Routing";
   stepConfigValidator: z.ZodType<C>;
   getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
   handle: (context: HandlerContext<C, V>) => Promise<FollowUpTask[]>;
 }
 
 interface ValueHandler<C = unknown, V = unknown> {
-  kind: "value";
+  kind: "Value";
   stepConfigValidator: z.ZodType<C>;
   getStepValueValidator: (stepConfig: C) => z.ZodType<V>;
   handle: (context: HandlerContext<C, V>) => Promise<unknown>;
@@ -318,7 +318,7 @@ Requires:
 - Add `Sequence` variant to `Action`
 - Piping logic in the runner
 - Schema regeneration
-- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: "..." } } }` and `handler` → `{ kind: "Unit", executor: handler }`
+- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Inline", executor: { kind: "Bash", source: "..." } } }` and `handler` → `{ kind: "Unit", executor: handler }`
 
 ### Ship with JS rewrite
 
@@ -343,13 +343,13 @@ pub enum Executor {
     Handler(HandlerExecutor),
 }
 
-#[serde(tag = "language")]
+#[serde(tag = "kind")]
 pub enum InlineExecutor {
     Bash { source: String },
     TypeScript { source: String },
 }
 
-#[serde(tag = "language")]
+#[serde(tag = "kind")]
 pub enum HandlerExecutor {
     Bash { path: String },
     TypeScript { path: String, exported_as: Option<String>,
@@ -439,8 +439,8 @@ The Executor type has two axes: `{Inline, Handler} × {Bash, TypeScript}`. Today
 
 | | Inline | Handler |
 |---|---|---|
-| **Bash** | `Inline(Bash { source })` | `Handler(Bash { path })` |
-| **TypeScript** | `Inline(TypeScript { source })` | `Handler(TypeScript { path, stepConfig, ... })` (via `createHandler`) |
+| **Bash** | `{ kind: "Inline", executor: { kind: "Bash", source } }` | `{ kind: "Handler", executor: { kind: "Bash", path } }` |
+| **TypeScript** | `{ kind: "Inline", executor: { kind: "TypeScript", source } }` | `{ kind: "Handler", executor: { kind: "TypeScript", path, stepConfig, ... } }` (via `createHandler`) |
 
 **Implemented now**: Inline Bash, TypeScript Handler.
 
