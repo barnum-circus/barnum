@@ -161,6 +161,92 @@ export type ValidateStepRefs<
     };
 
 // ---------------------------------------------------------------------------
+// Step Reference Tracking (Refs type parameter)
+// ---------------------------------------------------------------------------
+//
+// ## Overview
+//
+// Named steps can reference each other via `stepRef("B")`. These references
+// are validated at compile time: if you write `stepRef("Bt")` when only "A"
+// and "B" exist, TypeScript rejects it. This works through a third type
+// parameter on TypedAction called `Refs`.
+//
+// ## How it works
+//
+// 1. `stepRef<N extends string>(name: N)` returns `TypedAction<any, any, N>`.
+//    The literal string "B" is captured in the Refs position.
+//
+// 2. Every combinator propagates Refs via union. For example, pipe's 2-arg
+//    overload is:
+//
+//      pipe<T1, T2, T3, R1 extends string, R2 extends string>(
+//        a1: TypedAction<T1, T2, R1>,
+//        a2: TypedAction<T2, T3, R2>,
+//      ): TypedAction<T1, T3, R1 | R2>
+//
+//    So `pipe(check(), stepRef("B"))` has Refs = never | "B" = "B".
+//    And `pipe(stepRef("A"), stepRef("B"))` has Refs = "A" | "B".
+//
+// 3. `registerSteps` uses `ValidateStepRefs` to extract all Refs from the
+//    registered step values and check they're a subset of the known step
+//    names (current batch keys + previously registered keys):
+//
+//      registerSteps<R extends Record<string, Action>>(
+//        steps: R & ValidateStepRefs<R, TSteps>,
+//      )
+//
+//    When valid, ValidateStepRefs resolves to {} (transparent intersection).
+//    When invalid, it resolves to { __error: "Step reference to undefined
+//    step: Bt" }, which makes the argument incompatible and produces a
+//    readable compile error.
+//
+// 4. `StripRefs` removes Refs from step types before they're passed to the
+//    workflow callback, since refs have already been validated by
+//    registerSteps and shouldn't propagate into the workflow's return type.
+//
+// ## Why Refs is boxed: `__refs?: { _brand: Refs }`
+//
+// The Refs phantom field uses a boxing wrapper `{ _brand: Refs }` instead of
+// a bare `__refs?: Refs`. This is necessary because of how TypeScript infers
+// generic type parameters from optional properties on discriminated unions.
+//
+// When Refs = never (the common case — most actions don't use stepRef), the
+// field `__refs?: never` collapses to `undefined` at the type level. When
+// pipe's overload tries to infer `R1 extends string` from this field, TS
+// sees `undefined`, can't find a valid inference for `R1`, and falls back to
+// the constraint bound `string`.
+//
+// This means `pipe(check(), recur())` — two actions with no step refs —
+// would infer Refs = string | string = string. Then ValidateStepRefs sees
+// Refs = string and rejects it because `string` doesn't extend the step
+// name literals.
+//
+// **Important**: this only happens with the real Action type (a discriminated
+// union of 8 variants). With a simple `{ kind: string }` Action type, TS
+// infers correctly. The union distribution changes how TS resolves optional
+// fields during inference.
+//
+// The fix: `__refs?: { _brand: Refs }`. When Refs = never, the field is
+// `__refs?: { _brand: never }`. The wrapper `{ _brand: never }` is a
+// distinct structural type (not just `undefined`), so TS can match
+// `{ _brand: R1 }` against `{ _brand: never }` and correctly infer
+// R1 = never.
+//
+// ## Why ExtractInput/ExtractOutput/ExtractRefs use structural extraction
+//
+// All three Extract* utilities match on individual phantom fields rather than
+// on the full TypedAction type. The constraint `TypedAction<any, any, any>`
+// fails for actions with In = never because `(input: never) => void` is not
+// assignable to `(input: any) => void` (function params are contravariant).
+// Structural extraction avoids this entirely.
+//
+// ExtractRefs uses a two-step conditional (`infer R` then `R extends string`)
+// rather than `infer R extends string` because the latter falls back to the
+// constraint bound `string` when R = never.
+//
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Combinators
 // ---------------------------------------------------------------------------
 
