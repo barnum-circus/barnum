@@ -81,7 +81,6 @@ version = "0.2.4"
 dependencies = [
  "barnum_ast",
  "clap",
- "rstest",
  "serde_json",
 ]
 

@@ -1,3 +1,5 @@
+import { fileURLToPath } from "url";
+
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
 // ---------------------------------------------------------------------------
@@ -89,27 +91,85 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   __phantom_out?: () => Out;
 };
 
-/** A handler with tracked input/output types. */
-export type TypedHandler<In = unknown, Out = unknown> = HandlerKind & {
-  __phantom_in?: (input: In) => void;
-  __phantom_out?: () => Out;
+// ---------------------------------------------------------------------------
+// Handler — opaque typed handler reference
+// ---------------------------------------------------------------------------
+
+export type HandlerDefinition<In = unknown, Out = unknown> = {
+  handle: (input: In) => Promise<Out>;
 };
+
+const HANDLER_BRAND = Symbol.for("barnum:handler");
+
+export class Handler<In = unknown, Out = unknown> {
+  readonly [HANDLER_BRAND] = true;
+  readonly __filePath: string;
+  readonly __definition: HandlerDefinition<In, Out>;
+
+  // Phantom types — `declare` means these exist only at the type level.
+  declare readonly __phantom_in: (input: In) => void;
+  declare readonly __phantom_out: () => Out;
+
+  constructor(definition: HandlerDefinition<In, Out>, filePath: string) {
+    this.__filePath = filePath;
+    this.__definition = definition;
+  }
+}
+
+export function isHandler(x: unknown): x is Handler {
+  return typeof x === "object" && x !== null && HANDLER_BRAND in x;
+}
+
+/**
+ * Deduces the caller's file path from the V8 stack trace API.
+ * Frame 0 = getCallerFilePath, Frame 1 = createHandler, Frame 2 = the caller.
+ */
+function getCallerFilePath(): string {
+  const original = Error.prepareStackTrace;
+  let callerFile: string | undefined;
+
+  Error.prepareStackTrace = (_err, stack) => {
+    const frame = stack[2];
+    callerFile = frame?.getFileName() ?? undefined;
+    return "";
+  };
+
+  const err = new Error();
+  void err.stack;
+  Error.prepareStackTrace = original;
+
+  if (!callerFile) {
+    throw new Error(
+      "createHandler: could not determine caller file path from stack trace.",
+    );
+  }
+
+  if (callerFile.startsWith("file://")) {
+    return fileURLToPath(callerFile);
+  }
+  return callerFile;
+}
+
+export function createHandler<In, Out>(
+  definition: HandlerDefinition<In, Out>,
+): Handler<In, Out> {
+  const filePath = getCallerFilePath();
+  return new Handler(definition, filePath);
+}
 
 // ---------------------------------------------------------------------------
 // Builders
 // ---------------------------------------------------------------------------
 
-export function typescript<In = unknown, Out = unknown>(
-  module: string,
-  func: string,
-): TypedHandler<In, Out> {
-  return { kind: "TypeScript", module, func };
-}
-
-export function call<In, Out>(
-  handler: TypedHandler<In, Out>,
-): TypedAction<In, Out> {
-  return { kind: "Call", handler };
+export function call<In, Out>(handler: Handler<In, Out>): TypedAction<In, Out> {
+  return {
+    kind: "Call",
+    handler: {
+      kind: "TypeScript",
+      module: handler.__filePath,
+      func: "default",
+    },
+  };
 }
 
 // -- Sequence: type-safe chaining via overloads --
@@ -192,34 +252,47 @@ export function sequence(...actions: TypedAction[]): TypedAction {
 }
 
 // -- Other builders (untyped for now, type safety added incrementally) --
+// These use `any` to accept typed actions without variance conflicts.
 
-export function traverse(action: TypedAction): TypedAction {
+export function traverse<In, Out>(
+  action: TypedAction<In, Out>,
+): TypedAction<In[], Out[]> {
   return { kind: "Traverse", action };
 }
 
-export function all(...actions: TypedAction[]): TypedAction {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function all(...actions: TypedAction<any, any>[]): TypedAction<any, any> {
   return { kind: "All", actions };
 }
 
-export function matchCases(cases: Record<string, TypedAction>): TypedAction {
+export function matchCases(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  cases: Record<string, TypedAction<any, any>>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): TypedAction<any, any> {
   return { kind: "Match", cases };
 }
 
-export function loop(body: TypedAction): TypedAction {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function loop(body: TypedAction<any, any>): TypedAction<any, any> {
   return { kind: "Loop", body };
 }
 
-export function attempt(action: TypedAction): TypedAction {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function attempt(action: TypedAction<any, any>): TypedAction<any, any> {
   return { kind: "Attempt", action };
 }
 
-export function step(name: string): TypedAction {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function step(name: string): TypedAction<any, any> {
   return { kind: "Step", step: name };
 }
 
 export function config(
-  workflow: TypedAction,
-  steps?: Record<string, TypedAction>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  workflow: TypedAction<any, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  steps?: Record<string, TypedAction<any, any>>,
 ): Config {
   const result: Config = { workflow };
   if (steps && Object.keys(steps).length > 0) {

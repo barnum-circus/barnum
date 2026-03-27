@@ -13,8 +13,11 @@ import {
   sequence,
   step,
   traverse,
-  typescript,
 } from "../src/core.js";
+import setup from "./handlers/setup.js";
+import process_ from "./handlers/process.js";
+import check from "./handlers/check.js";
+import finalize from "./handlers/finalize.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
@@ -33,25 +36,17 @@ describe("barnum round-trip", () => {
   it("exercises every action kind through the Rust binary", () => {
     const workflow = config(
       sequence(
-        call(typescript("./setup.ts", "setup")),
-        all(
-          call(typescript("./a.ts", "taskA")),
-          call(typescript("./b.ts", "taskB")),
-        ),
-        traverse(call(typescript("./each.ts", "process"))),
-        attempt(call(typescript("./risky.ts", "tryIt"))),
+        call(setup),
+        all(call(process_), call(check)),
+        traverse(call(finalize)),
+        attempt(call(check)),
         matchCases({
           Success: step("Finalize"),
-          Failure: call(typescript("./fail.ts", "handleError")),
+          Failure: call(setup),
         }),
-        loop(
-          sequence(
-            call(typescript("./check.ts", "poll")),
-            call(typescript("./signal.ts", "decide")),
-          ),
-        ),
+        loop(sequence(call(check), call(finalize))),
       ),
-      { Finalize: call(typescript("./done.ts", "finalize")) },
+      { Finalize: call(finalize) },
     );
 
     const output = roundTrip(workflow);
