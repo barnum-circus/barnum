@@ -7,11 +7,13 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 **Note:** `ActionId` will be a `u32` newtype via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
-/// An entry in the flat action table. Instructions and inline operands.
+/// An entry in the flat action table.
 ///
 /// Multi-child instructions (Pipe, Parallel, Branch) are followed by
-/// `count` inline operand entries (Item or BranchCase). The operands
-/// are always at positions self_id+1 through self_id+count.
+/// `count` inline operand entries (Item or BranchCase) at self+1..self+1+count.
+///
+/// Single-child instructions (ForEach, Loop, Attempt) have their child
+/// at self+1 unconditionally. No ActionId field needed.
 ///
 /// Generic over `T`: the Step target type. During pass 1, `T = StepTarget`
 /// (may contain unresolved step names). After pass 2, `T = ActionId`
@@ -23,25 +25,25 @@ enum FlatEntry<T> {
     Invoke { handler: HandlerKind },
 
     /// Sequential composition.
-    /// Followed by `count` Item entries at self+1..self+1+count.
-    Pipe { count: u32 },
+    /// Followed by `count` Item entries. Each Item points to a child's root.
+    Pipe { count: u16 },
 
     /// Fan-out: same input to all children, collect results as array.
-    /// Followed by `count` Item entries at self+1..self+1+count.
-    Parallel { count: u32 },
+    /// Followed by `count` Item entries. Each Item points to a child's root.
+    Parallel { count: u16 },
 
-    /// Map over array input. Single body action.
-    ForEach { body: ActionId },
+    /// Map over array input. Body at self+1.
+    ForEach,
 
     /// Case analysis on value["kind"].
-    /// Followed by `count` BranchCase entries at self+1..self+1+count.
-    Branch { count: u32 },
+    /// Followed by `count` BranchCase entries. Each has a key + pointer to case root.
+    Branch { count: u16 },
 
-    /// Fixed-point iteration. Single body action.
-    Loop { body: ActionId },
+    /// Fixed-point iteration. Body at self+1.
+    Loop,
 
-    /// Error materialization. Single child action.
-    Attempt { action: ActionId },
+    /// Error materialization. Child at self+1.
+    Attempt,
 
     /// Redirect to another action (step reference or self-recursion).
     Step { target: T },
@@ -65,7 +67,7 @@ struct FlatConfig {
 }
 ```
 
-Multi-child instructions store only `count`. Their operand entries are always at `self+1` through `self+count`. No `first_child`, no `first_case`, no side tables.
+Multi-child instructions store only `count`. Their operand entries are always at `self+1` through `self+count`. Single-child instructions have their child unconditionally at `self+1`. No offset fields, no side tables.
 
 Branch key lookup: read the `count` BranchCase entries following the Branch instruction, linear scan for the matching key.
 
@@ -73,9 +75,9 @@ Branch key lookup: read the `count` BranchCase entries following the Branch inst
 
 ### DFS with pre-allocated operand slots
 
-DFS flattening. When encountering a multi-child node, pre-allocate the instruction slot and operand slots, then DFS into each child. Backpatch the operand entries with each child's root ActionId.
+DFS flattening. Multi-child nodes: pre-allocate the instruction slot and `count` operand slots, then DFS into each child and backpatch the operand entries with the child's root ActionId.
 
-Single-child nodes (ForEach, Loop, Attempt) DFS into their child and store the returned root ActionId directly in the instruction.
+Single-child nodes (ForEach, Loop, Attempt): allocate the instruction slot, then immediately DFS into the child. Since no other allocation happens between the instruction and the child, the child's root is guaranteed to be at self+1.
 
 Step(Named(name)) stores the name, resolved in pass 2. Step(Root) resolves immediately since the workflow root is always the first ActionId allocated.
 
@@ -86,7 +88,6 @@ Step(Named(name)) stores the name, resolved in pass 2. Step(Root) resolves immed
 **Pass 2**: Walk the vec, replacing `StepTarget::Named(name)` with `step_roots[name]`.
 
 ```rust
-/// Intermediate state during pass 1.
 enum StepTarget {
     Named(StepName),
     Resolved(ActionId),
@@ -103,18 +104,17 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
 
     fn alloc() -> ActionId:
         let id = ActionId(next_id)
-        entries.push(None)       // reserve slot
+        entries.push(None)
         next_id += 1
         id
 
-    fn alloc_n(n: u32) -> ActionId:
+    fn alloc_n(n: usize) -> ActionId:
         let first = ActionId(next_id)
         for _ in 0..n:
-            entries.push(None)   // reserve slots
-        next_id += n
+            entries.push(None)
+        next_id += n as u32
         first
 
-    // Returns the root ActionId of the flattened subtree.
     fn flatten_node(node: &Action) -> ActionId:
         match node:
             Invoke { handler } =>
@@ -125,7 +125,7 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
             Pipe { children } =>
                 let id = alloc()
                 let items_start = alloc_n(children.len())
-                entries[id] = Some(Pipe { count: children.len() })
+                entries[id] = Some(Pipe { count: children.len() as u16 })
                 for (i, child) in children.iter().enumerate():
                     let child_root = flatten_node(child)
                     entries[items_start + i] = Some(Item { action: child_root })
@@ -134,7 +134,7 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
             Parallel { children } =>
                 let id = alloc()
                 let items_start = alloc_n(children.len())
-                entries[id] = Some(Parallel { count: children.len() })
+                entries[id] = Some(Parallel { count: children.len() as u16 })
                 for (i, child) in children.iter().enumerate():
                     let child_root = flatten_node(child)
                     entries[items_start + i] = Some(Item { action: child_root })
@@ -142,8 +142,8 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
 
             ForEach { body } =>
                 let id = alloc()
-                let body_root = flatten_node(body)
-                entries[id] = Some(ForEach { body: body_root })
+                entries[id] = Some(ForEach)
+                flatten_node(body)    // root guaranteed at id+1
                 id
 
             Branch { cases } =>
@@ -152,7 +152,7 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
                     .sorted_by_key(|(k, _)| k)
                     .collect()
                 let cases_start = alloc_n(sorted.len())
-                entries[id] = Some(Branch { count: sorted.len() })
+                entries[id] = Some(Branch { count: sorted.len() as u16 })
                 for (i, (key, case_action)) in sorted.iter().enumerate():
                     let case_root = flatten_node(case_action)
                     entries[cases_start + i] = Some(BranchCase { key, action: case_root })
@@ -160,14 +160,14 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
 
             Loop { body } =>
                 let id = alloc()
-                let body_root = flatten_node(body)
-                entries[id] = Some(Loop { body: body_root })
+                entries[id] = Some(Loop)
+                flatten_node(body)    // root guaranteed at id+1
                 id
 
             Attempt { action } =>
                 let id = alloc()
-                let action_root = flatten_node(action)
-                entries[id] = Some(Attempt { action: action_root })
+                entries[id] = Some(Attempt)
+                flatten_node(action)  // root guaranteed at id+1
                 id
 
             Step(Named(name)) =>
@@ -188,7 +188,6 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
         let step_root = flatten_node(step_action)
         step_roots.insert(name, step_root)
 
-    // All slots filled.
     let entries = entries.into_iter().map(Option::unwrap).collect()
     (entries, step_roots, workflow_root)
 ```
@@ -216,73 +215,92 @@ resolve(
 ### Simple pipe
 
 ```
-Input:
-    Pipe([Invoke(a), Invoke(b), Invoke(c)])
+Input:  Pipe([Invoke(a), Invoke(b), Invoke(c)])
 
-Flat:
-    0: Pipe { count: 3 }
-    1: Item { action: 4 }
-    2: Item { action: 5 }
-    3: Item { action: 6 }
-    4: Invoke(a)
-    5: Invoke(b)
-    6: Invoke(c)
+  0: Pipe { count: 3 }
+  1: Item { action: 4 }
+  2: Item { action: 5 }
+  3: Item { action: 6 }
+  4: Invoke(a)
+  5: Invoke(b)
+  6: Invoke(c)
 ```
 
 ### Nested pipe
 
 ```
-Input:
-    Pipe([Invoke(a), Pipe([Invoke(b), Invoke(c)]), Invoke(d)])
+Input:  Pipe([Invoke(a), Pipe([Invoke(b), Invoke(c)]), Invoke(d)])
 
-Flat:
-    0: Pipe { count: 3 }
-    1: Item { action: 4 }
-    2: Item { action: 5 }
-    3: Item { action: 10 }
-    4: Invoke(a)
-    5: Pipe { count: 2 }
-    6: Item { action: 8 }
-    7: Item { action: 9 }
-    8: Invoke(b)
-    9: Invoke(c)
-    10: Invoke(d)
+  0: Pipe { count: 3 }
+  1: Item { action: 4 }       -- child 0: Invoke(a)
+  2: Item { action: 5 }       -- child 1: inner Pipe
+  3: Item { action: 10 }      -- child 2: Invoke(d)
+  4: Invoke(a)
+  5: Pipe { count: 2 }
+  6: Item { action: 8 }
+  7: Item { action: 9 }
+  8: Invoke(b)
+  9: Invoke(c)
+  10: Invoke(d)
+```
+
+### Single-child nodes
+
+```
+Input:  Loop(Attempt(ForEach(Invoke(process))))
+
+  0: Loop                      -- body at 1
+  1: Attempt                   -- child at 2
+  2: ForEach                   -- body at 3
+  3: Invoke(process)
 ```
 
 ### Branch
 
 ```
-Input:
-    Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
+Input:  Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
 
-Flat:
-    0: Branch { count: 2 }
-    1: BranchCase { key: "Err", action: 3 }
-    2: BranchCase { key: "Ok", action: 4 }
-    3: Invoke(handle_err)
-    4: Invoke(handle_ok)
+  0: Branch { count: 2 }
+  1: BranchCase { key: "Err", action: 3 }
+  2: BranchCase { key: "Ok", action: 4 }
+  3: Invoke(handle_err)
+  4: Invoke(handle_ok)
 ```
 
 ### Step resolution
 
 ```
 Input:
-    workflow: Pipe([Invoke(setup), Step(Named("Fix"))])
-    steps: { Fix: Loop(Invoke(check)) }
+  workflow: Pipe([Invoke(setup), Step(Named("Fix"))])
+  steps: { Fix: Loop(Invoke(check)) }
 
 Pass 1:
-    0: Pipe { count: 2 }
-    1: Item { action: 3 }
-    2: Item { action: 4 }
-    3: Invoke(setup)
-    4: Step { target: Named("Fix") }
-    5: Loop { body: 6 }
-    6: Invoke(check)
+  0: Pipe { count: 2 }
+  1: Item { action: 3 }
+  2: Item { action: 4 }
+  3: Invoke(setup)
+  4: Step { target: Named("Fix") }
+  5: Loop                          -- step "Fix" root
+  6: Invoke(check)                 -- Loop body at 5+1
 
-    step_roots: { "Fix" => 5 }
+  step_roots: { "Fix" => 5 }
 
 Pass 2:
-    4: Step { target: 5 }
+  4: Step { target: 5 }
+```
+
+### Mutual recursion
+
+```
+Input:
+  workflow: Step(Named("A"))
+  steps: {
+    A: Pipe([Invoke(do_a), Step(Named("B"))]),
+    B: Pipe([Invoke(do_b), Step(Named("A"))]),
+  }
+
+Pass 1 flattens each tree independently. Step nodes store names, never follow
+targets. Pass 2 resolves names to ActionIds. No infinite loop.
 ```
 
 ## Unit tests
@@ -318,12 +336,12 @@ fn flatten_single_invoke()
 fn flatten_pipe()
 // [0: Pipe{3}, 1: Item{4}, 2: Item{5}, 3: Item{6}, 4: Invoke(a), 5: Invoke(b), 6: Invoke(c)]
 
-/// Parallel: same layout as Pipe.
+/// Parallel: same layout as Pipe but with Parallel instruction.
 fn flatten_parallel()
 
-/// ForEach: instruction with inline body ActionId.
+/// ForEach: body at self+1.
 fn flatten_foreach()
-// [0: ForEach{body:1}, 1: Invoke(process)]
+// [0: ForEach, 1: Invoke(process)]
 
 /// Branch: instruction + count BranchCases + case subtrees.
 fn flatten_branch()
@@ -332,13 +350,13 @@ fn flatten_branch()
 /// Branch cases sorted by key for determinism.
 fn flatten_branch_deterministic()
 
-/// Loop: instruction with inline body ActionId.
+/// Loop: body at self+1.
 fn flatten_loop()
-// [0: Loop{body:1}, 1: Invoke(check)]
+// [0: Loop, 1: Invoke(check)]
 
-/// Attempt: instruction with inline child ActionId.
+/// Attempt: child at self+1.
 fn flatten_attempt()
-// [0: Attempt{action:1}, 1: Invoke(risky)]
+// [0: Attempt, 1: Invoke(risky)]
 ```
 
 ### Nesting
@@ -346,7 +364,10 @@ fn flatten_attempt()
 ```rust
 /// Nested pipe: inner pipe Items point deeper into the array.
 fn flatten_nested_pipe()
-// See nested pipe example above.
+
+/// Single-child chain: Loop > Attempt > ForEach.
+fn flatten_single_child_chain()
+// [0: Loop, 1: Attempt, 2: ForEach, 3: Invoke(x)]
 
 /// Deep nesting: Attempt > Loop > Pipe.
 fn flatten_deep_nesting()
