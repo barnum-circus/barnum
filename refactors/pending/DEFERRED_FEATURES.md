@@ -110,11 +110,9 @@ function branch<TUnion extends { kind: string }, TOut>(
 
 The challenge: `TUnion` must be inferred from the pipe context (the preceding action's output), not from the cases object. This likely requires either (a) a two-step builder like `branch<ClassifyResult>().cases({...})`, or (b) TypeScript inference improvements in future versions.
 
-## Exhaustive Branch
+## ~~Exhaustive Branch~~ (Implemented)
 
-WORKFLOW_ALGEBRA.md specifies exhaustive branch handling: `{ [K in U['kind']]: Action }` ensures every variant has a case. Current implementation uses `Record<string, TypedAction<any, Out>>`, which allows missing or extra cases without compile-time errors.
-
-This is blocked on branch narrowing above — exhaustiveness requires knowing the input union type.
+Implemented via K-inference in `branch`'s signature: `branch<K extends string, Out, R>(cases: Record<K, TypedAction<any, Out, R>>): TypedAction<{ kind: K }, Out, R>`. TypeScript infers `K` from the cases keys, and pipe's contravariant input checking enforces exhaustiveness automatically. Missing cases produce compile errors; extra cases are allowed.
 
 ## AttemptResult Shape
 

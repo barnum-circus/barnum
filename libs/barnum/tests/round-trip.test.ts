@@ -72,7 +72,7 @@ describe("barnum round-trip", () => {
   it("Branch", () => {
     const cfg = configBuilder().workflow(() =>
       pipe(
-        constant({ kind: "Yes" }),
+        constant({ kind: "Yes" } as const),
         branch({ Yes: deploy(), No: deploy() }),
       ),
     );

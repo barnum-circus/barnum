@@ -255,12 +255,14 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Parallel");
   });
 
-  it("branch: input is { kind: string }, output is case union", () => {
+  it("branch: input is { kind: K }, output is case union (exhaustive)", () => {
     const action = branch({
       Yes: deploy(),
       No: deploy(),
     });
-    assertExact<IsExact<ExtractInput<typeof action>, { kind: string }>>();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, { kind: "Yes" | "No" }>
+    >();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: true }>>();
     expect(action.kind).toBe("Branch");
   });
@@ -306,6 +308,22 @@ describe("pipe type safety", () => {
     // setup outputs { initialized: boolean, project: string }
     // build expects { initialized: boolean, project: string }
     const action = pipe(setup(), build());
+    expect(action.kind).toBe("Pipe");
+  });
+
+  it("rejects non-exhaustive branch (missing case)", () => {
+    // classifyErrors outputs { kind: "HasErrors"; ... } | { kind: "Clean" }
+    // branch with only HasErrors case produces { kind: "HasErrors" } input
+    // pipe rejects because { kind: "Clean" } is not assignable to { kind: "HasErrors" }
+    // @ts-expect-error — non-exhaustive: missing "Clean" case
+    pipe(classifyErrors(), branch({ HasErrors: drop() }));
+  });
+
+  it("accepts exhaustive branch", () => {
+    const action = pipe(
+      classifyErrors(),
+      branch({ HasErrors: drop(), Clean: drop() }),
+    );
     expect(action.kind).toBe("Pipe");
   });
 });

@@ -288,10 +288,10 @@ export function forEach<In, Out, R extends string = never>(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function branch<Out, R extends string = never>(
-  cases: Record<string, TypedAction<any, Out, R>>,
-): TypedAction<{ kind: string }, Out, R> {
-  return { kind: "Branch", cases } as TypedAction<{ kind: string }, Out, R>;
+export function branch<K extends string, Out, R extends string = never>(
+  cases: Record<K, TypedAction<any, Out, R>>,
+): TypedAction<{ kind: K }, Out, R> {
+  return { kind: "Branch", cases } as TypedAction<{ kind: K }, Out, R>;
 }
 
 export type LoopResult<TContinue, TBreak> =
