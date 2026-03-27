@@ -4,9 +4,27 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId`, `EntryId`, `HandlerId`, and `Count` are `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId`, `FlatConfigEntryId`, `HandlerId`, and `Count` are `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
-**`ActionId` vs `EntryId`:** Both are indices into `FlatConfig::entries`. `ActionId` is guaranteed to point to an action entry (Invoke, Pipe, Parallel, ForEach, Branch, Loop, Attempt, Step). `EntryId` is a raw position that might also be a ChildRef or BranchKey — used for child slot positions computed by arithmetic on a parent's position. `resolve_child_slot(EntryId) -> ActionId` resolves the indirection: if the slot holds a ChildRef, follow the pointer; if it holds an inlined action, return the slot as an ActionId.
+**`ActionId` vs `FlatConfigEntryId`:** Both are indices into `FlatConfig::entries`. `ActionId` is guaranteed to point to an action entry (Invoke, Pipe, Parallel, ForEach, Branch, Loop, Attempt, Step). `FlatConfigEntryId` is a raw position that might also be a ChildRef or BranchKey — produced by `ActionId + u32` arithmetic when computing child slot positions relative to a parent. `resolve_child_slot(FlatConfigEntryId) -> ActionId` resolves the indirection.
+
+```rust
+/// ActionId + offset = FlatConfigEntryId (child slot position relative to parent).
+impl Add<u32> for ActionId {
+    type Output = FlatConfigEntryId;
+    fn add(self, offset: u32) -> FlatConfigEntryId {
+        FlatConfigEntryId(self.0 + offset)
+    }
+}
+
+/// FlatConfigEntryId + offset = FlatConfigEntryId (stride within child slots).
+impl Add<u32> for FlatConfigEntryId {
+    type Output = FlatConfigEntryId;
+    fn add(self, offset: u32) -> FlatConfigEntryId {
+        FlatConfigEntryId(self.0 + offset)
+    }
+}
+```
 
 ```rust
 /// An executable action in the flat table. This is what the interpreter
@@ -106,7 +124,7 @@ impl<T> FlatEntry<T> {
 enum FlattenError {
     StepRootInStepBody,
     UnknownStep { name: StepName },
-    UninitializedEntry { index: EntryId },
+    UninitializedEntry { index: FlatConfigEntryId },
 }
 ```
 
@@ -122,8 +140,8 @@ enum StepTarget {
 #[derive(Debug, PartialEq, Eq)]
 struct FlatConfig {
     /// The entry array. Contains actions (indexed by ActionId) and inline data
-    /// (ChildRef, BranchKey) indexed by EntryId. Use `action()` to look up
-    /// an ActionId; use `resolve_child_slot()` to resolve an EntryId.
+    /// (ChildRef, BranchKey) indexed by FlatConfigEntryId. Use `action()` to look up
+    /// an ActionId; use `resolve_child_slot()` to resolve a FlatConfigEntryId.
     entries: Vec<FlatEntry<ActionId>>,
 
     /// Handler pool. HandlerIds are indices into this vec.
@@ -137,7 +155,7 @@ struct FlatConfig {
 
 ### Accessors
 
-The interpreter works with `ActionId` and `FlatAction`. Child slots (positions after Pipe/Parallel/Branch) are `EntryId`s — resolve them via `resolve_child_slot` to get an `ActionId`, then call `action()` to get the `FlatAction`.
+The interpreter works with `ActionId` and `FlatAction`. Child slots (positions after Pipe/Parallel/Branch) are `FlatConfigEntryId`s — resolve them via `resolve_child_slot` to get an `ActionId`, then call `action()` to get the `FlatAction`.
 
 ```rust
 impl FlatConfig {
@@ -154,18 +172,14 @@ impl FlatConfig {
         &self.handlers[id.0 as usize]
     }
 
-    /// Resolve a child slot (EntryId) to an ActionId.
+    /// Resolve a child slot to an ActionId.
     /// - Inlined action: the slot position is the ActionId.
-    /// - ChildRef: follow the pointer; validate target is an action via `action()`.
+    /// - ChildRef: follow the pointer.
     /// - BranchKey in a child slot is a bug.
-    fn resolve_child_slot(&self, slot: EntryId) -> ActionId {
+    fn resolve_child_slot(&self, slot: FlatConfigEntryId) -> ActionId {
         match self.entries[slot.0 as usize] {
             FlatEntry::Action(_) => ActionId(slot.0),
-            FlatEntry::ChildRef { action } => {
-                // Validate the target is actually an action (panics if not).
-                self.action(action);
-                action
-            }
+            FlatEntry::ChildRef { action } => action,
             FlatEntry::BranchKey { .. } => panic!("unexpected BranchKey in child slot"),
         }
     }
@@ -176,8 +190,7 @@ impl FlatConfig {
             FlatAction::Pipe { count } | FlatAction::Parallel { count } => count.0,
             other => panic!("expected Pipe or Parallel, got {other:?}"),
         };
-        let start = id.0 + 1;
-        (0..count).map(move |i| self.resolve_child_slot(EntryId(start + i)))
+        (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
 
     /// Returns (key, action) pairs for a Branch.
@@ -186,16 +199,14 @@ impl FlatConfig {
             FlatAction::Branch { count } => count.0,
             other => panic!("expected Branch, got {other:?}"),
         };
-        let start = id.0 + 1;
         (0..count).map(move |i| {
-            let key_slot = EntryId(start + 2 * i);
+            let key_slot = id + 1 + 2 * i;
             let key = match self.entries[key_slot.0 as usize] {
                 FlatEntry::BranchKey { key } => key,
                 other => panic!("expected BranchKey at {key_slot:?}, got {other:?}"),
             };
-            let child_slot = EntryId(start + 2 * i + 1);
-            let action = self.resolve_child_slot(child_slot);
-            (key, action)
+            let child_slot = key_slot + 1;
+            (key, self.resolve_child_slot(child_slot))
         })
     }
 }
@@ -205,15 +216,12 @@ impl FlatConfig {
 
 ### Overview
 
-DFS flattening into a single flat vec. No side tables.
+DFS flattening into a single flat vec. No side tables. Four methods:
 
-**Pipe/Parallel:** Allocate the instruction entry, then reserve `count` child slots. For each child: if the child is a multi-entry node (Pipe/Parallel/Branch), flatten it elsewhere and write a ChildRef into the slot. Otherwise, write the child entry directly into the slot via `flatten_into`.
-
-**Branch:** Allocate the instruction entry, then reserve `2 * count` slots (alternating BranchKey/child). Same inlining rules apply to each child slot.
-
-**ForEach/Loop/Attempt:** Allocate the entry, flatten the body/child (which allocates it next in DFS order), and store the body's ActionId in the entry. No implicit "self+1" convention — bodies are always referenced by explicit ActionId.
-
-**Step(Named(name))** stores the name, resolved in pass 2. **Step(Root)** resolves immediately — the workflow root ActionId is known the moment we start flattening the workflow (it's the next `alloc()`).
+- **`flatten_action`** — allocate a slot, then `flatten_action_at` into it. Returns ActionId.
+- **`flatten_action_at`** — write an action's root entry into a given slot. The single match over all Action variants. For Pipe/Parallel/Branch, also `alloc_many` for child slots and `fill_child_slots`.
+- **`fill_child_slot`** — put an action into a child slot. Single-entry children are inlined via `flatten_action_at`. Multi-entry children (Pipe/Parallel/Branch) are flattened elsewhere via `flatten_action` and a ChildRef is written into the slot.
+- **`fill_child_slots`** — loop: call `fill_child_slot` for each child.
 
 Handlers are interned via `IndexSet<HandlerKind>`: `insert_full` returns `(index, was_new)`, giving O(1) dedup with stable insertion-order indices. The `IndexSet` lives on `UnresolvedFlatConfig` during building; `resolve()` converts it to a `Vec<HandlerKind>` for the final `FlatConfig`.
 
@@ -223,13 +231,13 @@ KindDiscriminator is already an interned StringKey (Copy, u32-sized). No second 
 
 **Pass 1**: DFS-flatten each tree. Step(Named(name)) stores `StepTarget::Named(name)`. Step(Root) resolves immediately to `StepTarget::Resolved(workflow_root)`.
 
-**Pass 2**: Walk the vec via `map_target`. `StepTarget::Named(name)` resolves to `step_roots[name]`. `StepTarget::Resolved(id)` passes through. ChildRef and BranchKey entries pass through unchanged.
+**Pass 2**: Walk the vec via `try_map_target`. `StepTarget::Named(name)` resolves to `step_roots[name]`. `StepTarget::Resolved(id)` passes through. ChildRef and BranchKey entries pass through unchanged.
 
 ### Pass 1: UnresolvedFlatConfig
 
 `UnresolvedFlatConfig` is the builder — the unresolved version of `FlatConfig`. It holds the entry array (with `Option` placeholders for pre-allocated slots) and the handler interning state. It has no `workflow_root` field; that's determined by the caller and threaded through as a parameter.
 
-`workflow_root: Option<ActionId>` is `Some` when flattening the workflow tree (Step(Root) resolves to it) and `None` when flattening step bodies (Step(Root) in a step body panics — see CONFIG_VALIDATION.md rule #5).
+`workflow_root: Option<ActionId>` is `Some` when flattening the workflow tree (Step(Root) resolves to it) and `None` when flattening step bodies (Step(Root) in a step body is an error — see CONFIG_VALIDATION.md rule #5).
 
 ```rust
 struct UnresolvedFlatConfig {
@@ -238,17 +246,15 @@ struct UnresolvedFlatConfig {
 }
 
 impl UnresolvedFlatConfig {
-    fn alloc(&mut self) -> EntryId {
-        let id = EntryId(self.entries.len() as u32);
+    fn alloc(&mut self) -> ActionId {
+        let id = ActionId(self.entries.len() as u32);
         self.entries.push(None);
         id
     }
 
-    /// Pre-allocate `count` contiguous slots. Returns the EntryId of the first slot.
-    fn alloc_many(&mut self, count: Count) -> EntryId {
-        let start = EntryId(self.entries.len() as u32);
+    /// Pre-allocate `count` contiguous None slots.
+    fn alloc_many(&mut self, count: Count) {
         self.entries.extend(std::iter::repeat_n(None, count.0 as usize));
-        start
     }
 
     fn intern_handler(&mut self, handler: HandlerKind) -> HandlerId {
@@ -256,173 +262,137 @@ impl UnresolvedFlatConfig {
         HandlerId(index as u32)
     }
 
-    fn is_multi_entry(node: &Action) -> bool {
-        matches!(node, Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. })
+    /// Allocate a slot, flatten an action into it, return its ActionId.
+    fn flatten_action(
+        &mut self,
+        action: Action,
+        workflow_root: Option<ActionId>,
+    ) -> Result<ActionId, FlattenError> {
+        let action_id = self.alloc();
+        self.flatten_action_at(action, action_id, workflow_root)?;
+        Ok(action_id)
     }
 
-    /// Flatten a single-entry node directly into a pre-allocated child slot.
-    /// Takes ownership of the node. Multi-entry nodes cannot be inlined — use ChildRef.
-    fn flatten_into(
+    /// Write an action's root entry into an existing slot. The single match
+    /// over all Action variants — no duplication.
+    ///
+    /// For Pipe/Parallel/Branch, child slots are alloc_many'd immediately
+    /// after the slot. This means the slot must be at the end of the vec
+    /// for multi-entry actions (guaranteed when called from flatten_action).
+    fn flatten_action_at(
         &mut self,
-        node: Action,
-        slot: EntryId,
+        action: Action,
+        action_id: ActionId,
         workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
-        let entry = match node {
+        let entry = match action {
             Action::Invoke { handler } => {
                 let handler_id = self.intern_handler(handler);
                 FlatEntry::Action(FlatAction::Invoke { handler: handler_id })
             }
-            Action::ForEach { body } => {
-                let body_id = self.flatten_node(*body, workflow_root)?;
-                FlatEntry::Action(FlatAction::ForEach { body: body_id })
-            }
-            Action::Loop { body } => {
-                let body_id = self.flatten_node(*body, workflow_root)?;
-                FlatEntry::Action(FlatAction::Loop { body: body_id })
-            }
-            Action::Attempt { action } => {
-                let child_id = self.flatten_node(*action, workflow_root)?;
-                FlatEntry::Action(FlatAction::Attempt { child: child_id })
-            }
-            Action::Step(StepRef::Named(name)) => {
-                FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Named(name),
-                })
-            }
-            Action::Step(StepRef::Root) => {
-                let root = workflow_root.ok_or(FlattenError::StepRootInStepBody)?;
-                FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Resolved(root),
-                })
-            }
-            _ => panic!("multi-entry nodes cannot be inlined"),
-        };
-        self.entries[slot.0 as usize] = Some(entry);
-        Ok(())
-    }
-
-    /// Fill child slots for a Pipe or Parallel. Takes ownership of the action vec.
-    fn flatten_children(
-        &mut self,
-        actions: Vec<Action>,
-        ref_start: EntryId,
-        workflow_root: Option<ActionId>,
-    ) -> Result<(), FlattenError> {
-        for (i, child) in actions.into_iter().enumerate() {
-            let slot = EntryId(ref_start.0 + i as u32);
-            if Self::is_multi_entry(&child) {
-                let child_root = self.flatten_node(child, workflow_root)?;
-                self.entries[slot.0 as usize] =
-                    Some(FlatEntry::ChildRef { action: child_root });
-            } else {
-                self.flatten_into(child, slot, workflow_root)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Flatten an action node, taking ownership. Returns the root ActionId.
-    fn flatten_node(
-        &mut self,
-        node: Action,
-        workflow_root: Option<ActionId>,
-    ) -> Result<ActionId, FlattenError> {
-        match node {
-            Action::Invoke { handler } => {
-                let id = self.alloc();
-                let handler_id = self.intern_handler(handler);
-                self.entries[id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Invoke { handler: handler_id }));
-                Ok(ActionId(id.0))
-            }
 
             Action::Pipe { actions } => {
-                let id = self.alloc();
                 let count = Count(actions.len() as u32);
-                let ref_start = self.alloc_many(count);
-                self.entries[id.0 as usize] =
+                self.alloc_many(count);
+                self.entries[action_id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Pipe { count }));
-                self.flatten_children(actions, ref_start, workflow_root)?;
-                Ok(ActionId(id.0))
+                self.fill_child_slots(actions, action_id + 1, workflow_root)?;
+                return Ok(());
             }
 
             Action::Parallel { actions } => {
-                let id = self.alloc();
                 let count = Count(actions.len() as u32);
-                let ref_start = self.alloc_many(count);
-                self.entries[id.0 as usize] =
+                self.alloc_many(count);
+                self.entries[action_id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Parallel { count }));
-                self.flatten_children(actions, ref_start, workflow_root)?;
-                Ok(ActionId(id.0))
-            }
-
-            Action::ForEach { body } => {
-                let id = self.alloc();
-                let body_id = self.flatten_node(*body, workflow_root)?;
-                self.entries[id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::ForEach { body: body_id }));
-                Ok(ActionId(id.0))
+                self.fill_child_slots(actions, action_id + 1, workflow_root)?;
+                return Ok(());
             }
 
             Action::Branch { mut cases } => {
-                let id = self.alloc();
                 let count = Count(cases.len() as u32);
                 let mut sorted_keys: Vec<_> = cases.keys().cloned().collect();
                 sorted_keys.sort();
-                let ref_start = self.alloc_many(Count(2 * count.0));
-                self.entries[id.0 as usize] =
+                self.alloc_many(Count(2 * count.0));
+                self.entries[action_id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Branch { count }));
                 for (i, key) in sorted_keys.into_iter().enumerate() {
-                    let key_slot = EntryId(ref_start.0 + 2 * i as u32);
+                    let key_slot = action_id + 1 + 2 * i as u32;
                     self.entries[key_slot.0 as usize] =
                         Some(FlatEntry::BranchKey { key });
                     let child = cases.remove(&key).unwrap();
-                    let child_slot = EntryId(ref_start.0 + 2 * i as u32 + 1);
-                    if Self::is_multi_entry(&child) {
-                        let case_root = self.flatten_node(child, workflow_root)?;
-                        self.entries[child_slot.0 as usize] =
-                            Some(FlatEntry::ChildRef { action: case_root });
-                    } else {
-                        self.flatten_into(child, child_slot, workflow_root)?;
-                    }
+                    self.fill_child_slot(child, key_slot + 1, workflow_root)?;
                 }
-                Ok(ActionId(id.0))
+                return Ok(());
+            }
+
+            Action::ForEach { body } => {
+                let body_id = self.flatten_action(*body, workflow_root)?;
+                FlatEntry::Action(FlatAction::ForEach { body: body_id })
             }
 
             Action::Loop { body } => {
-                let id = self.alloc();
-                let body_id = self.flatten_node(*body, workflow_root)?;
-                self.entries[id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Loop { body: body_id }));
-                Ok(ActionId(id.0))
+                let body_id = self.flatten_action(*body, workflow_root)?;
+                FlatEntry::Action(FlatAction::Loop { body: body_id })
             }
 
             Action::Attempt { action } => {
-                let id = self.alloc();
-                let child_id = self.flatten_node(*action, workflow_root)?;
-                self.entries[id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Attempt { child: child_id }));
-                Ok(ActionId(id.0))
+                let child_id = self.flatten_action(*action, workflow_root)?;
+                FlatEntry::Action(FlatAction::Attempt { child: child_id })
             }
 
             Action::Step(StepRef::Named(name)) => {
-                let id = self.alloc();
-                self.entries[id.0 as usize] = Some(FlatEntry::Action(FlatAction::Step {
+                FlatEntry::Action(FlatAction::Step {
                     target: StepTarget::Named(name),
-                }));
-                Ok(ActionId(id.0))
+                })
             }
 
             Action::Step(StepRef::Root) => {
                 let root = workflow_root.ok_or(FlattenError::StepRootInStepBody)?;
-                let id = self.alloc();
-                self.entries[id.0 as usize] = Some(FlatEntry::Action(FlatAction::Step {
+                FlatEntry::Action(FlatAction::Step {
                     target: StepTarget::Resolved(root),
-                }));
-                Ok(ActionId(id.0))
+                })
+            }
+        };
+        self.entries[action_id.0 as usize] = Some(entry);
+        Ok(())
+    }
+
+    /// Fill a child slot with an action. Single-entry actions are inlined
+    /// directly into the slot (the FlatConfigEntryId becomes an ActionId).
+    /// Multi-entry actions (Pipe/Parallel/Branch) are flattened elsewhere
+    /// via flatten_action, and a ChildRef is written into the slot.
+    fn fill_child_slot(
+        &mut self,
+        action: Action,
+        slot: FlatConfigEntryId,
+        workflow_root: Option<ActionId>,
+    ) -> Result<(), FlattenError> {
+        match action {
+            Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
+                let action_id = self.flatten_action(action, workflow_root)?;
+                self.entries[slot.0 as usize] =
+                    Some(FlatEntry::ChildRef { action: action_id });
+            }
+            single_entry => {
+                // Inline: this child slot IS the action. Convert to ActionId.
+                self.flatten_action_at(single_entry, ActionId(slot.0), workflow_root)?;
             }
         }
+        Ok(())
+    }
+
+    /// Fill contiguous child slots from a Vec<Action>.
+    fn fill_child_slots(
+        &mut self,
+        actions: Vec<Action>,
+        start: FlatConfigEntryId,
+        workflow_root: Option<ActionId>,
+    ) -> Result<(), FlattenError> {
+        for (i, action) in actions.into_iter().enumerate() {
+            self.fill_child_slot(action, start + i as u32, workflow_root)?;
+        }
+        Ok(())
     }
 
     /// Resolve step names and produce the final FlatConfig.
@@ -436,7 +406,7 @@ impl UnresolvedFlatConfig {
             .enumerate()
             .map(|(i, slot)| {
                 let entry = slot.ok_or(FlattenError::UninitializedEntry {
-                    index: EntryId(i as u32),
+                    index: FlatConfigEntryId(i as u32),
                 })?;
                 entry.try_map_target(|target| match target {
                     StepTarget::Named(name) => step_roots
@@ -469,11 +439,11 @@ fn flatten(config: Config) -> Result<FlatConfig, FlattenError> {
 
     // The workflow root will be at the next alloc position.
     let workflow_root = ActionId(unresolved_flat_config.entries.len() as u32);
-    unresolved_flat_config.flatten_node(config.workflow, Some(workflow_root))?;
+    unresolved_flat_config.flatten_action(config.workflow, Some(workflow_root))?;
 
     let mut step_roots = HashMap::new();
     for (name, step_action) in config.steps {
-        let step_root = unresolved_flat_config.flatten_node(step_action, None)?;
+        let step_root = unresolved_flat_config.flatten_action(step_action, None)?;
         step_roots.insert(name, step_root);
     }
 
