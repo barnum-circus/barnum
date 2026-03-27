@@ -118,13 +118,16 @@ traverse(action)
 Action::Traverse { action } => {
     let items = input.as_array()
         .expect("Traverse input must be an array");
-    let futures: Vec<_> = items.iter()
+    let results = stream::iter(items)
         .map(|item| evaluate(action, item.clone(), steps))
-        .collect();
-    let results = futures::future::try_join_all(futures).await?;
+        .buffer_unordered(concurrency_limit)
+        .try_collect::<Vec<_>>()
+        .await?;
     Ok(Value::Array(results))
 }
 ```
+
+`try_join_all` would spawn unbounded concurrent tasks — 50,000 files means 50,000 simultaneous FFI calls, exhausting file descriptors and IPC capacity. `buffer_unordered` enforces a concurrency ceiling. The limit is configurable (step-level or global).
 
 ### All
 
@@ -312,6 +315,8 @@ Action::Recover { action, fallback } => {
 ```
 
 The fallback receives both the error and the original input.
+
+As currently defined, Recover is a blind catch-all. It will swallow infrastructure failures (V8 OOM, module load crash, IPC timeout) alongside domain errors (expected HTTP 404, validation failure). Production implementation must distinguish these — either via an error discriminator on the Recover node or by classifying errors into kinds that Recover can filter on.
 
 ### Step
 
@@ -601,3 +606,9 @@ BarnumConfig.fromConfig({
 3. **FlatMap.** Traverse followed by flatten. Useful when each element produces an array and results should be concatenated. Can be expressed as `sequence(traverse(action), flattenHandler)` but a dedicated node would avoid the utility handler. Deferred.
 
 4. **Predicate convenience.** Match requires the input to be a discriminated union. Producing the union requires an explicit classification handler. A `branch(predicate, ifTrue, ifFalse)` combinator that bundles predicate evaluation + binary match would reduce boilerplate at the cost of a less general primitive.
+
+5. **Rust-native builtins.** A `Builtin` AST node for synchronous, FFI-free JSON transformations (`Flatten`, `ExtractField`, `Merge`, `IsNotEmpty`). These execute entirely in the Rust VM, bypassing Node IPC. Eliminates the need for trivial adapter handlers that exist only to reshape data. Also resolves FlatMap (item 3) and predicate convenience (item 4) without FFI overhead. Deferred — V1 is TypeScript-only.
+
+6. **Recover error discrimination.** Recover currently catches all errors indiscriminately. Should accept an error filter — either a list of catchable error kinds or a predicate — so infrastructure failures (V8 OOM, IPC timeout) bypass recovery and propagate to a supervisor.
+
+7. **Handler idempotency.** Loop, Recover, and Step enable re-execution of Call nodes. The engine provides deterministic control flow but cannot enforce pure functions. Handlers that mutate external state (database writes, file deletes) must be idempotent at the domain level, or the engine must provide at-most-once delivery guarantees via checkpointing.
