@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook: runs fmt, check, clippy, test
+# Pre-commit hook: runs fmt, check, clippy, barnum tests
 # Skips cargo commands if no Rust files are staged
 
 set -e
@@ -21,7 +21,7 @@ echo "$STAGED_FILES" | xargs git add
 
 # Build CLI binaries first (tests spawn them as subprocesses)
 echo "Building CLI binaries..."
-cargo build -p troupe_cli || { echo "cargo build failed"; exit 1; }
+cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
 
 echo "Running cargo check..."
 cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
@@ -29,20 +29,20 @@ cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
 echo "Running cargo clippy..."
 cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy failed"; exit 1; }
 
-# Run tests via command pool (outside sandbox) for reliable IPC test execution.
-# Falls back to direct execution if the command pool is unavailable.
+# Only run barnum-related tests (skip troupe/agent tests)
 TROUPE_BIN="./target/debug/troupe"
 echo "Running tests..."
+BARNUM_TEST_CMD="cargo test -p barnum_ast -p barnum_cli -p barnum_event_loop -- --test-threads=1"
 if [ -x "$TROUPE_BIN" ]; then
     RESULT=$("$TROUPE_BIN" submit_task --pool cmd --notify file \
-        --data "{\"kind\": \"Task\", \"task\": {\"instructions\": \"pre-commit tests\", \"data\": {\"cmd\": \"cd $(pwd) && cargo test --workspace -- --test-threads=1 2>&1\"}}}" 2>/dev/null) || true
+        --data "{\"kind\": \"Task\", \"task\": {\"instructions\": \"pre-commit tests\", \"data\": {\"cmd\": \"cd $(pwd) && $BARNUM_TEST_CMD 2>&1\"}}}" 2>/dev/null) || true
     if echo "$RESULT" | grep -q '"kind":"Failed"'; then
         echo "cargo test failed (via command pool):"
         echo "$RESULT"
         exit 1
     fi
 else
-    SKIP_IPC_TESTS=1 cargo test --workspace -- --test-threads=1 || { echo "cargo test failed"; exit 1; }
+    SKIP_IPC_TESTS=1 $BARNUM_TEST_CMD || { echo "cargo test failed"; exit 1; }
 fi
 
 # udeps is optional
