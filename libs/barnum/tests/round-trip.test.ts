@@ -24,11 +24,10 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
 
-/** Pipe JSON through `barnum run` and parse the output. */
+/** Pipe JSON through `barnum run --config` and parse the output. */
 function roundTrip(input: unknown): unknown {
   const json = JSON.stringify(input);
-  const stdout = execFileSync(BINARY, ["run"], {
-    input: json,
+  const stdout = execFileSync(BINARY, ["run", "--config", json], {
     encoding: "utf-8",
   });
   return JSON.parse(stdout);
