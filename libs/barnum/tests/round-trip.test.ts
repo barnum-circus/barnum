@@ -14,7 +14,7 @@ import {
   step,
   traverse,
   typescript,
-} from "./core.js";
+} from "../src/core.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
@@ -22,33 +22,36 @@ const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
 /** Pipe JSON through `barnum run` and parse the output. */
 function roundTrip(input: unknown): unknown {
   const json = JSON.stringify(input);
-  const stdout = execFileSync(BINARY, ["run"], { input: json, encoding: "utf-8" });
+  const stdout = execFileSync(BINARY, ["run"], {
+    input: json,
+    encoding: "utf-8",
+  });
   return JSON.parse(stdout);
 }
 
 describe("barnum round-trip", () => {
-  it("round-trips a full workflow through the Rust binary", () => {
+  it("exercises every action kind through the Rust binary", () => {
     const workflow = config(
       sequence(
         call(typescript("./setup.ts", "setup")),
         all(
-          call(typescript("./list.ts", "listFiles")),
-          call(typescript("./ident.ts", "identity")),
+          call(typescript("./a.ts", "taskA")),
+          call(typescript("./b.ts", "taskB")),
         ),
-        traverse(call(typescript("./migrate.ts", "migrate"))),
+        traverse(call(typescript("./each.ts", "process"))),
         attempt(call(typescript("./risky.ts", "tryIt"))),
         matchCases({
-          Success: step("Process"),
+          Success: step("Finalize"),
           Failure: call(typescript("./fail.ts", "handleError")),
         }),
         loop(
           sequence(
-            call(typescript("./check.ts", "typeCheck")),
-            call(typescript("./signal.ts", "loopSignal")),
+            call(typescript("./check.ts", "poll")),
+            call(typescript("./signal.ts", "decide")),
           ),
         ),
       ),
-      { Process: call(typescript("./process.ts", "run")) },
+      { Finalize: call(typescript("./done.ts", "finalize")) },
     );
 
     const output = roundTrip(workflow);

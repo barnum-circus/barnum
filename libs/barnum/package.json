@@ -26,6 +26,8 @@
   ],
   "sideEffects": false,
   "devDependencies": {
+    "@types/node": "^25.5.0",
+    "prettier": "^3.8.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   }
