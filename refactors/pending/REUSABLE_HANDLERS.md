@@ -55,18 +55,24 @@ Two fundamental kinds: inline code (a string, interpreted) and handlers (a file,
 ```ts
 // Internal serialized form (what goes to Rust)
 type Executor =
-  | { kind: "Inline"; language: "bash"; source: string }
-  | { kind: "Inline"; language: "javascript"; source: string }
-  | { kind: "Handler"; language: "bash"; path: string }
-  | { kind: "Handler"; language: "typescript"; path: string;
+  | { kind: "Inline"; executor: InlineExecutor }
+  | { kind: "Handler"; executor: HandlerExecutor }
+
+type InlineExecutor =
+  | { language: "bash"; source: string }
+  | { language: "typescript"; source: string }
+
+type HandlerExecutor =
+  | { language: "bash"; path: string }
+  | { language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-One enum, two discriminants: `kind` (how code is loaded) and `language` (what interpreter runs it). Each variant carries only the fields that make sense for that combination — `stepConfig` only exists on TypeScript handlers.
+Three unions, each with two variants. `kind` discriminates how code is loaded; `language` discriminates the interpreter within each kind. `stepConfig` only exists on `HandlerExecutor::TypeScript`. Impossible states are unrepresentable.
 
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
-Currently only inline Bash and TypeScript handlers are implemented. Inline JavaScript (serialized via `fn.toString()`) and external Bash files are future additions — see "Speculation: the full 2×2" below.
+Currently only inline Bash and TypeScript handlers are implemented. Inline TypeScript (serialized via `fn.toString()`) and Bash handlers (external `.sh` files) are future additions — see "Speculation: the full 2×2" below.
 
 Executors never appear at the action level. They are always wrapped in a workflow primitive (Unit).
 
@@ -98,20 +104,28 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 
 ```rust
 /// How computation runs. Always wrapped in a workflow primitive.
-/// Discriminated by (kind, language). Each variant carries only the fields
-/// that make sense for that combination.
+#[serde(tag = "kind")]
 pub enum Executor {
-    InlineBash { source: String },
-    InlineJavaScript { source: String },
-    HandlerBash { path: String },
-    HandlerTypeScript {
+    Inline(InlineExecutor),
+    Handler(HandlerExecutor),
+}
+
+#[serde(tag = "language")]
+pub enum InlineExecutor {
+    Bash { source: String },
+    TypeScript { source: String },
+}
+
+#[serde(tag = "language")]
+pub enum HandlerExecutor {
+    Bash { path: String },
+    TypeScript {
         path: String,
         exported_as: Option<String>,
         step_config: Option<Value>,
         value_schema: Option<Value>,
     },
 }
-// Serializes as { "kind": "Inline"|"Handler", "language": "bash"|..., ... }
 
 /// How computations compose. The AST of the workflow language.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -128,10 +142,16 @@ pub enum Action {
 ```ts
 // Internal serialized form (mirrors Rust, produced by fromConfig resolution)
 type Executor =
-  | { kind: "Inline"; language: "bash"; source: string }
-  | { kind: "Inline"; language: "javascript"; source: string }
-  | { kind: "Handler"; language: "bash"; path: string }
-  | { kind: "Handler"; language: "typescript"; path: string;
+  | { kind: "Inline"; executor: InlineExecutor }
+  | { kind: "Handler"; executor: HandlerExecutor }
+
+type InlineExecutor =
+  | { language: "bash"; source: string }
+  | { language: "typescript"; source: string }
+
+type HandlerExecutor =
+  | { language: "bash"; path: string }
+  | { language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 
 // User-facing executor input (what users write in configs)
@@ -164,10 +184,10 @@ import tsCheck from "@barnum/ts-check";
     kind: "Sequence",
     actions: [
       { kind: "Unit", executor: tsCheck },
-      { kind: "Unit", executor: { kind: "Inline", language: "bash", source: `jq 'if .failedFiles | length > 0
+      { kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: `jq 'if .failedFiles | length > 0
         then [{kind: "Fix", value: .}]
         else [{kind: "Done", value: {}}]
-        end'` } },
+        end'` } } },
     ],
   },
   next: ["Fix", "Done"],
@@ -212,10 +232,10 @@ Step fails → catch the error → route to recovery instead of retrying. Inline
     kind: "Sequence",
     actions: [
       { kind: "Try", action: { kind: "Step", step: "RiskyWork" } },
-      { kind: "Unit", executor: { kind: "Inline", language: "bash", source: `jq 'if .kind == "Ok"
+      { kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: `jq 'if .kind == "Ok"
         then [{kind: "Continue", value: .value}]
         else [{kind: "Recover", value: .error}]
-        end'` } },
+        end'` } } },
     ],
   },
   next: ["Continue", "Recover"],
@@ -298,7 +318,7 @@ Requires:
 - Add `Sequence` variant to `Action`
 - Piping logic in the runner
 - Schema regeneration
-- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Inline", language: "bash", source: "..." } }` and `handler` → `{ kind: "Unit", executor: handler }`
+- Update existing configs: `{ kind: "Bash", script: "..." }` → `{ kind: "Unit", executor: { kind: "Inline", executor: { language: "bash", source: "..." } } }` and `handler` → `{ kind: "Unit", executor: handler }`
 
 ### Ship with JS rewrite
 
@@ -317,16 +337,25 @@ Requires:
 **config.rs** — Split `ActionKind` into two enums:
 
 ```rust
+#[serde(tag = "kind")]
 pub enum Executor {
-    InlineBash { source: String },
-    InlineJavaScript { source: String },
-    HandlerBash { path: String },
-    HandlerTypeScript { path: String, exported_as: Option<String>,
+    Inline(InlineExecutor),
+    Handler(HandlerExecutor),
+}
+
+#[serde(tag = "language")]
+pub enum InlineExecutor {
+    Bash { source: String },
+    TypeScript { source: String },
+}
+
+#[serde(tag = "language")]
+pub enum HandlerExecutor {
+    Bash { path: String },
+    TypeScript { path: String, exported_as: Option<String>,
         step_config: Option<Value>, value_schema: Option<Value> },
 }
 
-/// How computations compose.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Action {
     Unit { executor: Executor },
@@ -346,10 +375,12 @@ pub struct SequenceAction {
 match action:
   Unit { executor } ->
     match executor:
-      InlineBash { source } | InlineJavaScript { source } ->
-        spawn interpreter, pipe stdin, return stdout
-      HandlerBash { path } -> spawn bash file, pipe stdin, return stdout
-      HandlerTypeScript { path, .. } -> spawn ts handler, pipe stdin, return stdout
+      Inline(inline) -> match inline:
+        Bash { source } -> spawn bash, pipe stdin, return stdout
+        TypeScript { source } -> eval serialized fn, pipe stdin, return stdout
+      Handler(handler) -> match handler:
+        Bash { path } -> spawn bash file, pipe stdin, return stdout
+        TypeScript { path, .. } -> spawn ts handler, pipe stdin, return stdout
   Sequence(seq) ->
     let data = envelope_stdin
     for action in seq.actions:
@@ -404,18 +435,18 @@ JS rewrite. The Zod tree walking is straightforward, but it needs to happen in J
 
 ## Speculation: the full 2×2
 
-The Executor type has two axes: `{Inline, Handler} × {bash, typescript/javascript}`. Today only two cells are implemented:
+The Executor type has two axes: `{Inline, Handler} × {Bash, TypeScript}`. Today only two cells are implemented:
 
 | | Inline | Handler |
 |---|---|---|
-| **Bash** | `{ kind: "Inline", language: "bash", source: "..." }` | `{ kind: "Handler", language: "bash", path: "..." }` |
-| **TypeScript / JS** | `{ kind: "Inline", language: "javascript", source: "..." }` | `{ kind: "Handler", language: "typescript", path: "...", stepConfig, ... }` (via `createHandler`) |
+| **Bash** | `Inline(Bash { source })` | `Handler(Bash { path })` |
+| **TypeScript** | `Inline(TypeScript { source })` | `Handler(TypeScript { path, stepConfig, ... })` (via `createHandler`) |
 
 **Implemented now**: Inline Bash, TypeScript Handler.
 
-**Future**: Inline JavaScript (serialized via `fn.toString()` — closures that capture locals will break, use a Handler instead). Bash Handler (external `.sh` file — useful for non-trivial shell scripts that don't belong inline in a config).
+**Future**: Inline TypeScript (serialized via `fn.toString()` — closures that capture locals will break, use a Handler instead). Bash Handler (external `.sh` file — useful for non-trivial shell scripts that don't belong inline in a config).
 
-The `kind` (Inline vs Handler) is the structural distinction: string interpreted at runtime vs file loaded and invoked. The `language` selects the interpreter. New languages (Python, etc.) are additional `language` values, not new top-level kinds.
+New languages (Python, etc.) are additional variants on `InlineExecutor` and `HandlerExecutor`.
 
 ## Speculation: Suspend
 
