@@ -92,3 +92,29 @@ export function extractField<
 >(field: TField): TypedAction<TObj, TObj[TField]> {
   return builtin(`extractField:${field}`);
 }
+
+// ---------------------------------------------------------------------------
+// Constant — ignore input, produce a fixed value
+// ---------------------------------------------------------------------------
+
+export function constant<T>(value: T): TypedAction<unknown, T> {
+  return {
+    kind: "Call",
+    handler: {
+      kind: "TypeScript",
+      module: "__builtin__",
+      func: `constant:${JSON.stringify(value)}`,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Range — produce an integer array [start, start+1, ..., end-1]
+// ---------------------------------------------------------------------------
+
+export function range(
+  start: number,
+  end: number,
+): TypedAction<unknown, number[]> {
+  return builtin(`range:${start}:${end}`);
+}

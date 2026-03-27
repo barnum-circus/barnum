@@ -111,31 +111,40 @@ export type HandlerDefinition<
 
 const HANDLER_BRAND = Symbol.for("barnum:handler");
 
-export class Handler<
+/**
+ * A handler that can be invoked directly to produce a TypedAction, or passed
+ * to `call()` for explicit invocation. Created by `createHandler`.
+ *
+ * ```ts
+ * import setup from "./handlers/setup.js";
+ *
+ * // Direct invocation (preferred):
+ * sequence(setup(), process_());
+ *
+ * // With step config:
+ * setup({ stepConfig: { timeout: 5000 } });
+ *
+ * // Explicit call() still works:
+ * call(setup);
+ * ```
+ */
+export type CallableHandler<
   TValue = unknown,
   TOutput = unknown,
   TStepConfig = unknown,
-> {
-  readonly [HANDLER_BRAND] = true;
+> = ((
+  options?: { stepConfig?: TStepConfig },
+) => TypedAction<TValue, TOutput>) & {
+  readonly [HANDLER_BRAND]: true;
   readonly __filePath: string;
   readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
+  readonly __phantom_in: (input: TValue) => void;
+  readonly __phantom_out: () => TOutput;
+  readonly __phantom_step_config: TStepConfig;
+};
 
-  // Phantom types — `declare` means these exist only at the type level.
-  declare readonly __phantom_in: (input: TValue) => void;
-  declare readonly __phantom_out: () => TOutput;
-  declare readonly __phantom_step_config: TStepConfig;
-
-  constructor(
-    definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
-    filePath: string,
-  ) {
-    this.__filePath = filePath;
-    this.__definition = definition;
-  }
-}
-
-export function isHandler(x: unknown): x is Handler {
-  return typeof x === "object" && x !== null && HANDLER_BRAND in x;
+export function isHandler(x: unknown): x is CallableHandler {
+  return typeof x === "function" && HANDLER_BRAND in x;
 }
 
 /**
@@ -170,9 +179,26 @@ function getCallerFilePath(): string {
 
 export function createHandler<TValue, TOutput, TStepConfig = unknown>(
   definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
-): Handler<TValue, TOutput, TStepConfig> {
+): CallableHandler<TValue, TOutput, TStepConfig> {
   const filePath = getCallerFilePath();
-  return new Handler(definition, filePath);
+
+  const fn = ((
+    options?: { stepConfig?: TStepConfig },
+  ): TypedAction<TValue, TOutput> => ({
+    kind: "Call",
+    handler: {
+      kind: "TypeScript",
+      module: filePath,
+      func: "default",
+      stepConfig: options?.stepConfig,
+    },
+  })) as CallableHandler<TValue, TOutput, TStepConfig>;
+
+  Object.defineProperty(fn, HANDLER_BRAND, { value: true });
+  Object.defineProperty(fn, "__filePath", { value: filePath });
+  Object.defineProperty(fn, "__definition", { value: definition });
+
+  return fn;
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +206,7 @@ export function createHandler<TValue, TOutput, TStepConfig = unknown>(
 // ---------------------------------------------------------------------------
 
 export function call<TValue, TOutput, TStepConfig>(
-  handler: Handler<TValue, TOutput, TStepConfig>,
+  handler: CallableHandler<TValue, TOutput, TStepConfig>,
   ...args: unknown extends TStepConfig
     ? [options?: { stepConfig?: TStepConfig }]
     : [options: { stepConfig: TStepConfig }]
