@@ -2,12 +2,81 @@
 
 Features removed from the initial implementation to keep the surface area minimal. To be added incrementally as needed.
 
+## Namespaced Builtins
+
+Current builtins are flat exports from `builtins.ts`: `identity`, `constant`, `merge`, `flatten`, `extractField`, `drop`, `dropResult`, `range`, `recur`, `done`, `tag`. This doesn't scale — as we add result combinators, option types, and more structural transforms, the flat namespace becomes a grab bag.
+
+Proposed namespacing via exported objects:
+
+### `result` — AttemptResult combinators
+
+For working with `AttemptResult<T>` (produced by `attempt()`):
+
+```ts
+import { result } from "barnum/builtins";
+
+// Extract the Ok value, discarding Err (AttemptResult<T> → T | null)
+result.ok()
+
+// Extract the Err value, discarding Ok (AttemptResult<T> → unknown | null)
+result.err()
+
+// Unwrap Ok or throw (AttemptResult<T> → T)
+result.unwrap()
+
+// Map over the Ok value (AttemptResult<T> → AttemptResult<U>)
+result.map(action)
+
+// Provide a fallback for Err (AttemptResult<T> → T)
+result.unwrapOr(fallbackAction)
+```
+
+### `loop` — LoopResult signals
+
+Replace the current `recur()` and `done()` with namespaced equivalents:
+
+```ts
+import { loop as loopBuiltins } from "barnum/builtins";
+
+// These replace the current top-level recur() and done()
+loopBuiltins.continue()  // tag as { kind: "Continue", value: input }
+loopBuiltins.break()     // tag as { kind: "Break", value: input }
+```
+
+Note: import alias needed since `loop` is also an AST combinator. Alternatively, re-export from the `loop` combinator itself: `loop.continue()`, `loop.break()` — though mixing combinator + namespace is unusual.
+
+### `data` — Structural transforms
+
+Group the pure data manipulation builtins:
+
+```ts
+import { data } from "barnum/builtins";
+
+data.identity()           // pass-through
+data.constant(value)      // produce fixed value (no pipeline input)
+data.merge()              // merge array of objects into one
+data.flatten()            // flatten nested array one level
+data.field("name")        // extract a single field (rename of extractField)
+data.drop()               // discard pipeline value
+data.dropResult(action)   // run action for side effects, discard output
+data.range(start, end)    // produce integer array
+data.tag("MyKind")        // wrap as { kind: "MyKind", value: input }
+```
+
+### Migration path
+
+Since backward compatibility doesn't matter, the flat exports can be replaced directly. No re-exports or deprecation.
+
+### Open question: are these builtins or combinators?
+
+Some of these (`result.map`, `result.unwrapOr`) take an action argument and compose it — that makes them combinators, not just builtins. The namespace grouping is still useful, but the implementation may live in `ast.ts` rather than `builtins.ts` since they produce composite AST nodes.
+
 ## Builtin Handler Kind
 
-Rust-native data transformations executed without FFI. Conceptually a variant of `HandlerKind` (not a separate `Action` variant — it's a type of `Call`).
+Rust-native data transformations executed without FFI. Conceptually a variant of `HandlerKind` (not a separate `Action` variant — it's a type of `Invoke`).
 
 Operations:
-- **Tag**: Wraps input as `{ kind, value: input }`. Enables `recur()` (Tag "Continue") and `done()` (Tag "Break") for loop signals.
+- **Tag**: Wraps input as `{ kind, value: input }`. Enables `loop.continue()` (Tag "Continue") and `loop.break()` (Tag "Break") for loop signals.
 - **Identity**: Passes input through unchanged.
 - **Merge**: Merges an array of objects into a single object.
 - **Flatten**: Flattens a nested array one level.
@@ -23,29 +92,29 @@ Reconsider the `createHandler` validator design:
 - **`stepConfigValidator` as a type parameter instead of a runtime validator**: Instead of `stepConfigValidator?: z.ZodType<TStepConfig>`, allow passing `TStepConfig` as a generic type parameter directly (e.g., `createHandler<{ timeout: number }>({...})`). The runtime validator is needed for serialization, but the type parameter approach is more ergonomic for handlers where config shape is known statically.
 - General question: should validators be the only way to specify types, or should explicit type parameters remain an option?
 
-## matchCases Discriminated Union Narrowing
+## Branch Discriminated Union Narrowing
 
-`matchCases` currently uses `any` for per-case input types because runtime dispatch narrows the input per variant, but TypeScript can't express this statically with the current signature. This has two consequences:
+`branch` currently uses `any` for per-case input types because runtime dispatch narrows the input per variant, but TypeScript can't express this statically with the current signature. This has two consequences:
 
-1. **No per-case type narrowing.** Each match case receives `any` as input instead of `Extract<TUnion, { kind: K }>`. Handlers inside cases like `extractField("errors")` work syntactically (any field name is valid on `any`) but lose output type tracking.
+1. **No per-case type narrowing.** Each branch case receives `any` as input instead of `Extract<TUnion, { kind: K }>`. Handlers inside cases like `data.field("errors")` work syntactically (any field name is valid on `any`) but lose output type tracking.
 
-2. **`recur()` and `done()` can't be properly generic.** Semantically, `recur<T>()` should be `TypedAction<T, LoopResult<T, never>>` and `done<T>()` should be `TypedAction<T, LoopResult<never, T>>`. But inside matchCases, `T` infers as `any` (from the `any` input), so both collapse to `LoopResult<any, any>` and the complementary `never` types can't unify as matchCases' `Out`. Currently both return `LoopResult<any, any>` as a workaround.
+2. **`loop.continue()` and `loop.break()` can't be properly generic.** Semantically, `loop.continue<T>()` should be `TypedAction<T, LoopResult<T, never>>` and `loop.break<T>()` should be `TypedAction<T, LoopResult<never, T>>`. But inside branch, `T` infers as `any` (from the `any` input), so both collapse to `LoopResult<any, any>` and the complementary `never` types can't unify as branch's `Out`. Currently both return `LoopResult<any, any>` as a workaround.
 
-The proper fix requires matchCases to accept a mapped type over the discriminated union:
+The proper fix requires branch to accept a mapped type over the discriminated union:
 
 ```ts
-function matchCases<TUnion extends { kind: string }, TOut>(
+function branch<TUnion extends { kind: string }, TOut>(
   cases: { [K in TUnion['kind']]: TypedAction<Extract<TUnion, { kind: K }>, TOut> },
 ): TypedAction<TUnion, TOut>
 ```
 
-The challenge: `TUnion` must be inferred from the sequence context (the preceding action's output), not from the cases object. This likely requires either (a) a two-step builder like `match<ClassifyResult>().cases({...})`, or (b) TypeScript inference improvements in future versions.
+The challenge: `TUnion` must be inferred from the pipe context (the preceding action's output), not from the cases object. This likely requires either (a) a two-step builder like `branch<ClassifyResult>().cases({...})`, or (b) TypeScript inference improvements in future versions.
 
-## Exhaustive matchCases
+## Exhaustive Branch
 
-WORKFLOW_ALGEBRA.md specifies exhaustive match handling: `{ [K in U['kind']]: Action }` ensures every variant has a case. Current implementation uses `Record<string, TypedAction<any, Out>>`, which allows missing or extra cases without compile-time errors.
+WORKFLOW_ALGEBRA.md specifies exhaustive branch handling: `{ [K in U['kind']]: Action }` ensures every variant has a case. Current implementation uses `Record<string, TypedAction<any, Out>>`, which allows missing or extra cases without compile-time errors.
 
-This is blocked on matchCases narrowing above — exhaustiveness requires knowing the input union type.
+This is blocked on branch narrowing above — exhaustiveness requires knowing the input union type.
 
 ## AttemptResult Shape
 
@@ -57,7 +126,7 @@ WORKFLOW_ALGEBRA.md specifies `{ kind: "Success", value } | { kind: "Failure", e
 
 Read-only environment (`context: Value`) on `Config`, passed to all handlers. Carries API keys, workflow IDs, tenant config, etc.
 
-Alternative: user-land Reader Monad pattern using `All` + `Identity` + `Merge` (see WORKFLOW_ALGEBRA.md). This incurs O(N) cloning cost for parallel branches, which the host-level context avoids.
+Alternative: user-land Reader Monad pattern using `parallel` + `identity` + `merge` (see WORKFLOW_ALGEBRA.md). This incurs O(N) cloning cost for parallel branches, which the host-level context avoids.
 
 ## Effect Registries / Side-Effect Context
 
@@ -83,12 +152,12 @@ The error type defaults to `unknown` in TypeScript. The `attempt` combinator wou
 
 Support for streaming data through the pipeline — actions that produce or consume async iterables rather than single values. Relevant for large datasets, real-time feeds, or incremental processing where buffering the full result is impractical.
 
-Open question: is this a new primitive (e.g., `StreamTraverse`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
+Open question: is this a new primitive (e.g., `StreamForEach`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
 
 ## ~~Constant and Range Builtins~~ (Implemented)
 
-Implemented in `libs/barnum/src/builtins.ts`. `constant<T>(value)` and `range(start, end)` are available as TypeScript builtins using placeholder `__builtin__` Call nodes.
+Implemented in `libs/barnum/src/builtins.ts`. `constant<T>(value)` and `range(start, end)` are available as TypeScript builtins using placeholder `__builtin__` Invoke nodes.
 
 ## ~~Handler as Callable~~ (Implemented)
 
-Implemented in `libs/barnum/src/core.ts`. `createHandler` returns a `CallableHandler` — a function that produces `TypedAction` when invoked, with Handler metadata (`__filePath`, `__definition`, brand symbol) attached via `Object.defineProperty`. Direct invocation: `setup()` or `setup({ stepConfig: { timeout: 5000 } })`. `call()` still works for explicit invocation.
+Implemented in `libs/barnum/src/handler.ts`. `createHandler` returns a `CallableHandler` — a function that produces `TypedAction` when invoked, with Handler metadata (`__filePath`, `__definition`, brand symbol) attached via `Object.assign`. Direct invocation: `setup()` or `setup({ stepConfig: { timeout: 5000 } })`. `invoke()` still works for explicit invocation.
