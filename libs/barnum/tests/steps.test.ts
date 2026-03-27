@@ -140,12 +140,12 @@ describe("workflow self-reference", () => {
 
     expect(cfg.workflow.kind).toBe("Pipe");
     const workflow = cfg.workflow as { kind: string; actions: unknown[] };
-    const branchAction = workflow.actions[workflow.actions.length - 1] as {
+    const branchAction = workflow.actions.at(-1) as {
       kind: string;
       cases: Record<string, { kind: string; actions: unknown[] }>;
     };
     const hasErrorsPipe = branchAction.cases.HasErrors;
-    expect(hasErrorsPipe.actions[hasErrorsPipe.actions.length - 1]).toEqual({
+    expect(hasErrorsPipe.actions.at(-1)).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });
@@ -180,13 +180,13 @@ describe("mutual recursion", () => {
     // A body ends with a Step reference to B
     const aBody = cfg.steps!.A as { kind: string; actions: unknown[] };
     expect(aBody.kind).toBe("Pipe");
-    expect(aBody.actions[aBody.actions.length - 1]).toEqual({
+    expect(aBody.actions.at(-1)).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "B" },
     });
     // B body ends with a Step reference to A
     const bBody = cfg.steps!.B as { kind: string; actions: unknown[] };
-    expect(bBody.actions[bBody.actions.length - 1]).toEqual({
+    expect(bBody.actions.at(-1)).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "A" },
     });
@@ -224,24 +224,79 @@ describe("mutual recursion", () => {
 });
 
 // -----------------------------------------------------------------------
-// Kitchen sink — exercises all features together
+// Showcase — mutual recursion between two steps
 // -----------------------------------------------------------------------
+//
+// A type-check → fix cycle using two steps that reference each other.
+// TypeCheck discovers errors and jumps to FixAll. FixAll patches each
+// file and jumps back to TypeCheck. The cycle continues until clean.
+
+describe("showcase: type-check ↔ fix cycle", () => {
+  it("two steps reference each other via stepRef", () => {
+    const cfg = configBuilder()
+      .registerSteps(({ stepRef }) => ({
+        TypeCheck: pipe(
+          typeCheck(),
+          classifyErrors(),
+          branch({
+            HasErrors: stepRef("FixAll"),
+            Clean: pipe(drop(), constant({ success: true })),
+          }),
+        ),
+        FixAll: pipe(
+          forEach(fix()),
+          drop(),
+          stepRef("TypeCheck"),
+        ),
+      }))
+      .workflow(({ steps }) =>
+        pipe(
+          constant({ project: "my-app" }),
+          setup(),
+          listFiles(),
+          forEach(migrate()),
+          steps.TypeCheck,
+        ),
+      );
+
+    expect(cfg.steps).toHaveProperty("TypeCheck");
+    expect(cfg.steps).toHaveProperty("FixAll");
+    expect(cfg.workflow.kind).toBe("Pipe");
+  });
+});
+
+// -----------------------------------------------------------------------
+// Kitchen sink — a migration workflow that exercises every feature
+// -----------------------------------------------------------------------
+//
+// Scenario: a codebase migration tool that:
+//   1. Sets up the project environment           (registered step, batch 1)
+//   2. Lists and migrates all source files        (registered step, batch 2 — refs batch 1 via `steps`)
+//   3. Runs a type-check → fix loop               (registered step, batch 2 — mutual recursion via `stepRef`)
+//   4. Orchestrates everything in a workflow       (uses `steps` for registered steps, `self` for restart)
+//
+// Features demonstrated:
+//   - Object-form registerSteps (batch 1)
+//   - Callback-form registerSteps with `steps` (cross-batch) and `stepRef` (intra-batch)
+//   - Workflow with `steps` and `self`
 
 describe("kitchen sink", () => {
-  it("steps, stepRef, and self across registerSteps and workflow", () => {
+  it("migration workflow: setup → migrate → fix cycle, restart on failure", () => {
     const cfg = configBuilder()
-      // Batch 1: simple step, no cross-references (object form)
+      // ── Batch 1 (object form): standalone steps ──
       .registerSteps({
         Setup: setup(),
       })
-      // Batch 2: callback form — steps (prior batch) + stepRef (intra-batch)
+      // ── Batch 2 (callback form): cross-batch refs + mutual recursion ──
       .registerSteps(({ steps, stepRef }) => ({
-        Pipeline: pipe(
+        // MigrateAll chains through the previously registered Setup step
+        MigrateAll: pipe(
           steps.Setup,
           listFiles(),
           forEach(migrate()),
-          stepRef("FixCycle"),
+          stepRef("FixCycle"), // jump to the fix cycle defined below
         ),
+        // FixCycle: type-check, classify errors, fix or finish
         FixCycle: loop(
           pipe(
             typeCheck(),
@@ -253,45 +308,46 @@ describe("kitchen sink", () => {
           ),
         ),
       }))
-      // Workflow: steps (all registered) + self (root restart)
+      // ── Workflow: orchestrate with self-restart on persistent errors ──
       .workflow(({ steps, self }) =>
         pipe(
-          constant({ project: "test" }),
-          steps.Pipeline,
+          constant({ project: "my-app" }),
+          steps.MigrateAll,
           classifyErrors(),
           branch({
-            HasErrors: pipe(drop(), self),
-            Clean: pipe(drop(), constant({ done: true })),
+            HasErrors: pipe(drop(), self),  // restart the entire workflow
+            Clean: pipe(drop(), constant({ migrated: true })),
           }),
         ),
       );
 
-    // All steps registered
+    // ── Verify structure ──
+
+    // All three steps registered
     expect(cfg.steps).toHaveProperty("Setup");
-    expect(cfg.steps).toHaveProperty("Pipeline");
+    expect(cfg.steps).toHaveProperty("MigrateAll");
     expect(cfg.steps).toHaveProperty("FixCycle");
 
-    // Pipeline starts with steps.Setup reference
-    const pipeline = cfg.steps!.Pipeline as { kind: string; actions: unknown[] };
-    expect(pipeline.actions[0]).toEqual({
+    // MigrateAll starts with a reference to Setup (cross-batch via `steps`)
+    const migrateAll = cfg.steps!.MigrateAll as { kind: string; actions: unknown[] };
+    expect(migrateAll.actions[0]).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "Setup" },
     });
 
-    // Pipeline ends with stepRef("FixCycle")
-    expect(pipeline.actions[pipeline.actions.length - 1]).toEqual({
+    // MigrateAll ends with a reference to FixCycle (intra-batch via `stepRef`)
+    expect(migrateAll.actions.at(-1)).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "FixCycle" },
     });
 
-    // Workflow branch HasErrors ends with self (Root step)
+    // Workflow's HasErrors branch ends with self (Root step)
     const workflowActions = (cfg.workflow as { actions: unknown[] }).actions;
-    const branchAction = workflowActions[workflowActions.length - 1] as {
+    const branchAction = workflowActions.at(-1) as {
       kind: string;
       cases: Record<string, { kind: string; actions: unknown[] }>;
     };
-    const hasErrorsActions = branchAction.cases.HasErrors.actions;
-    expect(hasErrorsActions[hasErrorsActions.length - 1]).toEqual({
+    expect(branchAction.cases.HasErrors.actions.at(-1)).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });
