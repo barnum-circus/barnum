@@ -68,7 +68,7 @@ type HandlerExecutor =
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-Three unions, each with two variants. Every union discriminates on `kind` with upper camel case. `stepConfig` only exists on `HandlerExecutor::TypeScript`. Impossible states are unrepresentable.
+Three unions, each with two variants. `stepConfig` only exists on `HandlerExecutor::TypeScript`.
 
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
