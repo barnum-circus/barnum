@@ -55,13 +55,14 @@ Two fundamental kinds: inline code (a string, interpreted) and handlers (a file,
 ```ts
 // Internal serialized form (what goes to Rust)
 type Executor =
-  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
+  | { kind: "Inline"; language: "bash"; source: string }
+  | { kind: "Inline"; language: "javascript"; source: string }
   | { kind: "Handler"; language: "bash"; path: string }
   | { kind: "Handler"; language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
 ```
 
-The outer discriminant (`kind`) is how code is loaded: inline source string vs external file. Inline is symmetric across languages (always `{ language, source }`). Handler is discriminated by `language` because different languages have different shapes — TypeScript handlers carry `stepConfig`, `valueSchema`, `exportedAs`; Bash handlers just have a `path`.
+One enum, two discriminants: `kind` (how code is loaded) and `language` (what interpreter runs it). Each variant carries only the fields that make sense for that combination — `stepConfig` only exists on TypeScript handlers.
 
 The Handler executor is never written directly by users — it's produced internally by `fromConfig` when resolving `Handler` objects. Users write `createHandler()` and import handlers into configs. See `refactors/past/OPAQUE_HANDLER.md`.
 
@@ -97,28 +98,20 @@ Each primitive is irreducible — it cannot be expressed as a combination of oth
 
 ```rust
 /// How computation runs. Always wrapped in a workflow primitive.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
+/// Discriminated by (kind, language). Each variant carries only the fields
+/// that make sense for that combination.
 pub enum Executor {
-    /// Inline code, interpreted by the specified language runtime.
-    /// Symmetric across languages: always { language, source }.
-    Inline(InlineAction),
-    /// External handler module, loaded and invoked.
-    /// Nested enum on language — different languages have different shapes.
-    Handler(HandlerAction),
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "language")]
-pub enum HandlerAction {
-    Bash { path: String },
-    TypeScript {
+    InlineBash { source: String },
+    InlineJavaScript { source: String },
+    HandlerBash { path: String },
+    HandlerTypeScript {
         path: String,
         exported_as: Option<String>,
         step_config: Option<Value>,
         value_schema: Option<Value>,
     },
 }
+// Serializes as { "kind": "Inline"|"Handler", "language": "bash"|..., ... }
 
 /// How computations compose. The AST of the workflow language.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -135,7 +128,8 @@ pub enum Action {
 ```ts
 // Internal serialized form (mirrors Rust, produced by fromConfig resolution)
 type Executor =
-  | { kind: "Inline"; language: "bash" | "javascript"; source: string }
+  | { kind: "Inline"; language: "bash"; source: string }
+  | { kind: "Inline"; language: "javascript"; source: string }
   | { kind: "Handler"; language: "bash"; path: string }
   | { kind: "Handler"; language: "typescript"; path: string;
       exportedAs?: string; stepConfig?: unknown; valueSchema?: unknown }
@@ -323,42 +317,39 @@ Requires:
 **config.rs** — Split `ActionKind` into two enums:
 
 ```rust
-/// How computation runs. Always wrapped in a workflow primitive.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
 pub enum Executor {
-    Inline(InlineAction),
-    Handler(HandlerAction),  // nested enum on language
+    InlineBash { source: String },
+    InlineJavaScript { source: String },
+    HandlerBash { path: String },
+    HandlerTypeScript { path: String, exported_as: Option<String>,
+        step_config: Option<Value>, value_schema: Option<Value> },
 }
 
 /// How computations compose.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind")]
 pub enum Action {
-    /// Execute a single handler.
     Unit { executor: Executor },
-    /// Run actions in order, piping each one's output to the next's input.
-    /// Only the final action's output is parsed as follow-up tasks.
     Sequence(SequenceAction),
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SequenceAction {
-    /// The actions to run in order. Must contain at least one action.
     pub actions: Vec<Action>,
 }
 ```
 
 **config.rs validation** — Sequence must have at least one action. Empty sequence is a config error.
 
-**runner dispatch** — Two match arms on Action:
+**runner dispatch**:
 
 ```
 match action:
   Unit { executor } ->
     match executor:
-      Inline(inline) -> spawn interpreter (bash, etc.), pipe stdin, return stdout
-      Handler(handler) -> spawn ts handler, pipe stdin, return stdout
+      InlineBash { source } | InlineJavaScript { source } ->
+        spawn interpreter, pipe stdin, return stdout
+      HandlerBash { path } -> spawn bash file, pipe stdin, return stdout
+      HandlerTypeScript { path, .. } -> spawn ts handler, pipe stdin, return stdout
   Sequence(seq) ->
     let data = envelope_stdin
     for action in seq.actions:
