@@ -94,12 +94,71 @@ export type Config<Out = any> = {
  * __in: covariant — enables config() to reject workflows that expect input
  *   (the contravariant phantom makes never the most permissive input,
  *   so a second covariant phantom is needed for the entry point check)
+ * Refs: tracks step reference names through combinators for compile-time
+ *   validation in registerSteps (see ValidateStepRefs)
  */
-export type TypedAction<In = unknown, Out = unknown> = Action & {
+export type TypedAction<
+  In = unknown,
+  Out = unknown,
+  Refs extends string = never,
+> = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
   __in?: In;
+  __refs?: { _brand: Refs };
 };
+
+// ---------------------------------------------------------------------------
+// Type extraction utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the input type from a TypedAction.
+ *
+ * Uses direct phantom field extraction (not full TypedAction matching) to
+ * avoid the `TypedAction<any, any, any>` constraint which fails for In=never
+ * due to __phantom_in contravariance.
+ */
+export type ExtractInput<T> =
+  T extends { __phantom_in?: (input: infer In) => void } ? In : never;
+
+/**
+ * Extract the output type from a TypedAction.
+ *
+ * Uses direct phantom field extraction to avoid constraint issues.
+ */
+export type ExtractOutput<T> =
+  T extends { __phantom_out?: () => infer Out } ? Out : never;
+
+/**
+ * Extract step reference names tracked in a TypedAction's Refs parameter.
+ *
+ * Uses direct __refs extraction (not full TypedAction matching) to avoid
+ * variance issues with contravariant __phantom_in when In = never.
+ */
+export type ExtractRefs<T> =
+  T extends { __refs?: { _brand: infer R } }
+    ? R extends string
+      ? R
+      : never
+    : never;
+
+/**
+ * Validates that all step references in R resolve to known step names.
+ * Known names = keys of R (current batch) + keys of TSteps (previously registered).
+ *
+ * When valid: resolves to {} (transparent intersection).
+ * When invalid: resolves to a type with __error that causes a compile error.
+ */
+export type ValidateStepRefs<
+  R extends Record<string, Action>,
+  TSteps extends Record<string, Action> = {},
+> = [ExtractRefs<R[keyof R]>] extends [keyof R | keyof TSteps]
+  ? // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    {}
+  : {
+      __error: `Step reference to undefined step: ${Exclude<ExtractRefs<R[keyof R]>, keyof R | keyof TSteps> & string}`;
+    };
 
 // ---------------------------------------------------------------------------
 // Combinators
@@ -128,37 +187,52 @@ export function invoke<TValue, TOutput, TStepConfig>(
   };
 }
 
-export function forEach<In, Out>(
-  action: TypedAction<In, Out>,
-): TypedAction<In[], Out[]> {
-  return { kind: "ForEach", action };
+export function forEach<In, Out, R extends string = never>(
+  action: TypedAction<In, Out, R>,
+): TypedAction<In[], Out[], R> {
+  return { kind: "ForEach", action } as TypedAction<In[], Out[], R>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function branch<Out>(
-  cases: Record<string, TypedAction<any, Out>>,
-): TypedAction<{ kind: string }, Out> {
-  return { kind: "Branch", cases };
+export function branch<Out, R extends string = never>(
+  cases: Record<string, TypedAction<any, Out, R>>,
+): TypedAction<{ kind: string }, Out, R> {
+  return { kind: "Branch", cases } as TypedAction<{ kind: string }, Out, R>;
 }
 
 export type LoopResult<TContinue, TBreak> =
   | { kind: "Continue"; value: TContinue }
   | { kind: "Break"; value: TBreak };
 
-export function loop<In, Out>(
-  body: TypedAction<In, LoopResult<In, Out>>,
-): TypedAction<In, Out> {
-  return { kind: "Loop", body };
+export function loop<In, Out, R extends string = never>(
+  body: TypedAction<In, LoopResult<In, Out>, R>,
+): TypedAction<In, Out, R> {
+  return { kind: "Loop", body } as TypedAction<In, Out, R>;
 }
 
 export type AttemptResult<T> =
   | { kind: "Ok"; value: T }
   | { kind: "Err"; error: unknown };
 
-export function attempt<In, Out>(
-  action: TypedAction<In, Out>,
-): TypedAction<In, AttemptResult<Out>> {
-  return { kind: "Attempt", action };
+export function attempt<In, Out, R extends string = never>(
+  action: TypedAction<In, Out, R>,
+): TypedAction<In, AttemptResult<Out>, R> {
+  return { kind: "Attempt", action } as TypedAction<In, AttemptResult<Out>, R>;
+}
+
+/**
+ * Create a typed step reference. The name is tracked at the type level
+ * via the Refs parameter so registerSteps can validate all references resolve.
+ *
+ * Returns TypedAction<any, any, N> — a universal connector since the actual
+ * types depend on the referenced step's definition (which may not be fully
+ * typed during mutual recursion).
+ */
+export function stepRef<N extends string>(name: N): TypedAction<any, any, N> {
+  return {
+    kind: "Step",
+    step: { kind: "Named", name },
+  } as AnyAction;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +240,16 @@ export function attempt<In, Out>(
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyAction = TypedAction<any, any>;
+type AnyAction = TypedAction<any, any, any>;
+
+/**
+ * Strip the Refs parameter from registered step types. Refs are a compile-time
+ * mechanism for validating step references in registerSteps — once validated,
+ * they shouldn't propagate into the workflow callback's return type.
+ */
+type StripRefs<TSteps> = {
+  [K in keyof TSteps]: TypedAction<ExtractInput<TSteps[K]>, ExtractOutput<TSteps[K]>>;
+};
 
 /** Simple config with no named steps. */
 export function config<Out>(workflow: TypedAction<never, Out>): Config<Out> {
@@ -176,44 +259,36 @@ export function config<Out>(workflow: TypedAction<never, Out>): Config<Out> {
 /** Builder for configs with type-safe named steps. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
-  private readonly _steps: Record<string, AnyAction>;
+  private readonly _steps: Record<string, Action>;
 
-  constructor(steps: Record<string, AnyAction> = {}) {
+  constructor(steps: Record<string, Action> = {}) {
     this._steps = steps;
   }
 
   /**
-   * Register named steps. Accepts either a static object or a function
-   * for mutual recursion between steps.
+   * Register named steps. Use `stepRef("B")` to create cross-references
+   * between steps — all references are validated at compile time.
    *
-   * Static form preserves precise action types:
    * ```ts
-   * .registerSteps({ Check: check(), Finalize: finalize() })
+   * .registerSteps({
+   *   A: pipe(check(), stepRef("B")),
+   *   B: pipe(check(), stepRef("A")),
+   * })
    * ```
    *
-   * Function form enables mutual recursion. Step references are
-   * typed as `AnyAction` (TypeScript can't infer per-step types
-   * across mutual references — that's a circular dependency):
+   * References to previously registered steps are also valid:
    * ```ts
-   * .registerSteps((steps) => ({
-   *   Writer: pipe(draft(), steps.Reviewer),
-   *   Reviewer: pipe(critique(), branch({
-   *     Approved: publish(),
-   *     Rejected: steps.Writer,
-   *   })),
-   * }))
+   * .registerSteps({ Setup: setup() })
+   * .registerSteps({ Pipeline: pipe(stepRef("Setup"), process()) })
    * ```
    */
-  registerSteps<NewSteps extends Record<string, AnyAction>>(
-    stepsOrFn:
-      | NewSteps
-      | ((steps: TSteps & Record<string, AnyAction>) => NewSteps),
-  ): ConfigBuilder<TSteps & NewSteps> {
-    const newSteps =
-      typeof stepsOrFn === "function"
-        ? stepsOrFn(stepRefProxy())
-        : stepsOrFn;
-    return new ConfigBuilder({ ...this._steps, ...newSteps });
+  registerSteps<R extends Record<string, Action>>(
+    steps: R & ValidateStepRefs<R, TSteps>,
+  ): ConfigBuilder<TSteps & R> {
+    return new ConfigBuilder({
+      ...this._steps,
+      ...steps,
+    }) as ConfigBuilder<TSteps & R>;
   }
 
   /**
@@ -235,7 +310,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
    */
   workflow<Out>(
     build: (
-      steps: TSteps,
+      steps: StripRefs<TSteps>,
       self: TypedAction<never, never>,
     ) => TypedAction<never, Out>,
   ): Config<Out> {
@@ -247,26 +322,13 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
       kind: "Step",
       step: { kind: "Root" },
     } as TypedAction<never, never>;
-    const workflow = build(stepRefs as TSteps, self);
+    const workflow = build(stepRefs as StripRefs<TSteps>, self);
     const result: Config<Out> = { workflow };
     if (Object.keys(this._steps).length > 0) {
       result.steps = this._steps;
     }
     return result;
   }
-}
-
-/**
- * Creates a Proxy that returns `{ kind: "Step", step: { kind: "Named", name } }`
- * for any property access. Used to provide step references for mutual recursion.
- */
-function stepRefProxy<T extends Record<string, AnyAction>>(): T {
-  return new Proxy(Object.create(null) as T, {
-    get(_target, prop: string | symbol) {
-      if (typeof prop === "symbol") return undefined;
-      return { kind: "Step", step: { kind: "Named", name: prop } } as AnyAction;
-    },
-  });
 }
 
 export function configBuilder(): ConfigBuilder {

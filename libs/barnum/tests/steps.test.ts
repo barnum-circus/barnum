@@ -6,6 +6,7 @@ import {
   branch,
   pipe,
   forEach,
+  stepRef,
 } from "../src/ast.js";
 import {
   constant,
@@ -161,16 +162,16 @@ describe("workflow self-reference", () => {
 });
 
 // -----------------------------------------------------------------------
-// Mutual recursion
+// Mutual recursion via stepRef
 // -----------------------------------------------------------------------
 
 describe("mutual recursion", () => {
-  it("registerSteps callback enables cross-references between steps", () => {
+  it("stepRef enables cross-references between steps", () => {
     const cfg = configBuilder()
-      .registerSteps((steps) => ({
-        A: pipe(check(), steps.B),
-        B: pipe(check(), steps.A),
-      }))
+      .registerSteps({
+        A: pipe(check(), stepRef("B")),
+        B: pipe(check(), stepRef("A")),
+      })
       .workflow((steps) =>
         pipe(constant({ result: "test" }), steps.A),
       );
@@ -192,12 +193,12 @@ describe("mutual recursion", () => {
     });
   });
 
-  it("callback receives previously registered steps", () => {
+  it("stepRef resolves against previously registered steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Setup: setup() })
-      .registerSteps((steps) => ({
-        Pipeline: pipe(steps.Setup, process()),
-      }))
+      .registerSteps({
+        Pipeline: pipe(stepRef("Setup"), process()),
+      })
       .workflow((steps) =>
         pipe(constant({ project: "test" }), steps.Pipeline),
       );
@@ -210,5 +211,14 @@ describe("mutual recursion", () => {
       kind: "Step",
       step: { kind: "Named", name: "Setup" },
     });
+  });
+
+  it("rejects invalid step references at compile time", () => {
+    configBuilder()
+      // @ts-expect-error — "Bt" is not a valid step name
+      .registerSteps({
+        A: pipe(check(), stepRef("Bt")),
+        B: pipe(check(), stepRef("A")),
+      });
   });
 });
