@@ -85,35 +85,10 @@ Support for streaming data through the pipeline — actions that produce or cons
 
 Open question: is this a new primitive (e.g., `StreamTraverse`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
 
-## Constant and Range Builtins
+## ~~Constant and Range Builtins~~ (Implemented)
 
-Two additional Rust-native builtins:
+Implemented in `libs/barnum/src/builtins.ts`. `constant<T>(value)` and `range(start, end)` are available as TypeScript builtins using placeholder `__builtin__` Call nodes.
 
-- **Constant(value)**: Ignores input, always produces the given value. Useful for providing default values in match branches or injecting static config into pipelines.
-- **Range(start, end)**: Produces an array `[start, start+1, ..., end-1]`. Useful for driving traverse over a numeric range without a handler.
+## ~~Handler as Callable~~ (Implemented)
 
-## Handler as Callable (createHandler returns a call wrapper)
-
-Currently, using a handler in a workflow requires wrapping it with `call()`:
-
-```ts
-import setup from "./handlers/setup.js";
-sequence(call(setup), call(process_));
-```
-
-Instead, `createHandler` should return an object that is directly callable — invoking it produces a `TypedAction` (i.e., it calls `call()` internally). The returned function accepts an options object for step config and execution options:
-
-```ts
-import setup from "./handlers/setup.js";
-
-// Direct use in workflow — no explicit call() needed:
-sequence(setup(), process_());
-
-// With step config and execution options:
-sequence(
-  setup({ stepConfig: { timeout: 5000 }, retries: 3 }),
-  process_(),
-);
-```
-
-The handler object is both a `Handler` (for type inspection) and a function `(options?) => TypedAction`. This eliminates the `call()` boilerplate while preserving the ability to pass step config and retry/execution parameters.
+Implemented in `libs/barnum/src/core.ts`. `createHandler` returns a `CallableHandler` — a function that produces `TypedAction` when invoked, with Handler metadata (`__filePath`, `__definition`, brand symbol) attached via `Object.defineProperty`. Direct invocation: `setup()` or `setup({ stepConfig: { timeout: 5000 } })`. `call()` still works for explicit invocation.
