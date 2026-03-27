@@ -251,8 +251,7 @@ export function sequence(...actions: TypedAction[]): TypedAction {
   return { kind: "Sequence", actions };
 }
 
-// -- Other builders (untyped for now, type safety added incrementally) --
-// These use `any` to accept typed actions without variance conflicts.
+// -- Other typed builders --
 
 export function traverse<In, Out>(
   action: TypedAction<In, Out>,
@@ -260,26 +259,102 @@ export function traverse<In, Out>(
   return { kind: "Traverse", action };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function all(...actions: TypedAction<any, any>[]): TypedAction<any, any> {
+// -- All: parallel fanout with tuple output --
+
+export function all<In, O1>(a1: TypedAction<In, O1>): TypedAction<In, [O1]>;
+export function all<In, O1, O2>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+): TypedAction<In, [O1, O2]>;
+export function all<In, O1, O2, O3>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+): TypedAction<In, [O1, O2, O3]>;
+export function all<In, O1, O2, O3, O4>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+): TypedAction<In, [O1, O2, O3, O4]>;
+export function all<In, O1, O2, O3, O4, O5>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+): TypedAction<In, [O1, O2, O3, O4, O5]>;
+export function all<In, O1, O2, O3, O4, O5, O6>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+  a6: TypedAction<In, O6>,
+): TypedAction<In, [O1, O2, O3, O4, O5, O6]>;
+export function all<In, O1, O2, O3, O4, O5, O6, O7>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+  a6: TypedAction<In, O6>,
+  a7: TypedAction<In, O7>,
+): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7]>;
+export function all<In, O1, O2, O3, O4, O5, O6, O7, O8>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+  a6: TypedAction<In, O6>,
+  a7: TypedAction<In, O7>,
+  a8: TypedAction<In, O8>,
+): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8]>;
+export function all<In, O1, O2, O3, O4, O5, O6, O7, O8, O9>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+  a6: TypedAction<In, O6>,
+  a7: TypedAction<In, O7>,
+  a8: TypedAction<In, O8>,
+  a9: TypedAction<In, O9>,
+): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8, O9]>;
+export function all<In, O1, O2, O3, O4, O5, O6, O7, O8, O9, O10>(
+  a1: TypedAction<In, O1>,
+  a2: TypedAction<In, O2>,
+  a3: TypedAction<In, O3>,
+  a4: TypedAction<In, O4>,
+  a5: TypedAction<In, O5>,
+  a6: TypedAction<In, O6>,
+  a7: TypedAction<In, O7>,
+  a8: TypedAction<In, O8>,
+  a9: TypedAction<In, O9>,
+  a10: TypedAction<In, O10>,
+): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8, O9, O10]>;
+export function all(...actions: TypedAction[]): TypedAction {
   return { kind: "All", actions };
 }
 
-export function matchCases(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  cases: Record<string, TypedAction<any, any>>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-): TypedAction<any, any> {
+export function matchCases<In, Out>(
+  cases: Record<string, TypedAction<In, Out>>,
+): TypedAction<In, Out> {
   return { kind: "Match", cases };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function loop(body: TypedAction<any, any>): TypedAction<any, any> {
+export function loop<T>(body: TypedAction<T, T>): TypedAction<T, T> {
   return { kind: "Loop", body };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function attempt(action: TypedAction<any, any>): TypedAction<any, any> {
+export type AttemptResult<T> =
+  | { kind: "Ok"; value: T }
+  | { kind: "Err"; error: unknown };
+
+export function attempt<In, Out>(
+  action: TypedAction<In, Out>,
+): TypedAction<In, AttemptResult<Out>> {
   return { kind: "Attempt", action };
 }
 

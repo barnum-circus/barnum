@@ -7,6 +7,7 @@ import {
   all,
   attempt,
   call,
+  config,
   configBuilder,
   loop,
   matchCases,
@@ -17,6 +18,7 @@ import setup from "./handlers/setup.js";
 import process_ from "./handlers/process.js";
 import check from "./handlers/check.js";
 import finalize from "./handlers/finalize.js";
+import validate from "./handlers/validate.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
@@ -32,24 +34,64 @@ function roundTrip(input: unknown): unknown {
 }
 
 describe("barnum round-trip", () => {
-  it("exercises every action kind through the Rust binary", () => {
+  it("Call", () => {
+    const cfg = config(call(setup));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Sequence", () => {
+    const cfg = config(sequence(call(setup), call(process_)));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("All", () => {
+    const cfg = config(all(call(check), call(check)));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Traverse", () => {
+    const cfg = config(traverse(call(check)));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Attempt", () => {
+    const cfg = config(attempt(call(check)));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Match", () => {
+    const cfg = config(
+      matchCases({ yes: call(finalize), no: call(finalize) }),
+    );
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Loop", () => {
+    const cfg = config(loop(call(validate)));
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("Step", () => {
     const cfg = configBuilder()
-      .registerSteps({ Finalize: call(finalize) })
+      .registerSteps({ DoCheck: call(check) })
+      .workflow((steps) => steps.DoCheck);
+    expect(roundTrip(cfg)).toEqual(cfg);
+  });
+
+  it("combined workflow", () => {
+    const cfg = configBuilder()
+      .registerSteps({ Recheck: call(check) })
       .workflow((steps) =>
         sequence(
           call(setup),
-          all(call(process_), call(check)),
-          traverse(call(finalize)),
-          attempt(call(check)),
+          call(process_),
+          call(check),
           matchCases({
-            Success: steps.Finalize,
-            Failure: call(setup),
+            pass: call(finalize),
+            fail: call(finalize),
           }),
-          loop(sequence(call(check), call(finalize))),
         ),
       );
-
-    const output = roundTrip(cfg);
-    expect(output).toEqual(cfg);
+    expect(roundTrip(cfg)).toEqual(cfg);
   });
 });
