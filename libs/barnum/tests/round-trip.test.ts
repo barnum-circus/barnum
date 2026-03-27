@@ -6,12 +6,15 @@ import { describe, expect, it } from "vitest";
 import {
   all,
   attempt,
+  config,
+  configBuilder,
   loop,
   matchCases,
   sequence,
   traverse,
   type Config,
 } from "../src/core.js";
+import { constant } from "../src/builtins.js";
 import setup from "./handlers/setup.js";
 import process_ from "./handlers/process.js";
 import check from "./handlers/check.js";
@@ -84,19 +87,20 @@ describe("barnum round-trip", () => {
   });
 
   it("combined workflow", () => {
-    const steps: Config["steps"] = { Recheck: check() };
-    const cfg: Config = {
-      workflow: sequence(
-        setup(),
-        process_(),
-        attempt(check()),
-        matchCases({
-          Ok: finalize(),
-          Err: finalize(),
-        }),
-      ),
-      steps,
-    };
+    const cfg = configBuilder()
+      .registerSteps({ Recheck: check() })
+      .workflow((steps) =>
+        sequence(
+          constant({ project: "test" }),
+          setup(),
+          process_(),
+          attempt(check()),
+          matchCases({
+            Ok: finalize(),
+            Err: finalize(),
+          }),
+        ),
+      );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 });

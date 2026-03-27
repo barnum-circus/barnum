@@ -12,6 +12,28 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use string_key_newtype::string_key_newtype;
+
+// ---------------------------------------------------------------------------
+// Interned string newtypes
+// ---------------------------------------------------------------------------
+
+string_key_newtype!(
+    /// Named step identifier, referenced by [`StepAction`] and [`Config::steps`].
+    StepName
+);
+string_key_newtype!(
+    /// Absolute module path to a handler file.
+    ModulePath
+);
+string_key_newtype!(
+    /// Exported function name within a handler module.
+    FuncName
+);
+string_key_newtype!(
+    /// Discriminant value for a [`MatchAction`] branch.
+    MatchCase
+);
 
 // ---------------------------------------------------------------------------
 // Action (the AST)
@@ -91,7 +113,7 @@ pub struct AllAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchAction {
     /// Map from variant `kind` values to actions.
-    pub cases: HashMap<String, Action>,
+    pub cases: HashMap<MatchCase, Action>,
 }
 
 /// Monadic fixed-point iteration.
@@ -113,7 +135,7 @@ pub struct AttemptAction {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StepAction {
     /// Name of the step to invoke.
-    pub step: String,
+    pub step: StepName,
 }
 
 // ---------------------------------------------------------------------------
@@ -133,12 +155,12 @@ pub enum HandlerKind {
 #[serde(rename_all = "camelCase")]
 pub struct TypeScriptHandler {
     /// Module path (absolute — JS layer resolves before passing to Rust).
-    pub module: String,
+    pub module: ModulePath,
     /// Exported function name.
-    pub func: String,
-    /// Optional per-step configuration forwarded to the handler.
+    pub func: FuncName,
+    /// Optional per-step configuration schema forwarded to the handler.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub step_config: Option<Value>,
+    pub step_config_schema: Option<Value>,
     /// Optional JSON Schema describing the handler's expected input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_schema: Option<Value>,
@@ -158,5 +180,5 @@ pub struct Config {
 
     /// Named steps, referenced by [`Action::Step`] nodes.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub steps: HashMap<String, Action>,
+    pub steps: HashMap<StepName, Action>,
 }

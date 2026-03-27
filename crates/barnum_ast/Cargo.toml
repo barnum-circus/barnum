@@ -10,8 +10,10 @@ keywords = ["workflow", "ast", "barnum"]
 categories = ["data-structures"]
 
 [dependencies]
+intern = { path = "../intern" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+string_key_newtype = { path = "../string_key_newtype" }
 
 [lints]
 workspace = true

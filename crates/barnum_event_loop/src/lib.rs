@@ -190,6 +190,7 @@ pub async fn run_event_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use intern::string_key::Intern as _;
 
     #[test]
     fn ndjson_applier_writes_events() {
@@ -206,9 +207,9 @@ mod tests {
         let event = Event::TaskStarted(TaskStartedEvent {
             task_id: "t1".to_owned(),
             handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
-                module: "/app/handlers/setup.ts".to_owned(),
-                func: "default".to_owned(),
-                step_config: None,
+                module: "/app/handlers/setup.ts".intern().into(),
+                func: "default".intern().into(),
+                step_config_schema: None,
                 value_schema: None,
             }),
             value: serde_json::json!({"project": "my-app"}),
@@ -253,9 +254,9 @@ mod tests {
         let event = Event::TaskStarted(TaskStartedEvent {
             task_id: "t1".to_owned(),
             handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
-                module: "/app/handlers/setup.ts".to_owned(),
-                func: "default".to_owned(),
-                step_config: None,
+                module: "/app/handlers/setup.ts".intern().into(),
+                func: "default".intern().into(),
+                step_config_schema: None,
                 value_schema: None,
             }),
             value: serde_json::json!({"project": "my-app"}),

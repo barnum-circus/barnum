@@ -65,7 +65,7 @@ export type TypeScriptHandler = {
   kind: "TypeScript";
   module: string;
   func: string;
-  stepConfig?: unknown;
+  stepConfigSchema?: unknown;
   valueSchema?: unknown;
 };
 
@@ -251,7 +251,7 @@ export function createHandler(
       kind: "TypeScript",
       module: filePath,
       func: funcName,
-      stepConfig: options?.stepConfig,
+      stepConfigSchema: options?.stepConfig,
     },
   });
 
@@ -280,7 +280,7 @@ export function call<TValue, TOutput, TStepConfig>(
       kind: "TypeScript",
       module: handler.__filePath,
       func: handler.__exportName,
-      stepConfig: options?.stepConfig,
+      stepConfigSchema: options?.stepConfig,
     },
   };
 }

@@ -58,7 +58,7 @@ sequence(analyzeHandler, ...)
     "kind": "TypeScript",
     "module": "/abs/path/handlers.ts",
     "func": "analyze",
-    "stepConfig": null,
+    "stepConfigSchema": null,
     "valueSchema": null
   }
 }
@@ -406,7 +406,7 @@ Action::Builtin(BuiltinAction { op }) => match op {
 ```ts
 type HandlerKind =
   | { kind: "TypeScript"; module: string; func: string;
-      stepConfig?: unknown; valueSchema?: unknown }
+      stepConfigSchema?: unknown; valueSchema?: unknown }
 
 type BuiltinOp =
   | { type: "Tag"; kind: string }

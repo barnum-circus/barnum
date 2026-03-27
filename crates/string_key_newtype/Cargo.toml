@@ -1,0 +1,18 @@
+[package]
+name = "string_key_newtype"
+version = { workspace = true }
+edition = { workspace = true }
+license = { workspace = true }
+
+[dependencies]
+# Used in macro expansion — cargo-udeps cannot detect this.
+intern = { path = "../intern" }
+serde = { workspace = true }
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["intern", "serde"]
+
+# The macro expands into code in the caller's crate, so lint
+# settings here don't affect macro-generated code.
+[lints]
+workspace = true
