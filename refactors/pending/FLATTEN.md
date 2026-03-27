@@ -4,15 +4,15 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId`, `HandlerId`, and `DiscriminatorId` will be `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId` and `HandlerId` will be `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). `DiscriminatorId` will be a `u16` newtype. To be created when implementation starts.
 
 ```rust
 /// An entry in the flat action table.
 ///
 /// Multi-child instructions (Pipe, Parallel, Branch) are followed by
-/// inline operand entries at self+1.
+/// `count` inline operand entries at self+1.
 ///   - Pipe, Parallel: `count` Item entries.
-///   - Branch: `count` (BranchKey, Item) pairs = 2*count entries.
+///   - Branch: `count` BranchCase entries.
 ///
 /// Single-child instructions (ForEach, Loop, Attempt) have their child
 /// at self+1 unconditionally. No ActionId field needed.
@@ -38,7 +38,7 @@ enum FlatEntry<T> {
     ForEach,
 
     /// Case analysis on value["kind"].
-    /// Followed by `count` alternating (BranchKey, Item) pairs = 2*count entries.
+    /// Followed by `count` BranchCase entries. Each has a discriminator key + case root.
     Branch { count: u16 },
 
     /// Fixed-point iteration. Body at self+1.
@@ -52,22 +52,25 @@ enum FlatEntry<T> {
 
     // -- Inline operands (always read in context of a parent instruction) --
 
-    /// Child reference for Pipe, Parallel, or Branch. Points to a child's root entry.
+    /// Child reference for Pipe or Parallel. Points to a child's root entry.
     Item { action: ActionId },
 
-    /// Discriminator key for a Branch case. `key` indexes into `FlatConfig::discriminators`.
-    BranchKey { key: DiscriminatorId },
+    /// Branch case: discriminator key + case root action.
+    /// `key` is a DiscriminatorId (u16) indexing into `FlatConfig::discriminators`.
+    /// `action` is the ActionId of the case subtree's root.
+    /// Payload: u16 + u32 = 6 bytes. Fits in 8 bytes with discriminant.
+    BranchCase { key: DiscriminatorId, action: ActionId },
 }
 ```
 
 ### Entry size
 
-Every variant payload is at most `u32` (4 bytes). With a 1-byte discriminant, each entry fits in 8 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
+Largest variant payload: `BranchCase` at u16 + u32 = 6 bytes. With a 1-byte discriminant, every entry fits in 8 bytes. Enforce with `static_assert!(size_of::<FlatEntry<ActionId>>() <= 8)`.
 
-Heap types are stored in side tables:
+Side tables for heap types:
 
 1. **Handler pool.** `Invoke` stores a `HandlerId` (u32 index) into `FlatConfig::handlers: Vec<HandlerKind>`. Handlers are interned: identical `HandlerKind` values share the same `HandlerId`.
-2. **Discriminator interning.** `BranchKey` stores a `DiscriminatorId` (u32 index) into `FlatConfig::discriminators: Vec<KindDiscriminator>`. Discriminators are interned: identical strings share the same `DiscriminatorId`.
+2. **Discriminator interning.** `BranchCase` stores a `DiscriminatorId` (u16 index) into `FlatConfig::discriminators: Vec<KindDiscriminator>`. Discriminators are interned: identical values share the same `DiscriminatorId`. u16 supports 65,536 unique discriminators.
 
 ```rust
 /// The fully-resolved flat configuration.
@@ -86,15 +89,15 @@ struct FlatConfig {
 }
 ```
 
-Multi-child instructions store only `count`. Pipe and Parallel operand entries are at `self+1` through `self+count`. Branch operand entries are alternating (BranchKey, Item) pairs at `self+1` through `self+2*count`. Single-child instructions have their child unconditionally at `self+1`. No offset fields.
+Multi-child instructions store only `count`. Pipe and Parallel operand entries are at `self+1` through `self+count`. Branch operand entries are BranchCase entries at `self+1` through `self+count`. Single-child instructions have their child unconditionally at `self+1`. No offset fields.
 
-Branch key lookup: read the `count` (BranchKey, Item) pairs following the Branch instruction, linear scan: check `entries[self + 1 + 2*i]` (BranchKey) for a match, take `entries[self + 1 + 2*i + 1]` (Item) as the target.
+Branch key lookup: linear scan over the `count` BranchCase entries following the Branch instruction, comparing each `key` against the interned discriminator of the input value's `kind` field.
 
 ## Algorithm
 
 ### DFS with pre-allocated operand slots
 
-DFS flattening. Multi-child nodes: pre-allocate the instruction slot and operand slots, then DFS into each child and backpatch the operand entries with the child's root ActionId.
+DFS flattening. Multi-child nodes: pre-allocate the instruction slot and `count` operand slots, then DFS into each child and backpatch the operand entries with the child's root ActionId.
 
 Single-child nodes (ForEach, Loop, Attempt): allocate the instruction slot, then immediately DFS into the child. Since no other allocation happens between the instruction and the child, the child's root is guaranteed to be at self+1.
 
@@ -127,7 +130,12 @@ intern_handler(handler: &HandlerKind) -> HandlerId:
     id
 
 intern_discriminator(key: &KindDiscriminator) -> DiscriminatorId:
-    // same pattern
+    if let Some(id) = discriminator_map.get(key):
+        return *id
+    let id = DiscriminatorId(discriminators.len() as u16)
+    discriminators.push(key.clone())
+    discriminator_map.insert(key.clone(), id)
+    id
 ```
 
 ### Pass 1: DFS flatten
@@ -193,13 +201,12 @@ flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId
                 let sorted: Vec<_> = cases.iter()
                     .sorted_by_key(|(k, _)| k)
                     .collect()
-                let pairs_start = alloc_n(2 * sorted.len())
+                let cases_start = alloc_n(sorted.len())
                 entries[id] = Some(Branch { count: sorted.len() as u16 })
                 for (i, (key, case_action)) in sorted.iter().enumerate():
                     let disc_id = intern_discriminator(key)
                     let case_root = flatten_node(case_action)
-                    entries[pairs_start + 2*i] = Some(BranchKey { key: disc_id })
-                    entries[pairs_start + 2*i + 1] = Some(Item { action: case_root })
+                    entries[cases_start + i] = Some(BranchCase { key: disc_id, action: case_root })
                 id
 
             Loop { body } =>
@@ -305,12 +312,10 @@ Input:  Loop(Attempt(ForEach(Invoke(process))))
 Input:  Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
 
   0: Branch { count: 2 }
-  1: BranchKey { key: "Err" }
-  2: Item { action: 5 }
-  3: BranchKey { key: "Ok" }
-  4: Item { action: 6 }
-  5: Invoke(handle_err)
-  6: Invoke(handle_ok)
+  1: BranchCase { key: "Err", action: 3 }
+  2: BranchCase { key: "Ok", action: 4 }
+  3: Invoke(handle_err)
+  4: Invoke(handle_ok)
 ```
 
 ### Step resolution
@@ -389,10 +394,9 @@ fn flatten_parallel()
 fn flatten_foreach()
 // [0: ForEach, 1: Invoke(process)]
 
-/// Branch: instruction + count (BranchKey, Item) pairs + case subtrees.
+/// Branch: instruction + count BranchCases + case subtrees.
 fn flatten_branch()
-// [0: Branch{2}, 1: BranchKey{"Err"}, 2: Item{5}, 3: BranchKey{"Ok"}, 4: Item{6},
-//  5: Invoke(err), 6: Invoke(ok)]
+// [0: Branch{2}, 1: BranchCase{"Err",3}, 2: BranchCase{"Ok",4}, 3: Invoke(err), 4: Invoke(ok)]
 
 /// Branch cases sorted by key for determinism.
 fn flatten_branch_deterministic()
