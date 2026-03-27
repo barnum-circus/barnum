@@ -5,37 +5,37 @@ import type { Handler } from "./handler.js";
 // ---------------------------------------------------------------------------
 
 export type Action =
-  | CallAction
-  | SequenceAction
-  | TraverseAction
-  | AllAction
-  | MatchAction
+  | InvokeAction
+  | PipeAction
+  | ForEachAction
+  | ParallelAction
+  | BranchAction
   | LoopAction
   | AttemptAction
   | StepAction;
 
-export type CallAction = {
-  kind: "Call";
+export type InvokeAction = {
+  kind: "Invoke";
   handler: HandlerKind;
 };
 
-export type SequenceAction = {
-  kind: "Sequence";
+export type PipeAction = {
+  kind: "Pipe";
   actions: Action[];
 };
 
-export type TraverseAction = {
-  kind: "Traverse";
+export type ForEachAction = {
+  kind: "ForEach";
   action: Action;
 };
 
-export type AllAction = {
-  kind: "All";
+export type ParallelAction = {
+  kind: "Parallel";
   actions: Action[];
 };
 
-export type MatchAction = {
-  kind: "Match";
+export type BranchAction = {
+  kind: "Branch";
   cases: Record<string, Action>;
 };
 
@@ -86,7 +86,7 @@ export type Config<Out = any> = {
  * An action with tracked input/output types. Phantom fields enforce variance
  * and are never set at runtime — they exist only for the TypeScript compiler.
  *
- * __phantom_in: contravariant — ensures sequence chaining correctness
+ * __phantom_in: contravariant — ensures pipe chaining correctness
  *   (output of step N is assignable to input of step N+1)
  * __phantom_out: covariant — tracks output type
  * __in: covariant — enables config() to reject workflows that expect input
@@ -103,10 +103,10 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
 // Combinators
 // ---------------------------------------------------------------------------
 
-export { sequence } from "./sequence.js";
-export { all } from "./all.js";
+export { pipe } from "./pipe.js";
+export { parallel } from "./parallel.js";
 
-export function call<TValue, TOutput, TStepConfig>(
+export function invoke<TValue, TOutput, TStepConfig>(
   handler: Handler<TValue, TOutput, TStepConfig>,
   ...args: [TStepConfig] extends [never]
     ? []
@@ -116,7 +116,7 @@ export function call<TValue, TOutput, TStepConfig>(
 ): TypedAction<TValue, TOutput> {
   const options = (args as [{ stepConfig?: TStepConfig }?])[0];
   return {
-    kind: "Call",
+    kind: "Invoke",
     handler: {
       kind: "TypeScript",
       module: handler.__filePath,
@@ -126,17 +126,17 @@ export function call<TValue, TOutput, TStepConfig>(
   };
 }
 
-export function traverse<In, Out>(
+export function forEach<In, Out>(
   action: TypedAction<In, Out>,
 ): TypedAction<In[], Out[]> {
-  return { kind: "Traverse", action };
+  return { kind: "ForEach", action };
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function matchCases<Out>(
+export function branch<Out>(
   cases: Record<string, TypedAction<any, Out>>,
 ): TypedAction<{ kind: string }, Out> {
-  return { kind: "Match", cases };
+  return { kind: "Branch", cases };
 }
 
 export type LoopResult<TContinue, TBreak> =

@@ -18,7 +18,7 @@ export const setup = createHandler({
 // process_: { initialized: boolean, project: string } → { result: string }
 // ---------------------------------------------------------------------------
 
-export const process_ = createHandler({
+export const process = createHandler({
   stepValueValidator: z.object({
     initialized: z.boolean(),
     project: z.string(),

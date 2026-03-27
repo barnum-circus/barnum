@@ -16,7 +16,7 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function builtin(func: string): TypedAction<any, any> {
   return {
-    kind: "Call",
+    kind: "Invoke",
     handler: { kind: "TypeScript", module: "__builtin__", func },
   };
 }
@@ -43,13 +43,13 @@ export function tag<T, TKind extends string>(
 // Loop signals
 //
 // These use `any` because their types depend on positional context (which
-// sequence/loop they appear in), not on arguments. The loop's own signature
+// pipe/loop they appear in), not on arguments. The loop's own signature
 // validates the overall LoopResult<In, Out> shape.
 // ---------------------------------------------------------------------------
 
 // These use `any` because their types depend on positional context (which
-// sequence/loop they appear in), not on arguments. Proper typing requires
-// matchCases to narrow per-case inputs from the discriminated union — until
+// pipe/loop they appear in), not on arguments. Proper typing requires
+// branch to narrow per-case inputs from the discriminated union — until
 // then, the loop's own signature validates the overall LoopResult<In, Out>.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function recur(): TypedAction<any, LoopResult<any, any>> {
@@ -113,7 +113,7 @@ export function drop<T>(): TypedAction<T, never> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
   return {
-    kind: "Sequence",
+    kind: "Pipe",
     actions: [action, dropHandler()],
   } as TypedAction<In, never>;
 }

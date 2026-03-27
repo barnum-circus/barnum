@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
-  all,
+  parallel,
   attempt,
   config,
   configBuilder,
   loop,
-  matchCases,
-  sequence,
-  traverse,
+  branch,
+  pipe,
+  forEach,
 } from "../src/ast.js";
 import {
   constant,
@@ -20,7 +20,7 @@ import {
 
 import {
   setup,
-  process_,
+  process,
   check,
   finalize,
   listFiles,
@@ -37,41 +37,41 @@ import {
 describe("linear pipeline", () => {
   it("chains setup → process → check → finalize", () => {
     const cfg = config(
-      sequence(
+      pipe(
         constant({ project: "test" }),
         setup(),
-        process_(),
+        process(),
         check(),
         finalize(),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
   });
 });
 
 // -----------------------------------------------------------------------
-// Pattern 2: Fan-out with traverse
+// Pattern 2: Fan-out with forEach
 // -----------------------------------------------------------------------
 
-describe("fan-out with traverse", () => {
-  it("setup → listFiles → traverse(migrate)", () => {
+describe("fan-out with forEach", () => {
+  it("setup → listFiles → forEach(migrate)", () => {
     const cfg = config(
-      sequence(
+      pipe(
         constant({ project: "test" }),
         setup(),
         listFiles(),
-        traverse(migrate()),
+        forEach(migrate()),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
   });
 });
 
 // -----------------------------------------------------------------------
 // Pattern 3: Type-check loop (from WORKFLOW_ALGEBRA.md example 3)
 //
-// typeCheck → classifyErrors → match {
-//   HasErrors: extractField("errors") → traverse(fix) → recur()
+// typeCheck → classifyErrors → branch {
+//   HasErrors: extractField("errors") → forEach(fix) → recur()
 //   Clean: done()
 // }
 // -----------------------------------------------------------------------
@@ -79,19 +79,19 @@ describe("fan-out with traverse", () => {
 describe("type-check loop", () => {
   it("loops until clean", () => {
     const cfg = config(
-      sequence(
+      pipe(
         constant({ project: "test" }),
         setup(),
         listFiles(),
-        traverse(migrate()),
+        forEach(migrate()),
         loop(
-          sequence(
+          pipe(
             typeCheck(),
             classifyErrors(),
-            matchCases({
-              HasErrors: sequence(
+            branch({
+              HasErrors: pipe(
                 extractField("errors"),
-                traverse(fix()),
+                forEach(fix()),
                 recur(),
               ),
               Clean: done(),
@@ -100,37 +100,37 @@ describe("type-check loop", () => {
         ),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
   });
 });
 
 // -----------------------------------------------------------------------
 // Pattern 4: Parallel branches with error handling
 //
-// all(
+// parallel(
 //   fetchA,
-//   sequence(attempt(fetchB), match { Ok: extractField, Err: default })
+//   pipe(attempt(fetchB), branch { Ok: extractField, Err: default })
 // )
 // -----------------------------------------------------------------------
 
 describe("parallel branches with error handling", () => {
-  it("runs branches in parallel with attempt/match fallback", () => {
+  it("runs branches in parallel with attempt/branch fallback", () => {
     const cfg = config(
-      sequence(
+      pipe(
         constant({ project: "test" }),
-        all(
+        parallel(
           setup(),
-          sequence(
+          pipe(
             attempt(setup()),
-            matchCases({
-              Ok: process_(),
-              Err: process_(),
+            branch({
+              Ok: process(),
+              Err: process(),
             }),
           ),
         ),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
   });
 });
 
@@ -146,13 +146,13 @@ describe("named steps — linter workflow", () => {
     const cfg = configBuilder()
       .registerSteps({
         FixCycle: loop(
-          sequence(
+          pipe(
             typeCheck(),
             classifyErrors(),
-            matchCases({
-              HasErrors: sequence(
+            branch({
+              HasErrors: pipe(
                 extractField("errors"),
-                traverse(fix()),
+                forEach(fix()),
                 recur(),
               ),
               Clean: done(),
@@ -161,32 +161,32 @@ describe("named steps — linter workflow", () => {
         ),
       })
       .workflow((steps) =>
-        sequence(
+        pipe(
           constant({ project: "test" }),
           setup(),
           listFiles(),
-          traverse(migrate()),
+          forEach(migrate()),
           steps.FixCycle,
         ),
       );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
     expect(cfg.steps).toHaveProperty("FixCycle");
   });
 
   it("uses multiple registerSteps calls to reference earlier steps", () => {
     const cfg = configBuilder()
       .registerSteps({
-        Migrate: sequence(listFiles(), traverse(migrate())),
+        Migrate: pipe(listFiles(), forEach(migrate())),
       })
       .registerSteps({
         FixCycle: loop(
-          sequence(
+          pipe(
             typeCheck(),
             classifyErrors(),
-            matchCases({
-              HasErrors: sequence(
+            branch({
+              HasErrors: pipe(
                 extractField("errors"),
-                traverse(fix()),
+                forEach(fix()),
                 recur(),
               ),
               Clean: done(),
@@ -195,7 +195,7 @@ describe("named steps — linter workflow", () => {
         ),
       })
       .workflow((steps) =>
-        sequence(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
+        pipe(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
       );
     expect(cfg.steps).toHaveProperty("Migrate");
     expect(cfg.steps).toHaveProperty("FixCycle");
@@ -205,19 +205,19 @@ describe("named steps — linter workflow", () => {
 // -----------------------------------------------------------------------
 // Pattern 6: Reader monad (user-land context passing)
 //
-// all(identity(), handler) → merge()
+// parallel(identity(), handler) → merge()
 // Preserves the original input alongside the handler's output.
 // -----------------------------------------------------------------------
 
 describe("reader monad pattern", () => {
-  it("preserves context via all + identity + merge", () => {
+  it("preserves context via parallel + identity + merge", () => {
     const cfg = config(
-      sequence(
+      pipe(
         constant({ initialized: true, project: "test" }),
-        all(identity(), process_()),
+        parallel(identity(), process()),
         merge(),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Sequence");
+    expect(cfg.workflow.kind).toBe("Pipe");
   });
 });

@@ -31,8 +31,8 @@ string_key_newtype!(
     FuncName
 );
 string_key_newtype!(
-    /// Discriminant value for a [`MatchAction`] branch.
-    MatchCase
+    /// Discriminant value for a [`BranchAction`] case.
+    BranchCase
 );
 
 // ---------------------------------------------------------------------------
@@ -42,26 +42,24 @@ string_key_newtype!(
 /// A single node in the workflow AST.
 ///
 /// Discriminated on `kind` for JSON serialization (`#[serde(tag = "kind")]`).
-/// See `refactors/pending/WORKFLOW_ALGEBRA.md` for the full specification of
-/// each variant's semantics.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Action {
     /// Leaf node. Invokes an external handler.
-    Call(CallAction),
+    Invoke(InvokeAction),
 
     /// Sequential composition. Each action receives the previous action's output.
-    Sequence(SequenceAction),
+    Pipe(PipeAction),
 
     /// Parallel map over an array input. Applies the action to each element.
-    Traverse(TraverseAction),
+    ForEach(ForEachAction),
 
     /// Parallel fanout. Passes the same input to all actions, collects results
     /// as an array.
-    All(AllAction),
+    Parallel(ParallelAction),
 
     /// N-ary branch on the `kind` field of a discriminated union input.
-    Match(MatchAction),
+    Branch(BranchAction),
 
     /// Monadic fixed-point iteration. Repeats the body until it signals
     /// `Break`.
@@ -83,37 +81,37 @@ pub enum Action {
 /// Invokes an external handler. The handler type is discriminated by
 /// [`HandlerKind`], currently only TypeScript.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CallAction {
+pub struct InvokeAction {
     /// Which handler to invoke.
     pub handler: HandlerKind,
 }
 
 /// Sequential composition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SequenceAction {
+pub struct PipeAction {
     /// Ordered list of actions to execute.
     pub actions: Vec<Action>,
 }
 
 /// Parallel map over an array input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TraverseAction {
+pub struct ForEachAction {
     /// The action to apply to each element.
     pub action: Box<Action>,
 }
 
 /// Parallel fanout.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AllAction {
+pub struct ParallelAction {
     /// Independent actions to execute in parallel.
     pub actions: Vec<Action>,
 }
 
 /// N-ary branch on the `kind` field of a discriminated union input.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct MatchAction {
+pub struct BranchAction {
     /// Map from variant `kind` values to actions.
-    pub cases: HashMap<MatchCase, Action>,
+    pub cases: HashMap<BranchCase, Action>,
 }
 
 /// Monadic fixed-point iteration.

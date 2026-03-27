@@ -4,18 +4,18 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 
 import {
-  all,
+  parallel,
   attempt,
   configBuilder,
   loop,
-  matchCases,
-  sequence,
-  traverse,
+  branch,
+  pipe,
+  forEach,
 } from "../src/ast.js";
 import { constant } from "../src/builtins.js";
 import {
   setup,
-  process_,
+  process,
   check,
   finalize,
   validate,
@@ -35,46 +35,46 @@ function roundTrip(input: unknown): unknown {
 }
 
 describe("barnum round-trip", () => {
-  it("Call", () => {
+  it("Invoke", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant({ project: "test" }), setup()),
+      pipe(constant({ project: "test" }), setup()),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Sequence", () => {
+  it("Pipe", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant({ project: "test" }), setup(), process_()),
+      pipe(constant({ project: "test" }), setup(), process()),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("All", () => {
+  it("Parallel", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant({ result: "test" }), all(check(), check())),
+      pipe(constant({ result: "test" }), parallel(check(), check())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Traverse", () => {
+  it("ForEach", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant([{ result: "test" }]), traverse(check())),
+      pipe(constant([{ result: "test" }]), forEach(check())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Attempt", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant({ result: "test" }), attempt(check())),
+      pipe(constant({ result: "test" }), attempt(check())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Match", () => {
+  it("Branch", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(
+      pipe(
         constant({ kind: "Yes" }),
-        matchCases({ Yes: finalize(), No: finalize() }),
+        branch({ Yes: finalize(), No: finalize() }),
       ),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
@@ -82,7 +82,7 @@ describe("barnum round-trip", () => {
 
   it("Loop", () => {
     const cfg = configBuilder().workflow(() =>
-      sequence(constant({ valid: true }), loop(validate())),
+      pipe(constant({ valid: true }), loop(validate())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
@@ -91,7 +91,7 @@ describe("barnum round-trip", () => {
     const cfg = configBuilder()
       .registerSteps({ DoCheck: check() })
       .workflow((steps) =>
-        sequence(constant({ result: "test" }), steps.DoCheck),
+        pipe(constant({ result: "test" }), steps.DoCheck),
       );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
@@ -100,12 +100,12 @@ describe("barnum round-trip", () => {
     const cfg = configBuilder()
       .registerSteps({ Recheck: check() })
       .workflow((steps) =>
-        sequence(
+        pipe(
           constant({ project: "test" }),
           setup(),
-          process_(),
+          process(),
           attempt(steps.Recheck),
-          matchCases({
+          branch({
             Ok: finalize(),
             Err: finalize(),
           }),

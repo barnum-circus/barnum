@@ -56,7 +56,7 @@ export type Handler<
  * import setup from "./handlers/setup.js";
  *
  * // Direct invocation (preferred):
- * sequence(setup(), process_());
+ * pipe(setup(), process());
  *
  * // With step config:
  * setup({ stepConfig: { timeout: 5000 } });
@@ -158,7 +158,7 @@ export function createHandler(
   const funcName = exportName ?? "default";
 
   const fn = (options?: { stepConfig?: unknown }): TypedAction => ({
-    kind: "Call",
+    kind: "Invoke",
     handler: {
       kind: "TypeScript",
       module: filePath,
