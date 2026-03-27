@@ -58,3 +58,62 @@ WORKFLOW_ALGEBRA.md specifies `{ kind: "Success", value } | { kind: "Failure", e
 Read-only environment (`context: Value`) on `Config`, passed to all handlers. Carries API keys, workflow IDs, tenant config, etc.
 
 Alternative: user-land Reader Monad pattern using `All` + `Identity` + `Merge` (see WORKFLOW_ALGEBRA.md). This incurs O(N) cloning cost for parallel branches, which the host-level context avoids.
+
+## Effect Registries / Side-Effect Context
+
+Beyond read-only context, handlers need a way to perform side effects (logging, metrics, tracing) through a structured API rather than ad-hoc I/O. This could take the form of an effect registry passed to handlers alongside the input and context — a set of capabilities the handler is allowed to use.
+
+This overlaps with the Context feature above but is distinct: context is read-only data, effects are write-only capabilities. Both are provided by the host and available to all handlers without flowing through the data pipeline.
+
+## Handler Error Type
+
+Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `unknown` by `attempt`). A typed error channel would let handlers declare their failure modes:
+
+```ts
+createHandler({
+  stepValueValidator: z.object({ ... }),
+  errorType: z.object({ code: z.string(), message: z.string() }),
+  handle: async ({ value }) => { ... },
+})
+```
+
+The error type defaults to `unknown` in TypeScript. The `attempt` combinator would then produce `AttemptResult<TOutput, TError>` instead of `AttemptResult<TOutput>` with `error: unknown`.
+
+## Streams
+
+Support for streaming data through the pipeline — actions that produce or consume async iterables rather than single values. Relevant for large datasets, real-time feeds, or incremental processing where buffering the full result is impractical.
+
+Open question: is this a new primitive (e.g., `StreamTraverse`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
+
+## Constant and Range Builtins
+
+Two additional Rust-native builtins:
+
+- **Constant(value)**: Ignores input, always produces the given value. Useful for providing default values in match branches or injecting static config into pipelines.
+- **Range(start, end)**: Produces an array `[start, start+1, ..., end-1]`. Useful for driving traverse over a numeric range without a handler.
+
+## Handler as Callable (createHandler returns a call wrapper)
+
+Currently, using a handler in a workflow requires wrapping it with `call()`:
+
+```ts
+import setup from "./handlers/setup.js";
+sequence(call(setup), call(process_));
+```
+
+Instead, `createHandler` should return an object that is directly callable — invoking it produces a `TypedAction` (i.e., it calls `call()` internally). The returned function accepts an options object for step config and execution options:
+
+```ts
+import setup from "./handlers/setup.js";
+
+// Direct use in workflow — no explicit call() needed:
+sequence(setup(), process_());
+
+// With step config and execution options:
+sequence(
+  setup({ stepConfig: { timeout: 5000 }, retries: 3 }),
+  process_(),
+);
+```
+
+The handler object is both a `Handler` (for type inspection) and a function `(options?) => TypedAction`. This eliminates the `call()` boilerplate while preserving the ability to pass step config and retry/execution parameters.
