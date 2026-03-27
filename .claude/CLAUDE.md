@@ -39,6 +39,10 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 - **Never spin/poll with `thread::sleep`.** Use proper synchronization.
 - **CI "cancelled" = timed out**, not manually cancelled.
 
+## Naming
+
+- **Variable names match the type name in snake_case.** An `UnresolvedFlatConfig` is `unresolved_flat_config`, not `unresolved` or `ufc`. Don't abbreviate or truncate — the full type name in snake_case is the variable name.
+
 ## Core Values
 
 1. **Readability is paramount.**
