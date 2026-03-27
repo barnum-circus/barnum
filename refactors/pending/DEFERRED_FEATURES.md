@@ -132,6 +132,21 @@ Beyond read-only context, handlers need a way to perform side effects (logging, 
 
 This overlaps with the Context feature above but is distinct: context is read-only data, effects are write-only capabilities. Both are provided by the host and available to all handlers without flowing through the data pipeline.
 
+## Attempt as Dynamic-Scope Context
+
+`Attempt` is implicitly a dynamic-scope mechanism. When `error()` propagates up the frame tree, the engine walks ancestor frames looking for an `Attempt` — that's dynamic scope lookup. The frame tree *is* the dynamic scope.
+
+This suggests a generalization: a `Provide` / `Consume` mechanism where `Provide` pushes a value onto the dynamic scope and `Consume` reads the nearest one. `Attempt` would be a special case — it "provides" an error boundary, and the error propagation logic "consumes" it.
+
+Use cases beyond error catching:
+- **Retry policies**: `WithRetry { max: 3, backoff: "exponential" }` wraps a subtree. When an Invoke inside fails, the engine walks up to find the nearest retry policy and re-dispatches.
+- **Timeouts**: `WithTimeout { ms: 5000 }` wraps a subtree. The runtime (not the engine — the engine is pure) uses this to set deadlines on dispatches.
+- **Tracing/logging context**: `WithSpan { name: "checkout" }` wraps a subtree. Dispatches include the span context so handlers can emit structured logs.
+
+The engine currently hard-codes `Attempt` as the only frame type that intercepts errors. A general context mechanism would let users define custom interception points. The tradeoff is complexity — dynamic scope is powerful but hard to reason about, and the engine's simplicity (pure state machine, no implicit plumbing) is a feature.
+
+For now, `Attempt` is hard-coded. If more interception patterns emerge (retry, timeout), refactoring to a general dynamic-scope mechanism becomes worthwhile.
+
 ## Handler Error Type
 
 Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `unknown` by `attempt`). A typed error channel would let handlers declare their failure modes:
