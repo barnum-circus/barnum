@@ -85,10 +85,10 @@ describe("barnum round-trip", () => {
         sequence(
           call(setup),
           call(process_),
-          call(check),
+          attempt(call(check)),
           matchCases({
-            pass: call(finalize),
-            fail: call(finalize),
+            Ok: call(finalize),
+            Err: call(finalize),
           }),
         ),
       );

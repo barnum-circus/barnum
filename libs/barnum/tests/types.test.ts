@@ -62,10 +62,10 @@ describe("matchCases type safety", () => {
     expect(workflow.kind).toBe("Match");
   });
 
-  it("rejects cases with different types", () => {
-    // finalize: { valid } → { done }, setup: { project } → { initialized, project }
-    // @ts-expect-error — cases have incompatible types
-    matchCases({ a: call(finalize), b: call(setup) });
+  it("rejects match output flowing into incompatible step", () => {
+    // matchCases outputs { done: true }, but setup expects { project: string }
+    // @ts-expect-error — match output doesn't satisfy next step's input
+    sequence(matchCases({ a: call(finalize), b: call(finalize) }), call(setup));
   });
 });
 

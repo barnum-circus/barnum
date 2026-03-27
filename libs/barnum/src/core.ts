@@ -206,9 +206,10 @@ export function traverse<In, Out>(
   return { kind: "Traverse", action };
 }
 
-export function matchCases<In, Out>(
-  cases: Record<string, TypedAction<In, Out>>,
-): TypedAction<In, Out> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function matchCases<Out>(
+  cases: Record<string, TypedAction<any, Out>>,
+): TypedAction<{ kind: string }, Out> {
   return { kind: "Match", cases };
 }
 
