@@ -37,7 +37,7 @@ enum FrameKind {
     ForEach { results: Vec<Option<Value>> },
 
     /// Fixed-point iteration.
-    Loop { action_id: ActionId },
+    Loop { body: ActionId },
 
     /// Error materialization.
     Attempt,
@@ -108,7 +108,7 @@ advance(action_id, value, parent):
       advance(case_id, value, parent)       // no frame — pass through
 
     Loop { body } =>
-      create Loop frame (action_id) with parent
+      create Loop frame (body) with parent
       advance(body, value, this_frame/0)
 
     Attempt { child } =>
@@ -156,8 +156,7 @@ complete(parent_ref, value):
     ForEach { results } =>
       // identical to Parallel
 
-    Loop { action_id } =>
-      let Loop { body } = flat.action(action_id)
+    Loop { body } =>
       match value["kind"]:
         "Continue" => advance(body, value["value"], frame_id/0)
         "Break" =>
