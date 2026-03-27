@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createHandler } from "../../src/core.js";
+import { createHandler } from "../../src/handler.js";
 
 export type TypeError = { file: string; message: string };
 export type ClassifyResult =
