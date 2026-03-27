@@ -379,4 +379,73 @@ describe("step reference types", () => {
       pipe(constant({ result: "test" }), check(), self),
     );
   });
+
+  it("preserves step types through callback form registerSteps", () => {
+    configBuilder()
+      .registerSteps(({ stepRef }) => ({
+        A: pipe(check(), stepRef("B")),
+        B: pipe(check(), stepRef("A")),
+      }))
+      .workflow((steps) => {
+        // Input type comes from check()'s input: { result: string }
+        assertExact<
+          IsExact<ExtractInput<typeof steps.A>, { result: string }>
+        >();
+        assertExact<
+          IsExact<ExtractInput<typeof steps.B>, { result: string }>
+        >();
+        // Output is any because stepRef doesn't track output types
+        assertExact<IsExact<ExtractOutput<typeof steps.A>, any>>();
+        assertExact<IsExact<ExtractOutput<typeof steps.B>, any>>();
+        return pipe(constant({ result: "test" }), steps.A);
+      });
+  });
+
+  it("callback steps parameter excludes current-batch keys", () => {
+    configBuilder()
+      .registerSteps({ Setup: setup() })
+      .registerSteps(({ steps }) => {
+        // steps.Setup exists (from prior batch)
+        assertExact<
+          IsExact<ExtractInput<typeof steps.Setup>, { project: string }>
+        >();
+        // @ts-expect-error — Pipeline is in the current batch, not prior
+        steps.Pipeline;
+        return { Pipeline: pipe(steps.Setup, process()) };
+      });
+  });
+
+  it("preserves types across mixed object + callback batches into workflow", () => {
+    configBuilder()
+      // Batch 1: object form
+      .registerSteps({ Setup: setup() })
+      // Batch 2: callback form
+      .registerSteps(({ steps }) => ({
+        Pipeline: pipe(steps.Setup, process()),
+      }))
+      .workflow((steps) => {
+        // Batch 1 step types survive
+        assertExact<
+          IsExact<ExtractInput<typeof steps.Setup>, { project: string }>
+        >();
+        assertExact<
+          IsExact<
+            ExtractOutput<typeof steps.Setup>,
+            { initialized: boolean; project: string }
+          >
+        >();
+        // Batch 2 step types survive — input comes from steps.Setup (a Step
+        // ref at runtime), but the static type is what registerSteps inferred:
+        // pipe(steps.Setup, process()) where steps.Setup is
+        // TypedAction<{ project: string }, { initialized: boolean, project: string }>
+        // and process() is TypedAction<{ initialized: boolean, project: string }, { result: string }>
+        assertExact<
+          IsExact<ExtractInput<typeof steps.Pipeline>, { project: string }>
+        >();
+        assertExact<
+          IsExact<ExtractOutput<typeof steps.Pipeline>, { result: string }>
+        >();
+        return pipe(constant({ project: "test" }), steps.Pipeline);
+      });
+  });
 });
