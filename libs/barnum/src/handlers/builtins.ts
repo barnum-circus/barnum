@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createHandler } from "../core.js";
+import { createHandler } from "../handler.js";
 
 export const constant = createHandler(
   {

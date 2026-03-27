@@ -7,7 +7,7 @@ import {
   matchCases,
   sequence,
   traverse,
-} from "../src/core.js";
+} from "../src/ast.js";
 import { constant } from "../src/builtins.js";
 import setup from "./handlers/setup.js";
 import process_ from "./handlers/process.js";

@@ -1,4 +1,4 @@
-import type { TypedAction } from "./core.js";
+import type { TypedAction } from "./ast.js";
 
 export function sequence<T1, T2>(a1: TypedAction<T1, T2>): TypedAction<T1, T2>;
 export function sequence<T1, T2, T3>(

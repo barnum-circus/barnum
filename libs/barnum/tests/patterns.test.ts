@@ -8,7 +8,7 @@ import {
   matchCases,
   sequence,
   traverse,
-} from "../src/core.js";
+} from "../src/ast.js";
 import {
   constant,
   done,

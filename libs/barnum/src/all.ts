@@ -1,4 +1,4 @@
-import type { TypedAction } from "./core.js";
+import type { TypedAction } from "./ast.js";
 
 export function all<In, O1>(a1: TypedAction<In, O1>): TypedAction<In, [O1]>;
 export function all<In, O1, O2>(

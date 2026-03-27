@@ -1,4 +1,4 @@
-import type { TypedAction, LoopResult } from "./core.js";
+import type { TypedAction, LoopResult } from "./ast.js";
 import {
   constant as constantHandler,
   drop as dropHandler,
