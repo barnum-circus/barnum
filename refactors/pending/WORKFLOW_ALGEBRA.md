@@ -22,6 +22,7 @@ The Rust evaluator has this shape:
 async fn evaluate(
     action: &Action,
     input: Value,
+    context: &Value,
     steps: &HashMap<String, Action>,
 ) -> Result<Value> {
     match action {
@@ -29,6 +30,8 @@ async fn evaluate(
     }
 }
 ```
+
+The `context` parameter is a read-only environment passed by reference through the entire execution tree. It carries global state (API keys, workflow IDs, tenant config) without flowing through the data pipeline. Handlers receive `(input, context)` at the FFI boundary. This avoids the O(N) cloning cost of threading context through the DAG topology via All+Identity+Merge.
 
 ### Call
 
@@ -58,7 +61,7 @@ Optional fields `stepConfig` and `valueSchema` for TypeScript handlers (see OPAQ
 
 ```rust
 Action::Call { module, func, .. } => {
-    node_runner::execute(module, func, input).await
+    node_runner::execute(module, func, input, context).await
 }
 ```
 
@@ -86,7 +89,7 @@ sequence(a, b, c)
 Action::Sequence { actions } => {
     let mut state = input;
     for action in actions {
-        state = evaluate(action, state, steps).await?;
+        state = evaluate(action, state, context, steps).await?;
     }
     Ok(state)
 }
@@ -119,7 +122,7 @@ Action::Traverse { action } => {
     let items = input.as_array()
         .expect("Traverse input must be an array");
     let results = stream::iter(items)
-        .map(|item| evaluate(action, item.clone(), steps))
+        .map(|item| evaluate(action, item.clone(), context, steps))
         .buffer_unordered(concurrency_limit)
         .try_collect::<Vec<_>>()
         .await?;
@@ -152,7 +155,7 @@ all(a, b, c)
 ```rust
 Action::All { actions } => {
     let futures: Vec<_> = actions.iter()
-        .map(|action| evaluate(action, input.clone(), steps))
+        .map(|action| evaluate(action, input.clone(), context, steps))
         .collect();
     let results = futures::future::try_join_all(futures).await?;
     Ok(Value::Array(results))
@@ -203,7 +206,7 @@ Action::Match { cases } => {
         .expect("Match input must have a 'kind' field");
     let action = cases.get(variant_kind)
         .unwrap_or_else(|| panic!("No match case for kind '{}'", variant_kind));
-    evaluate(action, input, steps).await
+    evaluate(action, input, context, steps).await
 }
 ```
 
@@ -233,7 +236,7 @@ loop(body)
 Action::Loop { body } => {
     let mut state = input;
     loop {
-        let result = evaluate(body, state, steps).await?;
+        let result = evaluate(body, state, context, steps).await?;
         let signal = result.get("kind")
             .and_then(|v| v.as_str())
             .expect("Loop body must produce {kind: \"Continue\"|\"Break\", value}");
@@ -301,14 +304,14 @@ recover(action, fallback)
 ```rust
 Action::Recover { action, fallback } => {
     let saved = input.clone();
-    match evaluate(action, input, steps).await {
+    match evaluate(action, input, context, steps).await {
         Ok(result) => Ok(result),
         Err(error) => {
             let fallback_input = json!({
                 "error": error.to_string(),
                 "input": saved,
             });
-            evaluate(fallback, fallback_input, steps).await
+            evaluate(fallback, fallback_input, context, steps).await
         }
     }
 }
@@ -342,7 +345,7 @@ step("TypeCheck")
 Action::Step { step: step_name } => {
     let action = steps.get(step_name)
         .unwrap_or_else(|| panic!("Undefined step '{}'", step_name));
-    evaluate(action, input, steps).await
+    evaluate(action, input, context, steps).await
 }
 ```
 
@@ -393,6 +396,53 @@ pub enum Action {
     Step { step: String },
 }
 ```
+
+## Context
+
+Global read-only environment available to all handlers. Carries API keys, workflow IDs, tenant config, or any state that should be accessible everywhere without flowing through the data pipeline.
+
+The context is set at workflow start and passed by reference through the entire execution tree. Handlers receive it as a second argument alongside their scoped input.
+
+**TypeScript handler interface:**
+
+```ts
+export default async function analyze(input: AnalyzeInput, context: WorkflowContext) {
+    const { apiKey, runId } = context;
+    // ...
+}
+```
+
+**Config:**
+
+```ts
+BarnumConfig.fromConfig({
+  workflow: sequence(setup, process, report),
+  context: { apiKey: process.env.API_KEY, runId: crypto.randomUUID() },
+});
+```
+
+**Serialized:**
+
+```json
+{
+  "workflow": { "kind": "Sequence", "actions": [...] },
+  "context": { "apiKey": "sk-...", "runId": "abc-123" }
+}
+```
+
+**Rust Config type:**
+
+```rust
+pub struct Config {
+    pub workflow: Action,
+    #[serde(default)]
+    pub steps: HashMap<String, Action>,
+    #[serde(default)]
+    pub context: Value,
+}
+```
+
+The context can also be constructed and routed through the DAG topology using `All + Identity + Merge` (the user-land Reader Monad pattern), but this incurs O(N) JSON cloning per node plus 3x AST overhead. The host-level context pointer eliminates this cost entirely: one allocation, zero-cost reference passing.
 
 ## Config API
 
