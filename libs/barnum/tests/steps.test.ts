@@ -127,23 +127,12 @@ describe("workflow self-reference", () => {
   it("workflow receives a self reference for recursion", () => {
     const cfg = configBuilder()
       .workflow((_steps, self) =>
-        pipe(
-          constant({ result: "test" }),
-          check(),
-          branch({
-            Valid: finalize(),
-            Invalid: self,
-          }),
-        ),
+        pipe(constant({ result: "test" }), check(), self),
       );
 
     expect(cfg.workflow.kind).toBe("Pipe");
     const workflow = cfg.workflow as { kind: string; actions: unknown[] };
-    const branchAction = workflow.actions[workflow.actions.length - 1] as {
-      kind: string;
-      cases: Record<string, unknown>;
-    };
-    expect(branchAction.cases.Invalid).toEqual({
+    expect(workflow.actions[workflow.actions.length - 1]).toEqual({
       kind: "Step",
       step: "__self__",
     });
