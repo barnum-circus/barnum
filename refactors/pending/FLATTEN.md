@@ -1,44 +1,41 @@
 # Flattening
 
-The nested `Config` (tree of `Action` nodes with step references by name) is flattened into a `FlatConfig`: a bytecode-like linear array of instructions where all cross-references are `ActionId` indices. No heap allocation within action variants.
-
-## Relationship to bytecode
-
-This is a bytecode representation, not SSA. SSA is about variable naming (each variable assigned exactly once for use-def chains). Our flat config has no variables: data flows implicitly through execution. What we have is an **instruction array with index-based operands**: each instruction has an address (ActionId), references other instructions by address, and multi-operand instructions reference contiguous address ranges. Branch discriminator keys live in a side table (analogous to a constant pool).
-
-The BFS layout ensures that children of any node occupy contiguous indices, enabling range references (`first_child + count`) instead of `Vec<ActionId>`.
+The nested `Config` (tree of `Action` nodes with step references by name) is flattened into a `FlatConfig`: a linear array of entries where all cross-references are `ActionId` indices. No heap allocation within entry variants.
 
 ## Types
 
 **Note:** `ActionId` will be a `u32` newtype via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
-/// A single instruction in the flat action table.
+/// An entry in the flat action table. Instructions and inline operands.
+///
+/// Multi-child instructions (Pipe, Parallel, Branch) are followed by
+/// `count` inline operand entries (Item or BranchCase). The operands
+/// are always at positions self_id+1 through self_id+count.
 ///
 /// Generic over `T`: the Step target type. During pass 1, `T = StepTarget`
 /// (may contain unresolved step names). After pass 2, `T = ActionId`
-/// (fully resolved). The generic applies only to Step -- all other
-/// ActionId references are resolved during BFS allocation.
-enum FlatAction<T> {
+/// (fully resolved). The generic applies only to Step.
+enum FlatEntry<T> {
+    // -- Instructions --
+
     /// Leaf: invoke a handler.
     Invoke { handler: HandlerKind },
 
     /// Sequential composition.
-    /// Children at actions[first_child .. first_child + count].
-    Pipe { first_child: ActionId, count: u32 },
+    /// Followed by `count` Item entries at self+1..self+1+count.
+    Pipe { count: u32 },
 
     /// Fan-out: same input to all children, collect results as array.
-    /// Children at actions[first_child .. first_child + count].
-    Parallel { first_child: ActionId, count: u32 },
+    /// Followed by `count` Item entries at self+1..self+1+count.
+    Parallel { count: u32 },
 
     /// Map over array input. Single body action.
     ForEach { body: ActionId },
 
     /// Case analysis on value["kind"].
-    /// Case actions at actions[first_case .. first_case + count].
-    /// Discriminator keys at branch_keys[keys_start .. keys_start + count].
-    /// branch_keys[keys_start + i] is the discriminator for actions[first_case + i].
-    Branch { first_case: ActionId, keys_start: u32, count: u32 },
+    /// Followed by `count` BranchCase entries at self+1..self+1+count.
+    Branch { count: u32 },
 
     /// Fixed-point iteration. Single body action.
     Loop { body: ActionId },
@@ -48,167 +45,169 @@ enum FlatAction<T> {
 
     /// Redirect to another action (step reference or self-recursion).
     Step { target: T },
+
+    // -- Inline operands (always read in context of a parent instruction) --
+
+    /// Child reference for Pipe or Parallel. Points to the child's root entry.
+    Item { action: ActionId },
+
+    /// Case reference for Branch. Discriminator key + pointer to case root.
+    BranchCase { key: KindDiscriminator, action: ActionId },
 }
 
 /// The fully-resolved flat configuration.
 struct FlatConfig {
-    /// The instruction array. ActionIds are indices into this vec.
-    actions: Vec<FlatAction<ActionId>>,
-
-    /// Branch discriminator keys. Each Branch references a contiguous slice.
-    branch_keys: Vec<KindDiscriminator>,
+    /// The entry array. ActionIds are indices into this vec.
+    entries: Vec<FlatEntry<ActionId>>,
 
     /// Entry point for execution.
     workflow_root: ActionId,
 }
 ```
 
-Branch key lookup is a linear scan of the relevant `branch_keys` slice. Case counts are small, so this is cache-friendly.
+Multi-child instructions store only `count`. Their operand entries are always at `self+1` through `self+count`. No `first_child`, no `first_case`, no side tables.
 
-```rust
-fn lookup_branch_case(
-    flat: &FlatConfig,
-    first_case: ActionId,
-    keys_start: u32,
-    count: u32,
-    kind: &KindDiscriminator,
-) -> Option<ActionId> {
-    let keys = &flat.branch_keys[keys_start as usize..(keys_start + count) as usize];
-    keys.iter()
-        .position(|k| k == kind)
-        .map(|i| ActionId(first_case.0 + i as u32))
-}
-```
+Branch key lookup: read the `count` BranchCase entries following the Branch instruction, linear scan for the matching key.
 
 ## Algorithm
 
-### Why BFS
+### DFS with pre-allocated operand slots
 
-Multi-child actions (Pipe, Parallel, Branch) reference their children as a contiguous range `[first_child, first_child + count)`. BFS achieves this naturally: when processing a node, allocate ActionIds for all children as a contiguous block, then enqueue children for later processing. Children are processed in the order they were enqueued (FIFO), so each node's push index equals its pre-allocated ActionId. No indexed insertion needed.
+DFS flattening. When encountering a multi-child node, pre-allocate the instruction slot and operand slots, then DFS into each child. Backpatch the operand entries with each child's root ActionId.
 
-DFS would interleave children's subtrees, breaking contiguity.
+Single-child nodes (ForEach, Loop, Attempt) DFS into their child and store the returned root ActionId directly in the instruction.
+
+Step(Named(name)) stores the name, resolved in pass 2. Step(Root) resolves immediately since the workflow root is always the first ActionId allocated.
 
 ### Two-pass resolution
 
-Step(Named(name)) references a named step whose root ActionId may not be allocated yet (it's in a different tree). Resolving step names requires two passes.
+**Pass 1**: DFS-flatten each tree. Step(Named(name)) stores `StepTarget::Named(name)`. Step(Root) resolves immediately to `StepTarget::Resolved(workflow_root)`.
 
-**Pass 1**: BFS-flatten each tree, allocating ActionIds. Step(Named(name)) stores the name as `StepTarget::Named(name)`. Step(Root) resolves immediately to `StepTarget::Resolved(workflow_root)` since the workflow root is always the first ActionId allocated.
-
-**Pass 2**: Walk the vec, replacing `StepTarget::Named(name)` with `step_roots[name]`. The result is `Vec<FlatAction<ActionId>>` -- all references resolved. The type system enforces this.
+**Pass 2**: Walk the vec, replacing `StepTarget::Named(name)` with `step_roots[name]`.
 
 ```rust
-/// Intermediate state during pass 1. Only Step targets can be unresolved.
+/// Intermediate state during pass 1.
 enum StepTarget {
-    /// Named step reference. Resolved in pass 2.
     Named(StepName),
-    /// Already resolved (Root, or after pass 2 completes).
     Resolved(ActionId),
 }
 ```
 
-### Pass 1: BFS flatten
+### Pass 1: DFS flatten
 
 ```
-flatten_pass1(config) -> (Vec<FlatAction<StepTarget>>, Vec<KindDiscriminator>,
-                          HashMap<StepName, ActionId>, ActionId):
-    let actions = Vec::new()
-    let branch_keys = Vec::new()
+flatten_pass1(config) -> (Vec<FlatEntry<StepTarget>>, HashMap<StepName, ActionId>, ActionId):
+    let entries: Vec<Option<FlatEntry<StepTarget>>> = Vec::new()
     let step_roots = HashMap::new()
     let next_id: u32 = 0
-    let queue = VecDeque::new()
 
     fn alloc() -> ActionId:
         let id = ActionId(next_id)
+        entries.push(None)       // reserve slot
         next_id += 1
         id
 
-    fn alloc_n(n: usize) -> ActionId:
+    fn alloc_n(n: u32) -> ActionId:
         let first = ActionId(next_id)
-        next_id += n as u32
+        for _ in 0..n:
+            entries.push(None)   // reserve slots
+        next_id += n
         first
 
-    // 1. Flatten workflow. Root is always the first ActionId.
-    let workflow_root = alloc()
-    queue.push_back((workflow_root, config.workflow))
-    drain_queue()
-
-    // 2. Flatten each named step.
-    for (name, step_action) in config.steps:
-        let step_root = alloc()
-        step_roots.insert(name, step_root)
-        queue.push_back((step_root, step_action))
-        drain_queue()
-
-    return (actions, branch_keys, step_roots, workflow_root)
-
-
-drain_queue():
-    while let Some((id, node)) = queue.pop_front():
+    // Returns the root ActionId of the flattened subtree.
+    fn flatten_node(node: &Action) -> ActionId:
         match node:
             Invoke { handler } =>
-                actions.push(Invoke { handler })
+                let id = alloc()
+                entries[id] = Some(Invoke { handler })
+                id
 
             Pipe { children } =>
-                let first = alloc_n(children.len())
-                actions.push(Pipe { first_child: first, count: children.len() })
+                let id = alloc()
+                let items_start = alloc_n(children.len())
+                entries[id] = Some(Pipe { count: children.len() })
                 for (i, child) in children.iter().enumerate():
-                    queue.push_back((ActionId(first.0 + i as u32), child))
+                    let child_root = flatten_node(child)
+                    entries[items_start + i] = Some(Item { action: child_root })
+                id
 
             Parallel { children } =>
-                // identical to Pipe
-                let first = alloc_n(children.len())
-                actions.push(Parallel { first_child: first, count: children.len() })
+                let id = alloc()
+                let items_start = alloc_n(children.len())
+                entries[id] = Some(Parallel { count: children.len() })
                 for (i, child) in children.iter().enumerate():
-                    queue.push_back((ActionId(first.0 + i as u32), child))
+                    let child_root = flatten_node(child)
+                    entries[items_start + i] = Some(Item { action: child_root })
+                id
 
             ForEach { body } =>
-                let body_id = alloc()
-                actions.push(ForEach { body: body_id })
-                queue.push_back((body_id, *body))
+                let id = alloc()
+                let body_root = flatten_node(body)
+                entries[id] = Some(ForEach { body: body_root })
+                id
 
             Branch { cases } =>
-                let sorted_cases: Vec<_> = cases.into_iter()
-                    .sorted_by_key(|(k, _)| k.clone())  // deterministic order
+                let id = alloc()
+                let sorted: Vec<_> = cases.iter()
+                    .sorted_by_key(|(k, _)| k)
                     .collect()
-                let first = alloc_n(sorted_cases.len())
-                let keys_start = branch_keys.len() as u32
-                for (i, (key, case_action)) in sorted_cases.into_iter().enumerate():
-                    branch_keys.push(key)
-                    queue.push_back((ActionId(first.0 + i as u32), case_action))
-                actions.push(Branch { first_case: first, keys_start, count })
+                let cases_start = alloc_n(sorted.len())
+                entries[id] = Some(Branch { count: sorted.len() })
+                for (i, (key, case_action)) in sorted.iter().enumerate():
+                    let case_root = flatten_node(case_action)
+                    entries[cases_start + i] = Some(BranchCase { key, action: case_root })
+                id
 
             Loop { body } =>
-                let body_id = alloc()
-                actions.push(Loop { body: body_id })
-                queue.push_back((body_id, *body))
+                let id = alloc()
+                let body_root = flatten_node(body)
+                entries[id] = Some(Loop { body: body_root })
+                id
 
             Attempt { action } =>
-                let action_id = alloc()
-                actions.push(Attempt { action: action_id })
-                queue.push_back((action_id, *action))
+                let id = alloc()
+                let action_root = flatten_node(action)
+                entries[id] = Some(Attempt { action: action_root })
+                id
 
             Step(Named(name)) =>
-                actions.push(Step { target: StepTarget::Named(name) })
+                let id = alloc()
+                entries[id] = Some(Step { target: StepTarget::Named(name) })
+                id
 
             Step(Root) =>
-                actions.push(Step { target: StepTarget::Resolved(workflow_root) })
+                let id = alloc()
+                entries[id] = Some(Step { target: StepTarget::Resolved(workflow_root) })
+                id
+
+    // 1. Flatten workflow. Root is always the first ActionId.
+    let workflow_root = flatten_node(&config.workflow)
+
+    // 2. Flatten each named step.
+    for (name, step_action) in &config.steps:
+        let step_root = flatten_node(step_action)
+        step_roots.insert(name, step_root)
+
+    // All slots filled.
+    let entries = entries.into_iter().map(Option::unwrap).collect()
+    (entries, step_roots, workflow_root)
 ```
 
-Branch cases are sorted by key for deterministic output. Without sorting, HashMap iteration order is nondeterministic, making tests flaky and the flat config non-reproducible.
+Branch cases are sorted by key for deterministic output.
 
 ### Pass 2: resolve step names
 
 ```
 resolve(
-    actions: Vec<FlatAction<StepTarget>>,
+    entries: Vec<FlatEntry<StepTarget>>,
     step_roots: &HashMap<StepName, ActionId>,
-) -> Vec<FlatAction<ActionId>>:
-    actions.into_iter().map(|action| match action {
+) -> Vec<FlatEntry<ActionId>>:
+    entries.into_iter().map(|entry| match entry {
         Step { target: StepTarget::Named(name) } =>
             Step { target: *step_roots.get(&name).expect("unknown step: {name}") }
         Step { target: StepTarget::Resolved(id) } =>
             Step { target: id }
-        other => other  // map identity over the ActionId fields
+        other => other
     }).collect()
 ```
 
@@ -218,185 +217,174 @@ resolve(
 
 ```
 Input:
-    config(pipe([invoke("a"), invoke("b"), invoke("c")]))
+    Pipe([Invoke(a), Invoke(b), Invoke(c)])
 
 Flat:
-    0: Pipe { first_child: 1, count: 3 }
-    1: Invoke(a)
-    2: Invoke(b)
-    3: Invoke(c)
+    0: Pipe { count: 3 }
+    1: Item { action: 4 }
+    2: Item { action: 5 }
+    3: Item { action: 6 }
+    4: Invoke(a)
+    5: Invoke(b)
+    6: Invoke(c)
 ```
 
 ### Nested pipe
 
 ```
 Input:
-    config(pipe([invoke("a"), pipe([invoke("b"), invoke("c")]), invoke("d")]))
-
-BFS allocation:
-    0: Pipe (root)           alloc children -> 1, 2, 3
-    1: Invoke(a)
-    2: Pipe (inner)          alloc children -> 4, 5
-    3: Invoke(d)
-    4: Invoke(b)
-    5: Invoke(c)
+    Pipe([Invoke(a), Pipe([Invoke(b), Invoke(c)]), Invoke(d)])
 
 Flat:
-    0: Pipe { first_child: 1, count: 3 }
-    1: Invoke(a)
-    2: Pipe { first_child: 4, count: 2 }
-    3: Invoke(d)
-    4: Invoke(b)
-    5: Invoke(c)
+    0: Pipe { count: 3 }
+    1: Item { action: 4 }
+    2: Item { action: 5 }
+    3: Item { action: 10 }
+    4: Invoke(a)
+    5: Pipe { count: 2 }
+    6: Item { action: 8 }
+    7: Item { action: 9 }
+    8: Invoke(b)
+    9: Invoke(c)
+    10: Invoke(d)
 ```
 
-Outer Pipe children: 1, 2, 3 -- contiguous. Inner Pipe children: 4, 5 -- contiguous.
+### Branch
+
+```
+Input:
+    Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
+
+Flat:
+    0: Branch { count: 2 }
+    1: BranchCase { key: "Err", action: 3 }
+    2: BranchCase { key: "Ok", action: 4 }
+    3: Invoke(handle_err)
+    4: Invoke(handle_ok)
+```
 
 ### Step resolution
 
 ```
 Input:
-    workflow: Pipe([Invoke(setup), Step(Named("Fix")), Invoke(cleanup)])
+    workflow: Pipe([Invoke(setup), Step(Named("Fix"))])
     steps: { Fix: Loop(Invoke(check)) }
 
-Pass 1 (BFS):
-    0: Pipe { first_child: 1, count: 3 }
-    1: Invoke(setup)
-    2: Step { target: Named("Fix") }
-    3: Invoke(cleanup)
-    4: Loop { body: 5 }           -- step "Fix" root
-    5: Invoke(check)
+Pass 1:
+    0: Pipe { count: 2 }
+    1: Item { action: 3 }
+    2: Item { action: 4 }
+    3: Invoke(setup)
+    4: Step { target: Named("Fix") }
+    5: Loop { body: 6 }
+    6: Invoke(check)
 
-    step_roots: { "Fix" => 4 }
+    step_roots: { "Fix" => 5 }
 
 Pass 2:
-    2: Step { target: 4 }         -- resolved
-```
-
-### Mutual recursion
-
-```
-Input:
-    workflow: Step(Named("A"))
-    steps: {
-        A: Pipe([Invoke(do_a), Step(Named("B"))]),
-        B: Pipe([Invoke(do_b), Step(Named("A"))]),
-    }
-
-Pass 1 flattens each tree independently. Step nodes store names, never follow targets.
-Pass 2 resolves names to ActionIds that already exist. No infinite loop.
+    4: Step { target: 5 }
 ```
 
 ## Unit tests
 
-Tests follow the pipeline: build `Config` (from JSON or programmatically) -> flatten -> assert `FlatConfig`.
+Tests follow the pipeline: build `Config` -> flatten -> assert `FlatConfig`.
 
 ### Helpers
 
 ```rust
 fn ts_handler(name: &str) -> HandlerKind { /* TypeScript handler with module="/m", func=name */ }
 fn invoke(name: &str) -> Action { Action::Invoke(InvokeAction { handler: ts_handler(name) }) }
-fn pipe(actions: Vec<Action>) -> Action { Action::Pipe(PipeAction { actions }) }
-fn parallel(actions: Vec<Action>) -> Action { Action::Parallel(ParallelAction { actions }) }
-fn for_each(action: Action) -> Action { Action::ForEach(ForEachAction { action: Box::new(action) }) }
+fn pipe(actions: Vec<Action>) -> Action { ... }
+fn parallel(actions: Vec<Action>) -> Action { ... }
+fn for_each(action: Action) -> Action { ... }
 fn branch(cases: Vec<(&str, Action)>) -> Action { /* sorted by key */ }
-fn loop_(body: Action) -> Action { Action::Loop(LoopAction { body: Box::new(body) }) }
-fn attempt(action: Action) -> Action { Action::Attempt(AttemptAction { action: Box::new(action) }) }
-fn step_named(name: &str) -> Action { Action::Step(StepAction { step: StepRef::Named { name: name.into() } }) }
-fn step_root() -> Action { Action::Step(StepAction { step: StepRef::Root }) }
+fn loop_(body: Action) -> Action { ... }
+fn attempt(action: Action) -> Action { ... }
+fn step_named(name: &str) -> Action { ... }
+fn step_root() -> Action { ... }
 fn config(workflow: Action) -> Config { Config { workflow, steps: HashMap::new() } }
-fn config_with_steps(workflow: Action, steps: Vec<(&str, Action)>) -> Config { /* ... */ }
+fn config_with_steps(workflow: Action, steps: Vec<(&str, Action)>) -> Config { ... }
 fn flatten(config: Config) -> FlatConfig { /* pass 1 + pass 2 */ }
 ```
 
-### Basic structure tests
+### Basic structure
 
 ```rust
-/// Single invoke: one instruction, root = 0.
+/// Single invoke: one entry, root = 0.
 fn flatten_single_invoke()
 // [0: Invoke(handler)]
 
-/// Pipe: children occupy contiguous range.
-fn flatten_pipe_contiguous()
-// [0: Pipe{1,3}, 1: Invoke(a), 2: Invoke(b), 3: Invoke(c)]
+/// Pipe: instruction + count Items + count children.
+fn flatten_pipe()
+// [0: Pipe{3}, 1: Item{4}, 2: Item{5}, 3: Item{6}, 4: Invoke(a), 5: Invoke(b), 6: Invoke(c)]
 
-/// Parallel: children occupy contiguous range.
-fn flatten_parallel_contiguous()
-// [0: Parallel{1,2}, 1: Invoke(a), 2: Invoke(b)]
+/// Parallel: same layout as Pipe.
+fn flatten_parallel()
 
-/// ForEach: single body reference.
+/// ForEach: instruction with inline body ActionId.
 fn flatten_foreach()
 // [0: ForEach{body:1}, 1: Invoke(process)]
 
-/// Branch: cases contiguous, keys in side table, sorted by key.
+/// Branch: instruction + count BranchCases + case subtrees.
 fn flatten_branch()
-// [0: Branch{first:1,keys:0,count:2}, 1: Invoke(err), 2: Invoke(ok)]
-// branch_keys: ["Error", "Ok"]
+// [0: Branch{2}, 1: BranchCase{"Err",3}, 2: BranchCase{"Ok",4}, 3: Invoke(err), 4: Invoke(ok)]
 
-/// Loop: single body reference.
+/// Branch cases sorted by key for determinism.
+fn flatten_branch_deterministic()
+
+/// Loop: instruction with inline body ActionId.
 fn flatten_loop()
 // [0: Loop{body:1}, 1: Invoke(check)]
 
-/// Attempt: single child reference.
+/// Attempt: instruction with inline child ActionId.
 fn flatten_attempt()
 // [0: Attempt{action:1}, 1: Invoke(risky)]
 ```
 
-### Nesting tests
+### Nesting
 
 ```rust
-/// BFS contiguity: nested pipe children don't break parent contiguity.
+/// Nested pipe: inner pipe Items point deeper into the array.
 fn flatten_nested_pipe()
-// [0: Pipe{1,3}, 1: Invoke(a), 2: Pipe{4,2}, 3: Invoke(d), 4: Invoke(b), 5: Invoke(c)]
+// See nested pipe example above.
 
-/// Deep nesting: attempt > loop > pipe.
+/// Deep nesting: Attempt > Loop > Pipe.
 fn flatten_deep_nesting()
-// [0: Attempt{1}, 1: Loop{2}, 2: Pipe{3,2}, 3: Invoke(a), 4: Invoke(b)]
 
-/// Pipe inside parallel inside loop.
+/// Pipe inside Parallel inside Loop.
 fn flatten_nested_combinators()
-// [0: Loop{1}, 1: Parallel{2,2}, 2: Pipe{4,2}, 3: Invoke(c), 4: Invoke(a), 5: Invoke(b)]
 
-/// Branch containing pipes.
+/// Branch cases containing compound subtrees.
 fn flatten_branch_with_subtrees()
-// Branch cases are subtrees, not just invokes. Children contiguous.
 
-/// Parallel of parallels.
+/// Parallel containing Parallels.
 fn flatten_parallel_of_parallels()
-// Inner parallel children contiguous, outer parallel children contiguous.
 ```
 
-### Step resolution tests
+### Step resolution
 
 ```rust
-/// Step(Root) resolved immediately to ActionId(0).
+/// Step(Root) resolved immediately to workflow root ActionId.
 fn flatten_step_root()
-// [0: Pipe{1,2}, 1: Invoke(a), 2: Step{target:0}]
 
 /// Named step resolved in pass 2.
 fn flatten_step_named()
-// Pipe([Invoke(a), Step("Fix")]) + steps { Fix: Invoke(fix) }
-// [0: Pipe{1,2}, 1: Invoke(a), 2: Step{target:3}, 3: Invoke(fix)]
 
 /// Mutual recursion: A -> B -> A, no infinite loop.
 fn flatten_mutual_recursion()
-// Both steps flattened independently, targets resolved correctly.
 
 /// Self-recursion: step body contains Step(Root).
 fn flatten_self_recursion()
-// Step(Root) inside a step body resolves to workflow root, not step root.
 
 /// Chain of steps: A -> B -> C -> Invoke.
 fn flatten_chain_of_steps()
-// Each Step resolved to its target's root.
 ```
 
-### JSON round-trip tests
+### JSON round-trips
 
 ```rust
 /// Parse JSON -> deserialize Config -> flatten -> assert.
 fn flatten_from_json_simple_pipe()
-// JSON: { "workflow": { "kind": "Pipe", "actions": [...] } }
 
 /// JSON workflow with named steps.
 fn flatten_from_json_with_steps()
@@ -404,25 +392,23 @@ fn flatten_from_json_with_steps()
 /// JSON with Branch.
 fn flatten_from_json_branch()
 
-/// Complex workflow exercising all action types.
+/// Complex workflow exercising all entry types.
 fn flatten_from_json_kitchen_sink()
 ```
 
 ### Edge cases
 
 ```rust
-/// Single-child pipe (degenerate but valid).
+/// Single-child pipe.
 fn flatten_single_child_pipe()
-// [0: Pipe{1,1}, 1: Invoke(a)]
 
-/// Branch with single case.
+/// Single-case branch.
 fn flatten_single_case_branch()
 
 /// Unknown step name panics.
 #[should_panic(expected = "unknown step")]
 fn flatten_unknown_step_panics()
 
-/// Deterministic output: flattening the same config twice yields identical results.
+/// Deterministic: flatten twice, assert identical.
 fn flatten_deterministic()
-// Run flatten twice, assert byte-for-byte equality.
 ```
