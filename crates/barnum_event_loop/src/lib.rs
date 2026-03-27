@@ -13,6 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use barnum_ast::HandlerKind;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
@@ -37,10 +38,10 @@ pub enum Event {
 pub struct TaskStartedEvent {
     /// Unique ID for this invocation.
     pub task_id: String,
-    /// Handler module path.
-    pub handler_module: String,
-    /// Handler function name.
-    pub handler_func: String,
+    /// Which handler is being invoked (TypeScript, Bash, etc.).
+    pub handler: HandlerKind,
+    /// The input value passed to the handler.
+    pub value: Value,
 }
 
 /// A handler has finished executing.
@@ -204,8 +205,13 @@ mod tests {
 
         let event = Event::TaskStarted(TaskStartedEvent {
             task_id: "t1".to_owned(),
-            handler_module: "/app/handlers/setup.ts".to_owned(),
-            handler_func: "default".to_owned(),
+            handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
+                module: "/app/handlers/setup.ts".to_owned(),
+                func: "default".to_owned(),
+                step_config: None,
+                value_schema: None,
+            }),
+            value: serde_json::json!({"project": "my-app"}),
         });
         applier.apply(&event);
 
@@ -246,8 +252,13 @@ mod tests {
 
         let event = Event::TaskStarted(TaskStartedEvent {
             task_id: "t1".to_owned(),
-            handler_module: "/app/handlers/setup.ts".to_owned(),
-            handler_func: "default".to_owned(),
+            handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
+                module: "/app/handlers/setup.ts".to_owned(),
+                func: "default".to_owned(),
+                step_config: None,
+                value_schema: None,
+            }),
+            value: serde_json::json!({"project": "my-app"}),
         });
         tx.send(event).await.ok();
         drop(tx);
