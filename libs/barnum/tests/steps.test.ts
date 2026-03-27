@@ -240,7 +240,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
           classifyErrors(),
           branch({
             HasErrors: stepRef("FixAll"),
-            Clean: pipe(drop(), constant({ success: true })),
+            Clean: drop(),
           }),
         ),
         FixAll: pipe(
