@@ -8,6 +8,8 @@
 //! TypeScript builds these structures via builder functions and serializes
 //! them to JSON. Rust deserializes and interprets them.
 
+pub mod flat;
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
