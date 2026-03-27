@@ -1,8 +1,11 @@
+import { z } from "zod";
 import { createHandler } from "../../src/core.js";
 
-export type SetupInput = { project: string };
-export type SetupOutput = { initialized: boolean; project: string };
+export default createHandler({
+  stepValueValidator: z.object({ project: z.string() }),
 
-export default createHandler<SetupInput, SetupOutput>({
-  handle: async (input) => ({ initialized: true, project: input.project }),
+  handle: async ({ value }) => ({
+    initialized: true,
+    project: value.project,
+  }),
 });

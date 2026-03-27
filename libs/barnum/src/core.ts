@@ -1,4 +1,5 @@
 import { fileURLToPath } from "url";
+import type { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
@@ -95,22 +96,39 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
 // Handler — opaque typed handler reference
 // ---------------------------------------------------------------------------
 
-export type HandlerDefinition<In = unknown, Out = unknown> = {
-  handle: (input: In) => Promise<Out>;
+export type HandlerDefinition<
+  TValue = unknown,
+  TOutput = unknown,
+  TStepConfig = unknown,
+> = {
+  stepValueValidator: z.ZodType<TValue>;
+  stepConfigValidator?: z.ZodType<TStepConfig>;
+  handle: (context: {
+    value: TValue;
+    stepConfig: TStepConfig;
+  }) => Promise<TOutput>;
 };
 
 const HANDLER_BRAND = Symbol.for("barnum:handler");
 
-export class Handler<In = unknown, Out = unknown> {
+export class Handler<
+  TValue = unknown,
+  TOutput = unknown,
+  TStepConfig = unknown,
+> {
   readonly [HANDLER_BRAND] = true;
   readonly __filePath: string;
-  readonly __definition: HandlerDefinition<In, Out>;
+  readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
 
   // Phantom types — `declare` means these exist only at the type level.
-  declare readonly __phantom_in: (input: In) => void;
-  declare readonly __phantom_out: () => Out;
+  declare readonly __phantom_in: (input: TValue) => void;
+  declare readonly __phantom_out: () => TOutput;
+  declare readonly __phantom_step_config: TStepConfig;
 
-  constructor(definition: HandlerDefinition<In, Out>, filePath: string) {
+  constructor(
+    definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
+    filePath: string,
+  ) {
     this.__filePath = filePath;
     this.__definition = definition;
   }
@@ -150,9 +168,9 @@ function getCallerFilePath(): string {
   return callerFile;
 }
 
-export function createHandler<In, Out>(
-  definition: HandlerDefinition<In, Out>,
-): Handler<In, Out> {
+export function createHandler<TValue, TOutput, TStepConfig = unknown>(
+  definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
+): Handler<TValue, TOutput, TStepConfig> {
   const filePath = getCallerFilePath();
   return new Handler(definition, filePath);
 }
@@ -161,13 +179,20 @@ export function createHandler<In, Out>(
 // Builders
 // ---------------------------------------------------------------------------
 
-export function call<In, Out>(handler: Handler<In, Out>): TypedAction<In, Out> {
+export function call<TValue, TOutput, TStepConfig>(
+  handler: Handler<TValue, TOutput, TStepConfig>,
+  ...args: unknown extends TStepConfig
+    ? [options?: { stepConfig?: TStepConfig }]
+    : [options: { stepConfig: TStepConfig }]
+): TypedAction<TValue, TOutput> {
+  const options = args[0];
   return {
     kind: "Call",
     handler: {
       kind: "TypeScript",
       module: handler.__filePath,
       func: "default",
+      stepConfig: options?.stepConfig,
     },
   };
 }

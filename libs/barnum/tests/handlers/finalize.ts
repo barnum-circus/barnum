@@ -1,8 +1,8 @@
+import { z } from "zod";
 import { createHandler } from "../../src/core.js";
 
-export type FinalizeInput = { valid: boolean };
-export type FinalizeOutput = { done: true };
+export default createHandler({
+  stepValueValidator: z.object({ valid: z.boolean() }),
 
-export default createHandler<FinalizeInput, FinalizeOutput>({
-  handle: async () => ({ done: true }),
+  handle: async () => ({ done: true as const }),
 });
