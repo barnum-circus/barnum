@@ -35,9 +35,9 @@ The `context` parameter is a read-only environment passed by reference through t
 
 ### Call
 
-Leaf node. The only primitive that executes external code. References an exported function in a module by path and name. The runtime loads the module and invokes the named export.
+Leaf node. The only primitive that executes external code. Contains a `handler` field discriminated by `HandlerKind`, currently only `TypeScript`. Future handler types (Bash, Python) add variants to `HandlerKind`, not new AST nodes.
 
-Categorically: a morphism in the Kleisli category (A → M B).
+Categorically: a morphism in the Kleisli category (A -> M B).
 
 **TS builder:**
 
@@ -52,10 +52,17 @@ sequence(analyzeHandler, ...)
 **Serialized:**
 
 ```json
-{ "kind": "Call", "module": "/abs/path/handlers.ts", "func": "analyze" }
+{
+  "kind": "Call",
+  "handler": {
+    "kind": "TypeScript",
+    "module": "/abs/path/handlers.ts",
+    "func": "analyze",
+    "stepConfig": null,
+    "valueSchema": null
+  }
+}
 ```
-
-Optional fields `stepConfig` and `valueSchema` for TypeScript handlers (see OPAQUE_HANDLER.md).
 
 **Rust evaluation:**
 
@@ -347,48 +354,82 @@ Action::Step { step: step_name } => {
 }
 ```
 
+### Builtin
+
+Rust-native data transformation. Executes entirely in the VM without FFI. Used for structural operations that shape data between handler calls.
+
+Operations:
+- **Tag(kind):** Wraps input as `{kind, value: input}`. Used for loop signals (`recur() = Tag("Continue")`, `done() = Tag("Break")`) and any discriminated union construction.
+- **Identity:** Passes input through unchanged. Used for the Arrow problem (preserving context across destructive nodes).
+- **Merge:** Merges an array of objects into a single object. `[{a:1}, {b:2}]` becomes `{a:1, b:2}`.
+- **Flatten:** Flattens a nested array one level. `[[1,2], [3]]` becomes `[1,2,3]`.
+- **ExtractField(field):** Extracts a field from an object. `{a:1, b:2}` with field "a" becomes `1`.
+
+**TS builders:**
+
+```ts
+identity()                           // Builtin Identity
+merge()                              // Builtin Merge
+flatten()                            // Builtin Flatten
+extractField("errors")               // Builtin ExtractField
+tag("Continue")                      // Builtin Tag
+recur()                              // tag("Continue")
+done()                               // tag("Break")
+```
+
+**Serialized:**
+
+```json
+{ "kind": "Builtin", "op": { "type": "Tag", "kind": "Continue" } }
+{ "kind": "Builtin", "op": { "type": "Identity" } }
+{ "kind": "Builtin", "op": { "type": "Merge" } }
+{ "kind": "Builtin", "op": { "type": "Flatten" } }
+{ "kind": "Builtin", "op": { "type": "ExtractField", "field": "errors" } }
+```
+
+**Rust evaluation:**
+
+```rust
+Action::Builtin(BuiltinAction { op }) => match op {
+    BuiltinOp::Tag(TagOp { kind }) => Ok(json!({ "kind": kind, "value": input })),
+    BuiltinOp::Identity => Ok(input),
+    BuiltinOp::Merge => { /* Object.assign({}, ...input) */ },
+    BuiltinOp::Flatten => { /* input.flat(1) */ },
+    BuiltinOp::ExtractField(ExtractFieldOp { field }) => { /* input[field] */ },
+}
+```
+
 ## Complete Types
 
 ### TypeScript (serialized form)
 
 ```ts
-type Action =
-  | { kind: "Call"; module: string; func: string;
+type HandlerKind =
+  | { kind: "TypeScript"; module: string; func: string;
       stepConfig?: unknown; valueSchema?: unknown }
+
+type BuiltinOp =
+  | { type: "Tag"; kind: string }
+  | { type: "Identity" }
+  | { type: "Merge" }
+  | { type: "Flatten" }
+  | { type: "ExtractField"; field: string }
+
+type Action =
+  | { kind: "Call"; handler: HandlerKind }
   | { kind: "Sequence"; actions: Action[] }
   | { kind: "Traverse"; action: Action }
   | { kind: "All"; actions: Action[] }
   | { kind: "Match"; cases: Record<string, Action> }
   | { kind: "Loop"; body: Action }
   | { kind: "Attempt"; action: Action }
+  | { kind: "Builtin"; op: BuiltinOp }
   | { kind: "Step"; step: string }
 ```
 
 ### Rust
 
-```rust
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind")]
-pub enum Action {
-    Call {
-        module: String,
-        func: String,
-        #[serde(rename = "stepConfig")]
-        step_config: Option<Value>,
-        #[serde(rename = "valueSchema")]
-        value_schema: Option<Value>,
-    },
-    Sequence { actions: Vec<Action> },
-    Traverse { action: Box<Action> },
-    All { actions: Vec<Action> },
-    Match { cases: HashMap<String, Action> },
-    Loop { body: Box<Action> },
-    Attempt {
-        action: Box<Action>,
-    },
-    Step { step: String },
-}
-```
+See `crates/barnum_ast/src/lib.rs` for the authoritative types. Every enum variant uses a named struct payload.
 
 ## Context
 
@@ -652,12 +693,10 @@ BarnumConfig.fromConfig({
 
 2. **Inline computation.** Inline Bash and inline TypeScript are useful for lightweight data transformations that don't warrant a separate handler file. Deferred—every leaf is a Call for now. Can be added as an `Inline` AST node later.
 
-3. **FlatMap.** Traverse followed by flatten. Useful when each element produces an array and results should be concatenated. Can be expressed as `sequence(traverse(action), flattenHandler)` but a dedicated node would avoid the utility handler. Deferred.
+3. **FlatMap convenience.** `sequence(traverse(action), flatten())` is verbose for a common pattern. A `flatMap(action)` combinator (TS-side only, compiling to Sequence + Traverse + Builtin::Flatten) would reduce boilerplate without a new AST node.
 
 4. **Predicate convenience.** Match requires the input to be a discriminated union. Producing the union requires an explicit classification handler. A `branch(predicate, ifTrue, ifFalse)` combinator that bundles predicate evaluation + binary match would reduce boilerplate at the cost of a less general primitive.
 
-5. **Rust-native builtins.** A `Builtin` AST node for synchronous, FFI-free JSON transformations (`Flatten`, `ExtractField`, `Merge`, `IsNotEmpty`). These execute entirely in the Rust VM, bypassing Node IPC. Eliminates the need for trivial adapter handlers that exist only to reshape data. Also resolves FlatMap (item 3) and predicate convenience (item 4) without FFI overhead. Deferred — V1 is TypeScript-only.
-
-6. **Attempt error classification.** Attempt materializes all errors into `{kind: "Failure"}`. Should the `error` field be a structured object (with `code`, `message`, `category`) rather than a flat string, so Match branches can discriminate infrastructure failures from domain errors?
+5. **Attempt error classification.** Attempt materializes all errors into `{kind: "Failure"}`. Should the `error` field be a structured object (with `code`, `message`, `category`) rather than a flat string, so Match branches can discriminate infrastructure failures from domain errors?
 
 7. **Handler idempotency.** Loop, Attempt, and Step enable re-execution of Call nodes. The engine provides deterministic control flow but cannot enforce pure functions. Handlers that mutate external state (database writes, file deletes) must be idempotent at the domain level, or the engine must provide at-most-once delivery guarantees via checkpointing.
