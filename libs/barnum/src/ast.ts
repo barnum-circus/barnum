@@ -180,24 +180,72 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
     this._steps = steps;
   }
 
+  /**
+   * Register named steps. Accepts either a static object or a function
+   * for mutual recursion between steps.
+   *
+   * Static form:
+   * ```ts
+   * .registerSteps({ Check: check(), Finalize: finalize() })
+   * ```
+   *
+   * Function form (enables mutual recursion):
+   * ```ts
+   * .registerSteps((refs) => ({
+   *   Writer: pipe(draft(), refs.Reviewer),
+   *   Reviewer: pipe(critique(), branch({
+   *     Approved: publish(),
+   *     Rejected: refs.Writer,
+   *   })),
+   * }))
+   * ```
+   */
   registerSteps<NewSteps extends Record<string, AnyAction>>(
-    steps: NewSteps,
+    stepsOrFn:
+      | NewSteps
+      | ((refs: TSteps & Record<string, AnyAction>) => NewSteps),
   ): ConfigBuilder<TSteps & NewSteps> {
-    return new ConfigBuilder({ ...this._steps, ...steps });
+    const newSteps =
+      typeof stepsOrFn === "function"
+        ? stepsOrFn(stepRefProxy<TSteps & Record<string, AnyAction>>())
+        : stepsOrFn;
+    return new ConfigBuilder({ ...this._steps, ...newSteps });
   }
 
-  workflow<Out>(build: (steps: TSteps) => TypedAction<never, Out>): Config<Out> {
+  /**
+   * Define the workflow entry point.
+   *
+   * @param build - receives step references and a `self` reference for
+   *   workflow-level recursion (re-runs the workflow from the top).
+   */
+  workflow<Out>(
+    build: (steps: TSteps, self: AnyAction) => TypedAction<never, Out>,
+  ): Config<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
       stepRefs[name] = { kind: "Step", step: name };
     }
-    const workflow = build(stepRefs as TSteps);
+    const self: AnyAction = { kind: "Step", step: "__self__" } as AnyAction;
+    const workflow = build(stepRefs as TSteps, self);
     const result: Config<Out> = { workflow };
     if (Object.keys(this._steps).length > 0) {
       result.steps = this._steps;
     }
     return result;
   }
+}
+
+/**
+ * Creates a Proxy that returns `{ kind: "Step", step: name }` for any
+ * property access. Used to provide step references for mutual recursion.
+ */
+function stepRefProxy<T extends Record<string, AnyAction>>(): T {
+  return new Proxy(Object.create(null) as T, {
+    get(_target, prop: string | symbol) {
+      if (typeof prop === "symbol") return undefined;
+      return { kind: "Step", step: prop } as AnyAction;
+    },
+  });
 }
 
 export function configBuilder(): ConfigBuilder {

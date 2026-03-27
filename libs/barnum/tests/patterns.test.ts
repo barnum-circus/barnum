@@ -221,3 +221,59 @@ describe("reader monad pattern", () => {
     expect(cfg.workflow.kind).toBe("Pipe");
   });
 });
+
+// -----------------------------------------------------------------------
+// Pattern 7: Mutual recursion via registerSteps callback
+//
+// Writer drafts, then sends to Reviewer. Reviewer either approves
+// (finalize) or rejects (back to Writer).
+// -----------------------------------------------------------------------
+
+describe("mutual recursion", () => {
+  it("registerSteps callback enables cross-references between steps", () => {
+    const cfg = configBuilder()
+      .registerSteps((refs) => ({
+        A: pipe(check(), refs.B),
+        B: pipe(check(), refs.A),
+      }))
+      .workflow((steps) =>
+        pipe(constant({ result: "test" }), steps.A),
+      );
+
+    expect(cfg.steps).toHaveProperty("A");
+    expect(cfg.steps).toHaveProperty("B");
+    // A body ends with a Step reference to B
+    const aBody = cfg.steps!.A as { kind: string; actions: unknown[] };
+    expect(aBody.kind).toBe("Pipe");
+    expect(aBody.actions[aBody.actions.length - 1]).toEqual({
+      kind: "Step",
+      step: "B",
+    });
+    // B body ends with a Step reference to A
+    const bBody = cfg.steps!.B as { kind: string; actions: unknown[] };
+    expect(bBody.actions[bBody.actions.length - 1]).toEqual({
+      kind: "Step",
+      step: "A",
+    });
+  });
+
+  it("callback receives previously registered steps", () => {
+    const cfg = configBuilder()
+      .registerSteps({ Setup: setup() })
+      .registerSteps((refs) => ({
+        Pipeline: pipe(refs.Setup, process()),
+      }))
+      .workflow((steps) =>
+        pipe(constant({ project: "test" }), steps.Pipeline),
+      );
+
+    expect(cfg.steps).toHaveProperty("Setup");
+    expect(cfg.steps).toHaveProperty("Pipeline");
+    // Pipeline body starts with a Step reference to Setup
+    const pipelineBody = cfg.steps!.Pipeline as { kind: string; actions: unknown[] };
+    expect(pipelineBody.actions[0]).toEqual({
+      kind: "Step",
+      step: "Setup",
+    });
+  });
+});
