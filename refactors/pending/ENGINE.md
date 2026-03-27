@@ -1,17 +1,85 @@
 # Engine Design
 
-The engine interprets the Action AST. It has two responsibilities:
+The engine interprets the Action AST. Two responsibilities:
 
-1. **Advance** — Walk cursors through the AST until they reach handler invocations. Pure state manipulation, no I/O.
-2. **Schedule** — Dispatch pending handler invocations to the executor, subject to concurrency limits.
+1. **Advance** — Given a cursor (location + value from a completed handler), walk the flat action table to produce the next set of handler dispatches. Pure state manipulation.
+2. **Schedule** — Dispatch pending handler invocations to an executor with concurrency control. I/O.
 
-These two operations alternate: advance produces a queue of dispatches, schedule sends them, handler results arrive as events, advance runs again.
+## Step 1: Flatten the AST
 
-## Cursors and frames
+The nested `Config` (tree of `Action` nodes) is flattened into a `FlatConfig`: a `Vec<FlatAction>` where every node has an `ActionId` (index). All references between actions are `ActionId`s, not nested pointers.
 
-A **cursor** is an active point of execution in the AST — a (position, value) pair where the engine is blocked waiting for a handler result. The engine starts with one cursor at the workflow root with value `null`. As execution proceeds, cursors multiply (Parallel, ForEach) and converge (when all branches complete).
+```rust
+type ActionId = u32;
 
-A **frame** is the engine's bookkeeping for one AST node. Frames form a tree mirroring the part of the AST that's currently executing. Leaf frames are Invoke nodes (cursors waiting for handler results). Interior frames are structural combinators (Pipe, Parallel, Loop, etc.) tracking partial progress.
+struct FlatConfig {
+    actions: Vec<FlatAction>,
+    /// The workflow entry point.
+    workflow: ActionId,
+}
+
+enum FlatAction {
+    Invoke { handler: HandlerKind },
+    Pipe { actions: Vec<ActionId> },
+    Parallel { actions: Vec<ActionId> },
+    ForEach { body: ActionId },
+    Branch { cases: HashMap<KindDiscriminator, ActionId> },
+    Loop { body: ActionId },
+    Attempt { action: ActionId },
+    /// Resolved step reference. Points to the step's root action.
+    Step { target: ActionId },
+}
+```
+
+Flattening walks the nested `Config` depth-first, assigns each node an `ActionId`, and resolves Step references:
+
+- `Step(Named("FixCycle"))` → look up `config.steps["FixCycle"]`, flatten that subtree, store its root `ActionId` as the target.
+- `Step(Root)` → target is `FlatConfig::workflow`.
+- Mutual recursion works because both steps are in the same flat vec and reference each other by `ActionId`.
+
+Validation happens during flattening. If a step name doesn't exist, flattening fails — not runtime. The engine never panics on bad step references.
+
+### Example
+
+Nested:
+```
+workflow: Pipe([
+    Invoke(setup),
+    Step(Named("FixCycle")),
+])
+steps: {
+    FixCycle: Loop(Invoke(healthCheck))
+}
+```
+
+Flattened:
+```
+0: Pipe { actions: [1, 2] }         ← workflow (ActionId 0)
+1: Invoke(setup)
+2: Step { target: 3 }               ← resolved FixCycle
+3: Loop { body: 4 }                 ← FixCycle root
+4: Invoke(healthCheck)
+```
+
+## Step 2: Engine and cursors
+
+A **cursor** is `(ActionId, Value)` — a position in the flat action table plus the value produced by the preceding handler. The engine processes one cursor at a time: each handler completion produces one cursor, which the engine advances until it hits the next set of handler invocations.
+
+The engine's core method:
+
+```rust
+fn advance_from_cursor(&mut self, location: ActionId, value: Value)
+```
+
+This walks the action table from `location`, advancing through structural combinators until it reaches Invoke nodes (which queue dispatches) or must wait for child results.
+
+### Hidden root handler
+
+Execution starts with a synthetic completion: the "root handler" completes with `Value::Null`. This feeds the first cursor into `advance_from_cursor(workflow, null)`. After that, everything is driven by real handler completions. The engine's event handling is uniform — startup is just another completion.
+
+### Frames
+
+While cursors are external inputs (one per handler completion), the engine needs internal state to track partial progress through structural combinators. A **frame** tracks this per-node state:
 
 ```rust
 struct Frame {
@@ -22,7 +90,7 @@ struct Frame {
 
 struct ParentRef {
     frame_id: FrameId,
-    /// Which child slot this frame occupies (e.g., index in Parallel's results).
+    /// Child's position within the parent (e.g., index in Parallel results).
     index: usize,
 }
 
@@ -30,31 +98,33 @@ enum FrameKind {
     /// Leaf: handler dispatched, waiting for result.
     Invoke { task_id: TaskId },
 
-    /// Sequential composition: executing action at `index`.
-    Pipe { action: PipeAction, index: usize },
+    /// Sequential: at action `index` within the Pipe's action list.
+    Pipe { action_id: ActionId, index: usize },
 
-    /// Parallel fanout: collecting results.
-    Parallel { results: Vec<Option<Value>>, remaining: usize },
+    /// Collecting results from N parallel branches.
+    Parallel { action_id: ActionId, results: Vec<Option<Value>>, remaining: usize },
 
-    /// Parallel map over array input: collecting results.
-    ForEach { results: Vec<Option<Value>>, remaining: usize },
+    /// Collecting results from N array elements.
+    ForEach { action_id: ActionId, results: Vec<Option<Value>>, remaining: usize },
 
     /// Fixed-point iteration.
-    Loop { action: LoopAction },
+    Loop { action_id: ActionId },
 
     /// Error materialization.
-    Attempt,
+    Attempt { action_id: ActionId },
 
-    /// Branch or Step delegation. Forwards child result to parent.
+    /// Step or Branch delegation. Forwards child result to parent.
     Passthrough,
 }
 ```
 
-## Engine state
+Frames reference actions by `ActionId`. No cloned AST nodes, no tree navigation.
+
+### Engine state
 
 ```rust
 struct Engine {
-    config: Config,
+    config: FlatConfig,
     frames: HashMap<FrameId, Frame>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
@@ -68,111 +138,55 @@ struct Dispatch {
     handler: HandlerKind,
     value: Value,
 }
-
-enum EngineResult {
-    Success(Value),
-    Failure(String),
-}
 ```
 
-No `tx`, no channels. The engine is a pure state machine. Scheduling is a separate concern wired up at the integration layer.
+### advance_from_cursor(location, value)
 
-## Operations
+Walk the action table from `location` with `value`:
 
-### advance(action, value, parent)
-
-Walk the AST from an action with the given input. Recurse until reaching Invoke nodes (which queue dispatches) or combinators that wait for children.
-
-| Action | Behavior |
-|--------|----------|
+| FlatAction | Behavior |
+|------------|----------|
 | **Invoke** | Create Invoke frame. Queue dispatch(task_id, handler, value). |
-| **Pipe** | Create Pipe frame (index=0). Advance into actions[0] with the value. |
-| **Parallel** | Create Parallel frame (remaining=N). Advance into each action with the value. |
-| **ForEach** | Value must be an array. Create ForEach frame (remaining=len). Advance body for each element. |
-| **Branch** | Read value["kind"]. Look up the case. Create Passthrough frame. Advance into the case. |
-| **Loop** | Create Loop frame. Advance into body with the value. |
-| **Attempt** | Create Attempt frame. Advance into inner action. |
-| **Step(Named)** | Resolve config.steps[name]. Create Passthrough frame. Advance into the resolved action. |
-| **Step(Root)** | Create Passthrough frame. Advance into config.workflow. |
+| **Pipe** | Create Pipe frame (index=0). Recurse into actions[0]. |
+| **Parallel** | Create Parallel frame (remaining=N). Recurse into each action. |
+| **ForEach** | Value must be array. Create ForEach frame (remaining=len). Recurse into body for each element. |
+| **Branch** | Read value["kind"]. Look up case. Create Passthrough frame. Recurse into case's ActionId. |
+| **Loop** | Create Loop frame. Recurse into body. |
+| **Attempt** | Create Attempt frame. Recurse into inner action. |
+| **Step** | Create Passthrough frame. Recurse into target ActionId. |
 
 ### complete(frame_id, value)
 
-A child frame resolved with a value. Advance the parent.
+A child resolved. Advance the parent:
 
 | Parent kind | Behavior |
 |-------------|----------|
-| **Pipe** | Increment index. If more actions, advance into the next with the value. Otherwise complete the Pipe's parent. |
-| **Parallel** | Store value at child index. Decrement remaining. If 0, collect results into an array. Complete parent. |
+| **Pipe** | Increment index. If more actions, recurse into next. Otherwise complete parent. |
+| **Parallel** | Store result at index. Decrement remaining. If 0, collect array, complete parent. |
 | **ForEach** | Same as Parallel. |
-| **Loop** | If value.kind == "Continue": advance body again with value.value. If "Break": complete parent with value.value. |
+| **Loop** | If value.kind == "Continue": recurse into body again. If "Break": complete parent. |
 | **Attempt** | Wrap as {kind: "Ok", value}. Complete parent. |
-| **Passthrough** | Forward value to parent. |
-
-When the root frame completes: `self.result = Some(EngineResult::Success(value))`.
-
-### error(frame_id, error)
-
-A child frame failed. Propagate upward.
-
-| Parent kind | Behavior |
-|-------------|----------|
-| **Attempt** | Catch. Complete parent with {kind: "Err", error}. |
-| **Parallel / ForEach** | Cancel siblings (remove frames, drop their pending dispatches). Propagate error to parent. |
-| **Everything else** | Propagate to parent. |
-
-When error reaches root: `self.result = Some(EngineResult::Failure(error))`.
+| **Passthrough** | Forward to parent. |
 
 ### on_task_completed(task_id, result)
 
-Entry point when a handler result arrives. Finds the Invoke frame, removes it, and calls complete or error on the parent.
+Look up the Invoke frame. Remove it. Call complete or error on the parent.
 
-```rust
-fn on_task_completed(&mut self, task_id: &TaskId, result: &TaskResult) {
-    let frame_id = self.task_to_frame.remove(task_id)
-        .expect("unknown task_id");
-    let frame = self.frames.remove(&frame_id).unwrap();
-    match result {
-        TaskResult::Success { value } => match frame.parent {
-            Some(parent) => self.complete(parent, value.clone()),
-            None => self.result = Some(EngineResult::Success(value.clone())),
-        },
-        TaskResult::Failure { error } => match frame.parent {
-            Some(parent) => self.error(parent, error.clone()),
-            None => self.result = Some(EngineResult::Failure(error.clone())),
-        },
-    }
-}
+## Worked example
+
+FlatConfig for `pipe(constant({project: "test"}), setup(), build())`:
+```
+0: Pipe { actions: [1, 2, 3] }
+1: Invoke(constant)
+2: Invoke(setup)
+3: Invoke(build)
 ```
 
-### start()
-
-```rust
-fn start(&mut self) {
-    self.advance(&self.config.workflow, Value::Null, None);
-}
+**Synthetic root completion → advance_from_cursor(0, null):**
 ```
-
-### take_pending_dispatches()
-
-```rust
-fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
-    std::mem::take(&mut self.pending_dispatches)
-}
-```
-
-Returns the queued dispatches. The caller (scheduler/executor) decides when and how to send them.
-
-## Worked examples
-
-### Pipe: `pipe(constant({project: "test"}), setup(), build())`
-
-**start():**
-```
-advance(Pipe, null, None)
-  create F1 (Pipe, index=0)
-  advance(Invoke[constant], null, F1/0)
-    create F2 (Invoke, t1)
-    queue dispatch(t1, constant, null)
+action[0] = Pipe → create F1 (Pipe, action_id=0, index=0)
+action[1] = Invoke(constant) → create F2 (Invoke, t1)
+queue dispatch(t1, constant, null)
 
 pending: [t1]
 ```
@@ -180,226 +194,255 @@ pending: [t1]
 **on_task_completed(t1, {project: "test"}):**
 ```
 remove F2. complete(F1, {project: "test"})
-  F1 Pipe: index 0 -> 1
-  advance(Invoke[setup], {project: "test"}, F1/0)
-    create F3 (Invoke, t2)
-    queue dispatch(t2, setup, {project: "test"})
+F1 Pipe: index 0→1. action[0].actions[1] = ActionId 2.
+action[2] = Invoke(setup) → create F3 (Invoke, t2)
+queue dispatch(t2, setup, {project: "test"})
 
 pending: [t2]
 ```
 
 **on_task_completed(t2, {initialized: true, project: "test"}):**
 ```
-remove F3. complete(F1, {initialized: true, project: "test"})
-  F1 Pipe: index 1 -> 2
-  advance(Invoke[build], {initialized: true, project: "test"}, F1/0)
-    create F4 (Invoke, t3)
-    queue dispatch(t3, build, {initialized: true, project: "test"})
-
-pending: [t3]
+remove F3. complete(F1, ...)
+F1 Pipe: index 1→2. action[0].actions[2] = ActionId 3.
+action[3] = Invoke(build) → create F4 (Invoke, t3)
+queue dispatch(t3, build, {initialized: true, project: "test"})
 ```
 
 **on_task_completed(t3, {artifact: "test.build"}):**
 ```
-remove F4. complete(F1, {artifact: "test.build"})
-  F1 Pipe: index 2 -> 3. 3 == len. Pipe complete.
-  F1 is root -> result = Success({artifact: "test.build"})
-
-pending: []
-done: true
+remove F4. complete(F1, ...)
+F1 Pipe: index 2→3. 3 == len. Pipe complete.
+F1 is root → result = Success({artifact: "test.build"})
 ```
-
-### Parallel: `parallel(verify(), verify())`
-
-Entered with value `{artifact: "a"}`:
-```
-advance(Parallel, {artifact: "a"}, parent)
-  create F1 (Parallel, results=[None, None], remaining=2)
-  advance(Invoke[verify], {artifact: "a"}, F1/0)
-    create F2 (Invoke, t1)
-    queue dispatch(t1, verify, {artifact: "a"})
-  advance(Invoke[verify], {artifact: "a"}, F1/1)
-    create F3 (Invoke, t2)
-    queue dispatch(t2, verify, {artifact: "a"})
-
-pending: [t1, t2]
-```
-
-Results arrive in any order:
-```
-on_task_completed(t1, {verified: true}):
-  remove F2. complete(F1/0, {verified: true})
-  results[0] = Some. remaining = 1.
-
-on_task_completed(t2, {verified: true}):
-  remove F3. complete(F1/1, {verified: true})
-  results[1] = Some. remaining = 0.
-  F1 resolves: [{verified: true}, {verified: true}]
-```
-
-### Loop: `loop(healthCheck())`
-
-Entered with `{deployed: false}`:
-```
-advance(Loop, {deployed: false}, parent)
-  create F1 (Loop)
-  advance(Invoke[healthCheck], {deployed: false}, F1/0)
-    create F2 (Invoke, t1)
-
-on_task_completed(t1, {kind: "Continue", value: {deployed: false}}):
-  remove F2. complete(F1, ...)
-  kind = Continue. Re-advance body with {deployed: false}.
-  create F3 (Invoke, t2)
-
-on_task_completed(t2, {kind: "Break", value: {stable: true}}):
-  remove F3. complete(F1, ...)
-  kind = Break. F1 resolves with {stable: true}.
-```
-
-### Branch: `branch({HasErrors: fixAll(), Clean: done()})`
-
-Entered with `{kind: "HasErrors", errors: [...]}`:
-```
-advance(Branch, {kind: "HasErrors", errors: [...]}, parent)
-  read kind = "HasErrors"
-  create F1 (Passthrough)
-  advance(Invoke[fixAll], {kind: "HasErrors", errors: [...]}, F1/0)
-    create F2 (Invoke, t1)
-```
-
-### Step: `steps.FixCycle`
-
-Entered with some value:
-```
-advance(Step(Named("FixCycle")), value, parent)
-  resolve config.steps["FixCycle"] -> Loop(...)
-  create F1 (Passthrough)
-  advance(Loop(...), value, F1/0)
-    ...
-```
-
-### ForEach: `forEach(migrate())`
-
-Entered with `[{file: "a.ts"}, {file: "b.ts"}]`:
-```
-advance(ForEach, [{file: "a.ts"}, {file: "b.ts"}], parent)
-  create F1 (ForEach, results=[None, None], remaining=2)
-  advance(Invoke[migrate], {file: "a.ts"}, F1/0)
-    create F2 (Invoke, t1)
-  advance(Invoke[migrate], {file: "b.ts"}, F1/1)
-    create F3 (Invoke, t2)
-
-pending: [t1, t2]
-```
-
-## How frames reference the AST
-
-Frames that need to re-enter child actions (Pipe advancing to the next action, Loop re-entering the body) store a cloned copy of the relevant AST node. The AST is config-sized (small), so cloning is cheap and avoids lifetime complexity.
 
 ## Testing strategy
 
-The engine is a pure state machine: start() + on_task_completed() produce pending dispatches and eventually a result. Tests construct configs programmatically, call start, assert dispatches, feed fake completions, assert more dispatches, assert the final result.
+### Priority 1: Flatten
+
+Test that `FlatConfig::from(config)` produces the correct flat structure.
 
 ```rust
 #[test]
-fn pipe_advances_through_actions() {
+fn flatten_pipe() {
     let config = Config {
         workflow: Action::Pipe(PipeAction {
-            actions: vec![invoke("setup"), invoke("build")],
+            actions: vec![invoke_action("a"), invoke_action("b")],
         }),
         steps: HashMap::new(),
     };
-    let mut engine = Engine::new(config);
-    engine.start();
-
-    // After start: first invoke is dispatched
-    let dispatches = engine.take_pending_dispatches();
-    assert_eq!(dispatches.len(), 1);
-    assert_eq!(dispatches[0].handler_name(), "setup");
-
-    // Feed result for setup
-    engine.on_task_completed(&dispatches[0].task_id, &success(json!({"ok": true})));
-
-    // Now build is dispatched
-    let dispatches = engine.take_pending_dispatches();
-    assert_eq!(dispatches.len(), 1);
-    assert_eq!(dispatches[0].handler_name(), "build");
-
-    // Feed result for build
-    engine.on_task_completed(&dispatches[0].task_id, &success(json!({"artifact": "x"})));
-
-    // Engine is done
-    assert!(engine.is_done());
-    assert_eq!(engine.result(), Some(&json!({"artifact": "x"})));
+    let flat = FlatConfig::from(config);
+    assert!(matches!(flat.actions[flat.workflow], FlatAction::Pipe { .. }));
+    // Pipe's children are Invoke nodes
+    let FlatAction::Pipe { actions } = &flat.actions[flat.workflow] else { panic!() };
+    assert_eq!(actions.len(), 2);
+    assert!(matches!(flat.actions[actions[0]], FlatAction::Invoke { .. }));
+    assert!(matches!(flat.actions[actions[1]], FlatAction::Invoke { .. }));
 }
 
 #[test]
-fn parallel_dispatches_all_branches() {
+fn flatten_resolves_step_references() {
     let config = Config {
-        workflow: Action::Parallel(ParallelAction {
-            actions: vec![invoke("verify"), invoke("verify")],
+        workflow: Action::Step(StepAction {
+            step: StepRef::Named { name: "MyStep".into() },
         }),
-        steps: HashMap::new(),
+        steps: HashMap::from([
+            ("MyStep".into(), invoke_action("handler")),
+        ]),
     };
-    let mut engine = Engine::new(config);
-    engine.start();
-
-    // Both dispatched at once
-    let dispatches = engine.take_pending_dispatches();
-    assert_eq!(dispatches.len(), 2);
+    let flat = FlatConfig::from(config);
+    let FlatAction::Step { target } = flat.actions[flat.workflow] else { panic!() };
+    assert!(matches!(flat.actions[target], FlatAction::Invoke { .. }));
 }
 
 #[test]
-fn loop_re_enters_on_continue() {
+fn flatten_mutual_recursion() {
+    // Steps A and B reference each other
     let config = Config {
-        workflow: Action::Loop(LoopAction {
-            body: Box::new(invoke("check")),
+        workflow: Action::Step(StepAction {
+            step: StepRef::Named { name: "A".into() },
         }),
-        steps: HashMap::new(),
+        steps: HashMap::from([
+            ("A".into(), Action::Pipe(PipeAction {
+                actions: vec![
+                    invoke_action("doA"),
+                    Action::Step(StepAction { step: StepRef::Named { name: "B".into() } }),
+                ],
+            })),
+            ("B".into(), Action::Pipe(PipeAction {
+                actions: vec![
+                    invoke_action("doB"),
+                    Action::Step(StepAction { step: StepRef::Named { name: "A".into() } }),
+                ],
+            })),
+        ]),
     };
-    let mut engine = Engine::new(config);
-    engine.start();
-
-    let d = engine.take_pending_dispatches();
-    assert_eq!(d.len(), 1);
-
-    // Continue: re-dispatches
-    engine.on_task_completed(&d[0].task_id, &success(json!({
-        "kind": "Continue", "value": {"retry": true}
-    })));
-    let d = engine.take_pending_dispatches();
-    assert_eq!(d.len(), 1);
-
-    // Break: done
-    engine.on_task_completed(&d[0].task_id, &success(json!({
-        "kind": "Break", "value": {"stable": true}
-    })));
-    assert!(engine.is_done());
-    assert_eq!(engine.result(), Some(&json!({"stable": true})));
+    let flat = FlatConfig::from(config);
+    // Both steps exist and reference each other
+    // The Step nodes' targets should point to each other's roots
+    assert!(flat.actions.len() >= 6); // workflow Step, A's Pipe+Invoke+Step, B's Pipe+Invoke+Step
 }
 ```
 
-Test helpers: `invoke(name)` builds an `Action::Invoke` with a recognizable handler name. `success(value)` builds a `TaskResult::Success`. These keep tests readable.
+### Priority 2: Advance (dispatch generation)
 
-Additional test cases:
-- `branch_selects_correct_case` — dispatches only the matching case's handler
-- `foreach_dispatches_per_element` — N elements = N dispatches
-- `step_resolves_named_step` — step reference enters the registered step's action
-- `step_resolves_root` — Step(Root) re-enters the workflow
-- `attempt_wraps_success` — success becomes {kind: "Ok", value}
-- `attempt_catches_failure` — failure becomes {kind: "Err", error}
-- `nested_pipe_in_parallel` — pipe inside parallel, both work correctly
-- `error_propagates_through_pipe` — failure in pipe step skips remaining steps
-- `error_cancels_parallel_siblings` — failure in one parallel branch cancels others
+Test that `advance_from_cursor` produces the correct dispatches.
 
-## Integration with the event loop
+```rust
+#[test]
+fn advance_single_invoke() {
+    let mut engine = engine_from(Config {
+        workflow: invoke_action("setup"),
+        steps: HashMap::new(),
+    });
+    // Synthetic root completion
+    engine.advance_from_cursor(engine.config.workflow, Value::Null);
 
-Deferred. The engine is testable as a standalone state machine. Integration wires it into the Applier trait and connects a handler executor, but the engine's logic is independent of that.
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].handler_func(), "setup");
+    assert_eq!(d[0].value, Value::Null);
+}
+
+#[test]
+fn advance_pipe_dispatches_first_action() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Pipe(PipeAction {
+            actions: vec![invoke_action("a"), invoke_action("b"), invoke_action("c")],
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(engine.config.workflow, Value::Null);
+
+    // Only the first action is dispatched
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].handler_func(), "a");
+}
+
+#[test]
+fn advance_parallel_dispatches_all() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Parallel(ParallelAction {
+            actions: vec![invoke_action("x"), invoke_action("y"), invoke_action("z")],
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(engine.config.workflow, Value::Null);
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 3);
+}
+
+#[test]
+fn advance_foreach_dispatches_per_element() {
+    let mut engine = engine_from(Config {
+        workflow: Action::ForEach(ForEachAction {
+            action: Box::new(invoke_action("process")),
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(
+        engine.config.workflow,
+        json!([{"a": 1}, {"a": 2}]),
+    );
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 2);
+    assert_eq!(d[0].value, json!({"a": 1}));
+    assert_eq!(d[1].value, json!({"a": 2}));
+}
+
+#[test]
+fn advance_branch_dispatches_matching_case() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Branch(BranchAction {
+            cases: HashMap::from([
+                ("Yes".into(), invoke_action("accept")),
+                ("No".into(), invoke_action("reject")),
+            ]),
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(
+        engine.config.workflow,
+        json!({"kind": "Yes", "data": 42}),
+    );
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].handler_func(), "accept");
+}
+
+#[test]
+fn pipe_then_complete_advances_to_next() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Pipe(PipeAction {
+            actions: vec![invoke_action("first"), invoke_action("second")],
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(engine.config.workflow, Value::Null);
+
+    let d = engine.take_pending_dispatches();
+    engine.on_task_completed(&d[0].task_id, &success(json!({"x": 1})));
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].handler_func(), "second");
+    assert_eq!(d[0].value, json!({"x": 1}));
+}
+
+#[test]
+fn loop_continue_re_dispatches() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Loop(LoopAction {
+            body: Box::new(invoke_action("check")),
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(engine.config.workflow, json!({"n": 0}));
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d[0].value, json!({"n": 0}));
+
+    engine.on_task_completed(&d[0].task_id, &success(json!({
+        "kind": "Continue", "value": {"n": 1}
+    })));
+
+    let d = engine.take_pending_dispatches();
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].value, json!({"n": 1}));
+}
+
+#[test]
+fn loop_break_completes() {
+    let mut engine = engine_from(Config {
+        workflow: Action::Loop(LoopAction {
+            body: Box::new(invoke_action("check")),
+        }),
+        steps: HashMap::new(),
+    });
+    engine.advance_from_cursor(engine.config.workflow, json!({"n": 0}));
+
+    let d = engine.take_pending_dispatches();
+    engine.on_task_completed(&d[0].task_id, &success(json!({
+        "kind": "Break", "value": {"done": true}
+    })));
+
+    assert!(engine.is_done());
+    assert_eq!(engine.result_value(), Some(&json!({"done": true})));
+}
+```
+
+Test helpers: `invoke_action(name)` builds an `Action::Invoke`. `engine_from(config)` flattens and constructs. `success(v)` builds `TaskResult::Success`. Keep tests readable.
+
+## Integration with scheduling
+
+Deferred. The engine is a pure state machine — it has no knowledge of concurrency limits, thread pools, or I/O. `take_pending_dispatches()` always returns everything. The scheduler is a separate component that wraps the engine, manages concurrency limits, and decides when to actually invoke handlers.
 
 ## Open questions
 
-1. **Concurrency limits.** ForEach over N elements dispatches N handlers. Max concurrency should throttle `take_pending_dispatches` or buffer dispatches internally. Deferred — start with unlimited.
+1. **Should Step be a FlatAction variant, or should it be inlined during flattening?** Keeping it as a variant preserves observability (logs show "entering step FixCycle"). Inlining eliminates a layer of indirection. Leaning toward keeping it for now.
 
-2. **Builtin short-circuiting.** constant(), identity(), etc. don't need handler invocation. The engine could resolve them inline during advance instead of dispatching. Deferred — all builtins go through handlers for now.
-
-3. **Task ID generation.** Monotonic counter? UUID? Counter is simpler and sufficient for a single engine instance. UUID is needed if task IDs must be globally unique across runs.
+2. **Task ID generation.** Monotonic counter for now. UUID if we need cross-run uniqueness later.
