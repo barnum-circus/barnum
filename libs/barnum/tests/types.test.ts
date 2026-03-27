@@ -70,15 +70,16 @@ describe("matchCases type safety", () => {
 });
 
 describe("loop type safety", () => {
-  it("accepts body where input equals output", () => {
-    // validate: { valid: boolean } → { valid: boolean }
+  it("accepts body returning LoopResult", () => {
+    // validate: { valid: boolean } → LoopResult<{ valid: boolean }, { done: true }>
+    // loop infers: TypedAction<{ valid: boolean }, { done: true }>
     const workflow = loop(call(validate));
     expect(workflow.kind).toBe("Loop");
   });
 
-  it("rejects body where input differs from output", () => {
-    // check: { result: string } → { valid: boolean } — input ≠ output
-    // @ts-expect-error — loop body must have matching input and output types
+  it("rejects body not returning LoopResult", () => {
+    // check: { result: string } → { valid: boolean } — not a LoopResult
+    // @ts-expect-error — loop body must return LoopResult<In, Out>
     loop(call(check));
   });
 });

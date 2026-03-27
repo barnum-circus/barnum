@@ -172,170 +172,13 @@ export function call<In, Out>(handler: Handler<In, Out>): TypedAction<In, Out> {
   };
 }
 
-// -- Sequence: type-safe chaining via overloads --
-
-export function sequence<T1, T2>(a1: TypedAction<T1, T2>): TypedAction<T1, T2>;
-export function sequence<T1, T2, T3>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-): TypedAction<T1, T3>;
-export function sequence<T1, T2, T3, T4>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-): TypedAction<T1, T4>;
-export function sequence<T1, T2, T3, T4, T5>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-): TypedAction<T1, T5>;
-export function sequence<T1, T2, T3, T4, T5, T6>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-): TypedAction<T1, T6>;
-export function sequence<T1, T2, T3, T4, T5, T6, T7>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-  a6: TypedAction<T6, T7>,
-): TypedAction<T1, T7>;
-export function sequence<T1, T2, T3, T4, T5, T6, T7, T8>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-  a6: TypedAction<T6, T7>,
-  a7: TypedAction<T7, T8>,
-): TypedAction<T1, T8>;
-export function sequence<T1, T2, T3, T4, T5, T6, T7, T8, T9>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-  a6: TypedAction<T6, T7>,
-  a7: TypedAction<T7, T8>,
-  a8: TypedAction<T8, T9>,
-): TypedAction<T1, T9>;
-export function sequence<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-  a6: TypedAction<T6, T7>,
-  a7: TypedAction<T7, T8>,
-  a8: TypedAction<T8, T9>,
-  a9: TypedAction<T9, T10>,
-): TypedAction<T1, T10>;
-export function sequence<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(
-  a1: TypedAction<T1, T2>,
-  a2: TypedAction<T2, T3>,
-  a3: TypedAction<T3, T4>,
-  a4: TypedAction<T4, T5>,
-  a5: TypedAction<T5, T6>,
-  a6: TypedAction<T6, T7>,
-  a7: TypedAction<T7, T8>,
-  a8: TypedAction<T8, T9>,
-  a9: TypedAction<T9, T10>,
-  a10: TypedAction<T10, T11>,
-): TypedAction<T1, T11>;
-export function sequence(...actions: TypedAction[]): TypedAction {
-  return { kind: "Sequence", actions };
-}
-
-// -- Other typed builders --
+export { sequence } from "./sequence.js";
+export { all } from "./all.js";
 
 export function traverse<In, Out>(
   action: TypedAction<In, Out>,
 ): TypedAction<In[], Out[]> {
   return { kind: "Traverse", action };
-}
-
-// -- All: parallel fanout with tuple output --
-
-export function all<In, O1>(a1: TypedAction<In, O1>): TypedAction<In, [O1]>;
-export function all<In, O1, O2>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-): TypedAction<In, [O1, O2]>;
-export function all<In, O1, O2, O3>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-): TypedAction<In, [O1, O2, O3]>;
-export function all<In, O1, O2, O3, O4>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-): TypedAction<In, [O1, O2, O3, O4]>;
-export function all<In, O1, O2, O3, O4, O5>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-): TypedAction<In, [O1, O2, O3, O4, O5]>;
-export function all<In, O1, O2, O3, O4, O5, O6>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-  a6: TypedAction<In, O6>,
-): TypedAction<In, [O1, O2, O3, O4, O5, O6]>;
-export function all<In, O1, O2, O3, O4, O5, O6, O7>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-  a6: TypedAction<In, O6>,
-  a7: TypedAction<In, O7>,
-): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7]>;
-export function all<In, O1, O2, O3, O4, O5, O6, O7, O8>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-  a6: TypedAction<In, O6>,
-  a7: TypedAction<In, O7>,
-  a8: TypedAction<In, O8>,
-): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8]>;
-export function all<In, O1, O2, O3, O4, O5, O6, O7, O8, O9>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-  a6: TypedAction<In, O6>,
-  a7: TypedAction<In, O7>,
-  a8: TypedAction<In, O8>,
-  a9: TypedAction<In, O9>,
-): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8, O9]>;
-export function all<In, O1, O2, O3, O4, O5, O6, O7, O8, O9, O10>(
-  a1: TypedAction<In, O1>,
-  a2: TypedAction<In, O2>,
-  a3: TypedAction<In, O3>,
-  a4: TypedAction<In, O4>,
-  a5: TypedAction<In, O5>,
-  a6: TypedAction<In, O6>,
-  a7: TypedAction<In, O7>,
-  a8: TypedAction<In, O8>,
-  a9: TypedAction<In, O9>,
-  a10: TypedAction<In, O10>,
-): TypedAction<In, [O1, O2, O3, O4, O5, O6, O7, O8, O9, O10]>;
-export function all(...actions: TypedAction[]): TypedAction {
-  return { kind: "All", actions };
 }
 
 export function matchCases<In, Out>(
@@ -344,7 +187,13 @@ export function matchCases<In, Out>(
   return { kind: "Match", cases };
 }
 
-export function loop<T>(body: TypedAction<T, T>): TypedAction<T, T> {
+export type LoopResult<TContinue, TBreak> =
+  | { kind: "Continue"; value: TContinue }
+  | { kind: "Break"; value: TBreak };
+
+export function loop<In, Out>(
+  body: TypedAction<In, LoopResult<In, Out>>,
+): TypedAction<In, Out> {
   return { kind: "Loop", body };
 }
 
