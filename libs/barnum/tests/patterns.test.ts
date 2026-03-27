@@ -11,6 +11,7 @@ import {
   traverse,
 } from "../src/core.js";
 import {
+  constant,
   done,
   extractField,
   identity,
@@ -35,7 +36,13 @@ import fix from "./handlers/fix.js";
 describe("linear pipeline", () => {
   it("chains setup → process → check → finalize", () => {
     const cfg = config(
-      sequence(call(setup), call(process_), call(check), call(finalize)),
+      sequence(
+        constant({ project: "test" }),
+        setup(),
+        process_(),
+        check(),
+        finalize(),
+      ),
     );
     expect(cfg.workflow.kind).toBe("Sequence");
   });
@@ -48,7 +55,12 @@ describe("linear pipeline", () => {
 describe("fan-out with traverse", () => {
   it("setup → listFiles → traverse(migrate)", () => {
     const cfg = config(
-      sequence(call(setup), call(listFiles), traverse(call(migrate))),
+      sequence(
+        constant({ project: "test" }),
+        setup(),
+        listFiles(),
+        traverse(migrate()),
+      ),
     );
     expect(cfg.workflow.kind).toBe("Sequence");
   });
@@ -67,17 +79,18 @@ describe("type-check loop", () => {
   it("loops until clean", () => {
     const cfg = config(
       sequence(
-        call(setup),
-        call(listFiles),
-        traverse(call(migrate)),
+        constant({ project: "test" }),
+        setup(),
+        listFiles(),
+        traverse(migrate()),
         loop(
           sequence(
-            call(typeCheck),
-            call(classifyErrors),
+            typeCheck(),
+            classifyErrors(),
             matchCases({
               HasErrors: sequence(
                 extractField("errors"),
-                traverse(call(fix)),
+                traverse(fix()),
                 recur(),
               ),
               Clean: done(),
@@ -103,13 +116,14 @@ describe("parallel branches with error handling", () => {
   it("runs branches in parallel with attempt/match fallback", () => {
     const cfg = config(
       sequence(
+        constant({ project: "test" }),
         all(
-          call(setup),
+          setup(),
           sequence(
-            attempt(call(setup)),
+            attempt(setup()),
             matchCases({
-              Ok: call(process_),
-              Err: call(process_),
+              Ok: process_(),
+              Err: process_(),
             }),
           ),
         ),
@@ -147,9 +161,10 @@ describe("named steps — linter workflow", () => {
       })
       .workflow((steps) =>
         sequence(
-          call(setup),
-          call(listFiles),
-          traverse(call(migrate)),
+          constant({ project: "test" }),
+          setup(),
+          listFiles(),
+          traverse(migrate()),
           steps.FixCycle,
         ),
       );
@@ -179,7 +194,7 @@ describe("named steps — linter workflow", () => {
         ),
       })
       .workflow((steps) =>
-        sequence(call(setup), steps.Migrate, steps.FixCycle),
+        sequence(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
       );
     expect(cfg.steps).toHaveProperty("Migrate");
     expect(cfg.steps).toHaveProperty("FixCycle");
@@ -197,7 +212,8 @@ describe("reader monad pattern", () => {
   it("preserves context via all + identity + merge", () => {
     const cfg = config(
       sequence(
-        all(identity(), call(process_)),
+        constant({ initialized: true, project: "test" }),
+        all(identity(), process_()),
         merge(),
       ),
     );

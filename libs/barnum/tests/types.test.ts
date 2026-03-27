@@ -9,6 +9,7 @@ import {
   sequence,
   traverse,
 } from "../src/core.js";
+import { constant } from "../src/builtins.js";
 import setup from "./handlers/setup.js";
 import process_ from "./handlers/process.js";
 import check from "./handlers/check.js";
@@ -110,8 +111,8 @@ describe("named step type safety", () => {
   it("allows referencing registered steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Finalize: call(finalize) })
-      .workflow((steps) => steps.Finalize);
-    expect(cfg.workflow.kind).toBe("Step");
+      .workflow((steps) => sequence(constant({ valid: true }), steps.Finalize));
+    expect(cfg.workflow.kind).toBe("Sequence");
   });
 
   it("rejects references to unregistered steps", () => {
@@ -127,7 +128,9 @@ describe("named step type safety", () => {
     const cfg = configBuilder()
       .registerSteps({ Finalize: call(finalize) })
       .registerSteps({ Revalidate: call(validate) })
-      .workflow((steps) => all(steps.Finalize, steps.Revalidate));
+      .workflow((steps) =>
+        sequence(constant({ valid: true }), all(steps.Finalize, steps.Revalidate)),
+      );
     expect(cfg.steps).toHaveProperty("Finalize");
     expect(cfg.steps).toHaveProperty("Revalidate");
   });

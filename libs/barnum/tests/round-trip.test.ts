@@ -6,13 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   all,
   attempt,
-  call,
-  config,
-  configBuilder,
   loop,
   matchCases,
   sequence,
   traverse,
+  type Config,
 } from "../src/core.js";
 import setup from "./handlers/setup.js";
 import process_ from "./handlers/process.js";
@@ -33,65 +31,72 @@ function roundTrip(input: unknown): unknown {
   return JSON.parse(stdout);
 }
 
+/**
+ * Round-trip tests verify JSON serialization, not type safety.
+ * Config objects are constructed directly to avoid the never-input
+ * constraint of config(), which is tested separately in types.test.ts.
+ */
 describe("barnum round-trip", () => {
   it("Call", () => {
-    const cfg = config(call(setup));
+    const cfg: Config = { workflow: setup() };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Sequence", () => {
-    const cfg = config(sequence(call(setup), call(process_)));
+    const cfg: Config = { workflow: sequence(setup(), process_()) };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("All", () => {
-    const cfg = config(all(call(check), call(check)));
+    const cfg: Config = { workflow: all(check(), check()) };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Traverse", () => {
-    const cfg = config(traverse(call(check)));
+    const cfg: Config = { workflow: traverse(check()) };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Attempt", () => {
-    const cfg = config(attempt(call(check)));
+    const cfg: Config = { workflow: attempt(check()) };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Match", () => {
-    const cfg = config(
-      matchCases({ yes: call(finalize), no: call(finalize) }),
-    );
+    const cfg: Config = {
+      workflow: matchCases({ yes: finalize(), no: finalize() }),
+    };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Loop", () => {
-    const cfg = config(loop(call(validate)));
+    const cfg: Config = { workflow: loop(validate()) };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Step", () => {
-    const cfg = configBuilder()
-      .registerSteps({ DoCheck: call(check) })
-      .workflow((steps) => steps.DoCheck);
+    const steps: Config["steps"] = { DoCheck: check() };
+    const cfg: Config = {
+      workflow: { kind: "Step", step: "DoCheck" },
+      steps,
+    };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("combined workflow", () => {
-    const cfg = configBuilder()
-      .registerSteps({ Recheck: call(check) })
-      .workflow((steps) =>
-        sequence(
-          call(setup),
-          call(process_),
-          attempt(call(check)),
-          matchCases({
-            Ok: call(finalize),
-            Err: call(finalize),
-          }),
-        ),
-      );
+    const steps: Config["steps"] = { Recheck: check() };
+    const cfg: Config = {
+      workflow: sequence(
+        setup(),
+        process_(),
+        attempt(check()),
+        matchCases({
+          Ok: finalize(),
+          Err: finalize(),
+        }),
+      ),
+      steps,
+    };
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 });

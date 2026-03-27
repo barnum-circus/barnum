@@ -3,7 +3,6 @@ import { createHandler } from "../core.js";
 
 export const constant = createHandler(
   {
-    stepValueValidator: z.unknown(),
     stepConfigValidator: z.object({ value: z.unknown() }),
     handle: async ({ stepConfig }) => stepConfig.value,
   },
@@ -12,7 +11,6 @@ export const constant = createHandler(
 
 export const range = createHandler(
   {
-    stepValueValidator: z.unknown(),
     stepConfigValidator: z.object({ start: z.number(), end: z.number() }),
     handle: async ({ stepConfig }) => {
       const result: number[] = [];
@@ -23,4 +21,11 @@ export const range = createHandler(
     },
   },
   "range",
+);
+
+export const drop = createHandler(
+  {
+    handle: async () => undefined,
+  },
+  "drop",
 );

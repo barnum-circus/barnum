@@ -1,6 +1,7 @@
 import type { TypedAction, LoopResult } from "./core.js";
 import {
   constant as constantHandler,
+  drop as dropHandler,
   range as rangeHandler,
 } from "./handlers/builtins.js";
 
@@ -98,11 +99,31 @@ export function extractField<
 }
 
 // ---------------------------------------------------------------------------
-// Constant — ignore input, produce a fixed value
+// Drop — discard pipeline value (enables transition to constant/range)
 // ---------------------------------------------------------------------------
 
-export function constant<T>(value: T): TypedAction<unknown, T> {
-  return constantHandler({ stepConfig: { value } }) as TypedAction<unknown, T>;
+export function drop<T>(): TypedAction<T, never> {
+  return dropHandler() as TypedAction<T, never>;
+}
+
+// ---------------------------------------------------------------------------
+// DropResult — run an action for side effects, discard its output
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
+  return {
+    kind: "Sequence",
+    actions: [action, dropHandler()],
+  } as TypedAction<In, never>;
+}
+
+// ---------------------------------------------------------------------------
+// Constant — produce a fixed value (takes no pipeline input)
+// ---------------------------------------------------------------------------
+
+export function constant<T>(value: T): TypedAction<never, T> {
+  return constantHandler({ stepConfig: { value } }) as TypedAction<never, T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,8 +133,8 @@ export function constant<T>(value: T): TypedAction<unknown, T> {
 export function range(
   start: number,
   end: number,
-): TypedAction<unknown, number[]> {
+): TypedAction<never, number[]> {
   return rangeHandler({
     stepConfig: { start, end },
-  }) as TypedAction<unknown, number[]>;
+  }) as TypedAction<never, number[]>;
 }

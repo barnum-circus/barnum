@@ -83,13 +83,20 @@ export type Config = {
 // ---------------------------------------------------------------------------
 
 /**
- * An action with tracked input/output types. The phantom fields use function
- * types to enforce correct variance (contravariant input, covariant output)
+ * An action with tracked input/output types. Phantom fields enforce variance
  * and are never set at runtime — they exist only for the TypeScript compiler.
+ *
+ * __phantom_in: contravariant — ensures sequence chaining correctness
+ *   (output of step N is assignable to input of step N+1)
+ * __phantom_out: covariant — tracks output type
+ * __in: covariant — enables config() to reject workflows that expect input
+ *   (the contravariant phantom makes never the most permissive input,
+ *   so a second covariant phantom is needed for the entry point check)
  */
 export type TypedAction<In = unknown, Out = unknown> = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
+  __in?: In;
 };
 
 // ---------------------------------------------------------------------------
@@ -101,12 +108,20 @@ export type HandlerDefinition<
   TOutput = unknown,
   TStepConfig = unknown,
 > = {
-  stepValueValidator: z.ZodType<TValue>;
+  stepValueValidator?: z.ZodType<TValue>;
   stepConfigValidator?: z.ZodType<TStepConfig>;
   handle: (context: {
     value: TValue;
     stepConfig: TStepConfig;
   }) => Promise<TOutput>;
+};
+
+/** Runtime-only handler definition shape — erases generic type info. */
+type UntypedHandlerDefinition = {
+  stepValueValidator?: z.ZodType;
+  stepConfigValidator?: z.ZodType;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  handle: (...args: any[]) => Promise<unknown>;
 };
 
 const HANDLER_BRAND = Symbol.for("barnum:handler");
@@ -178,16 +193,59 @@ function getCallerFilePath(): string {
   return callerFile;
 }
 
-export function createHandler<TValue, TOutput, TStepConfig = unknown>(
-  definition: HandlerDefinition<TValue, TOutput, TStepConfig>,
+// Both validators: handler accepts typed input and step config.
+export function createHandler<TValue, TOutput, TStepConfig>(
+  definition: {
+    stepValueValidator: z.ZodType<TValue>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: {
+      value: TValue;
+      stepConfig: TStepConfig;
+    }) => Promise<TOutput>;
+  },
   exportName?: string,
-): CallableHandler<TValue, TOutput, TStepConfig> {
+): CallableHandler<TValue, TOutput, TStepConfig>;
+
+// Value validator only: handler accepts typed input, no step config.
+export function createHandler<TValue, TOutput>(
+  definition: {
+    stepValueValidator: z.ZodType<TValue>;
+    handle: (context: { value: TValue }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): CallableHandler<TValue, TOutput, unknown>;
+
+// Config validator only: handler takes no pipeline input, has step config.
+export function createHandler<TOutput, TStepConfig>(
+  definition: {
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): CallableHandler<never, TOutput, TStepConfig>;
+
+// Neither validator: handler takes no input and no config.
+export function createHandler<TOutput>(
+  definition: {
+    handle: () => Promise<TOutput>;
+  },
+  exportName?: string,
+): CallableHandler<never, TOutput, unknown>;
+
+// Implementation: return type is intentionally broad. The overload signatures
+// provide all type safety for callers. TypeScript's overload compatibility
+// check cannot reconcile contravariant phantom types across return types
+// that differ in their TValue (generic vs never), so the implementation
+// uses the erased definition type and returns the unparameterized handler.
+export function createHandler(
+  definition: UntypedHandlerDefinition,
+  exportName?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
-  const fn = ((
-    options?: { stepConfig?: TStepConfig },
-  ): TypedAction<TValue, TOutput> => ({
+  const fn = (options?: { stepConfig?: unknown }): TypedAction => ({
     kind: "Call",
     handler: {
       kind: "TypeScript",
@@ -195,14 +253,14 @@ export function createHandler<TValue, TOutput, TStepConfig = unknown>(
       func: funcName,
       stepConfig: options?.stepConfig,
     },
-  })) as CallableHandler<TValue, TOutput, TStepConfig>;
+  });
 
-  Object.defineProperty(fn, HANDLER_BRAND, { value: true });
-  Object.defineProperty(fn, "__filePath", { value: filePath });
-  Object.defineProperty(fn, "__exportName", { value: funcName });
-  Object.defineProperty(fn, "__definition", { value: definition });
-
-  return fn;
+  return Object.assign(fn, {
+    [HANDLER_BRAND]: true as const,
+    __filePath: filePath,
+    __exportName: funcName,
+    __definition: definition,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -271,7 +329,8 @@ export function attempt<In, Out>(
 type AnyAction = TypedAction<any, any>;
 
 /** Simple config with no named steps. */
-export function config(workflow: AnyAction): Config {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function config(workflow: TypedAction<never, any>): Config {
   return { workflow };
 }
 
@@ -290,7 +349,8 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
     return new ConfigBuilder({ ...this._steps, ...steps });
   }
 
-  workflow(build: (steps: TSteps) => AnyAction): Config {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  workflow(build: (steps: TSteps) => TypedAction<never, any>): Config {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
       stepRefs[name] = { kind: "Step", step: name };
