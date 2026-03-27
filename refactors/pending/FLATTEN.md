@@ -288,25 +288,21 @@ impl UnresolvedFlatConfig {
         let entry = match action {
             Action::Invoke { handler } => {
                 let handler_id = self.intern_handler(handler);
-                FlatEntry::Action(FlatAction::Invoke { handler: handler_id })
+                FlatAction::Invoke { handler: handler_id }
             }
 
             Action::Pipe { actions } => {
                 let count = Count(actions.len() as u32);
                 self.alloc_many(count);
-                self.entries[action_id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Pipe { count }));
                 self.fill_child_slots(actions, action_id + 1, workflow_root)?;
-                return Ok(());
+                FlatAction::Pipe { count }
             }
 
             Action::Parallel { actions } => {
                 let count = Count(actions.len() as u32);
                 self.alloc_many(count);
-                self.entries[action_id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Parallel { count }));
                 self.fill_child_slots(actions, action_id + 1, workflow_root)?;
-                return Ok(());
+                FlatAction::Parallel { count }
             }
 
             Action::Branch { mut cases } => {
@@ -314,8 +310,6 @@ impl UnresolvedFlatConfig {
                 let mut sorted_keys: Vec<_> = cases.keys().cloned().collect();
                 sorted_keys.sort();
                 self.alloc_many(Count(2 * count.0));
-                self.entries[action_id.0 as usize] =
-                    Some(FlatEntry::Action(FlatAction::Branch { count }));
                 for (i, key) in sorted_keys.into_iter().enumerate() {
                     let key_slot = action_id + 1 + 2 * i as u32;
                     self.entries[key_slot.0 as usize] =
@@ -323,38 +317,34 @@ impl UnresolvedFlatConfig {
                     let child = cases.remove(&key).unwrap();
                     self.fill_child_slot(child, key_slot + 1, workflow_root)?;
                 }
-                return Ok(());
+                FlatAction::Branch { count }
             }
 
             Action::ForEach { body } => {
                 let body_id = self.flatten_action(*body, workflow_root)?;
-                FlatEntry::Action(FlatAction::ForEach { body: body_id })
+                FlatAction::ForEach { body: body_id }
             }
 
             Action::Loop { body } => {
                 let body_id = self.flatten_action(*body, workflow_root)?;
-                FlatEntry::Action(FlatAction::Loop { body: body_id })
+                FlatAction::Loop { body: body_id }
             }
 
             Action::Attempt { action } => {
                 let child_id = self.flatten_action(*action, workflow_root)?;
-                FlatEntry::Action(FlatAction::Attempt { child: child_id })
+                FlatAction::Attempt { child: child_id }
             }
 
             Action::Step(StepRef::Named(name)) => {
-                FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Named(name),
-                })
+                FlatAction::Step { target: StepTarget::Named(name) }
             }
 
             Action::Step(StepRef::Root) => {
                 let root = workflow_root.ok_or(FlattenError::StepRootInStepBody)?;
-                FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Resolved(root),
-                })
+                FlatAction::Step { target: StepTarget::Resolved(root) }
             }
         };
-        self.entries[action_id.0 as usize] = Some(entry);
+        self.entries[action_id.0 as usize] = Some(FlatEntry::Action(entry));
         Ok(())
     }
 
