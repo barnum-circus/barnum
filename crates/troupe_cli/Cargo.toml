@@ -13,13 +13,8 @@ categories = ["command-line-utilities"]
 name = "troupe"
 path = "src/main.rs"
 
-[lib]
-name = "troupe_cli"
-path = "src/lib.rs"
-
 [dependencies]
 troupe = { path = "../troupe" }
-cli_invoker = { path = "../cli_invoker" }
 clap = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
