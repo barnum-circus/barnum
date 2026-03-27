@@ -6,12 +6,6 @@ Given a cursor `(ActionId, Value)`, the engine walks the action table, creating 
 
 The engine has no knowledge of scheduling, concurrency, or I/O. It is a pure state machine.
 
-**Note:** All index types (`ActionId`, `FrameId`, `TaskId`) will be newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate, but u32 — 4 billion indices is plenty). To be created when implementation starts.
-
-## Flattening
-
-See [FLATTEN.md](./FLATTEN.md) for the complete flattening design: BFS layout, fully-flat `FlatAction` with contiguous child ranges (no Vec/HashMap in variants), two-pass step resolution, and comprehensive unit tests.
-
 ## Frames
 
 A frame tracks the engine's execution state at one structural combinator. Frames form a tree. Leaves are Invoke frames (suspended, waiting for handler results). Interior frames are combinators tracking partial progress.
@@ -83,21 +77,23 @@ Walk the action table from `action_id`. Recurse through structural nodes until r
 
 ```
 advance(action_id, value, parent):
-  match flat.actions[action_id]:
+  match flat.action(action_id):
 
     Invoke { handler } =>
       create Invoke frame with parent
-      queue dispatch(task_id, handler, value)
+      queue dispatch(task_id, flat.handler(handler), value)
       register task_id → frame_id
 
-    Pipe { actions } =>
+    Pipe { count } =>
+      let children = flat.children(action_id)    // resolves child slots
       create Pipe frame (action_id, index=0) with parent
-      advance(actions[0], value, this_frame/0)
+      advance(children[0], value, this_frame/0)
 
-    Parallel { actions } =>
-      create Parallel frame (results = [None; N]) with parent
-      for (i, action) in actions:
-        advance(action, value.clone(), this_frame/i)
+    Parallel { count } =>
+      let children = flat.children(action_id)
+      create Parallel frame (results = [None; count]) with parent
+      for (i, child) in children:
+        advance(child, value.clone(), this_frame/i)
 
     ForEach { body } =>
       let elements = value as array
@@ -105,18 +101,19 @@ advance(action_id, value, parent):
       for (i, element) in elements:
         advance(body, element, this_frame/i)
 
-    Branch { cases } =>
+    Branch { count } =>
+      let cases = flat.branch_cases(action_id)   // (KindDiscriminator, ActionId) pairs
       let kind = value["kind"]
-      let case_id = cases[kind]
+      let case_id = cases.find(kind)
       advance(case_id, value, parent)       // no frame — pass through
 
     Loop { body } =>
       create Loop frame (action_id) with parent
       advance(body, value, this_frame/0)
 
-    Attempt { action } =>
+    Attempt { child } =>
       create Attempt frame with parent
-      advance(action, value, this_frame/0)
+      advance(child, value, this_frame/0)
 
     Step { target } =>
       advance(target, value, parent)         // no frame — pass through
@@ -140,11 +137,11 @@ complete(parent_ref, value):
   match frame.kind:
 
     Pipe { action_id, index } =>
-      let pipe = flat.actions[action_id]
+      let children = flat.children(action_id)
       let next = index + 1
-      if next < pipe.actions.len():
+      if next < children.len():
         frame.index = next
-        advance(pipe.actions[next], value, frame_id/0)
+        advance(children[next], value, frame_id/0)
       else:
         remove frame
         complete(frame.parent, value)
@@ -160,9 +157,9 @@ complete(parent_ref, value):
       // identical to Parallel
 
     Loop { action_id } =>
-      let loop_action = flat.actions[action_id]
+      let Loop { body } = flat.action(action_id)
       match value["kind"]:
-        "Continue" => advance(loop_action.body, value["value"], frame_id/0)
+        "Continue" => advance(body, value["value"], frame_id/0)
         "Break" =>
           remove frame
           complete(frame.parent, value["value"])
@@ -224,18 +221,6 @@ impl Engine {
 ```
 
 ## Testing strategy
-
-### Priority 1: Flatten
-
-```rust
-fn flatten_pipe()
-fn flatten_resolves_step_references()
-fn flatten_mutual_recursion()           // A → B → A: no infinite loop
-fn flatten_self_recursion()             // Step(Root) → workflow root
-fn flatten_nested_combinators()         // pipe inside parallel inside loop
-```
-
-### Priority 2: Advance
 
 ```rust
 fn single_invoke()                      // start → 1 dispatch

@@ -76,32 +76,56 @@ impl Add<u32> for FlatConfigEntryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatAction<T> {
     /// Leaf: invoke a handler. `handler` indexes [`FlatConfig::handlers`].
-    Invoke { handler: HandlerId },
+    Invoke {
+        /// Index into the handler pool.
+        handler: HandlerId,
+    },
 
     /// Sequential composition.
     /// Parent is followed by `count` child slots in the entry array.
-    Pipe { count: Count },
+    Pipe {
+        /// Number of child slots following this entry.
+        count: Count,
+    },
 
     /// Fan-out: same input to all children, collect results as array.
     /// Parent is followed by `count` child slots in the entry array.
-    Parallel { count: Count },
+    Parallel {
+        /// Number of child slots following this entry.
+        count: Count,
+    },
 
     /// Map over array input.
-    ForEach { body: ActionId },
+    ForEach {
+        /// `ActionId` of the loop body.
+        body: ActionId,
+    },
 
     /// Case analysis on `value["kind"]`.
     /// Parent is followed by `2 * count` entries: `count` pairs of
     /// (`BranchKey`, child slot).
-    Branch { count: Count },
+    Branch {
+        /// Number of (key, child) pairs following this entry.
+        count: Count,
+    },
 
     /// Loop: runs body, inspects result variant to break or continue.
-    Loop { body: ActionId },
+    Loop {
+        /// `ActionId` of the loop body.
+        body: ActionId,
+    },
 
     /// Error materialization.
-    Attempt { child: ActionId },
+    Attempt {
+        /// `ActionId` of the wrapped action.
+        child: ActionId,
+    },
 
     /// Redirect to another action (step reference or self-recursion).
-    Step { target: T },
+    Step {
+        /// Target action (unresolved or resolved depending on `T`).
+        target: T,
+    },
 }
 
 impl<T> FlatAction<T> {
@@ -147,10 +171,16 @@ pub enum FlatEntry<T> {
 
     /// Child pointer for multi-entry children (Pipe/Parallel/Branch).
     /// Points to the root `ActionId` of a child subtree.
-    ChildRef { action: ActionId },
+    ChildRef {
+        /// The `ActionId` of the child subtree root.
+        action: ActionId,
+    },
 
     /// Branch case key. Always immediately followed by a child slot.
-    BranchKey { key: KindDiscriminator },
+    BranchKey {
+        /// The discriminant key for this branch case.
+        key: KindDiscriminator,
+    },
 }
 
 impl<T> FlatEntry<T> {
@@ -186,33 +216,24 @@ pub enum StepTarget {
 }
 
 /// Errors that can occur during flattening.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FlattenError {
     /// `Step(Root)` appeared in a step body (only valid in the workflow tree).
+    #[error("Step(Root) is only valid in the workflow tree, not in step bodies")]
     StepRootInStepBody,
     /// A named step reference that doesn't exist in `Config::steps`.
-    UnknownStep { name: StepName },
+    #[error("unknown step: {name}")]
+    UnknownStep {
+        /// The unresolved step name.
+        name: StepName,
+    },
     /// A pre-allocated slot was never filled (bug in the flattener).
-    UninitializedEntry { index: FlatConfigEntryId },
+    #[error("uninitialized entry at index {index}")]
+    UninitializedEntry {
+        /// The index of the uninitialized slot.
+        index: FlatConfigEntryId,
+    },
 }
-
-impl std::fmt::Display for FlattenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FlattenError::StepRootInStepBody => {
-                write!(f, "Step(Root) is only valid in the workflow tree, not in step bodies")
-            }
-            FlattenError::UnknownStep { name } => {
-                write!(f, "unknown step: {name}")
-            }
-            FlattenError::UninitializedEntry { index } => {
-                write!(f, "uninitialized entry at index {index}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for FlattenError {}
 
 // ---------------------------------------------------------------------------
 // FlatConfig
@@ -373,7 +394,9 @@ impl UnresolvedFlatConfig {
         let entry = match action {
             Action::Invoke(InvokeAction { handler }) => {
                 let handler_id = self.intern_handler(handler);
-                FlatAction::Invoke { handler: handler_id }
+                FlatAction::Invoke {
+                    handler: handler_id,
+                }
             }
 
             Action::Pipe(crate::PipeAction { actions }) => {
@@ -562,7 +585,7 @@ mod tests {
         StepName::from(s.intern())
     }
 
-    /// Helper: create a KindDiscriminator from a string literal.
+    /// Helper: create a `KindDiscriminator` from a string literal.
     fn kind(s: &str) -> KindDiscriminator {
         KindDiscriminator::from(s.intern())
     }
@@ -595,7 +618,7 @@ mod tests {
         Action::Parallel(crate::ParallelAction { actions })
     }
 
-    /// Helper: create a ForEach action.
+    /// Helper: create a `ForEach` action.
     fn for_each(action: Action) -> Action {
         Action::ForEach(crate::ForEachAction {
             action: Box::new(action),
@@ -605,10 +628,7 @@ mod tests {
     /// Helper: create a Branch action.
     fn branch(cases: Vec<(&str, Action)>) -> Action {
         Action::Branch(BranchAction {
-            cases: cases
-                .into_iter()
-                .map(|(k, v)| (kind(k), v))
-                .collect(),
+            cases: cases.into_iter().map(|(k, v)| (kind(k), v)).collect(),
         })
     }
 
@@ -629,7 +649,9 @@ mod tests {
     /// Helper: create a Step(Named) action.
     fn step_named(name: &str) -> Action {
         Action::Step(crate::StepAction {
-            step: StepRef::Named { name: step_name(name) },
+            step: StepRef::Named {
+                name: step_name(name),
+            },
         })
     }
 
@@ -670,9 +692,14 @@ mod tests {
         assert_eq!(flat.entries.len(), 1);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
-        assert_eq!(flat.handler(HandlerId(0)), &ts_handler("./handler.ts", "run"));
+        assert_eq!(
+            flat.handler(HandlerId(0)),
+            &ts_handler("./handler.ts", "run")
+        );
     }
 
     /// Pipe: all single-entry children inlined.
@@ -687,7 +714,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(flat.entries.len(), 4);
-        assert_eq!(flat.action(ActionId(0)), FlatAction::Pipe { count: Count(3) });
+        assert_eq!(
+            flat.action(ActionId(0)),
+            FlatAction::Pipe { count: Count(3) }
+        );
 
         let children: Vec<_> = flat.children(ActionId(0)).collect();
         assert_eq!(children.len(), 3);
@@ -715,7 +745,7 @@ mod tests {
         assert_eq!(children, vec![ActionId(1), ActionId(2)]);
     }
 
-    /// ForEach: explicit body ActionId.
+    /// `ForEach`: explicit body `ActionId`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_foreach() {
@@ -730,11 +760,13 @@ mod tests {
         );
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
     }
 
-    /// Branch: BranchKey + inlined child pairs.
+    /// Branch: `BranchKey` + inlined child pairs.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_branch() {
@@ -758,7 +790,7 @@ mod tests {
         assert_eq!(cases[1].0, kind("Ok"));
     }
 
-    /// Loop: explicit body ActionId.
+    /// Loop: explicit body `ActionId`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_loop() {
@@ -771,7 +803,7 @@ mod tests {
         );
     }
 
-    /// Attempt: explicit child ActionId.
+    /// Attempt: explicit child `ActionId`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_attempt() {
@@ -786,7 +818,7 @@ mod tests {
 
     // -- Nesting --
 
-    /// Nested pipe: inner pipe uses ChildRef, leaves inlined.
+    /// Nested pipe: inner pipe uses `ChildRef`, leaves inlined.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_nested_pipe() {
@@ -800,7 +832,10 @@ mod tests {
         // Child 1 (slot 2): inner Pipe is multi-entry → ChildRef.
         // inner Pipe allocates at 3, with child slots 4, 5.
         assert_eq!(flat.entries.len(), 6);
-        assert_eq!(flat.action(ActionId(0)), FlatAction::Pipe { count: Count(2) });
+        assert_eq!(
+            flat.action(ActionId(0)),
+            FlatAction::Pipe { count: Count(2) }
+        );
 
         let children: Vec<_> = flat.children(ActionId(0)).collect();
         // First child is inlined at slot 1.
@@ -809,10 +844,13 @@ mod tests {
         assert_eq!(children[1], ActionId(3));
 
         // Verify the inner pipe.
-        assert_eq!(flat.action(ActionId(3)), FlatAction::Pipe { count: Count(2) });
+        assert_eq!(
+            flat.action(ActionId(3)),
+            FlatAction::Pipe { count: Count(2) }
+        );
     }
 
-    /// Single-child chain: Loop > Attempt > ForEach with explicit ActionIds.
+    /// Single-child chain: Loop > Attempt > `ForEach` with explicit `ActionId`s.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_single_child_chain() {
@@ -839,7 +877,9 @@ mod tests {
         );
         assert_eq!(
             flat.action(ActionId(3)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
     }
 
@@ -862,10 +902,9 @@ mod tests {
             FlatAction::Parallel { count: Count(2) }
         );
 
-        let par_children: Vec<_> = flat.children(ActionId(1)).collect();
         // First child: Pipe is multi-entry, gets ChildRef.
         // Second child: Invoke is single-entry, inlined.
-        assert_eq!(par_children.len(), 2);
+        assert_eq!(flat.children(ActionId(1)).count(), 2);
     }
 
     /// Branch cases containing compound subtrees.
@@ -873,10 +912,7 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn flatten_branch_with_subtrees() {
         let ok_pipe = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
-        let action = branch(vec![
-            ("Ok", ok_pipe),
-            ("Err", invoke("./err.ts", "handle")),
-        ]);
+        let action = branch(vec![("Ok", ok_pipe), ("Err", invoke("./err.ts", "handle"))]);
         let flat = flatten(config(action)).unwrap();
 
         let cases: Vec<_> = flat.branch_cases(ActionId(0)).collect();
@@ -894,7 +930,7 @@ mod tests {
         }
     }
 
-    /// Parallel containing Parallels (ChildRef for each).
+    /// Parallel containing Parallels (`ChildRef` for each).
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_parallel_of_parallels() {
@@ -926,7 +962,10 @@ mod tests {
         ]);
         let flat = flatten(config(action)).unwrap();
 
-        assert_eq!(flat.action(ActionId(0)), FlatAction::Pipe { count: Count(2) });
+        assert_eq!(
+            flat.action(ActionId(0)),
+            FlatAction::Pipe { count: Count(2) }
+        );
         let children: Vec<_> = flat.children(ActionId(0)).collect();
         // Invoke inlined at slot 1.
         assert_eq!(children[0], ActionId(1));
@@ -937,7 +976,7 @@ mod tests {
 
     // -- Step resolution --
 
-    /// Step(Root) resolved immediately to workflow root ActionId.
+    /// `Step(Root)` resolved immediately to workflow root `ActionId`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_step_root() {
@@ -945,11 +984,16 @@ mod tests {
         let action = pipe(vec![invoke("./a.ts", "a"), step_root()]);
         let flat = flatten(config(action)).unwrap();
 
-        assert_eq!(flat.action(ActionId(0)), FlatAction::Pipe { count: Count(2) });
+        assert_eq!(
+            flat.action(ActionId(0)),
+            FlatAction::Pipe { count: Count(2) }
+        );
         // Step(Root) is inlined at slot 2, pointing to ActionId(0).
         assert_eq!(
             flat.action(ActionId(2)),
-            FlatAction::Step { target: ActionId(0) }
+            FlatAction::Step {
+                target: ActionId(0)
+            }
         );
     }
 
@@ -959,18 +1003,21 @@ mod tests {
     fn flatten_step_named() {
         let action = step_named("Cleanup");
         let cleanup = invoke("./cleanup.ts", "run");
-        let flat =
-            flatten(config_with_steps(action, vec![("Cleanup", cleanup)])).unwrap();
+        let flat = flatten(config_with_steps(action, vec![("Cleanup", cleanup)])).unwrap();
 
         // Workflow: Step(Named("Cleanup")) at 0.
         // Step body: Invoke at 1.
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Step { target: ActionId(1) }
+            FlatAction::Step {
+                target: ActionId(1)
+            }
         );
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
     }
 
@@ -980,10 +1027,7 @@ mod tests {
     fn flatten_mutual_recursion() {
         let flat = flatten(config_with_steps(
             step_named("A"),
-            vec![
-                ("A", step_named("B")),
-                ("B", step_named("A")),
-            ],
+            vec![("A", step_named("B")), ("B", step_named("A"))],
         ))
         .unwrap();
 
@@ -993,15 +1037,21 @@ mod tests {
         // After resolution, all targets are ActionIds.
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Step { target: ActionId(1) }
+            FlatAction::Step {
+                target: ActionId(1)
+            }
         );
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Step { target: ActionId(2) }
+            FlatAction::Step {
+                target: ActionId(2)
+            }
         );
         assert_eq!(
             flat.action(ActionId(2)),
-            FlatAction::Step { target: ActionId(1) }
+            FlatAction::Step {
+                target: ActionId(1)
+            }
         );
     }
 
@@ -1031,15 +1081,17 @@ mod tests {
     fn flatten_single_child_pipe() {
         let flat = flatten(config(pipe(vec![invoke("./a.ts", "a")]))).unwrap();
         assert_eq!(flat.entries.len(), 2);
-        assert_eq!(flat.action(ActionId(0)), FlatAction::Pipe { count: Count(1) });
+        assert_eq!(
+            flat.action(ActionId(0)),
+            FlatAction::Pipe { count: Count(1) }
+        );
     }
 
-    /// Single-case branch: BranchKey + inlined child.
+    /// Single-case branch: `BranchKey` + inlined child.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_single_case_branch() {
-        let flat =
-            flatten(config(branch(vec![("Ok", invoke("./ok.ts", "handle"))]))).unwrap();
+        let flat = flatten(config(branch(vec![("Ok", invoke("./ok.ts", "handle"))]))).unwrap();
 
         assert_eq!(flat.entries.len(), 3); // Branch + BranchKey + Invoke
         let cases: Vec<_> = flat.branch_cases(ActionId(0)).collect();
@@ -1051,10 +1103,7 @@ mod tests {
     #[test]
     fn flatten_unknown_step_errors() {
         let result = flatten(config(step_named("DoesNotExist")));
-        assert!(matches!(
-            result,
-            Err(FlattenError::UnknownStep { .. })
-        ));
+        assert!(matches!(result, Err(FlattenError::UnknownStep { .. })));
     }
 
     /// Deterministic: flatten twice, assert identical.
@@ -1076,7 +1125,7 @@ mod tests {
         assert_eq!(flat1, flat2);
     }
 
-    /// Handler interning: identical handlers share the same HandlerId.
+    /// Handler interning: identical handlers share the same `HandlerId`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_handler_interning() {
@@ -1090,20 +1139,26 @@ mod tests {
         // First two invokes should share HandlerId(0).
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
         assert_eq!(
             flat.action(ActionId(2)),
-            FlatAction::Invoke { handler: HandlerId(0) }
+            FlatAction::Invoke {
+                handler: HandlerId(0)
+            }
         );
         // Third invoke gets HandlerId(1).
         assert_eq!(
             flat.action(ActionId(3)),
-            FlatAction::Invoke { handler: HandlerId(1) }
+            FlatAction::Invoke {
+                handler: HandlerId(1)
+            }
         );
     }
 
-    /// Static assert: FlatEntry<ActionId> fits in 8 bytes.
+    /// Static assert: `FlatEntry<ActionId>` fits in 8 bytes.
     #[test]
     fn flat_entry_size() {
         assert!(std::mem::size_of::<FlatEntry<ActionId>>() <= 8);
@@ -1111,40 +1166,38 @@ mod tests {
 
     // -- Structural invariants --
 
-    /// action() panics when given an ActionId that points to a ChildRef.
+    /// `action()` panics when given an `ActionId` that points to a `ChildRef`.
     #[test]
     #[should_panic(expected = "does not point to an action")]
     fn action_rejects_childref() {
         let flat = FlatConfig {
-            entries: vec![FlatEntry::ChildRef { action: ActionId(0) }],
+            entries: vec![FlatEntry::ChildRef {
+                action: ActionId(0),
+            }],
             handlers: vec![],
             workflow_root: ActionId(0),
         };
         let _ = flat.action(ActionId(0));
     }
 
-    /// action() panics when given an ActionId that points to a BranchKey.
+    /// `action()` panics when given an `ActionId` that points to a `BranchKey`.
     #[test]
     #[should_panic(expected = "does not point to an action")]
     fn action_rejects_branchkey() {
         let flat = FlatConfig {
-            entries: vec![FlatEntry::BranchKey {
-                key: kind("test"),
-            }],
+            entries: vec![FlatEntry::BranchKey { key: kind("test") }],
             handlers: vec![],
             workflow_root: ActionId(0),
         };
         let _ = flat.action(ActionId(0));
     }
 
-    /// resolve_child_slot panics on BranchKey.
+    /// `resolve_child_slot` panics on `BranchKey`.
     #[test]
     #[should_panic(expected = "unexpected BranchKey")]
     fn resolve_child_slot_rejects_branchkey() {
         let flat = FlatConfig {
-            entries: vec![FlatEntry::BranchKey {
-                key: kind("test"),
-            }],
+            entries: vec![FlatEntry::BranchKey { key: kind("test") }],
             handlers: vec![],
             workflow_root: ActionId(0),
         };

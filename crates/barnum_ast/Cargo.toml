@@ -14,6 +14,7 @@ intern = { path = "../intern" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 string_key_newtype = { path = "../string_key_newtype" }
+thiserror = { workspace = true }
 u32_newtype = { path = "../u32_newtype" }
 
 [lints]
