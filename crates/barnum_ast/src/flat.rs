@@ -73,7 +73,7 @@ impl Add<u32> for FlatConfigEntryId {
 /// `FlatAction<ActionId>` is `Copy` (all fields are `u32` newtypes).
 /// `FlatAction<StepTarget>` is `Clone` but not `Copy` (`StepTarget::Named`
 /// holds a `StepName`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatAction<T> {
     /// Leaf: invoke a handler. `handler` indexes [`FlatConfig::handlers`].
     Invoke { handler: HandlerId },
@@ -103,8 +103,6 @@ pub enum FlatAction<T> {
     /// Redirect to another action (step reference or self-recursion).
     Step { target: T },
 }
-
-impl<T: Copy> Copy for FlatAction<T> {}
 
 impl<T> FlatAction<T> {
     /// Map the Step target through a fallible function. All other variants
@@ -142,7 +140,7 @@ impl<T> FlatAction<T> {
 ///
 /// Niche optimization: `FlatAction` uses 8 of 256 discriminant values.
 /// `ChildRef` and `BranchKey` use 2 more. `FlatEntry<ActionId>` fits in 8 bytes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlatEntry<T> {
     /// An executable action.
     Action(FlatAction<T>),
@@ -154,8 +152,6 @@ pub enum FlatEntry<T> {
     /// Branch case key. Always immediately followed by a child slot.
     BranchKey { key: KindDiscriminator },
 }
-
-impl<T: Copy> Copy for FlatEntry<T> {}
 
 impl<T> FlatEntry<T> {
     /// Map the Step target through a fallible function. `ChildRef` and
@@ -210,7 +206,7 @@ impl std::fmt::Display for FlattenError {
                 write!(f, "unknown step: {name}")
             }
             FlattenError::UninitializedEntry { index } => {
-                write!(f, "uninitialized entry at index {}", index.0)
+                write!(f, "uninitialized entry at index {index}")
             }
         }
     }
