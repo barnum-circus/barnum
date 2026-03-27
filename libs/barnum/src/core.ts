@@ -283,20 +283,47 @@ export function attempt(action: TypedAction<any, any>): TypedAction<any, any> {
   return { kind: "Attempt", action };
 }
 
+// ---------------------------------------------------------------------------
+// Config builders
+// ---------------------------------------------------------------------------
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function step(name: string): TypedAction<any, any> {
-  return { kind: "Step", step: name };
+type AnyAction = TypedAction<any, any>;
+
+/** Simple config with no named steps. */
+export function config(workflow: AnyAction): Config {
+  return { workflow };
 }
 
-export function config(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  workflow: TypedAction<any, any>,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  steps?: Record<string, TypedAction<any, any>>,
-): Config {
-  const result: Config = { workflow };
-  if (steps && Object.keys(steps).length > 0) {
-    result.steps = steps;
+/** Builder for configs with type-safe named steps. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
+  private readonly _steps: Record<string, AnyAction>;
+
+  constructor(steps: Record<string, AnyAction> = {}) {
+    this._steps = steps;
   }
-  return result;
+
+  registerSteps<NewSteps extends Record<string, AnyAction>>(
+    steps: NewSteps,
+  ): ConfigBuilder<TSteps & NewSteps> {
+    return new ConfigBuilder({ ...this._steps, ...steps });
+  }
+
+  workflow(build: (steps: TSteps) => AnyAction): Config {
+    const stepRefs: Record<string, Action> = {};
+    for (const name of Object.keys(this._steps)) {
+      stepRefs[name] = { kind: "Step", step: name };
+    }
+    const workflow = build(stepRefs as TSteps);
+    const result: Config = { workflow };
+    if (Object.keys(this._steps).length > 0) {
+      result.steps = this._steps;
+    }
+    return result;
+  }
+}
+
+export function configBuilder(): ConfigBuilder {
+  return new ConfigBuilder();
 }

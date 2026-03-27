@@ -7,11 +7,10 @@ import {
   all,
   attempt,
   call,
-  config,
+  configBuilder,
   loop,
   matchCases,
   sequence,
-  step,
   traverse,
 } from "../src/core.js";
 import setup from "./handlers/setup.js";
@@ -34,22 +33,23 @@ function roundTrip(input: unknown): unknown {
 
 describe("barnum round-trip", () => {
   it("exercises every action kind through the Rust binary", () => {
-    const workflow = config(
-      sequence(
-        call(setup),
-        all(call(process_), call(check)),
-        traverse(call(finalize)),
-        attempt(call(check)),
-        matchCases({
-          Success: step("Finalize"),
-          Failure: call(setup),
-        }),
-        loop(sequence(call(check), call(finalize))),
-      ),
-      { Finalize: call(finalize) },
-    );
+    const cfg = configBuilder()
+      .registerSteps({ Finalize: call(finalize) })
+      .workflow((steps) =>
+        sequence(
+          call(setup),
+          all(call(process_), call(check)),
+          traverse(call(finalize)),
+          attempt(call(check)),
+          matchCases({
+            Success: steps.Finalize,
+            Failure: call(setup),
+          }),
+          loop(sequence(call(check), call(finalize))),
+        ),
+      );
 
-    const output = roundTrip(workflow);
-    expect(output).toEqual(workflow);
+    const output = roundTrip(cfg);
+    expect(output).toEqual(cfg);
   });
 });
