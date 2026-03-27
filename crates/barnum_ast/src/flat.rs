@@ -210,7 +210,7 @@ impl std::fmt::Display for FlattenError {
                 write!(f, "unknown step: {name}")
             }
             FlattenError::UninitializedEntry { index } => {
-                write!(f, "uninitialized entry at index {index}")
+                write!(f, "uninitialized entry at index {}", index.0)
             }
         }
     }
