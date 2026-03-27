@@ -10,6 +10,7 @@ import {
 import {
   constant,
   done,
+  drop,
   extractField,
   recur,
 } from "../src/builtins.js";
@@ -124,18 +125,38 @@ describe("named steps", () => {
 // -----------------------------------------------------------------------
 
 describe("workflow self-reference", () => {
-  it("workflow receives a self reference for recursion", () => {
+  it("self serializes as Root step and works in branches via drop()", () => {
     const cfg = configBuilder()
       .workflow((_steps, self) =>
-        pipe(constant({ result: "test" }), check(), self),
+        pipe(
+          constant([{ file: "a.ts", message: "err" }]),
+          classifyErrors(),
+          branch({
+            HasErrors: pipe(extractField("errors"), forEach(fix()), drop(), self),
+            Clean: pipe(drop(), constant({ done: true })),
+          }),
+        ),
       );
 
     expect(cfg.workflow.kind).toBe("Pipe");
     const workflow = cfg.workflow as { kind: string; actions: unknown[] };
-    expect(workflow.actions[workflow.actions.length - 1]).toEqual({
+    const branchAction = workflow.actions[workflow.actions.length - 1] as {
+      kind: string;
+      cases: Record<string, { kind: string; actions: unknown[] }>;
+    };
+    const hasErrorsPipe = branchAction.cases.HasErrors;
+    expect(hasErrorsPipe.actions[hasErrorsPipe.actions.length - 1]).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });
+  });
+
+  it("rejects piping a value directly into self", () => {
+    configBuilder()
+      .workflow((_steps, self) =>
+        // @ts-expect-error — check outputs {valid: boolean} but self expects never
+        pipe(constant({ result: "test" }), check(), self),
+      );
   });
 });
 
@@ -146,9 +167,9 @@ describe("workflow self-reference", () => {
 describe("mutual recursion", () => {
   it("registerSteps callback enables cross-references between steps", () => {
     const cfg = configBuilder()
-      .registerSteps((refs) => ({
-        A: pipe(check(), refs.B),
-        B: pipe(check(), refs.A),
+      .registerSteps((steps) => ({
+        A: pipe(check(), steps.B),
+        B: pipe(check(), steps.A),
       }))
       .workflow((steps) =>
         pipe(constant({ result: "test" }), steps.A),
@@ -174,8 +195,8 @@ describe("mutual recursion", () => {
   it("callback receives previously registered steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Setup: setup() })
-      .registerSteps((refs) => ({
-        Pipeline: pipe(refs.Setup, process()),
+      .registerSteps((steps) => ({
+        Pipeline: pipe(steps.Setup, process()),
       }))
       .workflow((steps) =>
         pipe(constant({ project: "test" }), steps.Pipeline),

@@ -186,18 +186,20 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
    * Register named steps. Accepts either a static object or a function
    * for mutual recursion between steps.
    *
-   * Static form:
+   * Static form preserves precise action types:
    * ```ts
    * .registerSteps({ Check: check(), Finalize: finalize() })
    * ```
    *
-   * Function form (enables mutual recursion):
+   * Function form enables mutual recursion. Step references are
+   * typed as `AnyAction` (TypeScript can't infer per-step types
+   * across mutual references — that's a circular dependency):
    * ```ts
-   * .registerSteps((refs) => ({
-   *   Writer: pipe(draft(), refs.Reviewer),
+   * .registerSteps((steps) => ({
+   *   Writer: pipe(draft(), steps.Reviewer),
    *   Reviewer: pipe(critique(), branch({
    *     Approved: publish(),
-   *     Rejected: refs.Writer,
+   *     Rejected: steps.Writer,
    *   })),
    * }))
    * ```
@@ -205,11 +207,11 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   registerSteps<NewSteps extends Record<string, AnyAction>>(
     stepsOrFn:
       | NewSteps
-      | ((refs: TSteps & Record<string, AnyAction>) => NewSteps),
+      | ((steps: TSteps & Record<string, AnyAction>) => NewSteps),
   ): ConfigBuilder<TSteps & NewSteps> {
     const newSteps =
       typeof stepsOrFn === "function"
-        ? stepsOrFn(stepRefProxy<TSteps & Record<string, AnyAction>>())
+        ? stepsOrFn(stepRefProxy())
         : stepsOrFn;
     return new ConfigBuilder({ ...this._steps, ...newSteps });
   }
@@ -217,16 +219,24 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   /**
    * Define the workflow entry point.
    *
-   * @param build - receives step references and a `self` reference for
-   *   workflow-level recursion (re-runs the workflow from the top).
-   *   `self` has input `unknown` (accepts any value, which the engine
-   *   discards on restart) and output `never` (the current execution
-   *   path doesn't produce a value — it jumps).
+   * @param build - receives step references and a `self` reference.
+   *   `self` is `TypedAction<never, never>` — a jump to the workflow
+   *   root. Input `never` because it doesn't consume pipeline data.
+   *   Output `never` because the execution path restarts (and `never`
+   *   is eliminated from unions, so branches with `self` don't pollute
+   *   the output type).
+   *
+   *   Use `pipe(drop(), self)` to place `self` in a branch case.
+   *
+   *   Note: ideally `self` would be `TypedAction<never, Out>` so it
+   *   carries the workflow's output type, but TypeScript can't infer
+   *   a generic from a callback's return and use it in the same
+   *   callback's parameter — Out falls back to `unknown`.
    */
   workflow<Out>(
     build: (
       steps: TSteps,
-      self: TypedAction<unknown, never>,
+      self: TypedAction<never, never>,
     ) => TypedAction<never, Out>,
   ): Config<Out> {
     const stepRefs: Record<string, Action> = {};
@@ -236,7 +246,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
     const self = {
       kind: "Step",
       step: { kind: "Root" },
-    } as TypedAction<unknown, never>;
+    } as TypedAction<never, never>;
     const workflow = build(stepRefs as TSteps, self);
     const result: Config<Out> = { workflow };
     if (Object.keys(this._steps).length > 0) {
