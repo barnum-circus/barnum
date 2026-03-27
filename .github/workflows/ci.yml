@@ -72,56 +72,6 @@ jobs:
             echo "skip=true" >> $GITHUB_OUTPUT
           fi
 
-  # Gate for docs website - skips if no changes to docs-website/
-  gate-docs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      skip: ${{ steps.check.outputs.skip }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Check for docs changes
-        id: check
-        run: |
-          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
-            echo "Running: tag push"
-            exit 0
-          fi
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- docs-website/ .github/)
-            if [[ -n "$CHANGES" ]]; then
-              echo "Running: PR has changes in docs-website/ or .github/"
-              echo "$CHANGES"
-            else
-              echo "Skipping: PR has no changes to docs-website/ or .github/"
-              echo "skip=true" >> $GITHUB_OUTPUT
-            fi
-            exit 0
-          fi
-
-          BEFORE="${{ github.event.before }}"
-          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
-            echo "Running: new branch or cannot determine previous commit"
-            exit 0
-          fi
-
-          echo "Comparing HEAD against before: $BEFORE"
-          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
-            echo "Running: before commit unreachable (force push)"
-            exit 0
-          fi
-          CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/)
-          if [[ -n "$CHANGES" ]]; then
-            echo "Running: changes detected in docs-website/ or .github/"
-            echo "$CHANGES"
-          else
-            echo "Skipping: no changes to docs-website/ or .github/"
-            echo "skip=true" >> $GITHUB_OUTPUT
-          fi
-
   fmt:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
@@ -145,18 +95,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.93.1
       - name: Verify Cargo.lock is up to date
         run: cargo check --locked --workspace
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Verify pnpm lockfile is up to date (libs/barnum)
-        run: pnpm install --frozen-lockfile
-        working-directory: libs/barnum
-      - name: Verify pnpm lockfile is up to date (demos)
-        run: pnpm install --frozen-lockfile
-        working-directory: crates/barnum_cli/demos
 
   clippy:
     needs: gate-rust
@@ -191,63 +129,14 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Run tests
-        # Run single-threaded to avoid inotify race conditions
-        # Remove --nocapture to reduce log output (only show on failure)
-        # Disable RUST_LOG entirely in CI for minimal output
         env:
           TROUPE_BIN: ${{ github.workspace }}/target/debug/troupe
           RUST_LOG: warn
-          # CI runner paths are too long for Unix socket sun_path (108 char limit).
-          # Use a short temp directory for test data instead of CARGO_MANIFEST_DIR.
           TEST_TMPDIR: /tmp/bt
         run: cargo test --locked --workspace -- --test-threads=1
 
-  demos:
-    needs: [gate-rust, build-linux-x64]
-    if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download troupe binary
-        uses: actions/download-artifact@v4
-        with:
-          name: troupe-linux-x64
-          path: bin
-      - name: Download barnum binary
-        uses: actions/download-artifact@v4
-        with:
-          name: barnum-linux-x64
-          path: bin
-      - name: Make binaries executable
-        run: chmod +x bin/troupe bin/barnum
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y jq bc
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install barnum lib dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: libs/barnum
-      - name: Install demo npm dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: crates/barnum_cli/demos
-      - name: Check .dot files are up-to-date
-        env:
-          BARNUM: ${{ github.workspace }}/bin/barnum
-        run: ./scripts/generate-graphs.sh --check
-      - name: Run all demos
-        env:
-          TROUPE: ${{ github.workspace }}/bin/troupe
-          BARNUM: ${{ github.workspace }}/bin/barnum
-          RUST_LOG: off
-        run: ./scripts/run-all-demos.sh
-
   build-macos-x64:
-    needs: [gate-rust, test, demos]
+    needs: [gate-rust, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
@@ -290,7 +179,7 @@ jobs:
           path: target/x86_64-apple-darwin/release/barnum
 
   build-macos-arm64:
-    needs: [gate-rust, test, demos]
+    needs: [gate-rust, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
@@ -379,7 +268,7 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/barnum
 
   build-linux-arm64:
-    needs: [gate-rust, test, demos]
+    needs: [gate-rust, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -425,7 +314,7 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/barnum
 
   build-windows-x64:
-    needs: [gate-rust, test, demos]
+    needs: [gate-rust, test]
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 5
@@ -468,115 +357,9 @@ jobs:
           name: barnum-win-x64
           path: target/x86_64-pc-windows-msvc/release/barnum.exe
 
-  build-schema:
-    needs: gate-rust
-    if: needs.gate-rust.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.93.1
-      - uses: Swatinem/rust-cache@v2
-      - name: Generate schemas
-        run: cargo run --locked -p barnum_cli --bin build_schemas
-      - name: Check schemas are up to date
-        run: |
-          if ! git diff --exit-code libs/barnum/barnum-config-schema.json libs/barnum/barnum-config-schema.zod.ts libs/barnum/barnum-cli-schema.zod.ts; then
-            echo "::error::Generated schemas differ from checked-in versions. Run 'cargo run -p barnum_cli --bin build_schemas' and commit."
-            exit 1
-          fi
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install npm dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: libs/barnum
-      - name: Type-check generated schemas
-        run: pnpm typecheck
-        working-directory: libs/barnum
-      - name: Install demo dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: crates/barnum_cli/demos
-      - name: Type-check demo run scripts
-        run: pnpm typecheck
-        working-directory: crates/barnum_cli/demos
-      - uses: actions/upload-artifact@v4
-        with:
-          name: barnum-config-schema
-          path: |
-            libs/barnum/barnum-config-schema.json
-            libs/barnum/barnum-config-schema.zod.ts
-            libs/barnum/barnum-cli-schema.zod.ts
-
-  build-website:
-    needs: gate-docs
-    if: needs.gate-docs.outputs.skip != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: ./docs-website
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - name: Use Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: 'pnpm'
-          cache-dependency-path: docs-website/pnpm-lock.yaml
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-      - name: Build website
-        run: pnpm build
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: docusaurus-build
-          path: docs-website/build/
-          retention-days: 1
-          if-no-files-found: error
-
-  deploy-website:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [gate-docs, build-website, test, demos]
-    # Deploy only on master push when docs changed. Block on test/demos if they ran,
-    # but allow deploy when they're skipped (no Rust changes). always() is needed
-    # because GitHub Actions skips jobs when any dependency is skipped.
-    if: >-
-      always() &&
-      needs.gate-docs.outputs.skip != 'true' &&
-      needs.build-website.result == 'success' &&
-      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
-      (needs.demos.result == 'success' || needs.demos.result == 'skipped') &&
-      github.event_name == 'push' &&
-      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
-    steps:
-      - name: Download build folder
-        uses: actions/download-artifact@v4
-        with:
-          name: docusaurus-build
-          path: docs-website/build
-      - name: Deploy to barnum-circus.github.io
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
-          external_repository: barnum-circus/barnum-circus.github.io
-          publish_branch: main
-          publish_dir: docs-website/build
-          user_name: 'github-actions[bot]'
-          user_email: 'github-actions[bot]@users.noreply.github.com'
-          commit_message: 'Deploy docs from barnum@${{ github.sha }}'
-
   publish:
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [gate-rust, fmt, lockfiles, clippy, test, demos, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64, build-schema]
+    needs: [gate-rust, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -661,12 +444,6 @@ jobs:
           chmod +x libs/barnum/artifacts/macos-arm64/barnum
           chmod +x libs/barnum/artifacts/linux-x64/barnum
           chmod +x libs/barnum/artifacts/linux-arm64/barnum
-
-      - name: Download Barnum config schema
-        uses: actions/download-artifact@v4
-        with:
-          name: barnum-config-schema
-          path: libs/barnum
 
       - name: Set version for main branch
         if: "!startsWith(github.ref, 'refs/tags/v')"

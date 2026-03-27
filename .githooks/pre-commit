@@ -1,5 +1,5 @@
 #!/bin/bash
-# Pre-commit hook: runs fmt, schemas, check, clippy, test, and udeps
+# Pre-commit hook: runs fmt, check, clippy, test
 # Skips cargo commands if no Rust files are staged
 
 set -e
@@ -16,14 +16,8 @@ fi
 echo "Running cargo fmt..."
 cargo fmt --all
 
-echo "Regenerating schemas..."
-cargo run -p barnum_cli --bin build_schemas 2>/dev/null
-
 # Re-stage only files that were already staged (not unrelated unstaged changes)
 echo "$STAGED_FILES" | xargs git add
-git add libs/barnum/barnum-config-schema.json
-git add libs/barnum/barnum-config-schema.zod.ts
-git add libs/barnum/barnum-cli-schema.zod.ts
 
 # Build CLI binaries first (tests spawn them as subprocesses)
 echo "Building CLI binaries..."

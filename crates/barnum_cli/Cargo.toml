@@ -5,32 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "CLI for Barnum - workflow engine for agents"
-keywords = ["cli", "task", "orchestrator", "state-machine"]
+description = "Barnum workflow engine CLI"
+keywords = ["workflow", "engine", "cli"]
 categories = ["command-line-utilities"]
-
-[dependencies]
-troupe = { path = "../troupe" }
-barnum_config = { path = "../barnum_config" }
-clap = { workspace = true }
-json5 = { workspace = true }
-schemars = "0.8"
-serde = { workspace = true }
-serde_json = { workspace = true }
-tracing-subscriber = { workspace = true }
 
 [[bin]]
 name = "barnum"
 path = "src/main.rs"
 
-[[bin]]
-name = "build_schemas"
-path = "src/bin/build_schemas.rs"
-
-[dev-dependencies]
-troupe = { path = "../troupe" }
-interprocess = { workspace = true }
-rstest = { workspace = true }
+[dependencies]
 
 [lints]
 workspace = true

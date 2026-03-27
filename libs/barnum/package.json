@@ -1,16 +1,8 @@
 {
   "name": "@barnum/barnum",
   "version": "0.2.4",
-  "type": "module",
-  "description": "Barnum CLI - workflow engine for agents.",
-  "main": "index.ts",
-  "types": "index.ts",
-  "exports": {
-    ".": "./index.ts",
-    "./schema": "./barnum-config-schema.zod.ts",
-    "./cli-schema": "./barnum-cli-schema.zod.ts",
-    "./binary": "./index.cjs"
-  },
+  "description": "Barnum workflow engine",
+  "main": "index.js",
   "bin": {
     "barnum": "cli.cjs"
   },
@@ -24,35 +16,10 @@
     "access": "public",
     "registry": "https://registry.npmjs.org"
   },
-  "keywords": [
-    "barnum",
-    "ai",
-    "agents",
-    "automation",
-    "cli"
-  ],
   "files": [
-    "index.ts",
-    "index.cjs",
+    "index.js",
     "cli.cjs",
-    "artifacts/**/*",
-    "barnum-config-schema.json",
-    "barnum-config-schema.zod.ts",
-    "barnum-cli-schema.zod.ts",
-    "run.ts",
-    "types.ts",
-    "actions/**/*.ts"
+    "artifacts/**/*"
   ],
-  "scripts": {
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "zod": "^3.0.0",
-    "zod-to-json-schema": "^3.25.1"
-  },
-  "devDependencies": {
-    "@types/node": "^25.5.0",
-    "typescript": "^5.9.3"
-  },
   "sideEffects": false
 }
