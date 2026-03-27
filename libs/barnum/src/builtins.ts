@@ -42,6 +42,10 @@ export function tag<T, TKind extends string>(
 // validates the overall LoopResult<In, Out> shape.
 // ---------------------------------------------------------------------------
 
+// These use `any` because their types depend on positional context (which
+// sequence/loop they appear in), not on arguments. Proper typing requires
+// matchCases to narrow per-case inputs from the discriminated union — until
+// then, the loop's own signature validates the overall LoopResult<In, Out>.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function recur(): TypedAction<any, LoopResult<any, any>> {
   return builtin("tag:Continue");
