@@ -125,7 +125,7 @@ export function createHandler<TValue, TOutput>(
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
-): CallableHandler<TValue, TOutput, unknown>;
+): CallableHandler<TValue, TOutput, never>;
 
 // Config validator only: handler takes no pipeline input, has step config.
 export function createHandler<TOutput, TStepConfig>(
@@ -142,7 +142,7 @@ export function createHandler<TOutput>(
     handle: () => Promise<TOutput>;
   },
   exportName?: string,
-): CallableHandler<never, TOutput, unknown>;
+): CallableHandler<never, TOutput, never>;
 
 // Implementation: return type is intentionally broad. The overload signatures
 // provide all type safety for callers. TypeScript's overload compatibility
@@ -175,24 +175,3 @@ export function createHandler(
   });
 }
 
-// ---------------------------------------------------------------------------
-// call — produce a TypedAction from a Handler
-// ---------------------------------------------------------------------------
-
-export function call<TValue, TOutput, TStepConfig>(
-  handler: Handler<TValue, TOutput, TStepConfig>,
-  ...args: unknown extends TStepConfig
-    ? [options?: { stepConfig?: TStepConfig }]
-    : [options: { stepConfig: TStepConfig }]
-): TypedAction<TValue, TOutput> {
-  const options = args[0];
-  return {
-    kind: "Call",
-    handler: {
-      kind: "TypeScript",
-      module: handler.__filePath,
-      func: handler.__exportName,
-      stepConfigSchema: options?.stepConfig,
-    },
-  };
-}

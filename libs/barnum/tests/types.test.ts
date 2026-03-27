@@ -9,11 +9,13 @@ import {
   traverse,
 } from "../src/ast.js";
 import { constant } from "../src/builtins.js";
-import setup from "./handlers/setup.js";
-import process_ from "./handlers/process.js";
-import check from "./handlers/check.js";
-import finalize from "./handlers/finalize.js";
-import validate from "./handlers/validate.js";
+import {
+  setup,
+  process_,
+  check,
+  finalize,
+  validate,
+} from "./handlers.js";
 
 describe("sequence type safety", () => {
   it("accepts a valid two-step sequence", () => {

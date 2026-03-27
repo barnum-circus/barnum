@@ -18,15 +18,17 @@ import {
   recur,
 } from "../src/builtins.js";
 
-import setup from "./handlers/setup.js";
-import process_ from "./handlers/process.js";
-import check from "./handlers/check.js";
-import finalize from "./handlers/finalize.js";
-import listFiles from "./handlers/list-files.js";
-import migrate from "./handlers/migrate.js";
-import typeCheck from "./handlers/type-check.js";
-import classifyErrors from "./handlers/classify-errors.js";
-import fix from "./handlers/fix.js";
+import {
+  setup,
+  process_,
+  check,
+  finalize,
+  listFiles,
+  migrate,
+  typeCheck,
+  classifyErrors,
+  fix,
+} from "./handlers.js";
 
 // -----------------------------------------------------------------------
 // Pattern 1: Linear pipeline

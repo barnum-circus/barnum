@@ -1,3 +1,5 @@
+import type { Handler } from "./handler.js";
+
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
 // ---------------------------------------------------------------------------
@@ -103,6 +105,26 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
 
 export { sequence } from "./sequence.js";
 export { all } from "./all.js";
+
+export function call<TValue, TOutput, TStepConfig>(
+  handler: Handler<TValue, TOutput, TStepConfig>,
+  ...args: [TStepConfig] extends [never]
+    ? []
+    : unknown extends TStepConfig
+      ? [options?: { stepConfig?: TStepConfig }]
+      : [options: { stepConfig: TStepConfig }]
+): TypedAction<TValue, TOutput> {
+  const options = (args as [{ stepConfig?: TStepConfig }?])[0];
+  return {
+    kind: "Call",
+    handler: {
+      kind: "TypeScript",
+      module: handler.__filePath,
+      func: handler.__exportName,
+      stepConfigSchema: options?.stepConfig,
+    },
+  };
+}
 
 export function traverse<In, Out>(
   action: TypedAction<In, Out>,
