@@ -433,7 +433,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   /**
    * Define the workflow entry point.
    *
-   * @param build - receives step references and a `self` reference.
+   * @param build - receives `{ steps, self }`.
    *   `self` is `TypedAction<never, never>` — a jump to the workflow
    *   root. Input `never` because it doesn't consume pipeline data.
    *   Output `never` because the execution path restarts (and `never`
@@ -448,10 +448,10 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
    *   callback's parameter — Out falls back to `unknown`.
    */
   workflow<Out>(
-    build: (
-      steps: StripRefs<TSteps>,
-      self: TypedAction<never, never>,
-    ) => TypedAction<never, Out>,
+    build: (ctx: {
+      steps: StripRefs<TSteps>;
+      self: TypedAction<never, never>;
+    }) => TypedAction<never, Out>,
   ): Config<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
@@ -461,7 +461,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
       kind: "Step",
       step: { kind: "Root" },
     } as TypedAction<never, never>;
-    const workflow = build(stepRefs as StripRefs<TSteps>, self);
+    const workflow = build({ steps: stepRefs as StripRefs<TSteps>, self });
     const result: Config<Out> = { workflow };
     if (Object.keys(this._steps).length > 0) {
       result.steps = this._steps;

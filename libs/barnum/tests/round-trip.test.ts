@@ -89,7 +89,7 @@ describe("barnum round-trip", () => {
   it("Step", () => {
     const cfg = configBuilder()
       .registerSteps({ DoCheck: check() })
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(constant({ result: "test" }), steps.DoCheck),
       );
     expect(roundTrip(cfg)).toEqual(cfg);
@@ -98,7 +98,7 @@ describe("barnum round-trip", () => {
   it("combined workflow", () => {
     const cfg = configBuilder()
       .registerSteps({ Recheck: check() })
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(
           constant({ project: "test" }),
           setup(),

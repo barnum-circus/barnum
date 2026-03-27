@@ -36,14 +36,14 @@ describe("named steps", () => {
   it("allows referencing registered steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Finalize: finalize() })
-      .workflow((steps) => pipe(constant({ valid: true }), steps.Finalize));
+      .workflow(({ steps }) => pipe(constant({ valid: true }), steps.Finalize));
     expect(cfg.workflow.kind).toBe("Pipe");
   });
 
   it("rejects references to unregistered steps", () => {
     configBuilder()
       .registerSteps({ Finalize: finalize() })
-      .workflow((steps) => {
+      .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
         return steps.Nonexistent;
       });
@@ -53,7 +53,7 @@ describe("named steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Finalize: finalize() })
       .registerSteps({ Revalidate: validate() })
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(constant({ valid: true }), parallel(steps.Finalize, steps.Revalidate)),
       );
     expect(cfg.steps).toHaveProperty("Finalize");
@@ -78,7 +78,7 @@ describe("named steps", () => {
           ),
         ),
       })
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(
           constant({ project: "test" }),
           setup(),
@@ -112,7 +112,7 @@ describe("named steps", () => {
           ),
         ),
       })
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
       );
     expect(cfg.steps).toHaveProperty("Migrate");
@@ -127,7 +127,7 @@ describe("named steps", () => {
 describe("workflow self-reference", () => {
   it("self serializes as Root step and works in branches via drop()", () => {
     const cfg = configBuilder()
-      .workflow((_steps, self) =>
+      .workflow(({ self }) =>
         pipe(
           constant([{ file: "a.ts", message: "err" }]),
           classifyErrors(),
@@ -153,7 +153,7 @@ describe("workflow self-reference", () => {
 
   it("rejects piping a value directly into self", () => {
     configBuilder()
-      .workflow((_steps, self) =>
+      .workflow(({ self }) =>
         // @ts-expect-error — check outputs {valid: boolean} but self expects never
         pipe(constant({ result: "test" }), check(), self),
       );
@@ -171,7 +171,7 @@ describe("mutual recursion", () => {
         A: pipe(check(), stepRef("B")),
         B: pipe(check(), stepRef("A")),
       }))
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(constant({ result: "test" }), steps.A),
       );
 
@@ -198,7 +198,7 @@ describe("mutual recursion", () => {
       .registerSteps(({ steps }) => ({
         Pipeline: pipe(steps.Setup, process()),
       }))
-      .workflow((steps) =>
+      .workflow(({ steps }) =>
         pipe(constant({ project: "test" }), steps.Pipeline),
       );
 
@@ -219,7 +219,7 @@ describe("mutual recursion", () => {
         B: pipe(check(), stepRef("A")),
       }))
       // @ts-expect-error — "Bt" is not a valid step name; return is error type
-      .workflow((steps) => pipe(steps.A));
+      .workflow(({ steps }) => pipe(steps.A));
   });
 });
 
@@ -254,7 +254,7 @@ describe("kitchen sink", () => {
         ),
       }))
       // Workflow: steps (all registered) + self (root restart)
-      .workflow((steps, self) =>
+      .workflow(({ steps, self }) =>
         pipe(
           constant({ project: "test" }),
           steps.Pipeline,

@@ -337,7 +337,7 @@ describe("step reference types", () => {
   it("rejects references to unregistered steps", () => {
     configBuilder()
       .registerSteps({ Finalize: finalize() })
-      .workflow((steps) => {
+      .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
         return steps.Nonexistent;
       });
@@ -350,7 +350,7 @@ describe("step reference types", () => {
     });
 
     // Verify the step types are preserved in the builder's generic
-    builder.workflow((steps) => {
+    builder.workflow(({ steps }) => {
       assertExact<
         IsExact<ExtractInput<typeof steps.Check>, { result: string }>
       >();
@@ -366,7 +366,7 @@ describe("step reference types", () => {
   });
 
   it("self is TypedAction<never, never>", () => {
-    configBuilder().workflow((_steps, self) => {
+    configBuilder().workflow(({ self }) => {
       assertExact<IsExact<ExtractInput<typeof self>, never>>();
       assertExact<IsExact<ExtractOutput<typeof self>, never>>();
       return constant({ done: true });
@@ -374,7 +374,7 @@ describe("step reference types", () => {
   });
 
   it("self cannot be piped after a value-producing action", () => {
-    configBuilder().workflow((_steps, self) =>
+    configBuilder().workflow(({ self }) =>
       // @ts-expect-error — check outputs { valid: boolean } but self expects never
       pipe(constant({ result: "test" }), check(), self),
     );
@@ -386,7 +386,7 @@ describe("step reference types", () => {
         A: pipe(check(), stepRef("B")),
         B: pipe(check(), stepRef("A")),
       }))
-      .workflow((steps) => {
+      .workflow(({ steps }) => {
         // Input type comes from check()'s input: { result: string }
         assertExact<
           IsExact<ExtractInput<typeof steps.A>, { result: string }>
@@ -423,7 +423,7 @@ describe("step reference types", () => {
       .registerSteps(({ steps }) => ({
         Pipeline: pipe(steps.Setup, process()),
       }))
-      .workflow((steps) => {
+      .workflow(({ steps }) => {
         // Batch 1 step types survive
         assertExact<
           IsExact<ExtractInput<typeof steps.Setup>, { project: string }>
