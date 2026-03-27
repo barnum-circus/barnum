@@ -6,7 +6,6 @@ import {
   branch,
   pipe,
   forEach,
-  stepRef,
 } from "../src/ast.js";
 import {
   constant,
@@ -168,10 +167,10 @@ describe("workflow self-reference", () => {
 describe("mutual recursion", () => {
   it("stepRef enables cross-references between steps", () => {
     const cfg = configBuilder()
-      .registerSteps({
+      .registerSteps(({ stepRef }) => ({
         A: pipe(check(), stepRef("B")),
         B: pipe(check(), stepRef("A")),
-      })
+      }))
       .workflow((steps) =>
         pipe(constant({ result: "test" }), steps.A),
       );
@@ -193,12 +192,12 @@ describe("mutual recursion", () => {
     });
   });
 
-  it("stepRef resolves against previously registered steps", () => {
+  it("callback form provides typed access to previously registered steps", () => {
     const cfg = configBuilder()
       .registerSteps({ Setup: setup() })
-      .registerSteps({
-        Pipeline: pipe(stepRef("Setup"), process()),
-      })
+      .registerSteps(({ steps }) => ({
+        Pipeline: pipe(steps.Setup, process()),
+      }))
       .workflow((steps) =>
         pipe(constant({ project: "test" }), steps.Pipeline),
       );
@@ -215,10 +214,86 @@ describe("mutual recursion", () => {
 
   it("rejects invalid step references at compile time", () => {
     configBuilder()
-      // @ts-expect-error — "Bt" is not a valid step name
-      .registerSteps({
+      .registerSteps(({ stepRef }) => ({
         A: pipe(check(), stepRef("Bt")),
         B: pipe(check(), stepRef("A")),
-      });
+      }))
+      // @ts-expect-error — "Bt" is not a valid step name; return is error type
+      .workflow((steps) => pipe(steps.A));
+  });
+});
+
+// -----------------------------------------------------------------------
+// Kitchen sink — exercises all features together
+// -----------------------------------------------------------------------
+
+describe("kitchen sink", () => {
+  it("steps, stepRef, and self across registerSteps and workflow", () => {
+    const cfg = configBuilder()
+      // Batch 1: simple step, no cross-references (object form)
+      .registerSteps({
+        Setup: setup(),
+      })
+      // Batch 2: callback form — steps (prior batch) + stepRef (intra-batch)
+      .registerSteps(({ steps, stepRef }) => ({
+        Pipeline: pipe(
+          steps.Setup,
+          listFiles(),
+          forEach(migrate()),
+          stepRef("FixCycle"),
+        ),
+        FixCycle: loop(
+          pipe(
+            typeCheck(),
+            classifyErrors(),
+            branch({
+              HasErrors: pipe(extractField("errors"), forEach(fix()), recur()),
+              Clean: done(),
+            }),
+          ),
+        ),
+      }))
+      // Workflow: steps (all registered) + self (root restart)
+      .workflow((steps, self) =>
+        pipe(
+          constant({ project: "test" }),
+          steps.Pipeline,
+          classifyErrors(),
+          branch({
+            HasErrors: pipe(drop(), self),
+            Clean: pipe(drop(), constant({ done: true })),
+          }),
+        ),
+      );
+
+    // All steps registered
+    expect(cfg.steps).toHaveProperty("Setup");
+    expect(cfg.steps).toHaveProperty("Pipeline");
+    expect(cfg.steps).toHaveProperty("FixCycle");
+
+    // Pipeline starts with steps.Setup reference
+    const pipeline = cfg.steps!.Pipeline as { kind: string; actions: unknown[] };
+    expect(pipeline.actions[0]).toEqual({
+      kind: "Step",
+      step: { kind: "Named", name: "Setup" },
+    });
+
+    // Pipeline ends with stepRef("FixCycle")
+    expect(pipeline.actions[pipeline.actions.length - 1]).toEqual({
+      kind: "Step",
+      step: { kind: "Named", name: "FixCycle" },
+    });
+
+    // Workflow branch HasErrors ends with self (Root step)
+    const workflowActions = (cfg.workflow as { actions: unknown[] }).actions;
+    const branchAction = workflowActions[workflowActions.length - 1] as {
+      kind: string;
+      cases: Record<string, { kind: string; actions: unknown[] }>;
+    };
+    const hasErrorsActions = branchAction.cases.HasErrors.actions;
+    expect(hasErrorsActions[hasErrorsActions.length - 1]).toEqual({
+      kind: "Step",
+      step: { kind: "Root" },
+    });
   });
 });

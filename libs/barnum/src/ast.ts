@@ -144,20 +144,20 @@ export type ExtractRefs<T> =
     : never;
 
 /**
- * Validates that all step references in R resolve to known step names.
- * Known names = keys of R (current batch) + keys of TSteps (previously registered).
+ * Validates that all step references in R resolve to known step names
+ * within the current batch only (keyof R). Previously registered steps
+ * should be accessed via the callback's `steps` parameter, not stepRef.
  *
  * When valid: resolves to {} (transparent intersection).
  * When invalid: resolves to a type with __error that causes a compile error.
  */
 export type ValidateStepRefs<
   R extends Record<string, Action>,
-  TSteps extends Record<string, Action> = {},
-> = [ExtractRefs<R[keyof R]>] extends [keyof R | keyof TSteps]
+> = [ExtractRefs<R[keyof R]>] extends [keyof R]
   ? // eslint-disable-next-line @typescript-eslint/no-empty-object-type
     {}
   : {
-      __error: `Step reference to undefined step: ${Exclude<ExtractRefs<R[keyof R]>, keyof R | keyof TSteps> & string}`;
+      __error: `Step reference to undefined step: ${Exclude<ExtractRefs<R[keyof R]>, keyof R> & string}`;
     };
 
 // ---------------------------------------------------------------------------
@@ -188,17 +188,25 @@ export type ValidateStepRefs<
 //    And `pipe(stepRef("A"), stepRef("B"))` has Refs = "A" | "B".
 //
 // 3. `registerSteps` uses `ValidateStepRefs` to extract all Refs from the
-//    registered step values and check they're a subset of the known step
-//    names (current batch keys + previously registered keys):
+//    registered step values and check they're a subset of the current batch
+//    keys only (keyof R). Previously registered steps are accessed via the
+//    typed `steps` parameter in the callback form, not via stepRef:
 //
 //      registerSteps<R extends Record<string, Action>>(
-//        steps: R & ValidateStepRefs<R, TSteps>,
+//        stepsOrBuild:
+//          | (R & ValidateStepRefs<R>)
+//          | ((ctx: { steps: StripRefs<TSteps>; stepRef: ... })
+//              => R & ValidateStepRefs<R>),
 //      )
 //
 //    When valid, ValidateStepRefs resolves to {} (transparent intersection).
 //    When invalid, it resolves to { __error: "Step reference to undefined
 //    step: Bt" }, which makes the argument incompatible and produces a
 //    readable compile error.
+//
+//    stepRef is not exported — it's only available as a parameter in the
+//    registerSteps callback. This ensures step references are always
+//    validated within a batch context.
 //
 // 4. `StripRefs` removes Refs from step types before they're passed to the
 //    workflow callback, since refs have already been validated by
@@ -310,11 +318,18 @@ export function attempt<In, Out, R extends string = never>(
  * Create a typed step reference. The name is tracked at the type level
  * via the Refs parameter so registerSteps can validate all references resolve.
  *
- * Returns TypedAction<any, any, N> — a universal connector since the actual
- * types depend on the referenced step's definition (which may not be fully
- * typed during mutual recursion).
+ * Not exported — only available as a parameter in registerSteps callbacks.
+ * This ensures step references are always validated within a batch context.
+ *
+ * **Warning: no input/output type safety.** stepRef returns
+ * `TypedAction<any, any, N>` — it validates the reference *name* at compile
+ * time, but provides no type checking on input or output. The referenced
+ * step's types are unknown at the call site (mutual recursion means the
+ * step may not be fully defined yet). Prefer `steps.X` from the callback
+ * parameter when referencing previously registered steps, as that preserves
+ * full input/output types.
  */
-export function stepRef<N extends string>(name: N): TypedAction<any, any, N> {
+function stepRef<N extends string>(name: N): TypedAction<any, any, N> {
   return {
     kind: "Step",
     step: { kind: "Named", name },
@@ -352,29 +367,67 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   }
 
   /**
-   * Register named steps. Use `stepRef("B")` to create cross-references
-   * between steps — all references are validated at compile time.
+   * Register named steps. Two forms:
+   *
+   * **Object form** — for steps with no cross-references:
    *
    * ```ts
    * .registerSteps({
-   *   A: pipe(check(), stepRef("B")),
-   *   B: pipe(check(), stepRef("A")),
+   *   Setup: setup(),
+   *   Migrate: pipe(listFiles(), forEach(migrate())),
    * })
    * ```
    *
-   * References to previously registered steps are also valid:
+   * **Callback form** — for mutual recursion (via `stepRef`) and/or
+   * referencing previously registered steps (via `steps`):
+   *
    * ```ts
    * .registerSteps({ Setup: setup() })
-   * .registerSteps({ Pipeline: pipe(stepRef("Setup"), process()) })
+   * .registerSteps(({ steps, stepRef }) => ({
+   *   Pipeline: pipe(steps.Setup, process(), stepRef("FixCycle")),
+   *   FixCycle: loop(pipe(check(), stepRef("Pipeline"))),
+   * }))
    * ```
+   *
+   * `stepRef` only validates against current-batch keys. Previously
+   * registered steps must be accessed via `steps`.
    */
   registerSteps<R extends Record<string, Action>>(
-    steps: R & ValidateStepRefs<R, TSteps>,
+    steps: R & ValidateStepRefs<R>,
+  ): ConfigBuilder<TSteps & R>;
+  registerSteps<R extends Record<string, Action>>(
+    build: (ctx: {
+      steps: StripRefs<TSteps>;
+      stepRef: <N extends string>(name: N) => TypedAction<any, any, N>;
+    }) => R,
+  ): [ExtractRefs<R[keyof R]>] extends [keyof R]
+    ? ConfigBuilder<TSteps & R>
+    : ValidateStepRefs<R>;
+  registerSteps<R extends Record<string, Action>>(
+    stepsOrBuild:
+      | (R & ValidateStepRefs<R>)
+      | ((ctx: {
+          steps: StripRefs<TSteps>;
+          stepRef: <N extends string>(name: N) => TypedAction<any, any, N>;
+        }) => R),
   ): ConfigBuilder<TSteps & R> {
+    const resolved =
+      typeof stepsOrBuild === "function"
+        ? stepsOrBuild({ steps: this._buildStepRefs() as StripRefs<TSteps>, stepRef })
+        : stepsOrBuild;
     return new ConfigBuilder({
       ...this._steps,
-      ...steps,
+      ...resolved,
     }) as ConfigBuilder<TSteps & R>;
+  }
+
+  /** Build typed step reference objects for previously registered steps. */
+  private _buildStepRefs(): Record<string, Action> {
+    const refs: Record<string, Action> = {};
+    for (const name of Object.keys(this._steps)) {
+      refs[name] = { kind: "Step", step: { kind: "Named", name } };
+    }
+    return refs;
   }
 
   /**
