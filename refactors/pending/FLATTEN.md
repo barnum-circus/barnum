@@ -244,6 +244,13 @@ impl UnresolvedFlatConfig {
         id
     }
 
+    /// Pre-allocate `count` contiguous slots. Returns the EntryId of the first slot.
+    fn alloc_many(&mut self, count: Count) -> EntryId {
+        let start = EntryId(self.entries.len() as u32);
+        self.entries.extend(std::iter::repeat_n(None, count.0 as usize));
+        start
+    }
+
     fn intern_handler(&mut self, handler: HandlerKind) -> HandlerId {
         let (index, _) = self.handlers.insert_full(handler);
         HandlerId(index as u32)
@@ -333,10 +340,7 @@ impl UnresolvedFlatConfig {
             Action::Pipe { actions } => {
                 let id = self.alloc();
                 let count = Count(actions.len() as u32);
-                let ref_start = EntryId(self.entries.len() as u32);
-                for _ in 0..count.0 {
-                    self.alloc();
-                }
+                let ref_start = self.alloc_many(count);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Pipe { count }));
                 self.flatten_children(actions, ref_start, workflow_root)?;
@@ -346,10 +350,7 @@ impl UnresolvedFlatConfig {
             Action::Parallel { actions } => {
                 let id = self.alloc();
                 let count = Count(actions.len() as u32);
-                let ref_start = EntryId(self.entries.len() as u32);
-                for _ in 0..count.0 {
-                    self.alloc();
-                }
+                let ref_start = self.alloc_many(count);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Parallel { count }));
                 self.flatten_children(actions, ref_start, workflow_root)?;
@@ -369,10 +370,7 @@ impl UnresolvedFlatConfig {
                 let count = Count(cases.len() as u32);
                 let mut sorted_keys: Vec<_> = cases.keys().cloned().collect();
                 sorted_keys.sort();
-                let ref_start = EntryId(self.entries.len() as u32);
-                for _ in 0..(2 * count.0) {
-                    self.alloc();
-                }
+                let ref_start = self.alloc_many(Count(2 * count.0));
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Branch { count }));
                 for (i, key) in sorted_keys.into_iter().enumerate() {
