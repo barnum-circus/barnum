@@ -209,7 +209,7 @@ DFS flattening into a single flat vec. No side tables.
 
 **Step(Named(name))** stores the name, resolved in pass 2. **Step(Root)** resolves immediately — the workflow root ActionId is known the moment we start flattening the workflow (it's the next `alloc()`).
 
-Handlers are interned via `BTreeMap<HandlerKind, HandlerId>` for dedup/lookup plus `Vec<HandlerKind>` for index→handler. Inserting checks the map first; on miss, pushes to the vec and records the new `HandlerId` in the map.
+Handlers are interned via `IndexSet<HandlerKind>`: `insert_full` returns `(index, was_new)`, giving O(1) dedup with stable insertion-order indices. The `IndexSet` lives on `UnresolvedFlatConfig` during building; `resolve()` converts it to a `Vec<HandlerKind>` for the final `FlatConfig`.
 
 KindDiscriminator is already an interned StringKey (Copy, u32-sized). No second interning needed — BranchKey entries use it directly.
 
@@ -219,18 +219,19 @@ KindDiscriminator is already an interned StringKey (Copy, u32-sized). No second 
 
 **Pass 2**: Walk the vec via `map_target`. `StepTarget::Named(name)` resolves to `step_roots[name]`. `StepTarget::Resolved(id)` passes through. ChildRef and BranchKey entries pass through unchanged.
 
-### Pass 1: Flattener
+### Pass 1: UnresolvedFlatConfig
+
+`UnresolvedFlatConfig` is the builder — the unresolved version of `FlatConfig`. It holds the entry array (with `Option` placeholders for pre-allocated slots) and the handler interning state. It has no `workflow_root` field; that's determined by the caller and threaded through as a parameter.
+
+`workflow_root: Option<ActionId>` is `Some` when flattening the workflow tree (Step(Root) resolves to it) and `None` when flattening step bodies (Step(Root) in a step body panics — see CONFIG_VALIDATION.md rule #5).
 
 ```rust
-struct Flattener {
+struct UnresolvedFlatConfig {
     entries: Vec<Option<FlatEntry<StepTarget>>>,
-    handler_ids: BTreeMap<HandlerKind, HandlerId>,
-    handlers: Vec<HandlerKind>,
-    /// Set before flattening the workflow. Step(Root) resolves to this immediately.
-    workflow_root: ActionId,
+    handlers: IndexSet<HandlerKind>,
 }
 
-impl Flattener {
+impl UnresolvedFlatConfig {
     fn alloc(&mut self) -> EntryId {
         let id = EntryId(self.entries.len() as u32);
         self.entries.push(None);
@@ -238,13 +239,8 @@ impl Flattener {
     }
 
     fn intern_handler(&mut self, handler: HandlerKind) -> HandlerId {
-        if let Some(&id) = self.handler_ids.get(&handler) {
-            return id;
-        }
-        let id = HandlerId(self.handlers.len() as u32);
-        self.handler_ids.insert(handler.clone(), id);
-        self.handlers.push(handler);
-        id
+        let (index, _) = self.handlers.insert_full(handler);
+        HandlerId(index as u32)
     }
 
     fn is_multi_entry(node: &Action) -> bool {
@@ -253,22 +249,27 @@ impl Flattener {
 
     /// Flatten a single-entry node directly into a pre-allocated child slot.
     /// Multi-entry nodes (Pipe/Parallel/Branch) cannot be inlined — use ChildRef.
-    fn flatten_into(&mut self, node: &Action, slot: EntryId) {
+    fn flatten_into(
+        &mut self,
+        node: &Action,
+        slot: EntryId,
+        workflow_root: Option<ActionId>,
+    ) {
         let entry = match node {
             Action::Invoke { handler } => {
                 let handler_id = self.intern_handler(handler.clone());
                 FlatEntry::Action(FlatAction::Invoke { handler: handler_id })
             }
             Action::ForEach { body } => {
-                let body_id = self.flatten_node(body);
+                let body_id = self.flatten_node(body, workflow_root);
                 FlatEntry::Action(FlatAction::ForEach { body: body_id })
             }
             Action::Loop { body } => {
-                let body_id = self.flatten_node(body);
+                let body_id = self.flatten_node(body, workflow_root);
                 FlatEntry::Action(FlatAction::Loop { body: body_id })
             }
             Action::Attempt { action } => {
-                let child_id = self.flatten_node(action);
+                let child_id = self.flatten_node(action, workflow_root);
                 FlatEntry::Action(FlatAction::Attempt { child: child_id })
             }
             Action::Step(StepRef::Named(name)) => {
@@ -277,8 +278,10 @@ impl Flattener {
                 })
             }
             Action::Step(StepRef::Root) => {
+                let root = workflow_root
+                    .expect("Step(Root) in step body — only valid in workflow tree");
                 FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Resolved(self.workflow_root),
+                    target: StepTarget::Resolved(root),
                 })
             }
             _ => panic!("multi-entry nodes cannot be inlined"),
@@ -287,20 +290,29 @@ impl Flattener {
     }
 
     /// Fill child slots for a Pipe or Parallel.
-    fn flatten_children(&mut self, actions: &[Action], ref_start: EntryId) {
+    fn flatten_children(
+        &mut self,
+        actions: &[Action],
+        ref_start: EntryId,
+        workflow_root: Option<ActionId>,
+    ) {
         for (i, child) in actions.iter().enumerate() {
             let slot = EntryId(ref_start.0 + i as u32);
             if Self::is_multi_entry(child) {
-                let child_root = self.flatten_node(child);
+                let child_root = self.flatten_node(child, workflow_root);
                 self.entries[slot.0 as usize] =
                     Some(FlatEntry::ChildRef { action: child_root });
             } else {
-                self.flatten_into(child, slot);
+                self.flatten_into(child, slot, workflow_root);
             }
         }
     }
 
-    fn flatten_node(&mut self, node: &Action) -> ActionId {
+    fn flatten_node(
+        &mut self,
+        node: &Action,
+        workflow_root: Option<ActionId>,
+    ) -> ActionId {
         match node {
             Action::Invoke { handler } => {
                 let id = self.alloc();
@@ -319,7 +331,7 @@ impl Flattener {
                 }
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Pipe { count }));
-                self.flatten_children(actions, ref_start);
+                self.flatten_children(actions, ref_start, workflow_root);
                 ActionId(id.0)
             }
 
@@ -332,13 +344,13 @@ impl Flattener {
                 }
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Parallel { count }));
-                self.flatten_children(actions, ref_start);
+                self.flatten_children(actions, ref_start, workflow_root);
                 ActionId(id.0)
             }
 
             Action::ForEach { body } => {
                 let id = self.alloc();
-                let body_id = self.flatten_node(body);
+                let body_id = self.flatten_node(body, workflow_root);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::ForEach { body: body_id }));
                 ActionId(id.0)
@@ -362,11 +374,11 @@ impl Flattener {
                     let child = &cases[key];
                     let child_slot = EntryId(ref_start.0 + 2 * i as u32 + 1);
                     if Self::is_multi_entry(child) {
-                        let case_root = self.flatten_node(child);
+                        let case_root = self.flatten_node(child, workflow_root);
                         self.entries[child_slot.0 as usize] =
                             Some(FlatEntry::ChildRef { action: case_root });
                     } else {
-                        self.flatten_into(child, child_slot);
+                        self.flatten_into(child, child_slot, workflow_root);
                     }
                 }
                 ActionId(id.0)
@@ -374,7 +386,7 @@ impl Flattener {
 
             Action::Loop { body } => {
                 let id = self.alloc();
-                let body_id = self.flatten_node(body);
+                let body_id = self.flatten_node(body, workflow_root);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Loop { body: body_id }));
                 ActionId(id.0)
@@ -382,7 +394,7 @@ impl Flattener {
 
             Action::Attempt { action } => {
                 let id = self.alloc();
-                let child_id = self.flatten_node(action);
+                let child_id = self.flatten_node(action, workflow_root);
                 self.entries[id.0 as usize] =
                     Some(FlatEntry::Action(FlatAction::Attempt { child: child_id }));
                 ActionId(id.0)
@@ -397,12 +409,40 @@ impl Flattener {
             }
 
             Action::Step(StepRef::Root) => {
+                let root = workflow_root
+                    .expect("Step(Root) in step body — only valid in workflow tree");
                 let id = self.alloc();
                 self.entries[id.0 as usize] = Some(FlatEntry::Action(FlatAction::Step {
-                    target: StepTarget::Resolved(self.workflow_root),
+                    target: StepTarget::Resolved(root),
                 }));
                 ActionId(id.0)
             }
+        }
+    }
+
+    /// Resolve step names and produce the final FlatConfig.
+    fn resolve(
+        self,
+        workflow_root: ActionId,
+        step_roots: &HashMap<StepName, ActionId>,
+    ) -> FlatConfig {
+        let entries = self.entries
+            .into_iter()
+            .map(|slot| {
+                slot.expect("uninitialized entry")
+                    .map_target(|target| match target {
+                        StepTarget::Named(name) => *step_roots
+                            .get(&name)
+                            .unwrap_or_else(|| panic!("unknown step: {name}")),
+                        StepTarget::Resolved(id) => id,
+                    })
+            })
+            .collect();
+
+        FlatConfig {
+            entries,
+            handlers: self.handlers.into_iter().collect(),
+            workflow_root,
         }
     }
 }
@@ -410,54 +450,23 @@ impl Flattener {
 
 Branch cases are sorted by key for deterministic ActionId assignment.
 
-### Pass 2: resolve step names
-
-```rust
-fn resolve_targets(
-    entries: Vec<Option<FlatEntry<StepTarget>>>,
-    step_roots: &HashMap<StepName, ActionId>,
-) -> Vec<FlatEntry<ActionId>> {
-    entries
-        .into_iter()
-        .map(|slot| {
-            slot.expect("uninitialized entry")
-                .map_target(|target| match target {
-                    StepTarget::Named(name) => *step_roots
-                        .get(&name)
-                        .unwrap_or_else(|| panic!("unknown step: {name}")),
-                    StepTarget::Resolved(id) => id,
-                })
-        })
-        .collect()
-}
-```
-
 ### Top-level flatten
 
 ```rust
 fn flatten(config: &Config) -> FlatConfig {
-    let mut f = Flattener::new();
+    let mut unresolved = UnresolvedFlatConfig::new();
 
-    // Pass 1: DFS-flatten each tree.
-    // Peek at the next ActionId — this will be the workflow root.
-    f.workflow_root = ActionId(f.entries.len() as u32);
-    let workflow_root = f.flatten_node(&config.workflow);
+    // The workflow root will be at the next alloc position.
+    let workflow_root = ActionId(unresolved.entries.len() as u32);
+    unresolved.flatten_node(&config.workflow, Some(workflow_root));
 
     let mut step_roots = HashMap::new();
     for (name, step_action) in &config.steps {
-        let step_root = f.flatten_node(step_action);
+        let step_root = unresolved.flatten_node(step_action, None);
         step_roots.insert(name.clone(), step_root);
     }
 
-    // Pass 2: resolve step names to ActionIds.
-    // Step(Root) was already resolved in pass 1.
-    let entries = resolve_targets(f.entries, &step_roots);
-
-    FlatConfig {
-        entries,
-        handlers: f.handlers,
-        workflow_root,
-    }
+    unresolved.resolve(workflow_root, &step_roots)
 }
 ```
 
