@@ -73,8 +73,9 @@ export type TypeScriptHandler = {
 // Config
 // ---------------------------------------------------------------------------
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Config = {
-  workflow: Action;
+  workflow: TypedAction<never, any>;
   steps?: Record<string, Action>;
 };
 
