@@ -51,13 +51,19 @@ These are constraints that serde can't enforce:
 - **Call handler module path is non-empty.** An empty module path can't resolve.
 - **Call handler func name is non-empty.** An empty function name can't resolve.
 
-### 5. No direct recursion in steps
+### 5. Step(Root) only appears in the workflow, not in defined steps
+
+`Step(Root)` (self-recursion to the workflow root) is only meaningful inside the workflow tree. If it appears in a defined step body, it's a bug — the step has no way to know the workflow root, and the flattener resolves `Step(Root)` using the workflow root ActionId which is only set when flattening the workflow.
+
+Report: `"Step(Root) found in step '{name}' — Step(Root) is only valid in the workflow tree"`
+
+### 6. No direct recursion in steps
 
 A step whose body is just `Step(itself)` is an infinite loop with no useful work. More generally, cycles through steps are valid (mutual recursion is a feature), but a step that directly references itself as its entire body (not within a loop or match) is almost certainly a bug.
 
 This one is tricky to define precisely — `Step("A")` where A's body is `Sequence([..., Step("A")])` is a legitimate recursive pattern (the sequence does work before recurring). Only flag the degenerate case where the step body IS just `Step("self")`.
 
-### 6. Handler module paths exist on disk
+### 7. Handler module paths exist on disk
 
 If the handler kind is `TypeScript`, verify that the `module` path exists on the filesystem. This catches path typos before execution. Requires access to the filesystem, so this validation belongs in the CLI or evaluator, not in the pure AST crate.
 
