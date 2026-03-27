@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   all,
   attempt,
-  call,
   config,
   configBuilder,
   loop,
@@ -146,12 +145,12 @@ describe("named steps — linter workflow", () => {
       .registerSteps({
         FixCycle: loop(
           sequence(
-            call(typeCheck),
-            call(classifyErrors),
+            typeCheck(),
+            classifyErrors(),
             matchCases({
               HasErrors: sequence(
                 extractField("errors"),
-                traverse(call(fix)),
+                traverse(fix()),
                 recur(),
               ),
               Clean: done(),
@@ -175,17 +174,17 @@ describe("named steps — linter workflow", () => {
   it("uses multiple registerSteps calls to reference earlier steps", () => {
     const cfg = configBuilder()
       .registerSteps({
-        Migrate: sequence(call(listFiles), traverse(call(migrate))),
+        Migrate: sequence(listFiles(), traverse(migrate())),
       })
       .registerSteps({
         FixCycle: loop(
           sequence(
-            call(typeCheck),
-            call(classifyErrors),
+            typeCheck(),
+            classifyErrors(),
             matchCases({
               HasErrors: sequence(
                 extractField("errors"),
-                traverse(call(fix)),
+                traverse(fix()),
                 recur(),
               ),
               Clean: done(),

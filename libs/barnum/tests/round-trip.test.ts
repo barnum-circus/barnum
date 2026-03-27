@@ -6,13 +6,11 @@ import { describe, expect, it } from "vitest";
 import {
   all,
   attempt,
-  config,
   configBuilder,
   loop,
   matchCases,
   sequence,
   traverse,
-  type Config,
 } from "../src/core.js";
 import { constant } from "../src/builtins.js";
 import setup from "./handlers/setup.js";
@@ -34,55 +32,65 @@ function roundTrip(input: unknown): unknown {
   return JSON.parse(stdout);
 }
 
-/**
- * Round-trip tests verify JSON serialization, not type safety.
- * Config objects are constructed directly to avoid the never-input
- * constraint of config(), which is tested separately in types.test.ts.
- */
 describe("barnum round-trip", () => {
   it("Call", () => {
-    const cfg: Config = { workflow: setup() };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant({ project: "test" }), setup()),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Sequence", () => {
-    const cfg: Config = { workflow: sequence(setup(), process_()) };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant({ project: "test" }), setup(), process_()),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("All", () => {
-    const cfg: Config = { workflow: all(check(), check()) };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant({ result: "test" }), all(check(), check())),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Traverse", () => {
-    const cfg: Config = { workflow: traverse(check()) };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant([{ result: "test" }]), traverse(check())),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Attempt", () => {
-    const cfg: Config = { workflow: attempt(check()) };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant({ result: "test" }), attempt(check())),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Match", () => {
-    const cfg: Config = {
-      workflow: matchCases({ yes: finalize(), no: finalize() }),
-    };
+    const cfg = configBuilder().workflow(() =>
+      sequence(
+        constant({ kind: "Yes" }),
+        matchCases({ Yes: finalize(), No: finalize() }),
+      ),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Loop", () => {
-    const cfg: Config = { workflow: loop(validate()) };
+    const cfg = configBuilder().workflow(() =>
+      sequence(constant({ valid: true }), loop(validate())),
+    );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Step", () => {
-    const steps: Config["steps"] = { DoCheck: check() };
-    const cfg: Config = {
-      workflow: { kind: "Step", step: "DoCheck" },
-      steps,
-    };
+    const cfg = configBuilder()
+      .registerSteps({ DoCheck: check() })
+      .workflow((steps) =>
+        sequence(constant({ result: "test" }), steps.DoCheck),
+      );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
@@ -94,7 +102,7 @@ describe("barnum round-trip", () => {
           constant({ project: "test" }),
           setup(),
           process_(),
-          attempt(check()),
+          attempt(steps.Recheck),
           matchCases({
             Ok: finalize(),
             Err: finalize(),

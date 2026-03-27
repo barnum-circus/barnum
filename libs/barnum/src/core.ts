@@ -127,8 +127,27 @@ type UntypedHandlerDefinition = {
 const HANDLER_BRAND = Symbol.for("barnum:handler");
 
 /**
- * A handler that can be invoked directly to produce a TypedAction, or passed
- * to `call()` for explicit invocation. Created by `createHandler`.
+ * Opaque handler reference with typed metadata. This is the base type
+ * accepted by `call()` — it only needs the handler's identity, not
+ * callability.
+ */
+export type Handler<
+  TValue = unknown,
+  TOutput = unknown,
+  TStepConfig = unknown,
+> = {
+  readonly [HANDLER_BRAND]: true;
+  readonly __filePath: string;
+  readonly __exportName: string;
+  readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
+  readonly __phantom_in: (input: TValue) => void;
+  readonly __phantom_out: () => TOutput;
+  readonly __phantom_step_config: TStepConfig;
+};
+
+/**
+ * A handler that can be invoked directly to produce a TypedAction.
+ * Created by `createHandler`.
  *
  * ```ts
  * import setup from "./handlers/setup.js";
@@ -138,9 +157,6 @@ const HANDLER_BRAND = Symbol.for("barnum:handler");
  *
  * // With step config:
  * setup({ stepConfig: { timeout: 5000 } });
- *
- * // Explicit call() still works:
- * call(setup);
  * ```
  */
 export type CallableHandler<
@@ -149,15 +165,8 @@ export type CallableHandler<
   TStepConfig = unknown,
 > = ((
   options?: { stepConfig?: TStepConfig },
-) => TypedAction<TValue, TOutput>) & {
-  readonly [HANDLER_BRAND]: true;
-  readonly __filePath: string;
-  readonly __exportName: string;
-  readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
-  readonly __phantom_in: (input: TValue) => void;
-  readonly __phantom_out: () => TOutput;
-  readonly __phantom_step_config: TStepConfig;
-};
+) => TypedAction<TValue, TOutput>) &
+  Handler<TValue, TOutput, TStepConfig>;
 
 export function isHandler(x: unknown): x is CallableHandler {
   return typeof x === "function" && HANDLER_BRAND in x;
@@ -268,7 +277,7 @@ export function createHandler(
 // ---------------------------------------------------------------------------
 
 export function call<TValue, TOutput, TStepConfig>(
-  handler: CallableHandler<TValue, TOutput, TStepConfig>,
+  handler: Handler<TValue, TOutput, TStepConfig>,
   ...args: unknown extends TStepConfig
     ? [options?: { stepConfig?: TStepConfig }]
     : [options: { stepConfig: TStepConfig }]
