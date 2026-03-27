@@ -305,16 +305,15 @@ impl UnresolvedFlatConfig {
                 FlatAction::Parallel { count }
             }
 
-            Action::Branch { mut cases } => {
+            Action::Branch { cases } => {
                 let count = Count(cases.len() as u32);
-                let mut sorted_keys: Vec<_> = cases.keys().cloned().collect();
-                sorted_keys.sort();
+                let mut cases: Vec<_> = cases.into_iter().collect();
+                cases.sort_by_key(|(key, _)| *key);
                 self.alloc_many(Count(2 * count.0));
-                for (i, key) in sorted_keys.into_iter().enumerate() {
+                for (i, (key, child)) in cases.into_iter().enumerate() {
                     let key_slot = action_id + 1 + 2 * i as u32;
                     self.entries[key_slot.0 as usize] =
                         Some(FlatEntry::BranchKey { key });
-                    let child = cases.remove(&key).unwrap();
                     self.fill_child_slot(child, key_slot + 1, workflow_root)?;
                 }
                 FlatAction::Branch { count }
