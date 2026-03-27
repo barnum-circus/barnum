@@ -107,14 +107,14 @@ export const migrate = createHandler(
 );
 
 // ---------------------------------------------------------------------------
-// typeCheck: unknown → TypeError[]
+// typeCheck: never → TypeError[]
 // ---------------------------------------------------------------------------
 
 export type TypeError = { file: string; message: string };
 
 export const typeCheck = createHandler(
   {
-    stepValueValidator: z.unknown(),
+    stepValueValidator: z.never(),
     handle: async (): Promise<TypeError[]> => [
       { file: "src/index.ts", message: "Type error" },
     ],

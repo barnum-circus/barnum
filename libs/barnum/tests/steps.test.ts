@@ -65,6 +65,7 @@ describe("named steps", () => {
       .registerSteps({
         FixCycle: loop(
           pipe(
+            drop(),
             typeCheck(),
             classifyErrors(),
             branch({
@@ -99,6 +100,7 @@ describe("named steps", () => {
       .registerSteps({
         FixCycle: loop(
           pipe(
+            drop(),
             typeCheck(),
             classifyErrors(),
             branch({
@@ -236,6 +238,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
     const cfg = configBuilder()
       .registerSteps(({ stepRef }) => ({
         TypeCheck: pipe(
+          drop(),
           typeCheck(),
           classifyErrors(),
           branch({
@@ -255,6 +258,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
           setup(),
           listFiles(),
           forEach(migrate()),
+          drop(),
           steps.TypeCheck,
         ),
       );
@@ -299,6 +303,7 @@ describe("kitchen sink", () => {
         // FixCycle: type-check, classify errors, fix or finish
         FixCycle: loop(
           pipe(
+            drop(),
             typeCheck(),
             classifyErrors(),
             branch({

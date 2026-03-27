@@ -132,9 +132,9 @@ describe("handler types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("typeCheck: unknown -> TypeError[]", () => {
+  it("typeCheck: never -> TypeError[]", () => {
     const action = typeCheck();
-    assertExact<IsExact<ExtractInput<typeof action>, unknown>>();
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,

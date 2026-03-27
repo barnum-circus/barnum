@@ -11,6 +11,7 @@ import {
 import {
   constant,
   done,
+  drop,
   extractField,
   identity,
   merge,
@@ -170,6 +171,7 @@ describe("loop", () => {
         forEach(migrate()),
         loop(
           pipe(
+            drop(),
             typeCheck(),
             classifyErrors(),
             branch({
