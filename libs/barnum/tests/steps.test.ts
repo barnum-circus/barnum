@@ -17,10 +17,10 @@ import {
 
 import {
   setup,
-  process,
-  check,
-  finalize,
-  validate,
+  build,
+  verify,
+  deploy,
+  healthCheck,
   listFiles,
   migrate,
   typeCheck,
@@ -35,14 +35,14 @@ import {
 describe("named steps", () => {
   it("allows referencing registered steps", () => {
     const cfg = configBuilder()
-      .registerSteps({ Finalize: finalize() })
-      .workflow(({ steps }) => pipe(constant({ valid: true }), steps.Finalize));
+      .registerSteps({ Deploy: deploy() })
+      .workflow(({ steps }) => pipe(constant({ verified: true }), steps.Deploy));
     expect(cfg.workflow.kind).toBe("Pipe");
   });
 
   it("rejects references to unregistered steps", () => {
     configBuilder()
-      .registerSteps({ Finalize: finalize() })
+      .registerSteps({ Deploy: deploy() })
       .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
         return steps.Nonexistent;
@@ -51,13 +51,13 @@ describe("named steps", () => {
 
   it("supports multiple registerSteps calls", () => {
     const cfg = configBuilder()
-      .registerSteps({ Finalize: finalize() })
-      .registerSteps({ Revalidate: validate() })
+      .registerSteps({ Deploy: deploy() })
+      .registerSteps({ HealthCheck: healthCheck() })
       .workflow(({ steps }) =>
-        pipe(constant({ valid: true }), parallel(steps.Finalize, steps.Revalidate)),
+        pipe(constant({ verified: true }), steps.Deploy, loop(steps.HealthCheck)),
       );
-    expect(cfg.steps).toHaveProperty("Finalize");
-    expect(cfg.steps).toHaveProperty("Revalidate");
+    expect(cfg.steps).toHaveProperty("Deploy");
+    expect(cfg.steps).toHaveProperty("HealthCheck");
   });
 
   it("uses named steps for a fix cycle", () => {
@@ -156,8 +156,8 @@ describe("workflow self-reference", () => {
   it("rejects piping a value directly into self", () => {
     configBuilder()
       .workflow(({ self }) =>
-        // @ts-expect-error — check outputs {valid: boolean} but self expects never
-        pipe(constant({ result: "test" }), check(), self),
+        // @ts-expect-error — verify outputs {verified: boolean} but self expects never
+        pipe(constant({ artifact: "test" }), verify(), self),
       );
   });
 });
@@ -170,11 +170,11 @@ describe("mutual recursion", () => {
   it("stepRef enables cross-references between steps", () => {
     const cfg = configBuilder()
       .registerSteps(({ stepRef }) => ({
-        A: pipe(check(), stepRef("B")),
-        B: pipe(check(), stepRef("A")),
+        A: pipe(verify(), stepRef("B")),
+        B: pipe(verify(), stepRef("A")),
       }))
       .workflow(({ steps }) =>
-        pipe(constant({ result: "test" }), steps.A),
+        pipe(constant({ artifact: "test" }), steps.A),
       );
 
     expect(cfg.steps).toHaveProperty("A");
@@ -198,7 +198,7 @@ describe("mutual recursion", () => {
     const cfg = configBuilder()
       .registerSteps({ Setup: setup() })
       .registerSteps(({ steps }) => ({
-        Pipeline: pipe(steps.Setup, process()),
+        Pipeline: pipe(steps.Setup, build()),
       }))
       .workflow(({ steps }) =>
         pipe(constant({ project: "test" }), steps.Pipeline),
@@ -217,8 +217,8 @@ describe("mutual recursion", () => {
   it("rejects invalid step references at compile time", () => {
     configBuilder()
       .registerSteps(({ stepRef }) => ({
-        A: pipe(check(), stepRef("Bt")),
-        B: pipe(check(), stepRef("A")),
+        A: pipe(verify(), stepRef("Bt")),
+        B: pipe(verify(), stepRef("A")),
       }))
       // @ts-expect-error — "Bt" is not a valid step name; return is error type
       .workflow(({ steps }) => pipe(steps.A));

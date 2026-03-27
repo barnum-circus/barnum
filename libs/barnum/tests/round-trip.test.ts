@@ -15,10 +15,10 @@ import {
 import { constant } from "../src/builtins.js";
 import {
   setup,
-  process,
-  check,
-  finalize,
-  validate,
+  build,
+  verify,
+  deploy,
+  healthCheck,
 } from "./handlers.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -43,28 +43,28 @@ describe("barnum round-trip", () => {
 
   it("Pipe", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant({ project: "test" }), setup(), process()),
+      pipe(constant({ project: "test" }), setup(), build()),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Parallel", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant({ result: "test" }), parallel(check(), check())),
+      pipe(constant({ artifact: "test" }), parallel(verify(), verify())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("ForEach", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant([{ result: "test" }]), forEach(check())),
+      pipe(constant([{ artifact: "test" }]), forEach(verify())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Attempt", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant({ result: "test" }), attempt(check())),
+      pipe(constant({ artifact: "test" }), attempt(verify())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
@@ -73,7 +73,7 @@ describe("barnum round-trip", () => {
     const cfg = configBuilder().workflow(() =>
       pipe(
         constant({ kind: "Yes" }),
-        branch({ Yes: finalize(), No: finalize() }),
+        branch({ Yes: deploy(), No: deploy() }),
       ),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
@@ -81,32 +81,32 @@ describe("barnum round-trip", () => {
 
   it("Loop", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant({ valid: true }), loop(validate())),
+      pipe(constant({ deployed: true }), loop(healthCheck())),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Step", () => {
     const cfg = configBuilder()
-      .registerSteps({ DoCheck: check() })
+      .registerSteps({ DoVerify: verify() })
       .workflow(({ steps }) =>
-        pipe(constant({ result: "test" }), steps.DoCheck),
+        pipe(constant({ artifact: "test" }), steps.DoVerify),
       );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("combined workflow", () => {
     const cfg = configBuilder()
-      .registerSteps({ Recheck: check() })
+      .registerSteps({ Recheck: verify() })
       .workflow(({ steps }) =>
         pipe(
           constant({ project: "test" }),
           setup(),
-          process(),
+          build(),
           attempt(steps.Recheck),
           branch({
-            Ok: finalize(),
-            Err: finalize(),
+            Ok: deploy(),
+            Err: deploy(),
           }),
         ),
       );

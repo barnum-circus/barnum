@@ -28,10 +28,10 @@ import {
 } from "../src/builtins.js";
 import {
   setup,
-  process,
-  check,
-  finalize,
-  validate,
+  build,
+  verify,
+  deploy,
+  healthCheck,
   listFiles,
   migrate,
   typeCheck,
@@ -70,39 +70,39 @@ describe("handler types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("process: { initialized: boolean, project: string } -> { result: string }", () => {
-    const action = process();
+  it("build: { initialized: boolean, project: string } -> { artifact: string }", () => {
+    const action = build();
     assertExact<
       IsExact<
         ExtractInput<typeof action>,
         { initialized: boolean; project: string }
       >
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, { result: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { artifact: string }>>();
     expect(action.kind).toBe("Invoke");
   });
 
-  it("check: { result: string } -> { valid: boolean }", () => {
-    const action = check();
-    assertExact<IsExact<ExtractInput<typeof action>, { result: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { valid: boolean }>>();
+  it("verify: { artifact: string } -> { verified: boolean }", () => {
+    const action = verify();
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
     expect(action.kind).toBe("Invoke");
   });
 
-  it("finalize: { valid: boolean } -> { done: true }", () => {
-    const action = finalize();
-    assertExact<IsExact<ExtractInput<typeof action>, { valid: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { done: true }>>();
+  it("deploy: { verified: boolean } -> { deployed: true }", () => {
+    const action = deploy();
+    assertExact<IsExact<ExtractInput<typeof action>, { verified: boolean }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: true }>>();
     expect(action.kind).toBe("Invoke");
   });
 
-  it("validate: { valid: boolean } -> LoopResult<{ valid: boolean }, { done: true }>", () => {
-    const action = validate();
-    assertExact<IsExact<ExtractInput<typeof action>, { valid: boolean }>>();
+  it("healthCheck: { deployed: boolean } -> LoopResult<{ deployed: boolean }, { stable: true }>", () => {
+    const action = healthCheck();
+    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        LoopResult<{ valid: boolean }, { done: true }>
+        LoopResult<{ deployed: boolean }, { stable: true }>
       >
     >();
     expect(action.kind).toBe("Invoke");
@@ -229,27 +229,27 @@ describe("builtin types", () => {
 
 describe("combinator types", () => {
   it("pipe: input of first, output of last", () => {
-    const action = pipe(setup(), process(), check());
+    const action = pipe(setup(), build(), verify());
     assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { valid: boolean }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
     expect(action.kind).toBe("Pipe");
   });
 
   it("forEach: wraps input/output in arrays", () => {
-    const action = forEach(check());
-    assertExact<IsExact<ExtractInput<typeof action>, { result: string }[]>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { valid: boolean }[]>>();
+    const action = forEach(verify());
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>>();
     expect(action.kind).toBe("ForEach");
   });
 
   it("parallel: same input, tuple output", () => {
-    const action = parallel(check(), check());
-    assertExact<IsExact<ExtractInput<typeof action>, { result: string }>>();
+    const action = parallel(verify(), verify());
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     // parallel output is [Out1, Out2]
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        [{ valid: boolean }, { valid: boolean }]
+        [{ verified: boolean }, { verified: boolean }]
       >
     >();
     expect(action.kind).toBe("Parallel");
@@ -257,28 +257,28 @@ describe("combinator types", () => {
 
   it("branch: input is { kind: string }, output is case union", () => {
     const action = branch({
-      Yes: finalize(),
-      No: finalize(),
+      Yes: deploy(),
+      No: deploy(),
     });
     assertExact<IsExact<ExtractInput<typeof action>, { kind: string }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { done: true }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: true }>>();
     expect(action.kind).toBe("Branch");
   });
 
   it("loop: input matches Continue type, output is Break type", () => {
-    const action = loop(validate());
-    assertExact<IsExact<ExtractInput<typeof action>, { valid: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { done: true }>>();
+    const action = loop(healthCheck());
+    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
     expect(action.kind).toBe("Loop");
   });
 
   it("attempt: wraps output in AttemptResult", () => {
-    const action = attempt(check());
-    assertExact<IsExact<ExtractInput<typeof action>, { result: string }>>();
+    const action = attempt(verify());
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        AttemptResult<{ valid: boolean }>
+        AttemptResult<{ verified: boolean }>
       >
     >();
     expect(action.kind).toBe("Attempt");
@@ -291,21 +291,21 @@ describe("combinator types", () => {
 
 describe("pipe type safety", () => {
   it("rejects mismatched adjacent types", () => {
-    // check outputs { valid: boolean }, setup expects { project: string }
+    // verify outputs { verified: boolean }, setup expects { project: string }
     // @ts-expect-error — output/input mismatch
-    pipe(check(), setup());
+    pipe(verify(), setup());
   });
 
   it("rejects unrelated types", () => {
-    // finalize outputs { done: true }, setup expects { project: string }
+    // deploy outputs { deployed: true }, setup expects { project: string }
     // @ts-expect-error — output/input mismatch
-    pipe(finalize(), setup());
+    pipe(deploy(), setup());
   });
 
   it("accepts compatible types", () => {
     // setup outputs { initialized: boolean, project: string }
-    // process expects { initialized: boolean, project: string }
-    const action = pipe(setup(), process());
+    // build expects { initialized: boolean, project: string }
+    const action = pipe(setup(), build());
     expect(action.kind).toBe("Pipe");
   });
 });
@@ -316,14 +316,14 @@ describe("pipe type safety", () => {
 
 describe("config entry point", () => {
   it("rejects workflows that expect input", () => {
-    // check expects { result: string } input — can't be a workflow entry point
+    // verify expects { artifact: string } input — can't be a workflow entry point
     // @ts-expect-error — workflow entry point must accept never input
-    configBuilder().workflow(() => check());
+    configBuilder().workflow(() => verify());
   });
 
   it("accepts workflows starting with constant", () => {
     const cfg = configBuilder().workflow(() =>
-      pipe(constant({ result: "test" }), check()),
+      pipe(constant({ artifact: "test" }), verify()),
     );
     expect(cfg.workflow.kind).toBe("Pipe");
   });
@@ -336,7 +336,7 @@ describe("config entry point", () => {
 describe("step reference types", () => {
   it("rejects references to unregistered steps", () => {
     configBuilder()
-      .registerSteps({ Finalize: finalize() })
+      .registerSteps({ Deploy: deploy() })
       .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
         return steps.Nonexistent;
@@ -345,23 +345,23 @@ describe("step reference types", () => {
 
   it("preserves step types from static registration", () => {
     const builder = configBuilder().registerSteps({
-      Check: check(),
-      Finalize: finalize(),
+      Verify: verify(),
+      Deploy: deploy(),
     });
 
     // Verify the step types are preserved in the builder's generic
     builder.workflow(({ steps }) => {
       assertExact<
-        IsExact<ExtractInput<typeof steps.Check>, { result: string }>
+        IsExact<ExtractInput<typeof steps.Verify>, { artifact: string }>
       >();
       assertExact<
-        IsExact<ExtractOutput<typeof steps.Check>, { valid: boolean }>
+        IsExact<ExtractOutput<typeof steps.Verify>, { verified: boolean }>
       >();
       assertExact<
-        IsExact<ExtractInput<typeof steps.Finalize>, { valid: boolean }>
+        IsExact<ExtractInput<typeof steps.Deploy>, { verified: boolean }>
       >();
-      assertExact<IsExact<ExtractOutput<typeof steps.Finalize>, { done: true }>>();
-      return pipe(constant({ result: "test" }), steps.Check, steps.Finalize);
+      assertExact<IsExact<ExtractOutput<typeof steps.Deploy>, { deployed: true }>>();
+      return pipe(constant({ artifact: "test" }), steps.Verify, steps.Deploy);
     });
   });
 
@@ -375,29 +375,29 @@ describe("step reference types", () => {
 
   it("self cannot be piped after a value-producing action", () => {
     configBuilder().workflow(({ self }) =>
-      // @ts-expect-error — check outputs { valid: boolean } but self expects never
-      pipe(constant({ result: "test" }), check(), self),
+      // @ts-expect-error — verify outputs { verified: boolean } but self expects never
+      pipe(constant({ artifact: "test" }), verify(), self),
     );
   });
 
   it("preserves step types through callback form registerSteps", () => {
     configBuilder()
       .registerSteps(({ stepRef }) => ({
-        A: pipe(check(), stepRef("B")),
-        B: pipe(check(), stepRef("A")),
+        A: pipe(verify(), stepRef("B")),
+        B: pipe(verify(), stepRef("A")),
       }))
       .workflow(({ steps }) => {
-        // Input type comes from check()'s input: { result: string }
+        // Input type comes from verify()'s input: { artifact: string }
         assertExact<
-          IsExact<ExtractInput<typeof steps.A>, { result: string }>
+          IsExact<ExtractInput<typeof steps.A>, { artifact: string }>
         >();
         assertExact<
-          IsExact<ExtractInput<typeof steps.B>, { result: string }>
+          IsExact<ExtractInput<typeof steps.B>, { artifact: string }>
         >();
         // Output is any because stepRef doesn't track output types
         assertExact<IsExact<ExtractOutput<typeof steps.A>, any>>();
         assertExact<IsExact<ExtractOutput<typeof steps.B>, any>>();
-        return pipe(constant({ result: "test" }), steps.A);
+        return pipe(constant({ artifact: "test" }), steps.A);
       });
   });
 
@@ -411,7 +411,7 @@ describe("step reference types", () => {
         >();
         // @ts-expect-error — Pipeline is in the current batch, not prior
         steps.Pipeline;
-        return { Pipeline: pipe(steps.Setup, process()) };
+        return { Pipeline: pipe(steps.Setup, build()) };
       });
   });
 
@@ -421,7 +421,7 @@ describe("step reference types", () => {
       .registerSteps({ Setup: setup() })
       // Batch 2: callback form
       .registerSteps(({ steps }) => ({
-        Pipeline: pipe(steps.Setup, process()),
+        Pipeline: pipe(steps.Setup, build()),
       }))
       .workflow(({ steps }) => {
         // Batch 1 step types survive
@@ -436,14 +436,14 @@ describe("step reference types", () => {
         >();
         // Batch 2 step types survive — input comes from steps.Setup (a Step
         // ref at runtime), but the static type is what registerSteps inferred:
-        // pipe(steps.Setup, process()) where steps.Setup is
+        // pipe(steps.Setup, build()) where steps.Setup is
         // TypedAction<{ project: string }, { initialized: boolean, project: string }>
-        // and process() is TypedAction<{ initialized: boolean, project: string }, { result: string }>
+        // and build() is TypedAction<{ initialized: boolean, project: string }, { artifact: string }>
         assertExact<
           IsExact<ExtractInput<typeof steps.Pipeline>, { project: string }>
         >();
         assertExact<
-          IsExact<ExtractOutput<typeof steps.Pipeline>, { result: string }>
+          IsExact<ExtractOutput<typeof steps.Pipeline>, { artifact: string }>
         >();
         return pipe(constant({ project: "test" }), steps.Pipeline);
       });
