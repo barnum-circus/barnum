@@ -12,7 +12,7 @@ Leaf nodes reference exported functions by module path and name—the same patte
 
 ## Primitives
 
-Ten AST node types. One leaf computation (Call). Three compositional (Sequence, Traverse, All). One routing (Match). One iteration (Loop) with two signal nodes (Continue, Break). One error materialization (Attempt). One named reference (Step).
+Eight AST node types. One leaf computation (Call). Three compositional (Sequence, Traverse, All). One routing (Match). One iteration (Loop). One error materialization (Attempt). One named reference (Step).
 
 Each primitive is specified in four dimensions: concept, TypeScript builder API, serialized JSON form, and Rust evaluation semantics.
 
@@ -254,32 +254,18 @@ Action::Loop { body } => {
 
 The loop's initial state is its pipeline input. Continue's value becomes the next iteration's input. Break's value is the loop's output.
 
-#### Continue / Break
+#### Loop signals (value domain, not AST nodes)
 
-Loop signal constructors. Wrap their input in the format that Loop expects. These exist so that handlers don't need to know the loop protocol—the AST handles the wrapping.
+Continue and Break are values, not AST primitives. The loop body must produce output with `kind: "Continue"` or `kind: "Break"`. How that value gets constructed is the handler's concern.
 
-`continue` and `break` are reserved words in TypeScript, so the builder functions are `recur()` and `done()`.
-
-**TS builder:**
+The TypeScript builder provides convenience functions `recur()` and `done()` that produce Call nodes to built-in signal handlers:
 
 ```ts
-recur()   // wraps input as { kind: "Continue", value: input }
-done()    // wraps input as { kind: "Break", value: input }
+recur()  // Call to a handler that wraps input as { kind: "Continue", value: input }
+done()   // Call to a handler that wraps input as { kind: "Break", value: input }
 ```
 
-**Serialized:**
-
-```json
-{ "kind": "Continue" }
-{ "kind": "Break" }
-```
-
-**Rust evaluation:**
-
-```rust
-Action::Continue => Ok(json!({ "kind": "Continue", "value": input })),
-Action::Break => Ok(json!({ "kind": "Break", "value": input })),
-```
+These are syntactic sugar. A handler can produce `{kind: "Continue", value}` or `{kind: "Break", value}` directly without using `recur()`/`done()`.
 
 ### Attempt
 
@@ -374,8 +360,6 @@ type Action =
   | { kind: "All"; actions: Action[] }
   | { kind: "Match"; cases: Record<string, Action> }
   | { kind: "Loop"; body: Action }
-  | { kind: "Continue" }
-  | { kind: "Break" }
   | { kind: "Attempt"; action: Action }
   | { kind: "Step"; step: string }
 ```
@@ -399,8 +383,6 @@ pub enum Action {
     All { actions: Vec<Action> },
     Match { cases: HashMap<String, Action> },
     Loop { body: Box<Action> },
-    Continue,
-    Break,
     Attempt {
         action: Box<Action>,
     },

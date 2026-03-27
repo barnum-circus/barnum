@@ -68,12 +68,6 @@ pub enum Action {
         body: Box<Action>,
     },
 
-    /// Loop signal: continue iterating with the current value.
-    Continue,
-
-    /// Loop signal: exit the loop with the current value.
-    Break,
-
     /// Error materialization. Executes the action and reifies success/failure
     /// into `{kind: "Success", value}` or `{kind: "Failure", error, input}`.
     /// Always infallible from the VM's perspective.
@@ -177,7 +171,7 @@ mod tests {
             "kind": "Match",
             "cases": {
                 "HasErrors": {"kind": "Call", "module": "./fix.ts", "func": "fix"},
-                "Clean": {"kind": "Break"}
+                "Clean": {"kind": "Call", "module": "./done.ts", "func": "done"}
             }
         }"#;
         let action: Action = serde_json::from_str(json).unwrap();
@@ -190,28 +184,19 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_loop_with_signals() {
+    fn deserialize_loop() {
         let json = r#"{
             "kind": "Loop",
             "body": {
                 "kind": "Sequence",
                 "actions": [
                     {"kind": "Call", "module": "./check.ts", "func": "check"},
-                    {"kind": "Continue"}
+                    {"kind": "Call", "module": "./signal.ts", "func": "recur"}
                 ]
             }
         }"#;
         let action: Action = serde_json::from_str(json).unwrap();
         assert!(matches!(action, Action::Loop { .. }));
-    }
-
-    #[test]
-    fn deserialize_continue_and_break() {
-        let cont: Action = serde_json::from_str(r#"{"kind": "Continue"}"#).unwrap();
-        assert_eq!(cont, Action::Continue);
-
-        let brk: Action = serde_json::from_str(r#"{"kind": "Break"}"#).unwrap();
-        assert_eq!(brk, Action::Break);
     }
 
     #[test]
@@ -286,9 +271,9 @@ mod tests {
                                 "HasErrors": {"kind": "Sequence", "actions": [
                                     {"kind": "Call", "module": "./extract.ts", "func": "extractErrors"},
                                     {"kind": "Traverse", "action": {"kind": "Call", "module": "./fix.ts", "func": "fix"}},
-                                    {"kind": "Continue"}
+                                    {"kind": "Call", "module": "./signal.ts", "func": "recur"}
                                 ]},
-                                "Clean": {"kind": "Break"}
+                                "Clean": {"kind": "Call", "module": "./signal.ts", "func": "done"}
                             }}
                         ]
                     }}
