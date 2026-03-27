@@ -4,7 +4,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 ## Types
 
-**Note:** `ActionId`, `HandlerId` are `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
+**Note:** `ActionId`, `HandlerId`, and `Count` are `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
 ```rust
 /// An entry in the flat action table.
@@ -13,7 +13,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 /// by `count` ChildRef entries inline in the entries vec.
 ///
 /// Branch stores a `count` (number of cases) and is followed by `2 * count`
-/// entries: alternating BranchKey / ChildRef pairs.
+/// entries: `count` alternating pairs of (BranchKey, ChildRef).
 ///
 /// Single-child instructions (ForEach, Loop, Attempt) have their child
 /// at self+1 unconditionally. No field needed.
@@ -24,24 +24,30 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 /// Generic over `T`: the Step target type. During pass 1, `T = StepTarget`
 /// (may contain unresolved step names). After pass 2, `T = ActionId`
 /// (fully resolved). The generic applies only to Step.
+///
+/// `FlatEntry<ActionId>` is Copy (all fields are u32 newtypes).
+/// `FlatEntry<StepTarget>` is Clone but not Copy (StepTarget::Named holds a String).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FlatEntry<T> {
     /// Leaf: invoke a handler. `handler` indexes `FlatConfig::handlers`.
     Invoke { handler: HandlerId },
 
     /// Sequential composition.
     /// Followed by `count` ChildRef entries pointing to children's roots.
-    Pipe { count: u32 },
+    Pipe { count: Count },
 
     /// Fan-out: same input to all children, collect results as array.
     /// Followed by `count` ChildRef entries pointing to children's roots.
-    Parallel { count: u32 },
+    Parallel { count: Count },
 
     /// Map over array input. Body at self+1.
     ForEach,
 
     /// Case analysis on value["kind"].
-    /// Followed by `count` pairs of (BranchKey, ChildRef) entries.
-    Branch { count: u32 },
+    /// Followed by `2 * count` entries: `count` pairs of (BranchKey, ChildRef).
+    /// Each BranchKey holds the discriminator; the following ChildRef holds the
+    /// ActionId of the matching case's root.
+    Branch { count: Count },
 
     /// Fixed-point iteration. Body at self+1.
     Loop,
@@ -96,6 +102,7 @@ enum StepTarget {
 
 ```rust
 /// The fully-resolved flat configuration.
+#[derive(Debug, PartialEq, Eq)]
 struct FlatConfig {
     /// The entry array. ActionIds are indices into this vec.
     /// Contains both instructions and inline data (ChildRef, BranchKey).
@@ -111,6 +118,58 @@ struct FlatConfig {
 ```
 
 Single-child instructions (ForEach, Loop, Attempt) have their child unconditionally at `self+1` — guaranteed by DFS ordering.
+
+### Accessors
+
+The interpreter accesses entries by `ActionId`, not by linear iteration. Inline data (ChildRef, BranchKey) is read relative to the parent instruction's position. These accessors encapsulate that.
+
+```rust
+impl FlatConfig {
+    fn entry(&self, id: ActionId) -> FlatEntry<ActionId> {
+        self.entries[id.0 as usize]
+    }
+
+    fn handler(&self, id: HandlerId) -> &HandlerKind {
+        &self.handlers[id.0 as usize]
+    }
+
+    /// Returns the child ActionIds for a Pipe or Parallel.
+    /// Reads the `count` inline ChildRef entries starting at `id + 1`.
+    fn children(&self, id: ActionId) -> impl Iterator<Item = ActionId> + '_ {
+        let count = match self.entry(id) {
+            FlatEntry::Pipe { count } | FlatEntry::Parallel { count } => count.0 as usize,
+            other => panic!("expected Pipe or Parallel, got {other:?}"),
+        };
+        let start = id.0 as usize + 1;
+        self.entries[start..start + count].iter().map(|entry| match entry {
+            FlatEntry::ChildRef { action } => *action,
+            other => panic!("expected ChildRef, got {other:?}"),
+        })
+    }
+
+    /// Returns (key, action) pairs for a Branch.
+    /// Reads `2 * count` inline entries (alternating BranchKey / ChildRef)
+    /// starting at `id + 1`.
+    fn branch_cases(&self, id: ActionId) -> impl Iterator<Item = (KindDiscriminator, ActionId)> + '_ {
+        let count = match self.entry(id) {
+            FlatEntry::Branch { count } => count.0 as usize,
+            other => panic!("expected Branch, got {other:?}"),
+        };
+        let start = id.0 as usize + 1;
+        (0..count).map(move |i| {
+            let key = match self.entries[start + 2 * i] {
+                FlatEntry::BranchKey { key } => key,
+                other => panic!("expected BranchKey, got {other:?}"),
+            };
+            let action = match self.entries[start + 2 * i + 1] {
+                FlatEntry::ChildRef { action } => action,
+                other => panic!("expected ChildRef, got {other:?}"),
+            };
+            (key, action)
+        })
+    }
+}
+```
 
 ## Algorithm
 
@@ -168,10 +227,10 @@ impl Flattener {
 
             Action::Pipe { actions } => {
                 let id = self.alloc();
-                let count = actions.len() as u32;
+                let count = Count(actions.len() as u32);
                 // Reserve ChildRef slots
                 let ref_start = self.entries.len();
-                for _ in 0..count {
+                for _ in 0..count.0 {
                     self.alloc();
                 }
                 self.entries[id.0 as usize] =
@@ -186,10 +245,10 @@ impl Flattener {
 
             Action::Parallel { actions } => {
                 let id = self.alloc();
-                let count = actions.len() as u32;
+                let count = Count(actions.len() as u32);
                 // Reserve ChildRef slots
                 let ref_start = self.entries.len();
-                for _ in 0..count {
+                for _ in 0..count.0 {
                     self.alloc();
                 }
                 self.entries[id.0 as usize] =
@@ -211,12 +270,12 @@ impl Flattener {
 
             Action::Branch { cases } => {
                 let id = self.alloc();
-                let count = cases.len() as u32;
+                let count = Count(cases.len() as u32);
                 let mut sorted_keys: Vec<_> = cases.keys().collect();
                 sorted_keys.sort();
                 // Reserve 2*count slots: alternating BranchKey / ChildRef
                 let ref_start = self.entries.len();
-                for _ in 0..(2 * count) {
+                for _ in 0..(2 * count.0) {
                     self.alloc();
                 }
                 self.entries[id.0 as usize] =
@@ -377,11 +436,13 @@ Input:  Branch({ "Err": Invoke(handle_err), "Ok": Invoke(handle_ok) })
 entries:
   0: Branch { count: 2 }
   1: BranchKey { key: "Err" }
-  2: ChildRef { action: 5 }
+  2: ChildRef { action: 5 }     -- handle_err root
   3: BranchKey { key: "Ok" }
-  4: ChildRef { action: 6 }
-  5: Invoke { handler: 0 }    -- handle_err
-  6: Invoke { handler: 1 }    -- handle_ok
+  4: ChildRef { action: 6 }     -- handle_ok root
+  5: Invoke { handler: 0 }      -- handle_err
+  6: Invoke { handler: 1 }      -- handle_ok
+
+(2 cases × 2 entries each = 4 inline entries after Branch)
 ```
 
 ### Step resolution
@@ -461,7 +522,7 @@ fn flatten_parallel()
 fn flatten_foreach()
 // entries: [ForEach, Invoke(0)]
 
-/// Branch: instruction + inline BranchKey/ChildRef pairs + case entries.
+/// Branch: instruction + 2*count inline entries + case subtrees.
 fn flatten_branch()
 // entries: [Branch{2}, BranchKey("Err"), ChildRef(5), BranchKey("Ok"), ChildRef(6),
 //           Invoke(0), Invoke(1)]
