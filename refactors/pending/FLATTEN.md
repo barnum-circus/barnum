@@ -96,7 +96,7 @@ impl<T> FlatEntry<T> {
 ```rust
 enum StepTarget {
     Named(StepName),
-    Resolved(ActionId),
+    Root,
 }
 ```
 
@@ -183,7 +183,7 @@ DFS flattening into a single flat vec. No side tables.
 
 **Single-child nodes** (ForEach, Loop, Attempt): Allocate the instruction slot, then immediately DFS into the child. Since no other allocation happens between the instruction and the child, the child's root is guaranteed to be at self+1.
 
-**Step(Named(name))** stores the name, resolved in pass 2. **Step(Root)** resolves immediately since the workflow root is always ActionId(0).
+**Step(Named(name))** and **Step(Root)** both store unresolved targets, resolved in pass 2.
 
 Handlers are interned via `IndexSet<HandlerKind>`: identical handlers share a `HandlerId`. `IndexSet::insert_full` returns the index (existing or new), giving O(1) dedup with stable insertion-order indices.
 
@@ -191,9 +191,9 @@ KindDiscriminator is already an interned StringKey (Copy, u32-sized). No second 
 
 ### Two-pass resolution
 
-**Pass 1**: DFS-flatten each tree. Step(Named(name)) stores `StepTarget::Named(name)`. Step(Root) resolves immediately to `StepTarget::Resolved(ActionId(0))`.
+**Pass 1**: DFS-flatten each tree. Step(Named(name)) stores `StepTarget::Named(name)`. Step(Root) stores `StepTarget::Root`.
 
-**Pass 2**: Walk the vec, replacing `StepTarget::Named(name)` with `step_roots[name]` via `map_target`. ChildRef and BranchKey entries pass through unchanged.
+**Pass 2**: Walk the vec via `map_target`. `StepTarget::Named(name)` resolves to `step_roots[name]`. `StepTarget::Root` resolves to `workflow_root`. ChildRef and BranchKey entries pass through unchanged.
 
 ### Pass 1: Flattener
 
@@ -315,7 +315,7 @@ impl Flattener {
             Action::Step(StepRef::Root) => {
                 let id = self.alloc();
                 self.entries[id.0 as usize] = Some(FlatEntry::Step {
-                    target: StepTarget::Resolved(ActionId(0)),
+                    target: StepTarget::Root,
                 });
                 id
             }
@@ -332,6 +332,7 @@ Branch cases are sorted by key for deterministic ActionId assignment.
 fn resolve_targets(
     entries: Vec<Option<FlatEntry<StepTarget>>>,
     step_roots: &HashMap<StepName, ActionId>,
+    workflow_root: ActionId,
 ) -> Vec<FlatEntry<ActionId>> {
     entries
         .into_iter()
@@ -341,7 +342,7 @@ fn resolve_targets(
                     StepTarget::Named(name) => *step_roots
                         .get(&name)
                         .unwrap_or_else(|| panic!("unknown step: {name}")),
-                    StepTarget::Resolved(id) => id,
+                    StepTarget::Root => workflow_root,
                 })
         })
         .collect()
@@ -355,9 +356,7 @@ fn flatten(config: &Config) -> FlatConfig {
     let mut f = Flattener::new();
 
     // Pass 1: DFS-flatten each tree.
-    // Workflow root is always the first ActionId (0).
     let workflow_root = f.flatten_node(&config.workflow);
-    debug_assert_eq!(workflow_root, ActionId(0));
 
     let mut step_roots = HashMap::new();
     for (name, step_action) in &config.steps {
@@ -365,8 +364,8 @@ fn flatten(config: &Config) -> FlatConfig {
         step_roots.insert(name.clone(), step_root);
     }
 
-    // Pass 2: resolve step names to ActionIds.
-    let entries = resolve_targets(f.entries, &step_roots);
+    // Pass 2: resolve step names and Step(Root) to ActionIds.
+    let entries = resolve_targets(f.entries, &step_roots, workflow_root);
 
     FlatConfig {
         entries,
