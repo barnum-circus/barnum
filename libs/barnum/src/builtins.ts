@@ -1,4 +1,5 @@
 import type { TypedAction, LoopResult } from "./ast.js";
+import { chain } from "./chain.js";
 import {
   constant as constantHandler,
   drop as dropHandler,
@@ -112,11 +113,7 @@ export function drop<T>(): TypedAction<T, never> {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
-  return {
-    kind: "Chain",
-    first: action,
-    rest: dropHandler(),
-  } as TypedAction<In, never>;
+  return chain(action, dropHandler() as TypedAction<any, never>) as TypedAction<In, never>;
 }
 
 // ---------------------------------------------------------------------------

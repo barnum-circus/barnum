@@ -260,6 +260,7 @@ export type ValidateStepRefs<
 // ---------------------------------------------------------------------------
 
 export { pipe } from "./pipe.js";
+export { chain } from "./chain.js";
 export { parallel } from "./parallel.js";
 
 export function invoke<TValue, TOutput, TStepConfig>(

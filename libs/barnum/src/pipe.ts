@@ -1,5 +1,6 @@
 import type { Action, TypedAction } from "./ast.js";
 import { identity } from "./builtins.js";
+import { chain } from "./chain.js";
 
 export function pipe<T1, T2, R1 extends string>(
   a1: TypedAction<T1, T2, R1>,
@@ -114,7 +115,5 @@ export function pipe<
 export function pipe(...actions: Action[]): Action {
   if (actions.length === 0) return identity();
   if (actions.length === 1) return actions[0];
-  return actions.reduceRight(
-    (rest, first) => ({ kind: "Chain", first, rest }) as Action,
-  );
+  return actions.reduceRight((rest, first) => chain(first, rest) as Action);
 }

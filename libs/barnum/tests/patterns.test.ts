@@ -46,7 +46,7 @@ describe("pipe", () => {
         deploy(),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 
   it("rejects mismatched types", () => {
@@ -57,7 +57,7 @@ describe("pipe", () => {
 
   it("chains three steps correctly", () => {
     const workflow = pipe(setup(), build(), verify());
-    expect(workflow.kind).toBe("Pipe");
+    expect(workflow.kind).toBe("Chain");
   });
 
   it("rejects unrelated types", () => {
@@ -86,7 +86,7 @@ describe("forEach", () => {
         forEach(migrate()),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 });
 
@@ -122,7 +122,7 @@ describe("parallel", () => {
         ),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 });
 
@@ -186,7 +186,7 @@ describe("loop", () => {
         ),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 });
 
@@ -202,7 +202,7 @@ describe("attempt", () => {
 
   it("chains in pipe with result-aware consumer", () => {
     const workflow = pipe(build(), attempt(verify()));
-    expect(workflow.kind).toBe("Pipe");
+    expect(workflow.kind).toBe("Chain");
   });
 });
 
@@ -222,6 +222,6 @@ describe("reader monad pattern", () => {
         merge(),
       ),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 });

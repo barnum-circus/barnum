@@ -232,7 +232,7 @@ describe("combinator types", () => {
     const action = pipe(setup(), build(), verify());
     assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
-    expect(action.kind).toBe("Pipe");
+    expect(action.kind).toBe("Chain");
   });
 
   it("forEach: wraps input/output in arrays", () => {
@@ -308,7 +308,7 @@ describe("pipe type safety", () => {
     // setup outputs { initialized: boolean, project: string }
     // build expects { initialized: boolean, project: string }
     const action = pipe(setup(), build());
-    expect(action.kind).toBe("Pipe");
+    expect(action.kind).toBe("Chain");
   });
 
   it("rejects non-exhaustive branch (missing case)", () => {
@@ -324,7 +324,7 @@ describe("pipe type safety", () => {
       classifyErrors(),
       branch({ HasErrors: drop(), Clean: drop() }),
     );
-    expect(action.kind).toBe("Pipe");
+    expect(action.kind).toBe("Chain");
   });
 });
 
@@ -343,7 +343,7 @@ describe("config entry point", () => {
     const cfg = configBuilder().workflow(() =>
       pipe(constant({ artifact: "test" }), verify()),
     );
-    expect(cfg.workflow.kind).toBe("Pipe");
+    expect(cfg.workflow.kind).toBe("Chain");
   });
 });
 
