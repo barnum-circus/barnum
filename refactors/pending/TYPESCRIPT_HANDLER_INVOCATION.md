@@ -1,194 +1,135 @@
 # TypeScript Handler Invocation
 
-The final step to a working proof of concept: actually executing TypeScript handlers and feeding results back to the workflow_state.
+Executing TypeScript handlers from the Rust runtime and feeding results back to WorkflowState.
 
-**Depends on:** COMPLETION.md (advance/complete cycle), ENGINE.md (design)
+**Depends on:** RUNTIME.md (Scheduler + run_workflow loop)
 
-**Scope:** A minimal runtime that takes dispatches from the engine, executes TypeScript handlers, and delivers results back via `complete`. No persistence, no restart, no scheduling — just the synchronous dispatch/execute/complete loop.
+**Scope:** Subprocess management, the worker script, the stdin/stdout protocol. Errors panic the workflow for now — no structured error handling.
 
-## Current state
+## Architecture: one subprocess per dispatch
 
-The engine produces `Dispatch { handler_id, value }`. The caller resolves `handler_id` to a `HandlerKind::TypeScript { module, func, .. }` via `workflow_state.handler(id)`. But nothing actually runs the TypeScript.
+Match master's approach: spawn one short-lived Node.js process per handler invocation. Each process imports the handler module, calls it, writes the result to stdout, and exits.
 
-On the TypeScript side, `createHandler()` in `libs/barnum/src/handler.ts` captures:
-- `__filePath`: absolute path to the handler module (captured via V8 stack trace)
-- `__exportName`: the exported function name
-- `__definition.handle`: the actual `async (context) => result` function
+Why one-per-dispatch instead of a long-lived daemon:
+- Simpler — no multiplexing, no request/response correlation by task ID
+- Clean isolation — no state leaks between handler calls
+- Matches master's proven approach
 
-The Rust side sees `module` (file path) and `func` (export name) in the serialized config. It needs to load that module, call that export, and get JSON back.
+The tradeoff is startup overhead per invocation (Node.js boot + module import). For a POC this is fine. A long-lived daemon can replace this later as an optimization without changing the Scheduler interface.
 
-## Architecture: single long-lived Node.js process
+## Protocol
 
-Spawn one Node.js subprocess at startup. Communicate via stdin/stdout using NDJSON (one JSON object per line).
-
-Why a single process instead of one per dispatch:
-- Module loading is expensive. A persistent process caches `require()`/`import()` results.
-- Parallel dispatches share the same process — just send multiple requests, collect responses keyed by task ID.
-- No subprocess spawn overhead per handler call.
-
-### Protocol
-
-**Rust → Node.js (stdin):** dispatch request
+**Rust → Node.js (stdin):** handler input as JSON
 
 ```json
-{"taskId": 0, "module": "/app/handlers/setup.ts", "func": "setup", "value": {"project": "my-app"}}
+{"value": null}
 ```
 
-**Node.js → Rust (stdout):** task result
+The input is whatever value WorkflowState passed in the Dispatch. For the first handler in a workflow, this is `null` (workflows have no input).
+
+**Node.js → Rust (stdout):** handler result as JSON
 
 ```json
-{"taskId": 0, "status": "success", "value": {"initialized": true}}
+{"initialized": true}
 ```
 
-or
+Just the return value, not wrapped in an envelope. If the handler throws or the process exits non-zero, the workflow panics. No structured error handling for now.
 
-```json
-{"taskId": 0, "status": "failure", "error": "TypeError: Cannot read properties of undefined"}
-```
+## Worker script
 
-### Node.js worker script
-
-A small harness (`libs/barnum/src/worker.ts` or `worker.cjs`) that:
-
-1. Reads NDJSON lines from stdin.
-2. For each line: dynamically imports the module, looks up the export, calls it with `{ value }`.
-3. Writes the result as a JSON line to stdout.
-4. Handles errors (import failure, export not found, handler throws) as `failure` results.
+`libs/barnum/src/worker.ts` — invoked as `tsx worker.ts <module> <export>`:
 
 ```typescript
-import { createInterface } from "readline";
+const [modulePath, exportName = "default"] = process.argv.slice(2);
 
-const rl = createInterface({ input: process.stdin });
+// Read entire stdin
+const chunks: Buffer[] = [];
+for await (const chunk of process.stdin) chunks.push(chunk);
+const input = JSON.parse(Buffer.concat(chunks).toString());
 
-for await (const line of rl) {
-    const { taskId, module, func, value } = JSON.parse(line);
-    try {
-        const mod = await import(module);
-        const handler = mod[func];
-        if (!handler?.__definition?.handle) {
-            throw new Error(`${module}:${func} is not a barnum handler`);
-        }
-        const result = await handler.__definition.handle({ value, stepConfig: {} });
-        console.log(JSON.stringify({ taskId, status: "success", value: result }));
-    } catch (err) {
-        const error = err instanceof Error ? err.message : String(err);
-        console.log(JSON.stringify({ taskId, status: "failure", error }));
-    }
+// Import handler, call it
+const mod = await import(modulePath);
+const handler = mod[exportName];
+if (!handler?.__definition?.handle) {
+    throw new Error(`${modulePath}:${exportName} is not a barnum handler`);
+}
+const result = await handler.__definition.handle({ value: input.value });
+
+// Write result to stdout
+process.stdout.write(JSON.stringify(result));
+```
+
+## Executor resolution
+
+Use `tsx` to run TypeScript handlers. Resolve it from the project's `node_modules`:
+
+```typescript
+import { createRequire } from "module";
+
+function resolveExecutor(): string {
+    const require = createRequire(process.argv[1] || import.meta.url);
+    const tsxPath = require.resolve("tsx/cli");
+    return `node ${tsxPath}`;
 }
 ```
 
-### Rust side: subprocess management
+Master does this in `libs/barnum/run.ts`. The resolved executor string is passed from the JS config layer to Rust.
 
-In `barnum_cli` (or a new `barnum_runtime` crate if needed):
+## Rust side: Scheduler integration
+
+The Scheduler's `dispatch()` currently spawns a tokio task with a no-op handler. To execute real TypeScript handlers, replace the no-op with subprocess spawning:
 
 ```rust
-struct TypeScriptRuntime {
-    child: Child,
-    stdin: BufWriter<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
+    let result_tx = self.result_tx.clone();
+    let task_id = dispatch.task_id;
+    let HandlerKind::TypeScript(ts) = handler;
+    let module = ts.module.lookup().to_owned();
+    let func = ts.func.lookup().to_owned();
+    let value = dispatch.value.clone();
+
+    tokio::spawn(async move {
+        let result = execute_typescript(&module, &func, &value).await;
+        let _ = result_tx.send((task_id, result));
+    });
+}
+
+async fn execute_typescript(module: &str, func: &str, value: &Value) -> Value {
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{executor} {worker_path} {module} {func}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn handler process");
+
+    // Write input to stdin
+    let stdin = child.stdin.take().expect("no stdin");
+    let input = serde_json::to_vec(&json!({ "value": value })).expect("serialize failed");
+    // ... write input, close stdin
+
+    // Read stdout
+    let output = child.wait_with_output().await.expect("wait failed");
+    assert!(output.status.success(), "handler failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    serde_json::from_slice(&output.stdout).expect("invalid handler output")
 }
 ```
 
-- Spawn `node worker.cjs` (or `tsx worker.ts`) at startup.
-- `dispatch(task_id, module, func, value)` → write JSON line to stdin.
-- `recv() -> (TaskId, Result<Value, String>)` → read JSON line from stdout, parse.
-
-### The main loop
-
-```
-let flat_config = flatten(config)?;
-let mut workflow_state = WorkflowState::new(flat_config);
-let root = workflow_state.workflow_root();
-workflow_state.advance(root, input, None)?;
-
-loop {
-    let dispatches = workflow_state.take_pending_dispatches();
-    if dispatches.is_empty() {
-        // Workflow complete or stuck — shouldn't happen if engine is correct.
-        break;
-    }
-    for dispatch in &dispatches {
-        let handler = workflow_state.handler(dispatch.handler_id);
-        let HandlerKind::TypeScript(ts) = handler;
-        runtime.dispatch(dispatch.task_id, &ts.module, &ts.func, &dispatch.value);
-    }
-    // Wait for results. For POC, just read one at a time.
-    for _ in 0..dispatches.len() {
-        let (task_id, result) = runtime.recv();
-        if let Some(terminal) = workflow_state.complete(task_id, result) {
-            // Workflow done.
-            return terminal;
-        }
-    }
-}
-```
-
-This is synchronous and blocking. It dispatches all pending tasks, waits for all of them to complete, then repeats. Good enough for a POC. A real scheduler would use async I/O and not block on all dispatches completing before processing results.
-
-**Important subtlety:** `complete` can produce new dispatches (Chain trampoline, Loop re-enter). The inner loop should drain dispatches after each `complete` call, not assume the count matches the original batch. Revised:
-
-```
-loop {
-    let dispatches = workflow_state.take_pending_dispatches();
-    if dispatches.is_empty() {
-        break;
-    }
-    for dispatch in &dispatches {
-        let handler = workflow_state.handler(dispatch.handler_id);
-        let HandlerKind::TypeScript(ts) = handler;
-        runtime.dispatch(dispatch.task_id, &ts.module, &ts.func, &dispatch.value);
-    }
-    // Read ONE result at a time and check for new dispatches.
-    let (task_id, result) = runtime.recv();
-    if let Some(terminal) = workflow_state.complete(task_id, result) {
-        return terminal;
-    }
-    // Loop back — take_pending_dispatches will pick up any newly produced dispatches.
-}
-```
+This is the tokio async version of master's `ShellAction::start`. Each dispatch spawns a child process, writes the input, reads the output, parses JSON.
 
 ## What this does NOT cover
 
-- **Async/concurrent dispatch execution:** The POC processes one result at a time. A real runtime would use tokio + async subprocess I/O.
-- **Step config:** Handlers can receive `stepConfig` in addition to `value`. The POC passes `stepConfig: {}`.
-- **Value/config validation:** Zod validators exist on handlers but aren't invoked. The POC trusts the types.
-- **Bash handlers:** Only TypeScript handlers. Bash handlers (DEFERRED_FEATURES.md) would need a different execution path.
-- **Timeouts:** No handler timeout. A hung handler blocks forever.
-- **Persistence/restart:** No state persistence. If the process dies, the workflow is lost.
-- **Module resolution:** The POC assumes `module` paths are absolute and directly importable by Node.js. TypeScript files need `tsx` or compilation.
+- **Structured error handling:** Handler failures panic. No Result wrapping, no retry. See DEFERRED_FEATURES.md.
+- **Step config:** Handlers receive `{ value }` only. Step config is deferred.
+- **Validation:** Zod validators exist on handlers but aren't invoked.
+- **Timeouts:** A hung handler blocks its tokio task forever.
+- **Module resolution:** Assumes `module` paths are absolute. The TypeScript config layer resolves paths before serializing.
 
 ## Implementation order
 
-1. Write the Node.js worker script (`libs/barnum/src/worker.ts`).
-2. Add `TaskId` and `task_to_parent` to the engine (from COMPLETION.md).
-3. Implement `complete` and `error` (from COMPLETION.md).
-4. Write the Rust subprocess wrapper (`TypeScriptRuntime`).
-5. Wire the main loop in `barnum_cli`.
-6. Test end-to-end with a simple Chain(A, B) workflow.
-
-## Test plan
-
-Manual end-to-end: a TypeScript config that chains two handlers. First handler returns a transformed value, second handler receives it. Assert the final workflow result matches expectations.
-
-```typescript
-// test-workflow.ts
-import { config, pipe, createHandler } from "barnum";
-
-const double = createHandler({
-    stepValueValidator: z.number(),
-    handle: async ({ value }) => value * 2,
-}, "double");
-
-const addTen = createHandler({
-    stepValueValidator: z.number(),
-    handle: async ({ value }) => value + 10,
-}, "addTen");
-
-export default config(pipe(double(), addTen()));
-// Input: 5 → double → 10 → addTen → 20
-```
-
-```
-$ barnum run --config "$(tsx -e 'import c from "./test-workflow"; console.log(JSON.stringify(c))')" --input 5
-20
-```
+1. Write `libs/barnum/src/worker.ts`.
+2. Add `execute_typescript` to the Scheduler (replace the no-op).
+3. Wire the executor path through config or CLI args.
+4. Test end-to-end with a Chain(A, B) workflow.
