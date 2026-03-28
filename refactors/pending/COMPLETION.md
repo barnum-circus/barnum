@@ -17,7 +17,7 @@ This milestone closes the loop:
 ```
 Dispatch goes out → runtime executes handler → result comes back
   → on_task_completed(task_id, Ok(value) | Err(error))
-    → finds the Invoke frame
+    → looks up parent from task_to_parent
     → calls complete(parent, value) or error(parent, error_string)
       → parent frame decides what to do
         → may call advance() again (Chain trampoline, Loop re-enter)
@@ -38,7 +38,7 @@ u32_newtype!(
 );
 ```
 
-Monotonic `u32` counter. Assigned during advance when an Invoke frame is created. Returned in `Dispatch` so the runtime can correlate results. Used as a `HashMap` key in `task_to_frame`.
+Monotonic `u32` counter. Assigned during advance when an Invoke action is reached. Returned in `Dispatch` so the runtime can correlate results. Used as a `HashMap` key in `task_to_parent`.
 
 ### Updated Dispatch
 
@@ -53,13 +53,11 @@ pub struct Dispatch {
 
 Now includes `task_id` so the runtime can send results back keyed by task.
 
-### Updated FrameKind::Invoke
+### FrameKind::Invoke removed
 
-```rust
-FrameKind::Invoke { task_id: TaskId },
-```
+Invoke is not a structural frame — it's a pending dispatch. There's no state to track between dispatch and completion; we only need the parent reference so `on_task_completed` knows where to deliver the result. That parent reference is stored directly in `task_to_parent`, not in a frame.
 
-The Invoke frame now stores its TaskId. When `on_task_completed` arrives, the engine looks up the frame by TaskId, extracts the parent, removes the frame, and calls complete or error.
+This means `FrameKind` only has structural variants: Chain, Parallel, ForEach, Loop, Attempt. No variant exists solely to panic in `complete`.
 
 ### Updated Engine
 
@@ -67,30 +65,26 @@ The Invoke frame now stores its TaskId. When `on_task_completed` arrives, the en
 pub struct Engine {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
-    task_to_frame: HashMap<TaskId, FrameId>,
+    task_to_parent: HashMap<TaskId, Option<ParentRef>>,
     pending_dispatches: Vec<Dispatch>,
     next_task_id: u32,
 }
 ```
 
 Two new fields over the advance milestone:
-- `task_to_frame`: maps pending TaskIds to Invoke FrameIds. Populated in advance (Invoke arm), consumed in on_task_completed.
+- `task_to_parent`: maps pending TaskIds directly to the parent that should receive the result. Populated in advance (Invoke arm), consumed in on_task_completed.
 - `next_task_id`: monotonic counter for TaskId allocation.
 
 No stored result. Terminal results are returned directly from `on_task_completed`.
 
 ## Updated advance (Invoke arm only)
 
-The only change to advance: the Invoke arm now allocates a TaskId, stores the mapping, and includes the TaskId in the dispatch. Note: `advance` takes `parent: Option<ParentRef>` and stores it directly (no wrapping in `Some`).
+The only change to advance: the Invoke arm now allocates a TaskId, stores the parent mapping, and includes the TaskId in the dispatch. No frame is created — Invoke is not a structural frame.
 
 ```rust
 FlatAction::Invoke { handler } => {
     let task_id = self.next_task_id();
-    let frame_id = self.insert_frame(Frame {
-        parent,
-        kind: FrameKind::Invoke { task_id },
-    });
-    self.task_to_frame.insert(task_id, frame_id);
+    self.task_to_parent.insert(task_id, parent);
     self.pending_dispatches.push(Dispatch {
         task_id,
         handler_id: handler,
@@ -111,16 +105,15 @@ pub fn on_task_completed(
     task_id: TaskId,
     task_result: Result<Value, String>,
 ) -> Option<Result<Value, String>> {
-    let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
-    let frame = self.frames.remove(frame_id.0);
+    let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
     match task_result {
-        Ok(value) => self.complete(frame.parent, value),
-        Err(error) => self.error(frame.parent, error),
+        Ok(value) => self.complete(parent, value),
+        Err(error) => self.error(parent, error),
     }
 }
 ```
 
-Remove the Invoke frame and its task mapping. Pass `frame.parent` (which is `Option<ParentRef>`) directly to complete or error. The terminal result (if any) flows back through the return value.
+Look up the parent directly from `task_to_parent` — no frame to remove. The terminal result (if any) flows back through the return value.
 
 ## complete
 
@@ -262,37 +255,39 @@ Error walks up frame-by-frame:
 1. **`parent: None`**: terminal failure. Returns `Some(Err(error))`.
 2. **Attempt**: catches the error. Wraps as `{ kind: "Err", error }` and completes the parent normally. Error stops propagating.
 3. **Parallel/ForEach**: cancel all other in-flight children (they're now irrelevant), then propagate the error upward. Short-circuit — one failure fails the whole fan-out.
-4. **Chain/Loop/Invoke**: transparent — just propagate upward.
+4. **Chain/Loop**: transparent — just propagate upward.
 
 ### cancel_descendants
 
-When a Parallel or ForEach frame errors, its surviving children (other Invoke frames still pending) must be cancelled. The engine walks the subtree rooted at the fan-out frame and:
-- Removes all descendant frames from the slab
-- Removes all descendant TaskIds from `task_to_frame`
-- Does NOT remove dispatches already in `pending_dispatches` — those are already queued for the runtime. The runtime will send results for cancelled tasks; `on_task_completed` must handle "unknown task" gracefully (the frame was already removed).
+When a Parallel or ForEach frame errors, its surviving children (other pending tasks and structural frames) must be cancelled. Two things to clean up:
+1. Descendant structural frames in the slab.
+2. Pending tasks in `task_to_parent` whose parent chain includes the cancelled frame.
+
+Does NOT remove dispatches already in `pending_dispatches` — those are already queued for the runtime. The runtime will send results for cancelled tasks; `on_task_completed` must handle "unknown task" gracefully (the entry was already removed from `task_to_parent`).
 
 ```rust
 fn cancel_descendants(&mut self, frame_id: FrameId) {
-    // Walk all frames in the slab, find those whose ancestor chain
-    // includes frame_id, remove them and their task_to_frame entries.
-    //
-    // Simple approach: iterate slab, check parent chains.
-    // O(n) where n = number of frames. Fine for now.
-    let to_remove: Vec<usize> = self.frames.iter()
+    // Remove descendant structural frames.
+    let frames_to_remove: Vec<usize> = self.frames.iter()
         .filter(|(_, frame)| self.is_descendant_of(frame, frame_id))
         .map(|(key, _)| key)
         .collect();
+    for key in frames_to_remove {
+        self.frames.remove(key);
+    }
 
-    for key in to_remove {
-        let frame = self.frames.remove(key);
-        if let FrameKind::Invoke { task_id } = frame.kind {
-            self.task_to_frame.remove(&task_id);
-        }
+    // Remove pending tasks whose parent chain includes frame_id.
+    let tasks_to_remove: Vec<TaskId> = self.task_to_parent.iter()
+        .filter(|(_, parent)| self.parent_is_descendant_of(*parent, frame_id))
+        .map(|(task_id, _)| *task_id)
+        .collect();
+    for task_id in tasks_to_remove {
+        self.task_to_parent.remove(&task_id);
     }
 }
 ```
 
-**Open question:** Should `on_task_completed` panic or silently ignore unknown TaskIds? If cancelled tasks' results arrive after cancellation, the TaskId won't be in `task_to_frame`. Panicking is correct for debugging (unknown TaskId = bug); ignoring is correct for production (cancelled tasks' results are expected noise). Start with panic, add a flag or match later.
+**Open question:** Should `on_task_completed` panic or silently ignore unknown TaskIds? If cancelled tasks' results arrive after cancellation, the TaskId won't be in `task_to_parent`. Panicking is correct for debugging (unknown TaskId = bug); ignoring is correct for production (cancelled tasks' results are expected noise). Start with panic, add a flag or match later.
 
 ## Updated public API
 
