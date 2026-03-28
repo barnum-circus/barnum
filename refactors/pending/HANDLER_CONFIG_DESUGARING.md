@@ -335,6 +335,6 @@ When implementing, update all tests first:
 | `demos/simple-workflow/run*.ts` | Remove `()` from handler references in `pipe()`. |
 | `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` and `value_schema` from `TypeScriptHandler`. Builtin handler kind changes per BUILTIN_HANDLER_KIND.md. |
 | `crates/barnum_ast/src/flat.rs` | No structural changes (Builtin is a handler kind, not an action kind). Update test helpers. |
-| `crates/barnum_engine/src/lib.rs` | Invoke arm dispatches on handler kind (see BUILTIN_HANDLER_KIND.md). Update test helpers. Reconcile `advance`/`deliver` return types. |
+| `crates/barnum_engine/src/lib.rs` | No changes (builtins go through normal dispatch/complete). Update test helpers. |
 | `crates/barnum_event_loop/src/lib.rs` | Update test helpers. Scheduler dispatch unaffected (Constant/Identity never dispatched). |
 | Regenerated schemas | `build_schemas` picks up the Rust type changes. |

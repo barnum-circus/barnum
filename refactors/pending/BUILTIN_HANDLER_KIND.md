@@ -6,18 +6,16 @@
 
 ## Motivation
 
-Builtins (identity, constant, drop, tag, etc.) currently use `module: "__builtin__"` in their Invoke nodes — a synthetic module path that doesn't resolve to a real file. The scheduler tries to import it as a TypeScript module and fails. These builtins only work in noop-scheduler tests and are broken in real subprocess execution.
+Builtins (`identity`, `constant`, `drop`, `tag`, etc.) currently use `module: "__builtin__"` in their Invoke nodes — a synthetic module path that doesn't resolve to a real file. These are broken in real subprocess execution. The handler config desugaring requires Constant and Identity as engine-native operations.
 
-Additionally, the handler config desugaring (HANDLER_CONFIG_DESUGARING.md) requires Constant and Identity as engine-native operations. Without them, the desugared AST would spawn subprocesses for pure structural plumbing.
+## Types
 
-## Design
+### Rust
 
-### HandlerKind::Builtin
-
-A `Builtin` variant on `HandlerKind` containing a nested `BuiltinKind` discriminated union. Each level has exactly one `kind` discriminant — no multiple discriminants on the same object.
-
-**Rust:**
 ```rust
+// barnum_ast/src/lib.rs
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum HandlerKind {
     TypeScript(TypeScriptHandler),
@@ -42,8 +40,11 @@ pub enum BuiltinKind {
 }
 ```
 
-**TypeScript:**
+### TypeScript
+
 ```ts
+// ast.ts
+
 export type HandlerKind = TypeScriptHandler | BuiltinHandler;
 
 export type BuiltinHandler = {
@@ -61,7 +62,7 @@ export type BuiltinKind =
   | { kind: "ExtractField"; value: string };
 ```
 
-### JSON serialization
+### JSON examples
 
 ```json
 { "kind": "Builtin", "builtin": { "kind": "Constant", "value": 42 } }
@@ -73,65 +74,125 @@ export type BuiltinKind =
 { "kind": "Builtin", "builtin": { "kind": "Flatten" } }
 ```
 
-Outer `kind` discriminates `HandlerKind` (TypeScript vs Builtin). Inner `kind` discriminates `BuiltinKind` (which builtin). Variants that carry data have a `value` field; variants that don't, don't.
+Outer `kind` discriminates `HandlerKind`. Inner `kind` discriminates `BuiltinKind`. One discriminant per level.
 
-### Builtin behaviors
+## Engine
 
-| Kind | Value field | Engine behavior |
-|------|-------------|-----------------|
-| Constant | The value to return | Ignores input, returns `value` |
-| Identity | — | Returns input unchanged |
-| Drop | — | Ignores input, returns `null` |
-| Tag | Kind string (e.g. `"Continue"`) | Returns `{ "kind": value, "value": input }` |
-| Merge | — | Input is array of objects, returns shallow-merged object |
-| Flatten | — | Input is `T[][]`, returns flattened `T[]` |
-| ExtractField | Field name string (e.g. `"id"`) | Returns `input[value]` |
-
-### Engine implementation
-
-The Invoke arm dispatches on handler kind:
+No changes. The engine's Invoke arm creates a Dispatch for every handler, regardless of kind. Builtins go through the same dispatch → complete cycle as TypeScript handlers.
 
 ```rust
+// barnum_engine — UNCHANGED
 FlatAction::Invoke { handler } => {
-    match self.flat_config.handler(handler) {
-        HandlerKind::Builtin(builtin_handler) => {
-            let result = execute_builtin(&builtin_handler.builtin, &value);
-            self.deliver(parent, result)?;
-        }
-        HandlerKind::TypeScript(_) => {
-            let task_id = self.next_task_id();
-            self.task_to_parent.insert(task_id, parent);
-            self.pending_dispatches.push(Dispatch { task_id, handler_id: handler, value });
+    let task_id = self.next_task_id();
+    self.task_to_parent.insert(task_id, parent);
+    self.pending_dispatches.push(Dispatch { task_id, handler_id: handler, value });
+}
+```
+
+## Scheduler
+
+The scheduler is where execution strategy is decided. Builtins are executed inline and the result is sent through the same channel as subprocess results.
+
+```rust
+// barnum_event_loop/src/lib.rs
+
+impl Scheduler {
+    pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
+        let result_tx = self.result_tx.clone();
+        let task_id = dispatch.task_id;
+
+        match handler {
+            HandlerKind::Builtin(builtin_handler) => {
+                let result = execute_builtin(&builtin_handler.builtin, &dispatch.value);
+                tokio::spawn(async move {
+                    let _ = result_tx.send((task_id, result));
+                });
+            }
+            HandlerKind::TypeScript(_) => {
+                match &self.mode {
+                    ExecutionMode::Noop => {
+                        tokio::spawn(async move {
+                            let value = Value::Object(serde_json::Map::default());
+                            let _ = result_tx.send((task_id, value));
+                        });
+                    }
+                    ExecutionMode::Subprocess { executor, worker_path } => {
+                        // existing subprocess logic
+                    }
+                }
+            }
         }
     }
 }
 ```
 
-The `execute_builtin` function matches on `BuiltinKind`:
+Builtins always execute their real logic, even in noop mode. They're deterministic and have no external dependencies.
+
+## Builtin implementations
 
 ```rust
+// barnum_event_loop/src/lib.rs (or a dedicated builtins module)
+
 fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Value {
     match builtin_kind {
         BuiltinKind::Constant { value } => value.clone(),
+
         BuiltinKind::Identity => input.clone(),
+
         BuiltinKind::Drop => Value::Null,
-        BuiltinKind::Tag { value: tag } => json!({ "kind": tag, "value": input }),
-        BuiltinKind::Merge => { /* merge objects from array */ },
-        BuiltinKind::Flatten => { /* flatten nested array */ },
-        BuiltinKind::ExtractField { value: field } => { /* extract input[field] */ },
+
+        BuiltinKind::Tag { value: tag } => {
+            json!({ "kind": tag, "value": input })
+        }
+
+        BuiltinKind::Merge => {
+            let Value::Array(items) = input else {
+                panic!("Merge: expected array input, got {input}");
+            };
+            let mut merged = serde_json::Map::new();
+            for item in items {
+                let Value::Object(obj) = item else {
+                    panic!("Merge: expected object in array, got {item}");
+                };
+                for (k, v) in obj {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Object(merged)
+        }
+
+        BuiltinKind::Flatten => {
+            let Value::Array(outer) = input else {
+                panic!("Flatten: expected array input, got {input}");
+            };
+            let mut result = Vec::new();
+            for item in outer {
+                let Value::Array(inner) = item else {
+                    panic!("Flatten: expected array element, got {item}");
+                };
+                result.extend(inner.iter().cloned());
+            }
+            Value::Array(result)
+        }
+
+        BuiltinKind::ExtractField { value: field } => {
+            let Value::String(field_name) = field else {
+                panic!("ExtractField: value must be a string, got {field}");
+            };
+            let Value::Object(obj) = input else {
+                panic!("ExtractField: expected object input, got {input}");
+            };
+            obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null)
+        }
     }
 }
 ```
 
-#### advance/deliver return type mismatch
-
-`advance` returns `Result<(), AdvanceError>` while `deliver` returns `Result<Option<Value>, CompleteError>`. This mismatch is dormant today — Invoke always creates a Dispatch, never calls `deliver`. The builtin handler kind is what surfaces it: builtins call `deliver` from within `advance` for the first time. This needs reconciliation during implementation (either change `advance`'s return type or queue immediate completions).
-
-### TypeScript builtins
-
-Each builtin function in `builtins.ts` emits a Builtin handler kind directly:
+## TypeScript builtins
 
 ```ts
+// builtins.ts
+
 export function constant<T>(value: T): TypedAction<never, T> {
   return {
     kind: "Invoke",
@@ -159,11 +220,34 @@ export function tag<T, K extends string>(kind: K): TypedAction<T, { kind: K; val
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
   } as TypedAction<T, { kind: K; value: T }>;
 }
-```
 
-`range(start, end)` computes the array at config-build time and emits a Constant:
+export function merge<T extends Record<string, unknown>[]>(): TypedAction<
+  T,
+  UnionToIntersection<T[number]>
+> {
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+  } as TypedAction<T, UnionToIntersection<T[number]>>;
+}
 
-```ts
+export function flatten<T>(): TypedAction<T[][], T[]> {
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
+  } as TypedAction<T[][], T[]>;
+}
+
+export function extractField<
+  TObj extends Record<string, unknown>,
+  TField extends keyof TObj & string,
+>(field: TField): TypedAction<TObj, TObj[TField]> {
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } },
+  } as TypedAction<TObj, TObj[TField]>;
+}
+
 export function range(start: number, end: number): TypedAction<never, number[]> {
   const result: number[] = [];
   for (let i = start; i < end; i++) result.push(i);
@@ -172,58 +256,54 @@ export function range(start: number, end: number): TypedAction<never, number[]> 
     handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },
   } as TypedAction<never, number[]>;
 }
+
+// Loop signals (unchanged API, new implementation)
+export function recur(): TypedAction<any, LoopResult<any, any>> {
+  return tag("Continue") as TypedAction<any, LoopResult<any, any>>;
+}
+
+export function done(): TypedAction<any, LoopResult<any, any>> {
+  return tag("Break") as TypedAction<any, LoopResult<any, any>>;
+}
 ```
 
-### What this eliminates
+## What this eliminates
 
-- The `__builtin__` module convention — entirely gone
-- The `builtin()` helper function in `builtins.ts` — replaced by direct Builtin handler kind construction
-- The `constant` and `range` handler definitions in `handlers/builtins.ts` — no longer TypeScript handlers
-- The `drop` handler definition in `handlers/builtins.ts` — no longer a TypeScript handler
-
-`handlers/builtins.ts` can be deleted entirely. All builtins are engine-native.
+- The `__builtin__` module convention
+- The `builtin()` helper function in `builtins.ts`
+- `handlers/builtins.ts` (delete file — all builtins are engine-native)
 
 ## Implementation priority
 
 **Phase 1** (required for config desugaring): Constant, Identity
 
-**Phase 2** (fixes broken `__builtin__` builtins): Drop, Tag, Merge, Flatten, ExtractField
-
-Implement as many as practical in one pass — the engine match arms are trivial for most.
+**Phase 2** (fixes broken builtins): Drop, Tag, Merge, Flatten, ExtractField
 
 ## Future work
 
 ### Logging and observability
 
-Builtins should go through the full execution loop (logging, tracing, metrics) like TypeScript handlers do. For now they're resolved inline in the engine. When observability infrastructure is added, builtins should emit events so they appear in workflow traces.
+Because builtins go through the scheduler, logging can be added in the scheduler's dispatch path — same hook point as TypeScript handlers.
 
 ### Error handling
 
-Engine-native builtins currently panic on invalid config or input (e.g., Merge on non-objects, Flatten on non-arrays). These should return proper errors instead. Not blocking the demo.
+The `execute_builtin` function panics on invalid input. These should return `Result` and propagate as proper errors through the completion path.
 
 ### Generate TypeScript types from Rust
 
-The TypeScript AST types (`Action`, `HandlerKind`, `TypeScriptHandler`, `BuiltinHandler`, `BuiltinKind`, etc.) in `ast.ts` are manually maintained mirrors of the Rust types in `barnum_ast`. Every Rust-side change requires a corresponding manual TS edit — a maintenance burden and a source of drift.
-
-The `build_schemas` pipeline already generates JSON Schema and Zod schemas from the Rust types. The serializable TS types in `ast.ts` should be generated from the same source rather than hand-maintained. This would mean:
-
-- Rust types are the single source of truth for the wire format
-- `BuiltinKind` variants, `HandlerKind` discriminants, `Action` variants — all derived automatically
-- Adding a new builtin or action variant in Rust auto-propagates to TS
-- The hand-written `ast.ts` types shrink to only the TS-specific parts (phantom types, `TypedAction`, combinators, `ConfigBuilder`) that have no Rust equivalent
-
-This applies beyond builtins — the entire serializable AST layer (`Action`, `Config`, `HandlerKind`, `StepRef`, etc.) should be generated. The Zod schema generation is already halfway there; the missing piece is emitting plain TS types alongside the Zod validators.
+The TypeScript AST types in `ast.ts` are manually maintained mirrors of the Rust types in `barnum_ast`. The `build_schemas` pipeline already generates JSON Schema and Zod schemas from Rust. The serializable TS types should be generated from the same source. This applies to the entire AST layer (`Action`, `Config`, `HandlerKind`, `BuiltinKind`, `StepRef`, etc.), not just builtins.
 
 ## Changes summary
 
 | File | Change |
 |------|--------|
-| `crates/barnum_ast/src/lib.rs` | Add `BuiltinHandler` struct, `BuiltinKind` enum, `Builtin` variant to `HandlerKind`. |
-| `crates/barnum_engine/src/lib.rs` | Invoke arm dispatches on handler kind. Builtins resolved inline. Reconcile advance/deliver return types. |
-| `libs/barnum/src/ast.ts` | Add `BuiltinHandler`, `BuiltinKind` types, update `HandlerKind` union. |
+| `crates/barnum_ast/src/lib.rs` | Add `BuiltinHandler`, `BuiltinKind`, `Builtin` variant to `HandlerKind`. |
+| `crates/barnum_event_loop/src/lib.rs` | Scheduler dispatches builtins inline via `execute_builtin`. |
+| `crates/barnum_engine/src/lib.rs` | No changes (builtins are normal Invoke dispatches). |
+| `libs/barnum/src/ast.ts` | Add `BuiltinHandler`, `BuiltinKind` types, update `HandlerKind`. |
 | `libs/barnum/src/builtins.ts` | All builtins emit Builtin handler kind. Delete `builtin()` helper. |
-| `libs/barnum/src/handlers/builtins.ts` | Delete file (all builtins are engine-native). |
-| `crates/barnum_ast/src/flat.rs` | No structural changes (Builtin is a handler kind, not an action kind). Update test helpers. |
-| `crates/barnum_engine/src/lib.rs` tests | Update `ts_handler` helpers. Add Constant/Identity engine tests. |
-| `crates/barnum_event_loop/src/lib.rs` tests | Update test helpers. |
-| Regenerated schemas | `build_schemas` picks up the Rust type changes. |
+| `libs/barnum/src/handlers/builtins.ts` | Delete file. |
+| `crates/barnum_ast/src/flat.rs` | Update test helpers only. |
+| `crates/barnum_engine/src/lib.rs` tests | Update test helpers only. |
+| `crates/barnum_event_loop/src/lib.rs` tests | Update test helpers, add builtin tests. |
+| Regenerated schemas | `build_schemas` picks up Rust type changes. |
