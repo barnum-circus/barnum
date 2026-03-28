@@ -4,7 +4,7 @@ Implementation plan for the first engine milestone: store frames and expand an `
 
 **Depends on:** ENGINE.md (design), flat.rs (FlatConfig, FlatAction, ActionId, etc.)
 
-**Scope:** Frame storage, the `advance` function, `Engine::new`, `Engine::start`, `Engine::take_pending_dispatches`. Completion handling (`complete`, `error`, `on_task_completed`) is a separate step.
+**Scope:** Frame storage, the `advance` function (including `complete` as a private dependency — needed for empty ForEach/Parallel), `Engine::new`, `Engine::start`, `Engine::take_pending_dispatches`. Task correlation (`TaskId`, `task_to_frame`, `on_task_completed`) and terminal result (`EngineResult`, `result`) are a separate step.
 
 ## The advance/complete cycle
 
@@ -47,25 +47,19 @@ New module `engine` in `barnum_event_loop`:
 
 ## Types
 
-All in `engine.rs`. Private to the module except `Engine`, `Dispatch`, `EngineResult`, and the public API methods.
+All in `engine.rs`. Private to the module except `Engine`, `Dispatch`, and the public API methods.
 
-### FrameId, TaskId
+### FrameId
 
 ```rust
 /// Key into the engine's frame slab. Wraps the `usize` returned by `Slab::insert`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct FrameId(usize);
-
-u32_newtype!(
-    /// Identifies a pending handler invocation. Assigned by the engine,
-    /// returned to the engine in `on_task_completed`.
-    TaskId
-);
 ```
 
 `FrameId` wraps `usize` (slab keys are `usize`). Not a `u32_newtype` — different underlying type. Slab reuses keys, so FrameIds are not monotonic.
 
-`TaskId` remains a monotonic `u32` counter. Used as a HashMap key for `task_to_frame` and as an external identifier returned in dispatches.
+`TaskId` (monotonic `u32` for correlating dispatches to completions) is added in the completion milestone. This milestone doesn't need it — we only produce dispatches, never consume results.
 
 ### Frame, ParentRef, FrameKind
 
@@ -88,7 +82,7 @@ enum FrameKind {
     /// When its child completes or errors, the engine is done.
     Root,
     /// Leaf: handler dispatched, waiting for result.
-    Invoke { task_id: TaskId },
+    Invoke,
     /// Sequential: first child active, then trampoline to `rest`.
     Chain { rest: ActionId },
     /// Fan-out: collecting results from N parallel branches.
@@ -120,24 +114,21 @@ impl ParentRef {
 }
 ```
 
-### Dispatch, EngineResult
+### Dispatch
 
 ```rust
 #[derive(Debug)]
 pub struct Dispatch {
-    pub task_id: TaskId,
     pub handler_id: HandlerId,
     pub value: Value,
-}
-
-#[derive(Debug)]
-pub enum EngineResult {
-    Success(Value),
-    Failure(String),
 }
 ```
 
 `Dispatch` carries `HandlerId` (not the resolved `HandlerKind`). The caller resolves it via `Engine::handler(HandlerId)`.
+
+No `task_id` in this milestone — task correlation (mapping a completed result back to its Invoke frame) is added in the completion milestone along with `TaskId`, `task_to_frame`, and `on_task_completed`.
+
+`EngineResult` is also deferred — in this milestone, we don't expose whether the engine reached a terminal state. Root completion just removes the frame silently.
 
 ### Engine
 
@@ -145,10 +136,7 @@ pub enum EngineResult {
 pub struct Engine {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
-    task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
-    next_task_id: u32,
-    result: Option<EngineResult>,
 }
 ```
 
@@ -156,9 +144,9 @@ pub struct Engine {
 
 `FrameId` wraps the `usize` key returned by `Slab::insert`.
 
-`task_to_frame: HashMap<TaskId, FrameId>` — maps pending task IDs to their Invoke frames. Populated during advance, consumed during `on_task_completed`.
-
 `pending_dispatches: Vec<Dispatch>` — accumulated during advance. Drained by the caller via `take_pending_dispatches()`.
+
+Fields added in the completion milestone: `task_to_frame: HashMap<TaskId, FrameId>` (maps pending tasks to Invoke frames), `next_task_id: u32` (monotonic counter), `result: Option<EngineResult>` (terminal state).
 
 ## Private helpers
 
@@ -166,12 +154,6 @@ pub struct Engine {
 impl Engine {
     fn insert_frame(&mut self, frame: Frame) -> FrameId {
         FrameId(self.frames.insert(frame))
-    }
-
-    fn next_task_id(&mut self) -> TaskId {
-        let task_id = TaskId(self.next_task_id);
-        self.next_task_id += 1;
-        task_id
     }
 }
 ```
@@ -238,14 +220,11 @@ ForEach expects `Value::Array`. If the input is not an array, that's a bug in th
 fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
     match self.flat_config.action(action_id) {
         FlatAction::Invoke { handler } => {
-            let task_id = self.next_task_id();
-            let frame_id = self.insert_frame(Frame {
+            self.insert_frame(Frame {
                 parent: Some(parent),
-                kind: FrameKind::Invoke { task_id },
+                kind: FrameKind::Invoke,
             });
-            self.task_to_frame.insert(task_id, frame_id);
             self.pending_dispatches.push(Dispatch {
-                task_id,
                 handler_id: handler,
                 value,
             });
@@ -261,6 +240,11 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
         }
 
         FlatAction::Parallel { count } => {
+            if count.0 == 0 {
+                // No children — vacuously complete with empty array.
+                self.complete(parent, Value::Array(vec![]));
+                return;
+            }
             let children: Vec<ActionId> =
                 self.flat_config.parallel_children(action_id).collect();
             let frame_id = self.insert_frame(Frame {
@@ -283,6 +267,11 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
                 Value::Array(elements) => elements,
                 other => panic!("ForEach expected array, got {other}"),
             };
+            if elements.is_empty() {
+                // No elements — vacuously complete with empty array.
+                self.complete(parent, Value::Array(vec![]));
+                return;
+            }
             let frame_id = self.insert_frame(Frame {
                 parent: Some(parent),
                 kind: FrameKind::ForEach {
@@ -334,7 +323,87 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
 }
 ```
 
+**Empty ForEach/Parallel:** When ForEach receives `[]` or Parallel has 0 children, no frame is created. Instead, advance immediately calls `complete(parent, Value::Array(vec![]))` — the empty result propagates upward, potentially triggering further advance calls (e.g., Chain trampoline). No stuck frames.
+
 Branch uses `key.lookup()` (from `intern::Lookup` on `KindDiscriminator`) rather than `key.as_str()`. ENGINE.md uses `key.as_str()` which needs to be updated to match.
+
+`body` is `Copy` (`ActionId` is a `u32` newtype), so it's captured from the pattern match and remains valid after `value` is consumed.
+
+## complete (private, needed by advance)
+
+`advance` calls `complete` for the empty ForEach/Parallel edge cases. The empty result propagates upward through the frame tree — Chain trampolines to rest (calling advance again), Root silently removes itself, etc. This means complete must be fully implemented even though it's not part of the public API in this milestone.
+
+The full `complete` implementation is in ENGINE.md. The only difference for this milestone: Root completion just removes the frame — there's no `self.result` to set. The engine silently finishes.
+
+```rust
+fn complete(&mut self, parent_ref: ParentRef, value: Value) {
+    match parent_ref {
+        ParentRef::SingleChild { frame_id } => self.complete_single(frame_id, value),
+        ParentRef::IndexedChild { frame_id, child_index } => {
+            self.complete_indexed(frame_id, child_index, value);
+        }
+    }
+}
+
+fn complete_single(&mut self, frame_id: FrameId, value: Value) {
+    match self.frames[frame_id.0].kind {
+        FrameKind::Root => {
+            self.frames.remove(frame_id.0);
+            // No result storage in this milestone. Engine is done.
+        }
+
+        FrameKind::Chain { rest } => {
+            let frame = self.frames.remove(frame_id.0);
+            let parent = frame.parent.expect("non-root frame has parent");
+            self.advance(rest, value, parent);
+        }
+
+        FrameKind::Loop { body } => {
+            let kind = value["kind"].as_str().expect("Loop result must have 'kind'");
+            let inner = value.get("value").cloned().unwrap_or(Value::Null);
+            match kind {
+                "Continue" => {
+                    self.advance(body, inner, ParentRef::SingleChild { frame_id });
+                }
+                "Break" => {
+                    let frame = self.frames.remove(frame_id.0);
+                    let parent = frame.parent.expect("non-root frame has parent");
+                    self.complete(parent, inner);
+                }
+                other => panic!("Loop result kind must be Continue or Break, got {other}"),
+            }
+        }
+
+        FrameKind::Attempt => {
+            let frame = self.frames.remove(frame_id.0);
+            let parent = frame.parent.expect("non-root frame has parent");
+            let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
+            self.complete(parent, wrapped);
+        }
+
+        _ => panic!("complete_single called on unexpected frame kind"),
+    }
+}
+
+fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
+    let frame = self.frames.get_mut(frame_id.0).expect("frame not found");
+    let results = match &mut frame.kind {
+        FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
+        _ => panic!("complete_indexed called on unexpected frame kind"),
+    };
+
+    results[child_index] = Some(value);
+
+    if results.iter().all(Option::is_some) {
+        let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
+        let frame = self.frames.remove(frame_id.0);
+        let parent = frame.parent.expect("non-root frame has parent");
+        self.complete(parent, Value::Array(collected));
+    }
+}
+```
+
+This is the same as ENGINE.md's complete except Root doesn't set `self.result`. The completion milestone adds `result: Option<EngineResult>` and the Root arm stores the terminal value.
 
 ## Public API (this milestone)
 
@@ -345,10 +414,7 @@ impl Engine {
         Self {
             flat_config,
             frames: Slab::new(),
-            task_to_frame: HashMap::new(),
             pending_dispatches: Vec::new(),
-            next_task_id: 0,
-            result: None,
         }
     }
 
@@ -371,20 +437,12 @@ impl Engine {
     pub fn handler(&self, id: HandlerId) -> &HandlerKind {
         self.flat_config.handler(id)
     }
-
-    /// Whether the engine has reached a terminal state.
-    pub fn is_done(&self) -> bool {
-        self.result.is_some()
-    }
-
-    /// The terminal result, if the engine is done.
-    pub fn result(&self) -> Option<&EngineResult> {
-        self.result.as_ref()
-    }
 }
 ```
 
 `start` takes a `Value` input rather than hardcoding `Value::Null`. The caller decides the initial value.
+
+Added in the completion milestone: `is_done()`, `result()`, `on_task_completed()`.
 
 ## Tests
 
@@ -635,10 +693,8 @@ mod tests {
         );
     }
 
-    /// ForEach with empty array: no dispatches.
-    /// (Engine creates a ForEach frame with 0-length results, which is immediately
-    /// "all filled" — but completion handling is a later milestone. For now, just
-    /// verify no dispatches are produced.)
+    /// ForEach with empty array: no dispatches, no stuck frames.
+    /// advance detects the empty array and immediately completes the parent.
     #[test]
     fn foreach_empty_array() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
@@ -647,20 +703,45 @@ mod tests {
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 0);
     }
+
+    /// ForEach with empty array inside a chain: the chain trampolines to rest.
+    /// Verifies that empty ForEach's immediate completion triggers advance of the next step.
+    #[test]
+    fn foreach_empty_array_in_chain() {
+        let mut engine = engine_from(chain(
+            for_each(invoke("./a.ts", "a")),
+            invoke("./b.ts", "b"),
+        ));
+        engine.start(json!([]));
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./b.ts", "b"),
+        );
+        // The ForEach's empty-array result ([]) is passed as input to b.
+        assert_eq!(dispatches[0].value, json!([]));
+    }
+
+    /// Parallel with empty children (if it reaches the engine): no dispatches.
+    #[test]
+    fn parallel_empty() {
+        let mut engine = engine_from(parallel(vec![]));
+        engine.start(json!(null));
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 0);
+    }
 }
 ```
 
-### Open question: ForEach with empty array
-
-When ForEach receives `[]`, it creates a frame with `results: vec![]` and dispatches nothing. No child will ever complete, so the frame is stuck. The `complete_indexed` function checks `results.iter().all(is_some)` which is vacuously true for an empty vec — so in the completion milestone, we need to handle this edge case in `advance` itself: if elements is empty, skip frame creation and immediately call `complete(parent, Value::Array(vec![]))`.
-
-For this milestone, we just verify no dispatches are produced. The stuck-frame issue will be addressed when completion is implemented.
-
 ### Not tested here (completion milestone)
 
-- Chain trampoline on completion
-- Parallel/ForEach result collection
+- Task correlation (TaskId, on_task_completed)
+- Chain trampoline on external completion
+- Parallel/ForEach result collection from external completions
 - Loop Continue/Break
 - Attempt Ok/Err wrapping
 - Error propagation
-- Task completion flow
+- Terminal result (EngineResult, is_done)
