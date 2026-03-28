@@ -61,7 +61,7 @@ Now includes `task_id` so the runtime can send results back keyed by task.
 pub struct Engine {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
-    task_to_parent: HashMap<TaskId, Option<ParentRef>>,
+    task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
     pending_dispatches: Vec<Dispatch>,
     next_task_id: u32,
 }
@@ -112,7 +112,7 @@ A handler invocation finished successfully and produced a value. Now that value 
 
 - **No parent (`None`):** This was the top-level action. The workflow is done. Return the value as the terminal result.
 - **Chain:** The value is the output of the chain's first child. Use it as input to advance the `rest` action. This is the "trampoline" — completion triggers more expansion.
-- **Loop:** The value is the loop body's output. If it says `Continue`, re-advance the body with the new value (another iteration). If `Break`, the loop is done — complete the loop's parent with the break value.
+- **Loop:** The value is the loop body's output. If it says `Continue`, re-insert a new Loop frame and re-advance the body with the new value (the loop frame must persist across iterations — each Continue creates a fresh frame). If `Break`, the loop is done — complete the loop's parent with the break value.
 - **Attempt:** The child succeeded. Wrap the value as `{ kind: "Ok", value }` and complete the attempt's parent. (First pass: wraps unconditionally. Proper Attempt semantics — structured error types, catching failures — are deferred.)
 - **Parallel / ForEach:** The value is one child's result. Store it in the results slot at `child_index`. If all slots are filled, collect them into an array and complete the parent. If not, do nothing — more children are still in flight.
 
@@ -146,7 +146,16 @@ fn complete(
                     // value must be { kind: "Continue", value } or { kind: "Break", value }
                     match value["kind"].as_str() {
                         Some("Continue") => {
-                            self.advance(body, value["value"].clone(), frame.parent).unwrap();
+                            // Re-insert the loop frame for the next iteration.
+                            let frame_id = self.insert_frame(Frame {
+                                parent: frame.parent,
+                                kind: FrameKind::Loop { body },
+                            });
+                            self.advance(
+                                body,
+                                value["value"].clone(),
+                                Some(ParentRef::SingleChild { frame_id }),
+                            ).unwrap();
                             None
                         }
                         Some("Break") => {
@@ -217,9 +226,50 @@ Already public from advance milestone:
 
 ## Tests
 
-Tests use the full cycle: build config -> flatten -> Engine::new -> advance(workflow_root, input, None) -> take dispatches -> on_task_completed -> take more dispatches -> ... -> assert terminal result returned from on_task_completed.
+### Snapshot tests (JSON fixtures)
 
-### Completion tests
+Each fixture is a JSON file in `tests/completion/` containing:
+
+```json
+{
+  "config": { ... },
+  "input": ...,
+  "completions": [
+    { "task_id": 0, "value": "a_result" },
+    { "task_id": 1, "value": "b_result" }
+  ]
+}
+```
+
+Task IDs are monotonically incrementing from 0, so the fixture author knows exactly which ID corresponds to which dispatch.
+
+The test runner builds a trace string: after the initial advance and after each completion, it appends the engine's debug output and the pending dispatches. The whole trace is one insta snapshot per fixture. This captures the full lifecycle — frames created and removed, dispatches produced, results collected — in a single reviewable artifact.
+
+The trace format:
+
+```
+--- After advance ---
+Engine { ... }
+Pending: [Dispatch { ... }]
+
+--- Completion: task_id=0, value="a_result" ---
+Result: None
+Engine { ... }
+Pending: [Dispatch { ... }]
+
+--- Completion: task_id=1, value="b_result" ---
+Result: Some("b_result")
+Engine { ... }
+Pending: []
+```
+
+If config parsing or flattening fails, the trace shows the error rather than panicking.
+
+### Unit tests (inline assertions)
+
+Unit tests use the full cycle: build config -> flatten -> Engine::new -> advance(workflow_root, input, None) -> take dispatches -> on_task_completed -> take more dispatches -> ... -> assert terminal result returned from on_task_completed.
+
+### Completion unit tests
 
 ```rust
 /// Chain(A, B): complete A -> dispatches B. Complete B -> workflow done.

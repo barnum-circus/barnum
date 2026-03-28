@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 31
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_array.json
 ---
@@ -52,24 +51,66 @@ Engine {
             },
         },
     },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 0,
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+        TaskId(
+            2,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 2,
+            },
+        ),
+    },
     pending_dispatches: [
         Dispatch {
+            task_id: TaskId(
+                0,
+            ),
             handler_id: HandlerId(
                 0,
             ),
             value: Number(10),
         },
         Dispatch {
+            task_id: TaskId(
+                1,
+            ),
             handler_id: HandlerId(
                 0,
             ),
             value: Number(20),
         },
         Dispatch {
+            task_id: TaskId(
+                2,
+            ),
             handler_id: HandlerId(
                 0,
             ),
             value: Number(30),
         },
     ],
+    next_task_id: 3,
 }

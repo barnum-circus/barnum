@@ -27,7 +27,8 @@ fn advance_snapshots() {
         let test_case: TestCase = serde_json::from_str(&contents).unwrap();
         let flat_config = flatten(test_case.config).unwrap();
         let mut engine = Engine::new(flat_config);
-        engine.start(test_case.input).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, test_case.input, None).unwrap();
         insta::assert_debug_snapshot!(engine);
     });
 }

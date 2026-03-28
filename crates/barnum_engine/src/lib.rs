@@ -6,12 +6,25 @@
 
 pub mod frame;
 
+use std::collections::BTreeMap;
+
 use barnum_ast::HandlerKind;
 use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
 use frame::{Frame, FrameId, FrameKind, ParentRef};
 use intern::Lookup;
 use serde_json::Value;
 use slab::Slab;
+use u32_newtype::u32_newtype;
+
+// ---------------------------------------------------------------------------
+// TaskId
+// ---------------------------------------------------------------------------
+
+u32_newtype!(
+    /// Identifies a pending handler invocation. Assigned by the engine,
+    /// returned to the engine in [`Engine::on_task_completed`].
+    TaskId
+);
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -20,6 +33,9 @@ use slab::Slab;
 /// A pending handler invocation produced by `advance`.
 #[derive(Debug)]
 pub struct Dispatch {
+    /// Correlates this dispatch with the result delivered to
+    /// [`Engine::on_task_completed`].
+    pub task_id: TaskId,
     /// Index into the handler pool. Resolve via [`Engine::handler`].
     pub handler_id: HandlerId,
     /// The value to pass to the handler.
@@ -59,23 +75,30 @@ pub enum AdvanceError {
 
 /// Pure state-machine workflow engine.
 ///
-/// Call [`start`](Engine::start) to begin execution, then drain dispatches via
-/// [`take_pending_dispatches`](Engine::take_pending_dispatches).
+/// Call [`advance`](Engine::advance) with [`workflow_root`](Engine::workflow_root)
+/// to begin execution, then drain dispatches via
+/// [`take_pending_dispatches`](Engine::take_pending_dispatches). Deliver handler
+/// results via [`on_task_completed`](Engine::on_task_completed).
 #[derive(Debug)]
 pub struct Engine {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
+    task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
     pending_dispatches: Vec<Dispatch>,
+    next_task_id: u32,
 }
 
 impl Engine {
     /// Create a new engine from a flattened config.
     #[must_use]
-    pub const fn new(flat_config: FlatConfig) -> Self {
+    #[allow(clippy::missing_const_for_fn)] // BTreeMap::new() is not const
+    pub fn new(flat_config: FlatConfig) -> Self {
         Self {
             flat_config,
             frames: Slab::new(),
+            task_to_parent: BTreeMap::new(),
             pending_dispatches: Vec::new(),
+            next_task_id: 0,
         }
     }
 
@@ -84,24 +107,6 @@ impl Engine {
     #[must_use]
     pub const fn workflow_root(&self) -> ActionId {
         self.flat_config.workflow_root()
-    }
-
-    /// Convenience: advance from the workflow root with `parent: None`.
-    ///
-    /// Equivalent to:
-    /// ```ignore
-    /// let root = engine.workflow_root();
-    /// engine.advance(root, input, None)?;
-    /// ```
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AdvanceError`] if the workflow encounters a structural error
-    /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
-    /// matching case).
-    pub fn start(&mut self, input: Value) -> Result<(), AdvanceError> {
-        let workflow_root = self.workflow_root();
-        self.advance(workflow_root, input, None)
     }
 
     /// Drain all pending dispatches accumulated since the last call.
@@ -116,26 +121,126 @@ impl Engine {
         self.flat_config.handler(id)
     }
 
+    /// Deliver a handler result. The runtime calls this when a dispatched
+    /// handler finishes.
+    ///
+    /// Returns `Some(value)` when the workflow terminates, `None` when it's
+    /// still running.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `task_id` is not a known pending task.
+    #[allow(clippy::expect_used)]
+    pub fn on_task_completed(&mut self, task_id: TaskId, value: Value) -> Option<Value> {
+        let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
+        self.complete(parent, value)
+    }
+
     // -- Private helpers --
 
     fn insert_frame(&mut self, frame: Frame) -> FrameId {
         FrameId(self.frames.insert(frame))
     }
 
-    /// No-op in the advance milestone. The completion milestone fills this in
-    /// with the full advance/complete cycle.
-    #[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
-    fn complete(&mut self, _parent: Option<ParentRef>, _value: Value) {
-        // No-op: the value is discarded. Called by advance for empty
-        // ForEach/Parallel — the empty result has nowhere to go until
-        // completion is implemented.
+    #[allow(clippy::missing_const_for_fn)] // mutates self
+    fn next_task_id(&mut self) -> TaskId {
+        let id = TaskId(self.next_task_id);
+        self.next_task_id += 1;
+        id
+    }
+
+    /// A child produced a value. Deliver it to the parent that was waiting.
+    ///
+    /// - **No parent:** workflow done — return the terminal value.
+    /// - **Chain:** trampoline — advance the `rest` action with the value.
+    /// - **Loop:** inspect `Continue`/`Break` — re-enter or complete.
+    /// - **Attempt:** wrap in `{ kind: "Ok", value }` and complete parent.
+    /// - **Parallel/ForEach:** store in results slot; if all slots filled,
+    ///   collect into array and complete parent.
+    #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
+    fn complete(&mut self, parent: Option<ParentRef>, value: Value) -> Option<Value> {
+        let Some(parent_ref) = parent else {
+            return Some(value);
+        };
+
+        let frame_id = parent_ref.frame_id();
+
+        match parent_ref {
+            ParentRef::SingleChild { .. } => {
+                let frame = self.frames.remove(frame_id.0);
+                match frame.kind {
+                    FrameKind::Chain { rest } => {
+                        self.advance(rest, value, frame.parent).unwrap();
+                        None
+                    }
+                    FrameKind::Loop { body } => {
+                        match value["kind"].as_str() {
+                            Some("Continue") => {
+                                // Re-insert the loop frame for the next iteration.
+                                let frame_id = self.insert_frame(Frame {
+                                    parent: frame.parent,
+                                    kind: FrameKind::Loop { body },
+                                });
+                                self.advance(
+                                    body,
+                                    value["value"].clone(),
+                                    Some(ParentRef::SingleChild { frame_id }),
+                                )
+                                .unwrap();
+                                None
+                            }
+                            Some("Break") => self.complete(frame.parent, value["value"].clone()),
+                            _ => panic!(
+                                "Loop body must return {{kind: \"Continue\"}} or \
+                                 {{kind: \"Break\"}}, got: {value}"
+                            ),
+                        }
+                    }
+                    // First pass: wrap in Ok unconditionally. Proper Attempt
+                    // semantics (structured error types, etc.) are deferred.
+                    FrameKind::Attempt => {
+                        let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
+                        self.complete(frame.parent, wrapped)
+                    }
+                    _ => unreachable!(
+                        "SingleChild parent must be Chain, Loop, or Attempt, got {:?}",
+                        frame.kind
+                    ),
+                }
+            }
+            ParentRef::IndexedChild { child_index, .. } => {
+                let frame = self
+                    .frames
+                    .get_mut(frame_id.0)
+                    .expect("parent frame exists");
+                match &mut frame.kind {
+                    FrameKind::Parallel { results } | FrameKind::ForEach { results } => {
+                        results[child_index] = Some(value);
+                        if results.iter().all(Option::is_some) {
+                            let collected: Vec<Value> =
+                                results.iter_mut().map(|r| r.take().unwrap()).collect();
+                            let parent = frame.parent;
+                            self.frames.remove(frame_id.0);
+                            self.complete(parent, Value::Array(collected))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => unreachable!(
+                        "IndexedChild parent must be Parallel or ForEach, got {:?}",
+                        frame.kind
+                    ),
+                }
+            }
+        }
     }
 
     /// Expand an `ActionId` into frames. Creates frames for structural
     /// combinators and bottoms out at Invoke leaves with pending dispatches.
     ///
     /// Invoke actions do not create frames — they produce a [`Dispatch`] and
-    /// record the parent reference for later delivery via `on_task_completed`.
+    /// record the parent reference for later delivery via
+    /// [`on_task_completed`](Engine::on_task_completed).
     ///
     /// Pass `parent: None` for the top-level action (i.e., starting a
     /// workflow). Internal recursion provides `Some(parent_ref)` to attach
@@ -155,7 +260,10 @@ impl Engine {
     ) -> Result<(), AdvanceError> {
         match self.flat_config.action(action_id) {
             FlatAction::Invoke { handler } => {
+                let task_id = self.next_task_id();
+                self.task_to_parent.insert(task_id, parent);
                 self.pending_dispatches.push(Dispatch {
+                    task_id,
                     handler_id: handler,
                     value,
                 });
@@ -356,14 +464,15 @@ mod tests {
         Engine::new(flatten(config).unwrap())
     }
 
-    // -- Tests --
+    // -- Advance tests --
 
-    /// Single invoke: start -> 1 dispatch.
+    /// Single invoke: advance -> 1 dispatch.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn single_invoke() {
         let mut engine = engine_from(invoke("./handler.ts", "run"));
-        engine.start(json!({"x": 1})).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!({"x": 1}), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -374,12 +483,13 @@ mod tests {
         );
     }
 
-    /// Chain(A, B): only A is dispatched on start.
+    /// Chain(A, B): only A is dispatched on advance.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn chain_dispatches_first_only() {
         let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
-        engine.start(json!(null)).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -389,7 +499,7 @@ mod tests {
         );
     }
 
-    /// Parallel(A, B, C): all 3 dispatched on start, all receive the same
+    /// Parallel(A, B, C): all 3 dispatched on advance, all receive the same
     /// input.
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -399,7 +509,8 @@ mod tests {
             invoke("./b.ts", "b"),
             invoke("./c.ts", "c"),
         ]));
-        engine.start(json!({"shared": true})).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!({"shared": true}), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 3);
@@ -413,7 +524,8 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn foreach_dispatches_per_element() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
-        engine.start(json!([10, 20, 30])).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!([10, 20, 30]), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 3);
@@ -430,7 +542,10 @@ mod tests {
             ("Ok", invoke("./ok.ts", "handle")),
             ("Err", invoke("./err.ts", "handle")),
         ]));
-        engine.start(json!({"kind": "Ok", "value": 42})).unwrap();
+        let root = engine.workflow_root();
+        engine
+            .advance(root, json!({"kind": "Ok", "value": 42}), None)
+            .unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -440,24 +555,26 @@ mod tests {
         );
     }
 
-    /// Loop: body is dispatched on start.
+    /// Loop: body is dispatched on advance.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn loop_dispatches_body() {
         let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
-        engine.start(json!("init")).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!("init"), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
         assert_eq!(dispatches[0].value, json!("init"));
     }
 
-    /// Attempt: child is dispatched on start.
+    /// Attempt: child is dispatched on advance.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn attempt_dispatches_child() {
         let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
-        engine.start(json!("input")).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -476,7 +593,8 @@ mod tests {
             )]),
         };
         let mut engine = engine_from_config(config);
-        engine.start(json!(null)).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -495,7 +613,8 @@ mod tests {
             chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")),
             invoke("./c.ts", "c"),
         ]));
-        engine.start(json!(null)).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 2);
@@ -517,7 +636,8 @@ mod tests {
             invoke("./a.ts", "a"),
             chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
         ));
-        engine.start(json!(null)).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -527,27 +647,166 @@ mod tests {
         );
     }
 
-    /// `ForEach` with empty array: no dispatches.
-    /// `complete` is a no-op, so the empty result is discarded.
+    /// `ForEach` with empty array: no dispatches, immediate completion.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn foreach_empty_array() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
-        engine.start(json!([])).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!([]), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 0);
     }
 
-    /// Parallel with empty children: no dispatches.
-    /// `complete` is a no-op, so the empty result is discarded.
+    /// Parallel with empty children: no dispatches, immediate completion.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn parallel_empty() {
         let mut engine = engine_from(parallel(vec![]));
-        engine.start(json!(null)).unwrap();
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 0);
+    }
+
+    // -- Completion tests --
+
+    /// Chain(A, B): complete A -> dispatches B. Complete B -> workflow done.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn chain_trampolines_on_completion() {
+        let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let d1 = engine.take_pending_dispatches();
+        assert_eq!(d1.len(), 1);
+
+        let result = engine.on_task_completed(d1[0].task_id, json!("a_result"));
+        assert_eq!(result, None);
+
+        let d2 = engine.take_pending_dispatches();
+        assert_eq!(d2.len(), 1);
+        assert_eq!(d2[0].value, json!("a_result"));
+
+        let result = engine.on_task_completed(d2[0].task_id, json!("b_result"));
+        assert_eq!(result, Some(json!("b_result")));
+    }
+
+    /// Deep chain: Chain(A, Chain(B, C)) -> A -> B -> C -> done.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn nested_chain_completes() {
+        let mut engine = engine_from(chain(
+            invoke("./a.ts", "a"),
+            chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // A
+        let d = engine.take_pending_dispatches();
+        assert_eq!(engine.on_task_completed(d[0].task_id, json!("a_out")), None);
+        // B
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!("a_out"));
+        assert_eq!(engine.on_task_completed(d[0].task_id, json!("b_out")), None);
+        // C
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!("b_out"));
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!("c_out")),
+            Some(json!("c_out")),
+        );
+    }
+
+    /// `Parallel(A, B)`: complete both -> workflow done with collected results.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn parallel_collects_results() {
+        let mut engine = engine_from(parallel(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d.len(), 2);
+
+        // Complete in reverse order to verify index-based collection.
+        assert_eq!(
+            engine.on_task_completed(d[1].task_id, json!("b_result")),
+            None,
+        );
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!("a_result")),
+            Some(json!(["a_result", "b_result"])),
+        );
+    }
+
+    /// `ForEach` over array: complete both -> collected results.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn foreach_collects_results() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!([10, 20]), None).unwrap();
+
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d.len(), 2);
+
+        assert_eq!(engine.on_task_completed(d[0].task_id, json!("r10")), None);
+        assert_eq!(
+            engine.on_task_completed(d[1].task_id, json!("r20")),
+            Some(json!(["r10", "r20"])),
+        );
+    }
+
+    /// Loop: Continue re-dispatches, Break completes.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn loop_continue_and_break() {
+        let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(0), None).unwrap();
+
+        // Iteration 1: Continue
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!(0));
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 1})),
+            None,
+        );
+
+        // Iteration 2: Continue
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!(1));
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 2})),
+            None,
+        );
+
+        // Iteration 3: Break
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!(2));
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!({"kind": "Break", "value": "done"})),
+            Some(json!("done")),
+        );
+    }
+
+    /// Attempt wraps success in Ok.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn attempt_wraps_success() {
+        let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let d = engine.take_pending_dispatches();
+        assert_eq!(
+            engine.on_task_completed(d[0].task_id, json!("output")),
+            Some(json!({"kind": "Ok", "value": "output"})),
+        );
     }
 }

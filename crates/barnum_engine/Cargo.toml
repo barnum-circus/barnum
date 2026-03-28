@@ -16,6 +16,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 slab = "0.4"
 thiserror = { workspace = true }
+u32_newtype = { path = "../u32_newtype" }
 
 [dev-dependencies]
 barnum_ast = { path = "../barnum_ast" }

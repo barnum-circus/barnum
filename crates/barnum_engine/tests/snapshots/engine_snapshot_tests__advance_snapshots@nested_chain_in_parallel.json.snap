@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 31
 expression: engine
 input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
 ---
@@ -116,18 +115,46 @@ Engine {
             },
         },
     },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    1,
+                ),
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
     pending_dispatches: [
         Dispatch {
+            task_id: TaskId(
+                0,
+            ),
             handler_id: HandlerId(
                 1,
             ),
             value: Null,
         },
         Dispatch {
+            task_id: TaskId(
+                1,
+            ),
             handler_id: HandlerId(
                 2,
             ),
             value: Null,
         },
     ],
+    next_task_id: 2,
 }

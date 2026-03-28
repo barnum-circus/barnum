@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 31
 expression: engine
 input_file: crates/barnum_engine/tests/advance/attempt_wrapping_parallel.json
 ---
@@ -87,18 +86,47 @@ Engine {
             },
         },
     },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    1,
+                ),
+                child_index: 0,
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    1,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
     pending_dispatches: [
         Dispatch {
+            task_id: TaskId(
+                0,
+            ),
             handler_id: HandlerId(
                 0,
             ),
             value: String("shared"),
         },
         Dispatch {
+            task_id: TaskId(
+                1,
+            ),
             handler_id: HandlerId(
                 1,
             ),
             value: String("shared"),
         },
     ],
+    next_task_id: 2,
 }

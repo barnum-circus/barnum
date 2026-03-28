@@ -10,7 +10,6 @@ pub struct FrameId(pub usize);
 
 /// How a child frame refers to its parent.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 pub enum ParentRef {
     /// Parent has one active child (Chain, Loop, Attempt).
     SingleChild {
@@ -29,7 +28,6 @@ pub enum ParentRef {
 
 impl ParentRef {
     /// Extract the parent's [`FrameId`] regardless of variant.
-    #[allow(dead_code)] // Used by complete/error (completion milestone).
     #[must_use]
     pub const fn frame_id(self) -> FrameId {
         match self {
@@ -45,7 +43,6 @@ impl ParentRef {
 /// Only structural combinators have frames. Invoke actions are leaf
 /// dispatches — they don't create frames.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 pub enum FrameKind {
     /// Sequential: first child active, then trampoline to `rest`.
     Chain {
@@ -73,7 +70,6 @@ pub enum FrameKind {
 
 /// A single frame in the engine's frame tree.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 pub struct Frame {
     /// Parent reference. `None` for the top-level action.
     pub parent: Option<ParentRef>,

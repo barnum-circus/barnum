@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 31
 expression: engine
 input_file: crates/barnum_engine/tests/advance/step_root_recursive.json
 ---
@@ -90,8 +89,22 @@ Engine {
             },
         },
     },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    1,
+                ),
+            },
+        ),
+    },
     pending_dispatches: [
         Dispatch {
+            task_id: TaskId(
+                0,
+            ),
             handler_id: HandlerId(
                 1,
             ),
@@ -100,4 +113,5 @@ Engine {
             },
         },
     ],
+    next_task_id: 1,
 }
