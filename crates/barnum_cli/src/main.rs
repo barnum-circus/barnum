@@ -72,7 +72,7 @@ async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn st
     let config: barnum_ast::Config = serde_json::from_str(input)?;
     let flat_config = flatten(config)?;
     let mut workflow_state = WorkflowState::new(flat_config);
-    let mut scheduler = Scheduler::with_executor(executor.to_owned(), worker.to_owned());
+    let mut scheduler = Scheduler::new(executor.to_owned(), worker.to_owned());
 
     let result = run_workflow(&mut workflow_state, &mut scheduler).await?;
 

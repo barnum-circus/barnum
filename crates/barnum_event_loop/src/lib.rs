@@ -54,19 +54,6 @@ pub enum HandlerError {
 // Scheduler
 // =============================================================================
 
-/// How the scheduler executes TypeScript handler invocations.
-enum ExecutionMode {
-    /// No-op: every TypeScript handler returns `{}`. Used for tests.
-    Noop,
-    /// Spawn a subprocess per TypeScript invocation: `{executor} {worker_path} <module> <func>`.
-    Subprocess {
-        /// The command to invoke the worker, e.g. `"node /path/to/tsx/cli.mjs"`.
-        executor: String,
-        /// Path to `worker.ts`.
-        worker_path: String,
-    },
-}
-
 /// Dispatches handler invocations as tokio tasks and collects results.
 ///
 /// Each [`dispatch`](Scheduler::dispatch) call spawns a lightweight tokio task.
@@ -74,35 +61,25 @@ enum ExecutionMode {
 pub struct Scheduler {
     result_tx: mpsc::UnboundedSender<(TaskId, Result<Value, HandlerError>)>,
     result_rx: mpsc::UnboundedReceiver<(TaskId, Result<Value, HandlerError>)>,
-    mode: ExecutionMode,
+    /// The command to invoke the worker, e.g. `"node /path/to/tsx/cli.mjs"`.
+    executor: String,
+    /// Path to `worker.ts`.
+    worker_path: String,
 }
 
 impl Scheduler {
-    /// Create a no-op scheduler (TypeScript handlers return `{}`). Used for tests.
-    #[must_use]
-    pub fn new() -> Self {
-        let (result_tx, result_rx) = mpsc::unbounded_channel();
-        Self {
-            result_tx,
-            result_rx,
-            mode: ExecutionMode::Noop,
-        }
-    }
-
     /// Create a scheduler that spawns one subprocess per TypeScript handler invocation.
     ///
     /// `executor` is the command to run TypeScript, e.g. `"node /path/to/tsx/cli.mjs"`.
     /// `worker_path` is the absolute path to `worker.ts`.
     #[must_use]
-    pub fn with_executor(executor: String, worker_path: String) -> Self {
+    pub fn new(executor: String, worker_path: String) -> Self {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         Self {
             result_tx,
             result_rx,
-            mode: ExecutionMode::Subprocess {
-                executor,
-                worker_path,
-            },
+            executor,
+            worker_path,
         }
     }
 
@@ -124,31 +101,19 @@ impl Scheduler {
                     let _ = result_tx.send((task_id, result));
                 });
             }
-            HandlerKind::TypeScript(ts) => match &self.mode {
-                ExecutionMode::Noop => {
-                    tokio::spawn(async move {
-                        let value = Value::Object(serde_json::Map::default());
-                        let _ = result_tx.send((task_id, Ok(value)));
-                    });
-                }
-                ExecutionMode::Subprocess {
-                    executor,
-                    worker_path,
-                } => {
-                    let module = ts.module.lookup().to_owned();
-                    let func = ts.func.lookup().to_owned();
-                    let value = dispatch.value.clone();
-                    let executor = executor.clone();
-                    let worker_path = worker_path.clone();
+            HandlerKind::TypeScript(ts) => {
+                let module = ts.module.lookup().to_owned();
+                let func = ts.func.lookup().to_owned();
+                let value = dispatch.value.clone();
+                let executor = self.executor.clone();
+                let worker_path = self.worker_path.clone();
 
-                    tokio::spawn(async move {
-                        let result =
-                            execute_typescript(&executor, &worker_path, &module, &func, &value)
-                                .await;
-                        let _ = result_tx.send((task_id, result));
-                    });
-                }
-            },
+                tokio::spawn(async move {
+                    let result =
+                        execute_typescript(&executor, &worker_path, &module, &func, &value).await;
+                    let _ = result_tx.send((task_id, result));
+                });
+            }
         }
     }
 
@@ -158,12 +123,6 @@ impl Scheduler {
     /// during normal operation since `self` holds a sender).
     pub async fn recv(&mut self) -> Option<(TaskId, Result<Value, HandlerError>)> {
         self.result_rx.recv().await
-    }
-}
-
-impl Default for Scheduler {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -293,15 +252,13 @@ pub async fn run_workflow(
 mod tests {
     use super::*;
     use barnum_ast::flat::flatten;
-    use barnum_ast::{Action, Config, TypeScriptHandler};
-    use intern::string_key::Intern as _;
+    use barnum_ast::{Action, BuiltinHandler, BuiltinKind, Config};
     use std::collections::HashMap;
 
-    fn ts_handler(module: &str, func: &str) -> Action {
+    fn constant(value: Value) -> Action {
         Action::Invoke(barnum_ast::InvokeAction {
-            handler: HandlerKind::TypeScript(TypeScriptHandler {
-                module: module.intern().into(),
-                func: func.intern().into(),
+            handler: HandlerKind::Builtin(BuiltinHandler {
+                builtin: BuiltinKind::Constant { value },
             }),
         })
     }
@@ -313,51 +270,60 @@ mod tests {
         }
     }
 
+    /// Scheduler with dummy executor/worker paths — only builtin handlers
+    /// are used, so the subprocess executor is never invoked.
+    fn test_scheduler() -> Scheduler {
+        Scheduler::new("unused".to_owned(), "unused".to_owned())
+    }
+
     #[tokio::test]
-    async fn chain_of_two_invokes() {
-        let flat_config = flatten(config(Action::Chain(barnum_ast::ChainAction {
-            first: Box::new(ts_handler("./a.ts", "a")),
-            rest: Box::new(ts_handler("./b.ts", "b")),
-        })))
-        .unwrap();
+    async fn single_invoke() {
+        let flat_config = flatten(config(constant(serde_json::json!({"x": 42})))).unwrap();
         let mut workflow_state = WorkflowState::new(flat_config);
-        let mut scheduler = Scheduler::new();
+        let mut scheduler = test_scheduler();
 
         let result = run_workflow(&mut workflow_state, &mut scheduler)
             .await
             .unwrap();
 
-        // Both handlers return {}, so the final result is {}
-        assert_eq!(result, serde_json::json!({}));
+        assert_eq!(result, serde_json::json!({"x": 42}));
+    }
+
+    #[tokio::test]
+    async fn chain_of_two_invokes() {
+        let flat_config = flatten(config(Action::Chain(barnum_ast::ChainAction {
+            first: Box::new(constant(serde_json::json!({"a": 1}))),
+            rest: Box::new(constant(serde_json::json!({"b": 2}))),
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = test_scheduler();
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
+
+        // Chain output is the last step's output
+        assert_eq!(result, serde_json::json!({"b": 2}));
     }
 
     #[tokio::test]
     async fn parallel_two_invokes() {
         let flat_config = flatten(config(Action::Parallel(barnum_ast::ParallelAction {
-            actions: vec![ts_handler("./a.ts", "a"), ts_handler("./b.ts", "b")],
+            actions: vec![
+                constant(serde_json::json!({"a": 1})),
+                constant(serde_json::json!({"b": 2})),
+            ],
         })))
         .unwrap();
         let mut workflow_state = WorkflowState::new(flat_config);
-        let mut scheduler = Scheduler::new();
+        let mut scheduler = test_scheduler();
 
         let result = run_workflow(&mut workflow_state, &mut scheduler)
             .await
             .unwrap();
 
         // Parallel collects results into an array
-        assert_eq!(result, serde_json::json!([{}, {}]));
-    }
-
-    #[tokio::test]
-    async fn single_invoke() {
-        let flat_config = flatten(config(ts_handler("./a.ts", "a"))).unwrap();
-        let mut workflow_state = WorkflowState::new(flat_config);
-        let mut scheduler = Scheduler::new();
-
-        let result = run_workflow(&mut workflow_state, &mut scheduler)
-            .await
-            .unwrap();
-
-        assert_eq!(result, serde_json::json!({}));
+        assert_eq!(result, serde_json::json!([{"a": 1}, {"b": 2}]));
     }
 }
