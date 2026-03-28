@@ -300,21 +300,41 @@ export type Handler<TValue, TOutput>
 
 ### Worker changes
 
-None. The worker calls `handler.__definition.handle({ value: input.value })`. For simple handlers, `input.value` is the pipeline value. For config handlers, `input.value` is `[pipelineValue, config]` and the internal wrapper unpacks it. Same code path either way.
+The worker needs builtin dispatch. The desugared AST contains `__builtin__` Invoke nodes (identity, drop, constant). Currently the worker tries to `import("__builtin__")` which fails. Add inline handling:
+
+```ts
+if (modulePath === "__builtin__") {
+  // Handle builtins without module import
+  const result = executeBuiltin(exportName, input.value);
+  process.stdout.write(JSON.stringify(result));
+  return;
+}
+```
+
+Where `executeBuiltin` handles the data transforms: identity passes through, drop returns undefined, constant returns its parameter (from the func name or stepConfigSchema), tag wraps, merge merges, etc.
+
+This is a prerequisite for `createHandlerWithConfig` to work at runtime. Current demos don't use builtins in their workflows, but the desugared config AST does.
+
+### Dead field removal
+
+`value_schema` on `TypeScriptHandler` is never set and never read (in both TS and Rust). Remove it at the same time as `step_config_schema`.
 
 ## Changes summary
 
 | File | Change |
 |------|--------|
 | `libs/barnum/src/handler.ts` | Split into `createHandler` + `createHandlerWithConfig`. Delete `CallableHandler`. Handler drops to 2 type params. |
-| `libs/barnum/src/ast.ts` | Delete `invoke()`. Remove `stepConfigSchema` from `TypeScriptHandler`. |
-| `libs/barnum/src/handlers/builtins.ts` | `constant` and `range` become `createHandler` (encode params in func name, not stepConfig). `drop` unchanged. |
-| `libs/barnum/src/builtins.ts` | `constant()` wrapper uses `builtin("constant:${JSON.stringify(value)}")` instead of calling handler with stepConfig. `range()` similar. |
-| `libs/barnum/src/worker.ts` | No change. |
+| `libs/barnum/src/ast.ts` | Delete `invoke()`. Remove `stepConfigSchema` and `valueSchema` from `TypeScriptHandler`. |
+| `libs/barnum/src/handlers/builtins.ts` | `constant` and `range` become `createHandlerWithConfig`. `drop` stays as `createHandler`. |
+| `libs/barnum/src/builtins.ts` | `constant()` and `range()` wrappers call the config handler with the config value. |
+| `libs/barnum/src/worker.ts` | Add `__builtin__` dispatch for identity, drop, constant, tag, merge, flatten, extractField, range. |
 | `libs/barnum/tests/handlers.ts` | All handlers: remove `()` calls in workflow composition. |
 | `libs/barnum/tests/*.test.ts` | Update handler usage from `build()` to `build`. |
-| `demos/simple-workflow/handlers/*.ts` | Update `createHandler` calls (no API change for simple handlers). |
+| `libs/barnum/tests/round-trip.test.ts` | Update snapshot expectations (stepConfigSchema/valueSchema fields gone). |
+| `demos/simple-workflow/handlers/*.ts` | No API change for simple handlers (still `createHandler`). |
 | `demos/simple-workflow/run*.ts` | Remove `()` from handler references in `pipe()`. |
-| `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` from `TypeScriptHandler`. |
-| `crates/barnum_ast/src/flat.rs` | Remove `step_config_schema` from `FlatAction` if present. |
-| Regenerated schemas | `build_schemas` picks up the Rust type change. |
+| `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` and `value_schema` from `TypeScriptHandler`. |
+| `crates/barnum_ast/src/flat.rs` | Remove `step_config_schema` and `value_schema` from `FlatAction` if present. |
+| `crates/barnum_engine/src/lib.rs` | Remove `step_config_schema` and `value_schema` from test helper constructors. |
+| `crates/barnum_event_loop/src/lib.rs` | Remove `step_config_schema` and `value_schema` from test helper constructors. |
+| Regenerated schemas | `build_schemas` picks up the Rust type changes. |
