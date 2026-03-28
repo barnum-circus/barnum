@@ -147,6 +147,27 @@ The engine currently hard-codes `Attempt` as the only frame type that intercepts
 
 For now, `Attempt` is hard-coded. If more interception patterns emerge (retry, timeout), refactoring to a general dynamic-scope mechanism becomes worthwhile.
 
+## Loop as Desugared Step + Branch
+
+Loop can be desugared into existing primitives:
+
+```
+Loop(body)
+≡
+LoopBody = Chain(body, Branch({
+  Continue: Step("LoopBody"),
+  Break: identity()
+}))
+```
+
+Loop = Step + Chain + Branch + self-reference. It's eliminable but worth keeping as a primitive:
+
+1. **Frame reuse.** The engine can re-enter a Loop frame without teardown/creation per iteration. Desugared, each iteration creates and destroys a Chain frame + Branch reduction + Step redirect. For hot loops, this is 3x the frame churn.
+2. **No synthetic steps.** Desugaring requires manufacturing anonymous step entries in the flat table.
+3. **Debuggability.** A Loop frame is immediately recognizable in the frame tree.
+
+Loop follows the single-child frame pattern (body completes → inspect → re-enter or propagate). Unlike the old Pipe, it doesn't cause a fundamentally different frame pattern — it's just an optimization over the desugared form.
+
 ## Chain Normalization
 
 Chains should be right-nested. `Chain(Chain(A, B), C)` is non-canonical — it's semantically equivalent to `Chain(A, Chain(B, C))` but wastes a ChildRef (the left-nested Chain in `first` is multi-entry). The canonical form is a right-leaning spine where `first` is never a Chain:

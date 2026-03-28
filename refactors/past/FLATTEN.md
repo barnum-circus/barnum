@@ -545,9 +545,8 @@ fn flatten_single_child_pipe()
 /// Single-case branch: BranchKey + inlined child.
 fn flatten_single_case_branch()
 
-/// Unknown step name panics.
-#[should_panic(expected = "unknown step")]
-fn flatten_unknown_step_panics()
+/// Unknown step name returns Err(UnknownStep).
+fn flatten_unknown_step_errors()
 
 /// Deterministic: flatten twice, assert identical.
 fn flatten_deterministic()
