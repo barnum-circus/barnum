@@ -60,10 +60,9 @@ enum FrameKind {
 ```rust
 struct Engine {
     flat_config: FlatConfig,
-    frames: HashMap<FrameId, Frame>,
+    frames: Vec<Option<Frame>>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
-    next_frame_id: u32,
     next_task_id: u32,
     result: Option<EngineResult>,
 }
@@ -206,7 +205,7 @@ fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
 }
 
 fn complete_single(&mut self, frame_id: FrameId, value: Value) {
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    let frame = self.take_frame(frame_id);
     match frame.kind {
         FrameKind::Chain { rest } => {
             // Trampoline: remove this frame, advance rest with original parent.
@@ -218,8 +217,8 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
             let inner = value.get("value").cloned().unwrap_or(Value::Null);
             match kind {
                 "Continue" => {
-                    // Re-insert the frame (it wasn't consumed) and re-enter.
-                    self.frames.insert(frame_id, Frame {
+                    // Re-insert the frame and re-enter the body.
+                    self.frames[frame_id.0 as usize] = Some(Frame {
                         parent: frame.parent,
                         kind: FrameKind::Loop { body },
                     });
@@ -242,7 +241,7 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
 }
 
 fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
-    let frame = self.frames.get_mut(&frame_id).expect("frame not found");
+    let frame = self.frame_mut(frame_id);
     let results = match &mut frame.kind {
         FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
         other => panic!("complete_indexed called on {other:?}"),
@@ -252,7 +251,7 @@ fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Val
 
     if results.iter().all(Option::is_some) {
         let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
-        let frame = self.frames.remove(&frame_id).expect("frame not found");
+        let frame = self.take_frame(frame_id);
         self.complete(frame.parent, Value::Array(collected));
     }
 }
@@ -270,7 +269,7 @@ fn error(&mut self, parent: Option<ParentRef>, error: String) {
     };
 
     let frame_id = parent_ref.frame_id();
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    let frame = self.take_frame(frame_id);
 
     match frame.kind {
         FrameKind::Attempt => {
@@ -294,8 +293,8 @@ fn error(&mut self, parent: Option<ParentRef>, error: String) {
 
 ```rust
 fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult) {
-    let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task_id");
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
+    let frame = self.take_frame(frame_id);
     match result {
         TaskResult::Success { value } => self.complete(frame.parent, value),
         TaskResult::Failure { error } => self.error(frame.parent, error),
