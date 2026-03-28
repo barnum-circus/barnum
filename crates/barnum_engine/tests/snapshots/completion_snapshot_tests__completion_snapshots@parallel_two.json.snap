@@ -1,0 +1,268 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+expression: trace
+input_file: crates/barnum_engine/tests/completion/parallel_two.json
+---
+--- After advance ---
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    None,
+                ],
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 0,
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Null,
+    },
+    Dispatch {
+        task_id: TaskId(
+            1,
+        ),
+        handler_id: HandlerId(
+            1,
+        ),
+        value: Null,
+    },
+]
+
+--- Completion: task_id=1, value="b_result" ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    Some(
+                        String("b_result"),
+                    ),
+                ],
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 0,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: []
+
+--- Completion: task_id=0, value="a_result" ---
+Result: Some(Array [String("a_result"), String("b_result")])
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {},
+    task_to_parent: {},
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: []

@@ -1,0 +1,17 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Loop",
+      "body": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./handler.ts", "func": "run" }
+      }
+    }
+  },
+  "input": 0,
+  "completions": [
+    { "task_id": 0, "value": { "kind": "Continue", "value": 1 } },
+    { "task_id": 1, "value": { "kind": "Continue", "value": 2 } },
+    { "task_id": 2, "value": { "kind": "Break", "value": "done" } }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Parallel",
+      "actions": [
+        {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./a.ts", "func": "a" }
+        },
+        {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" }
+        }
+      ]
+    }
+  },
+  "input": null,
+  "completions": [
+    { "task_id": 1, "value": "b_result" },
+    { "task_id": 0, "value": "a_result" }
+  ]
+}

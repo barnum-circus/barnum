@@ -1,0 +1,270 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+expression: trace
+input_file: crates/barnum_engine/tests/completion/loop_continue_break.json
+---
+--- After advance ---
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Loop {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Loop {
+                body: ActionId(
+                    1,
+                ),
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    0,
+                ),
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 1,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Number(0),
+    },
+]
+
+--- Completion: task_id=0, value={"kind":"Continue","value":1} ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Loop {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Loop {
+                body: ActionId(
+                    1,
+                ),
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            1,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    0,
+                ),
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            1,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Number(1),
+    },
+]
+
+--- Completion: task_id=1, value={"kind":"Continue","value":2} ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Loop {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Loop {
+                body: ActionId(
+                    1,
+                ),
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            2,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    0,
+                ),
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 3,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            2,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Number(2),
+    },
+]
+
+--- Completion: task_id=2, value={"kind":"Break","value":"done"} ---
+Result: Some(String("done"))
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Loop {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {},
+    task_to_parent: {},
+    pending_dispatches: [],
+    next_task_id: 3,
+}
+Pending: []

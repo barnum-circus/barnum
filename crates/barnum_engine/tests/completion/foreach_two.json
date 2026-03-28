@@ -1,0 +1,16 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "ForEach",
+      "action": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./handler.ts", "func": "run" }
+      }
+    }
+  },
+  "input": [10, 20],
+  "completions": [
+    { "task_id": 0, "value": "r10" },
+    { "task_id": 1, "value": "r20" }
+  ]
+}

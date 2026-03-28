@@ -1,0 +1,20 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Chain",
+      "first": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./a.ts", "func": "a" }
+      },
+      "rest": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" }
+      }
+    }
+  },
+  "input": "start",
+  "completions": [
+    { "task_id": 0, "value": "a_result" },
+    { "task_id": 1, "value": "b_result" }
+  ]
+}

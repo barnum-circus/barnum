@@ -1,0 +1,517 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+expression: trace
+input_file: crates/barnum_engine/tests/completion/nested_chain_in_parallel.json
+---
+--- After advance ---
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./c.ts",
+                    ),
+                    func: FuncName(
+                        "c",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    None,
+                ],
+            },
+        },
+        1: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 0,
+                },
+            ),
+            kind: Chain {
+                rest: ActionId(
+                    5,
+                ),
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    1,
+                ),
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            1,
+        ),
+        value: Null,
+    },
+    Dispatch {
+        task_id: TaskId(
+            1,
+        ),
+        handler_id: HandlerId(
+            2,
+        ),
+        value: Null,
+    },
+]
+
+--- Completion: task_id=1, value="c_result" ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./c.ts",
+                    ),
+                    func: FuncName(
+                        "c",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    Some(
+                        String("c_result"),
+                    ),
+                ],
+            },
+        },
+        1: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 0,
+                },
+            ),
+            kind: Chain {
+                rest: ActionId(
+                    5,
+                ),
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            SingleChild {
+                frame_id: FrameId(
+                    1,
+                ),
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: []
+
+--- Completion: task_id=0, value="a_result" ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./c.ts",
+                    ),
+                    func: FuncName(
+                        "c",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    Some(
+                        String("c_result"),
+                    ),
+                ],
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            2,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 0,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 3,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            2,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: String("a_result"),
+    },
+]
+
+--- Completion: task_id=2, value="b_result" ---
+Result: Some(Array [String("b_result"), String("c_result")])
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./c.ts",
+                    ),
+                    func: FuncName(
+                        "c",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {},
+    task_to_parent: {},
+    pending_dispatches: [],
+    next_task_id: 3,
+}
+Pending: []

@@ -1,0 +1,12 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Invoke",
+      "handler": { "kind": "TypeScript", "module": "./handler.ts", "func": "run" }
+    }
+  },
+  "input": { "x": 1 },
+  "completions": [
+    { "task_id": 0, "value": "result" }
+  ]
+}

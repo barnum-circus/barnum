@@ -1,0 +1,211 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+expression: trace
+input_file: crates/barnum_engine/tests/completion/foreach_two.json
+---
+--- After advance ---
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                ForEach {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: ForEach {
+                results: [
+                    None,
+                    None,
+                ],
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 0,
+            },
+        ),
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Number(10),
+    },
+    Dispatch {
+        task_id: TaskId(
+            1,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: Number(20),
+    },
+]
+
+--- Completion: task_id=0, value="r10" ---
+Result: None
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                ForEach {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: ForEach {
+                results: [
+                    Some(
+                        String("r10"),
+                    ),
+                    None,
+                ],
+            },
+        },
+    },
+    task_to_parent: {
+        TaskId(
+            1,
+        ): Some(
+            IndexedChild {
+                frame_id: FrameId(
+                    0,
+                ),
+                child_index: 1,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: []
+
+--- Completion: task_id=1, value="r20" ---
+Result: Some(Array [String("r10"), String("r20")])
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                ForEach {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {},
+    task_to_parent: {},
+    pending_dispatches: [],
+    next_task_id: 2,
+}
+Pending: []
