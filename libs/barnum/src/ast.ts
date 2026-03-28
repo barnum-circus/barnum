@@ -55,7 +55,7 @@ export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
 // HandlerKind
 // ---------------------------------------------------------------------------
 
-export type HandlerKind = TypeScriptHandler;
+export type HandlerKind = TypeScriptHandler | BuiltinHandler;
 
 export type TypeScriptHandler = {
   kind: "TypeScript";
@@ -64,6 +64,20 @@ export type TypeScriptHandler = {
   stepConfigSchema?: unknown;
   valueSchema?: unknown;
 };
+
+export type BuiltinHandler = {
+  kind: "Builtin";
+  builtin: BuiltinKind;
+};
+
+export type BuiltinKind =
+  | { kind: "Constant"; value: unknown }
+  | { kind: "Identity" }
+  | { kind: "Drop" }
+  | { kind: "Tag"; value: string }
+  | { kind: "Merge" }
+  | { kind: "Flatten" }
+  | { kind: "ExtractField"; value: string };
 
 // ---------------------------------------------------------------------------
 // Config

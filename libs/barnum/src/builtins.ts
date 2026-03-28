@@ -1,25 +1,22 @@
 import type { TypedAction, LoopResult } from "./ast.js";
 import { chain } from "./chain.js";
-import {
-  constant as constantHandler,
-  drop as dropHandler,
-  range as rangeHandler,
-} from "./handlers/builtins.js";
 
 /**
  * Typed combinators for structural data transformations.
  *
- * These will eventually serialize as Rust-native Builtin nodes.
- * For now they use placeholder Call nodes — the types are what matter.
+ * All builtins emit `{ kind: "Builtin", builtin: { kind: ... } }` handler
+ * kinds. The Rust scheduler executes them inline (no subprocess).
  */
 
-// Placeholder serialization until Builtin is added to the AST.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function builtin(func: string): TypedAction<any, any> {
+// ---------------------------------------------------------------------------
+// Constant — produce a fixed value (takes no pipeline input)
+// ---------------------------------------------------------------------------
+
+export function constant<T>(value: T): TypedAction<never, T> {
   return {
     kind: "Invoke",
-    handler: { kind: "TypeScript", module: "__builtin__", func },
-  };
+    handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
+  } as TypedAction<never, T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -27,7 +24,21 @@ function builtin(func: string): TypedAction<any, any> {
 // ---------------------------------------------------------------------------
 
 export function identity<T>(): TypedAction<T, T> {
-  return builtin("identity");
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+  } as TypedAction<T, T>;
+}
+
+// ---------------------------------------------------------------------------
+// Drop — discard pipeline value
+// ---------------------------------------------------------------------------
+
+export function drop<T>(): TypedAction<T, never> {
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Drop" } },
+  } as TypedAction<T, never>;
 }
 
 // ---------------------------------------------------------------------------
@@ -37,7 +48,10 @@ export function identity<T>(): TypedAction<T, T> {
 export function tag<T, TKind extends string>(
   kind: TKind,
 ): TypedAction<T, { kind: TKind; value: T }> {
-  return builtin(`tag:${kind}`);
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
+  } as TypedAction<T, { kind: TKind; value: T }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -48,18 +62,14 @@ export function tag<T, TKind extends string>(
 // validates the overall LoopResult<In, Out> shape.
 // ---------------------------------------------------------------------------
 
-// These use `any` because their types depend on positional context (which
-// pipe/loop they appear in), not on arguments. Proper typing requires
-// branch to narrow per-case inputs from the discriminated union — until
-// then, the loop's own signature validates the overall LoopResult<In, Out>.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function recur(): TypedAction<any, LoopResult<any, any>> {
-  return builtin("tag:Continue");
+  return tag("Continue") as TypedAction<any, LoopResult<any, any>>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function done(): TypedAction<any, LoopResult<any, any>> {
-  return builtin("tag:Break");
+  return tag("Break") as TypedAction<any, LoopResult<any, any>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +87,10 @@ export function merge<T extends Record<string, unknown>[]>(): TypedAction<
   T,
   UnionToIntersection<T[number]>
 > {
-  return builtin("merge");
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+  } as TypedAction<T, UnionToIntersection<T[number]>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +98,10 @@ export function merge<T extends Record<string, unknown>[]>(): TypedAction<
 // ---------------------------------------------------------------------------
 
 export function flatten<T>(): TypedAction<T[][], T[]> {
-  return builtin("flatten");
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
+  } as TypedAction<T[][], T[]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,15 +112,10 @@ export function extractField<
   TObj extends Record<string, unknown>,
   TField extends keyof TObj & string,
 >(field: TField): TypedAction<TObj, TObj[TField]> {
-  return builtin(`extractField:${field}`);
-}
-
-// ---------------------------------------------------------------------------
-// Drop — discard pipeline value (enables transition to constant/range)
-// ---------------------------------------------------------------------------
-
-export function drop<T>(): TypedAction<T, never> {
-  return dropHandler() as TypedAction<T, never>;
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } },
+  } as TypedAction<TObj, TObj[TField]>;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,26 +124,18 @@ export function drop<T>(): TypedAction<T, never> {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
-  return chain(action, dropHandler() as TypedAction<any, never>) as TypedAction<In, never>;
-}
-
-// ---------------------------------------------------------------------------
-// Constant — produce a fixed value (takes no pipeline input)
-// ---------------------------------------------------------------------------
-
-export function constant<T>(value: T): TypedAction<never, T> {
-  return constantHandler({ stepConfig: { value } }) as TypedAction<never, T>;
+  return chain(action, drop() as TypedAction<any, never>) as TypedAction<In, never>;
 }
 
 // ---------------------------------------------------------------------------
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 
-export function range(
-  start: number,
-  end: number,
-): TypedAction<never, number[]> {
-  return rangeHandler({
-    stepConfig: { start, end },
-  }) as TypedAction<never, number[]>;
+export function range(start: number, end: number): TypedAction<never, number[]> {
+  const result: number[] = [];
+  for (let i = start; i < end; i++) result.push(i);
+  return {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },
+  } as TypedAction<never, number[]>;
 }
