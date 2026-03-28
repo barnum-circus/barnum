@@ -362,9 +362,8 @@ export type LoopResult<TContinue, TBreak> =
   | { kind: "Continue"; value: TContinue }
   | { kind: "Break"; value: TBreak };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function loop<In, Out, R extends string = never>(
-  body: TypedAction<In, LoopResult<any, Out>, R>,
+  body: TypedAction<In, LoopResult<unknown, Out>, R>,
 ): TypedAction<In, Out, R> {
   return typedAction({ kind: "Loop", body });
 }
