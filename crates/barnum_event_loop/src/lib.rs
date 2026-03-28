@@ -1,184 +1,111 @@
-//! Barnum event loop: receives workflow execution events and dispatches to appliers.
+//! Barnum workflow runtime: Scheduler + `run_workflow` loop.
 //!
-//! The event loop receives [`Event`]s from a Tokio MPSC channel and calls
-//! [`Applier::apply`] on each registered applier for every event. Appliers are
-//! called in order, synchronously within the loop iteration.
-//!
-//! Two built-in appliers:
-//! - [`NdjsonApplier`]: writes every event as a JSON line to a run log file.
-//! - [`EngineApplier`]: drives the workflow AST evaluator (currently a stub).
-
-use std::fs::{self, File, OpenOptions};
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+//! The [`Scheduler`] dispatches handler invocations as tokio tasks and collects
+//! results via an internal channel. [`run_workflow`] drives the
+//! [`WorkflowState`] by repeatedly dispatching pending work and feeding
+//! completions back until the workflow terminates.
 
 use barnum_ast::HandlerKind;
-use serde::{Deserialize, Serialize};
+use barnum_engine::{CompleteError, Dispatch, TaskId, WorkflowState};
 use serde_json::Value;
-use uuid::Uuid;
+use tokio::sync::mpsc;
 
 // =============================================================================
-// Events
+// Scheduler
 // =============================================================================
 
-/// An event produced during workflow execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum Event {
-    /// A handler invocation has started.
-    TaskStarted(TaskStartedEvent),
-    /// A handler invocation has completed (success or failure).
-    TaskCompleted(TaskCompletedEvent),
-}
-
-/// A handler has started executing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskStartedEvent {
-    /// Unique ID for this invocation.
-    pub task_id: String,
-    /// Which handler is being invoked (TypeScript, Bash, etc.).
-    pub handler: HandlerKind,
-    /// The input value passed to the handler.
-    pub value: Value,
-}
-
-/// A handler has finished executing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskCompletedEvent {
-    /// Unique ID for this invocation (matches the corresponding `TaskStarted`).
-    pub task_id: String,
-    /// The outcome of the invocation.
-    pub result: TaskResult,
-}
-
-/// Outcome of a handler invocation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "status")]
-pub enum TaskResult {
-    /// Handler returned successfully.
-    Success {
-        /// The returned value.
-        value: Value,
-    },
-    /// Handler failed.
-    Failure {
-        /// Error description.
-        error: String,
-    },
-}
-
-// =============================================================================
-// Applier trait
-// =============================================================================
-
-/// Processes workflow execution events.
+/// Dispatches handler invocations as tokio tasks and collects results.
 ///
-/// The event loop holds a `Vec<Box<dyn Applier>>` and calls [`Applier::apply`]
-/// on each applier for every event received.
-pub trait Applier: Send {
-    /// Process a single event.
-    fn apply(&mut self, event: &Event);
+/// Each [`dispatch`](Scheduler::dispatch) call spawns a lightweight tokio task.
+/// Results are collected via [`recv`](Scheduler::recv).
+pub struct Scheduler {
+    result_tx: mpsc::UnboundedSender<(TaskId, Value)>,
+    result_rx: mpsc::UnboundedReceiver<(TaskId, Value)>,
 }
 
-// =============================================================================
-// NDJSON Applier
-// =============================================================================
-
-/// Writes every event as a JSON line to an NDJSON file.
-///
-/// Default file location: `/tmp/barnum/runs/{unix_timestamp}_{uuid}.ndjson`.
-pub struct NdjsonApplier {
-    file: File,
-    path: PathBuf,
-}
-
-impl NdjsonApplier {
-    /// Create a new NDJSON applier writing to `/tmp/barnum/runs/`.
-    ///
-    /// Creates the directory if it doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory can't be created or the file can't be opened.
-    pub fn new() -> std::io::Result<Self> {
-        Self::with_dir(Path::new("/tmp/barnum/runs"))
-    }
-
-    /// Create a new NDJSON applier writing to a custom directory.
-    ///
-    /// Creates the directory if it doesn't exist. The file is named
-    /// `{unix_timestamp}_{uuid}.ndjson`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory can't be created or the file can't be opened.
-    pub fn with_dir(runs_dir: &Path) -> std::io::Result<Self> {
-        fs::create_dir_all(runs_dir)?;
-
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let id = Uuid::new_v4();
-        let filename = format!("{timestamp}_{id}.ndjson");
-        let path = runs_dir.join(filename);
-
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-
-        Ok(Self { file, path })
-    }
-
-    /// The path to the NDJSON file for this run.
+impl Scheduler {
+    /// Create a new scheduler.
     #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Applier for NdjsonApplier {
-    fn apply(&mut self, event: &Event) {
-        // Serialization can't fail for our Event types (all fields are Serialize).
-        // File write errors are silently dropped — losing a log line shouldn't
-        // crash the workflow.
-        if let Ok(json) = serde_json::to_string(event) {
-            let _ = writeln!(self.file, "{json}");
+    pub fn new() -> Self {
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+        Self {
+            result_tx,
+            result_rx,
         }
     }
+
+    /// Dispatch a handler invocation.
+    ///
+    /// Spawns a tokio task that executes the handler and sends the result
+    /// through the internal channel. Currently all handlers are no-ops that
+    /// return an empty JSON object.
+    pub fn dispatch(&self, dispatch: &Dispatch, _handler: &HandlerKind) {
+        let result_tx = self.result_tx.clone();
+        let task_id = dispatch.task_id;
+        tokio::spawn(async move {
+            let value = Value::Object(serde_json::Map::default());
+            let _ = result_tx.send((task_id, value));
+        });
+    }
+
+    /// Wait for the next handler result.
+    ///
+    /// Returns `None` if all senders have been dropped (shouldn't happen
+    /// during normal operation since `self` holds a sender).
+    pub async fn recv(&mut self) -> Option<(TaskId, Value)> {
+        self.result_rx.recv().await
+    }
 }
 
-// =============================================================================
-// Engine Applier (stub)
-// =============================================================================
-
-/// The workflow execution engine. Receives events and drives the AST evaluator.
-///
-/// Currently a stub — will be wired to the evaluator that walks `barnum_ast::Action`
-/// trees and dispatches handler calls.
-pub struct EngineApplier;
-
-impl Applier for EngineApplier {
-    fn apply(&mut self, _event: &Event) {
-        // Stub: will drive the AST evaluator based on task completions.
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 // =============================================================================
-// Event Loop
+// run_workflow
 // =============================================================================
 
-/// Run the event loop until the sender is dropped.
+/// Run a workflow to completion.
 ///
-/// Receives events from the Tokio MPSC channel and dispatches each to every
-/// applier in order.
-pub async fn run_event_loop(
-    mut receiver: tokio::sync::mpsc::Receiver<Event>,
-    appliers: &mut [Box<dyn Applier>],
-) {
-    while let Some(event) = receiver.recv().await {
-        for applier in appliers.iter_mut() {
-            applier.apply(&event);
+/// Performs the initial advance, then loops: dispatch pending work to the
+/// scheduler, receive one result, feed it back to the workflow state. Repeats
+/// until the workflow terminates.
+///
+/// # Errors
+///
+/// Returns [`CompleteError`] if a completion causes an engine error (e.g.,
+/// invalid loop result, advance failure during Chain trampoline).
+///
+/// # Panics
+///
+/// Panics if the initial advance fails or the scheduler channel closes
+/// unexpectedly.
+#[allow(clippy::missing_panics_doc, clippy::expect_used)]
+pub async fn run_workflow(
+    workflow_state: &mut WorkflowState,
+    scheduler: &mut Scheduler,
+) -> Result<Value, CompleteError> {
+    let root = workflow_state.workflow_root();
+    workflow_state
+        .advance(root, Value::Null, None)
+        .expect("initial advance failed");
+
+    loop {
+        let dispatches = workflow_state.take_pending_dispatches();
+        for dispatch in &dispatches {
+            let handler = workflow_state.handler(dispatch.handler_id);
+            scheduler.dispatch(dispatch, handler);
+        }
+
+        let (task_id, value) = scheduler
+            .recv()
+            .await
+            .expect("scheduler channel closed unexpectedly");
+
+        if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+            return Ok(terminal_value);
         }
     }
 }
@@ -188,88 +115,77 @@ pub async fn run_event_loop(
 // =============================================================================
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use barnum_ast::flat::flatten;
+    use barnum_ast::{Action, Config, TypeScriptHandler};
     use intern::string_key::Intern as _;
+    use std::collections::HashMap;
 
-    #[test]
-    fn ndjson_applier_writes_events() {
-        let dir = tempfile::tempdir().ok();
-        let Some(dir) = dir.as_ref() else {
-            return;
-        };
-
-        let mut applier = NdjsonApplier::with_dir(dir.path());
-        let Ok(applier) = applier.as_mut() else {
-            return;
-        };
-
-        let event = Event::TaskStarted(TaskStartedEvent {
-            task_id: "t1".to_owned(),
-            handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
-                module: "/app/handlers/setup.ts".intern().into(),
-                func: "default".intern().into(),
+    fn ts_handler(module: &str, func: &str) -> Action {
+        Action::Invoke(barnum_ast::InvokeAction {
+            handler: HandlerKind::TypeScript(TypeScriptHandler {
+                module: module.intern().into(),
+                func: func.intern().into(),
                 step_config_schema: None,
                 value_schema: None,
             }),
-            value: serde_json::json!({"project": "my-app"}),
-        });
-        applier.apply(&event);
+        })
+    }
 
-        let event = Event::TaskCompleted(TaskCompletedEvent {
-            task_id: "t1".to_owned(),
-            result: TaskResult::Success {
-                value: serde_json::json!({"initialized": true}),
-            },
-        });
-        applier.apply(&event);
-
-        let contents = fs::read_to_string(applier.path());
-        let Ok(contents) = contents else {
-            return;
-        };
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2);
-        assert!(lines[0].contains("TaskStarted"));
-        assert!(lines[1].contains("TaskCompleted"));
+    fn config(workflow: Action) -> Config {
+        Config {
+            workflow,
+            steps: HashMap::default(),
+        }
     }
 
     #[tokio::test]
-    async fn event_loop_dispatches_to_appliers() {
-        let (tx, rx) = tokio::sync::mpsc::channel(16);
+    async fn chain_of_two_invokes() {
+        let flat_config = flatten(config(Action::Chain(barnum_ast::ChainAction {
+            first: Box::new(ts_handler("./a.ts", "a")),
+            rest: Box::new(ts_handler("./b.ts", "b")),
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = Scheduler::new();
 
-        let dir = tempfile::tempdir().ok();
-        let Some(dir) = dir.as_ref() else {
-            return;
-        };
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
 
-        let ndjson = NdjsonApplier::with_dir(dir.path());
-        let Ok(ndjson) = ndjson else {
-            return;
-        };
-        let ndjson_path = ndjson.path().to_owned();
+        // Both handlers return {}, so the final result is {}
+        assert_eq!(result, serde_json::json!({}));
+    }
 
-        let mut appliers: Vec<Box<dyn Applier>> = vec![Box::new(ndjson), Box::new(EngineApplier)];
+    #[tokio::test]
+    async fn parallel_two_invokes() {
+        let flat_config = flatten(config(Action::Parallel(barnum_ast::ParallelAction {
+            actions: vec![ts_handler("./a.ts", "a"), ts_handler("./b.ts", "b")],
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = Scheduler::new();
 
-        let event = Event::TaskStarted(TaskStartedEvent {
-            task_id: "t1".to_owned(),
-            handler: HandlerKind::TypeScript(barnum_ast::TypeScriptHandler {
-                module: "/app/handlers/setup.ts".intern().into(),
-                func: "default".intern().into(),
-                step_config_schema: None,
-                value_schema: None,
-            }),
-            value: serde_json::json!({"project": "my-app"}),
-        });
-        tx.send(event).await.ok();
-        drop(tx);
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
 
-        run_event_loop(rx, &mut appliers).await;
+        // Parallel collects results into an array
+        assert_eq!(result, serde_json::json!([{}, {}]));
+    }
 
-        let contents = fs::read_to_string(&ndjson_path);
-        let Ok(contents) = contents else {
-            return;
-        };
-        assert_eq!(contents.lines().count(), 1);
+    #[tokio::test]
+    async fn single_invoke() {
+        let flat_config = flatten(config(ts_handler("./a.ts", "a"))).unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = Scheduler::new();
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!({}));
     }
 }
