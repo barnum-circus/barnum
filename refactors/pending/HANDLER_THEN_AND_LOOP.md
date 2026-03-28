@@ -1,4 +1,4 @@
-# Handler `.then()` and Loop Ergonomics
+# Handler `.then()` and `.forEach()`
 
 **Status:** Pending
 
@@ -12,7 +12,7 @@ After config desugaring lands, `createHandler` returns a `TypedAction` directly.
 pipe(initialize, build, deploy, report)
 ```
 
-Adding `.then()`, `.forEach()`, and `.loop()` methods on `TypedAction` enables method chaining as an alternative:
+Adding `.then()` and `.forEach()` methods on `TypedAction` enables method chaining as an alternative:
 
 ```ts
 initialize.then(build).then(deploy).then(report)
@@ -49,12 +49,6 @@ class ActionNode<In = unknown, Out = unknown, Refs extends string = never> {
     return new ActionNode({ kind: "ForEach", action: this.action });
   }
 
-  loop<TContinue, TBreak>(
-    this: ActionNode<TContinue, LoopResult<TContinue, TBreak>, Refs>,
-  ): ActionNode<TContinue, TBreak, Refs> {
-    return new ActionNode({ kind: "Loop", body: this.action });
-  }
-
   toJSON(): Action {
     return this.action;
   }
@@ -68,10 +62,6 @@ class ActionNode<In = unknown, Out = unknown, Refs extends string = never> {
 ### `.forEach()` lifts to ForEach
 
 `action.forEach()` wraps the action in a ForEach node. Lifts `ActionNode<A, B>` to `ActionNode<A[], B[]>`. Always valid.
-
-### `.loop()` wraps in Loop
-
-`body.loop()` wraps the action in a Loop. Constrained via `this` parameter: only type-checks when `Out` is `LoopResult<In, TBreak>`.
 
 ### Serialization
 
@@ -100,9 +90,6 @@ initialize.then(build).then(deploy).then(report)
 
 // ForEach
 listFiles.then(processFile.forEach())
-
-// Loop
-startPolling.then(pollStatus.loop())
 
 // Handler with config (from HANDLER_CONFIG_DESUGARING.md)
 initialize.then(deploy({ target: "production" })).then(report)
