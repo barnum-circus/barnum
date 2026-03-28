@@ -88,8 +88,8 @@ Builtins like `identity()`, `tag()`, `merge()`, `flatten()`, `extractField()` us
 
 See BUILTIN_HANDLER_KIND.md for the full design. The config desugaring uses two builtins:
 
-- **Constant** (`{ kind: "Builtin", name: "Constant", config: <value> }`) — engine returns config, ignores input
-- **Identity** (`{ kind: "Builtin", name: "Identity", config: null }`) — engine returns input unchanged
+- **Constant** (`{ kind: "Builtin", builtin: { kind: "Constant", value: <value> } }`) — engine returns value, ignores input
+- **Identity** (`{ kind: "Builtin", builtin: { kind: "Identity" } }`) — engine returns input unchanged
 
 These are engine-native: no subprocess, no dispatch. The flattener interns them in the handler pool like TypeScript handlers. No change to `FlatAction`, `FlatEntry`, or the 8-byte entry size.
 
@@ -140,8 +140,8 @@ When `deploy({ target: "production" })` is called, it produces:
 ```
 Chain(
   Parallel([
-    Invoke(Builtin("Identity", null)),
-    Invoke(Builtin("Constant", { target: "production" }))
+    Invoke(Builtin(Identity)),
+    Invoke(Builtin(Constant({ target: "production" })))
   ]),
   Invoke(TypeScript(deploy))
 )
@@ -238,8 +238,8 @@ function createHandlerWithConfig(definition, exportName?) {
       first: {
         kind: "Parallel",
         actions: [
-          { kind: "Invoke", handler: { kind: "Builtin", name: "Identity", config: null } },
-          { kind: "Invoke", handler: { kind: "Builtin", name: "Constant", config } },
+          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
         ],
       },
       rest: invokeAction,
@@ -260,9 +260,9 @@ No helper functions needed. The desugared AST uses `Identity` and `Constant` han
 
 All builtins migrate to the Builtin handler kind (see BUILTIN_HANDLER_KIND.md). The config desugaring specifically requires:
 
-- `constant(value)` → `Builtin("Constant", value)` — used in the desugared AST to inject config
-- `identity()` → `Builtin("Identity", null)` — used in the desugared AST to pass through pipeline value
-- `range(start, end)` → computed at build time, emitted as `Builtin("Constant", [start, start+1, ..., end-1])`
+- `constant(value)` → `Builtin(Constant { value })` — used in the desugared AST to inject config
+- `identity()` → `Builtin(Identity)` — used in the desugared AST to pass through pipeline value
+- `range(start, end)` → computed at build time, emitted as `Builtin(Constant { value: [start, ..., end-1] })`
 
 The `constant` and `range` handler definitions in `handlers/builtins.ts` are deleted — they're no longer TypeScript handlers.
 

@@ -14,7 +14,7 @@ Additionally, the handler config desugaring (HANDLER_CONFIG_DESUGARING.md) requi
 
 ### HandlerKind::Builtin
 
-A single `Builtin` variant on `HandlerKind` with a name discriminator and a config value:
+A `Builtin` variant on `HandlerKind` containing a nested `BuiltinKind` discriminated union. Each level has exactly one `kind` discriminant — no multiple discriminants on the same object.
 
 **Rust:**
 ```rust
@@ -26,19 +26,19 @@ pub enum HandlerKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuiltinHandler {
-    pub name: BuiltinName,
-    pub config: Value,
+    pub builtin: BuiltinKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum BuiltinName {
-    Constant,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum BuiltinKind {
+    Constant { value: Value },
     Identity,
     Drop,
-    Tag,
+    Tag { value: Value },
     Merge,
     Flatten,
-    ExtractField,
+    ExtractField { value: Value },
 }
 ```
 
@@ -48,51 +48,44 @@ export type HandlerKind = TypeScriptHandler | BuiltinHandler;
 
 export type BuiltinHandler = {
   kind: "Builtin";
-  name: BuiltinName;
-  config: unknown;
+  builtin: BuiltinKind;
 };
 
-export type BuiltinName =
-  | "Constant"
-  | "Identity"
-  | "Drop"
-  | "Tag"
-  | "Merge"
-  | "Flatten"
-  | "ExtractField";
+export type BuiltinKind =
+  | { kind: "Constant"; value: unknown }
+  | { kind: "Identity" }
+  | { kind: "Drop" }
+  | { kind: "Tag"; value: string }
+  | { kind: "Merge" }
+  | { kind: "Flatten" }
+  | { kind: "ExtractField"; value: string };
 ```
 
 ### JSON serialization
 
 ```json
-{ "kind": "Builtin", "name": "Constant", "config": 42 }
-{ "kind": "Builtin", "name": "Identity", "config": null }
-{ "kind": "Builtin", "name": "Tag", "config": "Continue" }
-{ "kind": "Builtin", "name": "ExtractField", "config": "id" }
-{ "kind": "Builtin", "name": "Drop", "config": null }
-{ "kind": "Builtin", "name": "Merge", "config": null }
-{ "kind": "Builtin", "name": "Flatten", "config": null }
+{ "kind": "Builtin", "builtin": { "kind": "Constant", "value": 42 } }
+{ "kind": "Builtin", "builtin": { "kind": "Identity" } }
+{ "kind": "Builtin", "builtin": { "kind": "Tag", "value": "Continue" } }
+{ "kind": "Builtin", "builtin": { "kind": "ExtractField", "value": "id" } }
+{ "kind": "Builtin", "builtin": { "kind": "Drop" } }
+{ "kind": "Builtin", "builtin": { "kind": "Merge" } }
+{ "kind": "Builtin", "builtin": { "kind": "Flatten" } }
 ```
 
-Config is always present. Builtins that don't need configuration use `null`.
-
-### Why `name` is an enum, not a string
-
-The engine must handle each builtin explicitly — there's no generic fallback. An unhandled builtin should be a compile error (exhaustive match), not a runtime panic. The enum also enumerates valid values in the JSON schema.
+Outer `kind` discriminates `HandlerKind` (TypeScript vs Builtin). Inner `kind` discriminates `BuiltinKind` (which builtin). Variants that carry data have a `value` field; variants that don't, don't.
 
 ### Builtin behaviors
 
-| Name | Config | Engine behavior |
-|------|--------|-----------------|
-| Constant | The value to return | Ignores input, returns `config` |
-| Identity | `null` | Returns input unchanged |
-| Drop | `null` | Ignores input, returns `null` |
-| Tag | Kind string (e.g. `"Continue"`) | Returns `{ "kind": config, "value": input }` |
-| Merge | `null` | Input is array of objects, returns shallow-merged object |
-| Flatten | `null` | Input is `T[][]`, returns flattened `T[]` |
-| ExtractField | Field name string (e.g. `"id"`) | Returns `input[config]` |
-
-Config is never wrapped — it's the raw value. `constant(42)` serializes `config: 42`, not `config: { value: 42 }`. `tag("Continue")` serializes `config: "Continue"`, not `config: { kind: "Continue" }`.
+| Kind | Value field | Engine behavior |
+|------|-------------|-----------------|
+| Constant | The value to return | Ignores input, returns `value` |
+| Identity | — | Returns input unchanged |
+| Drop | — | Ignores input, returns `null` |
+| Tag | Kind string (e.g. `"Continue"`) | Returns `{ "kind": value, "value": input }` |
+| Merge | — | Input is array of objects, returns shallow-merged object |
+| Flatten | — | Input is `T[][]`, returns flattened `T[]` |
+| ExtractField | Field name string (e.g. `"id"`) | Returns `input[value]` |
 
 ### Engine implementation
 
@@ -102,7 +95,7 @@ The Invoke arm dispatches on handler kind:
 FlatAction::Invoke { handler } => {
     match self.flat_config.handler(handler) {
         HandlerKind::Builtin(builtin_handler) => {
-            let result = self.execute_builtin(builtin_handler, &value);
+            let result = execute_builtin(&builtin_handler.builtin, &value);
             self.deliver(parent, result)?;
         }
         HandlerKind::TypeScript(_) => {
@@ -114,7 +107,25 @@ FlatAction::Invoke { handler } => {
 }
 ```
 
-Note: `advance` returns `Result<(), AdvanceError>` while `deliver` returns `Result<Option<Value>, CompleteError>`. These need reconciliation — see HANDLER_CONFIG_DESUGARING.md for details.
+The `execute_builtin` function matches on `BuiltinKind`:
+
+```rust
+fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Value {
+    match builtin_kind {
+        BuiltinKind::Constant { value } => value.clone(),
+        BuiltinKind::Identity => input.clone(),
+        BuiltinKind::Drop => Value::Null,
+        BuiltinKind::Tag { value: tag } => json!({ "kind": tag, "value": input }),
+        BuiltinKind::Merge => { /* merge objects from array */ },
+        BuiltinKind::Flatten => { /* flatten nested array */ },
+        BuiltinKind::ExtractField { value: field } => { /* extract input[field] */ },
+    }
+}
+```
+
+#### advance/deliver return type mismatch
+
+`advance` returns `Result<(), AdvanceError>` while `deliver` returns `Result<Option<Value>, CompleteError>`. This mismatch is dormant today — Invoke always creates a Dispatch, never calls `deliver`. The builtin handler kind is what surfaces it: builtins call `deliver` from within `advance` for the first time. This needs reconciliation during implementation (either change `advance`'s return type or queue immediate completions).
 
 ### TypeScript builtins
 
@@ -124,28 +135,28 @@ Each builtin function in `builtins.ts` emits a Builtin handler kind directly:
 export function constant<T>(value: T): TypedAction<never, T> {
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", name: "Constant", config: value },
+    handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
   } as TypedAction<never, T>;
 }
 
 export function identity<T>(): TypedAction<T, T> {
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", name: "Identity", config: null },
+    handler: { kind: "Builtin", builtin: { kind: "Identity" } },
   } as TypedAction<T, T>;
 }
 
 export function drop<T>(): TypedAction<T, never> {
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", name: "Drop", config: null },
+    handler: { kind: "Builtin", builtin: { kind: "Drop" } },
   } as TypedAction<T, never>;
 }
 
 export function tag<T, K extends string>(kind: K): TypedAction<T, { kind: K; value: T }> {
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", name: "Tag", config: kind },
+    handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
   } as TypedAction<T, { kind: K; value: T }>;
 }
 ```
@@ -158,7 +169,7 @@ export function range(start: number, end: number): TypedAction<never, number[]> 
   for (let i = start; i < end; i++) result.push(i);
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", name: "Constant", config: result },
+    handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },
   } as TypedAction<never, number[]>;
 }
 ```
@@ -192,12 +203,12 @@ Engine-native builtins currently panic on invalid config or input (e.g., Merge o
 
 ### Generate TypeScript types from Rust
 
-The TypeScript AST types (`Action`, `HandlerKind`, `TypeScriptHandler`, `BuiltinHandler`, `BuiltinName`, etc.) in `ast.ts` are manually maintained mirrors of the Rust types in `barnum_ast`. Every Rust-side change requires a corresponding manual TS edit — a maintenance burden and a source of drift.
+The TypeScript AST types (`Action`, `HandlerKind`, `TypeScriptHandler`, `BuiltinHandler`, `BuiltinKind`, etc.) in `ast.ts` are manually maintained mirrors of the Rust types in `barnum_ast`. Every Rust-side change requires a corresponding manual TS edit — a maintenance burden and a source of drift.
 
 The `build_schemas` pipeline already generates JSON Schema and Zod schemas from the Rust types. The serializable TS types in `ast.ts` should be generated from the same source rather than hand-maintained. This would mean:
 
 - Rust types are the single source of truth for the wire format
-- `BuiltinName` variants, `HandlerKind` discriminants, `Action` variants — all derived automatically
+- `BuiltinKind` variants, `HandlerKind` discriminants, `Action` variants — all derived automatically
 - Adding a new builtin or action variant in Rust auto-propagates to TS
 - The hand-written `ast.ts` types shrink to only the TS-specific parts (phantom types, `TypedAction`, combinators, `ConfigBuilder`) that have no Rust equivalent
 
@@ -207,9 +218,9 @@ This applies beyond builtins — the entire serializable AST layer (`Action`, `C
 
 | File | Change |
 |------|--------|
-| `crates/barnum_ast/src/lib.rs` | Add `BuiltinHandler` struct, `BuiltinName` enum, `Builtin` variant to `HandlerKind`. |
-| `crates/barnum_engine/src/lib.rs` | Invoke arm dispatches on handler kind. Builtins resolved inline. |
-| `libs/barnum/src/ast.ts` | Add `BuiltinHandler` type, `BuiltinName` union, update `HandlerKind`. |
+| `crates/barnum_ast/src/lib.rs` | Add `BuiltinHandler` struct, `BuiltinKind` enum, `Builtin` variant to `HandlerKind`. |
+| `crates/barnum_engine/src/lib.rs` | Invoke arm dispatches on handler kind. Builtins resolved inline. Reconcile advance/deliver return types. |
+| `libs/barnum/src/ast.ts` | Add `BuiltinHandler`, `BuiltinKind` types, update `HandlerKind` union. |
 | `libs/barnum/src/builtins.ts` | All builtins emit Builtin handler kind. Delete `builtin()` helper. |
 | `libs/barnum/src/handlers/builtins.ts` | Delete file (all builtins are engine-native). |
 | `crates/barnum_ast/src/flat.rs` | No structural changes (Builtin is a handler kind, not an action kind). Update test helpers. |
