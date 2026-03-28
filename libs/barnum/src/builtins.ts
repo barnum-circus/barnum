@@ -113,8 +113,9 @@ export function drop<T>(): TypedAction<T, never> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
   return {
-    kind: "Pipe",
-    actions: [action, dropHandler()],
+    kind: "Chain",
+    first: action,
+    rest: dropHandler(),
   } as TypedAction<In, never>;
 }
 

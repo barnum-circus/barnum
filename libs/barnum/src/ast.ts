@@ -6,7 +6,7 @@ import type { Handler } from "./handler.js";
 
 export type Action =
   | InvokeAction
-  | PipeAction
+  | ChainAction
   | ForEachAction
   | ParallelAction
   | BranchAction
@@ -19,9 +19,10 @@ export type InvokeAction = {
   handler: HandlerKind;
 };
 
-export type PipeAction = {
-  kind: "Pipe";
-  actions: Action[];
+export type ChainAction = {
+  kind: "Chain";
+  first: Action;
+  rest: Action;
 };
 
 export type ForEachAction = {
