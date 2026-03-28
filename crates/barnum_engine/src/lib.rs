@@ -7,86 +7,14 @@
 //! This milestone implements frame storage, the `advance` function, and the
 //! `start` / `take_pending_dispatches` / `handler` public API.
 
+mod frame;
+
 use barnum_ast::HandlerKind;
 use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
+use frame::{Frame, FrameId, FrameKind, ParentRef};
 use intern::Lookup;
 use serde_json::Value;
 use slab::Slab;
-
-// ---------------------------------------------------------------------------
-// FrameId
-// ---------------------------------------------------------------------------
-
-/// Key into the engine's frame slab. Wraps the `usize` returned by
-/// [`Slab::insert`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct FrameId(usize);
-
-// ---------------------------------------------------------------------------
-// ParentRef
-// ---------------------------------------------------------------------------
-
-/// How a child frame refers to its parent.
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
-enum ParentRef {
-    /// Parent has one active child (Chain, Loop, Attempt).
-    SingleChild { frame_id: FrameId },
-    /// Parent has N children; this child occupies `child_index` (Parallel,
-    /// `ForEach`).
-    IndexedChild {
-        frame_id: FrameId,
-        child_index: usize,
-    },
-}
-
-impl ParentRef {
-    /// Extract the parent's [`FrameId`] regardless of variant.
-    #[allow(dead_code)] // Used by complete/error (completion milestone).
-    const fn frame_id(self) -> FrameId {
-        match self {
-            ParentRef::SingleChild { frame_id } | ParentRef::IndexedChild { frame_id, .. } => {
-                frame_id
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// FrameKind
-// ---------------------------------------------------------------------------
-
-/// The kind-specific state stored in each frame.
-#[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
-enum FrameKind {
-    /// Leaf: handler dispatched, waiting for result.
-    Invoke,
-    /// Sequential: first child active, then trampoline to `rest`.
-    Chain { rest: ActionId },
-    /// Fan-out: collecting results from N parallel branches.
-    Parallel { results: Vec<Option<Value>> },
-    /// Fan-out: collecting results from N array elements.
-    ForEach { results: Vec<Option<Value>> },
-    /// Fixed-point: re-enter body on Continue, complete on Break.
-    Loop { body: ActionId },
-    /// Error boundary: wraps child result in Ok/Err.
-    Attempt,
-}
-
-// ---------------------------------------------------------------------------
-// Frame
-// ---------------------------------------------------------------------------
-
-/// A single frame in the engine's frame tree.
-#[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone).
-struct Frame {
-    /// Parent reference. `None` only for the Root frame.
-    parent: Option<ParentRef>,
-    /// Kind-specific state.
-    kind: FrameKind,
-}
 
 // ---------------------------------------------------------------------------
 // Dispatch
