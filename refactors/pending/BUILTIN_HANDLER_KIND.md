@@ -295,7 +295,7 @@ Because builtins go through the scheduler, logging can be added in the scheduler
 
 ### Delete noop execution mode
 
-Once builtins land, rewrite all Rust engine/event-loop tests to use builtin handlers (`Constant`, `Identity`, `Tag`, etc.) with real values and real assertions. Delete `ExecutionMode::Noop` and `Scheduler::new()` (the noop constructor). The only scheduler constructor should be `Scheduler::with_executor`.
+`ExecutionMode::Noop` silently stubs every handler to return `{}`. Tests that use it verify structural mechanics but never check data flow — a false sense of coverage. Delete `ExecutionMode::Noop`, delete `Scheduler::new()`, and rewrite all tests with real assertions on real values.
 
 ### Error handling
 
