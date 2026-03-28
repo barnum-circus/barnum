@@ -131,6 +131,7 @@ dependencies = [
  "barnum_engine",
  "intern",
  "serde_json",
+ "thiserror",
  "tokio",
 ]
 
