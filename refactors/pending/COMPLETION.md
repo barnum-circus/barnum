@@ -4,7 +4,9 @@ Implementation plan for the second engine milestone: task correlation, completio
 
 **Depends on:** ENGINE.md (design), FRAME_STORAGE_AND_ADVANCE.md (first milestone — frame storage, advance, pending dispatches)
 
-**Scope:** `TaskId`, `task_to_frame`, `on_task_completed`, `complete` (promoted to public-facing), `error`, `EngineResult`, `is_done()`, `result()`. This milestone takes the engine from "expand and dispatch" to "full advance/complete cycle."
+**Scope:** `TaskId`, `task_to_frame`, `on_task_completed`, `complete`, `error`, `EngineResult`, `is_done()`, `result()`. This milestone takes the engine from "expand and dispatch" to "full advance/complete cycle."
+
+**Note:** Since the advance milestone, `advance` is now a public method taking `Option<ParentRef>`, the `FrameKind::Root` sentinel has been removed, and `start()` is convenience sugar for `advance(workflow_root, input, None)`. Terminal state (workflow done) is detected when `complete` or `error` receives `parent: None`.
 
 ## What the first milestone left out
 
@@ -20,7 +22,7 @@ Dispatch goes out → runtime executes handler → result comes back
       → parent frame decides what to do
         → may call advance() again (Chain trampoline, Loop re-enter)
           → produces more dispatches
-            → cycle continues until Root completes or errors
+            → cycle continues until a frame with parent: None completes or errors
 ```
 
 ## New types
@@ -58,7 +60,7 @@ pub enum EngineResult {
 }
 ```
 
-Terminal state. Set when Root is completed or when an unhandled error reaches Root.
+Terminal state. Set when a frame with `parent: None` completes or when an unhandled error reaches a frame with `parent: None`.
 
 ### Updated Dispatch
 
@@ -101,13 +103,13 @@ Three new fields over the advance milestone:
 
 ## Updated advance (Invoke arm only)
 
-The only change to advance: the Invoke arm now allocates a TaskId, stores the mapping, and includes the TaskId in the dispatch.
+The only change to advance: the Invoke arm now allocates a TaskId, stores the mapping, and includes the TaskId in the dispatch. Note: `advance` takes `parent: Option<ParentRef>` and stores it directly (no wrapping in `Some`).
 
 ```rust
 FlatAction::Invoke { handler } => {
     let task_id = self.next_task_id();
     let frame_id = self.insert_frame(Frame {
-        parent: Some(parent),
+        parent,
         kind: FrameKind::Invoke { task_id },
     });
     self.task_to_frame.insert(task_id, frame_id);
@@ -119,50 +121,94 @@ FlatAction::Invoke { handler } => {
 }
 ```
 
-## complete (promoted from private)
+## complete
 
-In the advance milestone, complete existed as a private dependency for empty ForEach/Parallel. Now it's the core of the engine's execution model.
+In the advance milestone, complete existed as a private no-op for empty ForEach/Parallel. Now it's the core of the engine's execution model.
 
-No code changes to complete itself — the implementation from the advance milestone is already complete. The only change is that Root now stores the result:
-
-```rust
-FrameKind::Root => {
-    self.frames.remove(frame_id.0);
-    self.result = Some(EngineResult::Success(value));
-}
-```
-
-(The advance milestone's Root arm just removed the frame without storing anything.)
-
-## error
-
-A child failed. Walk up the frame tree until an Attempt catches the error or Root terminates.
+`complete` takes `Option<ParentRef>`. When `parent` is `None`, the top-level action has completed and the workflow is done. Otherwise, it removes the parent frame and dispatches on its kind.
 
 ```rust
-fn error(&mut self, parent_ref: ParentRef, error: String) {
+fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
+    let Some(parent_ref) = parent else {
+        // Top-level action completed — workflow is done.
+        self.result = Some(EngineResult::Success(value));
+        return;
+    };
     let frame_id = parent_ref.frame_id();
     let frame = self.frames.remove(frame_id.0);
 
     match frame.kind {
-        FrameKind::Root => {
-            self.result = Some(EngineResult::Failure(error));
+        FrameKind::Chain { rest } => {
+            self.advance(rest, value, frame.parent).unwrap();
         }
-
+        FrameKind::Parallel { mut results } => {
+            let ParentRef::IndexedChild { child_index, .. } = parent_ref else {
+                unreachable!("Parallel child uses IndexedChild");
+            };
+            results[child_index] = Some(value);
+            if results.iter().all(Option::is_some) {
+                let collected: Vec<Value> = results.into_iter().map(Option::unwrap).collect();
+                self.complete(frame.parent, Value::Array(collected));
+            } else {
+                // Re-insert frame with updated results (not all children done yet).
+                self.frames.insert(/* ... */);
+            }
+        }
+        FrameKind::ForEach { mut results } => {
+            // Same logic as Parallel.
+        }
+        FrameKind::Loop { body } => {
+            // value must be { kind: "Continue", value } or { kind: "Break", value }
+            match value["kind"].as_str() {
+                Some("Continue") => {
+                    self.advance(body, value["value"].clone(), frame.parent).unwrap();
+                }
+                Some("Break") => {
+                    self.complete(frame.parent, value["value"].clone());
+                }
+                _ => unreachable!("Loop body must return Continue or Break"),
+            }
+        }
         FrameKind::Attempt => {
-            let parent = frame.parent.expect("non-root frame has parent");
+            let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
+            self.complete(frame.parent, wrapped);
+        }
+        FrameKind::Invoke { .. } => {
+            unreachable!("Invoke frames don't have children that complete into them");
+        }
+    }
+}
+```
+
+**Note on Parallel/ForEach re-insertion:** When not all children are done, the frame must be put back into the slab at the same key. Use `slab.get_mut()` instead of remove+reinsert to avoid changing the FrameId. The exact approach is an implementation detail.
+
+## error
+
+A child failed. Walk up the frame tree until an Attempt catches the error or a frame with `parent: None` terminates.
+
+```rust
+fn error(&mut self, parent: Option<ParentRef>, error: String) {
+    let Some(parent_ref) = parent else {
+        // Unhandled error reached top — workflow failed.
+        self.result = Some(EngineResult::Failure(error));
+        return;
+    };
+    let frame_id = parent_ref.frame_id();
+    let frame = self.frames.remove(frame_id.0);
+
+    match frame.kind {
+        FrameKind::Attempt => {
             let wrapped = serde_json::json!({ "kind": "Err", "error": error });
-            self.complete(parent, wrapped);
+            self.complete(frame.parent, wrapped);
         }
 
         FrameKind::Parallel { .. } | FrameKind::ForEach { .. } => {
-            let parent = frame.parent.expect("non-root frame has parent");
             self.cancel_descendants(frame_id);
-            self.error(parent, error);
+            self.error(frame.parent, error);
         }
 
         _ => {
-            let parent = frame.parent.expect("non-root frame has parent");
-            self.error(parent, error);
+            self.error(frame.parent, error);
         }
     }
 }
@@ -171,7 +217,7 @@ fn error(&mut self, parent_ref: ParentRef, error: String) {
 ### Error propagation path
 
 Error walks up frame-by-frame:
-1. **Root**: terminal failure. Engine is done.
+1. **`parent: None`**: terminal failure. Engine is done.
 2. **Attempt**: catches the error. Wraps as `{ kind: "Err", error }` and completes the parent normally. Error stops propagating.
 3. **Parallel/ForEach**: cancel all other in-flight children (they're now irrelevant), then propagate the error upward. Short-circuit — one failure fails the whole fan-out.
 4. **Chain/Loop/Invoke**: transparent — just propagate upward.
@@ -217,22 +263,23 @@ The entry point from the runtime. A handler finished; deliver the result to the 
 pub fn on_task_completed(&mut self, task_id: TaskId, task_result: TaskResult) {
     let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
     let frame = self.frames.remove(frame_id.0);
-    let parent = frame.parent.expect("Invoke frame has parent");
     match task_result {
-        TaskResult::Success { value } => self.complete(parent, value),
-        TaskResult::Failure { error } => self.error(parent, error),
+        TaskResult::Success { value } => self.complete(frame.parent, value),
+        TaskResult::Failure { error } => self.error(frame.parent, error),
     }
 }
 ```
 
-Remove the Invoke frame and its task mapping. Extract the parent. Dispatch to complete or error based on the result.
+Remove the Invoke frame and its task mapping. Pass `frame.parent` (which is `Option<ParentRef>`) directly to complete or error. If the Invoke was the top-level action (`parent: None`), complete/error will set the terminal result.
 
 ## Updated public API
 
 ```rust
 impl Engine {
-    pub fn new(flat_config: FlatConfig) -> Self;
-    pub fn start(&mut self, input: Value);
+    pub const fn new(flat_config: FlatConfig) -> Self;
+    pub const fn workflow_root(&self) -> ActionId;
+    pub fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRef>) -> Result<(), AdvanceError>;
+    pub fn start(&mut self, input: Value) -> Result<(), AdvanceError>; // sugar for advance(workflow_root, input, None)
     pub fn on_task_completed(&mut self, task_id: TaskId, task_result: TaskResult);
     pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch>;
     pub fn handler(&self, id: HandlerId) -> &HandlerKind;
@@ -241,10 +288,15 @@ impl Engine {
 }
 ```
 
-Three new methods over the advance milestone:
+New in this milestone:
 - `on_task_completed` — deliver a handler result
 - `is_done` — check terminal state
 - `result` — read terminal value
+
+Already public from advance milestone:
+- `advance` — core primitive, expands an action into frames
+- `workflow_root` — the starting action ID
+- `start` — convenience sugar over `advance`
 
 ## Tests
 
