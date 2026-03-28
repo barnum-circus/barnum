@@ -60,32 +60,7 @@ Each `dispatch()` call:
 
 `recv()` returns the next completed result. Results may arrive in any order when multiple tasks are in flight (Parallel, ForEach).
 
-### Handler execution (first milestone)
-
-All handlers return an empty JSON object:
-
-```rust
-// Inside the tokio::spawn:
-let value = Value::Object(Default::default());
-```
-
-This exercises the full loop: WorkflowState advances, produces dispatches, Scheduler "runs" them, returns results, WorkflowState processes completions, cycle repeats until the workflow terminates.
-
-Real TypeScript handler execution replaces this later. See TYPESCRIPT_HANDLER_INVOCATION.md.
-
-### Actor trait (future, not this milestone)
-
-When multiple handler types exist (TypeScript, builtin, etc.), handler execution becomes a dispatch through type-erased actors:
-
-```rust
-trait Actor: Send + Sync {
-    fn execute(&self, value: Value) -> Pin<Box<dyn Future<Output = Value> + Send>>;
-}
-```
-
-The Scheduler holds `Vec<Box<dyn Actor>>` and routes dispatches based on `HandlerKind`. Each actor returns a future; the Scheduler wraps it in a `tokio::spawn` with the result channel wiring.
-
-For this milestone, no Actor trait — just the inline no-op. The trait is introduced when we have a second handler type.
+All handlers return an empty JSON object for this milestone. Real TypeScript handler execution replaces this later (see TYPESCRIPT_HANDLER_INVOCATION.md).
 
 ## run_workflow
 
@@ -134,8 +109,6 @@ The only non-deterministic input to WorkflowState is the sequence of `(TaskId, V
 
 To replay: record the completion sequence, feed the same `(task_id, value)` pairs into `complete()` on a fresh WorkflowState with the same config. The engine reproduces the same behavior. No special event types or logging infrastructure needed — just the completions.
 
-When replay or observability is needed, completions can be logged at the `run_workflow` level — one line per `complete()` call — without any architectural changes.
-
 ## What this replaces
 
 The current `barnum_event_loop` crate has:
@@ -145,29 +118,3 @@ The current `barnum_event_loop` crate has:
 - `NdjsonApplier` — deferred
 - `EngineApplier` stub — replaced by `run_workflow`
 - `run_event_loop` — replaced by `run_workflow`
-
-The Applier/event-loop pattern can be reintroduced later if multiple independent reactors are needed. The current architecture doesn't foreclose on it — `run_workflow` is the single point where completions flow, so wrapping it in an event dispatch is straightforward.
-
-## Future: error handling is an AST concern
-
-Handlers cross a process boundary (Rust → Node.js). They can always fail. Every handler naturally returns a Result — not as a special engine concept, but as the natural return type of any cross-boundary call. A Result is just a Value with a particular shape.
-
-Error handling — retries, unwrap, propagation — is expressible via existing AST primitives:
-
-**Retry as a Loop:**
-
-```
-Loop(
-  Chain(
-    Invoke(handler),
-    Switch(
-      "ok"  => Break(value),
-      "err" => Continue
-    )
-  )
-)
-```
-
-Add a max iteration count to Loop for bounded retries. No special engine or scheduler machinery needed.
-
-The Scheduler doesn't handle retries. WorkflowState doesn't distinguish success from failure. The AST determines what to do with Result values. See also DEFERRED_FEATURES.md § "Remove Attempt."
