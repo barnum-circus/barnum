@@ -6,3 +6,4 @@
 **/.vscode/**
 **/.td/**
 **/.test-data/**
+crates/intern/Cargo.lock
