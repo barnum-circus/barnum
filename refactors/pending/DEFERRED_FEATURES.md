@@ -167,6 +167,19 @@ Since `pipe()` already produces right-nested chains via `reduceRight`, non-canon
 
 The flattener could also normalize during flattening: when it encounters `Chain(Chain(A, B), C)`, rewrite to `Chain(A, Chain(B, C))` before emitting entries. This keeps the flat table canonical regardless of input shape.
 
+## Lazy Step Flattening
+
+Currently, flattening eagerly processes all steps in `Config::steps`, even if some are never referenced by the workflow. This is wasted work and inflates the flat table with dead entries.
+
+Lazy flattening: only flatten a step when the flattener first encounters a `Step` reference to it. Steps that are never referenced are never flattened. This is a natural fit for the two-pass model — pass 1 reserves ActionIds for steps when they're first referenced, pass 2 resolves them. The change is to skip pre-allocating entries for unreferenced steps entirely.
+
+Benefits:
+- Smaller flat tables when configs contain library-style step registries (many steps defined, few used per workflow).
+- Faster flattening for large configs.
+- Dead step detection for free — any step that wasn't flattened after the walk is unreferenced.
+
+The current eager approach is simpler and correct. Lazy flattening is an optimization for when config sizes grow.
+
 ## Handler Error Type
 
 Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `unknown` by `attempt`). A typed error channel would let handlers declare their failure modes:
