@@ -91,10 +91,36 @@ FlatAction::Invoke { handler } => {
 
 ## Scheduler
 
-The scheduler is where execution strategy is decided. Builtins are executed inline and the result is sent through the same channel as subprocess results.
+The scheduler is where execution strategy is decided. The channel carries `Result<Value, HandlerError>` — both builtins and TypeScript handlers can fail.
 
 ```rust
 // barnum_event_loop/src/lib.rs
+
+/// Unified error type for handler execution failures.
+#[derive(Debug, thiserror::Error)]
+pub enum HandlerError {
+    #[error(transparent)]
+    Builtin(#[from] BuiltinError),
+    #[error("handler {module}:{func} failed (exit {exit_code}): {stderr}")]
+    SubprocessFailed {
+        module: String,
+        func: String,
+        exit_code: i32,
+        stderr: String,
+    },
+    #[error("handler {module}:{func} returned invalid JSON: {source}")]
+    InvalidOutput {
+        module: String,
+        func: String,
+        source: serde_json::Error,
+    },
+}
+
+pub struct Scheduler {
+    result_tx: mpsc::UnboundedSender<(TaskId, Result<Value, HandlerError>)>,
+    result_rx: mpsc::UnboundedReceiver<(TaskId, Result<Value, HandlerError>)>,
+    mode: ExecutionMode,
+}
 
 impl Scheduler {
     pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
@@ -110,29 +136,30 @@ impl Scheduler {
                     let _ = result_tx.send((task_id, result));
                 });
             }
-            // Channel type: (TaskId, Result<Value, HandlerError>)
-            // HandlerError covers both BuiltinError and TypeScript subprocess failures.
-            // A builtin type error is the same class of failure as a TS handler throwing —
-            // both propagate through the same error path in run_workflow.
-            HandlerKind::TypeScript(_) => {
-                match &self.mode {
-                    ExecutionMode::Noop => {
-                        tokio::spawn(async move {
-                            let value = Value::Object(serde_json::Map::default());
-                            let _ = result_tx.send((task_id, value));
-                        });
-                    }
-                    ExecutionMode::Subprocess { executor, worker_path } => {
-                        // existing subprocess logic
-                    }
-                }
+            HandlerKind::TypeScript(ts) => {
+                // ... clone fields, spawn subprocess ...
+                // On success: result_tx.send((task_id, Ok(parsed_output)))
+                // On non-zero exit: result_tx.send((task_id, Err(HandlerError::SubprocessFailed { ... })))
+                // On invalid JSON: result_tx.send((task_id, Err(HandlerError::InvalidOutput { ... })))
             }
         }
+    }
+
+    pub async fn recv(&mut self) -> Option<(TaskId, Result<Value, HandlerError>)> {
+        self.result_rx.recv().await
     }
 }
 ```
 
-Builtins always execute their real logic. They're deterministic and have no external dependencies.
+`run_workflow` handles errors from `recv`:
+
+```rust
+let (task_id, result) = scheduler.recv().await.expect("channel closed");
+let value = result?; // propagate HandlerError
+if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+    return Ok(terminal_value);
+}
+```
 
 ### Noop scheduler deprecation
 
