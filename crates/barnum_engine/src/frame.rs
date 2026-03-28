@@ -13,11 +13,16 @@ pub struct FrameId(pub usize);
 #[allow(dead_code)] // Fields read by complete/error (completion milestone).
 pub enum ParentRef {
     /// Parent has one active child (Chain, Loop, Attempt).
-    SingleChild { frame_id: FrameId },
+    SingleChild {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+    },
     /// Parent has N children; this child occupies `child_index` (Parallel,
     /// `ForEach`).
     IndexedChild {
+        /// The parent frame's ID.
         frame_id: FrameId,
+        /// This child's index in the parent's results vector.
         child_index: usize,
     },
 }
@@ -25,6 +30,7 @@ pub enum ParentRef {
 impl ParentRef {
     /// Extract the parent's [`FrameId`] regardless of variant.
     #[allow(dead_code)] // Used by complete/error (completion milestone).
+    #[must_use]
     pub const fn frame_id(self) -> FrameId {
         match self {
             ParentRef::SingleChild { frame_id } | ParentRef::IndexedChild { frame_id, .. } => {
@@ -41,13 +47,25 @@ pub enum FrameKind {
     /// Leaf: handler dispatched, waiting for result.
     Invoke,
     /// Sequential: first child active, then trampoline to `rest`.
-    Chain { rest: ActionId },
+    Chain {
+        /// The remaining action to advance after the first child completes.
+        rest: ActionId,
+    },
     /// Fan-out: collecting results from N parallel branches.
-    Parallel { results: Vec<Option<Value>> },
+    Parallel {
+        /// Slot per child; `None` until the child completes.
+        results: Vec<Option<Value>>,
+    },
     /// Fan-out: collecting results from N array elements.
-    ForEach { results: Vec<Option<Value>> },
+    ForEach {
+        /// Slot per element; `None` until the child completes.
+        results: Vec<Option<Value>>,
+    },
     /// Fixed-point: re-enter body on Continue, complete on Break.
-    Loop { body: ActionId },
+    Loop {
+        /// The body action to re-enter on each iteration.
+        body: ActionId,
+    },
     /// Error boundary: wraps child result in Ok/Err.
     Attempt,
 }

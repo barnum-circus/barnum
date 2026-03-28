@@ -1,13 +1,10 @@
 //! Pure state-machine workflow engine for Barnum.
 //!
 //! The engine is a synchronous state machine with no I/O, no async, no timers,
-//! and no concurrency. It receives `start(input)` and produces dispatches.
-//! Later milestones add `on_task_completed` to close the advance/complete cycle.
-//!
-//! This milestone implements frame storage, the `advance` function, and the
-//! `start` / `take_pending_dispatches` / `handler` public API.
+//! and no concurrency. External code drives it by calling [`Engine::advance`]
+//! and draining dispatches via [`Engine::take_pending_dispatches`].
 
-mod frame;
+pub mod frame;
 
 use barnum_ast::HandlerKind;
 use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
@@ -82,7 +79,20 @@ impl Engine {
         }
     }
 
-    /// Begin execution. Advances from the workflow root action.
+    /// The workflow's root action. Pass this to [`advance`](Engine::advance)
+    /// with the initial input to start execution.
+    #[must_use]
+    pub const fn workflow_root(&self) -> ActionId {
+        self.flat_config.workflow_root()
+    }
+
+    /// Convenience: advance from the workflow root with `parent: None`.
+    ///
+    /// Equivalent to:
+    /// ```ignore
+    /// let root = engine.workflow_root();
+    /// engine.advance(root, input, None)?;
+    /// ```
     ///
     /// # Errors
     ///
@@ -90,7 +100,7 @@ impl Engine {
     /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
     /// matching case).
     pub fn start(&mut self, input: Value) -> Result<(), AdvanceError> {
-        let workflow_root = self.flat_config.workflow_root();
+        let workflow_root = self.workflow_root();
         self.advance(workflow_root, input, None)
     }
 
@@ -123,8 +133,18 @@ impl Engine {
 
     /// Expand an `ActionId` into frames. Creates frames for structural
     /// combinators and bottoms out at Invoke leaves with pending dispatches.
+    ///
+    /// Pass `parent: None` for the top-level action (i.e., starting a
+    /// workflow). Internal recursion provides `Some(parent_ref)` to attach
+    /// child frames to their parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdvanceError`] if the workflow encounters a structural error
+    /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
+    /// matching case).
     #[allow(clippy::too_many_lines)]
-    fn advance(
+    pub fn advance(
         &mut self,
         action_id: ActionId,
         value: Value,
