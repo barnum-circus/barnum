@@ -93,11 +93,10 @@ For this milestone, no Actor trait — just the inline no-op. The trait is intro
 pub async fn run_workflow(
     workflow_state: &mut WorkflowState,
     scheduler: &mut Scheduler,
-    input: Value,
 ) -> Result<Value, CompleteError> {
     let root = workflow_state.workflow_root();
     workflow_state
-        .advance(root, input, None)
+        .advance(root, Value::Null, None)
         .expect("initial advance failed");
 
     loop {
@@ -131,9 +130,9 @@ This handles:
 
 ## Replay
 
-The only non-deterministic input to WorkflowState is the sequence of `(TaskId, Value)` pairs from handler completions. Everything else — dispatches, frame creation, value routing — is deterministic given the config and input.
+The only non-deterministic input to WorkflowState is the sequence of `(TaskId, Value)` pairs from handler completions. Everything else — dispatches, frame creation, value routing — is deterministic given the config.
 
-To replay: record the completion sequence, feed the same `(task_id, value)` pairs into `complete()` on a fresh WorkflowState with the same config and input. The engine reproduces the same behavior. No special event types or logging infrastructure needed — just the completions.
+To replay: record the completion sequence, feed the same `(task_id, value)` pairs into `complete()` on a fresh WorkflowState with the same config. The engine reproduces the same behavior. No special event types or logging infrastructure needed — just the completions.
 
 When replay or observability is needed, completions can be logged at the `run_workflow` level — one line per `complete()` call — without any architectural changes.
 
