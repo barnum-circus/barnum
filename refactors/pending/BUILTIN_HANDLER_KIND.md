@@ -110,6 +110,10 @@ impl Scheduler {
                     let _ = result_tx.send((task_id, result));
                 });
             }
+            // Channel type: (TaskId, Result<Value, HandlerError>)
+            // HandlerError covers both BuiltinError and TypeScript subprocess failures.
+            // A builtin type error is the same class of failure as a TS handler throwing —
+            // both propagate through the same error path in run_workflow.
             HandlerKind::TypeScript(_) => {
                 match &self.mode {
                     ExecutionMode::Noop => {
@@ -141,56 +145,90 @@ With builtins, tests should use `Constant`, `Identity`, `Tag`, etc. as real hand
 ```rust
 // barnum_event_loop/src/lib.rs (or a dedicated builtins module)
 
-fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Value {
+#[derive(Debug, thiserror::Error)]
+pub enum BuiltinError {
+    #[error("{builtin}: expected {expected}, got {actual}")]
+    TypeError {
+        builtin: &'static str,
+        expected: &'static str,
+        actual: Value,
+    },
+}
+
+fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Value, BuiltinError> {
     match builtin_kind {
-        BuiltinKind::Constant { value } => value.clone(),
+        BuiltinKind::Constant { value } => Ok(value.clone()),
 
-        BuiltinKind::Identity => input.clone(),
+        BuiltinKind::Identity => Ok(input.clone()),
 
-        BuiltinKind::Drop => Value::Null,
+        BuiltinKind::Drop => Ok(Value::Null),
 
         BuiltinKind::Tag { value: tag } => {
-            json!({ "kind": tag, "value": input })
+            Ok(json!({ "kind": tag, "value": input }))
         }
 
         BuiltinKind::Merge => {
             let Value::Array(items) = input else {
-                panic!("Merge: expected array input, got {input}");
+                return Err(BuiltinError::TypeError {
+                    builtin: "Merge",
+                    expected: "array",
+                    actual: input.clone(),
+                });
             };
             let mut merged = serde_json::Map::new();
             for item in items {
                 let Value::Object(obj) = item else {
-                    panic!("Merge: expected object in array, got {item}");
+                    return Err(BuiltinError::TypeError {
+                        builtin: "Merge",
+                        expected: "object in array",
+                        actual: item.clone(),
+                    });
                 };
                 for (k, v) in obj {
                     merged.insert(k.clone(), v.clone());
                 }
             }
-            Value::Object(merged)
+            Ok(Value::Object(merged))
         }
 
         BuiltinKind::Flatten => {
             let Value::Array(outer) = input else {
-                panic!("Flatten: expected array input, got {input}");
+                return Err(BuiltinError::TypeError {
+                    builtin: "Flatten",
+                    expected: "array",
+                    actual: input.clone(),
+                });
             };
             let mut result = Vec::new();
             for item in outer {
                 let Value::Array(inner) = item else {
-                    panic!("Flatten: expected array element, got {item}");
+                    return Err(BuiltinError::TypeError {
+                        builtin: "Flatten",
+                        expected: "array element",
+                        actual: item.clone(),
+                    });
                 };
                 result.extend(inner.iter().cloned());
             }
-            Value::Array(result)
+            Ok(Value::Array(result))
         }
 
         BuiltinKind::ExtractField { value: field } => {
             let Value::String(field_name) = field else {
-                panic!("ExtractField: value must be a string, got {field}");
+                return Err(BuiltinError::TypeError {
+                    builtin: "ExtractField",
+                    expected: "string value",
+                    actual: field.clone(),
+                });
             };
             let Value::Object(obj) = input else {
-                panic!("ExtractField: expected object input, got {input}");
+                return Err(BuiltinError::TypeError {
+                    builtin: "ExtractField",
+                    expected: "object",
+                    actual: input.clone(),
+                });
             };
-            obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null)
+            Ok(obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null))
         }
     }
 }
@@ -297,9 +335,6 @@ Because builtins go through the scheduler, logging can be added in the scheduler
 
 `ExecutionMode::Noop` silently stubs every handler to return `{}`. Tests that use it verify structural mechanics but never check data flow — a false sense of coverage. Delete `ExecutionMode::Noop`, delete `Scheduler::new()`, and rewrite all tests with real assertions on real values.
 
-### Error handling
-
-The `execute_builtin` function panics on invalid input. These should return `Result` and propagate as proper errors through the completion path.
 
 ### Generate TypeScript types from Rust
 
