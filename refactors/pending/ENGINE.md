@@ -17,7 +17,6 @@ Every combinator follows one of two patterns:
 
 ```rust
 struct Frame {
-    id: FrameId,
     parent: Option<ParentRef>,
     kind: FrameKind,
 }
@@ -60,7 +59,7 @@ enum FrameKind {
 
 ```rust
 struct Engine {
-    flat: FlatConfig,
+    flat_config: FlatConfig,
     frames: HashMap<FrameId, Frame>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
@@ -71,7 +70,7 @@ struct Engine {
 
 struct Dispatch {
     task_id: TaskId,
-    handler: HandlerKind,
+    handler_id: HandlerId,
     value: Value,
 }
 
@@ -81,148 +80,237 @@ enum EngineResult {
 }
 ```
 
-## advance(action_id, value, parent)
+## advance
 
 Walk the action table from `action_id`. Recurse through structural nodes until reaching Invoke leaves.
 
-```
-advance(action_id, value, parent):
-  match flat.action(action_id):
+```rust
+fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRef>) {
+    match self.flat_config.action(action_id) {
+        FlatAction::Invoke { handler } => {
+            let task_id = self.next_task_id();
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::Invoke { task_id },
+            });
+            self.task_to_frame.insert(task_id, frame_id);
+            self.pending_dispatches.push(Dispatch {
+                task_id,
+                handler_id: handler,
+                value,
+            });
+        }
 
-    Invoke { handler } =>
-      create Invoke frame with parent
-      queue dispatch(task_id, flat.handler(handler), value)
-      register task_id → frame_id
+        FlatAction::Chain { rest } => {
+            let first = self.flat_config.chain_first(action_id);
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::Chain { rest },
+            });
+            self.advance(first, value, Some(ParentRef::SingleChild { frame_id }));
+        }
 
-    Chain { rest } =>
-      let first = flat.chain_first(action_id)    // resolve child slot at action_id + 1
-      create Chain frame { rest } with parent
-      advance(first, value, SingleChild(this_frame))
+        FlatAction::Parallel { count } => {
+            let children: Vec<ActionId> =
+                self.flat_config.parallel_children(action_id).collect();
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::Parallel {
+                    results: vec![None; count.0 as usize],
+                },
+            });
+            for (i, child) in children.into_iter().enumerate() {
+                self.advance(
+                    child,
+                    value.clone(),
+                    Some(ParentRef::IndexedChild { frame_id, child_index: i }),
+                );
+            }
+        }
 
-    Parallel { count } =>
-      let children = flat.parallel_children(action_id)
-      create Parallel frame (results = [None; count]) with parent
-      for (i, child) in children:
-        advance(child, value.clone(), IndexedChild(this_frame, i))
+        FlatAction::ForEach { body } => {
+            let elements = match value {
+                Value::Array(elements) => elements,
+                other => panic!("ForEach expected array, got {other}"),
+            };
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::ForEach {
+                    results: vec![None; elements.len()],
+                },
+            });
+            for (i, element) in elements.into_iter().enumerate() {
+                self.advance(
+                    body,
+                    element,
+                    Some(ParentRef::IndexedChild { frame_id, child_index: i }),
+                );
+            }
+        }
 
-    ForEach { body } =>
-      let elements = value as array
-      create ForEach frame (results = [None; N]) with parent
-      for (i, element) in elements:
-        advance(body, element, IndexedChild(this_frame, i))
+        FlatAction::Branch { .. } => {
+            let kind_str = value["kind"]
+                .as_str()
+                .expect("Branch input must have a string 'kind' field");
+            let case_action_id = self
+                .flat_config
+                .branch_cases(action_id)
+                .find(|(key, _)| key.as_str() == kind_str)
+                .expect("no matching branch case")
+                .1;
+            self.advance(case_action_id, value, parent);
+        }
 
-    Branch { count } =>
-      let cases = flat.branch_cases(action_id)   // (KindDiscriminator, ActionId) pairs
-      let kind = value["kind"]
-      let case_id = cases.find(kind)
-      advance(case_id, value, parent)       // no frame — pass through
+        FlatAction::Loop { body } => {
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::Loop { body },
+            });
+            self.advance(body, value, Some(ParentRef::SingleChild { frame_id }));
+        }
 
-    Loop { body } =>
-      create Loop frame { body } with parent
-      advance(body, value, SingleChild(this_frame))
+        FlatAction::Attempt { child } => {
+            let frame_id = self.alloc_frame(Frame {
+                parent,
+                kind: FrameKind::Attempt,
+            });
+            self.advance(child, value, Some(ParentRef::SingleChild { frame_id }));
+        }
 
-    Attempt { child } =>
-      create Attempt frame with parent
-      advance(child, value, SingleChild(this_frame))
-
-    Step { target } =>
-      advance(target, value, parent)         // no frame — pass through
+        FlatAction::Step { target } => {
+            self.advance(target, value, parent);
+        }
+    }
+}
 ```
 
 Branch and Step are tail calls — they redirect without allocating state.
 
-## complete(parent_ref, value)
+## complete
 
 A child resolved. Advance the parent.
 
+```rust
+fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
+    let Some(parent_ref) = parent else {
+        self.result = Some(EngineResult::Success(value));
+        return;
+    };
+
+    match parent_ref {
+        ParentRef::SingleChild { frame_id } => self.complete_single(frame_id, value),
+        ParentRef::IndexedChild { frame_id, child_index } => {
+            self.complete_indexed(frame_id, child_index, value);
+        }
+    }
+}
+
+fn complete_single(&mut self, frame_id: FrameId, value: Value) {
+    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    match frame.kind {
+        FrameKind::Chain { rest } => {
+            // Trampoline: remove this frame, advance rest with original parent.
+            self.advance(rest, value, frame.parent);
+        }
+
+        FrameKind::Loop { body } => {
+            let kind = value["kind"].as_str().expect("Loop result must have 'kind'");
+            let inner = value.get("value").cloned().unwrap_or(Value::Null);
+            match kind {
+                "Continue" => {
+                    // Re-insert the frame (it wasn't consumed) and re-enter.
+                    self.frames.insert(frame_id, Frame {
+                        parent: frame.parent,
+                        kind: FrameKind::Loop { body },
+                    });
+                    self.advance(body, inner, Some(ParentRef::SingleChild { frame_id }));
+                }
+                "Break" => {
+                    self.complete(frame.parent, inner);
+                }
+                other => panic!("Loop result kind must be Continue or Break, got {other}"),
+            }
+        }
+
+        FrameKind::Attempt => {
+            let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
+            self.complete(frame.parent, wrapped);
+        }
+
+        other => panic!("complete_single called on {other:?}"),
+    }
+}
+
+fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
+    let frame = self.frames.get_mut(&frame_id).expect("frame not found");
+    let results = match &mut frame.kind {
+        FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
+        other => panic!("complete_indexed called on {other:?}"),
+    };
+
+    results[child_index] = Some(value);
+
+    if results.iter().all(Option::is_some) {
+        let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
+        let frame = self.frames.remove(&frame_id).expect("frame not found");
+        self.complete(frame.parent, Value::Array(collected));
+    }
+}
 ```
-complete(parent_ref, value):
-  if parent_ref is None:
-    result = Success(value)
-    return
 
-  match parent_ref:
-    SingleChild { frame_id } => complete_single(frame_id, value)
-    IndexedChild { frame_id, child_index } => complete_indexed(frame_id, child_index, value)
-
-complete_single(frame_id, value):
-  let frame = frames[frame_id]
-  match frame.kind:
-
-    Chain { rest } =>
-      remove frame
-      advance(rest, value, frame.parent)    // trampoline
-
-    Loop { body } =>
-      match value["kind"]:
-        "Continue" => advance(body, value["value"], SingleChild(frame_id))
-        "Break" =>
-          remove frame
-          complete(frame.parent, value["value"])
-
-    Attempt =>
-      remove frame
-      complete(frame.parent, { kind: "Ok", value })
-
-complete_indexed(frame_id, child_index, value):
-  let frame = frames[frame_id]
-  match frame.kind:
-
-    Parallel { results } | ForEach { results } =>
-      results[child_index] = Some(value)
-      if results.iter().all(Option::is_some):
-        let collected = results.drain(..).map(unwrap).collect()
-        remove frame
-        complete(frame.parent, Value::Array(collected))
-```
-
-## error(parent_ref, error)
+## error
 
 A child failed.
 
+```rust
+fn error(&mut self, parent: Option<ParentRef>, error: String) {
+    let Some(parent_ref) = parent else {
+        self.result = Some(EngineResult::Failure(error));
+        return;
+    };
+
+    let frame_id = parent_ref.frame_id();
+    let frame = self.frames.remove(&frame_id).expect("frame not found");
+
+    match frame.kind {
+        FrameKind::Attempt => {
+            let wrapped = serde_json::json!({ "kind": "Err", "error": error });
+            self.complete(frame.parent, wrapped);
+        }
+
+        FrameKind::Parallel { .. } | FrameKind::ForEach { .. } => {
+            self.cancel_descendants(frame_id);
+            self.error(frame.parent, error);
+        }
+
+        _ => {
+            self.error(frame.parent, error);
+        }
+    }
+}
 ```
-error(parent_ref, error):
-  if parent_ref is None:
-    result = Failure(error)
-    return
 
-  let frame_id = parent_ref.frame_id()    // both variants have this
-  let frame = frames[frame_id]
+## on_task_completed
 
-  match frame.kind:
-    Attempt =>
-      remove frame
-      complete(frame.parent, { kind: "Err", error })
-
-    Parallel | ForEach =>
-      cancel all sibling Invoke frames (remove from frames + task_to_frame)
-      remove frame
-      error(frame.parent, error)
-
-    _ =>
-      remove frame
-      error(frame.parent, error)
-```
-
-## on_task_completed(task_id, result)
-
-```
-on_task_completed(task_id, result):
-  let frame_id = task_to_frame.remove(task_id)
-  let frame = frames.remove(frame_id)
-  match result:
-    Success { value } => complete(frame.parent, value)
-    Failure { error } => error(frame.parent, error)
+```rust
+fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult) {
+    let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task_id");
+    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    match result {
+        TaskResult::Success { value } => self.complete(frame.parent, value),
+        TaskResult::Failure { error } => self.error(frame.parent, error),
+    }
+}
 ```
 
 ## Public interface
 
 ```rust
 impl Engine {
-    fn new(flat: FlatConfig) -> Self;
-    fn start(&mut self);                                         // advance(workflow, null, None)
+    fn new(flat_config: FlatConfig) -> Self;
+    fn start(&mut self);
     fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult);
-    fn take_pending_dispatches(&mut self) -> Vec<Dispatch>;      // always returns everything
+    fn take_pending_dispatches(&mut self) -> Vec<Dispatch>;
     fn is_done(&self) -> bool;
     fn result(&self) -> Option<&EngineResult>;
 }
