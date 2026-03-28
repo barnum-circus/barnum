@@ -7,12 +7,28 @@
 
 use barnum_ast::HandlerKind;
 use barnum_engine::{CompleteError, Dispatch, TaskId, WorkflowState};
+use intern::Lookup;
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
 use tokio::sync::mpsc;
 
 // =============================================================================
 // Scheduler
 // =============================================================================
+
+/// How the scheduler executes handler invocations.
+enum ExecutionMode {
+    /// No-op: every handler returns `{}`. Used for tests.
+    Noop,
+    /// Spawn a subprocess per invocation: `{executor} {worker_path} <module> <func>`.
+    Subprocess {
+        /// The command to invoke the worker, e.g. `"node /path/to/tsx/cli.mjs"`.
+        executor: String,
+        /// Path to `worker.ts`.
+        worker_path: String,
+    },
+}
 
 /// Dispatches handler invocations as tokio tasks and collects results.
 ///
@@ -21,31 +37,71 @@ use tokio::sync::mpsc;
 pub struct Scheduler {
     result_tx: mpsc::UnboundedSender<(TaskId, Value)>,
     result_rx: mpsc::UnboundedReceiver<(TaskId, Value)>,
+    mode: ExecutionMode,
 }
 
 impl Scheduler {
-    /// Create a new scheduler.
+    /// Create a no-op scheduler (handlers return `{}`). Used for tests.
     #[must_use]
     pub fn new() -> Self {
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         Self {
             result_tx,
             result_rx,
+            mode: ExecutionMode::Noop,
+        }
+    }
+
+    /// Create a scheduler that spawns one subprocess per handler invocation.
+    ///
+    /// `executor` is the command to run TypeScript, e.g. `"node /path/to/tsx/cli.mjs"`.
+    /// `worker_path` is the absolute path to `worker.ts`.
+    #[must_use]
+    pub fn with_executor(executor: String, worker_path: String) -> Self {
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+        Self {
+            result_tx,
+            result_rx,
+            mode: ExecutionMode::Subprocess {
+                executor,
+                worker_path,
+            },
         }
     }
 
     /// Dispatch a handler invocation.
     ///
-    /// Spawns a tokio task that executes the handler and sends the result
-    /// through the internal channel. Currently all handlers are no-ops that
-    /// return an empty JSON object.
-    pub fn dispatch(&self, dispatch: &Dispatch, _handler: &HandlerKind) {
+    /// Spawns a tokio task that executes the handler (either no-op or
+    /// subprocess) and sends the result through the internal channel.
+    pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
         let result_tx = self.result_tx.clone();
         let task_id = dispatch.task_id;
-        tokio::spawn(async move {
-            let value = Value::Object(serde_json::Map::default());
-            let _ = result_tx.send((task_id, value));
-        });
+
+        match &self.mode {
+            ExecutionMode::Noop => {
+                tokio::spawn(async move {
+                    let value = Value::Object(serde_json::Map::default());
+                    let _ = result_tx.send((task_id, value));
+                });
+            }
+            ExecutionMode::Subprocess {
+                executor,
+                worker_path,
+            } => {
+                let HandlerKind::TypeScript(ts) = handler;
+                let module = ts.module.lookup().to_owned();
+                let func = ts.func.lookup().to_owned();
+                let value = dispatch.value.clone();
+                let executor = executor.clone();
+                let worker_path = worker_path.clone();
+
+                tokio::spawn(async move {
+                    let result =
+                        execute_typescript(&executor, &worker_path, &module, &func, &value).await;
+                    let _ = result_tx.send((task_id, result));
+                });
+            }
+        }
     }
 
     /// Wait for the next handler result.
@@ -61,6 +117,57 @@ impl Default for Scheduler {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// =============================================================================
+// TypeScript subprocess execution
+// =============================================================================
+
+/// Execute a TypeScript handler by spawning a subprocess.
+///
+/// Protocol:
+///   stdin  → `{ "value": <input> }` (JSON)
+///   stdout ← handler result (JSON)
+///
+/// # Panics
+///
+/// Panics if the subprocess fails to spawn, write stdin, read stdout,
+/// exits non-zero, or returns invalid JSON.
+#[allow(clippy::expect_used, clippy::panic)]
+async fn execute_typescript(
+    executor: &str,
+    worker_path: &str,
+    module: &str,
+    func: &str,
+    value: &Value,
+) -> Value {
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(format!("{executor} {worker_path} {module} {func}"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn handler process");
+
+    // Write input to stdin and close it
+    let mut stdin = child.stdin.take().expect("no stdin");
+    let input =
+        serde_json::to_vec(&serde_json::json!({ "value": value })).expect("serialize failed");
+    stdin.write_all(&input).await.expect("stdin write failed");
+    drop(stdin);
+
+    // Read stdout + wait for exit
+    let output = child.wait_with_output().await.expect("wait failed");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        panic!(
+            "handler {module}:{func} failed (exit {}): {stderr}",
+            output.status.code().unwrap_or(-1)
+        );
+    }
+
+    serde_json::from_slice(&output.stdout).expect("invalid handler output JSON")
 }
 
 // =============================================================================
