@@ -12,7 +12,7 @@ A frame tracks the engine's execution state at one structural combinator. Frames
 
 Every combinator follows one of two patterns:
 
-- **Single-child**: has one active child. When the child completes, the frame either completes upward (Attempt, Then) or re-enters the child (Loop on Continue). No indexing.
+- **Single-child**: has one active child. When the child completes, the frame either completes upward (Attempt, Chain) or re-enters the child (Loop on Continue). No indexing.
 - **Fan-out**: has N children running concurrently. Each child fills a slot. When all slots are filled, the frame collects results and completes upward (Parallel, ForEach).
 
 ```rust
@@ -24,7 +24,7 @@ struct Frame {
 
 enum ParentRef {
     /// Parent has one child. No index needed.
-    /// Used by: Then, Loop, Attempt.
+    /// Used by: Chain, Loop, Attempt.
     SingleChild { frame_id: FrameId },
     /// Parent has N children, this is child at `child_index`.
     /// Used by: Parallel, ForEach.
@@ -36,7 +36,7 @@ enum FrameKind {
     Invoke { task_id: TaskId },
 
     /// Sequential: run first child, then trampoline to rest.
-    Then { rest: ActionId },
+    Chain { rest: ActionId },
 
     /// Collecting results from N parallel branches.
     Parallel { results: Vec<Option<Value>> },
@@ -54,7 +54,7 @@ enum FrameKind {
 
 **Branch and Step do not create frames.** They are immediate reductions — Branch reads `value["kind"]` and redirects to the matching case; Step follows the target ActionId. Both pass through the parent reference unchanged. No state to track, no frame needed.
 
-**Then does not mutate.** When its child completes, the Then frame removes itself and trampolines to `rest` with the original parent. At most one Then frame exists at a time per sequential chain.
+**Chain does not mutate.** When its child completes, the Chain frame removes itself and trampolines to `rest` with the original parent. At most one Chain frame exists at a time per sequential chain.
 
 ## Engine state
 
@@ -94,13 +94,13 @@ advance(action_id, value, parent):
       queue dispatch(task_id, flat.handler(handler), value)
       register task_id → frame_id
 
-    Then { rest } =>
-      let first = flat.then_first(action_id)    // resolve child slot at action_id + 1
-      create Then frame { rest } with parent
+    Chain { rest } =>
+      let first = flat.chain_first(action_id)    // resolve child slot at action_id + 1
+      create Chain frame { rest } with parent
       advance(first, value, SingleChild(this_frame))
 
     Parallel { count } =>
-      let children = flat.children(action_id)
+      let children = flat.parallel_children(action_id)
       create Parallel frame (results = [None; count]) with parent
       for (i, child) in children:
         advance(child, value.clone(), IndexedChild(this_frame, i))
@@ -149,7 +149,7 @@ complete_single(frame_id, value):
   let frame = frames[frame_id]
   match frame.kind:
 
-    Then { rest } =>
+    Chain { rest } =>
       remove frame
       advance(rest, value, frame.parent)    // trampoline
 
@@ -232,9 +232,9 @@ impl Engine {
 
 ```rust
 fn single_invoke()                      // start → 1 dispatch
-fn then_dispatches_first_only()         // then(a, b) → 1 dispatch (a)
-fn then_trampolines_on_completion()     // complete a → dispatches b
-fn nested_then_completes()              // then(a, then(b, c)) → full pipeline
+fn chain_dispatches_first_only()         // chain(a, b) → 1 dispatch (a)
+fn chain_trampolines_on_completion()     // complete a → dispatches b
+fn nested_chain_completes()              // chain(a, chain(b, c)) → full pipeline
 fn parallel_dispatches_all()            // parallel of 3 → 3 dispatches
 fn parallel_collects_results()          // all complete → array result
 fn foreach_dispatches_per_element()     // 3 elements → 3 dispatches
@@ -245,9 +245,9 @@ fn attempt_wraps_success()              // Ok wrapper
 fn attempt_catches_failure()            // Err wrapper, no propagation
 fn step_follows_named()                 // enters the step's action
 fn step_follows_root()                  // re-enters workflow
-fn error_propagates_through_then()
+fn error_propagates_through_chain()
 fn error_cancels_parallel_siblings()
-fn nested_then_in_parallel()
+fn nested_chain_in_parallel()
 ```
 
 Test helpers: `invoke(name)` builds an `Action::Invoke`. `success(v)` builds `TaskResult::Success`. `engine_from(config)` flattens and constructs.
