@@ -1,8 +1,8 @@
 //! Pure state-machine workflow engine for Barnum.
 //!
 //! The engine is a synchronous state machine with no I/O, no async, no timers,
-//! and no concurrency. External code drives it by calling [`Engine::advance`]
-//! and draining dispatches via [`Engine::take_pending_dispatches`].
+//! and no concurrency. External code drives it by calling [`WorkflowState::advance`]
+//! and draining dispatches via [`WorkflowState::take_pending_dispatches`].
 
 pub mod frame;
 
@@ -22,7 +22,7 @@ use u32_newtype::u32_newtype;
 
 u32_newtype!(
     /// Identifies a pending handler invocation. Assigned by the engine,
-    /// returned to the engine in [`Engine::complete`].
+    /// returned to the engine in [`WorkflowState::complete`].
     TaskId
 );
 
@@ -34,9 +34,9 @@ u32_newtype!(
 #[derive(Debug)]
 pub struct Dispatch {
     /// Correlates this dispatch with the result delivered to
-    /// [`Engine::complete`].
+    /// [`WorkflowState::complete`].
     pub task_id: TaskId,
-    /// Index into the handler pool. Resolve via [`Engine::handler`].
+    /// Index into the handler pool. Resolve via [`WorkflowState::handler`].
     pub handler_id: HandlerId,
     /// The value to pass to the handler.
     pub value: Value,
@@ -73,7 +73,7 @@ pub enum AdvanceError {
 // CompleteError
 // ---------------------------------------------------------------------------
 
-/// Errors that can occur during [`Engine::complete`].
+/// Errors that can occur during [`WorkflowState::complete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CompleteError {
     /// Loop body returned a value that is not `{ kind: "Continue" }` or
@@ -94,12 +94,12 @@ pub enum CompleteError {
 
 /// Pure state-machine workflow engine.
 ///
-/// Call [`advance`](Engine::advance) with [`workflow_root`](Engine::workflow_root)
+/// Call [`advance`](WorkflowState::advance) with [`workflow_root`](WorkflowState::workflow_root)
 /// to begin execution, then drain dispatches via
-/// [`take_pending_dispatches`](Engine::take_pending_dispatches). Deliver handler
-/// results via [`complete`](Engine::complete).
+/// [`take_pending_dispatches`](WorkflowState::take_pending_dispatches). Deliver handler
+/// results via [`complete`](WorkflowState::complete).
 #[derive(Debug)]
-pub struct Engine {
+pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
     task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
@@ -107,7 +107,7 @@ pub struct Engine {
     next_task_id: u32,
 }
 
-impl Engine {
+impl WorkflowState {
     /// Create a new engine from a flattened config.
     #[must_use]
     #[allow(clippy::missing_const_for_fn)] // BTreeMap::new() is not const
@@ -121,7 +121,7 @@ impl Engine {
         }
     }
 
-    /// The workflow's root action. Pass this to [`advance`](Engine::advance)
+    /// The workflow's root action. Pass this to [`advance`](WorkflowState::advance)
     /// with the initial input to start execution.
     #[must_use]
     pub const fn workflow_root(&self) -> ActionId {
@@ -266,7 +266,7 @@ impl Engine {
     ///
     /// Invoke actions do not create frames — they produce a [`Dispatch`] and
     /// record the parent reference for later delivery via
-    /// [`complete`](Engine::complete).
+    /// [`complete`](WorkflowState::complete).
     ///
     /// Pass `parent: None` for the top-level action (i.e., starting a
     /// workflow). Internal recursion provides `Some(parent_ref)` to attach
@@ -483,17 +483,17 @@ mod tests {
     }
 
     #[allow(clippy::unwrap_used)]
-    fn engine_from(workflow: Action) -> Engine {
+    fn engine_from(workflow: Action) -> WorkflowState {
         let config = Config {
             workflow,
             steps: HashMap::new(),
         };
-        Engine::new(flatten(config).unwrap())
+        WorkflowState::new(flatten(config).unwrap())
     }
 
     #[allow(clippy::unwrap_used)]
-    fn engine_from_config(config: Config) -> Engine {
-        Engine::new(flatten(config).unwrap())
+    fn engine_from_config(config: Config) -> WorkflowState {
+        WorkflowState::new(flatten(config).unwrap())
     }
 
     // -- Advance tests --

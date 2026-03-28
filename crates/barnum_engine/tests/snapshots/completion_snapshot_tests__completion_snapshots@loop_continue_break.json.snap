@@ -1,10 +1,11 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/loop_continue_break.json
 ---
 --- After advance ---
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
@@ -78,7 +79,7 @@ Pending: [
 
 --- Completion: task_id=0, value={"kind":"Continue","value":1} ---
 Result: None
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
@@ -152,7 +153,7 @@ Pending: [
 
 --- Completion: task_id=1, value={"kind":"Continue","value":2} ---
 Result: None
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
@@ -226,7 +227,7 @@ Pending: [
 
 --- Completion: task_id=2, value={"kind":"Break","value":"done"} ---
 Result: Some(String("done"))
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(

@@ -1,14 +1,14 @@
 # TypeScript Handler Invocation
 
-The final step to a working proof of concept: actually executing TypeScript handlers and feeding results back to the engine.
+The final step to a working proof of concept: actually executing TypeScript handlers and feeding results back to the workflow_state.
 
 **Depends on:** COMPLETION.md (advance/complete cycle), ENGINE.md (design)
 
-**Scope:** A minimal runtime that takes dispatches from the engine, executes TypeScript handlers, and delivers results back via `on_task_completed`. No persistence, no restart, no scheduling — just the synchronous dispatch/execute/complete loop.
+**Scope:** A minimal runtime that takes dispatches from the engine, executes TypeScript handlers, and delivers results back via `complete`. No persistence, no restart, no scheduling — just the synchronous dispatch/execute/complete loop.
 
 ## Current state
 
-The engine produces `Dispatch { handler_id, value }`. The caller resolves `handler_id` to a `HandlerKind::TypeScript { module, func, .. }` via `engine.handler(id)`. But nothing actually runs the TypeScript.
+The engine produces `Dispatch { handler_id, value }`. The caller resolves `handler_id` to a `HandlerKind::TypeScript { module, func, .. }` via `workflow_state.handler(id)`. But nothing actually runs the TypeScript.
 
 On the TypeScript side, `createHandler()` in `libs/barnum/src/handler.ts` captures:
 - `__filePath`: absolute path to the handler module (captured via V8 stack trace)
@@ -97,24 +97,25 @@ struct TypeScriptRuntime {
 
 ```
 let flat_config = flatten(config)?;
-let mut engine = Engine::new(flat_config);
-engine.start(input)?;
+let mut workflow_state = WorkflowState::new(flat_config);
+let root = workflow_state.workflow_root();
+workflow_state.advance(root, input, None)?;
 
 loop {
-    let dispatches = engine.take_pending_dispatches();
+    let dispatches = workflow_state.take_pending_dispatches();
     if dispatches.is_empty() {
         // Workflow complete or stuck — shouldn't happen if engine is correct.
         break;
     }
     for dispatch in &dispatches {
-        let handler = engine.handler(dispatch.handler_id);
+        let handler = workflow_state.handler(dispatch.handler_id);
         let HandlerKind::TypeScript(ts) = handler;
         runtime.dispatch(dispatch.task_id, &ts.module, &ts.func, &dispatch.value);
     }
     // Wait for results. For POC, just read one at a time.
     for _ in 0..dispatches.len() {
         let (task_id, result) = runtime.recv();
-        if let Some(terminal) = engine.on_task_completed(task_id, result) {
+        if let Some(terminal) = workflow_state.complete(task_id, result) {
             // Workflow done.
             return terminal;
         }
@@ -124,22 +125,22 @@ loop {
 
 This is synchronous and blocking. It dispatches all pending tasks, waits for all of them to complete, then repeats. Good enough for a POC. A real scheduler would use async I/O and not block on all dispatches completing before processing results.
 
-**Important subtlety:** `on_task_completed` can produce new dispatches (Chain trampoline, Loop re-enter). The inner loop should drain dispatches after each `on_task_completed` call, not assume the count matches the original batch. Revised:
+**Important subtlety:** `complete` can produce new dispatches (Chain trampoline, Loop re-enter). The inner loop should drain dispatches after each `complete` call, not assume the count matches the original batch. Revised:
 
 ```
 loop {
-    let dispatches = engine.take_pending_dispatches();
+    let dispatches = workflow_state.take_pending_dispatches();
     if dispatches.is_empty() {
         break;
     }
     for dispatch in &dispatches {
-        let handler = engine.handler(dispatch.handler_id);
+        let handler = workflow_state.handler(dispatch.handler_id);
         let HandlerKind::TypeScript(ts) = handler;
         runtime.dispatch(dispatch.task_id, &ts.module, &ts.func, &dispatch.value);
     }
     // Read ONE result at a time and check for new dispatches.
     let (task_id, result) = runtime.recv();
-    if let Some(terminal) = engine.on_task_completed(task_id, result) {
+    if let Some(terminal) = workflow_state.complete(task_id, result) {
         return terminal;
     }
     // Loop back — take_pending_dispatches will pick up any newly produced dispatches.

@@ -8,7 +8,7 @@
 
 use barnum_ast::Config;
 use barnum_ast::flat::flatten;
-use barnum_engine::{Engine, TaskId};
+use barnum_engine::{TaskId, WorkflowState};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -35,7 +35,7 @@ fn completion_snapshots() {
         let test_case: TestCase = serde_json::from_str(&contents).unwrap();
 
         let flat_config = flatten(test_case.config).unwrap();
-        let mut engine = Engine::new(flat_config);
+        let mut engine = WorkflowState::new(flat_config);
         let root = engine.workflow_root();
 
         let mut trace = String::new();

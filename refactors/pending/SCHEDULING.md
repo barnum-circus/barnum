@@ -4,7 +4,7 @@ How dispatches produced by the engine get executed and how results flow back in.
 
 **Depends on:** COMPLETION.md (engine completion milestone — done)
 
-**Scope:** The event-driven scheduling loop, the bridge between `Engine` and the outside world. After advance and completion, this makes the engine actually *run*.
+**Scope:** The event-driven scheduling loop, the bridge between `WorkflowState` and the outside world. After advance and completion, this makes the engine actually *run*.
 
 ## The engine is not the runtime
 
@@ -12,7 +12,7 @@ The engine is a pure state machine. No I/O, no async, no timers, no concurrency.
 - Receives `advance(workflow_root(), input, None)` and produces dispatches
 - Receives `complete(task_id, value)` and produces more dispatches (or terminates)
 
-The runtime is everything around the engine:
+The runtime is everything around the workflow_state:
 - Taking dispatches and executing them
 - Collecting results and feeding them back via `complete`
 - Managing concurrency (multiple handlers executing in parallel)
@@ -32,10 +32,10 @@ enum Event {
 
 The scheduler owns the engine and a channel `(tx, rx)`. The loop:
 
-1. `engine.advance(engine.workflow_root(), input, None)`
+1. `workflow_state.advance(workflow_state.workflow_root(), input, None)`
 2. For each pending dispatch: emit `TaskTriggered`, then actually execute the handler
 3. `loop { event = rx.recv().await }` — process completions as they arrive
-4. On `TaskCompleted`: call `engine.complete(task_id, value)`, take new dispatches, emit `TaskTriggered` for each, execute handlers
+4. On `TaskCompleted`: call `workflow_state.complete(task_id, value)`, take new dispatches, emit `TaskTriggered` for each, execute handlers
 5. When `complete` returns `Some(value)`: workflow is done
 
 ### Why event-driven?
@@ -65,35 +65,35 @@ Each actor receives dispatches and has access to `tx` to send completions back. 
 
 **Single-threaded engine access.** The scheduler calls engine methods one at a time, never concurrently. Handlers execute concurrently on tokio tasks, but results arrive through the channel and are processed sequentially.
 
-**Deterministic engine.** Given the same sequence of `(TaskId, Value)` completions, the engine always produces the same state transitions. Nondeterminism is only in completion ordering, which is captured by the event stream.
+**Deterministic workflow_state.** Given the same sequence of `(TaskId, Value)` completions, the engine always produces the same state transitions. Nondeterminism is only in completion ordering, which is captured by the event stream.
 
-**Engine API:**
-- `engine.advance(action_id, value, parent)` — expand an action
-- `engine.complete(task_id, value) -> Result<Option<Value>, CompleteError>` — deliver a result
-- `engine.take_pending_dispatches() -> Vec<Dispatch>` — drain pending work
-- `engine.workflow_root() -> ActionId` — the root action
-- `engine.handler(id) -> &HandlerKind` — resolve a handler ID
+**WorkflowState API:**
+- `workflow_state.advance(action_id, value, parent)` — expand an action
+- `workflow_state.complete(task_id, value) -> Result<Option<Value>, CompleteError>` — deliver a result
+- `workflow_state.take_pending_dispatches() -> Vec<Dispatch>` — drain pending work
+- `workflow_state.workflow_root() -> ActionId` — the root action
+- `workflow_state.handler(id) -> &HandlerKind` — resolve a handler ID
 
 ## Sketch
 
 ```rust
-pub async fn run(engine: &mut Engine, input: Value) -> Value {
+pub async fn run(workflow_state: &mut WorkflowState, input: Value) -> Value {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
 
     // Initial advance
-    let root = engine.workflow_root();
-    engine.advance(root, input, None).unwrap();
-    dispatch_pending(engine, &tx);
+    let root = workflow_state.workflow_root();
+    workflow_state.advance(root, input, None).unwrap();
+    dispatch_pending(workflow_state, &tx);
 
     // Event loop
     loop {
         let event = rx.recv().await.expect("channel closed");
         match event {
             Event::TaskCompleted { task_id, value } => {
-                if let Some(result) = engine.complete(task_id, value).unwrap() {
+                if let Some(result) = workflow_state.complete(task_id, value).unwrap() {
                     return result;
                 }
-                dispatch_pending(engine, &tx);
+                dispatch_pending(workflow_state, &tx);
             }
             Event::TaskTriggered { .. } => {
                 // Logged/observed only. Actual execution was already spawned.
@@ -102,8 +102,8 @@ pub async fn run(engine: &mut Engine, input: Value) -> Value {
     }
 }
 
-fn dispatch_pending(engine: &mut Engine, tx: &UnboundedSender<Event>) {
-    let dispatches = engine.take_pending_dispatches();
+fn dispatch_pending(workflow_state: &mut WorkflowState, tx: &UnboundedSender<Event>) {
+    let dispatches = workflow_state.take_pending_dispatches();
     for dispatch in dispatches {
         tx.send(Event::TaskTriggered {
             task_id: dispatch.task_id,
@@ -127,4 +127,4 @@ fn dispatch_pending(engine: &mut Engine, tx: &UnboundedSender<Event>) {
 
 ## What happens to barnum_event_loop?
 
-The existing `run_event_loop`, `Applier` trait, `NdjsonApplier`, and `EngineApplier` all stay. The `EngineApplier` stub gets filled in — it owns the `Engine`, and its `apply()` implementation calls `engine.complete()` on `TaskCompleted` events, takes pending dispatches, and spawns handler executions (via `tx`). `NdjsonApplier` writes events to disk. The event loop with its `Vec<Box<dyn Applier>>` is the scheduler.
+The existing `run_event_loop`, `Applier` trait, `NdjsonApplier`, and `EngineApplier` all stay. The `EngineApplier` stub gets filled in — it owns the `WorkflowState`, and its `apply()` implementation calls `workflow_state.complete()` on `TaskCompleted` events, takes pending dispatches, and spawns handler executions (via `tx`). `NdjsonApplier` writes events to disk. The event loop with its `Vec<Box<dyn Applier>>` is the scheduler.

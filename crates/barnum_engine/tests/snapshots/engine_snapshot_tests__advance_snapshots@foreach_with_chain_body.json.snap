@@ -1,9 +1,10 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 32
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
 ---
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(

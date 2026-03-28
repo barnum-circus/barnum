@@ -1,10 +1,11 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/parallel_two.json
 ---
 --- After advance ---
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
@@ -118,7 +119,7 @@ Pending: [
 
 --- Completion: task_id=1, value="b_result" ---
 Result: None
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
@@ -205,7 +206,7 @@ Pending: []
 
 --- Completion: task_id=0, value="a_result" ---
 Result: Some(Array [String("a_result"), String("b_result")])
-Engine {
+WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
