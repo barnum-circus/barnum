@@ -1,0 +1,733 @@
+//! Pure state-machine workflow engine for Barnum.
+//!
+//! The engine is a synchronous state machine with no I/O, no async, no timers,
+//! and no concurrency. It receives `start(input)` and produces dispatches.
+//! Later milestones add `on_task_completed` to close the advance/complete cycle.
+//!
+//! This milestone implements frame storage, the `advance` function, and the
+//! `start` / `take_pending_dispatches` / `handler` public API.
+
+use barnum_ast::HandlerKind;
+use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
+use intern::Lookup;
+use serde_json::Value;
+use slab::Slab;
+
+// ---------------------------------------------------------------------------
+// FrameId
+// ---------------------------------------------------------------------------
+
+/// Key into the engine's frame slab. Wraps the `usize` returned by
+/// [`Slab::insert`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FrameId(usize);
+
+// ---------------------------------------------------------------------------
+// ParentRef
+// ---------------------------------------------------------------------------
+
+/// How a child frame refers to its parent.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+enum ParentRef {
+    /// Parent has one active child (Chain, Loop, Attempt).
+    SingleChild { frame_id: FrameId },
+    /// Parent has N children; this child occupies `child_index` (Parallel,
+    /// `ForEach`).
+    IndexedChild {
+        frame_id: FrameId,
+        child_index: usize,
+    },
+}
+
+impl ParentRef {
+    /// Extract the parent's [`FrameId`] regardless of variant.
+    #[allow(dead_code)] // Used by complete/error (completion milestone) and test_support.
+    const fn frame_id(self) -> FrameId {
+        match self {
+            ParentRef::SingleChild { frame_id } | ParentRef::IndexedChild { frame_id, .. } => {
+                frame_id
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FrameKind
+// ---------------------------------------------------------------------------
+
+/// The kind-specific state stored in each frame.
+#[derive(Debug)]
+#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+enum FrameKind {
+    /// Sentinel: the workflow entry point. Only one per engine.
+    Root,
+    /// Leaf: handler dispatched, waiting for result.
+    Invoke,
+    /// Sequential: first child active, then trampoline to `rest`.
+    Chain { rest: ActionId },
+    /// Fan-out: collecting results from N parallel branches.
+    Parallel { results: Vec<Option<Value>> },
+    /// Fan-out: collecting results from N array elements.
+    ForEach { results: Vec<Option<Value>> },
+    /// Fixed-point: re-enter body on Continue, complete on Break.
+    Loop { body: ActionId },
+    /// Error boundary: wraps child result in Ok/Err.
+    Attempt,
+}
+
+// ---------------------------------------------------------------------------
+// Frame
+// ---------------------------------------------------------------------------
+
+/// A single frame in the engine's frame tree.
+#[derive(Debug)]
+#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+struct Frame {
+    /// Parent reference. `None` only for the Root frame.
+    parent: Option<ParentRef>,
+    /// Kind-specific state.
+    kind: FrameKind,
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+/// A pending handler invocation produced by `advance`.
+#[derive(Debug)]
+pub struct Dispatch {
+    /// Index into the handler pool. Resolve via [`Engine::handler`].
+    pub handler_id: HandlerId,
+    /// The value to pass to the handler.
+    pub value: Value,
+}
+
+// ---------------------------------------------------------------------------
+// AdvanceError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during advance.
+#[derive(Debug, thiserror::Error)]
+pub enum AdvanceError {
+    /// `ForEach` received a non-array input.
+    #[error("ForEach expected array input, got: {value}")]
+    ForEachExpectedArray {
+        /// The non-array value that was received.
+        value: Value,
+    },
+    /// `Branch` input lacks a string `kind` field.
+    #[error("Branch input must have a string 'kind' field, got: {value}")]
+    BranchMissingKind {
+        /// The input value missing the `kind` field.
+        value: Value,
+    },
+    /// No branch case matched the input's `kind` value.
+    #[error("no matching branch case for kind {kind:?}")]
+    BranchNoMatch {
+        /// The `kind` value that had no matching case.
+        kind: String,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Engine
+// ---------------------------------------------------------------------------
+
+/// Pure state-machine workflow engine.
+///
+/// Call [`start`](Engine::start) to begin execution, then drain dispatches via
+/// [`take_pending_dispatches`](Engine::take_pending_dispatches).
+pub struct Engine {
+    flat_config: FlatConfig,
+    frames: Slab<Frame>,
+    pending_dispatches: Vec<Dispatch>,
+}
+
+impl Engine {
+    /// Create a new engine from a flattened config.
+    #[must_use]
+    pub const fn new(flat_config: FlatConfig) -> Self {
+        Self {
+            flat_config,
+            frames: Slab::new(),
+            pending_dispatches: Vec::new(),
+        }
+    }
+
+    /// Begin execution. Creates the Root frame and advances from the workflow
+    /// root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AdvanceError`] if the workflow encounters a structural error
+    /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
+    /// matching case).
+    pub fn start(&mut self, input: Value) -> Result<(), AdvanceError> {
+        let root_id = self.insert_frame(Frame {
+            parent: None,
+            kind: FrameKind::Root,
+        });
+        let workflow_root = self.flat_config.workflow_root();
+        self.advance(
+            workflow_root,
+            input,
+            ParentRef::SingleChild { frame_id: root_id },
+        )
+    }
+
+    /// Drain all pending dispatches accumulated since the last call.
+    pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
+        std::mem::take(&mut self.pending_dispatches)
+    }
+
+    /// Look up a handler by ID. Used by the caller to resolve
+    /// [`Dispatch::handler_id`].
+    #[must_use]
+    pub fn handler(&self, id: HandlerId) -> &HandlerKind {
+        self.flat_config.handler(id)
+    }
+
+    // -- Private helpers --
+
+    fn insert_frame(&mut self, frame: Frame) -> FrameId {
+        FrameId(self.frames.insert(frame))
+    }
+
+    /// No-op in the advance milestone. The completion milestone fills this in
+    /// with the full advance/complete cycle.
+    #[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
+    fn complete(&mut self, _parent_ref: ParentRef, _value: Value) {
+        // No-op: the value is discarded. Called by advance for empty
+        // ForEach/Parallel — the empty result has nowhere to go until
+        // completion is implemented.
+    }
+
+    /// Expand an `ActionId` into frames. Creates frames for structural
+    /// combinators and bottoms out at Invoke leaves with pending dispatches.
+    #[allow(clippy::too_many_lines)]
+    fn advance(
+        &mut self,
+        action_id: ActionId,
+        value: Value,
+        parent: ParentRef,
+    ) -> Result<(), AdvanceError> {
+        match self.flat_config.action(action_id) {
+            FlatAction::Invoke { handler } => {
+                self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::Invoke,
+                });
+                self.pending_dispatches.push(Dispatch {
+                    handler_id: handler,
+                    value,
+                });
+            }
+
+            FlatAction::Chain { rest } => {
+                let first = self.flat_config.chain_first(action_id);
+                let frame_id = self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::Chain { rest },
+                });
+                self.advance(first, value, ParentRef::SingleChild { frame_id })?;
+            }
+
+            FlatAction::Parallel { count } => {
+                if count.0 == 0 {
+                    // No children — vacuously complete with empty array.
+                    self.complete(parent, Value::Array(vec![]));
+                    return Ok(());
+                }
+                // Collect to a Vec to release the immutable borrow on
+                // flat_config before the mutable self.advance() calls.
+                #[allow(clippy::needless_collect)]
+                let children: Vec<ActionId> =
+                    self.flat_config.parallel_children(action_id).collect();
+                let frame_id = self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::Parallel {
+                        results: vec![None; count.0 as usize],
+                    },
+                });
+                for (i, child) in children.into_iter().enumerate() {
+                    self.advance(
+                        child,
+                        value.clone(),
+                        ParentRef::IndexedChild {
+                            frame_id,
+                            child_index: i,
+                        },
+                    )?;
+                }
+            }
+
+            FlatAction::ForEach { body } => {
+                let elements = match value {
+                    Value::Array(elements) => elements,
+                    other => {
+                        return Err(AdvanceError::ForEachExpectedArray { value: other });
+                    }
+                };
+                if elements.is_empty() {
+                    // No elements — vacuously complete with empty array.
+                    self.complete(parent, Value::Array(vec![]));
+                    return Ok(());
+                }
+                let frame_id = self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::ForEach {
+                        results: vec![None; elements.len()],
+                    },
+                });
+                for (i, element) in elements.into_iter().enumerate() {
+                    self.advance(
+                        body,
+                        element,
+                        ParentRef::IndexedChild {
+                            frame_id,
+                            child_index: i,
+                        },
+                    )?;
+                }
+            }
+
+            FlatAction::Branch { .. } => {
+                let kind_str =
+                    value["kind"]
+                        .as_str()
+                        .ok_or_else(|| AdvanceError::BranchMissingKind {
+                            value: value.clone(),
+                        })?;
+                let (_, case_action_id) = self
+                    .flat_config
+                    .branch_cases(action_id)
+                    .find(|(key, _)| key.lookup() == kind_str)
+                    .ok_or_else(|| AdvanceError::BranchNoMatch {
+                        kind: kind_str.to_owned(),
+                    })?;
+                self.advance(case_action_id, value, parent)?;
+            }
+
+            FlatAction::Loop { body } => {
+                let frame_id = self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::Loop { body },
+                });
+                self.advance(body, value, ParentRef::SingleChild { frame_id })?;
+            }
+
+            FlatAction::Attempt { child } => {
+                let frame_id = self.insert_frame(Frame {
+                    parent: Some(parent),
+                    kind: FrameKind::Attempt,
+                });
+                self.advance(child, value, ParentRef::SingleChild { frame_id })?;
+            }
+
+            FlatAction::Step { target } => {
+                self.advance(target, value, parent)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Frame tree rendering (test-only)
+// ---------------------------------------------------------------------------
+
+/// Test-only infrastructure for snapshot testing. Renders the engine's frame
+/// slab as a JSON tree and builds snapshot-friendly dispatch representations.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support {
+    use super::{Dispatch, Engine, FrameId, FrameKind, ParentRef, Value};
+    use barnum_ast::HandlerKind;
+    use serde::Serialize;
+    use serde_json::json;
+
+    /// Snapshot-friendly representation of the engine state after advance.
+    #[derive(Debug, Serialize)]
+    pub struct AdvanceSnapshot {
+        /// Pending dispatches with handler details resolved.
+        pub dispatches: Vec<SnapshotDispatch>,
+        /// The frame tree rendered from the slab.
+        pub frame_tree: Value,
+    }
+
+    /// A single dispatch in snapshot format.
+    #[derive(Debug, Serialize)]
+    pub struct SnapshotDispatch {
+        /// The resolved handler.
+        pub handler: HandlerKind,
+        /// The dispatch value.
+        pub value: Value,
+    }
+
+    impl Engine {
+        /// Build a snapshot of the current engine state.
+        #[must_use]
+        pub fn snapshot(&self, dispatches: &[Dispatch]) -> AdvanceSnapshot {
+            let snapshot_dispatches = dispatches
+                .iter()
+                .map(|d| SnapshotDispatch {
+                    handler: self.flat_config.handler(d.handler_id).clone(),
+                    value: d.value.clone(),
+                })
+                .collect();
+
+            let root_key = self
+                .frames
+                .iter()
+                .find(|(_, f)| matches!(f.kind, FrameKind::Root))
+                .map(|(k, _)| k);
+
+            let frame_tree = root_key.map_or(json!(null), |key| self.render_frame(FrameId(key)));
+
+            AdvanceSnapshot {
+                dispatches: snapshot_dispatches,
+                frame_tree,
+            }
+        }
+
+        fn render_frame(&self, frame_id: FrameId) -> Value {
+            let frame = &self.frames[frame_id.0];
+            let children = self.find_children(frame_id);
+
+            match &frame.kind {
+                FrameKind::Root => json!({
+                    "kind": "Root",
+                    "children": children.iter()
+                        .map(|c| self.render_frame(*c))
+                        .collect::<Vec<_>>()
+                }),
+                FrameKind::Invoke => json!({ "kind": "Invoke" }),
+                FrameKind::Chain { rest } => json!({
+                    "kind": "Chain",
+                    "rest": rest.0,
+                    "child": children.first()
+                        .map(|c| self.render_frame(*c))
+                }),
+                FrameKind::Parallel { results } => json!({
+                    "kind": "Parallel",
+                    "results": results,
+                    "children": children.iter()
+                        .map(|c| self.render_frame(*c))
+                        .collect::<Vec<_>>()
+                }),
+                FrameKind::ForEach { results } => json!({
+                    "kind": "ForEach",
+                    "results": results,
+                    "children": children.iter()
+                        .map(|c| self.render_frame(*c))
+                        .collect::<Vec<_>>()
+                }),
+                FrameKind::Loop { body } => json!({
+                    "kind": "Loop",
+                    "body": body.0,
+                    "child": children.first()
+                        .map(|c| self.render_frame(*c))
+                }),
+                FrameKind::Attempt => json!({
+                    "kind": "Attempt",
+                    "child": children.first()
+                        .map(|c| self.render_frame(*c))
+                }),
+            }
+        }
+
+        fn find_children(&self, parent_id: FrameId) -> Vec<FrameId> {
+            self.frames
+                .iter()
+                .filter(|(_, f)| {
+                    f.parent
+                        .map(ParentRef::frame_id)
+                        .is_some_and(|pid| pid == parent_id)
+                })
+                .map(|(k, _)| FrameId(k))
+                .collect()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use barnum_ast::flat::flatten;
+    use barnum_ast::*;
+    use intern::string_key::Intern;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    // -- Helpers --
+
+    fn ts_handler(module: &str, func: &str) -> HandlerKind {
+        HandlerKind::TypeScript(TypeScriptHandler {
+            module: ModulePath::from(module.intern()),
+            func: FuncName::from(func.intern()),
+            step_config_schema: None,
+            value_schema: None,
+        })
+    }
+
+    fn invoke(module: &str, func: &str) -> Action {
+        Action::Invoke(InvokeAction {
+            handler: ts_handler(module, func),
+        })
+    }
+
+    fn chain(first: Action, rest: Action) -> Action {
+        Action::Chain(ChainAction {
+            first: Box::new(first),
+            rest: Box::new(rest),
+        })
+    }
+
+    fn parallel(actions: Vec<Action>) -> Action {
+        Action::Parallel(ParallelAction { actions })
+    }
+
+    fn for_each(action: Action) -> Action {
+        Action::ForEach(ForEachAction {
+            action: Box::new(action),
+        })
+    }
+
+    fn branch(cases: Vec<(&str, Action)>) -> Action {
+        Action::Branch(BranchAction {
+            cases: cases
+                .into_iter()
+                .map(|(k, v)| (KindDiscriminator::from(k.intern()), v))
+                .collect(),
+        })
+    }
+
+    fn loop_action(body: Action) -> Action {
+        Action::Loop(LoopAction {
+            body: Box::new(body),
+        })
+    }
+
+    fn attempt(action: Action) -> Action {
+        Action::Attempt(AttemptAction {
+            action: Box::new(action),
+        })
+    }
+
+    fn step_named(name: &str) -> Action {
+        Action::Step(StepAction {
+            step: StepRef::Named {
+                name: StepName::from(name.intern()),
+            },
+        })
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn engine_from(workflow: Action) -> Engine {
+        let config = Config {
+            workflow,
+            steps: HashMap::new(),
+        };
+        Engine::new(flatten(config).unwrap())
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn engine_from_config(config: Config) -> Engine {
+        Engine::new(flatten(config).unwrap())
+    }
+
+    // -- Tests --
+
+    /// Single invoke: start -> 1 dispatch.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn single_invoke() {
+        let mut engine = engine_from(invoke("./handler.ts", "run"));
+        engine.start(json!({"x": 1})).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].value, json!({"x": 1}));
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./handler.ts", "run"),
+        );
+    }
+
+    /// Chain(A, B): only A is dispatched on start.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn chain_dispatches_first_only() {
+        let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
+        engine.start(json!(null)).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./a.ts", "a"),
+        );
+    }
+
+    /// Parallel(A, B, C): all 3 dispatched on start, all receive the same
+    /// input.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn parallel_dispatches_all() {
+        let mut engine = engine_from(parallel(vec![
+            invoke("./a.ts", "a"),
+            invoke("./b.ts", "b"),
+            invoke("./c.ts", "c"),
+        ]));
+        engine.start(json!({"shared": true})).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 3);
+        for d in &dispatches {
+            assert_eq!(d.value, json!({"shared": true}));
+        }
+    }
+
+    /// `ForEach` over 3-element array: 3 dispatches, one per element.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn foreach_dispatches_per_element() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        engine.start(json!([10, 20, 30])).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 3);
+        assert_eq!(dispatches[0].value, json!(10));
+        assert_eq!(dispatches[1].value, json!(20));
+        assert_eq!(dispatches[2].value, json!(30));
+    }
+
+    /// Branch: only the matching case is dispatched.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn branch_dispatches_matching_case() {
+        let mut engine = engine_from(branch(vec![
+            ("Ok", invoke("./ok.ts", "handle")),
+            ("Err", invoke("./err.ts", "handle")),
+        ]));
+        engine.start(json!({"kind": "Ok", "value": 42})).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./ok.ts", "handle"),
+        );
+    }
+
+    /// Loop: body is dispatched on start.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn loop_dispatches_body() {
+        let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
+        engine.start(json!("init")).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].value, json!("init"));
+    }
+
+    /// Attempt: child is dispatched on start.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn attempt_dispatches_child() {
+        let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
+        engine.start(json!("input")).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].value, json!("input"));
+    }
+
+    /// Step(Named): follows the step reference to the target action.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn step_follows_named() {
+        let config = Config {
+            workflow: step_named("setup"),
+            steps: HashMap::from([(
+                StepName::from("setup".intern()),
+                invoke("./setup.ts", "run"),
+            )]),
+        };
+        let mut engine = engine_from_config(config);
+        engine.start(json!(null)).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./setup.ts", "run"),
+        );
+    }
+
+    /// Nested: Chain inside Parallel. Parallel(Chain(A, B), C) -> dispatches A
+    /// and C.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn nested_chain_in_parallel() {
+        let mut engine = engine_from(parallel(vec![
+            chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")),
+            invoke("./c.ts", "c"),
+        ]));
+        engine.start(json!(null)).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 2);
+        let handlers: Vec<_> = dispatches
+            .iter()
+            .map(|d| engine.handler(d.handler_id).clone())
+            .collect();
+        assert!(handlers.contains(&ts_handler("./a.ts", "a")));
+        assert!(handlers.contains(&ts_handler("./c.ts", "c")));
+        // B is not dispatched yet (behind Chain).
+        assert!(!handlers.contains(&ts_handler("./b.ts", "b")));
+    }
+
+    /// Deep chain: Chain(A, Chain(B, C)) -> only A dispatched.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn deep_chain_dispatches_first_only() {
+        let mut engine = engine_from(chain(
+            invoke("./a.ts", "a"),
+            chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
+        ));
+        engine.start(json!(null)).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./a.ts", "a"),
+        );
+    }
+
+    /// `ForEach` with empty array: no dispatches.
+    /// `complete` is a no-op, so the empty result is discarded.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn foreach_empty_array() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        engine.start(json!([])).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 0);
+    }
+
+    /// Parallel with empty children: no dispatches.
+    /// `complete` is a no-op, so the empty result is discarded.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn parallel_empty() {
+        let mut engine = engine_from(parallel(vec![]));
+        engine.start(json!(null)).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 0);
+    }
+}

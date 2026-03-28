@@ -1,0 +1,36 @@
+[package]
+name = "barnum_engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure state-machine workflow engine for Barnum"
+keywords = ["workflow", "engine", "barnum"]
+categories = ["data-structures"]
+
+[features]
+test-support = []
+
+[dependencies]
+barnum_ast = { path = "../barnum_ast" }
+intern = { path = "../intern" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+slab = "0.4"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+barnum_engine = { path = ".", features = ["test-support"] }
+barnum_ast = { path = "../barnum_ast" }
+intern = { path = "../intern" }
+insta = { version = "1", features = ["json", "glob", "redactions"] }
+serde_json = { workspace = true }
+string_key_newtype = { path = "../string_key_newtype" }
+
+[package.metadata.cargo-udeps.ignore]
+# Self-reference enables test-support feature; insta used by integration tests.
+development = ["barnum_engine", "insta"]
+
+[lints]
+workspace = true

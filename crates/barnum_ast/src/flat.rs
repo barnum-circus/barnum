@@ -625,6 +625,7 @@ mod tests {
     }
 
     /// Helper: right-fold actions into nested Chain nodes (mirrors TS `pipe()`).
+    #[allow(clippy::panic, clippy::unwrap_used)]
     fn pipe(actions: Vec<Action>) -> Action {
         match actions.len() {
             0 => panic!("pipe() with zero actions not supported in tests"),
