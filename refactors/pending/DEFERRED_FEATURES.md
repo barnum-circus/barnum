@@ -167,6 +167,14 @@ Since `pipe()` already produces right-nested chains via `reduceRight`, non-canon
 
 The flattener could also normalize during flattening: when it encounters `Chain(Chain(A, B), C)`, rewrite to `Chain(A, Chain(B, C))` before emitting entries. This keeps the flat table canonical regardless of input shape.
 
+## Trivial Combinator Elimination
+
+Compile-time simplifications during flattening (or a validation/normalization pass):
+
+- **`Parallel([A])`** → `A`. A single-child parallel is just the child. Saves a frame at runtime (no fan-out/collection overhead for a single child). This applies to the tree AST before flattening or during flattening itself.
+
+These are safe, semantics-preserving rewrites. The flattener could apply them automatically, or a normalization pass could run before flattening.
+
 ## Lazy Step Flattening
 
 Currently, flattening eagerly processes all steps in `Config::steps`, even if some are never referenced by the workflow. This is wasted work and inflates the flat table with dead entries.
