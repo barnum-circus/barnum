@@ -88,6 +88,61 @@ Error propagation in `error(parent, error)` walks up the frame tree until it fin
 
 The difference from most languages: Barnum's error propagation must cancel sibling branches in Parallel/ForEach frames. In a linear call stack, there are no siblings to cancel. Structured concurrency adds a dimension to unwinding — it's not just upward, it's also lateral (cancel siblings before propagating to the parent).
 
+## Speculation: Result as the fundamental type
+
+The current engine has two channels: values flow down through `complete`, errors flow up through `error`. `Attempt` is the bridge — it catches errors from the error channel and lifts them into the value channel as `{ kind: "Err", error }`.
+
+An alternative design: **there is no error channel.** Every action produces a `Result` — `{ kind: "Ok", value }` or `{ kind: "Err", error }`. Chain is monadic bind: it auto-unwraps `Ok` and short-circuits on `Err`. Attempt means "stop the auto-unwrapping — give me the raw Result."
+
+### How it would work
+
+In this model, Chain's `complete_single` changes from "always advance to rest" to "check the value: if Ok, unwrap and advance; if Err, propagate upward." The "propagate upward" case is: call `complete(parent, the_err_result)`, which hits the parent chain, which also sees Err, which also propagates — all the way up until something catches it. That "something" is Attempt (which passes the raw Result through without unwrapping) or Root (which terminates the engine).
+
+This upward Err propagation IS the current `error()` function. The two-channel implementation is an optimization of the Result model: instead of checking Ok/Err at every Chain, it uses a separate code path (`error`) that skips directly to the catching frame. The semantics are identical; the implementation avoids redundant Ok checks on the happy path.
+
+### Handlers never see Results
+
+A handler returns a value. The framework wraps it in Ok. A handler throws. The framework wraps the thrown error in Err. From JavaScript, Results are invisible — you write normal code, and the monadic machinery is internal to the engine.
+
+This is how `const(42)` works: the handler ignores its input and returns `42`. The engine wraps this as `Ok(42)`. Chain auto-unwraps it. The next handler receives `42`. Nobody outside the engine ever sees the Result wrapper. The constructor "includes the unwrap" because Chain is monadic bind.
+
+The same applies to every handler. `fetchUser()` returns a user object → the engine sees `Ok(user)`. `fetchUser()` throws a network error → the engine sees `Err("network error")`. Chain unwraps Ok and short-circuits Err. The handler author writes the same code either way.
+
+### Timeouts and typed errors
+
+In the Result model, a timeout is just an Err variant. An auth failure is another Err variant. They're all data in the value channel:
+
+```
+attempt(
+  potentiallySlowAction
+).then(
+  branch({
+    Ok: handleSuccess,
+    Err: branch({
+      Timeout: retry,
+      RateLimit: backoff,
+      AuthError: abort,
+    })
+  })
+)
+```
+
+This actually works in the current design too — Attempt catches the error and wraps it as `{ kind: "Err", error }`, then you branch on the result. But in the Result model, it's more natural: errors are *always* data, and Attempt is just "stop auto-unwrapping" rather than "intercept a separate channel."
+
+The current design requires the error channel to carry untyped `String`s — there's no way to propagate structured error types through `error()`. The Result model makes typed errors trivial: the Err variant is just a Value, with whatever structure the handler put there. Branch on `error.kind` the same way you'd branch on any other discriminated union.
+
+### Which is more fundamental?
+
+Result is more fundamental. You can implement exceptions from Results (Rust's `?` operator is exactly this: monadic bind over `Result`, short-circuiting on `Err`). You can't implement typed Results from exceptions — exceptions flow through an implicit untyped channel.
+
+The current engine is operationally equivalent to the Result model. It's an optimization: two code paths (`complete` + `error`) instead of one code path that checks Ok/Err at every step. This avoids N conditional checks on the happy path (one per Chain frame) at the cost of a separate error propagation function.
+
+The "Not a monad stack" characterization below is slightly misleading in light of this. Chain *is* monadic bind over an implicit Result type — the engine just implements the bind as two separate functions instead of one function with a conditional. If we ever implement typed errors or general Provide/Consume, the Result framing becomes harder to avoid.
+
+### Implication for the engine
+
+No immediate changes. The current two-channel implementation is correct and performant. But the mental model should be: **every action produces a Result; Chain is bind; Attempt is catch.** The `error()` function is the optimized Err-propagation path of bind. When we add typed errors (DEFERRED_FEATURES.md), the Result framing will guide the design — error types are just the Err variant of the Result, dispatched by Branch like any other discriminated union.
+
 ## The engine is a cooperative scheduler
 
 The engine does not preempt. It runs `advance()` synchronously until all paths are suspended at Invoke leaves, then yields the accumulated dispatches. External completions arrive via `on_task_completed()`, which triggers `complete()` or `error()`, which may call `advance()` again, producing more dispatches.
@@ -257,4 +312,4 @@ Errors are untyped (`String` in the engine, `unknown` in TS). Handlers can fail 
 - **Not Turing-complete on its own.** Without handlers, the engine can only loop forever or terminate immediately. Handlers provide all computation. The engine is a scheduler, not a computer.
 - **Not a process calculus.** No communication between concurrent branches (Parallel children can't send messages to each other). Concurrency is fork-join only.
 - **Not a dataflow language.** Data flows sequentially through chains and fans out through Parallel, but there are no feedback loops or streaming — each value is produced once and consumed once.
-- **Not a monad stack.** Though the patterns are monadic (Chain is bind, Attempt is ExceptT, Loop is a fixed-point), there's no monad transformer composition. Each combinator is a hardcoded interpreter case, not a composable effect handler.
+- **Not a monad stack.** Though the patterns are monadic (Chain is bind over an implicit Result, Attempt is catch, Loop is a fixed-point — see "Speculation: Result as the fundamental type" above), there's no monad transformer composition. Each combinator is a hardcoded interpreter case, not a composable effect handler. The engine implements the Result monad's bind as two separate code paths (complete + error) rather than one function with a conditional.
