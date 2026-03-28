@@ -1,0 +1,49 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/attempt_wrapping_parallel.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./a.ts",
+        "func": "a"
+      },
+      "value": "shared"
+    },
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./b.ts",
+        "func": "b"
+      },
+      "value": "shared"
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "child": {
+          "children": [
+            {
+              "kind": "Invoke"
+            },
+            {
+              "kind": "Invoke"
+            }
+          ],
+          "kind": "Parallel",
+          "results": [
+            null,
+            null
+          ]
+        },
+        "kind": "Attempt"
+      }
+    ],
+    "kind": "Root"
+  }
+}

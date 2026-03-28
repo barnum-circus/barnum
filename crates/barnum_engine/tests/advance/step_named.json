@@ -1,0 +1,15 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Step",
+      "step": { "kind": "Named", "name": "setup" }
+    },
+    "steps": {
+      "setup": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./setup.ts", "func": "run" }
+      }
+    }
+  },
+  "input": null
+}

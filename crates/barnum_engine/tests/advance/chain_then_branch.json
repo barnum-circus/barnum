@@ -1,0 +1,25 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Chain",
+      "first": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./classify.ts", "func": "classify" }
+      },
+      "rest": {
+        "kind": "Branch",
+        "cases": {
+          "A": {
+            "kind": "Invoke",
+            "handler": { "kind": "TypeScript", "module": "./handle_a.ts", "func": "handle" }
+          },
+          "B": {
+            "kind": "Invoke",
+            "handler": { "kind": "TypeScript", "module": "./handle_b.ts", "func": "handle" }
+          }
+        }
+      }
+    }
+  },
+  "input": "raw"
+}

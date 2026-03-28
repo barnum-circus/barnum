@@ -1,0 +1,29 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/branch_matching.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./err.ts",
+        "func": "handle"
+      },
+      "value": {
+        "error": "something failed",
+        "kind": "Err"
+      }
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "kind": "Invoke"
+      }
+    ],
+    "kind": "Root"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Loop",
+      "body": {
+        "kind": "Chain",
+        "first": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./check.ts", "func": "check" }
+        },
+        "rest": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./decide.ts", "func": "decide" }
+        }
+      }
+    }
+  },
+  "input": { "counter": 0 }
+}

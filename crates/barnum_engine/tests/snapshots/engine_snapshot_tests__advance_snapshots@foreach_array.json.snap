@@ -1,0 +1,58 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/foreach_array.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./handler.ts",
+        "func": "run"
+      },
+      "value": 10
+    },
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./handler.ts",
+        "func": "run"
+      },
+      "value": 20
+    },
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./handler.ts",
+        "func": "run"
+      },
+      "value": 30
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "children": [
+          {
+            "kind": "Invoke"
+          },
+          {
+            "kind": "Invoke"
+          },
+          {
+            "kind": "Invoke"
+          }
+        ],
+        "kind": "ForEach",
+        "results": [
+          null,
+          null,
+          null
+        ]
+      }
+    ],
+    "kind": "Root"
+  }
+}

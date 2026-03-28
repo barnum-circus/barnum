@@ -1,0 +1,19 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "ForEach",
+      "action": {
+        "kind": "Chain",
+        "first": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./validate.ts", "func": "validate" }
+        },
+        "rest": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./process.ts", "func": "process" }
+        }
+      }
+    }
+  },
+  "input": ["item1", "item2"]
+}

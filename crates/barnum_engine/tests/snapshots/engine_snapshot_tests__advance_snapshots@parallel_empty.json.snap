@@ -1,0 +1,13 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/parallel_empty.json
+---
+{
+  "dispatches": [],
+  "frame_tree": {
+    "children": [],
+    "kind": "Root"
+  }
+}

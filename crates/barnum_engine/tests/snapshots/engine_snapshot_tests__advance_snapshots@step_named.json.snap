@@ -1,0 +1,26 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/step_named.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./setup.ts",
+        "func": "run"
+      },
+      "value": null
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "kind": "Invoke"
+      }
+    ],
+    "kind": "Root"
+  }
+}

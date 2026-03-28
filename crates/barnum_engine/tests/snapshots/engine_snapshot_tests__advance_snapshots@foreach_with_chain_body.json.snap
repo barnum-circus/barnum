@@ -1,0 +1,54 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./validate.ts",
+        "func": "validate"
+      },
+      "value": "item1"
+    },
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./validate.ts",
+        "func": "validate"
+      },
+      "value": "item2"
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "children": [
+          {
+            "child": {
+              "kind": "Invoke"
+            },
+            "kind": "Chain",
+            "rest": 3
+          },
+          {
+            "child": {
+              "kind": "Invoke"
+            },
+            "kind": "Chain",
+            "rest": 3
+          }
+        ],
+        "kind": "ForEach",
+        "results": [
+          null,
+          null
+        ]
+      }
+    ],
+    "kind": "Root"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Branch",
+      "cases": {
+        "Ok": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./ok.ts", "func": "handle" }
+        },
+        "Err": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./err.ts", "func": "handle" }
+        }
+      }
+    }
+  },
+  "input": { "kind": "Err", "error": "something failed" }
+}

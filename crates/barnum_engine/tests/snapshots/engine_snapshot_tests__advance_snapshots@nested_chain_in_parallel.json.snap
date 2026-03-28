@@ -1,0 +1,50 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 38
+expression: snapshot
+input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
+---
+{
+  "dispatches": [
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./a.ts",
+        "func": "a"
+      },
+      "value": null
+    },
+    {
+      "handler": {
+        "kind": "TypeScript",
+        "module": "./c.ts",
+        "func": "c"
+      },
+      "value": null
+    }
+  ],
+  "frame_tree": {
+    "children": [
+      {
+        "children": [
+          {
+            "child": {
+              "kind": "Invoke"
+            },
+            "kind": "Chain",
+            "rest": 5
+          },
+          {
+            "kind": "Invoke"
+          }
+        ],
+        "kind": "Parallel",
+        "results": [
+          null,
+          null
+        ]
+      }
+    ],
+    "kind": "Root"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Parallel",
+      "actions": []
+    }
+  },
+  "input": null
+}

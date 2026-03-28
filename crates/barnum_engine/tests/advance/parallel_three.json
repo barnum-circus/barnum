@@ -1,0 +1,22 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Parallel",
+      "actions": [
+        {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./a.ts", "func": "a" }
+        },
+        {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" }
+        },
+        {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./c.ts", "func": "c" }
+        }
+      ]
+    }
+  },
+  "input": { "shared": true }
+}
