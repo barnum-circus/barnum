@@ -2,80 +2,159 @@
 
 ## Motivation
 
-MISSING_FEATURES.md identifies two gaps as separate items:
+Two features that are actually the same mechanism:
 
-1. **Pause/Wait** (external signals): suspend execution until a human clicks "approve" or a webhook fires.
-2. **Time-based triggers**: suspend execution for a duration (delay, exponential backoff, SLA escalation).
+1. **External signals**: suspend until a human clicks "approve" or a webhook fires.
+2. **Time-based triggers**: suspend for a duration (delay, backoff, SLA escalation).
 
-These are the same mechanism. In both cases, the VM:
-- Serializes execution state (which Sequence step, Loop iteration, accumulated All results)
-- Persists it to durable storage
-- Halts
-- Resumes when a trigger fires (external signal or timer)
+In both cases: persist state, halt, resume when a trigger fires. The trigger source is the only difference.
 
-The trigger source is the only difference. The algebra doesn't need two primitives.
+## The key insight: Suspend is just a slow Invoke
 
-## The Primitive
+From WorkflowState's perspective, every Invoke dispatches a task and waits for `complete(task_id, value)`. Whether the task is a TypeScript handler that takes 100ms or a human approval that takes 3 days — WorkflowState doesn't know or care. It dispatched work. It's waiting for a result.
 
-A single `Suspend` action node. The workflow's execution state is persisted, and a trigger is registered. When the trigger fires, execution resumes and the trigger's payload becomes the output.
+This means Suspend doesn't need special engine support. It's an Invoke with a handler that the **runtime** knows to treat differently. WorkflowState dispatches it like any other task. The runtime sees the handler kind, persists state, and waits for the trigger instead of running code.
 
-### AST
+```
+WorkflowState: advance() → Dispatch { task_id: 5, handler_id: 3, value: ... }
+                                       ↓
+Runtime sees handler_id 3 is HandlerKind::Suspend(Signal { name: "approval" })
+                                       ↓
+Runtime persists WorkflowState, registers trigger, halts
+                                       ↓
+         ... days pass ...
+                                       ↓
+Trigger fires with payload → Runtime deserializes WorkflowState
+                                       ↓
+WorkflowState: complete(TaskId(5), payload) → continues execution
+```
+
+## AST
 
 ```rust
-pub struct SuspendAction {
-    pub trigger: Trigger,
-}
+// In the Action enum / FlatAction:
+Suspend { trigger: Trigger }
 
 pub enum Trigger {
     /// Wait for an external signal delivered via API.
-    Signal {
-        /// Logical name the caller uses to deliver the signal (e.g., "approval_{task_id}").
-        name: String,
-    },
+    Signal { name: String },
     /// Wait for a fixed duration.
-    Delay {
-        duration_ms: u64,
-    },
+    Delay { duration_ms: u64 },
 }
 ```
 
-Both `Signal` and `Delay` share the same VM codepath: persist state, halt, resume on trigger. `Signal` registers a listener keyed by name. `Delay` schedules a timer. Future trigger types (cron, composite AND/OR of triggers) extend the `Trigger` enum without changing the VM's suspend/resume machinery.
+This extends `HandlerKind`:
+
+```rust
+pub enum HandlerKind {
+    TypeScript(TypeScriptHandler),
+    Suspend(Trigger),  // new
+}
+```
+
+Or alternatively, Suspend is its own `FlatAction` variant (not an Invoke). Both work — the runtime just needs to recognize it in the dispatch. The `FlatAction` variant is cleaner because Suspend isn't really "invoking a handler" — it's a control flow primitive that happens to use the same dispatch/complete machinery.
 
 ### TypeScript API
 
 ```typescript
 // Wait for an external signal. Resumes with the signal's payload.
-function waitForSignal<TPayload>(
-  name: string,
-): TypedAction<unknown, TPayload>
+function waitForSignal<TPayload>(name: string): TypedAction<unknown, TPayload>
 
 // Wait for a fixed duration. Input passes through unchanged.
 function delay<T>(durationMs: number): TypedAction<T, T>
 ```
 
-`waitForSignal` ignores its input and produces whatever payload the external caller provides. `delay` is a passthrough that just adds a pause.
+`waitForSignal` ignores its input; its output is the signal payload. `delay` is a passthrough — input flows through unchanged after the pause.
 
-### Timeout as composition
+## State persistence: already solved
 
-A "wait for signal OR time out" is not a new primitive. It composes from existing pieces:
+WorkflowState is already almost snapshotable. All fields are fully owned with no lifetimes, function pointers, or channels:
+
+| Field | Type | Serializable? |
+|-------|------|---------------|
+| `flat_config` | `FlatConfig` | ✅ All u32 newtypes + `Vec<HandlerKind>` |
+| `frames` | `Slab<Frame>` | ✅ With `slab` crate's `serde` feature |
+| `task_to_parent` | `BTreeMap<TaskId, Option<ParentRef>>` | ✅ All Copy types |
+| `pending_dispatches` | `Vec<Dispatch>` | ✅ Contains `Value` (serde_json) |
+| `next_task_id` | `u32` | ✅ Primitive |
+
+The frame tree IS the defunctionalized continuation. Each `Frame` captures where execution paused and what intermediate state has accumulated (e.g., `Parallel { results: Vec<Option<Value>> }` tracks which branches have completed). This is exactly the "explicit continuation passing" approach — it's already built.
+
+**Work needed:**
+1. Add `Serialize, Deserialize` derives to `WorkflowState`, `Frame`, `FrameKind`, `ParentRef`, `FrameId`
+2. Enable `serde` feature on the `slab` crate dependency
+3. Add `Serialize, Deserialize` to the `u32_newtype!` macro
+4. Add `Serialize, Deserialize` to `FlatConfig`, `FlatAction`, `FlatEntry`
+
+No structural changes. Just derives.
+
+## Snapshot and resume
+
+### Snapshot
+
+The runtime can snapshot WorkflowState at any point. The natural point is **before dispatching** — when `take_pending_dispatches()` hasn't been called yet, so pending work is still in WorkflowState. On resume, the runtime calls `take_pending_dispatches()` and re-dispatches everything.
+
+```rust
+// In run_workflow, after each completion:
+let snapshot = serde_json::to_string(&workflow_state)?;
+persist(run_id, &snapshot);
+
+// Then proceed to take_pending_dispatches and dispatch
+```
+
+This gives crash recovery for free: if the process dies, deserialize the last snapshot, re-take dispatches, re-run handlers. Handlers must be idempotent (or at-least-once is acceptable).
+
+### Resume
+
+```rust
+// Later, when a trigger fires or the process restarts:
+let snapshot = load(run_id);
+let mut workflow_state: WorkflowState = serde_json::from_str(&snapshot)?;
+let mut scheduler = Scheduler::new();
+
+// If resuming from a trigger:
+if let Some((task_id, payload)) = trigger_completion {
+    workflow_state.complete(task_id, payload)?;
+}
+
+// Continue the normal run loop
+run_workflow_loop(&mut workflow_state, &mut scheduler).await
+```
+
+The resume path is the same as the normal run path. WorkflowState doesn't know it was serialized and deserialized. It just keeps processing dispatches and completions.
+
+### Replay (alternative to snapshots)
+
+Instead of snapshotting WorkflowState directly, record the completion log: `Vec<(TaskId, Value)>`. To resume, create a fresh WorkflowState from the config, replay all completions. This is simpler and more correct (no snapshot versioning issues) but requires storing the full log.
+
+Both approaches work. Replay is better for durability guarantees. Snapshots are better for large workflows where replaying from scratch is expensive.
+
+## Suspend inside Parallel
+
+If one branch of Parallel hits Suspend and other branches have active handlers:
+
+1. Active handlers continue running and completing normally
+2. Parallel frame accumulates their results as usual
+3. When only suspended tasks remain, the runtime persists state
+4. When a trigger fires, the runtime resumes and the Parallel frame continues accumulating
+
+This works naturally because Suspend uses the same dispatch/complete machinery. The Parallel frame doesn't know or care that one of its children is a signal wait and another is a TypeScript handler.
+
+## Timeout as composition: Race
+
+"Wait for signal OR time out" composes from a Race primitive:
 
 ```typescript
-// Wait for approval, but escalate after 24 hours
-sequence(
-  all(
-    waitForSignal<Approval>("approval"),
-    delay(86_400_000),
+race(
+  waitForSignal<Approval>("approval"),
+  pipe(
+    delay(86_400_000), // 24 hours
+    escalateToManager(),
   ),
-  // First result wins; the other is cancelled
 )
 ```
 
-This does require `All` to support "first-to-complete" semantics (race), which it doesn't today. Two options:
-
-1. Add a `Race` primitive (parallel, returns first result, cancels the rest).
-2. Add a `mode` field to `All` (`{ mode: "all" | "race" }`).
-
-A `Race` primitive is cleaner: it's a distinct operation with distinct semantics (one winner vs. all results). Putting a mode flag on `All` conflates two operations that share an implementation detail (parallel dispatch) but differ in their fundamental contract.
+Race is like Parallel but returns the first result and cancels the rest. It's a distinct AST node:
 
 ```rust
 pub struct RaceAction {
@@ -83,113 +162,40 @@ pub struct RaceAction {
 }
 ```
 
-```typescript
-function race<Out>(
-  ...actions: TypedAction<unknown, Out>[]
-): TypedAction<unknown, Out>
-```
+Cancellation of the losing branches means: when one branch completes, the runtime drops (doesn't dispatch or complete) any pending work from other branches. This requires tracking which tasks belong to which Race branch — a runtime concern, not a WorkflowState concern.
 
-### Examples
+## Retry with backoff (updated — no Attempt)
 
-**Human-in-the-loop approval:**
-```typescript
-sequence(
-  prepareReport(),           // In -> Report
-  submitForReview(),         // Report -> { reviewId: string }
-  extractField("reviewId"),  // -> string
-  // Workflow suspends here. External API delivers the approval payload.
-  waitForSignal<ApprovalDecision>("review"),
-  matchCases({
-    Approved: publishReport(),
-    Rejected: notifyAuthor(),
-  }),
-)
-```
-
-**Retry with exponential backoff:**
 ```typescript
 loop(
-  sequence(
-    attempt(callExternalApi()),
-    matchCases({
-      Ok: done(),
-      Err: sequence(
-        extractField("retryCount"),
-        computeBackoff(),     // number -> { delayMs: number }
+  pipe(
+    callExternalApi(),
+    // Handler returns a Result: { kind: "Ok", value } or { kind: "Err", error }
+    branch({
+      Ok: done(),          // Break the loop with the success value
+      Err: pipe(
+        computeBackoff(),  // error -> { delayMs: number }
         extractField("delayMs"),
-        delay(/* dynamic — see open question below */),
-        recur(),
+        delay(???),        // dynamic duration — see open question
+        recur(),           // Continue the loop
       ),
     }),
   ),
 )
 ```
 
-The backoff example exposes a design question: `delay` takes a static duration in the AST, but backoff needs a dynamic duration computed at runtime. See open questions.
+No Attempt node needed. The handler returns a Result (it always does — cross-boundary calls can fail). Branch (Switch) dispatches on the Result kind. See DEFERRED_FEATURES.md § "Remove Attempt" and ENGINE_APPLIER.md § "Future: error handling is an AST concern."
 
-**SLA escalation:**
-```typescript
-race(
-  sequence(
-    waitForSignal<Result>("task_complete"),
-    processResult(),
-  ),
-  sequence(
-    delay(86_400_000), // 24 hours
-    escalateToManager(),
-  ),
-)
-```
+## Open questions
 
-## State Persistence
+**Dynamic delay durations.** `delay` takes a static `duration_ms` in the AST. Backoff needs a runtime-computed duration. Cleanest option: `delay` always reads duration from its input value, and the "static" version is `pipe(constant(5000), delay())`. Consistent with how other builtins work.
 
-Suspend requires serializing the VM's execution continuation: where in the AST tree execution paused, and all intermediate state accumulated up to that point.
+**Cancellation semantics.** Suspended workflows waiting for signals that never come. Options: TTL on triggers, administrative cancellation API, or both.
 
-What needs to be serialized:
-- **Program counter**: which Action node is currently executing, including position within Sequence (step index), Loop (iteration), All (which branches completed), Match (which case was taken).
-- **Data stack**: the current value flowing through the pipeline, plus any partial results from All branches.
-- **Step bindings**: if named Steps are in scope, their resolved Actions.
+**Signal naming and scoping.** Signal names need to be unique per workflow run. Auto-scope with run ID, or leave to the workflow author?
 
-The VM's evaluator already walks the AST tree recursively. Serializing the continuation means capturing this call stack as data. Two approaches:
+**Idempotent resume.** Duplicate signal delivery (network retry) must be a no-op for already-resumed workflows.
 
-1. **Explicit continuation passing**: transform the recursive evaluator into a state machine where the "stack" is a serializable data structure (a list of frames, each describing which AST node and what position within it). Essentially, defunctionalize the continuation.
+**FlatConfig in the snapshot.** FlatConfig is static — it never changes during execution. Two options: (1) include it in every snapshot (simple, self-contained), (2) store it separately and only snapshot the dynamic state (frames, task_to_parent, pending_dispatches, next_task_id). Option 1 is simpler. Option 2 is more efficient for large configs with many snapshots.
 
-2. **Checkpoint at Suspend boundaries only**: restrict Suspend to appear at specific points (e.g., top-level Sequence steps only, not inside Traverse or All branches). This simplifies serialization at the cost of expressiveness.
-
-Option 1 is the general solution. Option 2 is a pragmatic starting point that covers the common cases (human approval, delays between pipeline stages) without solving the hard problem of suspending mid-parallel-execution.
-
-## Resume Infrastructure
-
-When a trigger fires:
-1. Look up the persisted state by trigger key (signal name or timer ID).
-2. Deserialize the execution continuation.
-3. Inject the trigger payload as the current value.
-4. Resume the evaluator from the saved continuation.
-
-For `Signal` triggers, the external API looks like:
-
-```
-POST /signals/{signal_name}
-Content-Type: application/json
-
-{ "payload": { "approved": true, "reviewer": "alice" } }
-```
-
-For `Delay` triggers, a background scheduler fires the timer. The scheduler is infrastructure — could be a Tokio timer for in-process, or a database-backed job queue for distributed deployments. The algebra doesn't care.
-
-## Open Questions
-
-**Dynamic delay durations.** The `delay` builtin takes a static `duration_ms` in the AST. But retry backoff needs a duration computed at runtime from handler output. Options:
-- `delay` reads the duration from its input value (e.g., input must be `{ delayMs: number }`). This makes the API less explicit.
-- A separate `dynamicDelay` that reads duration from input. Two delay variants feels unnecessary.
-- `delay` always reads from input, and the "static" version is just `sequence(constant(5000), delay())`. This is consistent with how `range` works.
-
-**Cancellation semantics.** If a workflow is suspended waiting for a signal that never comes, how is it cleaned up? Options: explicit TTL on all triggers, administrative cancellation API, or both.
-
-**Suspend inside parallel branches.** If one branch of `All` hits a Suspend, do the other branches continue executing or are they all suspended? If one branch of `Race` hits Suspend and another completes, the Suspend should be cancelled. This interacts with the evaluator's concurrency model.
-
-**Signal naming and scoping.** Signal names need to be unique per workflow run. Should the VM automatically scope them (e.g., prefix with run ID), or is that the workflow author's responsibility?
-
-**Idempotent resume.** If a signal is delivered twice (network retry), the VM must handle it idempotently. The second delivery to an already-resumed workflow should be a no-op, not a crash.
-
-**Persistence backend.** The design assumes durable storage exists but doesn't specify it. For local dev, a file on disk. For production, a database. The Applier pattern in `barnum_event_loop` could serve as the integration point: a `PersistenceApplier` that serializes state on Suspend events and loads it on resume.
+**Snapshot versioning.** If WorkflowState's internal representation changes between releases, old snapshots become unloadable. Mitigation: version field in the snapshot format, or always use replay (which depends on the stable public API, not internal representation).
