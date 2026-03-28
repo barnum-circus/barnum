@@ -11,6 +11,7 @@ barnum_ast = { path = "../barnum_ast" }
 barnum_engine = { path = "../barnum_engine" }
 intern = { path = "../intern" }
 serde_json.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

@@ -145,12 +145,14 @@ pub enum StepRef {
 // HandlerKind
 // ---------------------------------------------------------------------------
 
-/// Discriminated union of handler types. Currently only TypeScript.
+/// Discriminated union of handler types.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum HandlerKind {
     /// Run a TypeScript handler file as a subprocess.
     TypeScript(TypeScriptHandler),
+    /// Execute a builtin operation inline (no subprocess).
+    Builtin(BuiltinHandler),
 }
 
 /// A TypeScript handler: module path + exported function name.
@@ -167,6 +169,45 @@ pub struct TypeScriptHandler {
     /// Optional JSON Schema describing the handler's expected input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_schema: Option<Value>,
+}
+
+/// A builtin handler: wraps a [`BuiltinKind`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinHandler {
+    /// Which builtin operation to execute.
+    pub builtin: BuiltinKind,
+}
+
+/// Discriminated union of builtin operations.
+///
+/// Builtins are executed inline by the scheduler (no subprocess). Each
+/// variant corresponds to a pure data transformation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum BuiltinKind {
+    /// Return a fixed value, ignoring input.
+    Constant {
+        /// The value to return.
+        value: Value,
+    },
+    /// Return the input unchanged.
+    Identity,
+    /// Discard input, return null.
+    Drop,
+    /// Wrap input as `{ kind: <value>, value: <input> }`.
+    Tag {
+        /// The tag string (e.g. `"Continue"`, `"Break"`).
+        value: Value,
+    },
+    /// Merge an array of objects into a single object.
+    Merge,
+    /// Flatten a nested array one level.
+    Flatten,
+    /// Extract a named field from an object.
+    ExtractField {
+        /// The field name to extract (must be a JSON string).
+        value: Value,
+    },
 }
 
 // ---------------------------------------------------------------------------
