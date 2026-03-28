@@ -259,7 +259,11 @@ export function constant<T>(value: T): TypedAction<never, T> {
 }
 ```
 
-No recursion issue: the `constantAction()` helper inside `createHandlerWithConfig` constructs a raw `__builtin__` Invoke node directly (plain Action JSON), not through any handler creation function. It's a leaf node.
+No recursion issue: the `constantAction()` helper inside `createHandlerWithConfig` constructs a raw Invoke node pointing to the real `handlers/builtins.ts` file path, not through any handler creation function. It's a leaf node.
+
+The `builtin()` helper in `builtins.ts` also switches from `module: "__builtin__"` to using the real file path of `handlers/builtins.ts`. Builtins become regular TypeScript handlers that the worker imports and executes normally. The `__builtin__` convention is eliminated.
+
+Other builtins (`identity`, `drop`, `tag`, `merge`, `flatten`, `extractField`) become `createHandler` results in `handlers/builtins.ts`. The typed wrappers in `builtins.ts` reference these real handlers instead of constructing synthetic `__builtin__` Invoke nodes.
 
 ### Rust-side changes
 
@@ -300,20 +304,9 @@ export type Handler<TValue, TOutput>
 
 ### Worker changes
 
-The worker needs builtin dispatch. The desugared AST contains `__builtin__` Invoke nodes (identity, drop, constant). Currently the worker tries to `import("__builtin__")` which fails. Add inline handling:
+The builtins in `handlers/builtins.ts` are regular TypeScript handlers with real file paths. The worker imports them normally — no special `__builtin__` dispatch needed.
 
-```ts
-if (modulePath === "__builtin__") {
-  // Handle builtins without module import
-  const result = executeBuiltin(exportName, input.value);
-  process.stdout.write(JSON.stringify(result));
-  return;
-}
-```
-
-Where `executeBuiltin` handles the data transforms: identity passes through, drop returns undefined, constant returns its parameter (from the func name or stepConfigSchema), tag wraps, merge merges, etc.
-
-This is a prerequisite for `createHandlerWithConfig` to work at runtime. Current demos don't use builtins in their workflows, but the desugared config AST does.
+The one prerequisite: the Rust scheduler currently sends only `{ value }` on stdin to the worker. For parameterized builtins like `constant` (which carry their parameter in `step_config_schema`), the scheduler needs to include `step_config_schema` in the stdin payload so the worker can pass it to the handler as `stepConfig`. This is a small change to the scheduler's JSON serialization and the worker's `handle` call.
 
 ### Dead field removal
 
@@ -327,7 +320,7 @@ This is a prerequisite for `createHandlerWithConfig` to work at runtime. Current
 | `libs/barnum/src/ast.ts` | Delete `invoke()`. Remove `stepConfigSchema` and `valueSchema` from `TypeScriptHandler`. |
 | `libs/barnum/src/handlers/builtins.ts` | `constant` and `range` become `createHandlerWithConfig`. `drop` stays as `createHandler`. |
 | `libs/barnum/src/builtins.ts` | `constant()` and `range()` wrappers call the config handler with the config value. |
-| `libs/barnum/src/worker.ts` | Add `__builtin__` dispatch for identity, drop, constant, tag, merge, flatten, extractField, range. |
+| `libs/barnum/src/worker.ts` | Pass `stepConfig` to handler when present in stdin payload. |
 | `libs/barnum/tests/handlers.ts` | All handlers: remove `()` calls in workflow composition. |
 | `libs/barnum/tests/*.test.ts` | Update handler usage from `build()` to `build`. |
 | `libs/barnum/tests/round-trip.test.ts` | Update snapshot expectations (stepConfigSchema/valueSchema fields gone). |
