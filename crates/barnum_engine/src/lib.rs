@@ -134,6 +134,9 @@ impl Engine {
     /// Expand an `ActionId` into frames. Creates frames for structural
     /// combinators and bottoms out at Invoke leaves with pending dispatches.
     ///
+    /// Invoke actions do not create frames — they produce a [`Dispatch`] and
+    /// record the parent reference for later delivery via `on_task_completed`.
+    ///
     /// Pass `parent: None` for the top-level action (i.e., starting a
     /// workflow). Internal recursion provides `Some(parent_ref)` to attach
     /// child frames to their parent.
@@ -152,10 +155,6 @@ impl Engine {
     ) -> Result<(), AdvanceError> {
         match self.flat_config.action(action_id) {
             FlatAction::Invoke { handler } => {
-                self.insert_frame(Frame {
-                    parent,
-                    kind: FrameKind::Invoke,
-                });
                 self.pending_dispatches.push(Dispatch {
                     handler_id: handler,
                     value,

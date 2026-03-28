@@ -94,16 +94,6 @@ Engine {
                 ),
             },
         },
-        1: Frame {
-            parent: Some(
-                SingleChild {
-                    frame_id: FrameId(
-                        0,
-                    ),
-                },
-            ),
-            kind: Invoke,
-        },
     },
     pending_dispatches: [
         Dispatch {

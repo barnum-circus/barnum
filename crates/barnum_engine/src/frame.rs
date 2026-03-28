@@ -41,11 +41,12 @@ impl ParentRef {
 }
 
 /// The kind-specific state stored in each frame.
+///
+/// Only structural combinators have frames. Invoke actions are leaf
+/// dispatches — they don't create frames.
 #[derive(Debug)]
 #[allow(dead_code)] // Fields read by complete/error (completion milestone).
 pub enum FrameKind {
-    /// Leaf: handler dispatched, waiting for result.
-    Invoke,
     /// Sequential: first child active, then trampoline to `rest`.
     Chain {
         /// The remaining action to advance after the first child completes.

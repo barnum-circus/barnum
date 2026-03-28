@@ -86,28 +86,6 @@ Engine {
                 ],
             },
         },
-        2: Frame {
-            parent: Some(
-                IndexedChild {
-                    frame_id: FrameId(
-                        1,
-                    ),
-                    child_index: 0,
-                },
-            ),
-            kind: Invoke,
-        },
-        3: Frame {
-            parent: Some(
-                IndexedChild {
-                    frame_id: FrameId(
-                        1,
-                    ),
-                    child_index: 1,
-                },
-            ),
-            kind: Invoke,
-        },
     },
     pending_dispatches: [
         Dispatch {

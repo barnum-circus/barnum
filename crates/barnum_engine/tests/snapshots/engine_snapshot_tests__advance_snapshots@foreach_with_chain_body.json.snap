@@ -93,16 +93,6 @@ Engine {
         },
         2: Frame {
             parent: Some(
-                SingleChild {
-                    frame_id: FrameId(
-                        1,
-                    ),
-                },
-            ),
-            kind: Invoke,
-        },
-        3: Frame {
-            parent: Some(
                 IndexedChild {
                     frame_id: FrameId(
                         0,
@@ -115,16 +105,6 @@ Engine {
                     3,
                 ),
             },
-        },
-        4: Frame {
-            parent: Some(
-                SingleChild {
-                    frame_id: FrameId(
-                        3,
-                    ),
-                },
-            ),
-            kind: Invoke,
         },
     },
     pending_dispatches: [
