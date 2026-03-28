@@ -204,6 +204,44 @@ Compile-time simplifications during flattening (or a validation/normalization pa
 
 Other potential simplifications to investigate as the AST matures.
 
+## Handler Annotations and Dispatch Deduplication
+
+Handlers could carry metadata annotations that enable the engine to skip redundant work:
+
+- **Pure** (deterministic, no side effects): Given the same input, always produces the same output. The engine can **deduplicate dispatches** — if two Invoke nodes have the same `HandlerId` and the same input `Value`, the engine dispatches once and delivers the result to both Invoke frames. This is common subexpression elimination (CSE) at the dispatch level.
+
+- **Idempotent** (safe to retry, but may have side effects): Re-executing with the same input produces the same observable effect. Useful for retry policies — the engine can safely re-dispatch on timeout without worrying about double-charging, double-emailing, etc. Doesn't enable deduplication (side effects may differ between calls), but enables automatic retry.
+
+- **Read-only** (no side effects, but may be nondeterministic): Depends on external state that might change between calls (e.g., "get current inventory"). Safe to deduplicate within a single `advance()` expansion (the state won't change between dispatches produced in the same batch), but not across completions.
+
+### Dispatch deduplication for pure handlers
+
+During `advance()`, the engine accumulates dispatches. Before yielding them to the runtime, it scans for duplicates: pairs where `(handler_id, value)` are equal and the handler is annotated pure. Duplicates share a single dispatch; when the result arrives, it's delivered to all waiting Invoke frames.
+
+Implementation sketch:
+- `pending_dispatches` gains a dedup index: `HashMap<(HandlerId, ValueHash), TaskId>` mapping `(handler, input)` to an existing task.
+- When a new Invoke dispatch matches an existing entry, the new Invoke frame's `task_id` is set to the existing `TaskId`. `task_to_frame` becomes `task_to_frames: HashMap<TaskId, Vec<FrameId>>` (one task can complete multiple Invoke frames).
+- On completion, the result is cloned to each frame in the vec.
+
+This matters for Parallel where multiple branches invoke the same pure handler with the same input — e.g., `parallel(fetchUser(userId), fetchUser(userId))` dispatches once instead of twice.
+
+### Annotation mechanism
+
+Annotations live on `HandlerKind` (or a new `HandlerMetadata` struct). The TS surface DSL would specify them in `createHandler`:
+
+```ts
+createHandler({
+  annotations: { pure: true },
+  handle: async ({ value }) => { ... },
+})
+```
+
+The annotations serialize into the handler metadata and are available to the engine at runtime. The flattener preserves them in the handler pool.
+
+### Scope
+
+This is purely an optimization — the engine produces correct results without annotations. Annotations are opt-in; unannotated handlers are treated as effectful (no deduplication, no automatic retry).
+
 ## Lazy Step Flattening
 
 Currently, flattening eagerly processes all steps in `Config::steps`, even if some are never referenced by the workflow. This is wasted work and inflates the flat table with dead entries.
