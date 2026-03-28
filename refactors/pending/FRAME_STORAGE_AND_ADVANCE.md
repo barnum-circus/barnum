@@ -333,77 +333,14 @@ Branch uses `key.lookup()` (from `intern::Lookup` on `KindDiscriminator`) rather
 
 `advance` calls `complete` for the empty ForEach/Parallel edge cases. The empty result propagates upward through the frame tree — Chain trampolines to rest (calling advance again), Root silently removes itself, etc. This means complete must be fully implemented even though it's not part of the public API in this milestone.
 
-The full `complete` implementation is in ENGINE.md. The only difference for this milestone: Root completion just removes the frame — there's no `self.result` to set. The engine silently finishes.
+No-op stub. Called by advance for empty ForEach/Parallel — the value is discarded. The full implementation is in COMPLETION.md.
 
 ```rust
-fn complete(&mut self, parent_ref: ParentRef, value: Value) {
-    match parent_ref {
-        ParentRef::SingleChild { frame_id } => self.complete_single(frame_id, value),
-        ParentRef::IndexedChild { frame_id, child_index } => {
-            self.complete_indexed(frame_id, child_index, value);
-        }
-    }
-}
-
-fn complete_single(&mut self, frame_id: FrameId, value: Value) {
-    match self.frames[frame_id.0].kind {
-        FrameKind::Root => {
-            self.frames.remove(frame_id.0);
-            // No result storage in this milestone. Engine is done.
-        }
-
-        FrameKind::Chain { rest } => {
-            let frame = self.frames.remove(frame_id.0);
-            let parent = frame.parent.expect("non-root frame has parent");
-            self.advance(rest, value, parent);
-        }
-
-        FrameKind::Loop { body } => {
-            let kind = value["kind"].as_str().expect("Loop result must have 'kind'");
-            let inner = value.get("value").cloned().unwrap_or(Value::Null);
-            match kind {
-                "Continue" => {
-                    self.advance(body, inner, ParentRef::SingleChild { frame_id });
-                }
-                "Break" => {
-                    let frame = self.frames.remove(frame_id.0);
-                    let parent = frame.parent.expect("non-root frame has parent");
-                    self.complete(parent, inner);
-                }
-                other => panic!("Loop result kind must be Continue or Break, got {other}"),
-            }
-        }
-
-        FrameKind::Attempt => {
-            let frame = self.frames.remove(frame_id.0);
-            let parent = frame.parent.expect("non-root frame has parent");
-            let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
-            self.complete(parent, wrapped);
-        }
-
-        _ => panic!("complete_single called on unexpected frame kind"),
-    }
-}
-
-fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
-    let frame = self.frames.get_mut(frame_id.0).expect("frame not found");
-    let results = match &mut frame.kind {
-        FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
-        _ => panic!("complete_indexed called on unexpected frame kind"),
-    };
-
-    results[child_index] = Some(value);
-
-    if results.iter().all(Option::is_some) {
-        let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
-        let frame = self.frames.remove(frame_id.0);
-        let parent = frame.parent.expect("non-root frame has parent");
-        self.complete(parent, Value::Array(collected));
-    }
+fn complete(&mut self, _parent_ref: ParentRef, _value: Value) {
+    // No-op in the advance milestone. The completion milestone
+    // fills this in with the full advance/complete cycle.
 }
 ```
-
-This is the same as ENGINE.md's complete except Root doesn't set `self.result`. The completion milestone adds `result: Option<EngineResult>` and the Root arm stores the terminal value.
 
 ## Public API (this milestone)
 
@@ -693,8 +630,9 @@ mod tests {
         );
     }
 
-    /// ForEach with empty array: no dispatches, no stuck frames.
-    /// advance detects the empty array and immediately completes the parent.
+    /// ForEach with empty array: no dispatches.
+    /// complete is a no-op, so the empty result is discarded.
+    /// The completion milestone will test that empty ForEach propagates correctly.
     #[test]
     fn foreach_empty_array() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
@@ -704,27 +642,8 @@ mod tests {
         assert_eq!(dispatches.len(), 0);
     }
 
-    /// ForEach with empty array inside a chain: the chain trampolines to rest.
-    /// Verifies that empty ForEach's immediate completion triggers advance of the next step.
-    #[test]
-    fn foreach_empty_array_in_chain() {
-        let mut engine = engine_from(chain(
-            for_each(invoke("./a.ts", "a")),
-            invoke("./b.ts", "b"),
-        ));
-        engine.start(json!([]));
-
-        let dispatches = engine.take_pending_dispatches();
-        assert_eq!(dispatches.len(), 1);
-        assert_eq!(
-            engine.handler(dispatches[0].handler_id),
-            &ts_handler("./b.ts", "b"),
-        );
-        // The ForEach's empty-array result ([]) is passed as input to b.
-        assert_eq!(dispatches[0].value, json!([]));
-    }
-
-    /// Parallel with empty children (if it reaches the engine): no dispatches.
+    /// Parallel with empty children: no dispatches.
+    /// complete is a no-op, so the empty result is discarded.
     #[test]
     fn parallel_empty() {
         let mut engine = engine_from(parallel(vec![]));
