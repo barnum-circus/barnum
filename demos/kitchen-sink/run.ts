@@ -45,20 +45,19 @@ await configBuilder()
 
       // Phase 2: Migrate each JS file to TypeScript
       forEach(migrate),
+      drop(),
 
       // Phase 3: Type-check / fix loop
       //
-      // The loop body starts with drop() because typeCheck operates on
-      // the filesystem, not on a pipeline value. On first entry, drop
-      // discards the migration results; on subsequent iterations, it
-      // discards the fix results carried by Continue.
+      // typeCheck operates on the filesystem, not a pipeline value.
+      // recur() feeds the fix results back, so drop() discards them
+      // before re-entering typeCheck.
       loop(
         pipe(
-          drop(),
           typeCheck,
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+            HasErrors: pipe(extractField("errors"), forEach(fix), drop(), recur()),
             Clean: done(),
           }),
         ),
