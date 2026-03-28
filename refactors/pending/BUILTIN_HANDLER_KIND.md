@@ -190,6 +190,19 @@ Builtins should go through the full execution loop (logging, tracing, metrics) l
 
 Engine-native builtins currently panic on invalid config or input (e.g., Merge on non-objects, Flatten on non-arrays). These should return proper errors instead. Not blocking the demo.
 
+### Generate TypeScript types from Rust
+
+The TypeScript AST types (`Action`, `HandlerKind`, `TypeScriptHandler`, `BuiltinHandler`, `BuiltinName`, etc.) in `ast.ts` are manually maintained mirrors of the Rust types in `barnum_ast`. Every Rust-side change requires a corresponding manual TS edit — a maintenance burden and a source of drift.
+
+The `build_schemas` pipeline already generates JSON Schema and Zod schemas from the Rust types. The serializable TS types in `ast.ts` should be generated from the same source rather than hand-maintained. This would mean:
+
+- Rust types are the single source of truth for the wire format
+- `BuiltinName` variants, `HandlerKind` discriminants, `Action` variants — all derived automatically
+- Adding a new builtin or action variant in Rust auto-propagates to TS
+- The hand-written `ast.ts` types shrink to only the TS-specific parts (phantom types, `TypedAction`, combinators, `ConfigBuilder`) that have no Rust equivalent
+
+This applies beyond builtins — the entire serializable AST layer (`Action`, `Config`, `HandlerKind`, `StepRef`, etc.) should be generated. The Zod schema generation is already halfway there; the missing piece is emitting plain TS types alongside the Zod validators.
+
 ## Changes summary
 
 | File | Change |
