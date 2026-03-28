@@ -103,8 +103,10 @@ impl Scheduler {
 
         match handler {
             HandlerKind::Builtin(builtin_handler) => {
-                let result = execute_builtin(&builtin_handler.builtin, &dispatch.value);
+                let builtin_kind = builtin_handler.builtin.clone();
+                let value = dispatch.value.clone();
                 tokio::spawn(async move {
+                    let result = execute_builtin(&builtin_kind, &value);
                     let _ = result_tx.send((task_id, result));
                 });
             }
