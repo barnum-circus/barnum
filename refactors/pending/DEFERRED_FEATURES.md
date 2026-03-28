@@ -242,6 +242,30 @@ The annotations serialize into the handler metadata and are available to the eng
 
 This is purely an optimization — the engine produces correct results without annotations. Annotations are opt-in; unannotated handlers are treated as effectful (no deduplication, no automatic retry).
 
+## Schema Validation Elision
+
+If we add runtime validation (checking values against handler schemas before dispatch), we can skip redundant checks when the engine knows a value already satisfies a schema.
+
+The key insight: Parallel clones the same input to N children. If all N children expect the same input type (same handler, same schema), we validate once and skip N-1 checks. The value hasn't changed — it's a clone of a validated value.
+
+More generally, a value that has been validated against schema S remains valid for S as long as no handler has transformed it. Pass-through operations (Branch case lookup, Step redirect, Chain forwarding to rest with the same value) preserve the validation. Only Invoke (which produces a new value from a handler) invalidates the "already checked" status.
+
+### How it could work
+
+Track a `SchemaId` (or `HandlerId` as proxy) on values as they flow through the engine. When a value is validated against a handler's input schema, tag it. When the same schema is expected again, skip validation.
+
+Implementation options:
+
+1. **Per-dispatch dedup**: During `advance()`, if two dispatches target the same handler with the same input value (by identity, not equality), validate once. This is a subset of the pure handler deduplication optimization (above) — schema validation elision is the type-checking counterpart of dispatch deduplication.
+
+2. **Value tagging**: Attach a "validated for" set to values as engine-internal metadata. When a value passes through identity operations, the tag carries forward. When it's transformed (handler output), the tag is cleared. This is more general but requires wrapping `Value` or maintaining a side table.
+
+3. **Compile-time analysis**: The flattener can determine statically which paths share input types. If Parallel's children all expect the same schema, emit a flag that tells the engine to validate once. This moves the analysis to compile time (no runtime bookkeeping) but is less general.
+
+### When it matters
+
+Irrelevant until runtime validation exists. Currently, handlers receive raw `Value` with no schema checking. When we add handler input validation (via `stepValueValidator` schemas), this optimization prevents O(N) redundant validations in Parallel/ForEach fan-outs.
+
 ## Lazy Step Flattening
 
 Currently, flattening eagerly processes all steps in `Config::steps`, even if some are never referenced by the workflow. This is wasted work and inflates the flat table with dead entries.
@@ -270,6 +294,64 @@ createHandler({
 ```
 
 The error type defaults to `unknown` in TypeScript. The `attempt` combinator would then produce `AttemptResult<TOutput, TError>` instead of `AttemptResult<TOutput>` with `error: unknown`.
+
+## Workflow Stack Traces
+
+When a handler panics, fails, or the engine hits an unexpected state, the error message should include a meaningful stack trace showing the workflow path that led to the failure — not a Rust call stack, but a Barnum frame trace.
+
+### What a Barnum stack trace looks like
+
+The frame tree already contains the information: every frame has a `parent`, forming a chain from the failure point to Root. Walk the parent chain and emit a trace:
+
+```
+Handler error in ./payment.ts:charge
+  at Invoke (action 14)
+  at Chain rest (action 12)
+  at Parallel child 2 of 3 (action 8)
+  at Chain rest (action 5)
+  at Attempt (action 3)
+  at Root
+```
+
+Each frame in the trace can include:
+- **Frame kind**: Invoke, Chain, Parallel, ForEach, Loop, Attempt
+- **ActionId**: position in the flat table (useful for developer debugging)
+- **Structural context**: "child 2 of 3" for Parallel, "iteration N" for Loop
+- **Handler identity**: for Invoke frames, the handler's module path + function name
+
+### Implementation
+
+Two approaches:
+
+1. **On-demand trace**: When an error occurs, walk the frame tree's parent chain upward from the failing frame. No per-frame overhead — the trace is constructed only on error. This is the natural approach since the parent chain already exists.
+
+2. **Precomputed path**: Each frame stores its full path (a `Vec<FrameId>` or similar). Updated during advance. Costs memory proportional to tree depth × number of frames. Not worth it for the common case.
+
+On-demand is the right choice. The engine already has `parent` pointers — walking them is O(depth) which is bounded by workflow nesting.
+
+### Named anchors
+
+The trace above uses ActionIds, which are opaque to workflow authors. To make traces human-readable, actions could carry optional names:
+
+- Step references already have names (`StepName`). Step frames in the trace show the step name.
+- Handlers have module path + function name. Invoke frames show these.
+- Combinators (`pipe`, `parallel`, `branch`) could accept an optional label parameter in the TS surface DSL: `pipe("checkout-flow", ...)`. The label would serialize into the AST and survive flattening as metadata on the FlatEntry.
+
+Without labels, the trace falls back to ActionIds + handler identities, which is still more useful than nothing.
+
+### Panic hook integration
+
+In the Rust engine, panics (from `expect`, `panic!`, or unexpected states) produce a Rust stack trace that's useless to workflow authors. A custom panic hook could:
+
+1. Catch the panic
+2. Walk the frame tree to build the Barnum trace
+3. Include both the Rust panic message and the Barnum trace in the error output
+
+This requires the engine (or a thread-local) to be accessible from the panic hook. The engine is `!Sync` (single-threaded), so thread-local access is straightforward.
+
+### Error propagation traces
+
+When `error()` propagates up the frame tree, it could accumulate a trace: each frame the error passes through adds a line. By the time the error reaches Root (or is caught by Attempt), the trace shows the full propagation path including cancelled siblings. This is richer than a simple parent-chain walk — it shows the dynamic error path, not just the static frame ancestry.
 
 ## Streams
 
