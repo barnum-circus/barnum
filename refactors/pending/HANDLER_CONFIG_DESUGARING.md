@@ -2,7 +2,7 @@
 
 **Status:** Pending
 
-**Depends on:** None
+**Depends on:** BUILTIN_HANDLER_KIND.md (Constant and Identity builtins)
 
 ## Motivation
 
@@ -84,63 +84,14 @@ Builtins like `identity()`, `tag()`, `merge()`, `flatten()`, `extractField()` us
 
 ## Design
 
-### New handler kinds: Constant and Identity
+### Builtin handler kinds
 
-Rather than adding new `Action` variants, extend `HandlerKind` with engine-native variants. This keeps the Action enum unchanged and reuses the existing Invoke infrastructure.
+See BUILTIN_HANDLER_KIND.md for the full design. The config desugaring uses two builtins:
 
-**Rust:**
-```rust
-pub enum HandlerKind {
-    TypeScript(TypeScriptHandler),
-    Constant(ConstantHandler),
-    Identity,
-}
+- **Constant** (`{ kind: "Builtin", name: "Constant", config: <value> }`) — engine returns config, ignores input
+- **Identity** (`{ kind: "Builtin", name: "Identity", config: null }`) — engine returns input unchanged
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConstantHandler {
-    pub value: Value,
-}
-```
-
-**TypeScript:**
-```ts
-export type HandlerKind = TypeScriptHandler | ConstantHandler | IdentityHandler;
-
-export type ConstantHandler = { kind: "Constant"; value: unknown };
-export type IdentityHandler = { kind: "Identity" };
-```
-
-The engine handles these natively in the Invoke path:
-- **Constant**: delivers the stored value, ignores input. No subprocess.
-- **Identity**: delivers the input value unchanged. No subprocess.
-
-These are Invoke-level handler kinds, not action-level nodes. They serialize as `HandlerKind` discriminated union variants (`{ "kind": "Constant", "value": 42 }`, `{ "kind": "Identity" }`). The flattener interns them in the handler pool like TypeScript handlers. No change to `FlatAction`, `FlatEntry`, or the 8-byte entry size.
-
-### Engine changes
-
-The `advance` method's Invoke arm checks handler kind:
-
-```rust
-FlatAction::Invoke { handler } => {
-    match self.flat_config.handler(handler) {
-        HandlerKind::Constant(constant_handler) => {
-            // Deliver value immediately — no dispatch, no subprocess
-            self.deliver(parent, constant_handler.value.clone())?;
-        }
-        HandlerKind::Identity => {
-            // Pass through input — no dispatch, no subprocess
-            self.deliver(parent, value)?;
-        }
-        HandlerKind::TypeScript(_) => {
-            let task_id = self.next_task_id();
-            self.task_to_parent.insert(task_id, parent);
-            self.pending_dispatches.push(Dispatch { task_id, handler_id: handler, value });
-        }
-    }
-}
-```
-
-Note: `advance` currently returns `Result<(), AdvanceError>` while `deliver` returns `Result<Option<Value>, CompleteError>`. These types need to be reconciled — either by changing `advance`'s return type or by queuing immediate completions. Implementation detail to resolve during coding.
+These are engine-native: no subprocess, no dispatch. The flattener interns them in the handler pool like TypeScript handlers. No change to `FlatAction`, `FlatEntry`, or the 8-byte entry size.
 
 ### Split `createHandler` into two functions
 
@@ -189,16 +140,16 @@ When `deploy({ target: "production" })` is called, it produces:
 ```
 Chain(
   Parallel([
-    Invoke(Identity),
-    Invoke(Constant({ target: "production" }))
+    Invoke(Builtin("Identity", null)),
+    Invoke(Builtin("Constant", { target: "production" }))
   ]),
   Invoke(TypeScript(deploy))
 )
 ```
 
 Parallel receives the pipeline value, passes it to both children:
-- Identity returns the pipeline value unchanged (engine-native, no subprocess)
-- Constant returns `{ target: "production" }`, ignoring its input (engine-native, no subprocess)
+- Identity builtin returns the pipeline value unchanged (engine-native, no subprocess)
+- Constant builtin returns `{ target: "production" }`, ignoring its input (engine-native, no subprocess)
 
 Parallel collects: `[pipelineValue, { target: "production" }]`
 
@@ -287,8 +238,8 @@ function createHandlerWithConfig(definition, exportName?) {
       first: {
         kind: "Parallel",
         actions: [
-          { kind: "Invoke", handler: { kind: "Identity" } },
-          { kind: "Invoke", handler: { kind: "Constant", value: config } },
+          { kind: "Invoke", handler: { kind: "Builtin", name: "Identity", config: null } },
+          { kind: "Invoke", handler: { kind: "Builtin", name: "Constant", config } },
         ],
       },
       rest: invokeAction,
@@ -307,36 +258,13 @@ No helper functions needed. The desugared AST uses `Identity` and `Constant` han
 
 ### Builtin handlers
 
-**`constant` and `range`** currently use `stepConfigValidator` to carry parameters. After this change, they emit Constant handler kinds directly:
+All builtins migrate to the Builtin handler kind (see BUILTIN_HANDLER_KIND.md). The config desugaring specifically requires:
 
-```ts
-// builtins.ts
-export function constant<T>(value: T): TypedAction<never, T> {
-  return { kind: "Invoke", handler: { kind: "Constant", value } } as TypedAction<never, T>;
-}
+- `constant(value)` → `Builtin("Constant", value)` — used in the desugared AST to inject config
+- `identity()` → `Builtin("Identity", null)` — used in the desugared AST to pass through pipeline value
+- `range(start, end)` → computed at build time, emitted as `Builtin("Constant", [start, start+1, ..., end-1])`
 
-export function range(start: number, end: number): TypedAction<never, number[]> {
-  const result: number[] = [];
-  for (let i = start; i < end; i++) result.push(i);
-  return { kind: "Invoke", handler: { kind: "Constant", value: result } } as TypedAction<never, number[]>;
-}
-```
-
-`range` computes the array at config-build time and emits a Constant. No subprocess, no handler file needed.
-
-**`identity`** emits the Identity handler kind:
-
-```ts
-export function identity<T>(): TypedAction<T, T> {
-  return { kind: "Invoke", handler: { kind: "Identity" } } as TypedAction<T, T>;
-}
-```
-
-**`drop`** stays as a TypeScript handler in `handlers/builtins.ts` for now. Can be optimized to a handler kind later.
-
-**`tag`, `merge`, `flatten`, `extractField`** currently use `module: "__builtin__"` which is broken in real execution. These need real handler files in `handlers/builtins.ts` or new handler kinds. This is a separate concern from config desugaring — tracked as a follow-up.
-
-The `constant` and `range` handler definitions in `handlers/builtins.ts` are deleted since they're now emitted as Constant handler kinds, not TypeScript handlers.
+The `constant` and `range` handler definitions in `handlers/builtins.ts` are deleted — they're no longer TypeScript handlers.
 
 ### Rust-side changes
 
@@ -349,20 +277,7 @@ pub struct TypeScriptHandler {
 }
 ```
 
-Add handler kind variants:
-
-```rust
-pub enum HandlerKind {
-    TypeScript(TypeScriptHandler),
-    Constant(ConstantHandler),
-    Identity,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConstantHandler {
-    pub value: Value,
-}
-```
+The `Builtin` variant on `HandlerKind` is added by BUILTIN_HANDLER_KIND.md.
 
 The JSON schema, Zod schema, and CLI schema regenerations pick up the changes automatically via `build_schemas`.
 
@@ -388,11 +303,11 @@ export type Handler<TValue, TOutput>
 
 ### Worker changes
 
-None. The worker never sees Constant or Identity handlers — the engine resolves them before they reach the scheduler. The worker continues to call `handler.__definition.handle({ value: input.value })` for TypeScript handlers only.
+None. Builtins are engine-native — the worker only handles TypeScript handlers.
 
 ### Scheduler changes
 
-The scheduler's `dispatch` method currently pattern-matches on `HandlerKind::TypeScript`. With new variants, Constant and Identity never reach the scheduler (engine resolves them inline), so no changes needed. The irrefutable pattern on `TypeScript` can become an exhaustive match for safety.
+The scheduler's `dispatch` method currently pattern-matches on `HandlerKind::TypeScript`. Builtins never reach the scheduler (engine resolves them inline). The irrefutable pattern on `TypeScript` becomes an exhaustive match for safety.
 
 ## Implementation notes
 
@@ -409,17 +324,17 @@ When implementing, update all tests first:
 | File | Change |
 |------|--------|
 | `libs/barnum/src/handler.ts` | Split into `createHandler` + `createHandlerWithConfig`. Delete `CallableHandler`. Handler drops to 2 type params. |
-| `libs/barnum/src/ast.ts` | Delete `invoke()`. Remove `stepConfigSchema` and `valueSchema` from `TypeScriptHandler`. Add `ConstantHandler` and `IdentityHandler` to `HandlerKind`. |
-| `libs/barnum/src/handlers/builtins.ts` | Delete `constant` and `range` handler definitions. `drop` stays as `createHandler`. |
-| `libs/barnum/src/builtins.ts` | `constant()` and `range()` emit Constant handler kinds directly. `identity()` emits Identity handler kind. |
+| `libs/barnum/src/ast.ts` | Delete `invoke()`. Remove `stepConfigSchema` and `valueSchema` from `TypeScriptHandler`. Add `BuiltinHandler` to `HandlerKind` (see BUILTIN_HANDLER_KIND.md). |
+| `libs/barnum/src/handlers/builtins.ts` | Delete `constant` and `range` definitions. `drop` migrates to Builtin handler kind. |
+| `libs/barnum/src/builtins.ts` | All builtins emit Builtin handler kinds (see BUILTIN_HANDLER_KIND.md). |
 | `libs/barnum/src/worker.ts` | No changes. |
 | `libs/barnum/tests/handlers.ts` | All handlers: remove `()` calls in workflow composition. |
 | `libs/barnum/tests/*.test.ts` | Update handler usage from `build()` to `build`. |
 | `libs/barnum/tests/round-trip.test.ts` | Update snapshot expectations (stepConfigSchema/valueSchema fields gone). |
 | `demos/simple-workflow/handlers/*.ts` | No API change for simple handlers (still `createHandler`). |
 | `demos/simple-workflow/run*.ts` | Remove `()` from handler references in `pipe()`. |
-| `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` and `value_schema` from `TypeScriptHandler`. Add `ConstantHandler` struct, `Constant` and `Identity` variants to `HandlerKind`. |
-| `crates/barnum_ast/src/flat.rs` | No structural changes (Constant/Identity are handler kinds, not action kinds). Update test helpers. |
-| `crates/barnum_engine/src/lib.rs` | Invoke arm checks handler kind: Constant/Identity resolved inline, TypeScript dispatched. Update test helpers. Reconcile `advance`/`deliver` return types. |
+| `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` and `value_schema` from `TypeScriptHandler`. Builtin handler kind changes per BUILTIN_HANDLER_KIND.md. |
+| `crates/barnum_ast/src/flat.rs` | No structural changes (Builtin is a handler kind, not an action kind). Update test helpers. |
+| `crates/barnum_engine/src/lib.rs` | Invoke arm dispatches on handler kind (see BUILTIN_HANDLER_KIND.md). Update test helpers. Reconcile `advance`/`deliver` return types. |
 | `crates/barnum_event_loop/src/lib.rs` | Update test helpers. Scheduler dispatch unaffected (Constant/Identity never dispatched). |
 | Regenerated schemas | `build_schemas` picks up the Rust type changes. |
