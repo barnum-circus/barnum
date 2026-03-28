@@ -114,11 +114,19 @@ The challenge: `TUnion` must be inferred from the pipe context (the preceding ac
 
 Implemented via K-inference in `branch`'s signature: `branch<K extends string, Out, R>(cases: Record<K, TypedAction<any, Out, R>>): TypedAction<{ kind: K }, Out, R>`. TypeScript infers `K` from the cases keys, and pipe's contravariant input checking enforces exhaustiveness automatically. Missing cases produce compile errors; extra cases are allowed.
 
-## AttemptResult Shape
+## ~~AttemptResult Shape~~ — Remove Attempt
 
-WORKFLOW_ALGEBRA.md specifies `{ kind: "Success", value } | { kind: "Failure", error, input }`. Current TypeScript uses `{ kind: "Ok", value } | { kind: "Err", error }`. Two differences:
-- Naming: Success/Failure vs Ok/Err
-- Failure variant carries the original `input`, enabling retry/fallback patterns without re-computing the input
+**Status: Attempt should be removed from the AST.**
+
+Handlers cross a process boundary and can always fail. Every handler naturally returns a Result. Error handling — retries, unwrap, propagation — is expressible via existing AST primitives (Loop + Switch + Chain). There is no need for a dedicated Attempt node in the AST or a special AttemptResult type.
+
+- **Retry**: `Loop(Chain(Invoke(handler), Switch("ok" => Break, "err" => Continue)))` with a max iteration count.
+- **Unwrap**: a builtin or AST node that extracts the Ok value or panics the workflow.
+- **Map / and_then / `?`**: future AST combinators over Result values.
+
+The `result` namespace builtins (§ Namespaced Builtins above) still make sense — they'd operate on the Result values that handlers naturally produce, not on a special AttemptResult wrapper.
+
+See ENGINE_APPLIER.md § "Future: error handling is an AST concern" for the full rationale.
 
 ## Context
 
@@ -132,20 +140,15 @@ Beyond read-only context, handlers need a way to perform side effects (logging, 
 
 This overlaps with the Context feature above but is distinct: context is read-only data, effects are write-only capabilities. Both are provided by the host and available to all handlers without flowing through the data pipeline.
 
-## Attempt as Dynamic-Scope Context
+## ~~Attempt as Dynamic-Scope Context~~ — Subsumed by Attempt removal
 
-`Attempt` is implicitly a dynamic-scope mechanism. When `error()` propagates up the frame tree, the engine walks ancestor frames looking for an `Attempt` — that's dynamic scope lookup. The frame tree *is* the dynamic scope.
+With Attempt removed (see above), the dynamic-scope generalization loses its motivating example. The remaining use cases (retry policies, timeouts, tracing context) are worth revisiting independently:
 
-This suggests a generalization: a `Provide` / `Consume` mechanism where `Provide` pushes a value onto the dynamic scope and `Consume` reads the nearest one. `Attempt` would be a special case — it "provides" an error boundary, and the error propagation logic "consumes" it.
+- **Retry policies**: handled in userland via Loop + Switch (see above).
+- **Timeouts**: likely need runtime support (not engine support) — the Scheduler or handler execution layer sets deadlines, not the AST.
+- **Tracing/logging context**: could be a `Provide` / `Consume` mechanism or just part of the Context feature.
 
-Use cases beyond error catching:
-- **Retry policies**: `WithRetry { max: 3, backoff: "exponential" }` wraps a subtree. When an Invoke inside fails, the engine walks up to find the nearest retry policy and re-dispatches.
-- **Timeouts**: `WithTimeout { ms: 5000 }` wraps a subtree. The runtime (not the engine — the engine is pure) uses this to set deadlines on dispatches.
-- **Tracing/logging context**: `WithSpan { name: "checkout" }` wraps a subtree. Dispatches include the span context so handlers can emit structured logs.
-
-The engine currently hard-codes `Attempt` as the only frame type that intercepts errors. A general context mechanism would let users define custom interception points. The tradeoff is complexity — dynamic scope is powerful but hard to reason about, and the engine's simplicity (pure state machine, no implicit plumbing) is a feature.
-
-For now, `Attempt` is hard-coded. If more interception patterns emerge (retry, timeout), refactoring to a general dynamic-scope mechanism becomes worthwhile.
+The general dynamic-scope idea (`Provide` / `Consume` pushing values onto the frame tree) may still be useful, but it should be motivated by a concrete need, not by Attempt.
 
 ## Loop as Desugared Step + Branch
 
