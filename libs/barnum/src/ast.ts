@@ -438,7 +438,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
       steps: StripRefs<TSteps>;
       self: TypedAction<never, never>;
     }) => TypedAction<never, Out>,
-  ): Config<Out> {
+  ): RunnableConfig<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
       stepRefs[name] = { kind: "Step", step: { kind: "Named", name } };
@@ -447,10 +447,41 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
       kind: "Step",
       step: { kind: "Root" },
     } as TypedAction<never, never>;
-    const workflow = build({ steps: stepRefs as StripRefs<TSteps>, self });
-    const result: Config<Out> = { workflow };
-    if (Object.keys(this._steps).length > 0) {
-      result.steps = this._steps;
+    const workflowAction = build({ steps: stepRefs as StripRefs<TSteps>, self });
+    const steps = Object.keys(this._steps).length > 0 ? this._steps : undefined;
+    return new RunnableConfig(workflowAction, steps);
+  }
+}
+
+/**
+ * A workflow config with a `.run()` method for execution.
+ *
+ * Serializes to the same JSON shape as `Config` via `toJSON()`, so it
+ * works with `JSON.stringify` and round-trip tests.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export class RunnableConfig<Out = any> {
+  readonly workflow: TypedAction<never, Out>;
+  readonly steps?: Record<string, Action>;
+
+  constructor(workflow: TypedAction<never, Out>, steps?: Record<string, Action>) {
+    this.workflow = workflow;
+    this.steps = steps;
+  }
+
+  /** Run this workflow to completion. Prints result to stdout. */
+  async run(): Promise<void> {
+    // Dynamic import to avoid pulling in Node.js APIs at module load time
+    // (keeps ast.ts importable in non-Node environments for type checking).
+    const { run } = await import("./run.js");
+    run(this.toJSON());
+  }
+
+  /** Serialize to the same shape as Config. */
+  toJSON(): Config<Out> {
+    const result: Config<Out> = { workflow: this.workflow };
+    if (this.steps) {
+      result.steps = this.steps;
     }
     return result;
   }
