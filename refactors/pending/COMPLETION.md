@@ -1,12 +1,14 @@
-# Completion and Error Handling
+# Completion
 
-Implementation plan for the second engine milestone: task correlation, completion, error propagation, and terminal results.
+Implementation plan for the second engine milestone: task correlation, completion, and terminal results.
 
 **Depends on:** ENGINE.md (design), FRAME_STORAGE_AND_ADVANCE.md (first milestone — frame storage, advance, pending dispatches)
 
-**Scope:** `TaskId`, `task_to_frame`, `on_task_completed`, `complete`, `error`. This milestone takes the engine from "expand and dispatch" to "full advance/complete cycle."
+**Scope:** `TaskId`, `task_to_parent`, `on_task_completed`, `complete`. This milestone takes the engine from "expand and dispatch" to "full advance/complete cycle."
 
-**Note:** Since the advance milestone, `advance` is now a public method taking `Option<ParentRef>`, the `FrameKind::Root` sentinel has been removed, and `start()` is convenience sugar for `advance(workflow_root, input, None)`. Terminal state (workflow done) is detected when `complete` or `error` receives `parent: None`.
+**Note:** Since the advance milestone, `advance` is now a public method taking `Option<ParentRef>`, the `FrameKind::Root` sentinel has been removed, and `workflow_root()` returns the starting `ActionId`. Terminal state (workflow done) is detected when `complete` receives `parent: None`.
+
+**Error handling:** Deferred. If a handler fails or the engine encounters an unexpected state, it panics. Error propagation, cancellation, and `Attempt`'s error-catching behavior are a separate design concern.
 
 ## What the first milestone left out
 
@@ -15,15 +17,15 @@ The advance milestone produces dispatches but has no way to consume results. Dis
 This milestone closes the loop:
 
 ```
-Dispatch goes out → runtime executes handler → result comes back
-  → on_task_completed(task_id, Ok(value) | Err(error))
-    → looks up parent from task_to_parent
-    → calls complete(parent, value) or error(parent, error_string)
-      → parent frame decides what to do
-        → may call advance() again (Chain trampoline, Loop re-enter)
-          → produces more dispatches
-            → cycle continues until a frame with parent: None completes or errors
-  → on_task_completed returns Some(result) when workflow terminates
+Dispatch goes out -> runtime executes handler -> result comes back
+  -> on_task_completed(task_id, value)
+    -> looks up parent from task_to_parent
+    -> calls complete(parent, value)
+      -> parent frame decides what to do
+        -> may call advance() again (Chain trampoline, Loop re-enter)
+          -> produces more dispatches
+            -> cycle continues until a frame with parent: None completes
+  -> on_task_completed returns Some(value) when workflow terminates
 ```
 
 ## New types
@@ -53,12 +55,6 @@ pub struct Dispatch {
 
 Now includes `task_id` so the runtime can send results back keyed by task.
 
-### FrameKind::Invoke removed
-
-Invoke is not a structural frame — it's a pending dispatch. There's no state to track between dispatch and completion; we only need the parent reference so `on_task_completed` knows where to deliver the result. That parent reference is stored directly in `task_to_parent`, not in a frame.
-
-This means `FrameKind` only has structural variants: Chain, Parallel, ForEach, Loop, Attempt. No variant exists solely to panic in `complete`.
-
 ### Updated Engine
 
 ```rust
@@ -74,8 +70,6 @@ pub struct Engine {
 Two new fields over the advance milestone:
 - `task_to_parent`: maps pending TaskIds directly to the parent that should receive the result. Populated in advance (Invoke arm), consumed in on_task_completed.
 - `next_task_id`: monotonic counter for TaskId allocation.
-
-No stored result. Terminal results are returned directly from `on_task_completed`.
 
 ## Updated advance (Invoke arm only)
 
@@ -97,19 +91,16 @@ FlatAction::Invoke { handler } => {
 
 The entry point from the runtime. A handler finished; deliver the result to the engine.
 
-Returns `Some(result)` when the workflow terminates, `None` when it's still running.
+Returns `Some(value)` when the workflow terminates, `None` when it's still running.
 
 ```rust
 pub fn on_task_completed(
     &mut self,
     task_id: TaskId,
-    task_result: Result<Value, String>,
-) -> Option<Result<Value, String>> {
+    value: Value,
+) -> Option<Value> {
     let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
-    match task_result {
-        Ok(value) => self.complete(parent, value),
-        Err(error) => self.error(parent, error),
-    }
+    self.complete(parent, value)
 }
 ```
 
@@ -122,7 +113,7 @@ A handler invocation finished successfully and produced a value. Now that value 
 - **No parent (`None`):** This was the top-level action. The workflow is done. Return the value as the terminal result.
 - **Chain:** The value is the output of the chain's first child. Use it as input to advance the `rest` action. This is the "trampoline" — completion triggers more expansion.
 - **Loop:** The value is the loop body's output. If it says `Continue`, re-advance the body with the new value (another iteration). If `Break`, the loop is done — complete the loop's parent with the break value.
-- **Attempt:** The child succeeded. Wrap the value as `{ kind: "Ok", value }` and complete the attempt's parent.
+- **Attempt:** The child succeeded. Wrap the value as `{ kind: "Ok", value }` and complete the attempt's parent. (First pass: wraps unconditionally. Proper Attempt semantics — structured error types, catching failures — are deferred.)
 - **Parallel / ForEach:** The value is one child's result. Store it in the results slot at `child_index`. If all slots are filled, collect them into an array and complete the parent. If not, do nothing — more children are still in flight.
 
 The key insight: `complete` either **terminates** (returns a terminal result), **mutates** a frame in place (Parallel/ForEach partial result), or **continues** by calling `advance` again (Chain/Loop). It never blocks — everything is synchronous state manipulation.
@@ -136,9 +127,9 @@ fn complete(
     &mut self,
     parent: Option<ParentRef>,
     value: Value,
-) -> Option<Result<Value, String>> {
+) -> Option<Value> {
     let Some(parent_ref) = parent else {
-        return Some(Ok(value));
+        return Some(value);
     };
 
     let frame_id = parent_ref.frame_id();
@@ -161,18 +152,13 @@ fn complete(
                         Some("Break") => {
                             self.complete(frame.parent, value["value"].clone())
                         }
-                        _ => {
-                            // Handler returned garbage — treat as workflow error.
-                            let msg = format!(
-                                "Loop body must return {{kind: \"Continue\"}} or {{kind: \"Break\"}}, got: {value}"
-                            );
-                            self.error(frame.parent, msg)
-                        }
+                        _ => panic!(
+                            "Loop body must return {{kind: \"Continue\"}} or {{kind: \"Break\"}}, got: {value}"
+                        ),
                     }
                 }
                 // First pass: wrap in Ok unconditionally. Proper Attempt
-                // semantics (structured error types, etc.) are deferred —
-                // see DEFERRED_FEATURES.md.
+                // semantics (structured error types, etc.) are deferred.
                 FrameKind::Attempt => {
                     let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
                     self.complete(frame.parent, wrapped)
@@ -210,80 +196,6 @@ fn complete(
 }
 ```
 
-## error
-
-A child failed. Walk up the frame tree until an Attempt catches the error or a frame with `parent: None` terminates.
-
-```rust
-fn error(
-    &mut self,
-    parent: Option<ParentRef>,
-    error: String,
-) -> Option<Result<Value, String>> {
-    let Some(parent_ref) = parent else {
-        return Some(Err(error));
-    };
-    let frame_id = parent_ref.frame_id();
-    let frame = self.frames.remove(frame_id.0);
-
-    match frame.kind {
-        FrameKind::Attempt => {
-            let wrapped = serde_json::json!({ "kind": "Err", "error": error });
-            self.complete(frame.parent, wrapped)
-        }
-
-        FrameKind::Parallel { .. } | FrameKind::ForEach { .. } => {
-            self.cancel_descendants(frame_id);
-            self.error(frame.parent, error)
-        }
-
-        _ => {
-            self.error(frame.parent, error)
-        }
-    }
-}
-```
-
-### Error propagation path
-
-Error walks up frame-by-frame:
-1. **`parent: None`**: terminal failure. Returns `Some(Err(error))`.
-2. **Attempt**: catches the error. Wraps as `{ kind: "Err", error }` and completes the parent normally. Error stops propagating.
-3. **Parallel/ForEach**: cancel all other in-flight children (they're now irrelevant), then propagate the error upward. Short-circuit — one failure fails the whole fan-out.
-4. **Chain/Loop**: transparent — just propagate upward.
-
-### cancel_descendants
-
-When a Parallel or ForEach frame errors, its surviving children (other pending tasks and structural frames) must be cancelled. Two things to clean up:
-1. Descendant structural frames in the slab.
-2. Pending tasks in `task_to_parent` whose parent chain includes the cancelled frame.
-
-Does NOT remove dispatches already in `pending_dispatches` — those are already queued for the runtime. The runtime will send results for cancelled tasks; `on_task_completed` must handle "unknown task" gracefully (the entry was already removed from `task_to_parent`).
-
-```rust
-fn cancel_descendants(&mut self, frame_id: FrameId) {
-    // Remove descendant structural frames.
-    let frames_to_remove: Vec<usize> = self.frames.iter()
-        .filter(|(_, frame)| self.is_descendant_of(frame, frame_id))
-        .map(|(key, _)| key)
-        .collect();
-    for key in frames_to_remove {
-        self.frames.remove(key);
-    }
-
-    // Remove pending tasks whose parent chain includes frame_id.
-    let tasks_to_remove: Vec<TaskId> = self.task_to_parent.iter()
-        .filter(|(_, parent)| self.parent_is_descendant_of(*parent, frame_id))
-        .map(|(task_id, _)| *task_id)
-        .collect();
-    for task_id in tasks_to_remove {
-        self.task_to_parent.remove(&task_id);
-    }
-}
-```
-
-**Open question:** Should `on_task_completed` panic or silently ignore unknown TaskIds? If cancelled tasks' results arrive after cancellation, the TaskId won't be in `task_to_parent`. Panicking is correct for debugging (unknown TaskId = bug); ignoring is correct for production (cancelled tasks' results are expected noise). Start with panic, add a flag or match later.
-
 ## Updated public API
 
 ```rust
@@ -291,112 +203,113 @@ impl Engine {
     pub const fn new(flat_config: FlatConfig) -> Self;
     pub const fn workflow_root(&self) -> ActionId;
     pub fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRef>) -> Result<(), AdvanceError>;
-    pub fn start(&mut self, input: Value) -> Result<(), AdvanceError>; // sugar for advance(workflow_root, input, None)
-    pub fn on_task_completed(&mut self, task_id: TaskId, result: Result<Value, String>) -> Option<Result<Value, String>>;
+    pub fn on_task_completed(&mut self, task_id: TaskId, value: Value) -> Option<Value>;
     pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch>;
-    pub fn handler(&self, id: HandlerId) -> &HandlerKind;
 }
 ```
 
 New in this milestone:
-- `on_task_completed` — deliver a handler result, returns `Some(result)` when workflow terminates
+- `on_task_completed` — deliver a handler result, returns `Some(value)` when workflow terminates
 
 Already public from advance milestone:
 - `advance` — core primitive, expands an action into frames
 - `workflow_root` — the starting action ID
-- `start` — convenience sugar over `advance`
 
 ## Tests
 
-Tests use the full cycle: build config → flatten → Engine::new → start → take dispatches → on_task_completed → take more dispatches → ... → assert terminal result returned from on_task_completed.
+Tests use the full cycle: build config -> flatten -> Engine::new -> advance(workflow_root, input, None) -> take dispatches -> on_task_completed -> take more dispatches -> ... -> assert terminal result returned from on_task_completed.
 
 ### Completion tests
 
 ```rust
-/// Chain(A, B): complete A → dispatches B. Complete B → workflow done.
+/// Chain(A, B): complete A -> dispatches B. Complete B -> workflow done.
 #[test]
 fn chain_trampolines_on_completion() {
     let mut engine = engine_from(chain(
         invoke("./a.ts", "a"),
         invoke("./b.ts", "b"),
     ));
-    engine.start(json!(null)).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!(null), None).unwrap();
 
     let d1 = engine.take_pending_dispatches();
     assert_eq!(d1.len(), 1); // A dispatched
 
-    let result = engine.on_task_completed(d1[0].task_id, Ok(json!("a_result")));
+    let result = engine.on_task_completed(d1[0].task_id, json!("a_result"));
     assert_eq!(result, None); // Not done yet
 
     let d2 = engine.take_pending_dispatches();
     assert_eq!(d2.len(), 1); // B dispatched
     assert_eq!(d2[0].value, json!("a_result")); // B receives A's output
 
-    let result = engine.on_task_completed(d2[0].task_id, Ok(json!("b_result")));
-    assert_eq!(result, Some(Ok(json!("b_result"))));
+    let result = engine.on_task_completed(d2[0].task_id, json!("b_result"));
+    assert_eq!(result, Some(json!("b_result")));
 }
 
-/// Deep chain: Chain(A, Chain(B, C)) → A → B → C → done.
+/// Deep chain: Chain(A, Chain(B, C)) -> A -> B -> C -> done.
 #[test]
 fn nested_chain_completes() {
     let mut engine = engine_from(chain(
         invoke("./a.ts", "a"),
         chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
     ));
-    engine.start(json!("input")).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!("input"), None).unwrap();
 
     // A
     let d = engine.take_pending_dispatches();
-    assert_eq!(engine.on_task_completed(d[0].task_id, Ok(json!("a_out"))), None);
+    assert_eq!(engine.on_task_completed(d[0].task_id, json!("a_out")), None);
     // B
     let d = engine.take_pending_dispatches();
     assert_eq!(d[0].value, json!("a_out"));
-    assert_eq!(engine.on_task_completed(d[0].task_id, Ok(json!("b_out"))), None);
+    assert_eq!(engine.on_task_completed(d[0].task_id, json!("b_out")), None);
     // C
     let d = engine.take_pending_dispatches();
     assert_eq!(d[0].value, json!("b_out"));
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!("c_out"))),
-        Some(Ok(json!("c_out"))),
+        engine.on_task_completed(d[0].task_id, json!("c_out")),
+        Some(json!("c_out")),
     );
 }
 
-/// Parallel(A, B): complete both → workflow done with [a_result, b_result].
+/// Parallel(A, B): complete both -> workflow done with [a_result, b_result].
 #[test]
 fn parallel_collects_results() {
     let mut engine = engine_from(parallel(vec![
         invoke("./a.ts", "a"),
         invoke("./b.ts", "b"),
     ]));
-    engine.start(json!(null)).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!(null), None).unwrap();
 
     let d = engine.take_pending_dispatches();
     assert_eq!(d.len(), 2);
 
     // Complete in reverse order to verify index-based collection.
     assert_eq!(
-        engine.on_task_completed(d[1].task_id, Ok(json!("b_result"))),
+        engine.on_task_completed(d[1].task_id, json!("b_result")),
         None, // Still waiting for A
     );
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!("a_result"))),
-        Some(Ok(json!(["a_result", "b_result"]))),
+        engine.on_task_completed(d[0].task_id, json!("a_result")),
+        Some(json!(["a_result", "b_result"])),
     );
 }
 
-/// ForEach over [10, 20]: complete both → [handler(10), handler(20)].
+/// ForEach over [10, 20]: complete both -> [handler(10), handler(20)].
 #[test]
 fn foreach_collects_results() {
     let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
-    engine.start(json!([10, 20])).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!([10, 20]), None).unwrap();
 
     let d = engine.take_pending_dispatches();
     assert_eq!(d.len(), 2);
 
-    assert_eq!(engine.on_task_completed(d[0].task_id, Ok(json!("r10"))), None);
+    assert_eq!(engine.on_task_completed(d[0].task_id, json!("r10")), None);
     assert_eq!(
-        engine.on_task_completed(d[1].task_id, Ok(json!("r20"))),
-        Some(Ok(json!(["r10", "r20"]))),
+        engine.on_task_completed(d[1].task_id, json!("r20")),
+        Some(json!(["r10", "r20"])),
     );
 }
 
@@ -404,13 +317,14 @@ fn foreach_collects_results() {
 #[test]
 fn loop_continue_and_break() {
     let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
-    engine.start(json!(0)).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!(0), None).unwrap();
 
     // Iteration 1: handler returns Continue
     let d = engine.take_pending_dispatches();
     assert_eq!(d[0].value, json!(0));
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!({"kind": "Continue", "value": 1}))),
+        engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 1})),
         None,
     );
 
@@ -418,7 +332,7 @@ fn loop_continue_and_break() {
     let d = engine.take_pending_dispatches();
     assert_eq!(d[0].value, json!(1));
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!({"kind": "Continue", "value": 2}))),
+        engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 2})),
         None,
     );
 
@@ -426,8 +340,8 @@ fn loop_continue_and_break() {
     let d = engine.take_pending_dispatches();
     assert_eq!(d[0].value, json!(2));
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!({"kind": "Break", "value": "done"}))),
-        Some(Ok(json!("done"))),
+        engine.on_task_completed(d[0].task_id, json!({"kind": "Break", "value": "done"})),
+        Some(json!("done")),
     );
 }
 
@@ -435,69 +349,13 @@ fn loop_continue_and_break() {
 #[test]
 fn attempt_wraps_success() {
     let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
-    engine.start(json!("input")).unwrap();
+    let root = engine.workflow_root();
+    engine.advance(root, json!("input"), None).unwrap();
 
     let d = engine.take_pending_dispatches();
     assert_eq!(
-        engine.on_task_completed(d[0].task_id, Ok(json!("output"))),
-        Some(Ok(json!({"kind": "Ok", "value": "output"}))),
-    );
-}
-
-/// Attempt catches failure as Err.
-#[test]
-fn attempt_catches_failure() {
-    let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
-    engine.start(json!("input")).unwrap();
-
-    let d = engine.take_pending_dispatches();
-    let result = engine.on_task_completed(
-        d[0].task_id,
-        Err("handler crashed".to_string()),
-    );
-    // Success, not failure — Attempt caught the error.
-    assert_eq!(
-        result,
-        Some(Ok(json!({"kind": "Err", "error": "handler crashed"}))),
-    );
-}
-
-/// Error propagates through Chain to top.
-#[test]
-fn error_propagates_through_chain() {
-    let mut engine = engine_from(chain(
-        invoke("./a.ts", "a"),
-        invoke("./b.ts", "b"),
-    ));
-    engine.start(json!(null)).unwrap();
-
-    let d = engine.take_pending_dispatches();
-    assert_eq!(
-        engine.on_task_completed(d[0].task_id, Err("a failed".to_string())),
-        Some(Err("a failed".to_string())),
-    );
-}
-
-/// Error in one Parallel child fails the whole Parallel.
-#[test]
-fn error_in_parallel_child() {
-    let mut engine = engine_from(parallel(vec![
-        invoke("./a.ts", "a"),
-        invoke("./b.ts", "b"),
-    ]));
-    engine.start(json!(null)).unwrap();
-
-    let d = engine.take_pending_dispatches();
-    assert_eq!(
-        engine.on_task_completed(d[0].task_id, Err("a failed".to_string())),
-        Some(Err("a failed".to_string())),
+        engine.on_task_completed(d[0].task_id, json!("output")),
+        Some(json!({"kind": "Ok", "value": "output"})),
     );
 }
 ```
-
-### Not tested here
-
-- cancel_descendants correctness (requires inspecting internal frame state)
-- Cancelled task results arriving after cancellation (on_task_completed with unknown TaskId)
-- Deeply nested error propagation (Attempt inside Parallel inside Chain)
-- Step(Root) re-entry patterns
