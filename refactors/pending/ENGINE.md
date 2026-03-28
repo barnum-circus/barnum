@@ -60,10 +60,9 @@ enum FrameKind {
 ```rust
 struct Engine {
     flat_config: FlatConfig,
-    frames: HashMap<FrameId, Frame>,
+    frames: Slab<Frame>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
-    next_frame_id: u32,
     next_task_id: u32,
     result: Option<EngineResult>,
 }
@@ -89,7 +88,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
     match self.flat_config.action(action_id) {
         FlatAction::Invoke { handler } => {
             let task_id = self.next_task_id();
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::Invoke { task_id },
             });
@@ -103,7 +102,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
 
         FlatAction::Chain { rest } => {
             let first = self.flat_config.chain_first(action_id);
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::Chain { rest },
             });
@@ -113,7 +112,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
         FlatAction::Parallel { count } => {
             let children: Vec<ActionId> =
                 self.flat_config.parallel_children(action_id).collect();
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::Parallel {
                     results: vec![None; count.0 as usize],
@@ -133,7 +132,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
                 Value::Array(elements) => elements,
                 other => panic!("ForEach expected array, got {other}"),
             };
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::ForEach {
                     results: vec![None; elements.len()],
@@ -162,7 +161,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
         }
 
         FlatAction::Loop { body } => {
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::Loop { body },
             });
@@ -170,7 +169,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
         }
 
         FlatAction::Attempt { child } => {
-            let frame_id = self.alloc_frame(Frame {
+            let frame_id = self.insert_frame(Frame {
                 parent,
                 kind: FrameKind::Attempt,
             });
@@ -206,10 +205,10 @@ fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
 }
 
 fn complete_single(&mut self, frame_id: FrameId, value: Value) {
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
-    match frame.kind {
+    // Each arm handles its own removal. Loop Continue keeps the frame alive.
+    match self.frames[frame_id.0].kind {
         FrameKind::Chain { rest } => {
-            // Trampoline: remove this frame, advance rest with original parent.
+            let frame = self.frames.remove(frame_id.0);
             self.advance(rest, value, frame.parent);
         }
 
@@ -218,14 +217,11 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
             let inner = value.get("value").cloned().unwrap_or(Value::Null);
             match kind {
                 "Continue" => {
-                    // Re-insert the frame and re-enter the body.
-                    self.frames.insert(frame_id, Frame {
-                        parent: frame.parent,
-                        kind: FrameKind::Loop { body },
-                    });
+                    // Frame stays in place. Re-enter the body.
                     self.advance(body, inner, Some(ParentRef::SingleChild { frame_id }));
                 }
                 "Break" => {
+                    let frame = self.frames.remove(frame_id.0);
                     self.complete(frame.parent, inner);
                 }
                 other => panic!("Loop result kind must be Continue or Break, got {other}"),
@@ -233,6 +229,7 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
         }
 
         FrameKind::Attempt => {
+            let frame = self.frames.remove(frame_id.0);
             let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
             self.complete(frame.parent, wrapped);
         }
@@ -242,7 +239,7 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
 }
 
 fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
-    let frame = self.frames.get_mut(&frame_id).expect("frame not found");
+    let frame = self.frames.get_mut(frame_id.0).expect("frame not found");
     let results = match &mut frame.kind {
         FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
         other => panic!("complete_indexed called on {other:?}"),
@@ -252,7 +249,7 @@ fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Val
 
     if results.iter().all(Option::is_some) {
         let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
-        let frame = self.frames.remove(&frame_id).expect("frame not found");
+        let frame = self.frames.remove(frame_id.0);
         self.complete(frame.parent, Value::Array(collected));
     }
 }
@@ -270,7 +267,7 @@ fn error(&mut self, parent: Option<ParentRef>, error: String) {
     };
 
     let frame_id = parent_ref.frame_id();
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    let frame = self.frames.remove(frame_id.0);
 
     match frame.kind {
         FrameKind::Attempt => {
@@ -295,7 +292,7 @@ fn error(&mut self, parent: Option<ParentRef>, error: String) {
 ```rust
 fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult) {
     let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
-    let frame = self.frames.remove(&frame_id).expect("frame not found");
+    let frame = self.frames.remove(frame_id.0);
     match result {
         TaskResult::Success { value } => self.complete(frame.parent, value),
         TaskResult::Failure { error } => self.error(frame.parent, error),

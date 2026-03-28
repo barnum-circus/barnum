@@ -22,10 +22,9 @@ All in `engine.rs`. Private to the module except `Engine`, `Dispatch`, `EngineRe
 ### FrameId, TaskId
 
 ```rust
-u32_newtype!(
-    /// Index into the engine's frame storage.
-    FrameId
-);
+/// Key into the engine's frame slab. Wraps the `usize` returned by `Slab::insert`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct FrameId(usize);
 
 u32_newtype!(
     /// Identifies a pending handler invocation. Assigned by the engine,
@@ -34,7 +33,9 @@ u32_newtype!(
 );
 ```
 
-Monotonically increasing counters. Not reused. HashMap keys.
+`FrameId` wraps `usize` (slab keys are `usize`). Not a `u32_newtype` — different underlying type. Slab reuses keys, so FrameIds are not monotonic.
+
+`TaskId` remains a monotonic `u32` counter. Used as a HashMap key for `task_to_frame` and as an external identifier returned in dispatches.
 
 ### Frame, ParentRef, FrameKind
 
@@ -108,16 +109,17 @@ pub enum EngineResult {
 ```rust
 pub struct Engine {
     flat_config: FlatConfig,
-    frames: HashMap<FrameId, Frame>,
+    frames: Slab<Frame>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
-    next_frame_id: u32,
     next_task_id: u32,
     result: Option<EngineResult>,
 }
 ```
 
-`frames: HashMap<FrameId, Frame>` — the frame store. `FrameId` is a monotonic counter; `insert` to allocate, `remove` to deallocate. HashMap because frames are removed from the middle (Chain trampolines, completed fan-out children), and actual deallocation matters for long-running workflows — a loop that runs a million iterations should not accumulate a million tombstones.
+`frames: Slab<Frame>` — the frame store (from the `slab` crate). A `Vec<T>` with a free list: insert returns an opaque key (the index), remove puts the slot on the free list for reuse. O(1) insert/remove/lookup, no hashing, memory reuse. A million-iteration loop reuses the same ~2 slots.
+
+`FrameId` wraps the `usize` key returned by `Slab::insert`.
 
 `task_to_frame: HashMap<TaskId, FrameId>` — maps pending task IDs to their Invoke frames. Populated during advance, consumed during `on_task_completed`.
 
@@ -127,11 +129,8 @@ pub struct Engine {
 
 ```rust
 impl Engine {
-    fn alloc_frame(&mut self, frame: Frame) -> FrameId {
-        let frame_id = FrameId(self.next_frame_id);
-        self.next_frame_id += 1;
-        self.frames.insert(frame_id, frame);
-        frame_id
+    fn insert_frame(&mut self, frame: Frame) -> FrameId {
+        FrameId(self.frames.insert(frame))
     }
 
     fn next_task_id(&mut self) -> TaskId {
@@ -141,6 +140,8 @@ impl Engine {
     }
 }
 ```
+
+`Slab::insert` returns a `usize` key and handles free list reuse internally. `FrameId` wraps this key. `Slab::remove(key)` returns the value and frees the slot for reuse.
 
 ## advance
 
@@ -207,10 +208,9 @@ impl Engine {
     pub fn new(flat_config: FlatConfig) -> Self {
         Self {
             flat_config,
-            frames: HashMap::new(),
+            frames: Slab::new(),
             task_to_frame: HashMap::new(),
             pending_dispatches: Vec::new(),
-            next_frame_id: 0,
             next_task_id: 0,
             result: None,
         }
