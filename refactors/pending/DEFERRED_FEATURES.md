@@ -178,7 +178,9 @@ Benefits:
 - Faster flattening for large configs.
 - Dead step detection for free — any step that wasn't flattened after the walk is unreferenced.
 
-The current eager approach is simpler and correct. Lazy flattening is an optimization for when config sizes grow.
+This could go further: flatten steps on-demand during execution, not just during the flattening pass. The engine flattens the workflow root eagerly (down to the first Invoke leaves), dispatches those handlers, and while waiting for results, lazily flattens any Step targets that haven't been flattened yet. Step bodies behind a Chain's `rest` or inside a Branch case that hasn't been taken yet don't need to exist in the flat table until the engine actually reaches them. This turns flattening into an incremental process interleaved with execution — only the reachable frontier is materialized at any given time.
+
+The current eager approach is simpler and correct. Lazy/incremental flattening is an optimization for when config sizes grow.
 
 ## Handler Error Type
 
