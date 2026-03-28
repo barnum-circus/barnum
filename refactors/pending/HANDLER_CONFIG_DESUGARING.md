@@ -237,7 +237,7 @@ The AST helper functions (`identityAction`, `dropAction`, `constantAction`) cons
 
 ### Builtin handlers
 
-`constant` and `range` currently use `stepConfigValidator` to carry their parameters. After this change, they use `createHandlerWithConfig`:
+`constant` and `range` currently use `stepConfigValidator` to carry their parameters. After this change, they become `createHandlerWithConfig` handlers:
 
 ```ts
 export const constant = createHandlerWithConfig({
@@ -259,39 +259,7 @@ export function constant<T>(value: T): TypedAction<never, T> {
 }
 ```
 
-Note: this means `constant(x)` itself emits a `Chain(Parallel([Identity, Chain(Drop, Constant(x))]), Invoke)` subtree, which is recursive. The innermost `Constant` is a raw `__builtin__` invoke, not the desugared version. The desugaring only applies at the `createHandlerWithConfig` boundary.
-
-Actually, this recursion is a problem: the `constantAction()` helper used inside `createHandlerWithConfig` would reference the `constant` builtin, which itself is a `createHandlerWithConfig` result. We need the raw builtin `constant` to remain a simple `__builtin__` invoke that the worker handles directly, separate from the user-facing `constant()` combinator.
-
-The fix: `constant` and `range` in `handlers/builtins.ts` stay as `createHandler` (no config), and their parameters are encoded in the `func` field (like `tag` and `extractField` already do):
-
-```ts
-// handlers/builtins.ts -- these are raw builtins, not config handlers
-export const drop = createHandler({
-  handle: async () => undefined,
-}, "drop");
-
-// constant and range parameters are embedded in the func name at the builtin() call site
-// They don't need createHandlerWithConfig -- they're internal plumbing
-```
-
-The `builtins.ts` wrappers continue using the `builtin()` helper:
-
-```ts
-function builtin(func: string): TypedAction<any, any> {
-  return {
-    kind: "Invoke",
-    handler: { kind: "TypeScript", module: "__builtin__", func },
-  };
-}
-
-export function constant<T>(value: T): TypedAction<never, T> {
-  // Encode the constant value in the func field
-  return builtin(`constant:${JSON.stringify(value)}`);
-}
-```
-
-The worker's builtin dispatch already handles `constant:...` by parsing the value from the func name. This keeps the internal plumbing separate from the user-facing `createHandlerWithConfig`.
+No recursion issue: the `constantAction()` helper inside `createHandlerWithConfig` constructs a raw `__builtin__` Invoke node directly (plain Action JSON), not through any handler creation function. It's a leaf node.
 
 ### Rust-side changes
 
