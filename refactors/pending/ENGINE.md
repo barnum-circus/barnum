@@ -31,6 +31,10 @@ enum ParentRef {
 }
 
 enum FrameKind {
+    /// Sentinel: the workflow entry point. Only one exists per engine.
+    /// When its child completes, the engine is done.
+    Root,
+
     /// Leaf: handler dispatched, waiting for result.
     Invoke { task_id: TaskId },
 
@@ -84,12 +88,12 @@ enum EngineResult {
 Walk the action table from `action_id`. Recurse through structural nodes until reaching Invoke leaves.
 
 ```rust
-fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRef>) {
+fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
     match self.flat_config.action(action_id) {
         FlatAction::Invoke { handler } => {
             let task_id = self.next_task_id();
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::Invoke { task_id },
             });
             self.task_to_frame.insert(task_id, frame_id);
@@ -103,17 +107,17 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
         FlatAction::Chain { rest } => {
             let first = self.flat_config.chain_first(action_id);
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::Chain { rest },
             });
-            self.advance(first, value, Some(ParentRef::SingleChild { frame_id }));
+            self.advance(first, value, ParentRef::SingleChild { frame_id });
         }
 
         FlatAction::Parallel { count } => {
             let children: Vec<ActionId> =
                 self.flat_config.parallel_children(action_id).collect();
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::Parallel {
                     results: vec![None; count.0 as usize],
                 },
@@ -122,7 +126,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
                 self.advance(
                     child,
                     value.clone(),
-                    Some(ParentRef::IndexedChild { frame_id, child_index: i }),
+                    ParentRef::IndexedChild { frame_id, child_index: i },
                 );
             }
         }
@@ -133,7 +137,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
                 other => panic!("ForEach expected array, got {other}"),
             };
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::ForEach {
                     results: vec![None; elements.len()],
                 },
@@ -142,7 +146,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
                 self.advance(
                     body,
                     element,
-                    Some(ParentRef::IndexedChild { frame_id, child_index: i }),
+                    ParentRef::IndexedChild { frame_id, child_index: i },
                 );
             }
         }
@@ -162,18 +166,18 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: Option<ParentRe
 
         FlatAction::Loop { body } => {
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::Loop { body },
             });
-            self.advance(body, value, Some(ParentRef::SingleChild { frame_id }));
+            self.advance(body, value, ParentRef::SingleChild { frame_id });
         }
 
         FlatAction::Attempt { child } => {
             let frame_id = self.insert_frame(Frame {
-                parent,
+                parent: Some(parent),
                 kind: FrameKind::Attempt,
             });
-            self.advance(child, value, Some(ParentRef::SingleChild { frame_id }));
+            self.advance(child, value, ParentRef::SingleChild { frame_id });
         }
 
         FlatAction::Step { target } => {
@@ -190,12 +194,7 @@ Branch and Step are tail calls — they redirect without allocating state.
 A child resolved. Advance the parent.
 
 ```rust
-fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
-    let Some(parent_ref) = parent else {
-        self.result = Some(EngineResult::Success(value));
-        return;
-    };
-
+fn complete(&mut self, parent_ref: ParentRef, value: Value) {
     match parent_ref {
         ParentRef::SingleChild { frame_id } => self.complete_single(frame_id, value),
         ParentRef::IndexedChild { frame_id, child_index } => {
@@ -206,10 +205,17 @@ fn complete(&mut self, parent: Option<ParentRef>, value: Value) {
 
 fn complete_single(&mut self, frame_id: FrameId, value: Value) {
     // Each arm handles its own removal. Loop Continue keeps the frame alive.
+    // Root terminates; all other arms propagate via frame.parent (always Some for non-Root).
     match self.frames[frame_id.0].kind {
+        FrameKind::Root => {
+            self.frames.remove(frame_id.0);
+            self.result = Some(EngineResult::Success(value));
+        }
+
         FrameKind::Chain { rest } => {
             let frame = self.frames.remove(frame_id.0);
-            self.advance(rest, value, frame.parent);
+            let parent = frame.parent.expect("non-root frame has parent");
+            self.advance(rest, value, parent);
         }
 
         FrameKind::Loop { body } => {
@@ -218,11 +224,12 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
             match kind {
                 "Continue" => {
                     // Frame stays in place. Re-enter the body.
-                    self.advance(body, inner, Some(ParentRef::SingleChild { frame_id }));
+                    self.advance(body, inner, ParentRef::SingleChild { frame_id });
                 }
                 "Break" => {
                     let frame = self.frames.remove(frame_id.0);
-                    self.complete(frame.parent, inner);
+                    let parent = frame.parent.expect("non-root frame has parent");
+                    self.complete(parent, inner);
                 }
                 other => panic!("Loop result kind must be Continue or Break, got {other}"),
             }
@@ -230,8 +237,9 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
 
         FrameKind::Attempt => {
             let frame = self.frames.remove(frame_id.0);
+            let parent = frame.parent.expect("non-root frame has parent");
             let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
-            self.complete(frame.parent, wrapped);
+            self.complete(parent, wrapped);
         }
 
         other => panic!("complete_single called on {other:?}"),
@@ -250,7 +258,8 @@ fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Val
     if results.iter().all(Option::is_some) {
         let collected: Vec<Value> = results.drain(..).map(Option::unwrap).collect();
         let frame = self.frames.remove(frame_id.0);
-        self.complete(frame.parent, Value::Array(collected));
+        let parent = frame.parent.expect("non-root frame has parent");
+        self.complete(parent, Value::Array(collected));
     }
 }
 ```
@@ -260,28 +269,30 @@ fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Val
 A child failed.
 
 ```rust
-fn error(&mut self, parent: Option<ParentRef>, error: String) {
-    let Some(parent_ref) = parent else {
-        self.result = Some(EngineResult::Failure(error));
-        return;
-    };
-
+fn error(&mut self, parent_ref: ParentRef, error: String) {
     let frame_id = parent_ref.frame_id();
     let frame = self.frames.remove(frame_id.0);
 
     match frame.kind {
+        FrameKind::Root => {
+            self.result = Some(EngineResult::Failure(error));
+        }
+
         FrameKind::Attempt => {
+            let parent = frame.parent.expect("non-root frame has parent");
             let wrapped = serde_json::json!({ "kind": "Err", "error": error });
-            self.complete(frame.parent, wrapped);
+            self.complete(parent, wrapped);
         }
 
         FrameKind::Parallel { .. } | FrameKind::ForEach { .. } => {
+            let parent = frame.parent.expect("non-root frame has parent");
             self.cancel_descendants(frame_id);
-            self.error(frame.parent, error);
+            self.error(parent, error);
         }
 
         _ => {
-            self.error(frame.parent, error);
+            let parent = frame.parent.expect("non-root frame has parent");
+            self.error(parent, error);
         }
     }
 }
@@ -293,9 +304,10 @@ fn error(&mut self, parent: Option<ParentRef>, error: String) {
 fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult) {
     let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
     let frame = self.frames.remove(frame_id.0);
+    let parent = frame.parent.expect("Invoke frame has parent");
     match result {
-        TaskResult::Success { value } => self.complete(frame.parent, value),
-        TaskResult::Failure { error } => self.error(frame.parent, error),
+        TaskResult::Success { value } => self.complete(parent, value),
+        TaskResult::Failure { error } => self.error(parent, error),
     }
 }
 ```
@@ -305,7 +317,7 @@ fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult) {
 ```rust
 impl Engine {
     fn new(flat_config: FlatConfig) -> Self;
-    fn start(&mut self);
+    fn start(&mut self, input: Value);
     fn on_task_completed(&mut self, task_id: TaskId, result: TaskResult);
     fn take_pending_dispatches(&mut self) -> Vec<Dispatch>;
     fn is_done(&self) -> bool;

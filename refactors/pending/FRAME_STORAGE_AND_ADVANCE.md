@@ -17,7 +17,8 @@ The engine operates in a two-phase cycle:
 The cycle:
 ```
 start(input)
-  → advance(workflow_root, input, None)
+  → creates Root frame
+  → advance(workflow_root, input, SingleChild { root_id })
     → creates frames, produces dispatches
       → dispatches go out to runtime
 
@@ -83,6 +84,9 @@ enum ParentRef {
 }
 
 enum FrameKind {
+    /// Sentinel: the workflow entry point. Only one per engine.
+    /// When its child completes or errors, the engine is done.
+    Root,
     /// Leaf: handler dispatched, waiting for result.
     Invoke { task_id: TaskId },
     /// Sequential: first child active, then trampoline to `rest`.
@@ -98,7 +102,9 @@ enum FrameKind {
 }
 ```
 
-`ParentRef` is `Copy` — it's two `u32`s (or two `u32`s + a `usize`). Stored inline in the child frame. The parent frame is looked up in the HashMap when the child completes.
+`ParentRef` is `Copy` — it's two `usize`s (or a `usize` + a `usize`). Stored inline in the child frame. The parent frame is looked up in the slab when the child completes.
+
+Only the Root frame has `parent: None`. Every other frame has `Some(ParentRef)`. `complete` and `error` take `ParentRef` (not `Option`) — the `None` case is handled by Root's own match arm inside `complete_single` / `error`.
 
 `ParentRef` needs a `frame_id()` accessor for `error()`:
 
@@ -174,12 +180,13 @@ impl Engine {
 
 ## advance
 
-The core expansion function. Takes `(ActionId, Value, Option<ParentRef>)`, walks the flat table, creates frames for structural combinators, and bottoms out at Invoke leaves with pending dispatches.
+The core expansion function. Takes `(ActionId, Value, ParentRef)`, walks the flat table, creates frames for structural combinators, and bottoms out at Invoke leaves with pending dispatches.
+
+Every `advance` call originates from an existing frame. The initial call comes from the Root frame created by `start()`.
 
 Called from:
-- `start()` — initial entry: `advance(workflow_root, input, None)`
+- `start()` — creates Root frame, then `advance(workflow_root, input, SingleChild { root_id })`
 - `complete_single()` — Chain trampoline, Loop re-enter (future milestone)
-- `complete()` with `None` parent — workflow done (future milestone)
 
 ### Per-variant behavior
 
@@ -227,7 +234,107 @@ ForEach expects `Value::Array`. If the input is not an array, that's a bug in th
 
 ### Full implementation
 
-See ENGINE.md `advance` section — the code there is implementation-ready. The only change is the Branch case lookup using `key.lookup()` instead of `key.as_str()`.
+```rust
+fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
+    match self.flat_config.action(action_id) {
+        FlatAction::Invoke { handler } => {
+            let task_id = self.next_task_id();
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::Invoke { task_id },
+            });
+            self.task_to_frame.insert(task_id, frame_id);
+            self.pending_dispatches.push(Dispatch {
+                task_id,
+                handler_id: handler,
+                value,
+            });
+        }
+
+        FlatAction::Chain { rest } => {
+            let first = self.flat_config.chain_first(action_id);
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::Chain { rest },
+            });
+            self.advance(first, value, ParentRef::SingleChild { frame_id });
+        }
+
+        FlatAction::Parallel { count } => {
+            let children: Vec<ActionId> =
+                self.flat_config.parallel_children(action_id).collect();
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::Parallel {
+                    results: vec![None; count.0 as usize],
+                },
+            });
+            for (i, child) in children.into_iter().enumerate() {
+                self.advance(
+                    child,
+                    value.clone(),
+                    ParentRef::IndexedChild { frame_id, child_index: i },
+                );
+            }
+        }
+
+        FlatAction::ForEach { body } => {
+            let elements = match value {
+                Value::Array(elements) => elements,
+                other => panic!("ForEach expected array, got {other}"),
+            };
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::ForEach {
+                    results: vec![None; elements.len()],
+                },
+            });
+            for (i, element) in elements.into_iter().enumerate() {
+                self.advance(
+                    body,
+                    element,
+                    ParentRef::IndexedChild { frame_id, child_index: i },
+                );
+            }
+        }
+
+        FlatAction::Branch { .. } => {
+            let kind_str = value["kind"]
+                .as_str()
+                .expect("Branch input must have a string 'kind' field");
+            let case_action_id = self
+                .flat_config
+                .branch_cases(action_id)
+                .find(|(key, _)| key.lookup() == kind_str)
+                .expect("no matching branch case")
+                .1;
+            self.advance(case_action_id, value, parent);
+        }
+
+        FlatAction::Loop { body } => {
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::Loop { body },
+            });
+            self.advance(body, value, ParentRef::SingleChild { frame_id });
+        }
+
+        FlatAction::Attempt { child } => {
+            let frame_id = self.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::Attempt,
+            });
+            self.advance(child, value, ParentRef::SingleChild { frame_id });
+        }
+
+        FlatAction::Step { target } => {
+            self.advance(target, value, parent);
+        }
+    }
+}
+```
+
+Branch uses `key.lookup()` (from `intern::Lookup` on `KindDiscriminator`) rather than `key.as_str()`. ENGINE.md uses `key.as_str()` which needs to be updated to match.
 
 ## Public API (this milestone)
 
@@ -245,10 +352,14 @@ impl Engine {
         }
     }
 
-    /// Begin execution. Advances from the workflow root with the given input.
+    /// Begin execution. Creates the Root frame and advances from the workflow root.
     pub fn start(&mut self, input: Value) {
+        let root_id = self.insert_frame(Frame {
+            parent: None,
+            kind: FrameKind::Root,
+        });
         let workflow_root = self.flat_config.workflow_root();
-        self.advance(workflow_root, input, None);
+        self.advance(workflow_root, input, ParentRef::SingleChild { frame_id: root_id });
     }
 
     /// Drain all pending dispatches accumulated since the last call.
