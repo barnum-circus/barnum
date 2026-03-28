@@ -114,17 +114,41 @@ export type TypedAction<
   /**
    * Chain this action with another. `a.then(b)` ≡ `chain(a, b)`.
    *
-   * Note: does not check input/output type compatibility (Out vs Next's In).
-   * Use `pipe()` for full type-checked chaining. `.then()` is ergonomic
-   * sugar — using `any` for `next`'s input avoids making `Out` invariant,
-   * which would break covariant uses (branch, discriminated unions).
+   * Uses ChainableAction (not TypedAction) for `next` to avoid making Out
+   * invariant. TypedAction's `__in` field is covariant, but `.then()` puts
+   * Out in the In position of next. When TypeScript checks assignability of
+   * two TypedActions, it compares `.then()` methods structurally, recursing
+   * into the parameter type. If that parameter were full TypedAction, the
+   * `__in` field would create a covariant occurrence of Out that conflicts
+   * with the contravariant `__phantom_in`, making Out invariant.
+   *
+   * ChainableAction omits `__in`, breaking the recursive invariance while
+   * still type-checking next's input/output compatibility.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  then<Next, R2 extends string = never>(
-    next: TypedAction<any, Next, R2>,
-  ): TypedAction<In, Next, Refs | R2>;
+  then<TNext, TRefs2 extends string = never>(
+    next: ChainableAction<Out, TNext, TRefs2>,
+  ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
+};
+
+/**
+ * TypedAction without `__in` — used as the parameter type for `.then()`.
+ *
+ * Omitting `__in` prevents recursive structural comparison from making Out
+ * invariant. See the `.then()` doc on TypedAction for the full explanation.
+ *
+ * TypedAction values are assignable to ChainableAction (superset of fields),
+ * so callers can pass any TypedAction to `.then()`.
+ */
+type ChainableAction<
+  In = unknown,
+  Out = unknown,
+  Refs extends string = never,
+> = Action & {
+  __phantom_in?: (input: In) => void;
+  __phantom_out?: () => Out;
+  __refs?: { _brand: Refs };
 };
 
 // ---------------------------------------------------------------------------
@@ -132,17 +156,19 @@ export type TypedAction<
 // ---------------------------------------------------------------------------
 
 // Shared implementations (one closure, not per-instance)
-function thenMethod(
-  this: TypedAction,
-  next: TypedAction,
-): TypedAction {
+function thenMethod<TIn, TOut, TRefs extends string, TNext, TRefs2 extends string>(
+  this: TypedAction<TIn, TOut, TRefs>,
+  next: TypedAction<TOut, TNext, TRefs2>,
+): TypedAction<TIn, TNext, TRefs | TRefs2> {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  return typedAction({ kind: "Chain", first: this as Action, rest: next as Action });
+  return typedAction({ kind: "Chain", first: this, rest: next });
 }
 
-function forEachMethod(this: TypedAction): TypedAction {
+function forEachMethod<TIn, TOut, TRefs extends string>(
+  this: TypedAction<TIn, TOut, TRefs>,
+): TypedAction<TIn[], TOut[], TRefs> {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  return typedAction({ kind: "ForEach", action: this as Action });
+  return typedAction({ kind: "ForEach", action: this });
 }
 
 /**
@@ -322,9 +348,13 @@ export function forEach<In, Out, R extends string = never>(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function branch<K extends string, Out, R extends string = never>(
-  cases: Record<K, TypedAction<any, Out, R>>,
-): TypedAction<{ kind: K }, Out, R> {
+export function branch<TCases extends Record<string, TypedAction<any, any, any>>>(
+  cases: TCases,
+): TypedAction<
+  { kind: keyof TCases & string },
+  ExtractOutput<TCases[keyof TCases & string]>,
+  ExtractRefs<TCases[keyof TCases & string]>
+> {
   return typedAction({ kind: "Branch", cases });
 }
 
@@ -332,8 +362,9 @@ export type LoopResult<TContinue, TBreak> =
   | { kind: "Continue"; value: TContinue }
   | { kind: "Break"; value: TBreak };
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function loop<In, Out, R extends string = never>(
-  body: TypedAction<In, LoopResult<In, Out>, R>,
+  body: TypedAction<In, LoopResult<any, Out>, R>,
 ): TypedAction<In, Out, R> {
   return typedAction({ kind: "Loop", body });
 }

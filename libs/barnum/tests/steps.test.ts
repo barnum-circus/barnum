@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  type Action,
   parallel,
   configBuilder,
   loop,
@@ -14,6 +15,17 @@ import {
   extractField,
   recur,
 } from "../src/builtins.js";
+
+/**
+ * Type-narrowing assertion for Action's discriminated union.
+ * Narrows `action` to the specific variant matching `kind`.
+ */
+function assertKind<T extends Action, K extends Action["kind"]>(
+  action: T,
+  kind: K,
+): asserts action is T & Extract<Action, { kind: K }> {
+  expect(action.kind).toBe(kind);
+}
 
 import {
   setup,
@@ -140,17 +152,17 @@ describe("workflow self-reference", () => {
         ),
       );
 
-    expect(cfg.workflow.kind).toBe("Chain");
     // pipe(constant, classifyErrors, branch) → Chain(constant, Chain(classifyErrors, branch))
-    const workflow = cfg.workflow as { kind: string; first: unknown; rest: { kind: string; first: unknown; rest: unknown } };
-    const branchAction = workflow.rest.rest as {
-      kind: string;
-      cases: Record<string, { kind: string; first: unknown; rest: { kind: string; first: unknown; rest: { kind: string; first: unknown; rest: unknown } } }>;
-    };
+    assertKind(cfg.workflow, "Chain");
+    assertKind(cfg.workflow.rest, "Chain");
+    assertKind(cfg.workflow.rest.rest, "Branch");
     // HasErrors: pipe(extractField, forEach(fix), drop, self)
     // → Chain(extractField, Chain(forEach(fix), Chain(drop, self)))
-    const hasErrorsChain = branchAction.cases.HasErrors;
-    expect(hasErrorsChain.rest.rest.rest).toEqual({
+    const hasErrors = cfg.workflow.rest.rest.cases.HasErrors;
+    assertKind(hasErrors, "Chain");
+    assertKind(hasErrors.rest, "Chain");
+    assertKind(hasErrors.rest.rest, "Chain");
+    expect(hasErrors.rest.rest.rest).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });
@@ -183,14 +195,15 @@ describe("mutual recursion", () => {
     expect(cfg.steps).toHaveProperty("A");
     expect(cfg.steps).toHaveProperty("B");
     // A body: pipe(verify, stepRef("B")) → Chain(verify, stepRef("B"))
-    const aBody = cfg.steps!.A as { kind: string; first: unknown; rest: unknown };
-    expect(aBody.kind).toBe("Chain");
+    const aBody = cfg.steps!.A;
+    assertKind(aBody, "Chain");
     expect(aBody.rest).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "B" },
     });
     // B body: pipe(verify, stepRef("A")) → Chain(verify, stepRef("A"))
-    const bBody = cfg.steps!.B as { kind: string; first: unknown; rest: unknown };
+    const bBody = cfg.steps!.B;
+    assertKind(bBody, "Chain");
     expect(bBody.rest).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "A" },
@@ -210,7 +223,8 @@ describe("mutual recursion", () => {
     expect(cfg.steps).toHaveProperty("Setup");
     expect(cfg.steps).toHaveProperty("Pipeline");
     // Pipeline body: pipe(steps.Setup, build) → Chain(steps.Setup, build)
-    const pipelineBody = cfg.steps!.Pipeline as { kind: string; first: unknown; rest: unknown };
+    const pipelineBody = cfg.steps!.Pipeline;
+    assertKind(pipelineBody, "Chain");
     expect(pipelineBody.first).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "Setup" },
@@ -338,17 +352,16 @@ describe("kitchen sink", () => {
 
     // MigrateAll: pipe(steps.Setup, listFiles, forEach(migrate), stepRef("FixCycle"))
     // → Chain(steps.Setup, Chain(listFiles, Chain(forEach(migrate), stepRef("FixCycle"))))
-    const migrateAll = cfg.steps!.MigrateAll as {
-      kind: string;
-      first: unknown;
-      rest: { kind: string; first: unknown; rest: { kind: string; first: unknown; rest: unknown } };
-    };
+    const migrateAll = cfg.steps!.MigrateAll;
+    assertKind(migrateAll, "Chain");
     expect(migrateAll.first).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "Setup" },
     });
 
     // MigrateAll ends with a reference to FixCycle (intra-batch via `stepRef`)
+    assertKind(migrateAll.rest, "Chain");
+    assertKind(migrateAll.rest.rest, "Chain");
     expect(migrateAll.rest.rest.rest).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "FixCycle" },
@@ -356,17 +369,14 @@ describe("kitchen sink", () => {
 
     // Workflow: pipe(constant, steps.MigrateAll, classifyErrors, branch)
     // → Chain(constant, Chain(steps.MigrateAll, Chain(classifyErrors, branch)))
-    const workflow = cfg.workflow as {
-      kind: string;
-      first: unknown;
-      rest: { kind: string; first: unknown; rest: { kind: string; first: unknown; rest: unknown } };
-    };
-    const branchAction = workflow.rest.rest.rest as {
-      kind: string;
-      cases: Record<string, { kind: string; first: unknown; rest: unknown }>;
-    };
+    assertKind(cfg.workflow, "Chain");
+    assertKind(cfg.workflow.rest, "Chain");
+    assertKind(cfg.workflow.rest.rest, "Chain");
+    assertKind(cfg.workflow.rest.rest.rest, "Branch");
     // HasErrors: pipe(drop, self) → Chain(drop, self)
-    expect(branchAction.cases.HasErrors.rest).toEqual({
+    const hasErrors = cfg.workflow.rest.rest.rest.cases.HasErrors;
+    assertKind(hasErrors, "Chain");
+    expect(hasErrors.rest).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });

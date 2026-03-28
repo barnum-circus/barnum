@@ -1,4 +1,4 @@
-import type { TypedAction, LoopResult } from "./ast.js";
+import type { TypedAction } from "./ast.js";
 import { typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
@@ -13,7 +13,7 @@ import { chain } from "./chain.js";
 // Constant — produce a fixed value (takes no pipeline input)
 // ---------------------------------------------------------------------------
 
-export function constant<T>(value: T): TypedAction<never, T> {
+export function constant<TValue>(value: TValue): TypedAction<never, TValue> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
@@ -24,7 +24,7 @@ export function constant<T>(value: T): TypedAction<never, T> {
 // Identity — pass input through unchanged
 // ---------------------------------------------------------------------------
 
-export function identity<T>(): TypedAction<T, T> {
+export function identity<TValue>(): TypedAction<TValue, TValue> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Identity" } },
@@ -35,7 +35,7 @@ export function identity<T>(): TypedAction<T, T> {
 // Drop — discard pipeline value
 // ---------------------------------------------------------------------------
 
-export function drop<T>(): TypedAction<T, never> {
+export function drop<TValue>(): TypedAction<TValue, never> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Drop" } },
@@ -46,9 +46,9 @@ export function drop<T>(): TypedAction<T, never> {
 // Tag — wrap input as { kind, value }
 // ---------------------------------------------------------------------------
 
-export function tag<T, TKind extends string>(
+export function tag<TValue, TKind extends string>(
   kind: TKind,
-): TypedAction<T, { kind: TKind; value: T }> {
+): TypedAction<TValue, { kind: TKind; value: TValue }> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
@@ -58,19 +58,23 @@ export function tag<T, TKind extends string>(
 // ---------------------------------------------------------------------------
 // Loop signals
 //
-// These use `any` because their types depend on positional context (which
-// pipe/loop they appear in), not on arguments. The loop's own signature
-// validates the overall LoopResult<In, Out> shape.
+// Return individual union members ({ kind: "Continue" } or { kind: "Break" })
+// rather than the full LoopResult<TContinue, TBreak> with `never` in the
+// opposite slot. This lets branch unify Out as the union of both members.
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function recur(): TypedAction<any, LoopResult<any, any>> {
-  return tag("Continue") as TypedAction<any, LoopResult<any, any>>;
+export function recur<TValue>(): TypedAction<
+  TValue,
+  { kind: "Continue"; value: TValue }
+> {
+  return tag("Continue");
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function done(): TypedAction<any, LoopResult<any, any>> {
-  return tag("Break") as TypedAction<any, LoopResult<any, any>>;
+export function done<TValue>(): TypedAction<
+  TValue,
+  { kind: "Break"; value: TValue }
+> {
+  return tag("Break");
 }
 
 // ---------------------------------------------------------------------------
@@ -84,10 +88,9 @@ type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (
   ? I
   : never;
 
-export function merge<T extends Record<string, unknown>[]>(): TypedAction<
-  T,
-  UnionToIntersection<T[number]>
-> {
+export function merge<
+  TObjects extends Record<string, unknown>[],
+>(): TypedAction<TObjects, UnionToIntersection<TObjects[number]>> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },
@@ -98,7 +101,7 @@ export function merge<T extends Record<string, unknown>[]>(): TypedAction<
 // Flatten — flatten a nested array one level
 // ---------------------------------------------------------------------------
 
-export function flatten<T>(): TypedAction<T[][], T[]> {
+export function flatten<TElement>(): TypedAction<TElement[][], TElement[]> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
@@ -115,7 +118,10 @@ export function extractField<
 >(field: TField): TypedAction<TObj, TObj[TField]> {
   return typedAction({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } },
+    handler: {
+      kind: "Builtin",
+      builtin: { kind: "ExtractField", value: field },
+    },
   });
 }
 
@@ -124,15 +130,20 @@ export function extractField<
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, never> {
-  return chain(action, drop() as TypedAction<any, never>) as TypedAction<In, never>;
+export function dropResult<TInput>(
+  action: TypedAction<TInput, any>,
+): TypedAction<TInput, never> {
+  return chain(action, drop());
 }
 
 // ---------------------------------------------------------------------------
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 
-export function range(start: number, end: number): TypedAction<never, number[]> {
+export function range(
+  start: number,
+  end: number,
+): TypedAction<never, number[]> {
   const result: number[] = [];
   for (let i = start; i < end; i++) result.push(i);
   return typedAction({

@@ -23,6 +23,8 @@ import {
   flatten,
   extractField,
   range,
+  recur,
+  done,
 } from "../src/builtins.js";
 import {
   setup,
@@ -35,6 +37,8 @@ import {
   typeCheck,
   classifyErrors,
   fix,
+  type TypeError,
+  type ClassifyResult,
 } from "./handlers.js";
 
 // ---------------------------------------------------------------------------
@@ -270,6 +274,73 @@ describe("combinator types", () => {
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
     expect(action.kind).toBe("Loop");
+  });
+
+  it("branch with recur/done: output is union of Continue and Break members", () => {
+    const action = pipe(
+      classifyErrors,
+      branch({
+        HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+        Clean: done(),
+      }),
+    );
+    assertExact<
+      IsExact<ExtractInput<typeof action>, TypeError[]>
+    >();
+    // Branch output is the union of recur's Continue and done's Break
+    assertExact<
+      IsExact<
+        ExtractOutput<typeof action>,
+        | { kind: "Continue"; value: { file: string; fixed: boolean }[] }
+        | { kind: "Break"; value: { kind: "Clean" } }
+      >
+    >();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it("loop with branch/recur/done: output is Break value type", () => {
+    const action = loop(
+      pipe(
+        drop(),
+        typeCheck,
+        classifyErrors,
+        branch({
+          HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+          Clean: done(),
+        }),
+      ),
+    );
+    // Loop input: whatever drop() accepts (inferred from context)
+    // Loop output: the Break value from done() in the Clean case
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, { kind: "Clean" }>
+    >();
+    expect(action.kind).toBe("Loop");
+  });
+
+  it("full pipeline: constant → handlers → forEach → loop", () => {
+    const action = pipe(
+      constant({ project: "test" }),
+      setup,
+      listFiles,
+      forEach(migrate),
+      loop(
+        pipe(
+          drop(),
+          typeCheck,
+          classifyErrors,
+          branch({
+            HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+            Clean: done(),
+          }),
+        ),
+      ),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, { kind: "Clean" }>
+    >();
+    expect(action.kind).toBe("Chain");
   });
 
 });
