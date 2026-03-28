@@ -50,7 +50,7 @@ fn completion_snapshots() {
         // Replay completions
         for completion in &test_case.completions {
             let task_id = TaskId(completion.task_id);
-            let result = engine.on_task_completed(task_id, completion.value.clone());
+            let result = engine.complete(task_id, completion.value.clone()).unwrap();
             let dispatches = engine.take_pending_dispatches();
 
             writeln!(trace).unwrap();

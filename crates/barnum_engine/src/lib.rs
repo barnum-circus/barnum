@@ -22,7 +22,7 @@ use u32_newtype::u32_newtype;
 
 u32_newtype!(
     /// Identifies a pending handler invocation. Assigned by the engine,
-    /// returned to the engine in [`Engine::on_task_completed`].
+    /// returned to the engine in [`Engine::complete`].
     TaskId
 );
 
@@ -34,7 +34,7 @@ u32_newtype!(
 #[derive(Debug)]
 pub struct Dispatch {
     /// Correlates this dispatch with the result delivered to
-    /// [`Engine::on_task_completed`].
+    /// [`Engine::complete`].
     pub task_id: TaskId,
     /// Index into the handler pool. Resolve via [`Engine::handler`].
     pub handler_id: HandlerId,
@@ -70,6 +70,25 @@ pub enum AdvanceError {
 }
 
 // ---------------------------------------------------------------------------
+// CompleteError
+// ---------------------------------------------------------------------------
+
+/// Errors that can occur during [`Engine::complete`].
+#[derive(Debug, thiserror::Error)]
+pub enum CompleteError {
+    /// Loop body returned a value that is not `{ kind: "Continue" }` or
+    /// `{ kind: "Break" }`.
+    #[error("Loop body must return {{kind: \"Continue\"}} or {{kind: \"Break\"}}, got: {value}")]
+    InvalidLoopResult {
+        /// The invalid value returned by the loop body.
+        value: Value,
+    },
+    /// An advance error occurred during Chain trampoline or Loop re-entry.
+    #[error(transparent)]
+    Advance(#[from] AdvanceError),
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
@@ -78,7 +97,7 @@ pub enum AdvanceError {
 /// Call [`advance`](Engine::advance) with [`workflow_root`](Engine::workflow_root)
 /// to begin execution, then drain dispatches via
 /// [`take_pending_dispatches`](Engine::take_pending_dispatches). Deliver handler
-/// results via [`on_task_completed`](Engine::on_task_completed).
+/// results via [`complete`](Engine::complete).
 #[derive(Debug)]
 pub struct Engine {
     flat_config: FlatConfig,
@@ -121,19 +140,29 @@ impl Engine {
         self.flat_config.handler(id)
     }
 
-    /// Deliver a handler result. The runtime calls this when a dispatched
+    /// Deliver a task result. The caller invokes this when a dispatched
     /// handler finishes.
     ///
-    /// Returns `Some(value)` when the workflow terminates, `None` when it's
-    /// still running.
+    /// Returns `Ok(Some(value))` when the workflow terminates, `Ok(None)`
+    /// when it's still running.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CompleteError`] if the result value has an invalid shape
+    /// (e.g., a Loop body that doesn't return Continue/Break), or if an
+    /// advance error occurs during Chain trampoline or Loop re-entry.
     ///
     /// # Panics
     ///
     /// Panics if `task_id` is not a known pending task.
     #[allow(clippy::expect_used)]
-    pub fn on_task_completed(&mut self, task_id: TaskId, value: Value) -> Option<Value> {
+    pub fn complete(
+        &mut self,
+        task_id: TaskId,
+        value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
         let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
-        self.complete(parent, value)
+        self.deliver(parent, value)
     }
 
     // -- Private helpers --
@@ -149,18 +178,22 @@ impl Engine {
         id
     }
 
-    /// A child produced a value. Deliver it to the parent that was waiting.
+    /// Deliver a value to the parent that was waiting for it.
     ///
     /// - **No parent:** workflow done — return the terminal value.
     /// - **Chain:** trampoline — advance the `rest` action with the value.
-    /// - **Loop:** inspect `Continue`/`Break` — re-enter or complete.
-    /// - **Attempt:** wrap in `{ kind: "Ok", value }` and complete parent.
+    /// - **Loop:** inspect `Continue`/`Break` — re-enter or deliver to parent.
+    /// - **Attempt:** wrap in `{ kind: "Ok", value }` and deliver to parent.
     /// - **Parallel/ForEach:** store in results slot; if all slots filled,
-    ///   collect into array and complete parent.
-    #[allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
-    fn complete(&mut self, parent: Option<ParentRef>, value: Value) -> Option<Value> {
+    ///   collect into array and deliver to parent.
+    #[allow(clippy::expect_used, clippy::unwrap_used)]
+    fn deliver(
+        &mut self,
+        parent: Option<ParentRef>,
+        value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
         let Some(parent_ref) = parent else {
-            return Some(value);
+            return Ok(Some(value));
         };
 
         let frame_id = parent_ref.frame_id();
@@ -170,37 +203,30 @@ impl Engine {
                 let frame = self.frames.remove(frame_id.0);
                 match frame.kind {
                     FrameKind::Chain { rest } => {
-                        self.advance(rest, value, frame.parent).unwrap();
-                        None
+                        self.advance(rest, value, frame.parent)?;
+                        Ok(None)
                     }
-                    FrameKind::Loop { body } => {
-                        match value["kind"].as_str() {
-                            Some("Continue") => {
-                                // Re-insert the loop frame for the next iteration.
-                                let frame_id = self.insert_frame(Frame {
-                                    parent: frame.parent,
-                                    kind: FrameKind::Loop { body },
-                                });
-                                self.advance(
-                                    body,
-                                    value["value"].clone(),
-                                    Some(ParentRef::SingleChild { frame_id }),
-                                )
-                                .unwrap();
-                                None
-                            }
-                            Some("Break") => self.complete(frame.parent, value["value"].clone()),
-                            _ => panic!(
-                                "Loop body must return {{kind: \"Continue\"}} or \
-                                 {{kind: \"Break\"}}, got: {value}"
-                            ),
+                    FrameKind::Loop { body } => match value["kind"].as_str() {
+                        Some("Continue") => {
+                            let frame_id = self.insert_frame(Frame {
+                                parent: frame.parent,
+                                kind: FrameKind::Loop { body },
+                            });
+                            self.advance(
+                                body,
+                                value["value"].clone(),
+                                Some(ParentRef::SingleChild { frame_id }),
+                            )?;
+                            Ok(None)
                         }
-                    }
+                        Some("Break") => self.deliver(frame.parent, value["value"].clone()),
+                        _ => Err(CompleteError::InvalidLoopResult { value }),
+                    },
                     // First pass: wrap in Ok unconditionally. Proper Attempt
                     // semantics (structured error types, etc.) are deferred.
                     FrameKind::Attempt => {
                         let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
-                        self.complete(frame.parent, wrapped)
+                        self.deliver(frame.parent, wrapped)
                     }
                     _ => unreachable!(
                         "SingleChild parent must be Chain, Loop, or Attempt, got {:?}",
@@ -221,9 +247,9 @@ impl Engine {
                                 results.iter_mut().map(|r| r.take().unwrap()).collect();
                             let parent = frame.parent;
                             self.frames.remove(frame_id.0);
-                            self.complete(parent, Value::Array(collected))
+                            self.deliver(parent, Value::Array(collected))
                         } else {
-                            None
+                            Ok(None)
                         }
                     }
                     _ => unreachable!(
@@ -240,7 +266,7 @@ impl Engine {
     ///
     /// Invoke actions do not create frames — they produce a [`Dispatch`] and
     /// record the parent reference for later delivery via
-    /// [`on_task_completed`](Engine::on_task_completed).
+    /// [`complete`](Engine::complete).
     ///
     /// Pass `parent: None` for the top-level action (i.e., starting a
     /// workflow). Internal recursion provides `Some(parent_ref)` to attach
@@ -251,7 +277,11 @@ impl Engine {
     /// Returns [`AdvanceError`] if the workflow encounters a structural error
     /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
     /// matching case).
-    #[allow(clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::missing_panics_doc,
+        clippy::expect_used
+    )]
     pub fn advance(
         &mut self,
         action_id: ActionId,
@@ -281,7 +311,8 @@ impl Engine {
             FlatAction::Parallel { count } => {
                 if count.0 == 0 {
                     // No children — vacuously complete with empty array.
-                    self.complete(parent, Value::Array(vec![]));
+                    self.deliver(parent, Value::Array(vec![]))
+                        .expect("vacuous empty-parallel completion should not fail");
                     return Ok(());
                 }
                 // Collect to a Vec to release the immutable borrow on
@@ -316,7 +347,8 @@ impl Engine {
                 };
                 if elements.is_empty() {
                     // No elements — vacuously complete with empty array.
-                    self.complete(parent, Value::Array(vec![]));
+                    self.deliver(parent, Value::Array(vec![]))
+                        .expect("vacuous empty-foreach completion should not fail");
                     return Ok(());
                 }
                 let frame_id = self.insert_frame(Frame {
@@ -684,14 +716,14 @@ mod tests {
         let d1 = engine.take_pending_dispatches();
         assert_eq!(d1.len(), 1);
 
-        let result = engine.on_task_completed(d1[0].task_id, json!("a_result"));
+        let result = engine.complete(d1[0].task_id, json!("a_result")).unwrap();
         assert_eq!(result, None);
 
         let d2 = engine.take_pending_dispatches();
         assert_eq!(d2.len(), 1);
         assert_eq!(d2[0].value, json!("a_result"));
 
-        let result = engine.on_task_completed(d2[0].task_id, json!("b_result"));
+        let result = engine.complete(d2[0].task_id, json!("b_result")).unwrap();
         assert_eq!(result, Some(json!("b_result")));
     }
 
@@ -708,16 +740,16 @@ mod tests {
 
         // A
         let d = engine.take_pending_dispatches();
-        assert_eq!(engine.on_task_completed(d[0].task_id, json!("a_out")), None);
+        assert_eq!(engine.complete(d[0].task_id, json!("a_out")).unwrap(), None);
         // B
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!("a_out"));
-        assert_eq!(engine.on_task_completed(d[0].task_id, json!("b_out")), None);
+        assert_eq!(engine.complete(d[0].task_id, json!("b_out")).unwrap(), None);
         // C
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!("b_out"));
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!("c_out")),
+            engine.complete(d[0].task_id, json!("c_out")).unwrap(),
             Some(json!("c_out")),
         );
     }
@@ -735,11 +767,11 @@ mod tests {
 
         // Complete in reverse order to verify index-based collection.
         assert_eq!(
-            engine.on_task_completed(d[1].task_id, json!("b_result")),
+            engine.complete(d[1].task_id, json!("b_result")).unwrap(),
             None,
         );
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!("a_result")),
+            engine.complete(d[0].task_id, json!("a_result")).unwrap(),
             Some(json!(["a_result", "b_result"])),
         );
     }
@@ -755,9 +787,9 @@ mod tests {
         let d = engine.take_pending_dispatches();
         assert_eq!(d.len(), 2);
 
-        assert_eq!(engine.on_task_completed(d[0].task_id, json!("r10")), None);
+        assert_eq!(engine.complete(d[0].task_id, json!("r10")).unwrap(), None);
         assert_eq!(
-            engine.on_task_completed(d[1].task_id, json!("r20")),
+            engine.complete(d[1].task_id, json!("r20")).unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }
@@ -774,7 +806,9 @@ mod tests {
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!(0));
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 1})),
+            engine
+                .complete(d[0].task_id, json!({"kind": "Continue", "value": 1}))
+                .unwrap(),
             None,
         );
 
@@ -782,7 +816,9 @@ mod tests {
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!(1));
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!({"kind": "Continue", "value": 2})),
+            engine
+                .complete(d[0].task_id, json!({"kind": "Continue", "value": 2}))
+                .unwrap(),
             None,
         );
 
@@ -790,7 +826,9 @@ mod tests {
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!(2));
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!({"kind": "Break", "value": "done"})),
+            engine
+                .complete(d[0].task_id, json!({"kind": "Break", "value": "done"}))
+                .unwrap(),
             Some(json!("done")),
         );
     }
@@ -805,7 +843,7 @@ mod tests {
 
         let d = engine.take_pending_dispatches();
         assert_eq!(
-            engine.on_task_completed(d[0].task_id, json!("output")),
+            engine.complete(d[0].task_id, json!("output")).unwrap(),
             Some(json!({"kind": "Ok", "value": "output"})),
         );
     }
