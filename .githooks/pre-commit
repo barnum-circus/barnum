@@ -10,8 +10,10 @@ RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
 
 # TypeScript type-checking (always runs if TS files are staged)
 if [ -n "$TS_FILES" ]; then
-    echo "Running TypeScript type-check..."
-    pnpm --filter barnum exec tsc --noEmit || { echo "tsc --noEmit failed"; exit 1; }
+    echo "Running TypeScript type-check (barnum)..."
+    pnpm --filter barnum exec tsc --noEmit || { echo "tsc --noEmit failed (barnum)"; exit 1; }
+    echo "Running TypeScript type-check (demos/simple-workflow)..."
+    (cd demos/simple-workflow && pnpm exec tsc --noEmit) || { echo "tsc --noEmit failed (demos)"; exit 1; }
 fi
 
 if [ -z "$RUST_FILES" ]; then
@@ -28,6 +30,12 @@ echo "$STAGED_FILES" | xargs git add
 # Build CLI binaries first (tests spawn them as subprocesses)
 echo "Building CLI binaries..."
 cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
+
+# Run demos (requires CLI binary built above)
+echo "Running demos..."
+(cd demos/simple-workflow && pnpm exec tsx run.ts > /dev/null) || { echo "demo run.ts failed"; exit 1; }
+(cd demos/simple-workflow && pnpm exec tsx run-parallel.ts > /dev/null) || { echo "demo run-parallel.ts failed"; exit 1; }
+(cd demos/simple-workflow && pnpm exec tsx run-loop.ts > /dev/null) || { echo "demo run-loop.ts failed"; exit 1; }
 
 echo "Running cargo check..."
 cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }

@@ -2,6 +2,7 @@
   "name": "@barnum/barnum",
   "version": "0.2.4",
   "description": "Barnum workflow engine",
+  "type": "module",
   "main": "index.js",
   "bin": {
     "barnum": "cli.cjs"

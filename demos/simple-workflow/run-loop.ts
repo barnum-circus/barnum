@@ -13,13 +13,12 @@ import { createRequire } from "module";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { pipe, loop } from "@barnum/barnum/src/ast.js";
+import { configBuilder, pipe, loop } from "@barnum/barnum/src/ast.js";
 import startPolling from "./handlers/start-polling.js";
 import pollStatus from "./handlers/poll-status.js";
 
-const config = {
-  workflow: pipe(startPolling(), loop(pollStatus())),
-};
+const workflow = configBuilder()
+  .workflow(() => pipe(startPolling(), loop(pollStatus())));
 
 // Resolve tsx executor
 const require = createRequire(import.meta.url);
@@ -31,7 +30,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const workerPath = path.resolve(__dirname, "../../libs/barnum/src/worker.ts");
 const barnumBinary = path.resolve(__dirname, "../../target/debug/barnum");
 
-const configJson = JSON.stringify(config);
+const configJson = JSON.stringify(workflow);
 
 console.error("=== Running polling loop workflow ===\n");
 
