@@ -88,10 +88,10 @@ Builtins like `identity()`, `tag()`, `merge()`, `flatten()`, `extractField()` us
 
 See BUILTIN_HANDLER_KIND.md for the full design. The config desugaring uses two builtins:
 
-- **Constant** (`{ kind: "Builtin", builtin: { kind: "Constant", value: <value> } }`) — engine returns value, ignores input
-- **Identity** (`{ kind: "Builtin", builtin: { kind: "Identity" } }`) — engine returns input unchanged
+- **Constant** (`{ kind: "Builtin", builtin: { kind: "Constant", value: <value> } }`) — returns stored value, ignores input
+- **Identity** (`{ kind: "Builtin", builtin: { kind: "Identity" } }`) — returns input unchanged
 
-These are engine-native: no subprocess, no dispatch. The flattener interns them in the handler pool like TypeScript handlers. No change to `FlatAction`, `FlatEntry`, or the 8-byte entry size.
+These go through the normal dispatch → scheduler → complete cycle like any Invoke. The scheduler executes them inline (no subprocess). The flattener interns them in the handler pool like TypeScript handlers. No change to `FlatAction`, `FlatEntry`, or the 8-byte entry size.
 
 ### Split `createHandler` into two functions
 
@@ -148,14 +148,14 @@ Chain(
 ```
 
 Parallel receives the pipeline value, passes it to both children:
-- Identity builtin returns the pipeline value unchanged (engine-native, no subprocess)
-- Constant builtin returns `{ target: "production" }`, ignoring its input (engine-native, no subprocess)
+- Identity builtin returns the pipeline value unchanged (scheduler executes inline, no subprocess)
+- Constant builtin returns `{ target: "production" }`, ignoring its input (scheduler executes inline, no subprocess)
 
 Parallel collects: `[pipelineValue, { target: "production" }]`
 
 Chain feeds this tuple to the TypeScript handler, which unpacks it via the internal wrapper.
 
-Only one subprocess is spawned — the actual handler. The structural plumbing (Identity + Constant + Parallel) is handled entirely by the engine.
+Only the actual handler spawns a subprocess. Identity and Constant are executed inline by the scheduler.
 
 ### Internal handle wrapper
 
@@ -307,7 +307,7 @@ None. Builtins are engine-native — the worker only handles TypeScript handlers
 
 ### Scheduler changes
 
-The scheduler's `dispatch` method currently pattern-matches on `HandlerKind::TypeScript`. Builtins never reach the scheduler (engine resolves them inline). The irrefutable pattern on `TypeScript` becomes an exhaustive match for safety.
+The scheduler's `dispatch` method gains a `HandlerKind::Builtin` match arm that executes builtins inline (see BUILTIN_HANDLER_KIND.md). The channel type changes from `(TaskId, Value)` to `(TaskId, Result<Value, HandlerError>)`.
 
 ## Implementation notes
 
@@ -336,5 +336,5 @@ When implementing, update all tests first:
 | `crates/barnum_ast/src/lib.rs` | Remove `step_config_schema` and `value_schema` from `TypeScriptHandler`. Builtin handler kind changes per BUILTIN_HANDLER_KIND.md. |
 | `crates/barnum_ast/src/flat.rs` | No structural changes (Builtin is a handler kind, not an action kind). Update test helpers. |
 | `crates/barnum_engine/src/lib.rs` | No changes (builtins go through normal dispatch/complete). Update test helpers. |
-| `crates/barnum_event_loop/src/lib.rs` | Update test helpers. Scheduler dispatch unaffected (Constant/Identity never dispatched). |
+| `crates/barnum_event_loop/src/lib.rs` | Scheduler dispatches builtins inline (see BUILTIN_HANDLER_KIND.md). Channel type changes to `Result`. |
 | Regenerated schemas | `build_schemas` picks up the Rust type changes. |

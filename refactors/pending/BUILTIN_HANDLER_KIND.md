@@ -6,7 +6,7 @@
 
 ## Motivation
 
-Builtins (`identity`, `constant`, `drop`, `tag`, etc.) currently use `module: "__builtin__"` in their Invoke nodes — a synthetic module path that doesn't resolve to a real file. These are broken in real subprocess execution. The handler config desugaring requires Constant and Identity as engine-native operations.
+Builtins (`identity`, `constant`, `drop`, `tag`, etc.) currently use `module: "__builtin__"` in their Invoke nodes — a synthetic module path that doesn't resolve to a real file. These are broken in real subprocess execution. The handler config desugaring requires Constant and Identity to be executed without spawning subprocesses.
 
 ## Types
 
@@ -169,8 +169,10 @@ With builtins, tests should use `Constant`, `Identity`, `Tag`, etc. as real hand
 
 ## Builtin implementations
 
+Rust builtins live in their own file: `crates/barnum_event_loop/src/builtins.rs`. TypeScript builtins live in `libs/barnum/src/builtins.ts` (the existing file, rewritten).
+
 ```rust
-// barnum_event_loop/src/lib.rs (or a dedicated builtins module)
+// crates/barnum_event_loop/src/builtins.rs
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuiltinError {
@@ -344,7 +346,7 @@ export function done(): TypedAction<any, LoopResult<any, any>> {
 
 - The `__builtin__` module convention
 - The `builtin()` helper function in `builtins.ts`
-- `handlers/builtins.ts` (delete file — all builtins are engine-native)
+- `handlers/builtins.ts` (delete file — all builtins are scheduler-native)
 
 ## Implementation priority
 
@@ -372,7 +374,8 @@ The TypeScript AST types in `ast.ts` are manually maintained mirrors of the Rust
 | File | Change |
 |------|--------|
 | `crates/barnum_ast/src/lib.rs` | Add `BuiltinHandler`, `BuiltinKind`, `Builtin` variant to `HandlerKind`. |
-| `crates/barnum_event_loop/src/lib.rs` | Scheduler dispatches builtins inline via `execute_builtin`. |
+| `crates/barnum_event_loop/src/builtins.rs` | New file: `execute_builtin`, `BuiltinError`. |
+| `crates/barnum_event_loop/src/lib.rs` | Scheduler dispatches builtins via `execute_builtin`. Channel type changes to `Result<Value, HandlerError>`. `HandlerError` enum. |
 | `crates/barnum_engine/src/lib.rs` | No changes (builtins are normal Invoke dispatches). |
 | `libs/barnum/src/ast.ts` | Add `BuiltinHandler`, `BuiltinKind` types, update `HandlerKind`. |
 | `libs/barnum/src/builtins.ts` | All builtins emit Builtin handler kind. Delete `builtin()` helper. |
