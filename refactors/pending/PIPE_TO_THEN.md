@@ -107,7 +107,7 @@ Remove the `Pipe` arm in `flatten_action_at`. Add `Then`:
 
 ```rust
 Action::Then(ThenAction { first, rest }) => {
-    self.alloc_many(Count(1));  // 1 child slot for first
+    self.alloc();  // child slot for first
     let rest_id = self.flatten_action(*rest, workflow_root)?;
     self.fill_child_slot(*first, action_id + 1, workflow_root)?;
     FlatAction::Then { rest: rest_id }
