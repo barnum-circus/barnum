@@ -600,8 +600,6 @@ mod tests {
         HandlerKind::TypeScript(TypeScriptHandler {
             module: ModulePath::from(module.intern()),
             func: FuncName::from(func.intern()),
-            step_config_schema: None,
-            value_schema: None,
         })
     }
 

@@ -62,8 +62,6 @@ WorkflowState {
                     func: FuncName(
                         "handle",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -74,8 +72,6 @@ WorkflowState {
                     func: FuncName(
                         "handle",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -86,8 +82,6 @@ WorkflowState {
                     func: FuncName(
                         "classify",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],

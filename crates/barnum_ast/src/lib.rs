@@ -157,18 +157,11 @@ pub enum HandlerKind {
 
 /// A TypeScript handler: module path + exported function name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct TypeScriptHandler {
     /// Module path (absolute — JS layer resolves before passing to Rust).
     pub module: ModulePath,
     /// Exported function name.
     pub func: FuncName,
-    /// Optional per-step configuration schema forwarded to the handler.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub step_config_schema: Option<Value>,
-    /// Optional JSON Schema describing the handler's expected input.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value_schema: Option<Value>,
 }
 
 /// A builtin handler: wraps a [`BuiltinKind`].

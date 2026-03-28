@@ -45,8 +45,6 @@ WorkflowState {
                     func: FuncName(
                         "process",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -57,8 +55,6 @@ WorkflowState {
                     func: FuncName(
                         "validate",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],

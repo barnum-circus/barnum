@@ -25,8 +25,6 @@ WorkflowState {
                     func: FuncName(
                         "run",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],
@@ -79,8 +77,6 @@ WorkflowState {
                     func: FuncName(
                         "run",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],

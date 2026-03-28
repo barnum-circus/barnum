@@ -302,8 +302,6 @@ mod tests {
             handler: HandlerKind::TypeScript(TypeScriptHandler {
                 module: module.intern().into(),
                 func: func.intern().into(),
-                step_config_schema: None,
-                value_schema: None,
             }),
         })
     }

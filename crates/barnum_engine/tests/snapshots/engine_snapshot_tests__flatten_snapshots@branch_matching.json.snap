@@ -1,6 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 41
+assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/branch_matching.json
 ---
@@ -47,8 +47,6 @@ FlatConfig {
                 func: FuncName(
                     "handle",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
         TypeScript(
@@ -59,8 +57,6 @@ FlatConfig {
                 func: FuncName(
                     "handle",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
     ],

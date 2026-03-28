@@ -1,6 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 41
+assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/loop_with_chain_body.json
 ---
@@ -44,8 +44,6 @@ FlatConfig {
                 func: FuncName(
                     "decide",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
         TypeScript(
@@ -56,8 +54,6 @@ FlatConfig {
                 func: FuncName(
                     "check",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
     ],

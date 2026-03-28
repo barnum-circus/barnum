@@ -39,8 +39,6 @@ WorkflowState {
                     func: FuncName(
                         "a",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -51,8 +49,6 @@ WorkflowState {
                     func: FuncName(
                         "b",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],
@@ -153,8 +149,6 @@ WorkflowState {
                     func: FuncName(
                         "a",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -165,8 +159,6 @@ WorkflowState {
                     func: FuncName(
                         "b",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],
@@ -240,8 +232,6 @@ WorkflowState {
                     func: FuncName(
                         "a",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
             TypeScript(
@@ -252,8 +242,6 @@ WorkflowState {
                     func: FuncName(
                         "b",
                     ),
-                    step_config_schema: None,
-                    value_schema: None,
                 },
             ),
         ],

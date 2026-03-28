@@ -1,6 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 41
+assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
 ---
@@ -56,8 +56,6 @@ FlatConfig {
                 func: FuncName(
                     "b",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
         TypeScript(
@@ -68,8 +66,6 @@ FlatConfig {
                 func: FuncName(
                     "a",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
         TypeScript(
@@ -80,8 +76,6 @@ FlatConfig {
                 func: FuncName(
                     "c",
                 ),
-                step_config_schema: None,
-                value_schema: None,
             },
         ),
     ],
