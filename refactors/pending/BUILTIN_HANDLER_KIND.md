@@ -128,7 +128,13 @@ impl Scheduler {
 }
 ```
 
-Builtins always execute their real logic, even in noop mode. They're deterministic and have no external dependencies.
+Builtins always execute their real logic. They're deterministic and have no external dependencies.
+
+### Noop scheduler deprecation
+
+The noop scheduler (`ExecutionMode::Noop`) returns `{}` for every TypeScript handler. All existing Rust tests use it — they verify structural mechanics (Chain trampolining, Parallel collection, Loop Continue/Break) but never check actual data flow.
+
+With builtins, tests should use `Constant`, `Identity`, `Tag`, etc. as real handlers and assert on real output values. The noop mode becomes unnecessary — replace all noop-based tests with builtin-based tests that exercise real execution.
 
 ## Builtin implementations
 
@@ -286,6 +292,10 @@ export function done(): TypedAction<any, LoopResult<any, any>> {
 ### Logging and observability
 
 Because builtins go through the scheduler, logging can be added in the scheduler's dispatch path — same hook point as TypeScript handlers.
+
+### Delete noop execution mode
+
+Once builtins land, rewrite all Rust engine/event-loop tests to use builtin handlers (`Constant`, `Identity`, `Tag`, etc.) with real values and real assertions. Delete `ExecutionMode::Noop` and `Scheduler::new()` (the noop constructor). The only scheduler constructor should be `Scheduler::with_executor`.
 
 ### Error handling
 
