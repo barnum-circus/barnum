@@ -242,6 +242,42 @@ The annotations serialize into the handler metadata and are available to the eng
 
 This is purely an optimization — the engine produces correct results without annotations. Annotations are opt-in; unannotated handlers are treated as effectful (no deduplication, no automatic retry).
 
+## Runtime Value Type Checking
+
+The engine already does structural type checks in `advance` — ForEach panics if the input isn't an array, Branch panics if the input lacks a `kind` field. These are ad-hoc checks on specific combinators. A general mechanism would validate the input value against the handler's declared schema before every dispatch (or advance step).
+
+### Where it belongs: advance, not dispatch
+
+Type checking in advance is natural because advance already introspects values:
+- ForEach: `match value { Value::Array(elements) => ..., other => panic!(...) }`
+- Branch: `value["kind"].as_str().expect(...)`
+
+Extending this to handler schemas: when advance hits an Invoke, it could validate the value against the handler's `value_schema` (if declared) before creating the Invoke frame and dispatch. A type mismatch would be caught immediately in the engine, with a full frame-tree stack trace available, rather than failing later in the handler subprocess with an opaque error.
+
+The alternative — checking at dispatch time (in the scheduler/runtime) — catches the same errors but later, after the value has left the engine. The engine's frame tree context is gone. Error messages are worse.
+
+### What it looks like
+
+```rust
+FlatAction::Invoke { handler } => {
+    if let Some(schema) = self.flat_config.handler_value_schema(handler) {
+        validate(&value, schema)
+            .unwrap_or_else(|e| panic!("Type error at Invoke: {e}"));
+    }
+    // ... create frame, push dispatch ...
+}
+```
+
+The `value_schema` on handlers is already a `Option<Value>` (JSON Schema). Validation would use a JSON Schema validator crate (e.g., `jsonschema`).
+
+### Panics vs error propagation
+
+Currently type mismatches panic. With the error propagation mechanism (COMPLETION.md), they should produce engine errors instead — propagating through the frame tree like handler failures, catchable by Attempt. This makes type errors recoverable and gives them the same stack-trace treatment as handler errors.
+
+### Not now
+
+This depends on having a JSON Schema validation crate in the dependency tree and wiring up handler schemas through the flattener. Not needed for the initial engine milestones. The existing panics (ForEach non-array, Branch missing kind) are sufficient for now.
+
 ## Schema Validation Elision
 
 If we add runtime validation (checking values against handler schemas before dispatch), we can skip redundant checks when the engine knows a value already satisfies a schema.
