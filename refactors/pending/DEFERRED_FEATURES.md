@@ -147,6 +147,26 @@ The engine currently hard-codes `Attempt` as the only frame type that intercepts
 
 For now, `Attempt` is hard-coded. If more interception patterns emerge (retry, timeout), refactoring to a general dynamic-scope mechanism becomes worthwhile.
 
+## Chain Normalization
+
+Chains should be right-nested. `Chain(Chain(A, B), C)` is non-canonical — it's semantically equivalent to `Chain(A, Chain(B, C))` but wastes a ChildRef (the left-nested Chain in `first` is multi-entry). The canonical form is a right-leaning spine where `first` is never a Chain:
+
+```
+// Non-canonical (left-nested):
+Chain(Chain(A, B), C)
+
+// Canonical (right-nested):
+Chain(A, Chain(B, C))
+```
+
+Since `pipe()` already produces right-nested chains via `reduceRight`, non-canonical forms can only arise from manual AST construction or other combinators that compose chains. Two enforcement options:
+
+1. **Validation pass**: after deserialization, walk the tree and reject (or normalize) any Chain whose `first` is a Chain. Simple, catches bugs.
+
+2. **Type-level enforcement**: make `Chain.first` accept a type that excludes `Chain`. In TypeScript this is straightforward — define a `NonChainAction` type that's the union minus `ChainAction`, and use it for `first`. In Rust, this would require either a newtype wrapper or a separate enum without the Chain variant, which is heavier. A validation pass is probably more practical.
+
+The flattener could also normalize during flattening: when it encounters `Chain(Chain(A, B), C)`, rewrite to `Chain(A, Chain(B, C))` before emitting entries. This keeps the flat table canonical regardless of input shape.
+
 ## Handler Error Type
 
 Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `unknown` by `attempt`). A typed error channel would let handlers declare their failure modes:
