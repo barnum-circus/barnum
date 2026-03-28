@@ -117,9 +117,15 @@ Look up the parent directly from `task_to_parent` — no frame to remove. The te
 
 ## complete
 
-In the advance milestone, complete existed as a private no-op for empty ForEach/Parallel. Now it's the core of the engine's execution model.
+A handler invocation finished successfully and produced a value. Now that value needs to go somewhere — it flows to the parent that was waiting for it. What happens next depends on what kind of parent was waiting:
 
-`complete` takes `Option<ParentRef>`. When `parent` is `None`, the top-level action has completed and the workflow is done — return the result. Otherwise, look up the parent frame and dispatch on its kind.
+- **No parent (`None`):** This was the top-level action. The workflow is done. Return the value as the terminal result.
+- **Chain:** The value is the output of the chain's first child. Use it as input to advance the `rest` action. This is the "trampoline" — completion triggers more expansion.
+- **Loop:** The value is the loop body's output. If it says `Continue`, re-advance the body with the new value (another iteration). If `Break`, the loop is done — complete the loop's parent with the break value.
+- **Attempt:** The child succeeded. Wrap the value as `{ kind: "Ok", value }` and complete the attempt's parent.
+- **Parallel / ForEach:** The value is one child's result. Store it in the results slot at `child_index`. If all slots are filled, collect them into an array and complete the parent. If not, do nothing — more children are still in flight.
+
+The key insight: `complete` either **terminates** (returns a terminal result), **mutates** a frame in place (Parallel/ForEach partial result), or **continues** by calling `advance` again (Chain/Loop). It never blocks — everything is synchronous state manipulation.
 
 Each arm asserts the expected `ParentRef` variant. Chain/Loop/Attempt use `SingleChild`; Parallel/ForEach use `IndexedChild`.
 
