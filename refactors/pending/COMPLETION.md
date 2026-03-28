@@ -187,19 +187,8 @@ fn complete(
             let frame = self.frames.get_mut(frame_id.0)
                 .expect("parent frame exists");
             match &mut frame.kind {
-                FrameKind::Parallel { results } => {
-                    results[child_index] = Some(value);
-                    if results.iter().all(Option::is_some) {
-                        let collected: Vec<Value> =
-                            results.iter_mut().map(|r| r.take().unwrap()).collect();
-                        let parent = frame.parent;
-                        self.frames.remove(frame_id.0);
-                        self.complete(parent, Value::Array(collected))
-                    } else {
-                        None
-                    }
-                }
-                FrameKind::ForEach { results } => {
+                FrameKind::Parallel { results }
+                | FrameKind::ForEach { results } => {
                     results[child_index] = Some(value);
                     if results.iter().all(Option::is_some) {
                         let collected: Vec<Value> =
