@@ -353,6 +353,64 @@ This requires the engine (or a thread-local) to be accessible from the panic hoo
 
 When `error()` propagates up the frame tree, it could accumulate a trace: each frame the error passes through adds a line. By the time the error reaches Root (or is caught by Attempt), the trace shows the full propagation path including cancelled siblings. This is richer than a simple parent-chain walk — it shows the dynamic error path, not just the static frame ancestry.
 
+## Value Interning
+
+Values (`serde_json::Value`) flow through the engine by move/clone. Parallel clones the input for each child — `value.clone()` deep-copies the entire JSON tree. For a 10KB payload fanned out to 20 parallel branches, that's 200KB of redundant copies.
+
+### Level 1: Rc<Value> (cheap clones)
+
+Replace `Value` with `Rc<Value>` in the engine's internal data flow. Parallel's `value.clone()` becomes an Rc clone — O(1), just an increment of the reference count. No deep copy.
+
+```rust
+// Before: deep clone per child
+for (i, child) in children.into_iter().enumerate() {
+    self.advance(child, value.clone(), ...);
+}
+
+// After: Rc clone per child (O(1))
+for (i, child) in children.into_iter().enumerate() {
+    self.advance(child, Rc::clone(&value), ...);
+}
+```
+
+The rest of the engine is unchanged — it just passes `Rc<Value>` instead of `Value`. `Rc` is appropriate because the engine is single-threaded (`!Sync`). `Arc` would work too but has unnecessary atomic overhead.
+
+**When values diverge:** Handlers produce new values (not mutations of existing ones). When an Invoke frame completes, the result is a new `Rc<Value>` — the old shared input is dropped naturally when all Rc references go out of scope. No copy-on-write needed because values are never mutated in the engine.
+
+**Dispatch boundary:** `Dispatch` carries a value to the runtime. If the runtime needs ownership (e.g., to send to a handler subprocess), it can `Rc::try_unwrap()` or clone at that point. The clone only happens once per dispatch, not once per Parallel child.
+
+**Cost:** Rc adds a pointer indirection and 8 bytes of refcount overhead per value. Negligible compared to the deep-clone savings.
+
+### Level 2: Value intern table (deduplication + identity equality)
+
+A step beyond Rc: deduplicate structurally identical values via an intern table.
+
+```rust
+struct ValuePool {
+    table: HashMap<Value, ValueId>,
+    values: Vec<Value>,
+}
+```
+
+When a value enters the engine (from `start()` or `on_task_completed()`), it's looked up in the pool. If it already exists, the existing `ValueId` is reused. Structurally identical values share a single allocation.
+
+**Benefits:**
+- **Identity equality:** `value_a == value_b` becomes `value_id_a == value_id_b` — O(1) instead of O(n) structural comparison. This enables cheap dispatch deduplication for pure handlers (same handler + same ValueId = skip redundant dispatch).
+- **Memory deduplication:** If multiple handlers return the same value (e.g., `null`, `true`, common error objects), only one copy exists.
+
+**Costs:**
+- **Hashing:** `Value` hashing is recursive over the JSON tree. For large values, this is expensive. The hash cost may exceed the clone cost for values that are only used once.
+- **Lifetime management:** When should entries be evicted? Reference counting per entry, or GC pass between engine steps? An Rc-based approach (Level 1) handles this automatically; an intern table needs explicit management.
+- **Floating-point hashing:** JSON numbers include floats. `f64` is not `Hash` in Rust. Need a wrapper that hashes the bits (`f64::to_bits()`), which means `NaN != NaN` in the intern table. Edge case but real.
+
+**Verdict:** Level 1 (Rc) is the clear first step — trivial to implement, no downsides, eliminates Parallel deep clones. Level 2 (intern table) is worth pursuing only when dispatch deduplication for pure handlers is implemented, since that's the main consumer of identity equality.
+
+### Interaction with other features
+
+- **Dispatch deduplication (Handler Annotations):** Requires comparing input values for equality. With interning, this is O(1) by ValueId. Without interning, it's O(n) structural comparison per dispatch pair.
+- **Schema validation elision:** If values are interned, "this value was already validated" can be tracked per ValueId rather than per value instance.
+- **Snapshot testing:** Interned values serialize identically to plain values. No impact on test output.
+
 ## Streams
 
 Support for streaming data through the pipeline — actions that produce or consume async iterables rather than single values. Relevant for large datasets, real-time feeds, or incremental processing where buffering the full result is impractical.
