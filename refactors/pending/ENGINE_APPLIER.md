@@ -325,3 +325,34 @@ For replay: filter to `TaskCompleted` lines. Feed them into a fresh EngineApplie
 - **Applier trait.** `fn apply(&mut self, event: &Event)` — unchanged.
 - **NdjsonApplier.** Still logs every event. Updated to handle new field types (`TaskId` serializes as a number, no `TaskResult` wrapper).
 - **run_event_loop.** Same structure. Only the receiver type changes (`UnboundedReceiver` instead of `Receiver`).
+
+## Future: error handling is an AST concern
+
+Handlers cross a process boundary (Rust → Node.js). They can always fail. Every handler returns a Result — not as a special engine concept, but as the natural return type of any cross-boundary call. A Result is just a Value with a particular shape (`{"ok": ...}` or `{"err": ...}`).
+
+Error handling — retries, unwrap, propagation — is expressible via existing AST primitives. No engine or scheduler machinery needed.
+
+**Retry as a Loop:**
+
+```
+Loop(
+  Chain(
+    Invoke(handler),
+    Switch(
+      "ok"  => Break(value),
+      "err" => Continue
+    )
+  )
+)
+```
+
+Add a max iteration count to Loop for bounded retries (e.g., retry 3 times). This composes naturally: `retry(3, handler)` is sugar for the above.
+
+**Other combinators** (future AST nodes or convenience wrappers):
+- `unwrap`: extract Ok value or panic the workflow
+- `map` / `and_then`: transform Result values
+- `?` (early return): short-circuit a Chain on Err
+
+**What this means for the engine:** WorkflowState doesn't distinguish success from failure. It routes opaque Values through the AST. The AST nodes (Switch, Loop) interpret Result shapes. The Scheduler runs handlers and returns whatever happened. Neither layer needs special error/retry logic.
+
+For the current milestone, handlers are no-ops that always succeed. Results, retries, and error combinators are future AST work. Nothing in the current architecture forecloses on them.

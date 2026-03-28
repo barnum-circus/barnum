@@ -99,3 +99,7 @@ trait Actor: Send + Sync {
 The Scheduler holds `Vec<Box<dyn Actor>>` and routes dispatches based on `HandlerKind`. Each actor returns a future; the Scheduler wraps it in a tokio::spawn with the event_tx wiring.
 
 For this milestone, no Actor trait — just the inline `execute_handler` no-op. The trait is introduced when we have a second handler type to dispatch to.
+
+## No retry logic in the Scheduler
+
+The Scheduler is a dumb executor: run handler, send result. It has no knowledge of retries, error handling, or Result semantics. Retries are an AST-level concern — expressible as `Loop(Chain(Invoke(handler), Switch(...)))`. See ENGINE_APPLIER.md § "Future: error handling is an AST concern."
