@@ -171,9 +171,9 @@ The flattener could also normalize during flattening: when it encounters `Chain(
 
 Compile-time simplifications during flattening (or a validation/normalization pass):
 
-- **`Parallel([A])`** → `A`. A single-child parallel is just the child. Saves a frame at runtime (no fan-out/collection overhead for a single child). This applies to the tree AST before flattening or during flattening itself.
+- **`Parallel([A])`**: NOT a trivial elimination. `Parallel([A])` produces `[A(x)]` while `A` produces `A(x)` — different output shapes (array-wrapped vs unwrapped). Eliminating the Parallel requires also wrapping the child's output in an array, which means a builtin. Not worth pursuing until builtins exist.
 
-These are safe, semantics-preserving rewrites. The flattener could apply them automatically, or a normalization pass could run before flattening.
+Other potential simplifications to investigate as the AST matures.
 
 ## Lazy Step Flattening
 
