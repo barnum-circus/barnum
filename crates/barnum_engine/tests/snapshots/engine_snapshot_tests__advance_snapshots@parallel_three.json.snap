@@ -1,64 +1,152 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/parallel_three.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./a.ts",
-        "func": "a"
-      },
-      "value": {
-        "shared": true
-      }
-    },
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./b.ts",
-        "func": "b"
-      },
-      "value": {
-        "shared": true
-      }
-    },
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./c.ts",
-        "func": "c"
-      },
-      "value": {
-        "shared": true
-      }
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "children": [
-          {
-            "kind": "Invoke"
-          },
-          {
-            "kind": "Invoke"
-          },
-          {
-            "kind": "Invoke"
-          }
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Parallel {
+                    count: Count(
+                        3,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
         ],
-        "kind": "Parallel",
-        "results": [
-          null,
-          null,
-          null
-        ]
-      }
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./c.ts",
+                    ),
+                    func: FuncName(
+                        "c",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Parallel {
+                results: [
+                    None,
+                    None,
+                    None,
+                ],
+            },
+        },
+        1: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 0,
+                },
+            ),
+            kind: Invoke,
+        },
+        2: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 1,
+                },
+            ),
+            kind: Invoke,
+        },
+        3: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 2,
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Object {
+                "shared": Bool(true),
+            },
+        },
+        Dispatch {
+            handler_id: HandlerId(
+                1,
+            ),
+            value: Object {
+                "shared": Bool(true),
+            },
+        },
+        Dispatch {
+            handler_id: HandlerId(
+                2,
+            ),
+            value: Object {
+                "shared": Bool(true),
+            },
+        },
     ],
-    "kind": "Root"
-  }
 }

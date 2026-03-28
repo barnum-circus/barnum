@@ -28,7 +28,7 @@ struct FrameId(usize);
 
 /// How a child frame refers to its parent.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 enum ParentRef {
     /// Parent has one active child (Chain, Loop, Attempt).
     SingleChild { frame_id: FrameId },
@@ -42,7 +42,7 @@ enum ParentRef {
 
 impl ParentRef {
     /// Extract the parent's [`FrameId`] regardless of variant.
-    #[allow(dead_code)] // Used by complete/error (completion milestone) and test_support.
+    #[allow(dead_code)] // Used by complete/error (completion milestone).
     const fn frame_id(self) -> FrameId {
         match self {
             ParentRef::SingleChild { frame_id } | ParentRef::IndexedChild { frame_id, .. } => {
@@ -58,10 +58,8 @@ impl ParentRef {
 
 /// The kind-specific state stored in each frame.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 enum FrameKind {
-    /// Sentinel: the workflow entry point. Only one per engine.
-    Root,
     /// Leaf: handler dispatched, waiting for result.
     Invoke,
     /// Sequential: first child active, then trampoline to `rest`.
@@ -82,7 +80,7 @@ enum FrameKind {
 
 /// A single frame in the engine's frame tree.
 #[derive(Debug)]
-#[allow(dead_code)] // Fields read by complete/error (completion milestone) and test_support.
+#[allow(dead_code)] // Fields read by complete/error (completion milestone).
 struct Frame {
     /// Parent reference. `None` only for the Root frame.
     parent: Option<ParentRef>,
@@ -138,6 +136,7 @@ pub enum AdvanceError {
 ///
 /// Call [`start`](Engine::start) to begin execution, then drain dispatches via
 /// [`take_pending_dispatches`](Engine::take_pending_dispatches).
+#[derive(Debug)]
 pub struct Engine {
     flat_config: FlatConfig,
     frames: Slab<Frame>,
@@ -155,8 +154,7 @@ impl Engine {
         }
     }
 
-    /// Begin execution. Creates the Root frame and advances from the workflow
-    /// root.
+    /// Begin execution. Advances from the workflow root action.
     ///
     /// # Errors
     ///
@@ -164,16 +162,8 @@ impl Engine {
     /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
     /// matching case).
     pub fn start(&mut self, input: Value) -> Result<(), AdvanceError> {
-        let root_id = self.insert_frame(Frame {
-            parent: None,
-            kind: FrameKind::Root,
-        });
         let workflow_root = self.flat_config.workflow_root();
-        self.advance(
-            workflow_root,
-            input,
-            ParentRef::SingleChild { frame_id: root_id },
-        )
+        self.advance(workflow_root, input, None)
     }
 
     /// Drain all pending dispatches accumulated since the last call.
@@ -197,7 +187,7 @@ impl Engine {
     /// No-op in the advance milestone. The completion milestone fills this in
     /// with the full advance/complete cycle.
     #[allow(clippy::unused_self, clippy::needless_pass_by_ref_mut)]
-    fn complete(&mut self, _parent_ref: ParentRef, _value: Value) {
+    fn complete(&mut self, _parent: Option<ParentRef>, _value: Value) {
         // No-op: the value is discarded. Called by advance for empty
         // ForEach/Parallel — the empty result has nowhere to go until
         // completion is implemented.
@@ -210,12 +200,12 @@ impl Engine {
         &mut self,
         action_id: ActionId,
         value: Value,
-        parent: ParentRef,
+        parent: Option<ParentRef>,
     ) -> Result<(), AdvanceError> {
         match self.flat_config.action(action_id) {
             FlatAction::Invoke { handler } => {
                 self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::Invoke,
                 });
                 self.pending_dispatches.push(Dispatch {
@@ -227,10 +217,10 @@ impl Engine {
             FlatAction::Chain { rest } => {
                 let first = self.flat_config.chain_first(action_id);
                 let frame_id = self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::Chain { rest },
                 });
-                self.advance(first, value, ParentRef::SingleChild { frame_id })?;
+                self.advance(first, value, Some(ParentRef::SingleChild { frame_id }))?;
             }
 
             FlatAction::Parallel { count } => {
@@ -245,7 +235,7 @@ impl Engine {
                 let children: Vec<ActionId> =
                     self.flat_config.parallel_children(action_id).collect();
                 let frame_id = self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::Parallel {
                         results: vec![None; count.0 as usize],
                     },
@@ -254,10 +244,10 @@ impl Engine {
                     self.advance(
                         child,
                         value.clone(),
-                        ParentRef::IndexedChild {
+                        Some(ParentRef::IndexedChild {
                             frame_id,
                             child_index: i,
-                        },
+                        }),
                     )?;
                 }
             }
@@ -275,7 +265,7 @@ impl Engine {
                     return Ok(());
                 }
                 let frame_id = self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::ForEach {
                         results: vec![None; elements.len()],
                     },
@@ -284,10 +274,10 @@ impl Engine {
                     self.advance(
                         body,
                         element,
-                        ParentRef::IndexedChild {
+                        Some(ParentRef::IndexedChild {
                             frame_id,
                             child_index: i,
-                        },
+                        }),
                     )?;
                 }
             }
@@ -311,18 +301,18 @@ impl Engine {
 
             FlatAction::Loop { body } => {
                 let frame_id = self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::Loop { body },
                 });
-                self.advance(body, value, ParentRef::SingleChild { frame_id })?;
+                self.advance(body, value, Some(ParentRef::SingleChild { frame_id }))?;
             }
 
             FlatAction::Attempt { child } => {
                 let frame_id = self.insert_frame(Frame {
-                    parent: Some(parent),
+                    parent,
                     kind: FrameKind::Attempt,
                 });
-                self.advance(child, value, ParentRef::SingleChild { frame_id })?;
+                self.advance(child, value, Some(ParentRef::SingleChild { frame_id }))?;
             }
 
             FlatAction::Step { target } => {
@@ -330,123 +320,6 @@ impl Engine {
             }
         }
         Ok(())
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Frame tree rendering (test-only)
-// ---------------------------------------------------------------------------
-
-/// Test-only infrastructure for snapshot testing. Renders the engine's frame
-/// slab as a JSON tree and builds snapshot-friendly dispatch representations.
-#[cfg(any(test, feature = "test-support"))]
-pub mod test_support {
-    use super::{Dispatch, Engine, FrameId, FrameKind, ParentRef, Value};
-    use barnum_ast::HandlerKind;
-    use serde::Serialize;
-    use serde_json::json;
-
-    /// Snapshot-friendly representation of the engine state after advance.
-    #[derive(Debug, Serialize)]
-    pub struct AdvanceSnapshot {
-        /// Pending dispatches with handler details resolved.
-        pub dispatches: Vec<SnapshotDispatch>,
-        /// The frame tree rendered from the slab.
-        pub frame_tree: Value,
-    }
-
-    /// A single dispatch in snapshot format.
-    #[derive(Debug, Serialize)]
-    pub struct SnapshotDispatch {
-        /// The resolved handler.
-        pub handler: HandlerKind,
-        /// The dispatch value.
-        pub value: Value,
-    }
-
-    impl Engine {
-        /// Build a snapshot of the current engine state.
-        #[must_use]
-        pub fn snapshot(&self, dispatches: &[Dispatch]) -> AdvanceSnapshot {
-            let snapshot_dispatches = dispatches
-                .iter()
-                .map(|d| SnapshotDispatch {
-                    handler: self.flat_config.handler(d.handler_id).clone(),
-                    value: d.value.clone(),
-                })
-                .collect();
-
-            let root_key = self
-                .frames
-                .iter()
-                .find(|(_, f)| matches!(f.kind, FrameKind::Root))
-                .map(|(k, _)| k);
-
-            let frame_tree = root_key.map_or(json!(null), |key| self.render_frame(FrameId(key)));
-
-            AdvanceSnapshot {
-                dispatches: snapshot_dispatches,
-                frame_tree,
-            }
-        }
-
-        fn render_frame(&self, frame_id: FrameId) -> Value {
-            let frame = &self.frames[frame_id.0];
-            let children = self.find_children(frame_id);
-
-            match &frame.kind {
-                FrameKind::Root => json!({
-                    "kind": "Root",
-                    "children": children.iter()
-                        .map(|c| self.render_frame(*c))
-                        .collect::<Vec<_>>()
-                }),
-                FrameKind::Invoke => json!({ "kind": "Invoke" }),
-                FrameKind::Chain { rest } => json!({
-                    "kind": "Chain",
-                    "rest": rest.0,
-                    "child": children.first()
-                        .map(|c| self.render_frame(*c))
-                }),
-                FrameKind::Parallel { results } => json!({
-                    "kind": "Parallel",
-                    "results": results,
-                    "children": children.iter()
-                        .map(|c| self.render_frame(*c))
-                        .collect::<Vec<_>>()
-                }),
-                FrameKind::ForEach { results } => json!({
-                    "kind": "ForEach",
-                    "results": results,
-                    "children": children.iter()
-                        .map(|c| self.render_frame(*c))
-                        .collect::<Vec<_>>()
-                }),
-                FrameKind::Loop { body } => json!({
-                    "kind": "Loop",
-                    "body": body.0,
-                    "child": children.first()
-                        .map(|c| self.render_frame(*c))
-                }),
-                FrameKind::Attempt => json!({
-                    "kind": "Attempt",
-                    "child": children.first()
-                        .map(|c| self.render_frame(*c))
-                }),
-            }
-        }
-
-        fn find_children(&self, parent_id: FrameId) -> Vec<FrameId> {
-            self.frames
-                .iter()
-                .filter(|(_, f)| {
-                    f.parent
-                        .map(ParentRef::frame_id)
-                        .is_some_and(|pid| pid == parent_id)
-                })
-                .map(|(k, _)| FrameId(k))
-                .collect()
-        }
     }
 }
 

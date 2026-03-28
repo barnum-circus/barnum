@@ -1,0 +1,96 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 41
+expression: flat_config
+input_file: crates/barnum_engine/tests/advance/chain_then_branch.json
+---
+FlatConfig {
+    entries: [
+        Action(
+            Chain {
+                rest: ActionId(
+                    2,
+                ),
+            },
+        ),
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    2,
+                ),
+            },
+        ),
+        Action(
+            Branch {
+                count: Count(
+                    2,
+                ),
+            },
+        ),
+        BranchKey {
+            key: KindDiscriminator(
+                "A",
+            ),
+        },
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    0,
+                ),
+            },
+        ),
+        BranchKey {
+            key: KindDiscriminator(
+                "B",
+            ),
+        },
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    1,
+                ),
+            },
+        ),
+    ],
+    handlers: [
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./handle_a.ts",
+                ),
+                func: FuncName(
+                    "handle",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./handle_b.ts",
+                ),
+                func: FuncName(
+                    "handle",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./classify.ts",
+                ),
+                func: FuncName(
+                    "classify",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+    ],
+    workflow_root: ActionId(
+        0,
+    ),
+}

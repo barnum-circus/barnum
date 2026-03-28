@@ -1,29 +1,67 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/attempt_child.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./handler.ts",
-        "func": "run"
-      },
-      "value": "test_input"
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "child": {
-          "kind": "Invoke"
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Attempt {
+                    child: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Attempt,
         },
-        "kind": "Attempt"
-      }
+        1: Frame {
+            parent: Some(
+                SingleChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: String("test_input"),
+        },
     ],
-    "kind": "Root"
-  }
 }

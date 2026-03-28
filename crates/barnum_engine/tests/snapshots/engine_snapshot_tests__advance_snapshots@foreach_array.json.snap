@@ -1,58 +1,108 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_array.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./handler.ts",
-        "func": "run"
-      },
-      "value": 10
-    },
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./handler.ts",
-        "func": "run"
-      },
-      "value": 20
-    },
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./handler.ts",
-        "func": "run"
-      },
-      "value": 30
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "children": [
-          {
-            "kind": "Invoke"
-          },
-          {
-            "kind": "Invoke"
-          },
-          {
-            "kind": "Invoke"
-          }
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                ForEach {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
         ],
-        "kind": "ForEach",
-        "results": [
-          null,
-          null,
-          null
-        ]
-      }
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: ForEach {
+                results: [
+                    None,
+                    None,
+                    None,
+                ],
+            },
+        },
+        1: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 0,
+                },
+            ),
+            kind: Invoke,
+        },
+        2: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 1,
+                },
+            ),
+            kind: Invoke,
+        },
+        3: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                    child_index: 2,
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Number(10),
+        },
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Number(20),
+        },
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Number(30),
+        },
     ],
-    "kind": "Root"
-  }
 }

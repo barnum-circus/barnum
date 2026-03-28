@@ -1,26 +1,57 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/step_named.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./setup.ts",
-        "func": "run"
-      },
-      "value": null
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "kind": "Invoke"
-      }
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Step {
+                    target: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./setup.ts",
+                    ),
+                    func: FuncName(
+                        "run",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Null,
+        },
     ],
-    "kind": "Root"
-  }
 }

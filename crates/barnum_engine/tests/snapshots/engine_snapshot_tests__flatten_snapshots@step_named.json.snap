@@ -1,0 +1,41 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 41
+expression: flat_config
+input_file: crates/barnum_engine/tests/advance/step_named.json
+---
+FlatConfig {
+    entries: [
+        Action(
+            Step {
+                target: ActionId(
+                    1,
+                ),
+            },
+        ),
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    0,
+                ),
+            },
+        ),
+    ],
+    handlers: [
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./setup.ts",
+                ),
+                func: FuncName(
+                    "run",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+    ],
+    workflow_root: ActionId(
+        0,
+    ),
+}

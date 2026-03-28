@@ -1,49 +1,126 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/attempt_wrapping_parallel.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./a.ts",
-        "func": "a"
-      },
-      "value": "shared"
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Attempt {
+                    child: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Parallel {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
     },
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./b.ts",
-        "func": "b"
-      },
-      "value": "shared"
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "child": {
-          "children": [
-            {
-              "kind": "Invoke"
-            },
-            {
-              "kind": "Invoke"
-            }
-          ],
-          "kind": "Parallel",
-          "results": [
-            null,
-            null
-          ]
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Attempt,
         },
-        "kind": "Attempt"
-      }
+        1: Frame {
+            parent: Some(
+                SingleChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                },
+            ),
+            kind: Parallel {
+                results: [
+                    None,
+                    None,
+                ],
+            },
+        },
+        2: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        1,
+                    ),
+                    child_index: 0,
+                },
+            ),
+            kind: Invoke,
+        },
+        3: Frame {
+            parent: Some(
+                IndexedChild {
+                    frame_id: FrameId(
+                        1,
+                    ),
+                    child_index: 1,
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: String("shared"),
+        },
+        Dispatch {
+            handler_id: HandlerId(
+                1,
+            ),
+            value: String("shared"),
+        },
     ],
-    "kind": "Root"
-  }
 }

@@ -1,36 +1,113 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/step_root_recursive.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./process.ts",
-        "func": "process"
-      },
-      "value": {
-        "iteration": 0
-      }
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "body": 1,
-        "child": {
-          "child": {
-            "kind": "Invoke"
-          },
-          "kind": "Chain",
-          "rest": 3
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Loop {
+                    body: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        3,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./decide.ts",
+                    ),
+                    func: FuncName(
+                        "decide",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./process.ts",
+                    ),
+                    func: FuncName(
+                        "process",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Loop {
+                body: ActionId(
+                    1,
+                ),
+            },
         },
-        "kind": "Loop"
-      }
+        1: Frame {
+            parent: Some(
+                SingleChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                },
+            ),
+            kind: Chain {
+                rest: ActionId(
+                    3,
+                ),
+            },
+        },
+        2: Frame {
+            parent: Some(
+                SingleChild {
+                    frame_id: FrameId(
+                        1,
+                    ),
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                1,
+            ),
+            value: Object {
+                "iteration": Number(0),
+            },
+        },
     ],
-    "kind": "Root"
-  }
 }

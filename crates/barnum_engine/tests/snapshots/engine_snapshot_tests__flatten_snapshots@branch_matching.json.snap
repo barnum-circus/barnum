@@ -1,0 +1,70 @@
+---
+source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 41
+expression: flat_config
+input_file: crates/barnum_engine/tests/advance/branch_matching.json
+---
+FlatConfig {
+    entries: [
+        Action(
+            Branch {
+                count: Count(
+                    2,
+                ),
+            },
+        ),
+        BranchKey {
+            key: KindDiscriminator(
+                "Err",
+            ),
+        },
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    0,
+                ),
+            },
+        ),
+        BranchKey {
+            key: KindDiscriminator(
+                "Ok",
+            ),
+        },
+        Action(
+            Invoke {
+                handler: HandlerId(
+                    1,
+                ),
+            },
+        ),
+    ],
+    handlers: [
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./err.ts",
+                ),
+                func: FuncName(
+                    "handle",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+        TypeScript(
+            TypeScriptHandler {
+                module: ModulePath(
+                    "./ok.ts",
+                ),
+                func: FuncName(
+                    "handle",
+                ),
+                step_config_schema: None,
+                value_schema: None,
+            },
+        ),
+    ],
+    workflow_root: ActionId(
+        0,
+    ),
+}

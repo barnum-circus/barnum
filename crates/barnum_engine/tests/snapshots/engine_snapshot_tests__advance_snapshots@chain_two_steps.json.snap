@@ -1,30 +1,90 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/chain_two_steps.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./a.ts",
-        "func": "a"
-      },
-      "value": "start"
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "child": {
-          "kind": "Invoke"
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Chain {
+                    rest: ActionId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Chain {
+                rest: ActionId(
+                    2,
+                ),
+            },
         },
-        "kind": "Chain",
-        "rest": 2
-      }
+        1: Frame {
+            parent: Some(
+                SingleChild {
+                    frame_id: FrameId(
+                        0,
+                    ),
+                },
+            ),
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                1,
+            ),
+            value: String("start"),
+        },
     ],
-    "kind": "Root"
-  }
 }

@@ -1,29 +1,89 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 38
-expression: snapshot
+assertion_line: 31
+expression: engine
 input_file: crates/barnum_engine/tests/advance/branch_matching.json
 ---
-{
-  "dispatches": [
-    {
-      "handler": {
-        "kind": "TypeScript",
-        "module": "./err.ts",
-        "func": "handle"
-      },
-      "value": {
-        "error": "something failed",
-        "kind": "Err"
-      }
-    }
-  ],
-  "frame_tree": {
-    "children": [
-      {
-        "kind": "Invoke"
-      }
+Engine {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Branch {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            BranchKey {
+                key: KindDiscriminator(
+                    "Err",
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+            BranchKey {
+                key: KindDiscriminator(
+                    "Ok",
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./err.ts",
+                    ),
+                    func: FuncName(
+                        "handle",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./ok.ts",
+                    ),
+                    func: FuncName(
+                        "handle",
+                    ),
+                    step_config_schema: None,
+                    value_schema: None,
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: {
+        0: Frame {
+            parent: None,
+            kind: Invoke,
+        },
+    },
+    pending_dispatches: [
+        Dispatch {
+            handler_id: HandlerId(
+                0,
+            ),
+            value: Object {
+                "error": String("something failed"),
+                "kind": String("Err"),
+            },
+        },
     ],
-    "kind": "Root"
-  }
 }
