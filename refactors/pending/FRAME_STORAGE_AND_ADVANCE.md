@@ -108,17 +108,16 @@ pub enum EngineResult {
 ```rust
 pub struct Engine {
     flat_config: FlatConfig,
-    frames: Vec<Option<Frame>>,
+    frames: HashMap<FrameId, Frame>,
     task_to_frame: HashMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
+    next_frame_id: u32,
     next_task_id: u32,
     result: Option<EngineResult>,
 }
 ```
 
-No `next_frame_id` counter — `FrameId` is just the vec index. `frames.len()` is the next id.
-
-`frames: Vec<Option<Frame>>` — the frame store. Frames are allocated by pushing to the end; `FrameId` is the index. Removal sets the slot to `None` (tombstone). This is cheaper than HashMap (no hashing, contiguous memory), and since FrameIds are monotonic and never reused, tombstones are safe. The vec never shrinks — it grows to the high-water-mark frame count for the workflow execution.
+`frames: HashMap<FrameId, Frame>` — the frame store. `FrameId` is a monotonic counter; `insert` to allocate, `remove` to deallocate. HashMap because frames are removed from the middle (Chain trampolines, completed fan-out children), and actual deallocation matters for long-running workflows — a loop that runs a million iterations should not accumulate a million tombstones.
 
 `task_to_frame: HashMap<TaskId, FrameId>` — maps pending task IDs to their Invoke frames. Populated during advance, consumed during `on_task_completed`.
 
@@ -129,27 +128,10 @@ No `next_frame_id` counter — `FrameId` is just the vec index. `frames.len()` i
 ```rust
 impl Engine {
     fn alloc_frame(&mut self, frame: Frame) -> FrameId {
-        let frame_id = FrameId(self.frames.len() as u32);
-        self.frames.push(Some(frame));
+        let frame_id = FrameId(self.next_frame_id);
+        self.next_frame_id += 1;
+        self.frames.insert(frame_id, frame);
         frame_id
-    }
-
-    fn frame(&self, id: FrameId) -> &Frame {
-        self.frames[id.0 as usize]
-            .as_ref()
-            .expect("frame already removed")
-    }
-
-    fn frame_mut(&mut self, id: FrameId) -> &mut Frame {
-        self.frames[id.0 as usize]
-            .as_mut()
-            .expect("frame already removed")
-    }
-
-    fn take_frame(&mut self, id: FrameId) -> Frame {
-        self.frames[id.0 as usize]
-            .take()
-            .expect("frame already removed")
     }
 
     fn next_task_id(&mut self) -> TaskId {
@@ -159,8 +141,6 @@ impl Engine {
     }
 }
 ```
-
-`take_frame` removes the frame and leaves `None` in the slot (tombstone). `frame` and `frame_mut` are for non-destructive access (e.g., `complete_indexed` fills a slot before deciding whether to remove the frame).
 
 ## advance
 
@@ -227,9 +207,10 @@ impl Engine {
     pub fn new(flat_config: FlatConfig) -> Self {
         Self {
             flat_config,
-            frames: Vec::new(),
+            frames: HashMap::new(),
             task_to_frame: HashMap::new(),
             pending_dispatches: Vec::new(),
+            next_frame_id: 0,
             next_task_id: 0,
             result: None,
         }
