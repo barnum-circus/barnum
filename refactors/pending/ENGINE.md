@@ -94,7 +94,8 @@ advance(action_id, value, parent):
       queue dispatch(task_id, flat.handler(handler), value)
       register task_id → frame_id
 
-    Then { first, rest } =>
+    Then { rest } =>
+      let first = flat.then_first(action_id)    // resolve child slot at action_id + 1
       create Then frame { rest } with parent
       advance(first, value, SingleChild(this_frame))
 

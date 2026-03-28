@@ -9,13 +9,14 @@ Replace the N-ary `Pipe` AST node with binary `Then` across the entire stack.
 ## The transformation
 
 ```
-Pipe([A])          →  A
-Pipe([A, B])       →  Then(A, B)
-Pipe([A, B, C])    →  Then(A, Then(B, C))
-Pipe([A, B, C, D]) →  Then(A, Then(B, Then(C, D)))
+pipe()             →  identity()       (built-in, neutral element)
+pipe(A)            →  A
+pipe(A, B)         →  Then(A, B)
+pipe(A, B, C)      →  Then(A, Then(B, C))
+pipe(A, B, C, D)   →  Then(A, Then(B, Then(C, D)))
 ```
 
-Right-associative nesting. The `pipe()` TypeScript combinator still exists as a user-facing convenience — it produces nested `Then` nodes. No change to user API.
+Right-associative nesting. The `pipe()` TypeScript combinator still exists as a user-facing convenience with all its type-level overloads unchanged — only the runtime implementation body changes to produce nested `Then` nodes.
 
 ## Changes
 
@@ -40,19 +41,27 @@ export type ThenAction = {
 
 Update the `Action` union type accordingly.
 
-### 2. TypeScript combinator (`libs/barnum/src/ast.ts`)
+### 2. TypeScript combinator (`libs/barnum/src/pipe.ts`)
 
-The `pipe()` function becomes a right-fold that produces nested `Then` nodes:
+All type-level overloads stay identical. Only the implementation body changes:
 
 ```ts
+// Before:
 export function pipe(...actions: Action[]): Action {
-  if (actions.length === 0) throw new Error("pipe requires at least one action");
+  return { kind: "Pipe", actions };
+}
+
+// After:
+export function pipe(...actions: Action[]): Action {
+  if (actions.length === 0) return identity();
   if (actions.length === 1) return actions[0];
-  return actions.reduceRight((rest, first) => ({ kind: "Then", first, rest }));
+  return actions.reduceRight(
+    (rest, first) => ({ kind: "Then", first, rest } as Action),
+  );
 }
 ```
 
-Callers don't change. The only difference is the serialized JSON shape.
+`pipe()` with zero actions returns `identity()` — the built-in neutral element of sequential composition.
 
 ### 3. Rust tree AST (`crates/barnum_ast/src/lib.rs`)
 
@@ -75,19 +84,22 @@ Serde tag is `"Then"`. Both fields deserialized directly from JSON.
 
 ### 4. Flat action table (`crates/barnum_ast/src/flat.rs`)
 
-Remove `FlatAction::Pipe { count: Count }`. Add `FlatAction::Then { first: ActionId, rest: ActionId }`.
+Remove `FlatAction::Pipe { count: Count }`. Add `FlatAction::Then { rest: ActionId }`.
 
 ```rust
 // Remove:
 Pipe { count: Count },
 
 // Add:
-Then { first: ActionId, rest: ActionId },
+/// Sequential: run child at action_id + 1, then advance to rest.
+Then { rest: ActionId },
 ```
 
-`Then` has two `ActionId` fields (two u32s). This increases `FlatEntry<ActionId>` from 8 bytes to 12 bytes. The 8-byte property was nice but not load-bearing — correctness and uniformity matter more.
+Then is a **2-entry action**: the Then entry itself (with `rest` as an explicit `ActionId` field), followed by one child slot for `first`. The child slot is either an inlined single-entry action or a `ChildRef` to a multi-entry subtree elsewhere.
 
-**Alternative (preserve 8 bytes):** Store only `rest: ActionId` in the variant, and convention that `first` is the child slot at `action_id + 1` (like current Pipe child slots). This makes Then a 2-entry action (Then + child slot), reusing the existing child slot machinery. Tradeoff: preserves size at the cost of more indirection. Probably not worth it given that Pipe's child slot machinery is the thing we're eliminating.
+This is optimal for the common case: `Then(Invoke, Then(...))`. The Invoke (single-entry) inlines into the child slot — zero indirection. The `rest` (often another Then) is a direct `ActionId` — also zero indirection. `ChildRef` is only needed when `first` is multi-entry (Parallel, Branch, or another Then), which is uncommon.
+
+`FlatEntry<ActionId>` stays 8 bytes. Then has one `ActionId` field, same as ForEach/Loop/Attempt.
 
 ### 5. Flattening (`crates/barnum_ast/src/flat.rs`)
 
@@ -95,39 +107,63 @@ Remove the `Pipe` arm in `flatten_action_at`. Add `Then`:
 
 ```rust
 Action::Then(ThenAction { first, rest }) => {
-    let first_id = self.flatten_action(*first, workflow_root)?;
+    self.alloc_many(Count(1));  // 1 child slot for first
     let rest_id = self.flatten_action(*rest, workflow_root)?;
-    FlatAction::Then { first: first_id, rest: rest_id }
+    self.fill_child_slot(*first, action_id + 1, workflow_root)?;
+    FlatAction::Then { rest: rest_id }
 }
 ```
 
-Both children are flattened via `flatten_action` (allocated elsewhere, referenced by ActionId). No child slots, no `alloc_many`, no `fill_child_slots` for Then.
+`rest` is flattened via `flatten_action` (allocated elsewhere, referenced by `ActionId`). `first` uses `fill_child_slot` — inlined if single-entry, `ChildRef` if multi-entry.
 
-This simplifies flattening: only `Parallel` and `Branch` use the multi-entry child slot model. The `fill_child_slot` inlining optimization (single-entry children inlined, multi-entry via ChildRef) still applies to those two.
+The `fill_child_slot` multi-entry check adds `Then` to the list:
+
+```rust
+// Before:
+Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. } => { ... ChildRef ... }
+
+// After:
+Action::Then { .. } | Action::Parallel { .. } | Action::Branch { .. } => { ... ChildRef ... }
+```
 
 ### 6. FlatConfig accessors
 
-Remove `children()` (was Pipe/Parallel). Split into:
-- `parallel_children()` — for Parallel only
-- `branch_cases()` — unchanged
+Rename `children()` to `parallel_children()` — it's now only used by Parallel.
 
-Or keep `children()` for Parallel only and rename to `parallel_children()` for clarity.
+Add a Then accessor:
+
+```rust
+/// Returns the first child ActionId for a Then (resolves the child slot at action_id + 1).
+/// The rest ActionId is already stored in the Then variant itself.
+fn then_first(&self, id: ActionId) -> ActionId {
+    debug_assert!(matches!(self.action(id), FlatAction::Then { .. }));
+    self.resolve_child_slot(id + 1)
+}
+```
 
 ### 7. Engine (not yet implemented, but ENGINE.md updated)
 
-Already done. `Then { rest }` frame replaces `Pipe { action_id, index }`.
+Already done. `Then { rest }` frame replaces `Pipe { action_id, index }`. The engine resolves `first` and `rest` from the flat table during `advance`, stores only `rest` in the frame (since `first` is being advanced immediately).
 
 ### 8. Flatten tests
 
-Update all Pipe tests to use Then. The basic structure tests change shape:
+Update all Pipe tests to use Then. Example layout change:
 
 ```rust
 // Old: Pipe([A, B, C]) → [Pipe{3}, Invoke(0), Invoke(1), Invoke(2)]
+//   4 entries, all children inlined
+
 // New: pipe(A, B, C) → Then(A, Then(B, C))
-//   → [Then{first:1, rest:2}, Invoke(0), Then{first:3, rest:4}, Invoke(1), Invoke(2)]
+//   DFS allocation:
+//   0: Then { rest: 2 }     ← outer Then, rest points to inner Then
+//   1: Invoke(handler_0)    ← first child slot (inlined: A is single-entry)
+//   2: Then { rest: 4 }     ← inner Then (allocated by flatten_action for rest)
+//   3: Invoke(handler_1)    ← inner first child slot (inlined: B)
+//   4: Invoke(handler_2)    ← inner rest (allocated by flatten_action: C)
+//   5 entries total. No ChildRefs — all firsts are single-entry Invokes.
 ```
 
-Nested Pipe tests simplify — no more ChildRef for inner Pipes, since Then is always 1 entry (no child slots).
+When a Then's first child is multi-entry (e.g. `pipe(parallel(...), invoke(...))`), the first child slot contains a `ChildRef` pointing to the Parallel elsewhere. Same as current Pipe behavior.
 
 ### 9. JSON schema regeneration
 
@@ -142,29 +178,27 @@ Update any tests that assert on the serialized Pipe shape. The `pipe()` combinat
 
 ## What simplifies
 
-- **Flattening**: Pipe was one of three multi-entry action types (with Parallel and Branch). Then is single-entry. `fill_child_slots` is only needed for Parallel. Less code, fewer edge cases.
-- **Engine**: No index tracking, no frame mutation for sequential execution. Every frame follows the single-child or fan-out pattern.
-- **`children()` accessor**: Was shared by Pipe and Parallel. With Pipe gone, it's just Parallel's accessor.
-- **ChildRef entries**: Fewer of them. Pipe's children could be ChildRefs (for nested multi-entry children). Then's children are always ActionIds — no indirection.
+- **Engine**: No index tracking, no frame mutation for sequential execution. Every frame follows the single-child or fan-out pattern. `ParentRef` becomes an enum (SingleChild vs IndexedChild) — impossible states unrepresentable.
+- **`children()`/`fill_child_slots()`**: No longer shared by Pipe and Parallel. Then uses `fill_child_slot` (singular) once (for `first`). `rest` is a direct `ActionId`. Parallel keeps `fill_child_slots` (plural) for N children. Clearer separation.
 
 ## What doesn't change
 
-- **User-facing `pipe()` API**: Still exists, still takes variadic actions. Just produces different AST nodes.
+- **User-facing `pipe()` API**: All overloads identical. Just the implementation body changes.
 - **Parallel, Branch, ForEach, Loop, Attempt, Step, Invoke**: All unchanged.
-- **Two-pass step resolution**: Unchanged (Step is orthogonal to this).
+- **Child slot model**: Then uses the same inlining/ChildRef machinery as Parallel and Branch.
+- **Two-pass step resolution**: Unchanged.
 - **Handler interning**: Unchanged.
+- **8-byte `FlatEntry<ActionId>`**: Preserved. Then is a unit variant.
 
 ## Size impact
 
-`FlatEntry<ActionId>` grows from 8 to 12 bytes. For a workflow with N sequential steps, the old representation used `1 + N` entries at 8 bytes each (`Pipe + N child slots`). The new representation uses `N - 1 + N = 2N - 1` entries at 12 bytes each (`N-1 Then nodes + N leaf actions`). For N=5: old = 48 bytes, new = 108 bytes. The absolute numbers are tiny (workflow configs are small), but the constant-factor increase is real.
-
-If this matters later, the 8-byte alternative (Then stores only `rest`, `first` in a child slot) recovers most of it.
+For a pipeline of N steps, old representation: `1 + N` entries (Pipe + N child slots). New representation: `2(N-1) + 1` entries in the typical case (`N-1` Then entries each with 1 child slot, plus the final leaf). For `pipe(A, B, C)`: old = 4 entries (32 bytes), new = 5 entries (40 bytes). Entry size is unchanged at 8 bytes each. The entry count increases slightly but absolute sizes remain tiny for workflow configs.
 
 ## Implementation order
 
-1. TypeScript: add `ThenAction` type, update `pipe()` to produce nested Then, update tests
+1. TypeScript: add `ThenAction` type, update `pipe()` body to produce nested Then, update tests
 2. Rust tree AST: replace `PipeAction` with `ThenAction`, update serde
-3. Rust flat AST: replace `FlatAction::Pipe` with `FlatAction::Then`, update flattening
+3. Rust flat AST: replace `FlatAction::Pipe` with `FlatAction::Then`, update flattening and `fill_child_slot` check
 4. Update flatten tests
 5. Regenerate schemas
 6. Verify CI
