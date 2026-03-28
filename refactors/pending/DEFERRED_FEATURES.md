@@ -359,6 +359,168 @@ Support for streaming data through the pipeline — actions that produce or cons
 
 Open question: is this a new primitive (e.g., `StreamForEach`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
 
+## Fluent API (`.then()`, `.attempt()`, etc.)
+
+Currently, composing actions uses nested function calls:
+
+```ts
+pipe(
+  constant(42),
+  fetchUser(),
+  branch({
+    Active: processActive(),
+    Inactive: archiveUser(),
+  })
+)
+```
+
+A fluent API would use dot-chaining:
+
+```ts
+constant(42)
+  .then(fetchUser())
+  .then(branch({
+    Active: processActive(),
+    Inactive: archiveUser(),
+  }))
+```
+
+`.then()` is the big win — it replaces `pipe()` for sequential composition. `pipe()` has 10 overloads to handle 1-10 arguments, each manually threading the type parameters. `.then()` is a single method that chains naturally with full type inference.
+
+### Which operations work as dot methods
+
+**Sequencing (the main one):**
+- **`.then(action)`** → `chain(this, action)`. The action receives this action's output as input.
+
+**Wrapping (modifiers on this action):**
+- **`.attempt()`** → `attempt(this)`. Wrap this action in a try/catch boundary. Result is `AttemptResult<Out>`.
+- **`.forEach()`** → `forEach(this)`. Apply this action to each element of the input array. Input becomes `In[]`, output becomes `Out[]`.
+- **`.loop()`** → `loop(this)`. Repeat this action until it returns `{ kind: "Break", value }`. The action body must return a `LoopResult`.
+
+**Don't make sense as dot methods:**
+- `parallel(a, b, c)` — symmetric. No "this" that the others follow. Stays as a function call.
+- `branch(cases)` — takes a cases object, not an action to chain after. Use `.then(branch({...}))`.
+- `step("name")` — a reference, not a modification of an existing action.
+
+### Implementation: non-enumerable properties
+
+`TypedAction` is currently a branded type over plain `Action` objects (discriminated union with phantom type fields). Adding methods requires attaching them to the objects without breaking JSON serialization.
+
+Non-enumerable properties solve this. `JSON.stringify` skips non-enumerable properties, so they don't appear in serialized output. But `action.then(...)` still works at runtime:
+
+```ts
+function withMethods<In, Out, Refs extends string>(
+  action: Action,
+): TypedAction<In, Out, Refs> {
+  Object.defineProperties(action, {
+    then: {
+      value<Next, R extends string>(
+        this: TypedAction<In, Out, Refs>,
+        next: TypedAction<Out, Next, R>,
+      ): TypedAction<In, Next, Refs | R> {
+        return chain(this, next);
+      },
+      enumerable: false,
+    },
+    attempt: {
+      value<In, Out, Refs extends string>(
+        this: TypedAction<In, Out, Refs>,
+      ): TypedAction<In, AttemptResult<Out>, Refs> {
+        return attempt(this);
+      },
+      enumerable: false,
+    },
+    forEach: {
+      value<In, Out, Refs extends string>(
+        this: TypedAction<In, Out, Refs>,
+      ): TypedAction<In[], Out[], Refs> {
+        return forEach(this);
+      },
+      enumerable: false,
+    },
+    loop: {
+      value<In, Out, Refs extends string>(
+        this: TypedAction<In, Out, Refs>,
+      ): TypedAction<In, Out, Refs> {
+        return loop(this);
+      },
+      enumerable: false,
+    },
+  });
+  return action as TypedAction<In, Out, Refs>;
+}
+```
+
+Every combinator function (`chain`, `parallel`, `branch`, `invoke`, `constant`, etc.) would call `withMethods()` on the Action object before returning it. This is similar to the existing `Object.assign` pattern used by `createHandler` for `CallableHandler`.
+
+### TypeScript declaration
+
+The `TypedAction` type gains method signatures:
+
+```ts
+export type TypedAction<In, Out, Refs extends string = never> = Action & {
+  __phantom_in?: (input: In) => void;
+  __phantom_out?: () => Out;
+  __in?: In;
+  __refs?: { _brand: Refs };
+
+  then<Next, R extends string>(
+    next: TypedAction<Out, Next, R>,
+  ): TypedAction<In, Next, Refs | R>;
+
+  attempt(): TypedAction<In, AttemptResult<Out>, Refs>;
+  forEach(): TypedAction<In[], Out[], Refs>;
+  loop(): TypedAction<In, Out, Refs>; // Out must be LoopResult<In, T>
+};
+```
+
+### Coexistence with functional API
+
+The fluent API doesn't replace the functional API — both coexist. `pipe()` and `chain()` remain available. Users choose based on preference:
+
+```ts
+// Functional style
+const workflow = pipe(constant(42), fetchUser(), processUser());
+
+// Fluent style
+const workflow = constant(42).then(fetchUser()).then(processUser());
+
+// Mixed
+const workflow = parallel(
+  constant(42).then(fetchUser()),
+  constant(99).then(fetchAdmin()),
+);
+```
+
+`parallel` and `branch` stay as functions. `.then()` replaces `pipe` for the common case of linear sequencing.
+
+### Ergonomic impact
+
+The big win: `.then()` eliminates `pipe()` overloads. Currently `pipe` has 10 overloads (for 1-10 arguments) because TypeScript can't infer a variadic chain of type parameters. Each overload manually threads `T1 → T2 → T3 → ...`. Adding an 11th step means adding an 11th overload.
+
+`.then()` has a single signature: `then<Next>(next: TypedAction<Out, Next>): TypedAction<In, Next>`. It chains indefinitely without overloads. The type system infers `Out` from the preceding `.then()` call automatically.
+
+### Promise analogy
+
+`.then()` mirrors `Promise.then()` — a familiar pattern for JS/TS developers. A `TypedAction` is like a "deferred computation" that you compose with `.then()`. The parallel to Promises is intentional:
+
+| Promise | TypedAction |
+|---|---|
+| `.then(fn)` | `.then(action)` |
+| `Promise.all([p1, p2])` | `parallel(a1, a2)` |
+| `try { await p } catch (e)` | `.attempt()` |
+
+This makes the API immediately intuitive to anyone who's used Promises.
+
+### Open question: should TypedAction be a class?
+
+Non-enumerable properties work but are somewhat unusual. An alternative: make `TypedAction` a proper class with a `.toJSON()` method that serializes only the `Action` data (excluding methods). This is more conventional OOP, but:
+- Breaking change (all combinator functions must return class instances)
+- Heavier (class overhead, prototype chain)
+- `createHandler`'s `Object.assign` pattern would need adjustment
+
+Non-enumerable properties are the lighter touch. Revisit if the pattern causes issues.
+
 ## ~~Constant and Range Builtins~~ (Implemented)
 
 Implemented in `libs/barnum/src/builtins.ts`. `constant<T>(value)` and `range(start, end)` are available as TypeScript builtins using placeholder `__builtin__` Invoke nodes.
