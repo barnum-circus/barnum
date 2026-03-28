@@ -112,7 +112,11 @@ loop:
 
 This is simpler. The scheduler is a single async function that drives the engine and spawns handlers. Events are a byproduct, not the control mechanism. The `NdjsonApplier` can still observe events for logging, but the engine doesn't depend on the event loop.
 
-**Option B is the right approach.** The event loop was designed before the engine existed. The engine's synchronous, pull-based model doesn't fit the event loop's push-based architecture. The scheduler should own the engine directly.
+**Option B is likely the right approach** for execution control — the engine's synchronous, pull-based model doesn't fit the event loop's push-based architecture. But Option A has a real advantage: the event channel is the single source of truth. Every state transition flows through it, and the NDJSON log is a complete record.
+
+With Option B, the scheduler must remember to emit an event for every state transition. If it forgets one, the NDJSON log has a gap. This is solvable (disciplined event emission in the scheduler), but it's a correctness obligation that Option A handles structurally.
+
+**Open question:** Should the event stream cover more than just TaskStarted/TaskCompleted? Internal engine transitions (empty ForEach immediately completing, Chain trampolining to rest, error propagating through frames) are invisible in the current event model. If the NDJSON log should be a complete replay of engine behavior, the Event enum needs more variants — and the scheduler needs to emit them at the right points. This argues for either (a) the engine itself emitting events (callback/observer pattern), or (b) a richer Event enum that the scheduler faithfully populates.
 
 ### What happens to EngineApplier?
 
