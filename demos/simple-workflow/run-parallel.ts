@@ -19,10 +19,10 @@ console.error("=== Running parallel post-deploy workflow ===\n");
 await configBuilder()
   .workflow(() =>
     pipe(
-      initialize(),
-      build(),
-      deploy(),
-      parallel(checkHealth(), notify(), report()),
+      initialize,
+      build,
+      deploy,
+      parallel(checkHealth, notify, report),
     ),
   )
   .run();

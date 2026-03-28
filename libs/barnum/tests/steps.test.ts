@@ -35,14 +35,14 @@ import {
 describe("named steps", () => {
   it("allows referencing registered steps", () => {
     const cfg = configBuilder()
-      .registerSteps({ Deploy: deploy() })
+      .registerSteps({ Deploy: deploy })
       .workflow(({ steps }) => pipe(constant({ verified: true }), steps.Deploy));
     expect(cfg.workflow.kind).toBe("Chain");
   });
 
   it("rejects references to unregistered steps", () => {
     configBuilder()
-      .registerSteps({ Deploy: deploy() })
+      .registerSteps({ Deploy: deploy })
       .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
         return steps.Nonexistent;
@@ -51,8 +51,8 @@ describe("named steps", () => {
 
   it("supports multiple registerSteps calls", () => {
     const cfg = configBuilder()
-      .registerSteps({ Deploy: deploy() })
-      .registerSteps({ HealthCheck: healthCheck() })
+      .registerSteps({ Deploy: deploy })
+      .registerSteps({ HealthCheck: healthCheck })
       .workflow(({ steps }) =>
         pipe(constant({ verified: true }), steps.Deploy, loop(steps.HealthCheck)),
       );
@@ -66,12 +66,12 @@ describe("named steps", () => {
         FixCycle: loop(
           pipe(
             drop(),
-            typeCheck(),
-            classifyErrors(),
+            typeCheck,
+            classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField("errors"),
-                forEach(fix()),
+                forEach(fix),
                 recur(),
               ),
               Clean: done(),
@@ -82,9 +82,9 @@ describe("named steps", () => {
       .workflow(({ steps }) =>
         pipe(
           constant({ project: "test" }),
-          setup(),
-          listFiles(),
-          forEach(migrate()),
+          setup,
+          listFiles,
+          forEach(migrate),
           steps.FixCycle,
         ),
       );
@@ -95,18 +95,18 @@ describe("named steps", () => {
   it("uses multiple registerSteps calls to reference earlier steps", () => {
     const cfg = configBuilder()
       .registerSteps({
-        Migrate: pipe(listFiles(), forEach(migrate())),
+        Migrate: pipe(listFiles, forEach(migrate)),
       })
       .registerSteps({
         FixCycle: loop(
           pipe(
             drop(),
-            typeCheck(),
-            classifyErrors(),
+            typeCheck,
+            classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField("errors"),
-                forEach(fix()),
+                forEach(fix),
                 recur(),
               ),
               Clean: done(),
@@ -115,7 +115,7 @@ describe("named steps", () => {
         ),
       })
       .workflow(({ steps }) =>
-        pipe(constant({ project: "test" }), setup(), steps.Migrate, steps.FixCycle),
+        pipe(constant({ project: "test" }), setup, steps.Migrate, steps.FixCycle),
       );
     expect(cfg.steps).toHaveProperty("Migrate");
     expect(cfg.steps).toHaveProperty("FixCycle");
@@ -132,9 +132,9 @@ describe("workflow self-reference", () => {
       .workflow(({ self }) =>
         pipe(
           constant([{ file: "a.ts", message: "err" }]),
-          classifyErrors(),
+          classifyErrors,
           branch({
-            HasErrors: pipe(extractField("errors"), forEach(fix()), drop(), self),
+            HasErrors: pipe(extractField("errors"), forEach(fix), drop(), self),
             Clean: pipe(drop(), constant({ done: true })),
           }),
         ),
@@ -160,7 +160,7 @@ describe("workflow self-reference", () => {
     configBuilder()
       .workflow(({ self }) =>
         // @ts-expect-error — verify outputs {verified: boolean} but self expects never
-        pipe(constant({ artifact: "test" }), verify(), self),
+        pipe(constant({ artifact: "test" }), verify, self),
       );
   });
 });
@@ -173,8 +173,8 @@ describe("mutual recursion", () => {
   it("stepRef enables cross-references between steps", () => {
     const cfg = configBuilder()
       .registerSteps(({ stepRef }) => ({
-        A: pipe(verify(), stepRef("B")),
-        B: pipe(verify(), stepRef("A")),
+        A: pipe(verify, stepRef("B")),
+        B: pipe(verify, stepRef("A")),
       }))
       .workflow(({ steps }) =>
         pipe(constant({ artifact: "test" }), steps.A),
@@ -182,14 +182,14 @@ describe("mutual recursion", () => {
 
     expect(cfg.steps).toHaveProperty("A");
     expect(cfg.steps).toHaveProperty("B");
-    // A body: pipe(verify(), stepRef("B")) → Chain(verify(), stepRef("B"))
+    // A body: pipe(verify, stepRef("B")) → Chain(verify, stepRef("B"))
     const aBody = cfg.steps!.A as { kind: string; first: unknown; rest: unknown };
     expect(aBody.kind).toBe("Chain");
     expect(aBody.rest).toEqual({
       kind: "Step",
       step: { kind: "Named", name: "B" },
     });
-    // B body: pipe(verify(), stepRef("A")) → Chain(verify(), stepRef("A"))
+    // B body: pipe(verify, stepRef("A")) → Chain(verify, stepRef("A"))
     const bBody = cfg.steps!.B as { kind: string; first: unknown; rest: unknown };
     expect(bBody.rest).toEqual({
       kind: "Step",
@@ -199,9 +199,9 @@ describe("mutual recursion", () => {
 
   it("callback form provides typed access to previously registered steps", () => {
     const cfg = configBuilder()
-      .registerSteps({ Setup: setup() })
+      .registerSteps({ Setup: setup })
       .registerSteps(({ steps }) => ({
-        Pipeline: pipe(steps.Setup, build()),
+        Pipeline: pipe(steps.Setup, build),
       }))
       .workflow(({ steps }) =>
         pipe(constant({ project: "test" }), steps.Pipeline),
@@ -209,7 +209,7 @@ describe("mutual recursion", () => {
 
     expect(cfg.steps).toHaveProperty("Setup");
     expect(cfg.steps).toHaveProperty("Pipeline");
-    // Pipeline body: pipe(steps.Setup, build()) → Chain(steps.Setup, build())
+    // Pipeline body: pipe(steps.Setup, build) → Chain(steps.Setup, build)
     const pipelineBody = cfg.steps!.Pipeline as { kind: string; first: unknown; rest: unknown };
     expect(pipelineBody.first).toEqual({
       kind: "Step",
@@ -220,8 +220,8 @@ describe("mutual recursion", () => {
   it("rejects invalid step references at compile time", () => {
     configBuilder()
       .registerSteps(({ stepRef }) => ({
-        A: pipe(verify(), stepRef("Bt")),
-        B: pipe(verify(), stepRef("A")),
+        A: pipe(verify, stepRef("Bt")),
+        B: pipe(verify, stepRef("A")),
       }))
       // @ts-expect-error — "Bt" is not a valid step name; return is error type
       .workflow(({ steps }) => pipe(steps.A));
@@ -242,15 +242,15 @@ describe("showcase: type-check ↔ fix cycle", () => {
       .registerSteps(({ stepRef }) => ({
         TypeCheck: pipe(
           drop(),
-          typeCheck(),
-          classifyErrors(),
+          typeCheck,
+          classifyErrors,
           branch({
             HasErrors: stepRef("FixAll"),
             Clean: drop(),
           }),
         ),
         FixAll: pipe(
-          forEach(fix()),
+          forEach(fix),
           drop(),
           stepRef("TypeCheck"),
         ),
@@ -258,9 +258,9 @@ describe("showcase: type-check ↔ fix cycle", () => {
       .workflow(({ steps }) =>
         pipe(
           constant({ project: "my-app" }),
-          setup(),
-          listFiles(),
-          forEach(migrate()),
+          setup,
+          listFiles,
+          forEach(migrate),
           drop(),
           steps.TypeCheck,
         ),
@@ -292,25 +292,25 @@ describe("kitchen sink", () => {
     const cfg = configBuilder()
       // ── Batch 1 (object form): standalone steps ──
       .registerSteps({
-        Setup: setup(),
+        Setup: setup,
       })
       // ── Batch 2 (callback form): cross-batch refs + mutual recursion ──
       .registerSteps(({ steps, stepRef }) => ({
         // MigrateAll chains through the previously registered Setup step
         MigrateAll: pipe(
           steps.Setup,
-          listFiles(),
-          forEach(migrate()),
+          listFiles,
+          forEach(migrate),
           stepRef("FixCycle"), // jump to the fix cycle defined below
         ),
         // FixCycle: type-check, classify errors, fix or finish
         FixCycle: loop(
           pipe(
             drop(),
-            typeCheck(),
-            classifyErrors(),
+            typeCheck,
+            classifyErrors,
             branch({
-              HasErrors: pipe(extractField("errors"), forEach(fix()), recur()),
+              HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
               Clean: done(),
             }),
           ),
@@ -321,7 +321,7 @@ describe("kitchen sink", () => {
         pipe(
           constant({ project: "my-app" }),
           steps.MigrateAll,
-          classifyErrors(),
+          classifyErrors,
           branch({
             HasErrors: pipe(drop(), self),  // restart the entire workflow
             Clean: pipe(drop(), constant({ migrated: true })),

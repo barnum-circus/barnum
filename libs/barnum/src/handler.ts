@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { TypedAction } from "./ast.js";
 
 // ---------------------------------------------------------------------------
-// Handler — opaque typed handler reference
+// HandlerDefinition — the user's handle function + optional validators
 // ---------------------------------------------------------------------------
 
 export type HandlerDefinition<
@@ -27,53 +27,24 @@ type UntypedHandlerDefinition = {
   handle: (...args: any[]) => Promise<unknown>;
 };
 
+// ---------------------------------------------------------------------------
+// Handler — opaque typed handler reference
+// ---------------------------------------------------------------------------
+
 const HANDLER_BRAND = Symbol.for("barnum:handler");
 
 /**
- * Opaque handler reference with typed metadata. This is the base type
- * accepted by `call()` — it only needs the handler's identity, not
- * callability.
+ * Opaque handler reference with typed metadata. The `__definition` property
+ * is non-enumerable — invisible to `JSON.stringify`, visible to the worker.
  */
-export type Handler<
-  TValue = unknown,
-  TOutput = unknown,
-  TStepConfig = unknown,
-> = {
+export type Handler<TValue = unknown, TOutput = unknown> = TypedAction<TValue, TOutput> & {
   readonly [HANDLER_BRAND]: true;
-  readonly __filePath: string;
-  readonly __exportName: string;
-  readonly __definition: HandlerDefinition<TValue, TOutput, TStepConfig>;
-  readonly __phantom_in: (input: TValue) => void;
-  readonly __phantom_out: () => TOutput;
-  readonly __phantom_step_config: TStepConfig;
+  readonly __definition: UntypedHandlerDefinition;
 };
 
-/**
- * A handler that can be invoked directly to produce a TypedAction.
- * Created by `createHandler`.
- *
- * ```ts
- * import setup from "./handlers/setup.js";
- *
- * // Direct invocation (preferred):
- * pipe(setup(), process());
- *
- * // With step config:
- * setup({ stepConfig: { timeout: 5000 } });
- * ```
- */
-export type CallableHandler<
-  TValue = unknown,
-  TOutput = unknown,
-  TStepConfig = unknown,
-> = ((
-  options?: { stepConfig?: TStepConfig },
-) => TypedAction<TValue, TOutput>) &
-  Handler<TValue, TOutput, TStepConfig>;
-
-export function isHandler(x: unknown): x is CallableHandler {
-  return typeof x === "function" && HANDLER_BRAND in x;
-}
+// ---------------------------------------------------------------------------
+// getCallerFilePath
+// ---------------------------------------------------------------------------
 
 /**
  * Deduces the caller's file path from the V8 stack trace API.
@@ -105,50 +76,28 @@ function getCallerFilePath(): string {
   return callerFile;
 }
 
-// Both validators: handler accepts typed input and step config.
-export function createHandler<TValue, TOutput, TStepConfig>(
-  definition: {
-    stepValueValidator: z.ZodType<TValue>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: {
-      value: TValue;
-      stepConfig: TStepConfig;
-    }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): CallableHandler<TValue, TOutput, TStepConfig>;
+// ---------------------------------------------------------------------------
+// createHandler — handlers with no config, returns TypedAction directly
+// ---------------------------------------------------------------------------
 
-// Value validator only: handler accepts typed input, no step config.
+// With stepValueValidator: handler accepts typed pipeline input.
 export function createHandler<TValue, TOutput>(
   definition: {
     stepValueValidator: z.ZodType<TValue>;
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
-): CallableHandler<TValue, TOutput, never>;
+): Handler<TValue, TOutput>;
 
-// Config validator only: handler takes no pipeline input, has step config.
-export function createHandler<TOutput, TStepConfig>(
-  definition: {
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): CallableHandler<never, TOutput, TStepConfig>;
-
-// Neither validator: handler takes no input and no config.
+// Without stepValueValidator: handler takes no pipeline input.
 export function createHandler<TOutput>(
   definition: {
     handle: () => Promise<TOutput>;
   },
   exportName?: string,
-): CallableHandler<never, TOutput, never>;
+): Handler<never, TOutput>;
 
-// Implementation: return type is intentionally broad. The overload signatures
-// provide all type safety for callers. TypeScript's overload compatibility
-// check cannot reconcile contravariant phantom types across return types
-// that differ in their TValue (generic vs never), so the implementation
-// uses the erased definition type and returns the unparameterized handler.
+// Implementation
 export function createHandler(
   definition: UntypedHandlerDefinition,
   exportName?: string,
@@ -157,21 +106,88 @@ export function createHandler(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
-  const fn = (options?: { stepConfig?: unknown }): TypedAction => ({
+  const action: Record<string, unknown> = {
     kind: "Invoke",
-    handler: {
-      kind: "TypeScript",
-      module: filePath,
-      func: funcName,
-      stepConfigSchema: options?.stepConfig,
-    },
+    handler: { kind: "TypeScript", module: filePath, func: funcName },
+  };
+
+  // Non-enumerable: invisible to JSON.stringify, visible to the worker
+  Object.defineProperty(action, HANDLER_BRAND, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(action, "__definition", {
+    value: definition,
+    enumerable: false,
   });
 
-  return Object.assign(fn, {
-    [HANDLER_BRAND]: true as const,
-    __filePath: filePath,
-    __exportName: funcName,
-    __definition: definition,
-  });
+  return action;
 }
 
+// ---------------------------------------------------------------------------
+// createHandlerWithConfig — handlers that need static config
+// ---------------------------------------------------------------------------
+
+// With stepValueValidator: handler accepts typed pipeline input + config.
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    stepValueValidator: z.ZodType<TValue>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, TOutput>;
+
+// Without stepValueValidator: handler takes no pipeline input, has config.
+export function createHandlerWithConfig<TOutput, TStepConfig>(
+  definition: {
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<never, TOutput>;
+
+// Implementation
+export function createHandlerWithConfig(
+  definition: UntypedHandlerDefinition,
+  exportName?: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  const filePath = getCallerFilePath();
+  const funcName = exportName ?? "default";
+
+  // Internal handle that unpacks the [value, config] tuple from Parallel
+  const internalDefinition: UntypedHandlerDefinition = {
+    handle: async ({ value }: { value: unknown }) => {
+      const [pipelineValue, config] = value as [unknown, unknown];
+      return definition.handle({ value: pipelineValue, stepConfig: config });
+    },
+  };
+
+  const invokeAction = {
+    kind: "Invoke" as const,
+    handler: { kind: "TypeScript" as const, module: filePath, func: funcName },
+  };
+
+  // Non-enumerable: invisible to JSON.stringify, visible to the worker
+  Object.defineProperty(invokeAction, HANDLER_BRAND, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(invokeAction, "__definition", {
+    value: internalDefinition,
+    enumerable: false,
+  });
+
+  return (config: unknown) => ({
+    kind: "Chain",
+    first: {
+      kind: "Parallel",
+      actions: [
+        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
+      ],
+    },
+    rest: invokeAction,
+  });
+}

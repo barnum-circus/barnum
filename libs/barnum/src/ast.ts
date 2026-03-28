@@ -1,5 +1,3 @@
-import type { Handler } from "./handler.js";
-
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
 // ---------------------------------------------------------------------------
@@ -61,8 +59,6 @@ export type TypeScriptHandler = {
   kind: "TypeScript";
   module: string;
   func: string;
-  stepConfigSchema?: unknown;
-  valueSchema?: unknown;
 };
 
 export type BuiltinHandler = {
@@ -270,26 +266,6 @@ export type ValidateStepRefs<
 export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
 export { parallel } from "./parallel.js";
-
-export function invoke<TValue, TOutput, TStepConfig>(
-  handler: Handler<TValue, TOutput, TStepConfig>,
-  ...args: [TStepConfig] extends [never]
-    ? []
-    : unknown extends TStepConfig
-      ? [options?: { stepConfig?: TStepConfig }]
-      : [options: { stepConfig: TStepConfig }]
-): TypedAction<TValue, TOutput> {
-  const options = (args as [{ stepConfig?: TStepConfig }?])[0];
-  return {
-    kind: "Invoke",
-    handler: {
-      kind: "TypeScript",
-      module: handler.__filePath,
-      func: handler.__exportName,
-      stepConfigSchema: options?.stepConfig,
-    },
-  };
-}
 
 export function forEach<In, Out, R extends string = never>(
   action: TypedAction<In, Out, R>,

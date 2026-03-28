@@ -15,5 +15,5 @@ import report from "./handlers/report.js";
 console.error("=== Running deployment pipeline workflow ===\n");
 
 await configBuilder()
-  .workflow(() => pipe(initialize(), build(), deploy(), report()))
+  .workflow(() => pipe(initialize, build, deploy, report))
   .run();

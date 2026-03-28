@@ -15,5 +15,5 @@ import pollStatus from "./handlers/poll-status.js";
 console.error("=== Running polling loop workflow ===\n");
 
 await configBuilder()
-  .workflow(() => pipe(startPolling(), loop(pollStatus())))
+  .workflow(() => pipe(startPolling, loop(pollStatus)))
   .run();

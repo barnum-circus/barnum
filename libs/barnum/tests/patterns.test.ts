@@ -39,10 +39,10 @@ describe("pipe", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
-        setup(),
-        build(),
-        verify(),
-        deploy(),
+        setup,
+        build,
+        verify,
+        deploy,
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");
@@ -51,18 +51,18 @@ describe("pipe", () => {
   it("rejects mismatched types", () => {
     // verify outputs { verified: boolean }, setup expects { project: string }
     // @ts-expect-error — type mismatch between verify's output and setup's input
-    pipe(verify(), setup());
+    pipe(verify, setup);
   });
 
   it("chains three steps correctly", () => {
-    const workflow = pipe(setup(), build(), verify());
+    const workflow = pipe(setup, build, verify);
     expect(workflow.kind).toBe("Chain");
   });
 
   it("rejects unrelated types", () => {
     // deploy outputs { deployed: true }, setup expects { project: string }
     // @ts-expect-error — type mismatch between deploy's output and setup's input
-    pipe(deploy(), setup());
+    pipe(deploy, setup);
   });
 });
 
@@ -72,7 +72,7 @@ describe("pipe", () => {
 
 describe("forEach", () => {
   it("maps input/output to arrays", () => {
-    const workflow = forEach(verify());
+    const workflow = forEach(verify);
     expect(workflow.kind).toBe("ForEach");
   });
 
@@ -80,9 +80,9 @@ describe("forEach", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
-        setup(),
-        listFiles(),
-        forEach(migrate()),
+        setup,
+        listFiles,
+        forEach(migrate),
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");
@@ -95,14 +95,14 @@ describe("forEach", () => {
 
 describe("parallel", () => {
   it("accepts actions with the same input type", () => {
-    const workflow = parallel(verify(), verify());
+    const workflow = parallel(verify, verify);
     expect(workflow.kind).toBe("Parallel");
   });
 
   it("rejects actions with different input types", () => {
     // setup expects { project: string }, verify expects { artifact: string }
     // @ts-expect-error — input types do not unify
-    parallel(setup(), verify());
+    parallel(setup, verify);
   });
 
   it("composes with parallel and branch", () => {
@@ -110,10 +110,10 @@ describe("parallel", () => {
       pipe(
         constant({ project: "test" }),
         parallel(
-          setup(),
+          setup,
           pipe(
-            setup(),
-            build(),
+            setup,
+            build,
           ),
         ),
       ),
@@ -129,8 +129,8 @@ describe("parallel", () => {
 describe("branch", () => {
   it("accepts cases with the same output type", () => {
     const workflow = branch({
-      Yes: deploy(),
-      No: deploy(),
+      Yes: deploy,
+      No: deploy,
     });
     expect(workflow.kind).toBe("Branch");
   });
@@ -138,7 +138,7 @@ describe("branch", () => {
   it("rejects output flowing into incompatible step", () => {
     // branch outputs { deployed: true }, but setup expects { project: string }
     // @ts-expect-error — branch output doesn't satisfy next step's input
-    pipe(branch({ A: deploy(), B: deploy() }), setup());
+    pipe(branch({ A: deploy, B: deploy }), setup);
   });
 });
 
@@ -148,32 +148,32 @@ describe("branch", () => {
 
 describe("loop", () => {
   it("accepts body returning LoopResult", () => {
-    const workflow = loop(healthCheck());
+    const workflow = loop(healthCheck);
     expect(workflow.kind).toBe("Loop");
   });
 
   it("rejects body not returning LoopResult", () => {
     // verify: { artifact: string } → { verified: boolean } — not a LoopResult
     // @ts-expect-error — loop body must return LoopResult<In, Out>
-    loop(verify());
+    loop(verify);
   });
 
   it("composes type-check loop with branch", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
-        setup(),
-        listFiles(),
-        forEach(migrate()),
+        setup,
+        listFiles,
+        forEach(migrate),
         loop(
           pipe(
             drop(),
-            typeCheck(),
-            classifyErrors(),
+            typeCheck,
+            classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField("errors"),
-                forEach(fix()),
+                forEach(fix),
                 recur(),
               ),
               Clean: done(),
@@ -198,7 +198,7 @@ describe("reader monad pattern", () => {
     const cfg = config(
       pipe(
         constant({ initialized: true, project: "test" }),
-        parallel(identity(), build()),
+        parallel(identity(), build),
         merge(),
       ),
     );
