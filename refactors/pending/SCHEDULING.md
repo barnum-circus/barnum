@@ -127,4 +127,4 @@ fn dispatch_pending(engine: &mut Engine, tx: &UnboundedSender<Event>) {
 
 ## What happens to barnum_event_loop?
 
-The existing `run_event_loop`, `Applier` trait, and `NdjsonApplier` stay. The scheduler emits events into the channel. `NdjsonApplier` writes them to disk. `EngineApplier` stub is removed — the scheduler replaces it.
+The existing `run_event_loop`, `Applier` trait, `NdjsonApplier`, and `EngineApplier` all stay. The `EngineApplier` stub gets filled in — it owns the `Engine`, and its `apply()` implementation calls `engine.complete()` on `TaskCompleted` events, takes pending dispatches, and spawns handler executions (via `tx`). `NdjsonApplier` writes events to disk. The event loop with its `Vec<Box<dyn Applier>>` is the scheduler.
