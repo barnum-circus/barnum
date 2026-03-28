@@ -42,6 +42,7 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 ## Naming
 
 - **Variable names match the type name in snake_case.** An `UnresolvedFlatConfig` is `unresolved_flat_config`, not `unresolved` or `ufc`. Don't abbreviate or truncate — the full type name in snake_case is the variable name.
+- **No bare `T` type parameters.** Use descriptive names: `TValue`, `TInput`, `TOutput`, `TContinue`, `TBreak`, etc. Every type parameter should communicate what it represents.
 
 ## Core Values
 
