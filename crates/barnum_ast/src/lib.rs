@@ -50,8 +50,8 @@ pub enum Action {
     /// Leaf node. Invokes an external handler.
     Invoke(InvokeAction),
 
-    /// Sequential composition. Each action receives the previous action's output.
-    Pipe(PipeAction),
+    /// Binary sequential composition. Runs `first`, feeds its output to `rest`.
+    Chain(ChainAction),
 
     /// Parallel map over an array input. Applies the action to each element.
     ForEach(ForEachAction),
@@ -88,11 +88,13 @@ pub struct InvokeAction {
     pub handler: HandlerKind,
 }
 
-/// Sequential composition.
+/// Binary sequential composition: run `first`, feed its output to `rest`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PipeAction {
-    /// Ordered list of actions to execute.
-    pub actions: Vec<Action>,
+pub struct ChainAction {
+    /// The action to run first.
+    pub first: Box<Action>,
+    /// The action to run with `first`'s output.
+    pub rest: Box<Action>,
 }
 
 /// Parallel map over an array input.
