@@ -101,8 +101,11 @@ name = "barnum_cli"
 version = "0.2.4"
 dependencies = [
  "barnum_ast",
+ "barnum_engine",
+ "barnum_event_loop",
  "clap",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

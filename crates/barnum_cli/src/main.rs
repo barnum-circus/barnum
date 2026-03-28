@@ -14,6 +14,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Deserialize a workflow config, reserialize, and print. Used for
+    /// round-trip validation.
+    Check {
+        /// Serialized JSON config.
+        #[arg(long)]
+        config: String,
+    },
+
     /// Run a workflow to completion.
     Run {
         /// Serialized JSON config.
@@ -33,21 +41,31 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    match cli.command {
+    let result = match cli.command {
+        Command::Check { config } => check(&config),
         Command::Run {
             config,
             executor,
             worker,
-        } => {
-            if let Err(e) = run(&config, &executor, &worker).await {
-                #[expect(clippy::print_stderr)]
-                {
-                    eprintln!("{e}");
-                }
-                std::process::exit(1);
-            }
+        } => run(&config, &executor, &worker).await,
+    };
+    if let Err(e) = result {
+        #[expect(clippy::print_stderr)]
+        {
+            eprintln!("{e}");
         }
+        std::process::exit(1);
     }
+}
+
+fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let config: barnum_ast::Config = serde_json::from_str(input)?;
+    let output = serde_json::to_string_pretty(&config)?;
+    #[expect(clippy::print_stdout)]
+    {
+        println!("{output}");
+    }
+    Ok(())
 }
 
 async fn run(input: &str, executor: &str, worker: &str) -> Result<(), Box<dyn std::error::Error>> {

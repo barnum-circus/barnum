@@ -146,7 +146,7 @@ async fn execute_typescript(
         .arg(format!("{executor} {worker_path} {module} {func}"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("failed to spawn handler process");
 
@@ -159,13 +159,11 @@ async fn execute_typescript(
 
     // Read stdout + wait for exit
     let output = child.wait_with_output().await.expect("wait failed");
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        panic!(
-            "handler {module}:{func} failed (exit {}): {stderr}",
-            output.status.code().unwrap_or(-1)
-        );
-    }
+    assert!(
+        output.status.success(),
+        "handler {module}:{func} failed (exit {})",
+        output.status.code().unwrap_or(-1)
+    );
 
     serde_json::from_slice(&output.stdout).expect("invalid handler output JSON")
 }
