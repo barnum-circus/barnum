@@ -168,6 +168,12 @@ Loop = Step + Chain + Branch + self-reference. It's eliminable but worth keeping
 
 Loop follows the single-child frame pattern (body completes → inspect → re-enter or propagate). Unlike the old Pipe, it doesn't cause a fundamentally different frame pattern — it's just an optimization over the desugared form.
 
+### Step is goto
+
+In the flat representation, `Step { target: ActionId }` is literally a `goto` — it redirects to another ActionId with no frame creation. Named steps are just labels in the flat table. This means the desugared Loop is just: run body, branch on result, goto self on Continue. No special recursion primitive needed — `goto` + `Branch` gives you fixed-point iteration for free.
+
+This also means named steps are not a "function call" abstraction — they're jump targets. There's no stack frame, no return address, no scope. The flat table is a control flow graph and Step is an edge.
+
 ## Chain Normalization
 
 Chains should be right-nested. `Chain(Chain(A, B), C)` is non-canonical — it's semantically equivalent to `Chain(A, Chain(B, C))` but wastes a ChildRef (the left-nested Chain in `first` is multi-entry). The canonical form is a right-leaning spine where `first` is never a Chain:
