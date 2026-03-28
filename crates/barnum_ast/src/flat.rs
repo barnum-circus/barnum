@@ -14,7 +14,8 @@ use std::ops::Add;
 use u32_newtype::u32_newtype;
 
 use crate::{
-    Action, BranchAction, Config, HandlerKind, InvokeAction, KindDiscriminator, StepName, StepRef,
+    Action, BranchAction, ChainAction, Config, HandlerKind, InvokeAction, KindDiscriminator,
+    StepName, StepRef,
 };
 
 u32_newtype!(
@@ -36,7 +37,7 @@ u32_newtype!(
 );
 
 u32_newtype!(
-    /// Count of children (Pipe/Parallel) or cases (Branch).
+    /// Count of children (Parallel) or cases (Branch).
     Count
 );
 
@@ -81,11 +82,15 @@ pub enum FlatAction<T> {
         handler: HandlerId,
     },
 
-    /// Sequential composition.
-    /// Parent is followed by `count` child slots in the entry array.
-    Pipe {
-        /// Number of child slots following this entry.
-        count: Count,
+    /// Binary sequential composition: run the child at `action_id + 1`,
+    /// then advance to `rest`.
+    ///
+    /// 2-entry action: the Chain entry itself, followed by one child slot
+    /// for `first`. The child slot is either an inlined single-entry action
+    /// or a [`FlatEntry::ChildRef`] to a multi-entry subtree elsewhere.
+    Chain {
+        /// `ActionId` of the continuation (the action to run after `first`).
+        rest: ActionId,
     },
 
     /// Fan-out: same input to all children, collect results as array.
@@ -142,7 +147,7 @@ impl<T> FlatAction<T> {
         Ok(match self {
             FlatAction::Step { target } => FlatAction::Step { target: f(target)? },
             FlatAction::Invoke { handler } => FlatAction::Invoke { handler },
-            FlatAction::Pipe { count } => FlatAction::Pipe { count },
+            FlatAction::Chain { rest } => FlatAction::Chain { rest },
             FlatAction::Parallel { count } => FlatAction::Parallel { count },
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
@@ -155,7 +160,7 @@ impl<T> FlatAction<T> {
 /// A slot in the entry array. Either an action or inline data
 /// (ChildRef/BranchKey).
 ///
-/// Child slots after Pipe/Parallel/Branch contain either:
+/// Child slots after Chain/Parallel/Branch contain either:
 /// - `Action(...)` — a single-entry child inlined directly into the slot
 /// - `ChildRef { action }` — a pointer to a multi-entry child elsewhere
 ///
@@ -169,7 +174,7 @@ pub enum FlatEntry<T> {
     /// An executable action.
     Action(FlatAction<T>),
 
-    /// Child pointer for multi-entry children (Pipe/Parallel/Branch).
+    /// Child pointer for multi-entry children (Chain/Parallel/Branch).
     /// Points to the root `ActionId` of a child subtree.
     ChildRef {
         /// The `ActionId` of the child subtree root.
@@ -293,11 +298,20 @@ impl FlatConfig {
         }
     }
 
-    /// Returns the child `ActionId`s for a Pipe or Parallel.
-    pub fn children(&self, id: ActionId) -> impl Iterator<Item = ActionId> + '_ {
+    /// Returns the `first` child `ActionId` for a Chain (resolves the child
+    /// slot at `action_id + 1`). The `rest` `ActionId` is stored in the
+    /// [`FlatAction::Chain`] variant itself.
+    #[must_use]
+    pub fn chain_first(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::Chain { .. }));
+        self.resolve_child_slot(id + 1)
+    }
+
+    /// Returns the child `ActionId`s for a Parallel.
+    pub fn parallel_children(&self, id: ActionId) -> impl Iterator<Item = ActionId> + '_ {
         let count = match self.action(id) {
-            FlatAction::Pipe { count } | FlatAction::Parallel { count } => count.0,
-            other => panic!("expected Pipe or Parallel, got {other:?}"),
+            FlatAction::Parallel { count } => count.0,
+            other => panic!("expected Parallel, got {other:?}"),
         };
         (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
@@ -382,7 +396,7 @@ impl UnresolvedFlatConfig {
     /// Write an action's root entry into an existing slot. The single match
     /// over all `Action` variants — no duplication.
     ///
-    /// For Pipe/Parallel/Branch, child slots are `alloc_many`'d immediately
+    /// For Chain/Parallel/Branch, child slots are allocated immediately
     /// after the slot. This means the slot must be at the end of the vec
     /// for multi-entry actions (guaranteed when called from `flatten_action`).
     fn flatten_action_at(
@@ -399,11 +413,13 @@ impl UnresolvedFlatConfig {
                 }
             }
 
-            Action::Pipe(crate::PipeAction { actions }) => {
-                let count = Count(actions.len() as u32);
-                self.alloc_many(count);
-                self.fill_child_slots(actions, action_id + 1, workflow_root)?;
-                FlatAction::Pipe { count }
+            Action::Chain(ChainAction { first, rest }) => {
+                self.alloc(); // child slot for first
+                let rest_action_id = self.flatten_action(*rest, workflow_root)?;
+                self.fill_child_slot(*first, action_id + 1, workflow_root)?;
+                FlatAction::Chain {
+                    rest: rest_action_id,
+                }
             }
 
             Action::Parallel(crate::ParallelAction { actions }) => {
@@ -462,7 +478,7 @@ impl UnresolvedFlatConfig {
 
     /// Fill a child slot with an action. Single-entry actions are inlined
     /// directly into the slot (the `FlatConfigEntryId` becomes an `ActionId`).
-    /// Multi-entry actions (Pipe/Parallel/Branch) are flattened elsewhere
+    /// Multi-entry actions (Chain/Parallel/Branch) are flattened elsewhere
     /// via `flatten_action`, and a `ChildRef` is written into the slot.
     fn fill_child_slot(
         &mut self,
@@ -471,7 +487,7 @@ impl UnresolvedFlatConfig {
         workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         match action {
-            Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
+            Action::Chain { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
                 let action_id = self.flatten_action(action, workflow_root)?;
                 self.entries[slot.0 as usize] = Some(FlatEntry::ChildRef { action: action_id });
             }
@@ -608,9 +624,21 @@ mod tests {
         })
     }
 
-    /// Helper: create a Pipe action.
+    /// Helper: right-fold actions into nested Chain nodes (mirrors TS `pipe()`).
     fn pipe(actions: Vec<Action>) -> Action {
-        Action::Pipe(crate::PipeAction { actions })
+        match actions.len() {
+            0 => panic!("pipe() with zero actions not supported in tests"),
+            _ => actions
+                .into_iter()
+                .rev()
+                .reduce(|rest, first| {
+                    Action::Chain(ChainAction {
+                        first: Box::new(first),
+                        rest: Box::new(rest),
+                    })
+                })
+                .unwrap(),
+        }
     }
 
     /// Helper: create a Parallel action.
@@ -702,10 +730,11 @@ mod tests {
         );
     }
 
-    /// Pipe: all single-entry children inlined.
+    /// Chain: `pipe(A, B, C)` → `Chain(A, Chain(B, C))`, right-nested.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn flatten_pipe() {
+    fn flatten_chain() {
+        // pipe(A, B, C) → Chain(A, Chain(B, C))
         let flat = flatten(config(pipe(vec![
             invoke("./a.ts", "a"),
             invoke("./b.ts", "b"),
@@ -713,19 +742,25 @@ mod tests {
         ])))
         .unwrap();
 
-        assert_eq!(flat.entries.len(), 4);
+        // 0: Chain { rest: 2 }
+        // 1: Invoke(0)         ← A (child slot, inlined)
+        // 2: Chain { rest: 4 } ← inner Chain (rest of outer)
+        // 3: Invoke(1)         ← B (child slot, inlined)
+        // 4: Invoke(2)         ← C (rest of inner Chain)
+        assert_eq!(flat.entries.len(), 5);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Pipe { count: Count(3) }
+            FlatAction::Chain { rest: ActionId(2) }
         );
-
-        let children: Vec<_> = flat.children(ActionId(0)).collect();
-        assert_eq!(children.len(), 3);
-        // All children are inlined — their ActionIds are sequential after the Pipe.
-        assert_eq!(children, vec![ActionId(1), ActionId(2), ActionId(3)]);
+        assert_eq!(flat.chain_first(ActionId(0)), ActionId(1));
+        assert_eq!(
+            flat.action(ActionId(2)),
+            FlatAction::Chain { rest: ActionId(4) }
+        );
+        assert_eq!(flat.chain_first(ActionId(2)), ActionId(3));
     }
 
-    /// Parallel: same layout as Pipe but with Parallel variant.
+    /// Parallel: fan-out with `count` child slots.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_parallel() {
@@ -741,7 +776,7 @@ mod tests {
             FlatAction::Parallel { count: Count(2) }
         );
 
-        let children: Vec<_> = flat.children(ActionId(0)).collect();
+        let children: Vec<_> = flat.parallel_children(ActionId(0)).collect();
         assert_eq!(children, vec![ActionId(1), ActionId(2)]);
     }
 
@@ -818,35 +853,33 @@ mod tests {
 
     // -- Nesting --
 
-    /// Nested pipe: inner pipe uses `ChildRef`, leaves inlined.
+    /// Chain with multi-entry first: first is Parallel → `ChildRef`.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn flatten_nested_pipe() {
-        // Pipe([Invoke, Pipe([Invoke, Invoke])])
-        let inner = pipe(vec![invoke("./b.ts", "b"), invoke("./c.ts", "c")]);
-        let outer = pipe(vec![invoke("./a.ts", "a"), inner]);
-        let flat = flatten(config(outer)).unwrap();
+    fn flatten_chain_with_multi_entry_first() {
+        // Chain(Parallel(X, Y), B) — first is multi-entry, gets ChildRef.
+        let action = pipe(vec![
+            parallel(vec![invoke("./x.ts", "x"), invoke("./y.ts", "y")]),
+            invoke("./b.ts", "b"),
+        ]);
+        let flat = flatten(config(action)).unwrap();
 
-        // outer Pipe allocates slot 0, then 2 child slots (1, 2).
-        // Child 0 (slot 1): Invoke is single-entry, inlined.
-        // Child 1 (slot 2): inner Pipe is multi-entry → ChildRef.
-        // inner Pipe allocates at 3, with child slots 4, 5.
+        // 0: Chain { rest: 2 }
+        // 1: ChildRef { action: 3 }   ← first is multi-entry Parallel
+        // 2: Invoke(handler_b)         ← rest
+        // 3: Parallel { count: 2 }
+        // 4: Invoke(handler_x)
+        // 5: Invoke(handler_y)
         assert_eq!(flat.entries.len(), 6);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Pipe { count: Count(2) }
+            FlatAction::Chain { rest: ActionId(2) }
         );
-
-        let children: Vec<_> = flat.children(ActionId(0)).collect();
-        // First child is inlined at slot 1.
-        assert_eq!(children[0], ActionId(1));
-        // Second child is via ChildRef pointing to slot 3.
-        assert_eq!(children[1], ActionId(3));
-
-        // Verify the inner pipe.
+        // first is via ChildRef → Parallel at ActionId(3).
+        assert_eq!(flat.chain_first(ActionId(0)), ActionId(3));
         assert_eq!(
             flat.action(ActionId(3)),
-            FlatAction::Pipe { count: Count(2) }
+            FlatAction::Parallel { count: Count(2) }
         );
     }
 
@@ -883,16 +916,16 @@ mod tests {
         );
     }
 
-    /// Pipe inside Parallel inside Loop.
+    /// Chain inside Parallel inside Loop.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_nested_combinators() {
-        let inner_pipe = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
-        let par = parallel(vec![inner_pipe, invoke("./c.ts", "c")]);
+        let inner_chain = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
+        let par = parallel(vec![inner_chain, invoke("./c.ts", "c")]);
         let action = loop_action(par);
         let flat = flatten(config(action)).unwrap();
 
-        // Loop(0) -> Parallel(1) -> [ChildRef(Pipe(4)), Invoke(3)]
+        // Loop(0) -> Parallel(1) -> [ChildRef(Chain(...)), Invoke(3)]
         assert_eq!(
             flat.action(ActionId(0)),
             FlatAction::Loop { body: ActionId(1) }
@@ -902,30 +935,33 @@ mod tests {
             FlatAction::Parallel { count: Count(2) }
         );
 
-        // First child: Pipe is multi-entry, gets ChildRef.
+        // First child: Chain is multi-entry, gets ChildRef.
         // Second child: Invoke is single-entry, inlined.
-        assert_eq!(flat.children(ActionId(1)).count(), 2);
+        assert_eq!(flat.parallel_children(ActionId(1)).count(), 2);
     }
 
     /// Branch cases containing compound subtrees.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_branch_with_subtrees() {
-        let ok_pipe = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
-        let action = branch(vec![("Ok", ok_pipe), ("Err", invoke("./err.ts", "handle"))]);
+        let ok_chain = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
+        let action = branch(vec![
+            ("Ok", ok_chain),
+            ("Err", invoke("./err.ts", "handle")),
+        ]);
         let flat = flatten(config(action)).unwrap();
 
         let cases: Vec<_> = flat.branch_cases(ActionId(0)).collect();
         assert_eq!(cases.len(), 2);
 
         // Err case child is single-entry (Invoke), inlined.
-        // Ok case child is multi-entry (Pipe), ChildRef.
+        // Ok case child is multi-entry (Chain), ChildRef.
         for (key, action_id) in &cases {
             let action = flat.action(*action_id);
             if *key == kind("Err") {
                 assert!(matches!(action, FlatAction::Invoke { .. }));
             } else {
-                assert!(matches!(action, FlatAction::Pipe { .. }));
+                assert!(matches!(action, FlatAction::Chain { .. }));
             }
         }
     }
@@ -944,7 +980,7 @@ mod tests {
             FlatAction::Parallel { count: Count(2) }
         );
 
-        let children: Vec<_> = flat.children(ActionId(0)).collect();
+        let children: Vec<_> = flat.parallel_children(ActionId(0)).collect();
         assert_eq!(children.len(), 2);
         // Both children are multi-entry Parallels → ChildRefs.
         for child in children {
@@ -952,26 +988,31 @@ mod tests {
         }
     }
 
-    /// Pipe with Loop child: Loop inlined, body elsewhere.
+    /// Chain with Loop as rest: Loop is allocated as rest target.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn flatten_pipe_with_loop_child() {
+    fn flatten_chain_with_loop_rest() {
+        // Chain(Invoke(a), Loop(Invoke(b)))
         let action = pipe(vec![
             invoke("./a.ts", "a"),
             loop_action(invoke("./b.ts", "b")),
         ]);
         let flat = flatten(config(action)).unwrap();
 
+        // 0: Chain { rest: 2 }
+        // 1: Invoke(0)         ← first (child slot, inlined)
+        // 2: Loop { body: 3 }  ← rest (allocated by flatten_action)
+        // 3: Invoke(1)         ← loop body
+        assert_eq!(flat.entries.len(), 4);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Pipe { count: Count(2) }
+            FlatAction::Chain { rest: ActionId(2) }
         );
-        let children: Vec<_> = flat.children(ActionId(0)).collect();
-        // Invoke inlined at slot 1.
-        assert_eq!(children[0], ActionId(1));
-        // Loop is single-entry, inlined at slot 2. Its body is elsewhere.
-        assert_eq!(children[1], ActionId(2));
-        assert!(matches!(flat.action(ActionId(2)), FlatAction::Loop { .. }));
+        assert_eq!(flat.chain_first(ActionId(0)), ActionId(1));
+        assert_eq!(
+            flat.action(ActionId(2)),
+            FlatAction::Loop { body: ActionId(3) }
+        );
     }
 
     // -- Step resolution --
@@ -980,15 +1021,17 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_step_root() {
-        // Pipe([Invoke, Step(Root)]) — the Step(Root) points back to the Pipe.
+        // Chain(Invoke, Step(Root)) — the Step(Root) points back to the Chain.
         let action = pipe(vec![invoke("./a.ts", "a"), step_root()]);
         let flat = flatten(config(action)).unwrap();
 
+        // 0: Chain { rest: 2 }
+        // 1: Invoke(0)                ← first (child slot, inlined)
+        // 2: Step { target: 0 }       ← rest, points back to workflow root
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Pipe { count: Count(2) }
+            FlatAction::Chain { rest: ActionId(2) }
         );
-        // Step(Root) is inlined at slot 2, pointing to ActionId(0).
         assert_eq!(
             flat.action(ActionId(2)),
             FlatAction::Step {
@@ -1075,18 +1118,6 @@ mod tests {
 
     // -- Edge cases --
 
-    /// Single-child pipe: child inlined.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_single_child_pipe() {
-        let flat = flatten(config(pipe(vec![invoke("./a.ts", "a")]))).unwrap();
-        assert_eq!(flat.entries.len(), 2);
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Pipe { count: Count(1) }
-        );
-    }
-
     /// Single-case branch: `BranchKey` + inlined child.
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -1129,6 +1160,13 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_handler_interning() {
+        // pipe(A, A, B) → Chain(A, Chain(A, B))
+        // rest is flattened before first, so B is interned first.
+        // 0: Chain { rest: 2 }
+        // 1: Invoke(1)         ← first A (handler interned second)
+        // 2: Chain { rest: 4 }
+        // 3: Invoke(1)         ← second A (same handler, interned)
+        // 4: Invoke(0)         ← B (handler interned first — deepest rest)
         let flat = flatten(config(pipe(vec![
             invoke("./handler.ts", "run"),
             invoke("./handler.ts", "run"), // same handler
@@ -1136,26 +1174,14 @@ mod tests {
         ])))
         .unwrap();
 
-        // First two invokes should share HandlerId(0).
-        assert_eq!(
-            flat.action(ActionId(1)),
-            FlatAction::Invoke {
-                handler: HandlerId(0)
-            }
-        );
-        assert_eq!(
-            flat.action(ActionId(2)),
-            FlatAction::Invoke {
-                handler: HandlerId(0)
-            }
-        );
-        // Third invoke gets HandlerId(1).
-        assert_eq!(
-            flat.action(ActionId(3)),
-            FlatAction::Invoke {
-                handler: HandlerId(1)
-            }
-        );
+        // Both A invokes share the same HandlerId.
+        let a1 = flat.action(ActionId(1));
+        let a2 = flat.action(ActionId(3));
+        assert_eq!(a1, a2);
+
+        // B has a different HandlerId.
+        let b = flat.action(ActionId(4));
+        assert_ne!(a1, b);
     }
 
     /// Static assert: `FlatEntry<ActionId>` fits in 8 bytes.
