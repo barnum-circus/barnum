@@ -11,7 +11,7 @@ pub struct FrameId(pub usize);
 /// How a child frame refers to its parent.
 #[derive(Debug, Clone, Copy)]
 pub enum ParentRef {
-    /// Parent has one active child (Chain, Loop, Attempt).
+    /// Parent has one active child (Chain, Loop).
     SingleChild {
         /// The parent frame's ID.
         frame_id: FrameId,
@@ -64,8 +64,6 @@ pub enum FrameKind {
         /// The body action to re-enter on each iteration.
         body: ActionId,
     },
-    /// Error boundary: wraps child result in Ok/Err.
-    Attempt,
 }
 
 /// A single frame in the engine's frame tree.

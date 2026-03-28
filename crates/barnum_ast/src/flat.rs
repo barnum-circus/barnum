@@ -120,12 +120,6 @@ pub enum FlatAction<T> {
         body: ActionId,
     },
 
-    /// Error materialization.
-    Attempt {
-        /// `ActionId` of the wrapped action.
-        child: ActionId,
-    },
-
     /// Redirect to another action (step reference or self-recursion).
     Step {
         /// Target action (unresolved or resolved depending on `T`).
@@ -152,7 +146,6 @@ impl<T> FlatAction<T> {
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
             FlatAction::Loop { body } => FlatAction::Loop { body },
-            FlatAction::Attempt { child } => FlatAction::Attempt { child },
         })
     }
 }
@@ -452,11 +445,6 @@ impl UnresolvedFlatConfig {
                 FlatAction::Loop { body: body_id }
             }
 
-            Action::Attempt(crate::AttemptAction { action }) => {
-                let child_id = self.flatten_action(*action, workflow_root)?;
-                FlatAction::Attempt { child: child_id }
-            }
-
             Action::Step(crate::StepAction {
                 step: StepRef::Named { name },
             }) => FlatAction::Step {
@@ -668,13 +656,6 @@ mod tests {
         })
     }
 
-    /// Helper: create an Attempt action.
-    fn attempt(action: Action) -> Action {
-        Action::Attempt(crate::AttemptAction {
-            action: Box::new(action),
-        })
-    }
-
     /// Helper: create a Step(Named) action.
     fn step_named(name: &str) -> Action {
         Action::Step(crate::StepAction {
@@ -839,19 +820,6 @@ mod tests {
         );
     }
 
-    /// Attempt: explicit child `ActionId`.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_attempt() {
-        let flat = flatten(config(attempt(invoke("./handler.ts", "run")))).unwrap();
-
-        assert_eq!(flat.entries.len(), 2);
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Attempt { child: ActionId(1) }
-        );
-    }
-
     // -- Nesting --
 
     /// Chain with multi-entry first: first is Parallel → `ChildRef`.
@@ -884,33 +852,28 @@ mod tests {
         );
     }
 
-    /// Single-child chain: Loop > Attempt > `ForEach` with explicit `ActionId`s.
+    /// Single-child chain: Loop > `ForEach` with explicit `ActionId`s.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_single_child_chain() {
-        // Loop(Attempt(ForEach(Invoke)))
-        let action = loop_action(attempt(for_each(invoke("./handler.ts", "run"))));
+        // Loop(ForEach(Invoke))
+        let action = loop_action(for_each(invoke("./handler.ts", "run")));
         let flat = flatten(config(action)).unwrap();
 
         // DFS: Loop allocates 0, then flatten_action for body:
-        //   Attempt allocates 1, then flatten_action for child:
-        //     ForEach allocates 2, then flatten_action for body:
-        //       Invoke allocates 3.
-        assert_eq!(flat.entries.len(), 4);
+        //   ForEach allocates 1, then flatten_action for body:
+        //     Invoke allocates 2.
+        assert_eq!(flat.entries.len(), 3);
         assert_eq!(
             flat.action(ActionId(0)),
             FlatAction::Loop { body: ActionId(1) }
         );
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Attempt { child: ActionId(2) }
+            FlatAction::ForEach { body: ActionId(2) }
         );
         assert_eq!(
             flat.action(ActionId(2)),
-            FlatAction::ForEach { body: ActionId(3) }
-        );
-        assert_eq!(
-            flat.action(ActionId(3)),
             FlatAction::Invoke {
                 handler: HandlerId(0)
             }

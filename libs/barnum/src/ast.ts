@@ -11,7 +11,6 @@ export type Action =
   | ParallelAction
   | BranchAction
   | LoopAction
-  | AttemptAction
   | StepAction;
 
 export type InvokeAction = {
@@ -43,11 +42,6 @@ export type BranchAction = {
 export type LoopAction = {
   kind: "Loop";
   body: Action;
-};
-
-export type AttemptAction = {
-  kind: "Attempt";
-  action: Action;
 };
 
 export type StepAction = {
@@ -304,16 +298,6 @@ export function loop<In, Out, R extends string = never>(
   body: TypedAction<In, LoopResult<In, Out>, R>,
 ): TypedAction<In, Out, R> {
   return { kind: "Loop", body } as TypedAction<In, Out, R>;
-}
-
-export type AttemptResult<T> =
-  | { kind: "Ok"; value: T }
-  | { kind: "Err"; error: unknown };
-
-export function attempt<In, Out, R extends string = never>(
-  action: TypedAction<In, Out, R>,
-): TypedAction<In, AttemptResult<Out>, R> {
-  return { kind: "Attempt", action } as TypedAction<In, AttemptResult<Out>, R>;
 }
 
 /**

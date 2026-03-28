@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   parallel,
-  attempt,
   config,
   loop,
   branch,
@@ -106,18 +105,15 @@ describe("parallel", () => {
     parallel(setup(), verify());
   });
 
-  it("composes with error handling", () => {
+  it("composes with parallel and branch", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
         parallel(
           setup(),
           pipe(
-            attempt(setup()),
-            branch({
-              Ok: build(),
-              Err: build(),
-            }),
+            setup(),
+            build(),
           ),
         ),
       ),
@@ -187,22 +183,6 @@ describe("loop", () => {
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");
-  });
-});
-
-// -----------------------------------------------------------------------
-// Attempt
-// -----------------------------------------------------------------------
-
-describe("attempt", () => {
-  it("wraps output in AttemptResult", () => {
-    const wrapped = attempt(verify());
-    expect(wrapped.kind).toBe("Attempt");
-  });
-
-  it("chains in pipe with result-aware consumer", () => {
-    const workflow = pipe(build(), attempt(verify()));
-    expect(workflow.kind).toBe("Chain");
   });
 });
 

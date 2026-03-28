@@ -8,13 +8,11 @@ import {
   type ExtractInput,
   type ExtractOutput,
   type LoopResult,
-  type AttemptResult,
   pipe,
   parallel,
   forEach,
   branch,
   loop,
-  attempt,
   configBuilder,
 } from "../src/ast.js";
 import {
@@ -274,17 +272,6 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Loop");
   });
 
-  it("attempt: wraps output in AttemptResult", () => {
-    const action = attempt(verify());
-    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
-        AttemptResult<{ verified: boolean }>
-      >
-    >();
-    expect(action.kind).toBe("Attempt");
-  });
 });
 
 // ---------------------------------------------------------------------------

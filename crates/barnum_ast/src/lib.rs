@@ -67,11 +67,6 @@ pub enum Action {
     /// `Break`.
     Loop(LoopAction),
 
-    /// Error materialization. Executes the action and reifies success/failure
-    /// into `{kind: "Success", value}` or `{kind: "Failure", error, input}`.
-    /// Always infallible from the VM's perspective.
-    Attempt(AttemptAction),
-
     /// Named step reference for mutual recursion and DAG topologies.
     Step(StepAction),
 }
@@ -124,13 +119,6 @@ pub struct LoopAction {
     /// The action to execute each iteration. Must produce a value with
     /// `kind: "Continue"` or `kind: "Break"`.
     pub body: Box<Action>,
-}
-
-/// Error materialization.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AttemptAction {
-    /// The action to attempt.
-    pub action: Box<Action>,
 }
 
 /// Step reference — either a named step or the workflow root.

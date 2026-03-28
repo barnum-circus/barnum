@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   parallel,
-  attempt,
   configBuilder,
   loop,
   branch,
@@ -62,13 +61,6 @@ describe("barnum round-trip", () => {
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Attempt", () => {
-    const cfg = configBuilder().workflow(() =>
-      pipe(constant({ artifact: "test" }), attempt(verify())),
-    );
-    expect(roundTrip(cfg)).toEqual(cfg);
-  });
-
   it("Branch", () => {
     const cfg = configBuilder().workflow(() =>
       pipe(
@@ -103,11 +95,8 @@ describe("barnum round-trip", () => {
           constant({ project: "test" }),
           setup(),
           build(),
-          attempt(steps.Recheck),
-          branch({
-            Ok: deploy(),
-            Err: deploy(),
-          }),
+          steps.Recheck,
+          deploy(),
         ),
       );
     expect(roundTrip(cfg)).toEqual(cfg);

@@ -183,7 +183,6 @@ impl WorkflowState {
     /// - **No parent:** workflow done — return the terminal value.
     /// - **Chain:** trampoline — advance the `rest` action with the value.
     /// - **Loop:** inspect `Continue`/`Break` — re-enter or deliver to parent.
-    /// - **Attempt:** wrap in `{ kind: "Ok", value }` and deliver to parent.
     /// - **Parallel/ForEach:** store in results slot; if all slots filled,
     ///   collect into array and deliver to parent.
     #[allow(clippy::expect_used, clippy::unwrap_used)]
@@ -222,14 +221,8 @@ impl WorkflowState {
                         Some("Break") => self.deliver(frame.parent, value["value"].clone()),
                         _ => Err(CompleteError::InvalidLoopResult { value }),
                     },
-                    // First pass: wrap in Ok unconditionally. Proper Attempt
-                    // semantics (structured error types, etc.) are deferred.
-                    FrameKind::Attempt => {
-                        let wrapped = serde_json::json!({ "kind": "Ok", "value": value });
-                        self.deliver(frame.parent, wrapped)
-                    }
                     _ => unreachable!(
-                        "SingleChild parent must be Chain, Loop, or Attempt, got {:?}",
+                        "SingleChild parent must be Chain or Loop, got {:?}",
                         frame.kind
                     ),
                 }
@@ -394,14 +387,6 @@ impl WorkflowState {
                 self.advance(body, value, Some(ParentRef::SingleChild { frame_id }))?;
             }
 
-            FlatAction::Attempt { child } => {
-                let frame_id = self.insert_frame(Frame {
-                    parent,
-                    kind: FrameKind::Attempt,
-                });
-                self.advance(child, value, Some(ParentRef::SingleChild { frame_id }))?;
-            }
-
             FlatAction::Step { target } => {
                 self.advance(target, value, parent)?;
             }
@@ -465,12 +450,6 @@ mod tests {
     fn loop_action(body: Action) -> Action {
         Action::Loop(LoopAction {
             body: Box::new(body),
-        })
-    }
-
-    fn attempt(action: Action) -> Action {
-        Action::Attempt(AttemptAction {
-            action: Box::new(action),
         })
     }
 
@@ -598,19 +577,6 @@ mod tests {
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
         assert_eq!(dispatches[0].value, json!("init"));
-    }
-
-    /// Attempt: child is dispatched on advance.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn attempt_dispatches_child() {
-        let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
-        let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
-
-        let dispatches = engine.take_pending_dispatches();
-        assert_eq!(dispatches.len(), 1);
-        assert_eq!(dispatches[0].value, json!("input"));
     }
 
     /// Step(Named): follows the step reference to the target action.
@@ -833,18 +799,4 @@ mod tests {
         );
     }
 
-    /// Attempt wraps success in Ok.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn attempt_wraps_success() {
-        let mut engine = engine_from(attempt(invoke("./handler.ts", "run")));
-        let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
-
-        let d = engine.take_pending_dispatches();
-        assert_eq!(
-            engine.complete(d[0].task_id, json!("output")).unwrap(),
-            Some(json!({"kind": "Ok", "value": "output"})),
-        );
-    }
 }
