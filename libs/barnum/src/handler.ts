@@ -1,6 +1,7 @@
 import { fileURLToPath } from "url";
 import type { z } from "zod";
 import type { TypedAction } from "./ast.js";
+import { typedAction } from "./ast.js";
 
 // ---------------------------------------------------------------------------
 // HandlerDefinition — the user's handle function + optional validators
@@ -106,10 +107,10 @@ export function createHandler(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
-  const action: Record<string, unknown> = {
+  const action = typedAction({
     kind: "Invoke",
     handler: { kind: "TypeScript", module: filePath, func: funcName },
-  };
+  });
 
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
   Object.defineProperty(action, HANDLER_BRAND, {
@@ -164,10 +165,10 @@ export function createHandlerWithConfig(
     },
   };
 
-  const invokeAction = {
-    kind: "Invoke" as const,
-    handler: { kind: "TypeScript" as const, module: filePath, func: funcName },
-  };
+  const invokeAction = typedAction({
+    kind: "Invoke",
+    handler: { kind: "TypeScript", module: filePath, func: funcName },
+  });
 
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
   Object.defineProperty(invokeAction, HANDLER_BRAND, {
@@ -179,15 +180,16 @@ export function createHandlerWithConfig(
     enumerable: false,
   });
 
-  return (config: unknown) => ({
-    kind: "Chain",
-    first: {
-      kind: "Parallel",
-      actions: [
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
-      ],
-    },
-    rest: invokeAction,
-  });
+  return (config: unknown) =>
+    typedAction({
+      kind: "Chain",
+      first: {
+        kind: "Parallel",
+        actions: [
+          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
+        ],
+      },
+      rest: invokeAction,
+    });
 }

@@ -1,4 +1,5 @@
 import type { TypedAction, LoopResult } from "./ast.js";
+import { typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -13,10 +14,10 @@ import { chain } from "./chain.js";
 // ---------------------------------------------------------------------------
 
 export function constant<T>(value: T): TypedAction<never, T> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
-  } as TypedAction<never, T>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -24,10 +25,10 @@ export function constant<T>(value: T): TypedAction<never, T> {
 // ---------------------------------------------------------------------------
 
 export function identity<T>(): TypedAction<T, T> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-  } as TypedAction<T, T>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -35,10 +36,10 @@ export function identity<T>(): TypedAction<T, T> {
 // ---------------------------------------------------------------------------
 
 export function drop<T>(): TypedAction<T, never> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Drop" } },
-  } as TypedAction<T, never>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -48,10 +49,10 @@ export function drop<T>(): TypedAction<T, never> {
 export function tag<T, TKind extends string>(
   kind: TKind,
 ): TypedAction<T, { kind: TKind; value: T }> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
-  } as TypedAction<T, { kind: TKind; value: T }>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -87,10 +88,10 @@ export function merge<T extends Record<string, unknown>[]>(): TypedAction<
   T,
   UnionToIntersection<T[number]>
 > {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },
-  } as TypedAction<T, UnionToIntersection<T[number]>>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -98,10 +99,10 @@ export function merge<T extends Record<string, unknown>[]>(): TypedAction<
 // ---------------------------------------------------------------------------
 
 export function flatten<T>(): TypedAction<T[][], T[]> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
-  } as TypedAction<T[][], T[]>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -112,10 +113,10 @@ export function extractField<
   TObj extends Record<string, unknown>,
   TField extends keyof TObj & string,
 >(field: TField): TypedAction<TObj, TObj[TField]> {
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } },
-  } as TypedAction<TObj, TObj[TField]>;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -134,8 +135,8 @@ export function dropResult<In>(action: TypedAction<In, any>): TypedAction<In, ne
 export function range(start: number, end: number): TypedAction<never, number[]> {
   const result: number[] = [];
   for (let i = start; i < end; i++) result.push(i);
-  return {
+  return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },
-  } as TypedAction<never, number[]>;
+  });
 }

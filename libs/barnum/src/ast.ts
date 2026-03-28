@@ -111,7 +111,55 @@ export type TypedAction<
   __phantom_out?: () => Out;
   __in?: In;
   __refs?: { _brand: Refs };
+  /**
+   * Chain this action with another. `a.then(b)` ≡ `chain(a, b)`.
+   *
+   * Note: does not check input/output type compatibility (Out vs Next's In).
+   * Use `pipe()` for full type-checked chaining. `.then()` is ergonomic
+   * sugar — using `any` for `next`'s input avoids making `Out` invariant,
+   * which would break covariant uses (branch, discriminated unions).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  then<Next, R2 extends string = never>(
+    next: TypedAction<any, Next, R2>,
+  ): TypedAction<In, Next, Refs | R2>;
+  /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
+  forEach(): TypedAction<In[], Out[], Refs>;
 };
+
+// ---------------------------------------------------------------------------
+// typedAction — attach .then() and .forEach() as non-enumerable methods
+// ---------------------------------------------------------------------------
+
+// Shared implementations (one closure, not per-instance)
+function thenMethod(
+  this: TypedAction,
+  next: TypedAction,
+): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({ kind: "Chain", first: this as Action, rest: next as Action });
+}
+
+function forEachMethod(this: TypedAction): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({ kind: "ForEach", action: this as Action });
+}
+
+/**
+ * Attach `.then()` and `.forEach()` methods to a plain Action object.
+ * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
+ */
+export function typedAction<In = unknown, Out = unknown, Refs extends string = never>(
+  action: Action,
+): TypedAction<In, Out, Refs> {
+  if (!("then" in action)) {
+    Object.defineProperties(action, {
+      then: { value: thenMethod, configurable: true },
+      forEach: { value: forEachMethod, configurable: true },
+    });
+  }
+  return action as TypedAction<In, Out, Refs>;
+}
 
 // ---------------------------------------------------------------------------
 // Type extraction utilities
@@ -270,14 +318,14 @@ export { parallel } from "./parallel.js";
 export function forEach<In, Out, R extends string = never>(
   action: TypedAction<In, Out, R>,
 ): TypedAction<In[], Out[], R> {
-  return { kind: "ForEach", action } as TypedAction<In[], Out[], R>;
+  return typedAction({ kind: "ForEach", action });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function branch<K extends string, Out, R extends string = never>(
   cases: Record<K, TypedAction<any, Out, R>>,
 ): TypedAction<{ kind: K }, Out, R> {
-  return { kind: "Branch", cases } as TypedAction<{ kind: K }, Out, R>;
+  return typedAction({ kind: "Branch", cases });
 }
 
 export type LoopResult<TContinue, TBreak> =
@@ -287,7 +335,7 @@ export type LoopResult<TContinue, TBreak> =
 export function loop<In, Out, R extends string = never>(
   body: TypedAction<In, LoopResult<In, Out>, R>,
 ): TypedAction<In, Out, R> {
-  return { kind: "Loop", body } as TypedAction<In, Out, R>;
+  return typedAction({ kind: "Loop", body });
 }
 
 /**
@@ -306,10 +354,10 @@ export function loop<In, Out, R extends string = never>(
  * full input/output types.
  */
 function stepRef<N extends string>(name: N): TypedAction<any, any, N> {
-  return {
+  return typedAction({
     kind: "Step",
     step: { kind: "Named", name },
-  } as AnyAction;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +449,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   private _buildStepRefs(): Record<string, Action> {
     const refs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
-      refs[name] = { kind: "Step", step: { kind: "Named", name } };
+      refs[name] = typedAction({ kind: "Step", step: { kind: "Named", name } });
     }
     return refs;
   }
@@ -431,12 +479,12 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   ): RunnableConfig<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
-      stepRefs[name] = { kind: "Step", step: { kind: "Named", name } };
+      stepRefs[name] = typedAction({ kind: "Step", step: { kind: "Named", name } });
     }
-    const self = {
+    const self = typedAction<never, never>({
       kind: "Step",
       step: { kind: "Root" },
-    } as TypedAction<never, never>;
+    });
     const workflowAction = build({ steps: stepRefs as StripRefs<TSteps>, self });
     const steps = Object.keys(this._steps).length > 0 ? this._steps : undefined;
     return new RunnableConfig(workflowAction, steps);
