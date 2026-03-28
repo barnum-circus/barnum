@@ -38,7 +38,7 @@ cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy fa
 # Only run barnum-related tests (skip troupe/agent tests)
 TROUPE_BIN="./target/debug/troupe"
 echo "Running tests..."
-BARNUM_TEST_CMD="cargo test -p barnum_ast -p barnum_cli -p barnum_event_loop -- --test-threads=1"
+BARNUM_TEST_CMD="cargo test -p barnum_ast -p barnum_engine -p barnum_cli -p barnum_event_loop -- --test-threads=1"
 if [ -x "$TROUPE_BIN" ]; then
     RESULT=$("$TROUPE_BIN" submit_task --pool cmd --notify file \
         --data "{\"kind\": \"Task\", \"task\": {\"instructions\": \"pre-commit tests\", \"data\": {\"cmd\": \"cd $(pwd) && $BARNUM_TEST_CMD 2>&1\"}}}" 2>/dev/null) || true
