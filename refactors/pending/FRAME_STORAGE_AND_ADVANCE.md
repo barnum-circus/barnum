@@ -6,6 +6,35 @@ Implementation plan for the first engine milestone: store frames and expand an `
 
 **Scope:** Frame storage, the `advance` function, `Engine::new`, `Engine::start`, `Engine::take_pending_dispatches`. Completion handling (`complete`, `error`, `on_task_completed`) is a separate step.
 
+## The advance/complete cycle
+
+The engine operates in a two-phase cycle:
+
+1. **advance(ActionId, Value, parent)** — expand an ActionId into frames. Walks the flat table, creates frames for structural combinators, and bottoms out at Invoke leaves with pending dispatches. This is "given a cursor into the flat table, build the frame tree until everything is waiting on external work."
+
+2. **complete(ParentRef, Value)** — a child finished; advance the parent frame. Reads the frame, decides what to do next (Chain: trampoline to rest, Loop: re-enter or break, Parallel: fill a result slot), and may call `advance()` to expand the next subtree.
+
+The cycle:
+```
+start(input)
+  → advance(workflow_root, input, None)
+    → creates frames, produces dispatches
+      → dispatches go out to runtime
+
+on_task_completed(task_id, result)        ← runtime delivers result
+  → finds Invoke frame, calls complete(parent, value)
+    → parent frame decides what to do
+      → may call advance(next_action_id, value, parent)
+        → creates more frames, produces more dispatches
+          → dispatches go out to runtime
+
+... repeat until engine.result is Some ...
+```
+
+`advance` takes an ActionId (not a frame) because it *creates* frames — it's the "expand this position in the flat table" primitive. `complete` takes a ParentRef (a frame reference) because it *processes* existing frames — it's the "this frame's child delivered a value" primitive. They're dual operations that call each other.
+
+This milestone implements `advance`, `start`, and the frame storage. The next milestone implements `complete`, `error`, and `on_task_completed`.
+
 ## Where it lives
 
 New module `engine` in `barnum_event_loop`:
