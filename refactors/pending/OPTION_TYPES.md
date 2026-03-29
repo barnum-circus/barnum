@@ -1,6 +1,6 @@
 # Option types: representing optional values in barnum pipelines
 
-> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. With PHANTOM_UNION_DEF.md, they use `TaggedUnion<Def>` for phantom `__def`. Branch auto-unwraps `value` — case handlers receive the payload directly.
+> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. This is not optional: **all union variants must carry `__def`**, no exceptions. Constructors like `some()`, `none()`, `recur()`, `done()`, and `tag()` all require the full variant map as a type parameter so the output type carries `__def`. Branch uses `ExtractDef` for inference and auto-unwraps `value` before each case handler.
 
 ## Problem
 
@@ -42,15 +42,19 @@ pipe(
 
 ### `some` / `none` — constructors
 
+Both carry the full `OptionDef<T>` so the output includes `__def`:
+
 ```ts
 function some<T>(): TypedAction<T, Option<T>>
-// Equivalent to: tag<OptionDef<T>, "Some">("Some")
+// = tag<OptionDef<T>, "Some">("Some")
+// Input: T, Output: Option<T> (full union with __def)
 
-function none<T>(): TypedAction<unknown, Option<T>>
-// Produces { kind: "None"; value: undefined } regardless of input
+function none<T>(): TypedAction<void, Option<T>>
+// = tag<OptionDef<T>, "None">("None")
+// Input: void, Output: Option<T> (full union with __def)
 ```
 
-`some` is `tag<OptionDef<T>, "Some">("Some")` — tag knows the full union. `none` produces a fixed `{ kind: "None"; value: undefined }`.
+Both use `tag()` with the full variant map. The input type comes from the def: `OptionDef<T>["Some"]` = `T`, `OptionDef<T>["None"]` = `void`. The output is `Option<T>` = `TaggedUnion<OptionDef<T>>` — carrying `__def` so `.branch()` can decompose it.
 
 ### `filterMap` — map + flatten options
 
