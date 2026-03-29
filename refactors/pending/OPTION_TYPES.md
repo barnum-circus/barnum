@@ -477,6 +477,18 @@ The `this` constraint (Phase 2 from POSTFIX_OPERATORS.md) makes these methods in
 
 **Naming**: Postfix methods include "Option" in the name (`mapOption`, not `map`) to avoid collision with hypothetical Result postfix methods (`mapOk`, `mapErr`). The namespace form doesn't need the suffix because `Option.map` is already unambiguous.
 
+### `collect` is prefix-only
+
+`Option.collect()` takes `Option<T>[]` as input. A postfix `.collect()` would need the `this` constraint to match `Out extends Option<infer T>[]` — an array of a specific tagged union shape. TypeScript doesn't support `infer` in `this` parameter positions, and the conditional type gymnastics to make this work would be fragile.
+
+Use via `.then()` instead:
+
+```ts
+forEach(action).then(Option.collect())
+```
+
+Same applies to `Option.filterMap`, `Option.partition`, and all collection-level combinators. They're prefix-only.
+
 ## Implementation notes
 
 ### The namespace object
