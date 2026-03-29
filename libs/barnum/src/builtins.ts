@@ -1,4 +1,4 @@
-import type { TypedAction } from "./ast.js";
+import type { Action, TypedAction } from "./ast.js";
 import { typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
@@ -165,6 +165,37 @@ export function withResource<TIn, TResource, TOut>({
   dispose: TypedAction<TOut, any>;
 }): TypedAction<TIn, never> {
   return chain(create, chain(action, dropResult(dispose)));
+}
+
+// ---------------------------------------------------------------------------
+// Augment — run a transform, merge its output back into the original input
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `action` on the input, then merge the action's output fields back
+ * into the original input object. Replaces the verbose
+ * `parallel(action, identity()) → merge()` pattern.
+ *
+ * Example:
+ *   augment(pipe(extractField("file"), migrate({ to: "Typescript" })))
+ *   // { file, outputPath } → { content, file, outputPath }
+ */
+export function augment<
+  TInput extends Record<string, unknown>,
+  TOutput extends Record<string, unknown>,
+  TRefs extends string = never,
+>(
+  action: TypedAction<TInput, TOutput, TRefs>,
+): TypedAction<TInput, TInput & TOutput, TRefs> {
+  // Construct parallel(action, identity()) inline to avoid circular import
+  // with parallel.ts (which imports constant from this file).
+  const parallelNode = typedAction<TInput, [TOutput, TInput], TRefs>({
+    kind: "Parallel",
+    actions: [action as Action, identity() as Action],
+  });
+  // UnionToIntersection<A | B> is semantically A & B, but TypeScript
+  // can't reduce this at the generic level. Safe cast.
+  return chain(parallelNode, merge()) as TypedAction<TInput, TInput & TOutput, TRefs>;
 }
 
 // ---------------------------------------------------------------------------
