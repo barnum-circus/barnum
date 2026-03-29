@@ -227,11 +227,173 @@ Adding lazy bindings with memoization makes the parallel even tighter. We should
 | `tap(sideEffect)` | Side effect in a binding that's never referenced (eager) |
 | `withResource({ create, action, dispose })` | See below |
 
-### Interaction with RAII
+### What RAII would mean for declare
 
-`declare` doesn't replace `withResource` — it has no cleanup semantics. A binding that creates a worktree has no way to delete it when the body exits. If `implement` fails, cleanup never runs.
+`declare` as specified has no cleanup semantics. A binding that creates a git worktree has no way to delete it when the body exits. If the body fails, the worktree leaks.
 
-`declare` + RAII (if added later) could replace `withResource`. `declare` alone cannot.
+```ts
+// Without RAII — cleanup is manual and fragile
+declare({
+  worktree: createWorktree,
+}, ({ worktree }) =>
+  pipe(
+    worktree.then(implement),
+    worktree.then(commit),
+    worktree.then(deleteWorktree),  // never runs if implement fails
+  ),
+)
+```
+
+RAII would add an optional `dispose` action to each binding. The scheduler guarantees: if a binding was successfully evaluated, its dispose action runs when the `declare` scope exits — regardless of whether the body succeeded or failed.
+
+#### Surface API with RAII
+
+The bindings object would accept either a bare action (no cleanup) or a `{ create, dispose }` pair:
+
+```ts
+declare({
+  // Simple binding — no cleanup
+  branch: deriveBranch,
+  // Resource binding — with cleanup
+  worktree: {
+    create: createWorktree,
+    dispose: deleteWorktree,
+  },
+}, ({ branch, worktree }) =>
+  pipe(
+    worktree.then(pick("worktreePath", "description")).then(implement),
+    worktree.then(pick("worktreePath")).then(commit),
+    branch.then(createPR),
+  ),
+)
+```
+
+The type system would distinguish these: a bare `Pipeable<TIn, T>` produces a `TypedAction<never, T>` VarRef. A `{ create: Pipeable<TIn, T>, dispose: Pipeable<T, unknown> }` also produces a `TypedAction<never, T>` VarRef — same from the body's perspective. The dispose action is invisible to the body callback. It's metadata for the scheduler.
+
+#### Scheduler behavior
+
+When a `Declare` node with disposable bindings is entered:
+
+1. Evaluate all bindings in parallel (same as today).
+2. Store results in the environment.
+3. Execute the body.
+4. **On body completion (success or failure)**: run dispose actions for all bindings that have them and were successfully evaluated.
+
+The critical guarantee: dispose runs **even if the body fails**. This is the entire point of RAII — cleanup is not optional, not manual, not dependent on the happy path.
+
+#### Error semantics
+
+This is where it gets interesting. There are several failure modes:
+
+**Body succeeds, dispose succeeds**: Normal case. Declare produces the body's output.
+
+**Body succeeds, dispose fails**: The body's work completed, but cleanup failed. What should the declare node produce? Options:
+- Return the body's output and log/ignore the dispose failure (pragmatic — the work is done)
+- Fail the declare node with the dispose error (strict — resource leak is an error)
+- Return both: `{ result: bodyOutput, disposeErrors: [...] }` (changes the output type — ugly)
+
+**Body fails, dispose succeeds**: Cleanup ran correctly after a failure. The declare node propagates the body's error.
+
+**Body fails, dispose fails**: Both failed. The declare node must propagate the body's error (that's the primary failure). The dispose error is secondary — log it, attach it as a suppressed error, or drop it.
+
+**Binding fails**: If a binding itself fails during evaluation, the other bindings that completed need their dispose actions run. This means dispose must be possible even when not all bindings were evaluated — the scheduler needs to track which bindings completed successfully.
+
+#### Dispose ordering
+
+When multiple bindings have dispose actions, what order do they run?
+
+**Reverse order of completion** (stack discipline): The last binding to complete is the first to be disposed. This matches C++ RAII semantics and is correct when resources have dependencies — a resource created later might depend on one created earlier.
+
+**Parallel**: Run all dispose actions concurrently. Faster, but incorrect if resources depend on each other (e.g., a file handle in a worktree — must close file before deleting worktree).
+
+**Recommendation**: Parallel by default (bindings are independent unless proven otherwise — they were evaluated in parallel, after all). If ordering matters, nest the declares:
+
+```ts
+// Outer disposes after inner
+declare({
+  worktree: { create: createWorktree, dispose: deleteWorktree },
+}, ({ worktree }) =>
+  declare({
+    file: { create: worktree.then(openFile), dispose: closeFile },
+  }, ({ file }) =>
+    file.then(write),
+  ),
+)
+```
+
+The inner `declare`'s dispose (closeFile) runs when its body completes. The outer `declare`'s dispose (deleteWorktree) runs after the inner `declare` — including its dispose — completes. Nesting gives you ordering control without special syntax.
+
+#### AST representation
+
+Two options for encoding dispose in the AST:
+
+**Option 1: Inline in DeclareAction.** Each binding in the `bindings` map becomes `{ create: Action, dispose?: Action }` instead of a bare `Action`.
+
+```ts
+interface DeclareAction {
+  kind: "Declare";
+  bindings: Record<string, DeclareBinding>;
+  body: Action;
+}
+
+type DeclareBinding =
+  | { kind: "Simple"; action: Action }
+  | { kind: "Resource"; create: Action; dispose: Action };
+```
+
+**Option 2: Separate dispose map.** Keep `bindings` as `Record<string, Action>` and add a `disposers: Record<string, Action>` map (same keys as bindings, only for bindings that have cleanup).
+
+```ts
+interface DeclareAction {
+  kind: "Declare";
+  bindings: Record<string, Action>;
+  disposers: Record<string, Action>;  // subset of binding IDs
+  body: Action;
+}
+```
+
+Option 2 is simpler for the flattener and engine — the bindings map stays uniform. The disposers map is a parallel structure the scheduler consults during scope exit. Option 1 is more self-describing. Either works; option 2 is probably easier to implement.
+
+#### This replaces withResource
+
+`declare` with RAII subsumes `withResource` entirely:
+
+```ts
+// withResource today:
+withResource({
+  create: createWorktree,
+  action: pipe(implement, commit),
+  dispose: deleteWorktree,
+})
+
+// declare with RAII:
+declare({
+  worktree: { create: createWorktree, dispose: deleteWorktree },
+}, ({ worktree }) =>
+  pipe(
+    worktree.then(implement),
+    worktree.then(commit),
+  ),
+)
+```
+
+The `declare` version is strictly more powerful:
+- Multiple resources in one scope (withResource handles one)
+- Resources can be referenced from any point in the body (withResource merges into pipeline input)
+- Other bindings can coexist alongside resources (withResource is resources only)
+- Nested declares give dispose ordering control
+
+Once `declare` has RAII, `withResource` becomes a convenience wrapper — or is deleted entirely.
+
+#### Implementation order
+
+RAII is not part of the initial `declare` implementation. The plan:
+
+1. Ship `declare` with simple bindings (no dispose). This solves prop drilling.
+2. Add RAII to `declare` as a follow-up. This replaces `withResource`.
+3. Deprecate `withResource`.
+
+Step 1 is valuable on its own. Step 2 is valuable on its own. Neither blocks the other. The `DeclareAction` AST node is designed so that adding `disposers` later is a backward-compatible extension (add a new field with a default of empty map).
 
 ## Relationship to scopes and continuations
 
