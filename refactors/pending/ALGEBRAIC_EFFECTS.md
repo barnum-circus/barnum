@@ -6,208 +6,135 @@ Barnum's current AST is grounded in Cartesian Monoidal Categories: `Chain` (comp
 
 The prop drilling problem is the fundamental weakness of point-free topologies. When step C needs the output of step A and step A's output isn't on the direct pipeline path to step C, you must manually route it (augment, tap, pick). This isn't a missing feature. It's a structural property of point-free composition.
 
-The proposed `declare` + `VarRef` introduces the Lambda Calculus: named bindings, lexical scope, an environment. This is point-ful evaluation bolted onto a Cartesian structure. The two models coexist but don't unify.
+The proposed `declare` + `VarRef` introduces the Lambda Calculus: named bindings, lexical scope, an environment. This is point-ful evaluation bolted onto a Cartesian structure. Rather than bolt on ad-hoc nodes for each new scope feature, we can unify all scope-based features through a single mechanism.
 
-## The unification: Handle/Perform
+## The minimal AST
 
-`declare`, `tryCatch`, `loop`, `withTimeout`, and any future scope-creating combinator are all instances of algebraic effects. The two primitives:
+The goal: fewest possible primitives, maximum expressivity. Every scope-based feature (`declare`, `loop`, `tryCatch`, `withTimeout`, `race`, RAII) is TypeScript surface sugar that compiles down to these primitives.
 
-- **`Handle`**: Install a scoped effect handler around a body. When the body (or anything nested inside it) performs a matching effect, control transfers to the handler. The handler receives the effect's payload and a continuation representing "the rest of the computation."
-- **`Perform`**: Suspend execution and yield a value to the nearest enclosing `Handle` that matches.
+| Node | Role | Categorical analogue |
+|---|---|---|
+| `Invoke` | External computation (handler call) | Morphism |
+| `Chain` | Sequential composition | Kleisli composition |
+| `Parallel` | Concurrent fork-join | Tensor product |
+| `Branch` | Dispatch on tagged union | Coproduct elimination |
+| `ForEach` | Map over array | Functorial lift |
+| `Handle` | Install scoped effect handler | Effect handler |
+| `Perform` | Emit effect, suspend execution | Effect operation |
+
+7 nodes. `Loop` and `Step` are gone from the tree AST. (Step may remain in the flat table as a jump optimization.) Everything that creates a scope — variables, error handling, timeouts, resource management, looping — compiles to `Handle`/`Perform`.
+
+Note: `pipe`, `augment`, `tap`, `pick`, `merge`, `option.map`, `declare`, `loop`, `tryCatch`, `withTimeout`, `race` are all TypeScript surface functions that produce trees of these 7 nodes. This is already the pattern — `pipe(a, b, c)` compiles to nested `Chain` nodes. Handle/Perform extends the same approach to scope-based features.
+
+## How Handle/Perform works
+
+- **`Handle(effect_type, handler_logic, body)`**: Wraps a body. When anything inside the body performs a matching effect, control transfers to the handler. The handler receives the effect's payload and a continuation (the suspended rest of the computation).
+- **`Perform(effect_type, payload)`**: Suspends execution and yields to the nearest enclosing Handle for that effect type.
+
+The handler can:
+- **Resume the continuation** with a value (variable lookup: look up value, resume)
+- **Discard the continuation** (error handling: don't resume, run recovery instead)
+- **Re-enter the body** (loop: on Continue, restart the handler's body with a new input)
 
 ### Declare as Handle/Perform
 
 ```
+// User writes:
 declare({ x: computeX }, ({ x }) => body_using_x)
 
 // Compiles to:
-Handle(
-  handlers: {
-    ReadVar(id) => if id == "__declare_0" then resume(evaluate(computeX))
-                   else re-perform(ReadVar(id))  // propagate to outer scope
-  },
-  body: body_with_VarRefs_replaced_by_Perform(ReadVar("__declare_0"))
-)
-```
-
-When the body hits a VarRef, it performs `ReadVar(id)`. The nearest Handle that knows about that id looks up (or evaluates) the binding and resumes the continuation with the value.
-
-### Loop as Handle/Perform
-
-```
-loop(body)
-
-// Compiles to:
-Handle(
-  handlers: {
-    Continue(value) => restart body with value  // re-enter the handler's body
-    Break(value) => return value                // discard continuation, exit handler
-  },
-  body
-)
-```
-
-The handler intercepts Continue by re-entering its own body (capturing the re-entry point). It intercepts Break by discarding the continuation and delivering the value to the parent. This is what the current LoopAction frame already does, just expressed as a general mechanism.
-
-### TryCatch as Handle/Perform
-
-```
-tryCatch(body, recovery)
-
-// Compiles to:
-Handle(
-  handlers: {
-    Error(err) => evaluate recovery with err  // discard continuation, run recovery
-  },
-  body
-)
-```
-
-The handler intercepts errors. On error, it discards the body's continuation and runs the recovery action instead.
-
-### Timeout as Handle/Perform
-
-```
-withTimeout(duration, body)
-
-// Compiles to:
-Handle(
-  handlers: {
-    Timeout() => cancel body, propagate timeout error
-  },
-  Chain(
-    Parallel(body, timer(duration)),
-    // whichever completes first triggers the handler
+Chain(
+  computeX,                           // evaluate binding eagerly
+  Handle(
+    effect: ReadVar,
+    handler: on ReadVar(id) {
+      // Each Handle frame holds one (id, value) pair.
+      // If id matches, resume with the stored value.
+      // If not, re-perform (propagate to outer Handle).
+    },
+    body: /* body with VarRefs replaced by Perform(ReadVar(id)) */
   )
 )
 ```
 
-Timer completion performs a Timeout effect. The handler cancels the body and propagates.
+The binding is evaluated before the Handle is entered. The Handle frame stores one `(id, value)` pair. VarRefs in the body become `Perform(ReadVar(id))`. When the scheduler encounters a Perform, it walks up the frame tree to find the Handle that owns that id. The Handle resumes the continuation with the value.
 
-## The continuation question
-
-Handle/Perform requires the scheduler to reify continuations. When a Perform suspends execution, the handler receives:
-1. The effect's payload (a variable ID, an error value, a Continue value)
-2. A continuation — "the rest of the computation" from the Perform site to the Handle site
-
-The handler decides what to do with the continuation:
-- **Resume once** (declare: look up value, resume with it)
-- **Discard** (tryCatch on error: don't resume, run recovery instead)
-- **Resume repeatedly** (loop on Continue: re-enter body, which means invoking the handler again)
-- **Resume zero times** (timeout: cancel everything)
-
-The current engine doesn't have explicit continuations. Each frame has a `parent: Option<ParentRef>` that implicitly encodes "what to do next." The continuation is the frame tree from the current frame up to the root.
-
-Implementing general Handle/Perform requires making this implicit continuation explicit and manipulable. The scheduler must be able to:
-- Capture a portion of the frame tree (from Perform site to Handle site)
-- Invoke it (resume the computation)
-- Discard it (cancel all frames in the captured portion)
-- Copy it (for multi-shot continuations, if ever needed)
-
-This is a significant change to the frame model. Each specific scope type (declare, loop, tryCatch) can be implemented with specific frame logic that doesn't require general continuation capture. Handle/Perform generalizes this at the cost of a more complex frame model.
-
-### Two-level architecture
-
-A pragmatic approach: keep specific AST nodes in the tree AST (what TypeScript produces) and compile to Handle/Perform in the flat table (what Rust executes).
-
-- **Tree AST**: `DeclareAction`, `LoopAction`, `TryCatchAction`, etc. Specific nodes with specific types, specific error messages, specific validation. The TypeScript surface API produces these.
-- **Flat table**: `HandleAction`, `PerformAction`. The flattener desugars specific nodes into Handle/Perform pairs. The Rust scheduler implements one general mechanism.
-
-This is how compilers work. `for`, `while`, `if/else`, `try/catch` exist in the AST. They compile to `branch`, `jump`, `compare` in the instruction set. The AST preserves intent and enables validation. The instruction set is minimal and general.
-
-Benefits:
-- TypeScript type checking works on specific nodes (DeclareAction carries TIn, TOut, the binding types)
-- Error messages reference user concepts ("variable '__declare_0' not found" vs "unhandled effect 'ReadVar'")
-- The scheduler implements one frame model (Handle) instead of N frame kinds
-- New scope types require only: new TS surface function + new AST node + new flattener case. No scheduler changes.
-
-Cost:
-- The flattener becomes a real compiler pass, not just a tree-to-table layout
-- The scheduler must implement general continuation management
-- Debugging the flat table requires mapping back to tree AST concepts
-
-## RAII: separate concern from variable binding
-
-The LET_BINDINGS.md proposal ties resource disposal to `declare`'s scope exit. This conflates two type-theoretic concepts:
-
-- **Unrestricted variables**: Read zero or more times. No lifecycle constraint. A VarRef is pure data lookup.
-- **Affine resources**: Used at most once, must be disposed. A resource has a lifecycle that must be managed.
-
-A `declare`-bound variable that happens to come from a disposable handler is both: a variable (read many times) and a resource (disposed once). The current proposal handles both with one mechanism (Declare scope exit runs dispose). This works under strict sequential execution where lexical scope matches temporal lifetime.
-
-It breaks if:
-- **Lazy evaluation**: A VarRef is forced after the Declare scope exits. The value was disposed. Use-after-free.
-- **Detached forks**: A VarRef is passed to a background process. The Declare scope exits and disposes. The background process holds a dangling reference.
-- **Continuation capture**: A continuation that includes a VarRef is captured and resumed after the Declare scope exits.
-
-Under Handle/Perform, resource management is a separate effect:
+For the object form (concurrent bindings), the compilation wraps the bindings in Parallel first:
 
 ```
-// Variable binding: ReadVar effect
-Handle(
-  { ReadVar(id) => resume(lookup(id)) },
-  body
+// declare({ a: exprA, b: exprB }, body)
+// Compiles to:
+Chain(
+  Parallel(exprA, exprB),            // concurrent evaluation
+  Handle(ReadVar("__0"), {           // bind first result
+    Handle(ReadVar("__1"), {         // bind second result
+      body
+    })
+  })
 )
+```
 
-// Resource management: Bracket effect
+For the array form (sequential, dependent bindings), each binding is a nested Chain + Handle:
+
+```
+// declare([{ a: exprA }, ({ a }) => ({ b: exprB_using_a })], body)
+// Compiles to:
+Chain(
+  exprA,
+  Handle(ReadVar("__0"), {
+    Chain(
+      exprB_using_a,                  // may contain Perform(ReadVar("__0"))
+      Handle(ReadVar("__1"), {
+        body
+      })
+    )
+  })
+)
+```
+
+### Loop as Handle/Perform
+
+```
+// loop(body)
+// Compiles to:
 Handle(
-  {
-    Acquire(action) => evaluate action, track resource, resume(resource)
-    Release() => dispose all tracked resources (reverse order)
-    // Release fires automatically on handler scope exit (success or error)
+  effect: LoopControl,
+  handler: {
+    on Continue(value) => re-enter body with value
+    on Break(value) => return value (discard continuation, exit handler)
+  },
+  body  // body contains Perform(Continue(v)) or Perform(Break(v))
+)
+```
+
+The current `LoopAction` frame already does exactly this. The handler re-enters its body on Continue (multi-shot: the continuation is discarded, a fresh execution starts) and exits on Break (zero-shot: the continuation is discarded, the value is delivered to the parent).
+
+`recur()` and `done()` compile to `Perform(Continue(value))` and `Perform(Break(value))`.
+
+### TryCatch as Handle/Perform
+
+```
+// tryCatch(body, recovery)
+// Compiles to:
+Handle(
+  effect: Error,
+  handler: {
+    on Error(err) => evaluate recovery with err  // discard continuation
   },
   body
 )
 ```
 
-The two can be composed:
+### Race as Handle/Perform
 
 ```
-// User writes: declare({ wt: createWorktree }, body)
-// Where createWorktree has dispose metadata
-
-// Compiles to nested handlers:
-Handle(Bracket, {
-  Handle(ReadVar, {
-    body  // VarRefs perform ReadVar; resource cleanup on Bracket exit
-  })
-})
-```
-
-The user writes one thing. The compiler generates two nested handlers: one for the resource lifecycle (affine), one for the variable binding (unrestricted). The concerns are separated at the semantic level.
-
-### Current execution model makes the conflation safe
-
-The current Barnum scheduler is cooperative and single-threaded. There are no detached forks, no lazy evaluation, no continuation capture. Lexical scope perfectly matches temporal lifetime. Under these constraints, tying disposal to Declare scope exit is correct.
-
-The risk is: if the execution model evolves (lazy bindings, background tasks, durable execution with resume), the conflation becomes a bug. Separating the concerns now (even if the implementation happens to interleave them) makes the migration path clear.
-
-## Environment: persistent data structure, not flat HashMap
-
-The LET_BINDINGS.md proposal uses a single `HashMap<DeclareId, Value>` for the environment. Under Handle/Perform, the environment is an effect handler's local state. Each Handle for ReadVar maintains its own binding.
-
-A persistent immutable data structure (cons list of `(id, value)` pairs, or a persistent hash map like an HAMT) has advantages:
-
-- **Automatic scope cleanup**: When a Declare scope exits, the extended environment is simply no longer referenced. No explicit removal needed. The garbage collector (or Rust ownership) handles it.
-- **No mutation**: Parallel branches each receive the same environment reference. No cloning, no locking. Reads are safe without synchronization because the data is immutable.
-- **Thread safety for free**: If the scheduler ever goes multi-threaded, the persistent data structure works without changes.
-
-The flat HashMap requires explicit cleanup (remove bindings on scope exit) and explicit cloning or locking for parallel branches. The persistent structure avoids both.
-
-Lookup cost: O(n) for a cons list (where n is the number of bindings in scope), O(log n) for an HAMT. Given that typical workflows have tens of bindings, not thousands, the cons list is fine. The constant factor is lower than a HashMap for small n.
-
-Under Handle/Perform, the environment is even simpler: each Handle frame for ReadVar holds exactly one `(id, value)` pair. Lookup walks up the handler chain (parent pointers). This IS a cons list, implemented via the frame tree itself.
-
-## Race: derived from cancellation semantics
-
-Race is not a primitive. It's `Parallel` + `Handle` + cancellation:
-
-```
-race(a, b)
-
+// race(a, b)
 // Compiles to:
 Handle(
-  { FirstResult(value) => return value  // discard continuation, cancelling the other branch },
+  effect: FirstResult,
+  handler: {
+    on FirstResult(value) => return value  // discard continuation + cancel siblings
+  },
   Parallel(
     Chain(a, Perform(FirstResult)),
     Chain(b, Perform(FirstResult))
@@ -215,42 +142,190 @@ Handle(
 )
 ```
 
-Whichever branch completes first performs `FirstResult`. The handler takes the value and discards the continuation, which means the entire Parallel subgraph (including the other branch) must be cancelled.
+Whichever branch completes first performs `FirstResult`. The handler discards the continuation, which means the Parallel frame (and its other branch) must be cancelled. The implementation burden is cancellation semantics, not a new AST node.
 
-The implementation burden is cancellation: the scheduler must traverse the orphaned branch's frame subtree and tear it down, running dispose handlers for any acquired resources. If the scheduler's frame-drop logic is sound, Race falls out for free.
+### RAII (Bracket) as Handle/Perform
 
-If Race is added as a separate AST node, it masks a deficiency in cancellation semantics. The right approach: ensure cancellation works correctly, then build Race in the TypeScript surface layer.
+```
+// A handler with dispose metadata, used in declare:
+// declare({ wt: pipe(deriveBranch, createWorktree) }, body)
+//
+// Compiles to two nested handlers — one for the resource lifecycle,
+// one for the variable binding:
+Chain(
+  pipe(deriveBranch, createWorktree),
+  Handle(
+    effect: Bracket,
+    handler: {
+      // On scope exit (success or error): run dispose on the stored value
+      on_exit: dispose(stored_value)
+    },
+    Handle(
+      effect: ReadVar("__0"),
+      handler: { on ReadVar => resume(stored_value) },
+      body
+    )
+  )
+)
+```
+
+Variable binding (unrestricted: read many times) is separated from resource lifecycle (affine: disposed once). The Bracket handler manages disposal. The ReadVar handler manages lookup. They compose by nesting.
+
+This separation matters if the execution model ever evolves to include lazy evaluation, detached forks, or continuation capture. Under those models, a ReadVar handler can be resumed after the Bracket handler has exited — and the Bracket handler will have already disposed the resource. The separation makes this a detectable error rather than a silent use-after-free.
+
+Under the current strict sequential execution model, the two handlers always exit together, so the separation is invisible to the user. But it's architecturally clean.
+
+## The scheduler's execution model
+
+### StepResult: the core ADT
+
+The scheduler evaluates frames by ticking them. Each tick returns one of:
+
+```rust
+pub enum StepResult {
+    Done(Value),                       // frame completed, produced a value
+    Suspend(Effect, FrameState),       // frame emitted an effect, yielded its state
+    Dispatch(HandlerId, Value),        // frame hit an Invoke, needs external execution
+    Error(WorkflowError),              // frame failed
+}
+```
+
+`Suspend` is the new variant. When a `Perform` node is evaluated, it returns `Suspend(effect, state)`. The scheduler propagates this upward.
+
+### Effect propagation (stack unwinding)
+
+When the scheduler sees `Suspend`, it walks up the frame tree looking for a `Handle` frame that matches the effect type:
+
+1. The Perform frame returns `Suspend(ReadVar("__0"), frame_state)`.
+2. The parent (say, a Chain frame) receives `Suspend`. It doesn't handle effects. It freezes its own state and returns `Suspend` to its parent.
+3. This continues up the tree until a Handle frame matching `ReadVar` is found.
+4. The Handle frame receives the effect payload and the frozen frames between itself and the Perform site.
+
+The frozen frames between the Perform and the Handle are the **continuation**. They're a snapshot of the execution path that was interrupted.
+
+### Intermediate nodes don't handle effects
+
+Chain, Parallel, Branch, ForEach are ignorant of effects. They only understand `Done`, `Suspend`, `Dispatch`, and `Error`. When a child returns `Suspend`:
+
+- **Chain**: Freeze own state (remember which child completed, what the `rest` is). Return `Suspend` to parent.
+- **Branch**: Same — freeze state, propagate.
+- **ForEach**: Freeze state (which iterations completed, which suspended). Propagate.
+- **Parallel**: This is the interesting case (see below).
+
+### Parallel and suspension
+
+When `Parallel(A, B)` is running and A returns `Suspend`:
+
+1. The Parallel frame receives A's suspension.
+2. B may still be executing (if the scheduler is processing children round-robin) or may have already completed.
+3. The Parallel frame pauses. It freezes its state: A is suspended with `(effect, frame_state)`, B has its current status (Done, still running, etc.).
+4. The Parallel frame returns `Suspend` to its parent, passing the effect upward.
+
+When the Handle frame resumes the continuation:
+
+1. The Parallel frame is restored.
+2. A receives the resume value and transitions from Suspended to Done.
+3. The Parallel frame waits for B to also complete (if it hasn't already).
+4. Once both are Done, the Parallel frame returns `Done([result_a, result_b])`.
+
+When the Handle frame **discards** the continuation (Race scenario):
+
+1. The continuation (including the Parallel frame) is dropped.
+2. Dropping the Parallel frame drops B's execution state.
+3. If B had acquired resources, their disposal runs via Bracket handlers during teardown.
+
+### Continuation representation
+
+The continuation is the chain of frozen frames from the Perform site to the Handle site:
+
+```rust
+pub struct Continuation {
+    /// Frozen frames, innermost first. Resuming pushes them
+    /// back onto the scheduler's active frame stack.
+    frames: Vec<FrozenFrame>,
+}
+
+impl Continuation {
+    /// Resume by restoring frozen frames and injecting the value
+    /// into the innermost frame.
+    pub fn resume(self, scheduler: &mut Scheduler, value: Value) { ... }
+
+    /// Discard by dropping all frozen frames, triggering cleanup.
+    pub fn discard(self, scheduler: &mut Scheduler) { ... }
+}
+```
+
+Rust's ownership model helps: dropping a Continuation drops the frozen frames, which can trigger RAII cleanup via the Drop trait on frame state that holds Bracket resources.
+
+### Multi-shot continuations (loop)
+
+Loop's Continue handler needs to re-enter the body. This looks like "resume the continuation multiple times," but it's simpler than general multi-shot continuations. The handler doesn't replay the old continuation — it starts a fresh execution of the body with the Continue value. The old continuation (from the Perform(Continue) site) is discarded.
+
+So loop is actually zero-shot on Continue (discard the old continuation, start fresh) and zero-shot on Break (discard, exit). No multi-shot continuations are needed for any current or planned feature.
+
+## Where Gemini's analysis was wrong
+
+This analysis was informed by external feedback (Gemini) without source access. Corrections:
+
+1. **`pipe` is already not an AST node.** `pipe(a, b, c)` compiles to nested Chain nodes in TypeScript. The TS-side sugar pattern that Gemini proposes is already how Barnum works. Handle/Perform extends this existing pattern to scope-based features.
+
+2. **The flat HashMap "bottleneck" doesn't exist.** The scheduler is cooperative and single-threaded. There's no concurrent write contention. The persistent data structure recommendation is still valid for correctness (automatic scope cleanup), but the performance argument is moot.
+
+3. **"De Bruijn naming scheme" is inaccurate.** De Bruijn indices are relative (distance from use site to binding site) and change under substitution. Monotonic counter IDs are absolute and stable. Different mechanism, different properties.
+
+4. **The ReadVar dispatch mechanism is simpler than shown.** Gemini shows runtime string-matching dispatch (`if id == "__declare_0"`). In practice, each Handle frame holds one (id, value) pair. Lookup walks up the handler chain via parent pointers — structurally identical to how the current engine walks frames. No string matching at runtime; the frame tree encodes the scope chain.
+
+## Environment as frame tree
+
+Under Handle/Perform, the environment is implicit in the frame tree. Each Handle(ReadVar) frame holds one `(id, value)` pair. Looking up a variable means walking parent pointers to find the Handle that owns that id.
+
+This IS a persistent immutable cons list, implemented via the frame tree structure. No separate data structure needed. When a Handle scope exits, its frame is removed — the binding disappears. When Parallel forks, both branches share the same parent chain — both can read the same variables without cloning.
+
+For the current cooperative single-threaded scheduler, this is a simple parent-pointer walk. For a future multi-threaded scheduler, the frame tree would need to be made thread-safe (Arc-based parent pointers, or each thread gets its own frame stack with shared ancestry).
 
 ## Implementation path
 
-### Option A: Handle/Perform first (theoretical purity)
+Handle/Perform is the preferred direction. Fewest primitives, maximum extensibility, clean educational story.
 
-Build the general mechanism. All scope types are TypeScript sugar. The scheduler implements one frame kind.
+### Phase 1: Handle/Perform in the scheduler
 
-Cost: continuation management in the scheduler is hard. Multi-shot continuations (loop), single-shot (declare), zero-shot (tryCatch on error) all require different handling. The scheduler must track continuation state, handle cleanup on discard, and prevent misuse (resuming a consumed continuation).
+Add Handle and Perform to the flat table's action types. Implement the suspension/resumption mechanism in the Rust scheduler:
 
-Benefit: future scope types require zero scheduler changes. The AST stays minimal. The frame model is general and proven correct once.
+1. `FlatAction::Perform { effect }` — returns `StepResult::Suspend`
+2. `FlatAction::Handle { effect_type, body }` — installs a handler frame
+3. The scheduler's run loop gains a `Suspend` propagation path (analogous to the existing error propagation path)
+4. Handle frames catch matching suspensions and execute handler logic
+5. Continuation capture, resume, and discard
 
-### Option B: Specific frame kinds first (pragmatic)
+### Phase 2: Declare as the first sugar
 
-Build DeclareAction, then TryCatchAction, then TimeoutAction. Each is a specific frame kind in the scheduler. Refactor to Handle/Perform later if the pattern proves out.
+Implement `declare` in TypeScript as sugar over Handle/Perform. This exercises the full mechanism:
 
-Cost: N frame kinds in the scheduler, each with its own enter/exit/error logic. When N gets large, the scheduler's match arms multiply. Adding a new scope type requires scheduler changes.
+- Perform(ReadVar) in the body
+- Handle(ReadVar) around the body
+- Eager evaluation of bindings before entering the Handle
+- Both object form (concurrent via Parallel) and array form (sequential via nesting)
 
-Benefit: each step is small, testable, and delivers user value immediately. The scheduler remains simple. Type safety and error messages are specific.
+### Phase 3: Loop migration
 
-### Option C: Two-level architecture (recommended)
+Rewrite the existing LoopAction to compile to Handle/Perform. This exercises:
 
-Tree AST has specific nodes. Flat table uses Handle/Perform. The flattener compiles specific nodes to Handle/Perform.
+- Perform(Continue) and Perform(Break) replacing the current `recur()` / `done()` builtins
+- Handle(LoopControl) replacing the current Loop frame kind
+- Re-entry semantics (on Continue, start fresh body execution)
+- The existing Loop tests validate that the migration is correct
 
-Cost: the flattener becomes a real compiler pass. The scheduler implements Handle/Perform (same cost as Option A).
+### Phase 4: TryCatch, Timeout, Race, RAII
 
-Benefit: TypeScript surface stays clean and well-typed. Scheduler is general. New scope types require: TS function + AST node + flattener case. No scheduler changes.
+Each is new TypeScript surface sugar that compiles to Handle/Perform. The scheduler doesn't change. Each new feature exercises the mechanism in a new way:
 
-This is the standard compiler architecture: rich frontend AST, minimal backend IR.
+- TryCatch: discard continuation on error
+- Timeout: timer-based cancellation
+- Race: first-completion with sibling cancellation
+- RAII (Bracket): scope-exit cleanup, separated from variable binding
 
-### What to build first regardless of option
+### What stays in the tree AST
 
-No matter which path, the first step is the same: implement a single-binding Declare that adds one entry to the environment and executes a body. Under Option A, this is Handle(ReadVar, body). Under Option B, this is a Declare frame kind. Under Option C, this is a DeclareAction in the tree AST that the flattener lowers to Handle(ReadVar, body) in the flat table.
+The tree AST (what TypeScript produces) can keep specific node types for type checking and error messages: `DeclareAction`, `LoopAction`, `TryCatchAction`. These are desugared to Handle/Perform during flattening. Or the tree AST can use Handle/Perform directly, with TypeScript functions providing the type safety. This is a TS-side design choice that doesn't affect the scheduler.
 
-The implementation of the first scope type is the same work regardless. The question is whether the scheduler's frame model is general (Handle) or specific (Declare). That decision can be deferred to the point where we implement the second scope type (tryCatch), because that's when the generalization pays off.
+The TS-vs-Rust boundary: currently, TypeScript does all rewriting (pipe → Chain, augment → Parallel+Identity+Merge, etc.) and the Rust flattener does layout + handler interning + step resolution. Adding Handle/Perform desugaring could happen on either side. Doing it in TypeScript keeps the flattener simple. Doing it in Rust keeps the tree AST closer to user intent.
