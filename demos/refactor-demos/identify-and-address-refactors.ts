@@ -53,21 +53,22 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 await configBuilder()
-  // Mutual recursion: TypeCheckFix → branch → HasErrors → fix → TypeCheckFix
+  // Mutual recursion: TypeCheck → Fix → TypeCheck
+  //
+  // TypeCheck runs tsc, classifies the result, and either dispatches to
+  // Fix (HasErrors) or exits (Clean). Fix applies fixes and jumps back
+  // to TypeCheck. Neither step can be defined without referencing the
+  // other, so both must be registered in the same batch via stepRef.
   .registerSteps(({ stepRef }) => ({
-    TypeCheckFix: pipe(
+    TypeCheck: pipe(
       typeCheck,
       classifyErrors,
       branch({
-        HasErrors: pipe(
-          extractField("errors"),
-          forEach(fix),
-          drop(),
-          stepRef("TypeCheckFix"),
-        ),
+        HasErrors: pipe(extractField("errors"), stepRef("Fix")),
         Clean: drop(),
       }),
     ),
+    Fix: pipe(forEach(fix), drop(), stepRef("TypeCheck")),
   }))
   .workflow(({ steps }) =>
     pipe(
@@ -87,11 +88,11 @@ await configBuilder()
             commit,
             drop(),
 
-            // Type-check/fix cycle (registered step for mutual recursion)
-            steps.TypeCheckFix,
+            // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
+            steps.TypeCheck,
 
             // Judge/revise loop: review the refactor, revise if needed.
-            // drop() discards the TypeCheckFix output — judgeRefactor
+            // drop() discards the TypeCheck output — judgeRefactor
             // reads the filesystem, not pipeline data.
             loop(
               pipe(
@@ -103,7 +104,7 @@ await configBuilder()
                     extractField("instructions"),
                     applyFeedback,
                     drop(),
-                    steps.TypeCheckFix,
+                    steps.TypeCheck,
                     recur(),
                   ),
                   Approved: done(),
