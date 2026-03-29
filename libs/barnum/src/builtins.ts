@@ -1,5 +1,4 @@
-import type { Action, TypedAction } from "./ast.js";
-import { typedAction } from "./ast.js";
+import { type Action, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -304,7 +303,9 @@ export function range(
   end: number,
 ): TypedAction<never, number[]> {
   const result: number[] = [];
-  for (let i = start; i < end; i++) result.push(i);
+  for (let i = start; i < end; i++) {
+    result.push(i);
+  }
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },

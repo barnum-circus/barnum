@@ -1,5 +1,4 @@
-import type { Action, TypedAction } from "./ast.js";
-import { typedAction } from "./ast.js";
+import { type Action, type TypedAction, typedAction } from "./ast.js";
 import { constant } from "./builtins.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -131,6 +130,8 @@ export function parallel<
   R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10
 >;
 export function parallel(...actions: Action[]): Action {
-  if (actions.length === 0) return constant([]);
+  if (actions.length === 0) {
+    return constant([]);
+  }
   return typedAction({ kind: "Parallel", actions });
 }

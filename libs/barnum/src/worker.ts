@@ -9,7 +9,9 @@
  * process exits non-zero. Rust interprets that as a fatal workflow error.
  */
 
-async function main() {
+export {};
+
+async function main(): Promise<void> {
   const [modulePath, exportName = "default"] = process.argv.slice(2);
 
   if (!modulePath) {
@@ -19,7 +21,9 @@ async function main() {
 
   // Read entire stdin
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk);
+  }
   const input = JSON.parse(Buffer.concat(chunks).toString());
 
   // Import handler, call it
@@ -39,7 +43,9 @@ async function main() {
   process.stdout.write(JSON.stringify(result));
 }
 
-main().catch((err) => {
-  process.stderr.write(`worker: ${err}\n`);
+try {
+  await main();
+} catch (error) {
+  process.stderr.write(`worker: ${error}\n`);
   process.exit(1);
-});
+}

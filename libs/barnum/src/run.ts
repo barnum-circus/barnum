@@ -3,10 +3,10 @@
  * script, then spawns the workflow as a subprocess.
  */
 
-import { execFileSync } from "child_process";
-import { createRequire } from "module";
-import path from "path";
-import { fileURLToPath } from "url";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Config } from "./ast.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

@@ -11,41 +11,41 @@ export type Action =
   | LoopAction
   | StepAction;
 
-export type InvokeAction = {
+export interface InvokeAction {
   kind: "Invoke";
   handler: HandlerKind;
-};
+}
 
-export type ChainAction = {
+export interface ChainAction {
   kind: "Chain";
   first: Action;
   rest: Action;
-};
+}
 
-export type ForEachAction = {
+export interface ForEachAction {
   kind: "ForEach";
   action: Action;
-};
+}
 
-export type ParallelAction = {
+export interface ParallelAction {
   kind: "Parallel";
   actions: Action[];
-};
+}
 
-export type BranchAction = {
+export interface BranchAction {
   kind: "Branch";
   cases: Record<string, Action>;
-};
+}
 
-export type LoopAction = {
+export interface LoopAction {
   kind: "Loop";
   body: Action;
-};
+}
 
-export type StepAction = {
+export interface StepAction {
   kind: "Step";
   step: StepRef;
-};
+}
 
 export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
 
@@ -55,16 +55,16 @@ export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
 
 export type HandlerKind = TypeScriptHandler | BuiltinHandler;
 
-export type TypeScriptHandler = {
+export interface TypeScriptHandler {
   kind: "TypeScript";
   module: string;
   func: string;
-};
+}
 
-export type BuiltinHandler = {
+export interface BuiltinHandler {
   kind: "Builtin";
   builtin: BuiltinKind;
-};
+}
 
 export type BuiltinKind =
   | { kind: "Constant"; value: unknown }
@@ -81,10 +81,10 @@ export type BuiltinKind =
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Config<Out = any> = {
+export interface Config<Out = any> {
   workflow: TypedAction<never, Out>;
   steps?: Record<string, Action>;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking

@@ -1,32 +1,31 @@
-import { fileURLToPath } from "url";
+import { fileURLToPath } from "node:url";
 import type { z } from "zod";
-import type { TypedAction } from "./ast.js";
-import { typedAction } from "./ast.js";
+import { type TypedAction, typedAction } from "./ast.js";
 
 // ---------------------------------------------------------------------------
 // HandlerDefinition — the user's handle function + optional validators
 // ---------------------------------------------------------------------------
 
-export type HandlerDefinition<
+export interface HandlerDefinition<
   TValue = unknown,
   TOutput = unknown,
   TStepConfig = unknown,
-> = {
+> {
   inputValidator?: z.ZodType<TValue>;
   stepConfigValidator?: z.ZodType<TStepConfig>;
   handle: (context: {
     value: TValue;
     stepConfig: TStepConfig;
   }) => Promise<TOutput>;
-};
+}
 
 /** Runtime-only handler definition shape — erases generic type info. */
-type UntypedHandlerDefinition = {
+interface UntypedHandlerDefinition {
   inputValidator?: z.ZodType;
   stepConfigValidator?: z.ZodType;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handle: (...args: any[]) => Promise<unknown>;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Handler — opaque typed handler reference
@@ -55,13 +54,13 @@ function getCallerFilePath(): string {
   const original = Error.prepareStackTrace;
   let callerFile: string | undefined;
 
-  Error.prepareStackTrace = (_err, stack) => {
+  Error.prepareStackTrace = (_err, stack): string => {
     const frame = stack[2];
     callerFile = frame?.getFileName() ?? undefined;
     return "";
   };
 
-  const err = new Error();
+  const err = new Error("stack trace capture");
   void err.stack;
   Error.prepareStackTrace = original;
 
@@ -159,7 +158,7 @@ export function createHandlerWithConfig(
 
   // Internal handle that unpacks the [value, config] tuple from Parallel
   const internalDefinition: UntypedHandlerDefinition = {
-    handle: async ({ value }: { value: unknown }) => {
+    handle: ({ value }: { value: unknown }) => {
       const [pipelineValue, config] = value as [unknown, unknown];
       return definition.handle({ value: pipelineValue, stepConfig: config });
     },

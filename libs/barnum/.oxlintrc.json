@@ -1,7 +1,45 @@
 {
   "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "error",
+    "perf": "error",
+    "restriction": "error",
+    "suspicious": "error",
+    "pedantic": "error",
+    "style": "error",
+    "nursery": "error"
+  },
   "rules": {
-    "import/no-cycle": "error",
-    "unicorn/no-thenable": "off"
+    "unicorn/no-thenable": "off",
+
+    "eslint/sort-keys": "off",
+    "eslint/capitalized-comments": "off",
+    "eslint/func-style": "off",
+    "eslint/id-length": "off",
+    "eslint/no-magic-numbers": "off",
+    "eslint/max-params": "off",
+    "eslint/sort-imports": "off",
+    "eslint/no-ternary": "off",
+    "eslint/no-undefined": "off",
+    "eslint/max-statements": "off",
+    "eslint/max-lines": "off",
+    "eslint/max-classes-per-file": "off",
+    "eslint/no-void": "off",
+    "eslint/no-plusplus": "off",
+    "eslint/init-declarations": "off",
+    "eslint/no-use-before-define": "off",
+    "eslint/prefer-destructuring": "off",
+    "eslint/no-undef": "off",
+
+    "oxc/no-async-await": "off",
+    "oxc/no-rest-spread-properties": "off",
+    "oxc/no-optional-chaining": "off",
+
+    "unicorn/no-array-reduce": "off",
+    "unicorn/no-process-exit": "off",
+
+    "typescript/no-explicit-any": "off",
+    "typescript/ban-types": "off",
+    "typescript/no-empty-object-type": "off"
   }
 }
