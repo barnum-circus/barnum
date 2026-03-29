@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src/"
   },
   "author": "Robert Balicki",
   "license": "MIT",
@@ -28,6 +29,7 @@
   ],
   "sideEffects": false,
   "devDependencies": {
+    "@oxlint/binding-darwin-arm64": "^1.57.0",
     "@types/node": "^25.5.0",
     "oxlint": "^1.57.0",
     "prettier": "^3.8.1",

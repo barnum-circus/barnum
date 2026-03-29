@@ -1,4 +1,4 @@
-import type { Action, TypedAction } from "./ast.js";
+import type { TypedAction } from "./ast.js";
 import { typedAction } from "./ast.js";
 
 export function chain<T1, T2, T3, R1 extends string, R2 extends string>(

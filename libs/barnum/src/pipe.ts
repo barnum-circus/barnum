@@ -1,7 +1,6 @@
 import type { Action, TypedAction } from "./ast.js";
 import { typedAction } from "./ast.js";
 import { identity } from "./builtins.js";
-import { chain } from "./chain.js";
 
 export function pipe<T1, T2, R1 extends string>(
   a1: TypedAction<T1, T2, R1>,
