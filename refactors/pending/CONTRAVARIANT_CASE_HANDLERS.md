@@ -69,25 +69,28 @@ branch({
 /**
  * Contravariant-only input checking for branch case handler positions.
  *
- * Omits __in (the covariant input field) so only __phantom_in is checked.
- * This means the handler just needs to ACCEPT the variant type, not declare
- * it exactly. A handler with input `unknown` (like drop()) accepts any
- * variant via contravariance: (input: unknown) => void is assignable to
+ * Omits __in (covariant input) and __phantom_out_check (contravariant output)
+ * compared to TypedAction/Pipeable. This gives:
+ *   In:  contravariant only (via __phantom_in)
+ *   Out: covariant only (via __phantom_out)
+ *
+ * Why contravariant input: a handler that accepts `unknown` (like drop())
+ * can handle any variant. (input: unknown) => void is assignable to
  * (input: HasErrors) => void because HasErrors extends unknown.
  *
- * Output remains invariant — the case handler's output type flows into
- * downstream combinators and must be exact.
+ * Why covariant output: the constraint doesn't restrict output types —
+ * they're inferred from the actual case handlers via ExtractOutput.
+ * TypedAction's invariant __phantom_out_check with TOut=unknown would
+ * reject any handler with a specific output type, so we omit it.
  */
-type CaseHandler<In = unknown, Out = unknown, Refs extends string = never> = Action & {
-  __phantom_in?: (input: In) => void;
-  // No __in — only contravariant input checking
-  __phantom_out?: () => Out;
-  __phantom_out_check?: (output: Out) => void;
-  __refs?: { _brand: Refs };
+type CaseHandler<TIn = unknown, TOut = unknown, TRefs extends string = never> = Action & {
+  __phantom_in?: (input: TIn) => void;
+  __phantom_out?: () => TOut;
+  __refs?: { _brand: TRefs };
 };
 ```
 
-TypedAction (which has `__in`) is assignable to CaseHandler (which doesn't require `__in`) — extra properties are fine.
+TypedAction is assignable to CaseHandler because CaseHandler only requires a subset of TypedAction's phantom fields. Extra fields (`__in`, `__phantom_out_check`) don't prevent assignability.
 
 ### 2. Add `KindOf` helper type
 
@@ -113,9 +116,11 @@ After:
 ```ts
 /** Dispatch on a tagged union output. Requires exhaustive case coverage. */
 branch<TCases extends { [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }>(
-  cases: TCases,
+  cases: [KindOf<Out>] extends [never] ? never : TCases,
 ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
 ```
+
+The `[KindOf<Out>] extends [never] ? never : TCases` conditional makes `.branch()` unavailable when `Out` has no `kind` field — passing any argument to a `never` parameter is a compile error.
 
 This enforces:
 - **Exhaustiveness** — `[K in KindOf<Out>]` requires a key for every `kind` in `Out`
@@ -174,12 +179,7 @@ pipe(typeCheck, classifyErrors).branch({
 
 If `Out` doesn't have a `kind` field, `KindOf<Out>` = `never`, and the constraint becomes `{ [K in never]: ... }` = `{}`. Any cases object satisfies `{}`, which means no validation.
 
-Options:
-- Accept this — if you call `.branch()` on a non-discriminated output, you're on your own
-- Add a conditional that makes `.branch` unavailable when Out has no `kind` — e.g., return type is `never` when `KindOf<Out>` is `never`
-- Use an overload: one for discriminated Out (validated), one fallback (current behavior)
-
-**Recommendation:** Use a conditional. If `KindOf<Out>` is `never`, the cases parameter type should be `never` (compile error). This catches misuse at the call site.
+**Implemented:** The cases parameter uses a conditional: `[KindOf<Out>] extends [never] ? never : TCases`. When `Out` has no `kind`, the parameter type is `never`, so passing any object is a compile error. This catches misuse at the call site.
 
 ## Implementation strategy: test-first
 
@@ -246,6 +246,6 @@ The unused `@ts-expect-error` directives becoming valid **proves the fix works**
 
 ## Open questions
 
-1. **Inference stability** — The `.branch()` signature constrains `TCases` with a mapped type: `{ [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }`. TypeScript must infer `TCases` from the argument while simultaneously checking it against the constraint. If TS struggles — e.g., resolves `TCases` to the constraint type instead of the argument type, breaking `ExtractOutput` — the fallback is: keep `TCases extends Record<string, Action>` (easy to infer) and use a conditional return type that produces `never` when cases don't match the constraint. Prototype during implementation.
+1. **Inference stability** — ✅ Resolved. The mapped type constraint works: TypeScript correctly infers `TCases` from the argument and checks it against the constraint. `ExtractOutput` resolves from the inferred argument types, not the constraint. No fallback needed.
 
 2. **Non-exhaustive branches** — Exhaustive matching only. No escape hatch for partial matching. To handle a subset of variants, use a `pick`-style combinator to narrow first, then exhaustively match including a `none`/`otherwise` case for unmatched variants. This is a separate feature to design later.
