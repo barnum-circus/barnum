@@ -332,148 +332,127 @@ Adding lazy bindings with memoization makes the parallel even tighter. We should
 | `tap(sideEffect)` | Side effect in a binding that's never referenced (eager) |
 | `withResource({ create, action, dispose })` | See below |
 
-### What RAII would mean for declare
+### RAII: handlers declare their own cleanup
 
-`declare` as specified has no cleanup semantics. A binding that creates a git worktree has no way to delete it when the body exits. If the body fails, the worktree leaks.
+The key insight: RAII is a property of **handlers**, not of **bindings**. A handler that creates a resource knows how to clean it up. The binding site shouldn't need to specify cleanup — it should happen automatically.
+
+#### The model
+
+A handler can optionally declare a `dispose` function alongside its `handle` function:
 
 ```ts
-// Without RAII — cleanup is manual and fragile
-declare({
-  worktree: createWorktree,
-}, ({ worktree }) =>
-  pipe(
-    worktree.then(implement),
-    worktree.then(commit),
-    worktree.then(deleteWorktree),  // never runs if implement fails
-  ),
-)
+const createWorktree = createHandler({
+  inputValidator: z.object({ branch: z.string() }),
+  handle: async ({ value }) => {
+    // create worktree, return { worktreePath, branch }
+  },
+  dispose: async ({ value }) => {
+    // value is the handler's output: { worktreePath, branch }
+    // delete worktree at value.worktreePath
+  },
+});
 ```
 
-RAII would add an optional `dispose` action to each binding. The scheduler guarantees: if a binding was successfully evaluated, its dispose action runs when the `declare` scope exits — regardless of whether the body succeeded or failed.
+The `dispose` function receives the handler's output value — the same value the pipeline sees. This is the Rust `Drop` trait pattern: the type knows how to clean itself up. The caller doesn't specify cleanup; the producer does.
 
-#### Surface API with RAII
+#### How it interacts with declare
 
-The bindings object would accept either a bare action (no cleanup) or a `{ create, dispose }` pair:
+`declare` doesn't change. No `{ create, dispose }` pairs. No special syntax. The user writes:
 
 ```ts
 declare({
-  // Simple binding — no cleanup
-  branch: deriveBranch,
-  // Resource binding — with cleanup
-  worktree: {
-    create: createWorktree,
-    dispose: deleteWorktree,
-  },
-}, ({ branch, worktree }) =>
+  worktree: pipe(deriveBranch, createWorktree),
+}, ({ worktree }) =>
   pipe(
     worktree.then(pick("worktreePath", "description")).then(implement),
     worktree.then(pick("worktreePath")).then(commit),
-    branch.then(createPR),
+    worktree.then(pick("branch", "description")).then(createPR),
   ),
 )
 ```
 
-The type system would distinguish these: a bare `Pipeable<TIn, T>` produces a `TypedAction<never, T>` VarRef. A `{ create: Pipeable<TIn, T>, dispose: Pipeable<T, unknown> }` also produces a `TypedAction<never, T>` VarRef — same from the body's perspective. The dispose action is invisible to the body callback. It's metadata for the scheduler.
+The scheduler knows that `createWorktree`'s output is disposable because the handler declared a `dispose` function. When the `declare` scope exits (body completes or fails), the scheduler runs `dispose` on the bound value automatically.
 
-#### Scheduler behavior
+This is "free" — `declare` provides the scope boundaries, handlers provide the cleanup logic, and the scheduler connects them. No additional user code.
 
-When a `Declare` node with disposable bindings is entered:
+#### Scope exit = dispose trigger
 
-1. Evaluate all bindings in parallel (same as today).
-2. Store results in the environment.
-3. Execute the body.
-4. **On body completion (success or failure)**: run dispose actions for all bindings that have them and were successfully evaluated.
+The scheduler tracks which values in the environment were produced by handlers that have `dispose`. When a `Declare` frame is removed (body completed or errored):
 
-The critical guarantee: dispose runs **even if the body fails**. This is the entire point of RAII — cleanup is not optional, not manual, not dependent on the happy path.
+1. Inspect all bindings in the frame's scope.
+2. For each binding whose handler declared `dispose`: run `dispose` on the bound value.
+3. Then deliver the body's result (or error) to the parent.
+
+The guarantee: if a binding was successfully evaluated and its handler has `dispose`, cleanup runs. Body success or failure doesn't matter.
+
+#### Nested declares give ordering for free
+
+```ts
+declare({
+  worktree: pipe(deriveBranch, createWorktree),
+}, ({ worktree }) =>
+  declare({
+    file: worktree.then(openTempFile),
+  }, ({ file }) =>
+    file.then(write),
+    // inner scope exits → openTempFile's dispose runs (close file)
+  ),
+  // outer scope exits → createWorktree's dispose runs (delete worktree)
+)
+```
+
+The inner scope's dispose runs first because the inner `declare` body completes before the outer `declare` body continues. File closed before worktree deleted. No explicit ordering needed — the nesting IS the ordering.
+
+#### Serialization: dispose in the handler pool
+
+Dispose actions are handler metadata, not AST structure. In the serialized config, the handler pool (see handler dedup in implementation doc) would carry dispose information:
+
+```json
+{
+  "handlers": {
+    "__handler_0": {
+      "kind": "TypeScript",
+      "module": "./git.ts",
+      "func": "createWorktree",
+      "dispose": {
+        "kind": "TypeScript",
+        "module": "./git.ts",
+        "func": "deleteWorktree"
+      }
+    }
+  }
+}
+```
+
+The AST itself is unchanged — `InvokeAction` still just references a handler ID. The scheduler looks up the handler's dispose when it needs to clean up.
 
 #### Error semantics
 
-This is where it gets interesting. There are several failure modes:
-
 **Body succeeds, dispose succeeds**: Normal case. Declare produces the body's output.
 
-**Body succeeds, dispose fails**: The body's work completed, but cleanup failed. What should the declare node produce? Options:
-- Return the body's output and log/ignore the dispose failure (pragmatic — the work is done)
-- Fail the declare node with the dispose error (strict — resource leak is an error)
-- Return both: `{ result: bodyOutput, disposeErrors: [...] }` (changes the output type — ugly)
+**Body fails, dispose succeeds**: Cleanup ran correctly. Declare propagates the body's error.
 
-**Body fails, dispose succeeds**: Cleanup ran correctly after a failure. The declare node propagates the body's error.
+**Body succeeds, dispose fails**: Body's work is done but cleanup leaked. Options: propagate dispose error (strict) or log and return body's output (pragmatic). Recommend strict — a leaked resource is an error.
 
-**Body fails, dispose fails**: Both failed. The declare node must propagate the body's error (that's the primary failure). The dispose error is secondary — log it, attach it as a suppressed error, or drop it.
+**Body fails, dispose fails**: Propagate body's error (primary). Attach dispose error as suppressed/secondary.
 
-**Binding fails**: If a binding itself fails during evaluation, the other bindings that completed need their dispose actions run. This means dispose must be possible even when not all bindings were evaluated — the scheduler needs to track which bindings completed successfully.
-
-#### Dispose ordering
-
-When multiple bindings have dispose actions, what order do they run?
-
-**Reverse order of completion** (stack discipline): The last binding to complete is the first to be disposed. This matches C++ RAII semantics and is correct when resources have dependencies — a resource created later might depend on one created earlier.
-
-**Parallel**: Run all dispose actions concurrently. Faster, but incorrect if resources depend on each other (e.g., a file handle in a worktree — must close file before deleting worktree).
-
-**Recommendation**: Parallel by default (bindings are independent unless proven otherwise — they were evaluated in parallel, after all). If ordering matters, nest the declares:
-
-```ts
-// Outer disposes after inner
-declare({
-  worktree: { create: createWorktree, dispose: deleteWorktree },
-}, ({ worktree }) =>
-  declare({
-    file: { create: worktree.then(openFile), dispose: closeFile },
-  }, ({ file }) =>
-    file.then(write),
-  ),
-)
-```
-
-The inner `declare`'s dispose (closeFile) runs when its body completes. The outer `declare`'s dispose (deleteWorktree) runs after the inner `declare` — including its dispose — completes. Nesting gives you ordering control without special syntax.
-
-#### AST representation
-
-Two options for encoding dispose in the AST:
-
-**Option 1: Inline in DeclareAction.** Each binding in the `bindings` map becomes `{ create: Action, dispose?: Action }` instead of a bare `Action`.
-
-```ts
-interface DeclareAction {
-  kind: "Declare";
-  bindings: Record<string, DeclareBinding>;
-  body: Action;
-}
-
-type DeclareBinding =
-  | { kind: "Simple"; action: Action }
-  | { kind: "Resource"; create: Action; dispose: Action };
-```
-
-**Option 2: Separate dispose map.** Keep `bindings` as `Record<string, Action>` and add a `disposers: Record<string, Action>` map (same keys as bindings, only for bindings that have cleanup).
-
-```ts
-interface DeclareAction {
-  kind: "Declare";
-  bindings: Record<string, Action>;
-  disposers: Record<string, Action>;  // subset of binding IDs
-  body: Action;
-}
-```
-
-Option 2 is simpler for the flattener and engine — the bindings map stays uniform. The disposers map is a parallel structure the scheduler consults during scope exit. Option 1 is more self-describing. Either works; option 2 is probably easier to implement.
+**Binding fails**: Bindings evaluated in parallel. If one fails, the others that completed still need their dispose run. The scheduler tracks which bindings completed successfully.
 
 #### This replaces withResource
 
-`declare` with RAII subsumes `withResource` entirely:
+`declare` + handler-level dispose subsumes `withResource` entirely. The user doesn't think about cleanup at the binding site at all — they just bind and use. Cleanup is the handler's responsibility.
 
 ```ts
-// withResource today:
+// withResource today — user specifies cleanup:
 withResource({
   create: createWorktree,
   action: pipe(implement, commit),
   dispose: deleteWorktree,
 })
 
-// declare with RAII:
+// declare + handler dispose — cleanup is automatic:
 declare({
-  worktree: { create: createWorktree, dispose: deleteWorktree },
+  worktree: pipe(deriveBranch, createWorktree),
 }, ({ worktree }) =>
   pipe(
     worktree.then(implement),
@@ -482,23 +461,82 @@ declare({
 )
 ```
 
-The `declare` version is strictly more powerful:
-- Multiple resources in one scope (withResource handles one)
-- Resources can be referenced from any point in the body (withResource merges into pipeline input)
-- Other bindings can coexist alongside resources (withResource is resources only)
-- Nested declares give dispose ordering control
+## Callbacks as scope boundaries: effects, error handling, and context
 
-Once `declare` has RAII, `withResource` becomes a convenience wrapper — or is deleted entirely.
+The `declare` callback pattern — "run some setup, execute a body, run some cleanup" — is a general mechanism. It's the same shape as try/catch, RAII, React context providers, and database transactions. All of them create a **scope** with entry/exit behavior controlled by the framework.
 
-#### Implementation order
+### What scopes give you
 
-RAII is not part of the initial `declare` implementation. The plan:
+A scope has three properties:
+1. **Entry**: something happens when the scope is entered (evaluate bindings, acquire resource, start transaction)
+2. **Body**: the user's code runs within the scope
+3. **Exit**: something happens when the scope exits (dispose resources, commit/rollback, catch errors)
 
-1. Ship `declare` with simple bindings (no dispose). This solves prop drilling.
-2. Add RAII to `declare` as a follow-up. This replaces `withResource`.
-3. Deprecate `withResource`.
+The callback in TypeScript is the natural way to express "here is a region of code where X is true." The callback's extent IS the scope.
 
-Step 1 is valuable on its own. Step 2 is valuable on its own. Neither blocks the other. The `DeclareAction` AST node is designed so that adding `disposers` later is a backward-compatible extension (add a new field with a default of empty map).
+### How this generalizes
+
+**RAII** (discussed above): Handlers declare cleanup. The scheduler runs cleanup when the enclosing `declare` scope exits. Entry = evaluate bindings. Exit = dispose.
+
+**Error handling / catch**: A `tryCatch` combinator wraps a body in error-handling logic:
+
+```ts
+tryCatch(
+  body,
+  (error) => recoveryAction,  // callback receives error info
+)
+```
+
+The callback here is on the TS side (definition time) — it constructs the recovery AST. The scheduler catches errors from the body and executes the recovery action instead of propagating the error. This is a scope where entry = try and exit = catch.
+
+But `tryCatch` doesn't need the declare-style callback pattern — it's a combinator that takes two actions. It could be:
+
+```ts
+tryCatch({
+  body: pipe(deploy, verify),
+  catch: pipe(rollback, notify),  // receives the error as pipeline input
+})
+```
+
+No callback needed because there's nothing to "capture" — unlike `declare` where the callback captures VarRef AST nodes.
+
+**Timeouts**: A scope that limits execution time:
+
+```ts
+withTimeout(30_000, body)
+```
+
+Entry = start timer. Exit = cancel timer (if body completed) or cancel body (if timer fires). The scheduler's scope-exit logic handles cleanup. Again, no callback needed — just a combinator.
+
+**Context / providers**: More speculative. React-style context would provide a value to all handlers within a scope:
+
+```ts
+provide({ database: dbConnection }, body)
+```
+
+This is fundamentally different from `declare` because context crosses the handler boundary — TypeScript subprocess handlers would need access to the provided value. `declare` variables are AST-level references that resolve in the scheduler; context would be runtime values passed through the handler invocation protocol. This requires changes to the handler IPC protocol, not just the AST.
+
+Context is worth exploring separately, but it's a different mechanism from `declare` scopes.
+
+### The pattern
+
+All of these share the shape: **combinator creates a scope, scheduler manages entry/exit behavior.** The callback is only needed when the user needs to capture an opaque reference (VarRef in `declare`, restart in `scope`). Otherwise, the combinator just takes arguments.
+
+What they share at the scheduler level:
+- A frame type that tracks the scope's state
+- Entry logic in `advance`
+- Exit logic in `deliver` (or a new scope-exit path)
+- Error path handling (what happens if the body fails?)
+
+`declare` is the first scope mechanism. RAII is the first scope-exit behavior. Once both exist, adding more scope-exit behaviors (timeout cancellation, transaction rollback, error catching) is extending the same infrastructure.
+
+### Implementation order
+
+1. **`declare`** — scope with entry behavior (evaluate bindings). No exit behavior.
+2. **Handler-level dispose** — scope-exit behavior triggered by handler metadata. `declare` provides the scope boundary.
+3. **`tryCatch`** — scope-exit behavior triggered by errors. May or may not use `declare`; could be a standalone combinator.
+4. **`withTimeout`** — scope-exit behavior triggered by time. Requires scheduler-level timer support.
+5. **Context** — if ever. Requires handler IPC changes.
 
 ## Relationship to scopes and continuations
 
