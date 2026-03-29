@@ -5,10 +5,16 @@
 - **Rename `configBuilder` to `workflowBuilder`** — The builder constructs a workflow, not a config. Update `ast.ts` export, all demos, and all tests.
 - **Rename `stepValueValidator` to `inputValidator`** — Clearer name. Update `handler.ts`, all handler definitions in demos, and tests.
 
-## Docs to write
+## Builtins
 
-- **Pre-compilation / serialization** — Speculate about storing compiled workflow state for resumption and performance. Consider contextual effects for reading input.
-- **Loop with closure providing scoped recur/done** — `loop(({ recur, done }) => body)` where recur/done are properly typed objects scoped to the loop instance, not top-level exports. Closure called at construction time to build AST.
+- **Add `extractIndex` builtin** — Extract element from JSON array by index. Enables tuple-based `withResource` redesign. See FUTURE_COMBINATORS.md.
+- **Add circular import lint rule** — ESLint rule to disallow circular imports in `libs/barnum/src/`.
+
+## Docs written (pending review)
+
+- Pre-compilation / serialization — PRECOMPILATION.md
+- Loop with closure providing scoped recur/done — LOOP_WITH_CLOSURE.md
+- Future combinators (extractIndex, option-returning extractField, unwrap, pick, withResource redesign) — FUTURE_COMBINATORS.md
 
 ## Fixes
 

@@ -85,6 +85,14 @@ function loop<In, Out>(
 
 TypeScript distinguishes the overloads by argument type (TypedAction vs function).
 
+## Loop IDs and scoping
+
+The scoped `recur` and `done` need to be tied to a specific loop instance. Each loop gets an ID assigned at construction time. The closure's `recur`/`done` close over that ID.
+
+**ID stability for tests**: Use a deterministic counter (incrementing integer per config builder invocation). Since closures are called in source order at construction time, the same source always produces the same IDs. No randomness.
+
+**Connection to continuations**: `recur()` and `done()` are effectively delimited continuations scoped to the loop. The closure makes the scoping explicit — they're first-class continuation constructors bound to a specific loop delimiter.
+
 ## Implementation
 
 1. Add the overload signature to `loop` in `ast.ts`

@@ -39,11 +39,11 @@ pipe(
 function some<T>(): TypedAction<T, { kind: "Some"; value: T }>
 // Equivalent to: tag("Some")
 
-function none<T>(): TypedAction<T, { kind: "None" }>
-// Drops the input, returns { kind: "None" }
+function none(): TypedAction<never, { kind: "None" }>
+// Equivalent to: constant({ kind: "None" })
 ```
 
-`some` is just `tag("Some")`. `none` needs to drop the input and produce a fixed value — could be `pipe(drop(), constant({ kind: "None" }))` or a dedicated builtin.
+`some` is just `tag("Some")`. `none` is just `constant({ kind: "None" })` — it's a fixed value with no dependency on pipeline input.
 
 ### `filterMap` — map + flatten options
 
