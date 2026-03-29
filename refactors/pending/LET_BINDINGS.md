@@ -1,10 +1,10 @@
-# Let Bindings
+# Declare Bindings
 
 ## Motivation
 
 Barnum pipelines thread data through each step as a single value. When a step produces a result that later steps need, the intervening steps must accept and pass through fields they don't use — classic prop drilling. The current workarounds (`tap`, `augment`, `withResource`) keep the data flowing but add ceremony and obscure intent.
 
-A `let` combinator would introduce named variable bindings: evaluate a set of expressions, bind the results to names, and make those names available as AST references inside a callback. The callback constructs the body of the `let` block using those references.
+A `declare` combinator would introduce named variable bindings: evaluate a set of expressions, bind the results to names, and make those names available as AST references inside a callback. The callback constructs the body of the `declare` block using those references.
 
 This is the AST-level equivalent of JavaScript's `const { a, b } = ...`:
 
@@ -21,8 +21,8 @@ pipe(
   tap(pipe(pick("worktreePath"), commit)),
 )
 
-// Barnum with let bindings:
-let_({
+// Barnum with declare bindings:
+declare({
   worktree: pipe(deriveBranch, createWorktree),
 }, ({ worktree }) =>
   pipe(
@@ -32,14 +32,14 @@ let_({
 )
 ```
 
-The key property: `resource` in the callback is not the evaluated value — it's an AST node that, when placed in a pipeline, evaluates to the bound value. This keeps everything in AST-land. The callback runs at definition time (in JavaScript), producing an AST that the Rust scheduler later executes.
+The key property: `worktree` in the callback is not the evaluated value — it's an AST node that, when placed in a pipeline, evaluates to the bound value. This keeps everything in AST-land. The callback runs at definition time (in JavaScript), producing an AST that the Rust scheduler later executes.
 
 ## Design
 
 ### Surface API
 
 ```ts
-function let_<
+function declare<
   TIn,
   TBindings extends Record<string, TypedAction<TIn, unknown>>,
   TOut,
@@ -58,7 +58,7 @@ function let_<
 ### Example: avoiding prop drilling
 
 ```ts
-let_({
+declare({
   branch: pipe(extractField("description"), deriveBranch),
 }, ({ branch }) =>
   pipe(
@@ -72,18 +72,18 @@ let_({
 
 ## Implementation approaches
 
-Two approaches, each with different tradeoffs.
+Two approaches, each with different tradeoffs. **Approach A is the clear winner** — Approach B is documented here to record why it was rejected.
 
-### Approach A: New AST nodes (Let + VarRef)
+### Approach A: New AST nodes (Declare + VarRef) — chosen
 
-A new `Let` action node and a `VarRef` builtin:
+A new `Declare` action node and a `VarRef` builtin:
 
 ```ts
 // New Action variant
-| LetAction
+| DeclareAction
 
-interface LetAction {
-  kind: "Let";
+interface DeclareAction {
+  kind: "Declare";
   bindings: Record<string, Action>;  // each binding is an AST
   body: Action;                       // may contain VarRef nodes
 }
@@ -96,18 +96,22 @@ interface LetAction {
 
 Variables are an **environment**, not pipeline data. Pipeline data flows linearly through each step. Variables need to be accessible from any point in the body, regardless of what the current pipeline value is. `VarRef` reaches into a side channel (the environment) to get its value — it ignores the pipeline input entirely.
 
-**Pros**: The scheduler has full visibility into variable lifetimes. It can optimize (evaluate once, cache), enforce scoping, and integrate with error handling / RAII. The AST is self-contained — the Rust scheduler can execute it without calling back into JavaScript.
+**Pros**: The scheduler has full visibility into variable lifetimes. It can optimize (evaluate once, cache), enforce scoping, and integrate with error handling / RAII. The AST is self-contained — the Rust scheduler can execute it without calling back into JavaScript. Error messages reference user-written variable names. Future features (RAII, lazy evaluation, dependent bindings) are localized scheduler changes.
 
-**Cons**: New AST node, new Rust scheduler concept (variable environment). Every consumer of the AST (flattener, serializer, Rust engine) needs to handle `Let` and `VarRef`.
+**Cons**: New AST node, new Rust scheduler concept (variable environment). Every consumer of the AST (flattener, serializer, Rust engine) needs to handle `Declare` and `VarRef`.
 
-### Approach B: JS-side AST rewriting (no new AST nodes)
+### Approach B: JS-side AST rewriting (no new AST nodes) — rejected
 
-Instead of adding `Let` and `VarRef` to the AST, `let_` could work entirely in JavaScript by traversing and modifying the AST that the body callback produces.
+Instead of adding `Declare` and `VarRef` to the AST, `declare` could work entirely in JavaScript by rewriting the body AST to thread the variable environment through every step as an explicit pipeline value.
 
-The idea: the body callback produces an AST containing placeholder nodes (VarRef-like sentinels). Before serializing, `let_` walks the AST tree in JavaScript and replaces each placeholder with the appropriate `extractIndex(i)` from a wrapping `Parallel` node.
+#### The technique: closure conversion
+
+This is a well-known compiler technique called **closure conversion** (or closure elimination). When a language has variables that are accessible across lexical scope — reachable from arbitrary positions in the AST, not just from the immediately downstream step — and the target runtime only supports linear data flow, the compiler eliminates the free variables by threading them as an explicit environment parameter.
+
+Concretely: every step `f: A → B` in the body gets wrapped in `parallel(pipe(extractIndex(0), f), extractIndex(1))`, transforming it to `[A, Env] → [B, Env]`. The environment tuple is carried alongside the pipeline value through every step. VarRef sentinels are replaced with the appropriate `extractIndex` into the environment.
 
 ```ts
-function let_(bindings, body) {
+function declare(bindings, body) {
   const keys = Object.keys(bindings);
   const bindingActions = Object.values(bindings);
 
@@ -119,7 +123,6 @@ function let_(bindings, body) {
       kind: "Invoke",
       handler: { kind: "Builtin", builtin: { kind: "Identity" } },
     });
-    // Mark this node so we can find it during traversal
     Object.defineProperty(sentinel, "__varRef", { value: { name: key, index: i } });
     vars[key] = sentinel;
     sentinels.set(sentinel, i);
@@ -128,44 +131,63 @@ function let_(bindings, body) {
   // Body callback runs, producing an AST with sentinel nodes
   const rawBody = body(vars);
 
-  // Walk the AST, replacing sentinels with the real extraction logic:
-  // Each sentinel becomes: parallel(extractIndex(i_from_outer_tuple), identity())
-  // where the outer tuple is the Parallel node wrapping all bindings.
-  //
-  // Actually — this is where it gets complicated. The sentinel needs to
-  // "reach back" to the parallel result, but the pipeline value at the
-  // sentinel's position is whatever the upstream step produced, not the
-  // parallel tuple. Same fundamental problem as inline substitution.
-  const rewrittenBody = rewriteAst(rawBody, sentinels);
+  // Closure-convert: rewrite entire body to thread env through every node
+  const rewrittenBody = closureConvert(rawBody, sentinels);
 
   return pipe(
-    parallel(...bindingActions),
-    rewrittenBody,
+    parallel(...bindingActions),  // evaluate bindings → env tuple
+    rewrittenBody,                // body with env threaded through
   );
 }
 ```
 
-The problem is the same one that killed Options B and C from the earlier version of this doc: once the pipeline value moves past the parallel tuple, variable references can't reach back to extract from it. AST rewriting in JS-land doesn't change the runtime execution model — the Rust scheduler still only sees linear pipeline data flow.
+#### AST size is not the problem
 
-**However**, JS-side rewriting could work if the rewrite is more aggressive. Instead of simple sentinel replacement, `let_` could restructure the entire body AST to thread the variable tuple through every step. Concretely: every step in the body gets wrapped in a `parallel(step, identity())` node that preserves the variable tuple alongside the pipeline value, and every VarRef sentinel is replaced with the appropriate `extractIndex`.
+The raw AST blowup is a constant factor — roughly 3x (a 5-step body becomes ~15 nodes). This is linear, not exponential, and manageable in isolation.
 
-This is essentially CPS-transforming the body to carry the variable environment as an extra pipeline value. It's doable but produces an explosively larger AST (every step gets wrapped in parallel+identity).
+#### The real problems
 
-**Pros**: No changes to the Rust scheduler or AST definition. The entire feature lives in TypeScript. The serialized AST uses only existing node types.
+**1. Every AST node type needs a transform case, and several are subtle.**
 
-**Cons**:
-- AST explosion: every step in the body gets wrapped in parallel+identity to carry the environment. A 5-step body becomes ~15 nodes.
-- Fragile: the rewrite must handle every AST node type (Chain, Parallel, Branch, Loop, ForEach, Step). Missing a case is a bug.
-- Opaque: the Rust scheduler sees an explosion of parallel+extractIndex nodes with no semantic meaning. Debugging, logging, and optimization are harder.
-- Types: the TypeScript types become extremely complex because every intermediate step has a tuple type `[PipelineValue, VariableEnvironment]`.
+Flat pipes are trivial. The hard cases:
 
-**When it makes sense**: If we want to prototype `let` quickly without touching Rust, this works as a proof of concept. But for production, Approach A (scheduler-native) is cleaner.
+- **Loop**: The body produces `Continue(nextVal)` / `Break(result)` signals. The transform must restructure these to carry env: `Continue([nextVal, env])` / `Break([result, env])`, then strip env from the Break result after the loop exits. The loop machinery needs to understand that the env portion of Continue is threaded through, not accumulated.
+
+- **ForEach**: Input is `[items[], env]`. You can't forEach over the tuple — you need to extract items, map each to `[item, env]`, run the transformed body on each pair, then extract just the results. Requires non-trivial restructuring around the forEach.
+
+- **Parallel**: Each branch receives `[pipeVal, env]` and produces `[branchOut, env]`. Output is `[[out1, env], [out2, env], ...]` but you want `[[out1, out2, ...], env]`. Requires a restructuring step after the parallel to transpose the result.
+
+- **Branch**: Match predicates need the pipeline value, not the `[pipeVal, env]` tuple. Extract before matching, re-pair with env for the action arm.
+
+None are unsolvable, but each node type needs its own correct transform case. Every future AST node type also needs one.
+
+**2. Feature interactions compound quadratically.**
+
+Every feature desugared into existing nodes must account for every other desugared feature. If feature B's desugaring encounters feature A's desugared output, B's transform must handle A's synthetic nodes correctly. With N desugared features, there are O(N²) interaction cases. Native AST nodes avoid this entirely — each feature is a self-contained scheduler concern.
+
+**3. Scheduler opacity destroys debuggability.**
+
+The scheduler sees an explosion of `parallel`/`extractIndex` nodes with no semantic meaning. Error messages reference synthetic nodes ("parallel at position 3 failed") instead of user-written variable names ("binding `worktree` failed"). Visualization tools show the mechanical expansion. There's no way to reconstruct "this parallel is just env-threading, not real concurrency" from the desugared AST.
+
+**4. Future features require re-doing the desugaring, not extending the scheduler.**
+
+With native AST nodes, adding RAII cleanup to `declare` is a localized scheduler change: "when a Declare scope exits, run dispose on bindings that have disposers." With closure conversion, you'd need to restructure the entire desugaring to wrap the body in try/finally-equivalent nodes, threading dispose actions alongside the env. The `withResource` implementation (`builtins.ts:213-244`) is already 30 lines of careful `parallel`/`chain`/`extractIndex` assembly and still doesn't handle cleanup-on-failure — a preview of where this approach leads.
+
+**5. TypeScript type inference degrades.**
+
+Every intermediate value becomes a `[PipelineValue, Env]` tuple. The type-level transform mirrors the AST transform. TypeScript's inference is less reliable with deeply nested conditional tuple types, and error messages become inscrutable tuple-index complaints instead of named-variable complaints.
+
+#### When closure conversion is the right choice
+
+Closure conversion is standard practice when the target runtime is fixed (CPU instruction set, VM bytecode, WASM). You can't add new concepts to a CPU. But the Barnum scheduler is ours to extend. Adding a node is a one-time cost. Maintaining a closure conversion pass over a growing AST grammar is an ongoing tax on every future feature.
+
+**Verdict**: Approach B is viable as a proof-of-concept prototype. For production, Approach A is unambiguously better.
 
 ## Scheduler changes (Approach A)
 
 ### Environment model
 
-The scheduler maintains a `Map<String, Value>` environment alongside the frame tree. When a `Let` node is entered:
+The scheduler maintains a `Map<String, Value>` environment alongside the frame tree. When a `Declare` node is entered:
 
 1. Evaluate all bindings (each receives the pipeline input, produces a value).
 2. Push a new scope onto the environment with the bound names.
@@ -176,34 +198,34 @@ When a `VarRef` is encountered, look up the name in the current environment. Thi
 
 ### Scope rules
 
-- **Lexical scoping**: Variables are scoped to the `let` body. Not visible outside.
-- **Unique IDs, no shadowing**: Every let binding has a unique ID (generated at definition time in JS). There is no name-based shadowing — each binding is globally unique within the config. The scheduler environment is a flat map from ID to value.
+- **Lexical scoping**: Variables are scoped to the `declare` body. Not visible outside.
+- **Unique IDs, no shadowing**: Every binding has a unique ID (generated at definition time in JS). There is no name-based shadowing — each binding is globally unique within the config. The scheduler environment is a flat map from ID to value.
 - **Shared environment**: `forEach` iterations and `parallel` branches all share the same environment (read-only, since variables are immutable). No copying needed. A VarRef in any branch or iteration resolves to the same cached value.
 - **Step boundaries**: The environment does NOT leak across step jumps. When execution transfers to a named step (via `stepRef` or `steps.X`), the step runs with an empty environment. Variables are a structuring mechanism within a step's body, not a cross-step data channel.
-- **No mutation**: Variables are bound once and never reassigned. This is `let`, not `var`. The environment is append-only within a scope.
+- **No mutation**: Variables are bound once and never reassigned. The environment is append-only within a scope.
 
 ### Implicit scoping via handler boundaries
 
-Handlers (TypeScript subprocesses) can't access let-bound variables. The only way to get data into a handler is through its input. Variables are a structuring mechanism for the workflow graph, not a way to smuggle state into handlers. Handlers remain pure functions of their declared input.
+Handlers (TypeScript subprocesses) can't access declared variables. The only way to get data into a handler is through its input. Variables are a structuring mechanism for the workflow graph, not a way to smuggle state into handlers. Handlers remain pure functions of their declared input.
 
 ## Evaluation strategy
 
 ### Eager (current design)
 
-All bindings evaluate when the `Let` node is entered. Each binding receives the pipeline input and runs to completion. Results are stored in the environment. If a variable is never referenced, its binding still executes.
+All bindings evaluate when the `Declare` node is entered. Each binding receives the pipeline input and runs to completion. Results are stored in the environment. If a variable is never referenced, its binding still executes.
 
 ```
-Enter Let → evaluate all bindings → store results → execute body
+Enter Declare → evaluate all bindings → store results → execute body
 ```
 
 This is call-by-value. Simple, predictable, matches most languages. Side effects (handler invocations) happen in a known order: bindings first, body second.
 
 ### Lazy (speculative)
 
-Bindings are not evaluated when `Let` is entered. Instead, the scheduler records the binding ASTs in the environment as **thunks** — unevaluated computations. A `VarRef` forces its thunk on first access; the result is memoized for subsequent references. If a variable is never referenced, its binding never executes.
+Bindings are not evaluated when `Declare` is entered. Instead, the scheduler records the binding ASTs in the environment as **thunks** — unevaluated computations. A `VarRef` forces its thunk on first access; the result is memoized for subsequent references. If a variable is never referenced, its binding never executes.
 
 ```
-Enter Let → record thunks → execute body → force thunks on VarRef access
+Enter Declare → record thunks → execute body → force thunks on VarRef access
 ```
 
 This is call-by-need (Haskell's evaluation strategy).
@@ -215,7 +237,7 @@ This is call-by-need (Haskell's evaluation strategy).
 2. **Dependent bindings**: Bindings could reference other bindings. `b` could depend on `a`'s result if `a` is forced first. This enables:
 
 ```ts
-let_({
+declare({
   branch: deriveBranch,
   worktree: ({ branch }) => branch.then(createWorktree),  // depends on branch
 }, ({ worktree }) =>
@@ -233,7 +255,7 @@ With eager evaluation, all bindings see the same pipeline input. With lazy, bind
 
 2. **Concurrency semantics**: If two parallel branches both reference the same lazy variable, the scheduler needs synchronization: evaluate the thunk exactly once, block the second reference until the first completes. This is a concurrent memo table — not trivial.
 
-3. **Error semantics**: If a thunk fails, where does the error surface? At the `VarRef` site, not the `Let` site. This means error locations become less predictable. The same binding could fail at different points depending on which reference is evaluated first.
+3. **Error semantics**: If a thunk fails, where does the error surface? At the `VarRef` site, not the `Declare` site. This means error locations become less predictable. The same binding could fail at different points depending on which reference is evaluated first.
 
 4. **Debugging**: Lazy evaluation makes execution traces harder to follow. The order of operations in the trace doesn't match the order of declarations in the source.
 
@@ -245,7 +267,7 @@ Arguably yes. Consider what Barnum already has:
 |---|---|
 | `>>=` (monadic bind) | `pipe` / `.then()` |
 | `do` notation | `pipe(a, b, c)` |
-| `let` in `do` blocks | `let_` (this proposal) |
+| `let` in `do` blocks | `declare` (this proposal) |
 | `pure` / `return` | `constant` |
 | `void` | `drop` |
 | `fmap` | `forEach` (on arrays) |
@@ -254,30 +276,30 @@ Arguably yes. Consider what Barnum already has:
 | Recursion | `loop` / `stepRef` |
 | Type classes | Handler schemas (structural) |
 
-Adding lazy `let` bindings with memoization makes the parallel even tighter. Barnum would essentially be a lazy, first-order, effectful workflow DSL — which is a restricted Haskell with explicit effects.
+Adding lazy bindings with memoization makes the parallel even tighter. Barnum would essentially be a lazy, first-order, effectful workflow DSL — which is a restricted Haskell with explicit effects.
 
 The question is whether this is a good thing or a bad thing. Haskell's laziness is its most controversial feature. The benefits (composability, modularity) are real but so are the costs (space leaks, unpredictable performance, reasoning difficulty).
 
-**Recommendation**: Start with eager evaluation. It's simpler, predictable, and covers the common case (bind a few values, use them all). If we find ourselves writing bindings that are conditionally needed, we can add a `lazy_let_` variant or a per-binding `lazy: true` flag. Don't default to lazy.
+**Recommendation**: Start with eager evaluation. It's simpler, predictable, and covers the common case (bind a few values, use them all). If we find ourselves writing bindings that are conditionally needed, we can add a `lazy_declare` variant or a per-binding `lazy: true` flag. Don't default to lazy.
 
-The deeper insight: Barnum is already a language runtime (see BARNUM_AS_LANGUAGE.md). Every feature we add makes it more of a language. `let` bindings are variables; lazy `let` is call-by-need; RAII is linear types. We should be deliberate about which language features we adopt and recognize that each one moves us further along the "accidentally designed a programming language" spectrum.
+The deeper insight: Barnum is already a language runtime (see BARNUM_AS_LANGUAGE.md). Every feature we add makes it more of a language. `declare` bindings are variables; lazy `declare` is call-by-need; RAII is linear types. We should be deliberate about which language features we adopt and recognize that each one moves us further along the "accidentally designed a programming language" spectrum.
 
 ## Relation to existing combinators
 
-If `let` exists, several patterns simplify:
+If `declare` exists, several patterns simplify:
 
-| Current pattern | With `let` |
+| Current pattern | With `declare` |
 |---|---|
-| `augment(pipe(extract, transform))` | `let_({ x: pipe(extract, transform) }, ({ x }) => ...)` |
+| `augment(pipe(extract, transform))` | `declare({ x: pipe(extract, transform) }, ({ x }) => ...)` |
 | `tap(sideEffect)` | Side effect in a binding that's never referenced (eager) |
 | `withResource({ create, action, dispose })` | See "Interaction with RAII" below |
 
 ### Interaction with RAII
 
-`let` doesn't replace `withResource` because it has no cleanup semantics. A `let` binding that creates a worktree has no way to delete it when the body exits. You'd need:
+`declare` doesn't replace `withResource` because it has no cleanup semantics. A binding that creates a worktree has no way to delete it when the body exits. You'd need:
 
 ```ts
-let_({
+declare({
   resource: createWorktree,
 }, ({ resource }) =>
   pipe(
@@ -288,19 +310,17 @@ let_({
 )
 ```
 
-This is fragile — if `implement` fails, `deleteWorktree` never runs. `withResource` guarantees cleanup. `let` + RAII (see RAII.md if it exists) could replace `withResource`, but `let` alone cannot.
+This is fragile — if `implement` fails, `deleteWorktree` never runs. `withResource` guarantees cleanup. `declare` + RAII (see RAII.md if it exists) could replace `withResource`, but `declare` alone cannot.
 
 ## Open questions
 
-1. **Should the pipeline input be implicitly available as a variable?** In the `withResource` example, the original input is just as important as the resource. Should `let_` implicitly bind the input under a special name (e.g., `_` or `input`)? Or is `identity()` in the bindings sufficient?
+1. **Should the pipeline input be implicitly available as a variable?** In the `withResource` example, the original input is just as important as the resource. Should `declare` implicitly bind the input under a special name (e.g., `_` or `input`)? Or is `identity()` in the bindings sufficient?
 
-2. **Naming**: `let_` (trailing underscore because `let` is a JS keyword), `bind`, `with`, `assign`, `declare`? The semantics are closest to `let` in ML/Haskell: evaluate bindings, make them available in a body.
+2. **Interaction with steps**: Can a binding reference a named step? Can a step body contain `declare`? There's no fundamental obstacle, but the interaction with step registration and mutual recursion needs thought.
 
-3. **Interaction with steps**: Can a `let` binding reference a named step? Can a step body contain `let`? There's no fundamental obstacle, but the interaction with step registration and mutual recursion needs thought.
+3. **Multiple references to the same variable**: A VarRef can appear multiple times in the body AST. The scheduler evaluates the binding once and caches the value. Multiple references return the same cached result.
 
-4. **Multiple references to the same variable**: A VarRef can appear multiple times in the body AST. The scheduler evaluates the binding once and caches the value. Multiple references return the same cached result.
-
-5. **Body input type**: What is the body's pipeline input? Options:
+4. **Body input type**: What is the body's pipeline input? Options:
    - `never` — the body has no pipeline input, only variable references. Forces all data through variables.
-   - `TIn` — the body receives the same input as the let block. Variables are supplementary, not replacement.
+   - `TIn` — the body receives the same input as the declare block. Variables are supplementary, not replacement.
    - The second option is more flexible and avoids forcing the user to bind the input explicitly.
