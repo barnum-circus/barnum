@@ -259,7 +259,7 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 - `loop()` rewritten: HOAS callback provides `recur`/`done` tokens, compiles to Handle(freshId) + Perform(freshId)
 - Standalone `recur()` / `done()` removed — tokens come from the HOAS callback only
 - `LoopAction` removed from Action union
-- `StepAction` potentially removed (replaced by Handle-based mutual recursion, or kept for backward compat during migration)
+- `StepAction` kept — migrate callsites in-repo as needed, no external users
 
 ### Rust changes
 
