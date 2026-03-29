@@ -2,7 +2,7 @@
 
 How to bring Rust's Option, Result, Iterator, and combinator patterns into the workflow algebra.
 
-> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md, defined via `TaggedUnion<Def>` per PHANTOM_UNION_DEF.md. Branch auto-unwraps `value` — case handlers receive the payload directly.
+> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. All union constructors (`tag`, `recur`, `done`, `some`, `none`) require the full variant map so output carries `__def`. Branch auto-unwraps `value` — case handlers receive the payload directly.
 
 ## Option<T>
 

@@ -1,6 +1,6 @@
 # Loop with closure providing scoped recur/done
 
-> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. Branch auto-unwraps `value` — case handlers receive the payload directly. `LoopResult` uses `TaggedUnion<LoopResultDef>` per PHANTOM_UNION_DEF.md.
+> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. All union constructors (`tag`, `recur`, `done`, `some`, `none`) require the full variant map so output carries `__def`. Branch auto-unwraps `value` — case handlers receive the payload directly.
 
 ## Problem
 
@@ -30,8 +30,8 @@ The scoped `recur` and `done` carry the loop's type parameters:
 ```ts
 function loop<In, Out>(
   build: (ctx: {
-    recur: () => TypedAction<In, { kind: "Continue"; value: In }>;
-    done: () => TypedAction<Out, { kind: "Break"; value: Out }>;
+    recur: () => TypedAction<In, LoopResult<In, Out>>;
+    done: () => TypedAction<Out, LoopResult<In, Out>>;
   }) => TypedAction<In, LoopResult<In, Out>>,
 ): TypedAction<In, Out>
 ```

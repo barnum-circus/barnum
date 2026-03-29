@@ -166,7 +166,7 @@ Cancellation of the losing branches means: when one branch completes, the runtim
 
 ## Retry with backoff (updated — no Attempt)
 
-> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. Branch auto-unwraps `value` — case handlers receive the payload directly.
+> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. All union constructors require the full variant map so output carries `__def`. Branch auto-unwraps `value`.
 
 ```typescript
 loop(

@@ -3,6 +3,8 @@
 **Blocks:** nothing
 **Blocked by:** TAGGED_UNION_CONVENTION.md (needs `{ kind, value }` convention first)
 
+> **Invariant: all union variants carry `__def`, no exceptions.** Every function that constructs a tagged union variant (`tag`, `recur`, `done`, `some`, `none`) requires the full variant map as a type parameter. The output type is always `TaggedUnion<TDef>` (the full union), never a bare `{ kind: K; value: T }` without `__def`.
+
 ## Motivation
 
 After the `{ kind, value }` convention, unions are standardized but each variant doesn't carry information about the full union it belongs to. In Rust, `Option::None` is namespaced to `Option` — you can recover the full enum from any variant. In TypeScript, `{ kind: "None"; value: void }` is structurally identical regardless of which union it belongs to.
@@ -208,7 +210,7 @@ Test 2: After `__def`, `.branch()` infers output types through `ExtractDef<Out>[
 | File | What changes |
 |------|-------------|
 | `libs/barnum/src/ast.ts` | Add `TaggedUnion`, `ExtractDef`; update `LoopResult`; update `.branch()` signature to use `ExtractDef` |
-| `libs/barnum/src/builtins.ts` | Update `tag()` signature to `tag<TDef, TKind>` |
+| `libs/barnum/src/builtins.ts` | Update `tag()` to `tag<TDef, TKind>`, `recur()`/`done()` to `<TContinue, TBreak>`, postfix `.tag()` to require TDef |
 | `libs/barnum/tests/handlers.ts` | `ClassifyResult = TaggedUnion<ClassifyResultDef>` |
 | `libs/barnum/tests/types.test.ts` | Add failing tests (commit 1); remove `@ts-expect-error` (commit 2); update type assertions for `__def` |
 | `demos/convert-folder-to-ts/handlers/type-check-fix.ts` | Use `TaggedUnion<Def>` |
