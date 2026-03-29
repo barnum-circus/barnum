@@ -442,6 +442,26 @@ describe("postfix operator types", () => {
 });
 
 // ---------------------------------------------------------------------------
+// { kind, value } convention
+// ---------------------------------------------------------------------------
+
+describe("{ kind, value } convention", () => {
+  it("ClassifyResult uses { kind, value } form", () => {
+    // @ts-expect-error — remove after converting: HasErrors uses `errors` field, not `value`
+    assertExact<IsExact<Extract<ClassifyResult, { kind: "HasErrors" }>, { kind: "HasErrors"; value: TypeError[] }>>();
+  });
+
+  it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
+    // After auto-unwrap, forEach(fix) receives TypeError[] directly — no extractField needed.
+    classifyErrors.branch({
+      // @ts-expect-error — remove after implementing: forEach(fix) input doesn't match HasErrors variant
+      HasErrors: forEach(fix),
+      Clean: drop(),
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Postfix .branch() type safety (contravariant case handlers)
 // ---------------------------------------------------------------------------
 
