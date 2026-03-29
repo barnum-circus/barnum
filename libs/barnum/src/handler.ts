@@ -179,7 +179,10 @@ export function createHandlerWithConfig(
     enumerable: false,
   });
 
-  return (config: unknown) =>
+  // The factory function is the module export, so it must also carry
+  // __definition for the worker to find (the worker imports the module
+  // and accesses the named export, which is this function).
+  const factory = (config: unknown) =>
     typedAction({
       kind: "Chain",
       first: {
@@ -191,4 +194,15 @@ export function createHandlerWithConfig(
       },
       rest: invokeAction,
     });
+
+  Object.defineProperty(factory, HANDLER_BRAND, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(factory, "__definition", {
+    value: internalDefinition,
+    enumerable: false,
+  });
+
+  return factory;
 }
