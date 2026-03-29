@@ -2,7 +2,7 @@
 
 ## Builtins
 
-- **Add circular import lint rule** — oxlint rule to disallow circular imports in `libs/barnum/src/`.
+- **Add circular import lint rule** — oxlint rule to disallow circular imports in `libs/barnum/src/`. Blocked: oxlint native binding broken (pnpm optional dep issue). Fix with `pnpm install` and configure `import/no-cycle` in `.oxlintrc.json`.
 
 ## Docs written (pending review)
 
