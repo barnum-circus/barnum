@@ -4,7 +4,7 @@ import { z } from "zod";
 let callCount = 0;
 
 export default createHandler({
-  stepValueValidator: z.object({ attempt: z.number() }),
+  inputValidator: z.object({ attempt: z.number() }),
   handle: async ({ value }) => {
     callCount++;
     console.error(`[poll-status] Attempt ${value.attempt} (call #${callCount})...`);

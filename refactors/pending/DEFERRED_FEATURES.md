@@ -88,7 +88,7 @@ Without Builtin, loop signals and structural transforms must be implemented in h
 
 Reconsider the `createHandler` validator design:
 
-- **Optional `stepValueValidator`**: When omitted, the value type could default to `never` or `{}`, signaling "this handler doesn't consume pipeline input." Currently required.
+- **Optional `inputValidator`**: When omitted, the value type could default to `never` or `{}`, signaling "this handler doesn't consume pipeline input." Currently required.
 - **`stepConfigValidator` as a type parameter instead of a runtime validator**: Instead of `stepConfigValidator?: z.ZodType<TStepConfig>`, allow passing `TStepConfig` as a generic type parameter directly (e.g., `createHandler<{ timeout: number }>({...})`). The runtime validator is needed for serialization, but the type parameter approach is more ergonomic for handlers where config shape is known statically.
 - General question: should validators be the only way to specify types, or should explicit type parameters remain an option?
 
@@ -303,7 +303,7 @@ Implementation options:
 
 ### When it matters
 
-Irrelevant until runtime validation exists. Currently, handlers receive raw `Value` with no schema checking. When we add handler input validation (via `stepValueValidator` schemas), this optimization prevents O(N) redundant validations in Parallel/ForEach fan-outs.
+Irrelevant until runtime validation exists. Currently, handlers receive raw `Value` with no schema checking. When we add handler input validation (via `inputValidator` schemas), this optimization prevents O(N) redundant validations in Parallel/ForEach fan-outs.
 
 ## Lazy Step Flattening
 
@@ -326,7 +326,7 @@ Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `
 
 ```ts
 createHandler({
-  stepValueValidator: z.object({ ... }),
+  inputValidator: z.object({ ... }),
   errorType: z.object({ code: z.string(), message: z.string() }),
   handle: async ({ value }) => { ... },
 })

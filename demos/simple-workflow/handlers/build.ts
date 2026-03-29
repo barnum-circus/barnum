@@ -2,7 +2,7 @@ import { createHandler } from "@barnum/barnum/src/handler.js";
 import { z } from "zod";
 
 export default createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     project: z.string(),
     version: z.string(),
   }),

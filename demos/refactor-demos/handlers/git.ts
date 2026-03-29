@@ -11,7 +11,7 @@ import { z } from "zod";
 
 // In production: `git worktree add <path> -b <branch>`.
 export const createWorktree = createHandler({
-  stepValueValidator: z.object({ branch: z.string() }),
+  inputValidator: z.object({ branch: z.string() }),
   handle: async ({ value }) => {
     const worktreePath = `/tmp/worktrees/${value.branch.replace(/\//g, "-")}`;
     console.error(`[create-worktree] ${value.branch} at ${worktreePath}`);
@@ -23,7 +23,7 @@ export const createWorktree = createHandler({
 
 // In production: `git worktree remove <worktreePath>`, optionally `git branch -D`.
 export const deleteWorktree = createHandler({
-  stepValueValidator: z.object({ worktreePath: z.string() }),
+  inputValidator: z.object({ worktreePath: z.string() }),
   handle: async ({ value }) => {
     console.error(`[delete-worktree] Removing ${value.worktreePath}`);
   },
@@ -33,7 +33,7 @@ export const deleteWorktree = createHandler({
 
 // In production: `git push origin <branch>`, then `gh pr create --title "..." --body "..."`.
 export const createPR = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     branch: z.string(),
     title: z.string(),
     body: z.string(),

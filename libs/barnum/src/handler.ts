@@ -12,7 +12,7 @@ export type HandlerDefinition<
   TOutput = unknown,
   TStepConfig = unknown,
 > = {
-  stepValueValidator?: z.ZodType<TValue>;
+  inputValidator?: z.ZodType<TValue>;
   stepConfigValidator?: z.ZodType<TStepConfig>;
   handle: (context: {
     value: TValue;
@@ -22,7 +22,7 @@ export type HandlerDefinition<
 
 /** Runtime-only handler definition shape — erases generic type info. */
 type UntypedHandlerDefinition = {
-  stepValueValidator?: z.ZodType;
+  inputValidator?: z.ZodType;
   stepConfigValidator?: z.ZodType;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   handle: (...args: any[]) => Promise<unknown>;
@@ -81,16 +81,16 @@ function getCallerFilePath(): string {
 // createHandler — handlers with no config, returns TypedAction directly
 // ---------------------------------------------------------------------------
 
-// With stepValueValidator: handler accepts typed pipeline input.
+// With inputValidator: handler accepts typed pipeline input.
 export function createHandler<TValue, TOutput>(
   definition: {
-    stepValueValidator: z.ZodType<TValue>;
+    inputValidator: z.ZodType<TValue>;
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
 ): Handler<TValue, TOutput>;
 
-// Without stepValueValidator: handler takes no pipeline input.
+// Without inputValidator: handler takes no pipeline input.
 export function createHandler<TOutput>(
   definition: {
     handle: () => Promise<TOutput>;
@@ -129,17 +129,17 @@ export function createHandler(
 // createHandlerWithConfig — handlers that need static config
 // ---------------------------------------------------------------------------
 
-// With stepValueValidator: handler accepts typed pipeline input + config.
+// With inputValidator: handler accepts typed pipeline input + config.
 export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
   definition: {
-    stepValueValidator: z.ZodType<TValue>;
+    inputValidator: z.ZodType<TValue>;
     stepConfigValidator: z.ZodType<TStepConfig>;
     handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<TValue, TOutput>;
 
-// Without stepValueValidator: handler takes no pipeline input, has config.
+// Without inputValidator: handler takes no pipeline input, has config.
 export function createHandlerWithConfig<TOutput, TStepConfig>(
   definition: {
     stepConfigValidator: z.ZodType<TStepConfig>;

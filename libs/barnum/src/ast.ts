@@ -556,6 +556,6 @@ export class RunnableConfig<Out = any> {
   }
 }
 
-export function configBuilder(): ConfigBuilder {
+export function workflowBuilder(): ConfigBuilder {
   return new ConfigBuilder();
 }

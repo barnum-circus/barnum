@@ -31,7 +31,7 @@ export const typeCheck = createHandler({
 
 // Pure data transform: errors[] → { kind: "HasErrors" | "Clean" }.
 export const classifyErrors = createHandler({
-  stepValueValidator: z.array(
+  inputValidator: z.array(
     z.object({ file: z.string(), message: z.string() }),
   ),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
@@ -48,7 +48,7 @@ export const classifyErrors = createHandler({
 //   Prompt: "Fix the type error in {file}: {message}. Read the file,
 //   understand the issue, and make the minimal edit to resolve it."
 export const fix = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     file: z.string(),
     message: z.string(),
   }),

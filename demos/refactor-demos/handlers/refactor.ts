@@ -28,7 +28,7 @@ export type ClassifyJudgmentResult =
 
 // In production: glob folder for source files, filter by gitignore/node_modules.
 export const listTargetFiles = createHandler({
-  stepValueValidator: z.object({ folder: z.string() }),
+  inputValidator: z.object({ folder: z.string() }),
   handle: async ({ value }) => {
     console.error(`[list-target-files] Scanning ${value.folder}/ ...`);
     return [
@@ -44,7 +44,7 @@ export const listTargetFiles = createHandler({
 //   refactoring opportunities. For each, describe the change and why it
 //   improves the code. Return a JSON array of refactors."
 export const analyze = createHandler({
-  stepValueValidator: z.object({ file: z.string() }),
+  inputValidator: z.object({ file: z.string() }),
   handle: async ({ value }): Promise<Refactor[]> => {
     console.error(`[analyze] Analyzing ${value.file} for refactoring opportunities...`);
     return [
@@ -66,7 +66,7 @@ export const analyze = createHandler({
 
 // Derive a git branch name from a refactor description.
 export const deriveBranch = createHandler({
-  stepValueValidator: z.object({ description: z.string() }),
+  inputValidator: z.object({ description: z.string() }),
   handle: async ({ value }) => ({
     branch: `refactor/${value.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
   }),
@@ -74,7 +74,7 @@ export const deriveBranch = createHandler({
 
 // Prepare PR metadata from refactor context.
 export const preparePRInput = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     branch: z.string(),
     description: z.string(),
   }),
@@ -91,7 +91,7 @@ export const preparePRInput = createHandler({
 //   Prompt: "You are working in {worktreePath}. Implement the following
 //   refactor: {description}. Make minimal, focused changes."
 export const implement = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     worktreePath: z.string(),
     description: z.string(),
   }),
@@ -102,7 +102,7 @@ export const implement = createHandler({
 
 // In production: `git -C {worktreePath} add -A && git commit -m "{message}"`.
 export const commit = createHandler({
-  stepValueValidator: z.object({ worktreePath: z.string() }),
+  inputValidator: z.object({ worktreePath: z.string() }),
   handle: async ({ value }) => {
     console.error(`[commit] Committing in ${value.worktreePath}`);
   },
@@ -123,7 +123,7 @@ export const judgeRefactor = createHandler({
 
 // Pure data transform: { approved, instructions? } → discriminated union for branch.
 export const classifyJudgment = createHandler({
-  stepValueValidator: z.union([
+  inputValidator: z.union([
     z.object({ approved: z.literal(true) }),
     z.object({ approved: z.literal(false), instructions: z.string() }),
   ]),
@@ -141,7 +141,7 @@ export const classifyJudgment = createHandler({
 //   Prompt: "The reviewer provided the following feedback on your refactor:
 //   {instructions}. Apply these changes to the files in the worktree."
 export const applyFeedback = createHandler({
-  stepValueValidator: z.string(),
+  inputValidator: z.string(),
   handle: async ({ value: instructions }) => {
     console.error(`[apply-feedback] Applying: ${instructions}`);
   },

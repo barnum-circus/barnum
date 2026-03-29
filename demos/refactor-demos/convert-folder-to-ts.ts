@@ -16,7 +16,7 @@
  */
 
 import {
-  configBuilder,
+  workflowBuilder,
   pipe,
   forEach,
   loop,
@@ -35,7 +35,7 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
-await configBuilder()
+await workflowBuilder()
   .workflow(() =>
     pipe(
       // Phase 1: Setup and discover files

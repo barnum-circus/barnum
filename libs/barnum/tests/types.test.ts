@@ -13,7 +13,7 @@ import {
   forEach,
   branch,
   loop,
-  configBuilder,
+  workflowBuilder,
 } from "../src/ast.js";
 import {
   constant,
@@ -394,11 +394,11 @@ describe("config entry point", () => {
   it("rejects workflows that expect input", () => {
     // verify expects { artifact: string } input — can't be a workflow entry point
     // @ts-expect-error — workflow entry point must accept never input
-    configBuilder().workflow(() => verify);
+    workflowBuilder().workflow(() => verify);
   });
 
   it("accepts workflows starting with constant", () => {
-    const cfg = configBuilder().workflow(() =>
+    const cfg = workflowBuilder().workflow(() =>
       pipe(constant({ artifact: "test" }), verify),
     );
     expect(cfg.workflow.kind).toBe("Chain");
@@ -411,7 +411,7 @@ describe("config entry point", () => {
 
 describe("step reference types", () => {
   it("rejects references to unregistered steps", () => {
-    configBuilder()
+    workflowBuilder()
       .registerSteps({ Deploy: deploy })
       .workflow(({ steps }) => {
         // @ts-expect-error — "Nonexistent" was never registered
@@ -420,7 +420,7 @@ describe("step reference types", () => {
   });
 
   it("preserves step types from static registration", () => {
-    const builder = configBuilder().registerSteps({
+    const builder = workflowBuilder().registerSteps({
       Verify: verify,
       Deploy: deploy,
     });
@@ -442,7 +442,7 @@ describe("step reference types", () => {
   });
 
   it("self is TypedAction<never, never>", () => {
-    configBuilder().workflow(({ self }) => {
+    workflowBuilder().workflow(({ self }) => {
       assertExact<IsExact<ExtractInput<typeof self>, never>>();
       assertExact<IsExact<ExtractOutput<typeof self>, never>>();
       return constant({ done: true });
@@ -450,14 +450,14 @@ describe("step reference types", () => {
   });
 
   it("self cannot be piped after a value-producing action", () => {
-    configBuilder().workflow(({ self }) =>
+    workflowBuilder().workflow(({ self }) =>
       // @ts-expect-error — verify outputs { verified: boolean } but self expects never
       pipe(constant({ artifact: "test" }), verify, self),
     );
   });
 
   it("preserves step types through callback form registerSteps", () => {
-    configBuilder()
+    workflowBuilder()
       .registerSteps(({ stepRef }) => ({
         A: pipe(verify, stepRef("B")),
         B: pipe(verify, stepRef("A")),
@@ -478,7 +478,7 @@ describe("step reference types", () => {
   });
 
   it("callback steps parameter excludes current-batch keys", () => {
-    configBuilder()
+    workflowBuilder()
       .registerSteps({ Setup: setup })
       .registerSteps(({ steps }) => {
         // steps.Setup exists (from prior batch)
@@ -492,7 +492,7 @@ describe("step reference types", () => {
   });
 
   it("preserves types across mixed object + callback batches into workflow", () => {
-    configBuilder()
+    workflowBuilder()
       // Batch 1: object form
       .registerSteps({ Setup: setup })
       // Batch 2: callback form

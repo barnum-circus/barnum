@@ -6,7 +6,7 @@
  * Usage: pnpm exec tsx run-parallel.ts
  */
 
-import { configBuilder, pipe, parallel } from "@barnum/barnum/src/ast.js";
+import { workflowBuilder, pipe, parallel } from "@barnum/barnum/src/ast.js";
 import initialize from "./handlers/initialize.js";
 import build from "./handlers/build.js";
 import deploy from "./handlers/deploy.js";
@@ -16,7 +16,7 @@ import notify from "./handlers/notify.js";
 
 console.error("=== Running parallel post-deploy workflow ===\n");
 
-await configBuilder()
+await workflowBuilder()
   .workflow(() =>
     pipe(
       initialize,

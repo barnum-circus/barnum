@@ -12,7 +12,7 @@
 
 ### Handler creation (`handler.ts`)
 
-`createHandler` has 4 overloads covering every combination of `stepValueValidator` and `stepConfigValidator`. It returns a `CallableHandler` -- a function you call (optionally with `{ stepConfig }`) to produce a `TypedAction`:
+`createHandler` has 4 overloads covering every combination of `inputValidator` and `stepConfigValidator`. It returns a `CallableHandler` -- a function you call (optionally with `{ stepConfig }`) to produce a `TypedAction`:
 
 ```ts
 // handler.ts:65-72
@@ -100,7 +100,7 @@ These go through the normal dispatch → scheduler → complete cycle like any I
 ```ts
 // Handler definition:
 export default createHandler({
-  stepValueValidator: z.object({ artifact: z.string() }),
+  inputValidator: z.object({ artifact: z.string() }),
   handle: async ({ value }) => ({ built: true }),
 });
 
@@ -111,7 +111,7 @@ pipe(initialize, build, deploy, report)
 The default export is the handler object. It IS a `TypedAction` (an Invoke node). The worker imports the module, finds `__definition.handle` on the export, and calls it.
 
 Two overloads:
-1. With `stepValueValidator`: `Handler<TValue, TOutput>` -- handler has typed pipeline input
+1. With `inputValidator`: `Handler<TValue, TOutput>` -- handler has typed pipeline input
 2. Without: `Handler<never, TOutput>` -- handler takes no pipeline input
 
 **`createHandlerWithConfig`** -- handlers that need static config alongside the pipeline value. Returns a function. Calling it with a config value produces a `TypedAction` containing the desugared AST.
@@ -119,7 +119,7 @@ Two overloads:
 ```ts
 // Handler definition:
 export default createHandlerWithConfig({
-  stepValueValidator: z.object({ artifact: z.string() }),
+  inputValidator: z.object({ artifact: z.string() }),
   stepConfigValidator: z.object({ target: z.string() }),
   handle: async ({ value, stepConfig }) => ({
     deployed: true,
@@ -180,7 +180,7 @@ The user writes `handle: async ({ value, stepConfig }) => ...` and the wrapper b
 For `createHandlerWithConfig`, the invoke node receives `[TValue, TStepConfig]` -- a tuple. The handler's runtime validator (if we add runtime validation later) validates both parts using the two validators composed together:
 
 ```ts
-z.tuple([stepValueValidator, stepConfigValidator])
+z.tuple([inputValidator, stepConfigValidator])
 ```
 
 This reuses the existing validators without merging the types. The value and config remain structurally separate.

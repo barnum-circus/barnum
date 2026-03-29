@@ -32,7 +32,7 @@ This is a warning rather than a hard error — unreachable steps are wasteful bu
 
 ### 3. stepConfig validates against valueSchema (JSON Schema)
 
-The TypeScript layer serializes each handler's `stepValueValidator` as a JSON Schema in the `valueSchema` field. If a `TypeScriptHandler` has both `step_config` and a schema for that config, validate `step_config` against the schema at config load time.
+The TypeScript layer serializes each handler's `inputValidator` as a JSON Schema in the `valueSchema` field. If a `TypeScriptHandler` has both `step_config` and a schema for that config, validate `step_config` against the schema at config load time.
 
 This catches config typos (wrong field names, wrong types) before any handler runs. The alternative — discovering bad config when the handler's zod validator rejects it at runtime — gives worse error messages and wastes execution.
 

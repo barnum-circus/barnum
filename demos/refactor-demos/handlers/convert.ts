@@ -30,7 +30,7 @@ export const setup = createHandler({
 // Returns objects (not bare strings) so downstream steps can
 // parallel + merge file metadata with transformed content.
 export const listFiles = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     inputDir: z.string(),
     outputDir: z.string(),
   }),
@@ -54,7 +54,7 @@ export const listFiles = createHandler({
 // The `to` parameter comes from step config (e.g. { to: 'Typescript' }).
 // Pipeline value is the source file path.
 export const migrate = createHandlerWithConfig({
-  stepValueValidator: z.string(),
+  inputValidator: z.string(),
   stepConfigValidator: z.object({ to: z.string() }),
   handle: async ({ value: file, stepConfig }) => {
     console.error(`[migrate] Converting ${file} to ${stepConfig.to}`);
@@ -66,7 +66,7 @@ export const migrate = createHandlerWithConfig({
 
 // In production: mkdir -p parent dir, write content to outputPath.
 export const writeFile = createHandler({
-  stepValueValidator: z.object({
+  inputValidator: z.object({
     content: z.string(),
     outputPath: z.string(),
   }),

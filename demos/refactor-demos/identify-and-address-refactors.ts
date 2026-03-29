@@ -22,7 +22,7 @@
  */
 
 import {
-  configBuilder,
+  workflowBuilder,
   pipe,
   forEach,
   loop,
@@ -57,7 +57,7 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
-await configBuilder()
+await workflowBuilder()
   .registerSteps(({ stepRef }) => ({
     // Mutual recursion: TypeCheck → Fix → TypeCheck
     //

@@ -9,7 +9,7 @@ import type { LoopResult } from "../src/ast.js";
 // setup: { project: string } → { initialized: boolean, project: string }
 export const setup = createHandler(
   {
-    stepValueValidator: z.object({ project: z.string() }),
+    inputValidator: z.object({ project: z.string() }),
     handle: async ({ value }) => ({
       initialized: true,
       project: value.project,
@@ -21,7 +21,7 @@ export const setup = createHandler(
 // build: { initialized: boolean, project: string } → { artifact: string }
 export const build = createHandler(
   {
-    stepValueValidator: z.object({
+    inputValidator: z.object({
       initialized: z.boolean(),
       project: z.string(),
     }),
@@ -33,7 +33,7 @@ export const build = createHandler(
 // verify: { artifact: string } → { verified: boolean }
 export const verify = createHandler(
   {
-    stepValueValidator: z.object({ artifact: z.string() }),
+    inputValidator: z.object({ artifact: z.string() }),
     handle: async () => ({ verified: true }),
   },
   "verify",
@@ -42,7 +42,7 @@ export const verify = createHandler(
 // deploy: { verified: boolean } → { deployed: true }
 export const deploy = createHandler(
   {
-    stepValueValidator: z.object({ verified: z.boolean() }),
+    inputValidator: z.object({ verified: z.boolean() }),
     handle: async () => ({ deployed: true as const }),
   },
   "deploy",
@@ -51,7 +51,7 @@ export const deploy = createHandler(
 // healthCheck: { deployed: boolean } → LoopResult<{ deployed: boolean }, { stable: true }>
 export const healthCheck = createHandler(
   {
-    stepValueValidator: z.object({ deployed: z.boolean() }),
+    inputValidator: z.object({ deployed: z.boolean() }),
     handle: async ({
       value,
     }): Promise<LoopResult<{ deployed: boolean }, { stable: true }>> =>
@@ -69,7 +69,7 @@ export const healthCheck = createHandler(
 // listFiles: { initialized: boolean, project: string } → { file: string }[]
 export const listFiles = createHandler(
   {
-    stepValueValidator: z.object({
+    inputValidator: z.object({
       initialized: z.boolean(),
       project: z.string(),
     }),
@@ -84,7 +84,7 @@ export const listFiles = createHandler(
 // migrate: { file: string } → { file: string, migrated: boolean }
 export const migrate = createHandler(
   {
-    stepValueValidator: z.object({ file: z.string() }),
+    inputValidator: z.object({ file: z.string() }),
     handle: async ({ value }) => ({
       file: value.file,
       migrated: true,
@@ -98,7 +98,7 @@ export type TypeError = { file: string; message: string };
 
 export const typeCheck = createHandler(
   {
-    stepValueValidator: z.never(),
+    inputValidator: z.never(),
     handle: async (): Promise<TypeError[]> => [
       { file: "src/index.ts", message: "Type error" },
     ],
@@ -113,7 +113,7 @@ export type ClassifyResult =
 
 export const classifyErrors = createHandler(
   {
-    stepValueValidator: z.array(
+    inputValidator: z.array(
       z.object({ file: z.string(), message: z.string() }),
     ),
     handle: async ({ value }): Promise<ClassifyResult> =>
@@ -127,7 +127,7 @@ export const classifyErrors = createHandler(
 // fix: { file: string, message: string } → { file: string, fixed: boolean }
 export const fix = createHandler(
   {
-    stepValueValidator: z.object({ file: z.string(), message: z.string() }),
+    inputValidator: z.object({ file: z.string(), message: z.string() }),
     handle: async ({ value }) => ({ file: value.file, fixed: true }),
   },
   "fix",
