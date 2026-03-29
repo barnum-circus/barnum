@@ -5,17 +5,18 @@
  *   1. List all files in target folder
  *   2. For each file, analyze for refactoring opportunities
  *   3. Flatten into a single refactor list
- *   4. For each refactor, within an RAII worktree:
+ *   4. Assess each refactor's worthiness (Option.collect filters out Nones)
+ *   5. For each worthwhile refactor, within an RAII worktree:
  *      a. Implement the refactor (tap: side effect, preserves context)
  *      b. Commit changes (tap: side effect, preserves context)
  *      c. Type-check/fix cycle (tap: side effect, preserves context)
  *      d. Judge/revise loop (tap: side effect, preserves context)
  *      e. Create PR (augment: enriches context with prUrl)
- *   5. Delete worktree (RAII dispose — receives the resource directly)
+ *   6. Delete worktree (RAII dispose — receives the resource directly)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII), loop, forEach, constant, pipe, augment, tap, and postfix
- * operators (.branch, .flatten, .drop).
+ * (RAII), loop, forEach, constant, pipe, augment, tap, Option.collect,
+ * and postfix operators (.branch, .flatten, .drop, .then).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -38,6 +39,7 @@ import {
   withResource,
   recur,
   done,
+  Option,
 } from "@barnum/barnum/src/builtins.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -46,6 +48,7 @@ const srcDir = path.resolve(__dirname, "src");
 import {
   listTargetFiles,
   analyze,
+  assessWorthiness,
   deriveBranch,
   preparePRInput,
   implement,
@@ -129,6 +132,11 @@ await workflowBuilder()
 
       // Analyze each file for refactoring opportunities
       forEach(analyze).flatten(),
+
+      // Filter: assess each refactor's worthiness.
+      // assessWorthiness returns Option<Refactor> — Some if worth doing, None if not.
+      // Option.collect() drops Nones and unwraps Somes into a flat Refactor[].
+      forEach(assessWorthiness).then(Option.collect<Refactor>()),
 
       // For each refactor: create worktree → work → create PR → cleanup
       //

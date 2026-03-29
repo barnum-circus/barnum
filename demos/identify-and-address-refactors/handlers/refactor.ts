@@ -24,7 +24,7 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-import type { TaggedUnion } from "@barnum/barnum/src/ast.js";
+import type { TaggedUnion, Option } from "@barnum/barnum/src/ast.js";
 
 type ClassifyJudgmentResultDef = {
   Approved: void;
@@ -79,6 +79,46 @@ export const analyze = createHandler({
     }
   },
 }, "analyze");
+
+export const assessWorthiness = createHandler({
+  inputValidator: z.object({
+    file: z.string(),
+    description: z.string(),
+    scope: z.enum(["function", "module", "cross-file"]),
+  }),
+  handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
+    console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
+
+    const response = callClaude({
+      prompt: [
+        `Evaluate whether this refactoring opportunity is worth implementing:`,
+        `  File: ${refactor.file}`,
+        `  Description: ${refactor.description}`,
+        `  Scope: ${refactor.scope}`,
+        "",
+        "Consider: impact on maintainability, risk of introducing bugs, effort vs benefit.",
+        'Return a JSON object: { "worthwhile": true } or { "worthwhile": false, "reason": "..." }',
+        "Return ONLY the JSON object, no markdown fences, no explanation.",
+      ].join("\n"),
+      allowedTools: ["Read"],
+    });
+
+    try {
+      const cleaned = response.trim().replace(/^```json?\n?/, "").replace(/\n?```$/, "");
+      const result = JSON.parse(cleaned);
+      if (result.worthwhile) {
+        console.error(`[assess-worthiness] Worth it — proceeding`);
+        return { kind: "Some", value: refactor };
+      }
+      console.error(`[assess-worthiness] Skipping: ${result.reason ?? "not worth it"}`);
+      return { kind: "None", value: undefined };
+    } catch {
+      // If we can't parse, include it (demo safety)
+      console.error("[assess-worthiness] Could not parse response, including by default");
+      return { kind: "Some", value: refactor };
+    }
+  },
+}, "assessWorthiness");
 
 // --- Data shaping ---
 
