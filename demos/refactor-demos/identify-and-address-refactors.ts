@@ -52,51 +52,14 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
-// The action that runs inside each worktree, extracted for readability.
-// Implements the refactor, commits, runs the type-check/fix cycle,
-// judges quality in a loop, and creates a PR.
-const implementAndReview = (steps: { TypeCheck: any; Fix: any }) =>
-  pipe(
-    implement,
-    commit,
-    drop(),
-
-    // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-    steps.TypeCheck,
-
-    // Judge/revise loop: review the refactor, revise if needed.
-    // drop() discards the TypeCheck output — judgeRefactor
-    // reads the filesystem, not pipeline data.
-    loop(
-      pipe(
-        drop(),
-        judgeRefactor,
-        classifyJudgment,
-        branch({
-          NeedsWork: pipe(
-            extractField("instructions"),
-            applyFeedback,
-            drop(),
-            steps.TypeCheck,
-            recur(),
-          ),
-          Approved: done(),
-        }),
-      ),
-    ),
-
-    drop(),
-    createPR,
-  );
-
 await configBuilder()
-  // Mutual recursion: TypeCheck → Fix → TypeCheck
-  //
-  // TypeCheck runs tsc, classifies the result, and either dispatches to
-  // Fix (HasErrors) or exits (Clean). Fix applies fixes and jumps back
-  // to TypeCheck. Neither step can be defined without referencing the
-  // other, so both must be registered in the same batch via stepRef.
   .registerSteps(({ stepRef }) => ({
+    // Mutual recursion: TypeCheck → Fix → TypeCheck
+    //
+    // TypeCheck runs tsc, classifies the result, and either dispatches to
+    // Fix (HasErrors) or exits (Clean). Fix applies fixes and jumps back
+    // to TypeCheck. Neither step can be defined without referencing the
+    // other, so both must be registered in the same batch via stepRef.
     TypeCheck: pipe(
       typeCheck,
       classifyErrors,
@@ -106,6 +69,42 @@ await configBuilder()
       }),
     ),
     Fix: pipe(forEach(fix), drop(), stepRef("TypeCheck")),
+
+    // The action that runs inside each worktree. Implements the refactor,
+    // commits, runs the type-check/fix cycle, judges quality in a loop,
+    // and creates a PR.
+    ImplementAndReview: pipe(
+      implement,
+      commit,
+      drop(),
+
+      // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
+      stepRef("TypeCheck"),
+
+      // Judge/revise loop: review the refactor, revise if needed.
+      // drop() discards the TypeCheck output — judgeRefactor
+      // reads the filesystem, not pipeline data.
+      loop(
+        pipe(
+          drop(),
+          judgeRefactor,
+          classifyJudgment,
+          branch({
+            NeedsWork: pipe(
+              extractField("instructions"),
+              applyFeedback,
+              drop(),
+              stepRef("TypeCheck"),
+              recur(),
+            ),
+            Approved: done(),
+          }),
+        ),
+      ),
+
+      drop(),
+      createPR,
+    ),
   }))
   .workflow(({ steps }) =>
     pipe(
@@ -120,7 +119,7 @@ await configBuilder()
       forEach(
         withResource({
           create: createWorktree,
-          action: implementAndReview(steps),
+          action: steps.ImplementAndReview,
           dispose: deleteWorktree,
         }),
       ),
