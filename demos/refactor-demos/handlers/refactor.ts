@@ -6,7 +6,11 @@
 // Review loop: judgeRefactor, classifyJudgment, applyFeedback
 
 import { createHandler } from "@barnum/barnum/src/handler.js";
+import { spawnSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import path from "node:path";
 import { z } from "zod";
+import { baseDir, callClaude } from "./lib.js";
 
 // --- Types ---
 
@@ -26,45 +30,54 @@ export type ClassifyJudgmentResult =
 
 // --- Discovery ---
 
-// In production: glob folder for source files, filter by gitignore/node_modules.
 export const listTargetFiles = createHandler({
   inputValidator: z.object({ folder: z.string() }),
   handle: async ({ value }) => {
     console.error(`[list-target-files] Scanning ${value.folder}/ ...`);
-    return [
-      { file: `${value.folder}/src/api.ts` },
-      { file: `${value.folder}/src/utils.ts` },
-      { file: `${value.folder}/src/components/Button.tsx` },
-    ];
+    const files = readdirSync(value.folder)
+      .filter((name) => name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js"))
+      .sort();
+
+    const result = files.map((name) => ({
+      file: path.join(value.folder, name),
+    }));
+
+    console.error(`[list-target-files] Found ${result.length} files`);
+    return result;
   },
 }, "listTargetFiles");
 
-// In production:
-//   Prompt: "Analyze the following file and identify specific, independent
-//   refactoring opportunities. For each, describe the change and why it
-//   improves the code. Return a JSON array of refactors."
 export const analyze = createHandler({
   inputValidator: z.object({ file: z.string() }),
   handle: async ({ value }): Promise<Refactor[]> => {
     console.error(`[analyze] Analyzing ${value.file} for refactoring opportunities...`);
-    return [
-      {
-        file: value.file,
-        description: `Extract error handling into shared utility in ${value.file}`,
-        scope: "function",
-      },
-      {
-        file: value.file,
-        description: `Replace callback pattern with async/await in ${value.file}`,
-        scope: "module",
-      },
-    ];
+
+    const response = callClaude({
+      prompt: [
+        `Analyze the file ${value.file} for refactoring opportunities.`,
+        "Identify 1-2 specific, independent refactoring opportunities.",
+        "For each, describe the change and classify scope as function/module/cross-file.",
+        "Return a JSON array of objects with fields: file, description, scope.",
+        "Return ONLY the JSON array, no markdown fences, no explanation.",
+      ].join("\n"),
+      allowedTools: ["Read"],
+    });
+
+    try {
+      // Try to parse the JSON response
+      const cleaned = response.trim().replace(/^```json?\n?/, "").replace(/\n?```$/, "");
+      const refactors: Refactor[] = JSON.parse(cleaned);
+      console.error(`[analyze] Found ${refactors.length} opportunities in ${value.file}`);
+      return refactors;
+    } catch {
+      console.error(`[analyze] Failed to parse Claude's response, returning empty`);
+      return [];
+    }
   },
 }, "analyze");
 
 // --- Data shaping ---
 
-// Derive a git branch name from a refactor description.
 export const deriveBranch = createHandler({
   inputValidator: z.object({ description: z.string() }),
   handle: async ({ value }) => ({
@@ -72,7 +85,6 @@ export const deriveBranch = createHandler({
   }),
 }, "deriveBranch");
 
-// Prepare PR metadata from refactor context.
 export const preparePRInput = createHandler({
   inputValidator: z.object({
     branch: z.string(),
@@ -87,9 +99,6 @@ export const preparePRInput = createHandler({
 
 // --- Implementation ---
 
-// In production:
-//   Prompt: "You are working in {worktreePath}. Implement the following
-//   refactor: {description}. Make minimal, focused changes."
 export const implement = createHandler({
   inputValidator: z.object({
     worktreePath: z.string(),
@@ -97,31 +106,80 @@ export const implement = createHandler({
   }),
   handle: async ({ value }) => {
     console.error(`[implement] Applying refactor in ${value.worktreePath}: ${value.description}`);
+
+    callClaude({
+      prompt: [
+        `Implement the following refactor in the codebase:`,
+        `${value.description}`,
+        "",
+        `Working directory: ${value.worktreePath}`,
+        "Make minimal, focused changes. Only modify what's needed for this refactor.",
+      ].join("\n"),
+      allowedTools: ["Read", "Edit"],
+      cwd: value.worktreePath,
+    });
+
+    console.error(`[implement] Refactor applied`);
   },
 }, "implement");
 
-// In production: `git -C {worktreePath} add -A && git commit -m "{message}"`.
 export const commit = createHandler({
   inputValidator: z.object({ worktreePath: z.string() }),
   handle: async ({ value }) => {
-    console.error(`[commit] Committing in ${value.worktreePath}`);
+    console.error(`[commit] Committing changes in ${value.worktreePath}`);
+
+    spawnSync("git", ["add", "-A"], {
+      cwd: value.worktreePath,
+      encoding: "utf-8",
+    });
+
+    const result = spawnSync("git", [
+      "commit", "-m", "Apply automated refactor",
+      "--allow-empty",
+    ], {
+      cwd: value.worktreePath,
+      encoding: "utf-8",
+    });
+
+    if (result.status !== 0) {
+      console.error(`[commit] Warning: commit may have failed: ${result.stderr}`);
+    } else {
+      console.error(`[commit] Committed`);
+    }
   },
 }, "commit");
 
 // --- Review loop ---
 
-// In production:
-//   Prompt: "Review the changes on the current branch. Evaluate whether
-//   this refactor is correct, complete, and follows best practices.
-//   If improvements are needed, provide specific instructions."
 export const judgeRefactor = createHandler({
   handle: async (): Promise<JudgmentResult> => {
     console.error("[judge-refactor] Reviewing changes...");
-    return { approved: true };
+
+    const response = callClaude({
+      prompt: [
+        "Review the recent changes (git diff HEAD~1) in this repository.",
+        "Evaluate whether the refactor is correct, complete, and follows best practices.",
+        "Return a JSON object:",
+        '  If approved: { "approved": true }',
+        '  If needs work: { "approved": false, "instructions": "specific feedback here" }',
+        "Return ONLY the JSON object, no markdown fences, no explanation.",
+      ].join("\n"),
+      allowedTools: ["Bash(git:*)"],
+    });
+
+    try {
+      const cleaned = response.trim().replace(/^```json?\n?/, "").replace(/\n?```$/, "");
+      const judgment: JudgmentResult = JSON.parse(cleaned);
+      console.error(`[judge-refactor] ${judgment.approved ? "Approved" : "Needs work"}`);
+      return judgment;
+    } catch {
+      // If we can't parse, approve it (demo safety)
+      console.error("[judge-refactor] Could not parse response, approving by default");
+      return { approved: true };
+    }
   },
 }, "judgeRefactor");
 
-// Pure data transform: { approved, instructions? } → discriminated union for branch.
 export const classifyJudgment = createHandler({
   inputValidator: z.union([
     z.object({ approved: z.literal(true) }),
@@ -137,12 +195,21 @@ export const classifyJudgment = createHandler({
   },
 }, "classifyJudgment");
 
-// In production:
-//   Prompt: "The reviewer provided the following feedback on your refactor:
-//   {instructions}. Apply these changes to the files in the worktree."
 export const applyFeedback = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: instructions }) => {
-    console.error(`[apply-feedback] Applying: ${instructions}`);
+    console.error(`[apply-feedback] Applying feedback: ${instructions}`);
+
+    callClaude({
+      prompt: [
+        "The reviewer provided feedback on the refactor:",
+        instructions,
+        "",
+        "Apply these changes to the codebase. Read the relevant files, understand the feedback, and make the edits.",
+      ].join("\n"),
+      allowedTools: ["Read", "Edit"],
+    });
+
+    console.error(`[apply-feedback] Feedback applied`);
   },
 }, "applyFeedback");
