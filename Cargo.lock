@@ -97,6 +97,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "barnum_builtins"
+version = "0.2.4"
+dependencies = [
+ "barnum_ast",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "barnum_cli"
 version = "0.2.4"
 dependencies = [
@@ -128,8 +137,19 @@ name = "barnum_event_loop"
 version = "0.2.4"
 dependencies = [
  "barnum_ast",
+ "barnum_builtins",
  "barnum_engine",
+ "barnum_typescript_handler",
  "intern",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "barnum_typescript_handler"
+version = "0.2.4"
+dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
