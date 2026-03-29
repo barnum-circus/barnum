@@ -6,17 +6,16 @@
  *   2. For each file, analyze for refactoring opportunities
  *   3. Flatten into a single refactor list
  *   4. For each refactor, within an RAII worktree:
- *      a. merge() the [resource, input] tuple into a flat context
- *      b. Implement the refactor (tap: side effect, preserves context)
- *      c. Commit changes (tap: side effect, preserves context)
- *      d. Type-check/fix cycle (tap: side effect, preserves context)
- *      e. Judge/revise loop (tap: side effect, preserves context)
- *      f. Create PR (augment: enriches context with prUrl)
+ *      a. Implement the refactor (tap: side effect, preserves context)
+ *      b. Commit changes (tap: side effect, preserves context)
+ *      c. Type-check/fix cycle (tap: side effect, preserves context)
+ *      d. Judge/revise loop (tap: side effect, preserves context)
+ *      e. Create PR (augment: enriches context with prUrl)
  *   5. Delete worktree (RAII dispose — receives the resource directly)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII with tuple), loop, forEach, constant, pipe, merge, augment, tap,
- * and postfix operators (.branch, .flatten, .drop).
+ * (RAII), loop, forEach, constant, pipe, augment, tap, and postfix
+ * operators (.branch, .flatten, .drop).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -35,7 +34,6 @@ import {
   constant,
   drop,
   extractField,
-  merge,
   tap,
   withResource,
   recur,
@@ -61,8 +59,6 @@ import {
 import { createWorktree, deleteWorktree, createPR } from "./handlers/git.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
-type WorktreeResource = { worktreePath: string; branch: string };
-
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 await workflowBuilder()
@@ -81,16 +77,14 @@ await workflowBuilder()
 
     // The action that runs inside each worktree.
     //
-    // withResource passes [resource, input] as a tuple. merge() flattens
-    // it into a single context object so downstream handlers can access
-    // both resource fields (worktreePath, branch) and input fields
-    // (file, description, scope).
+    // withResource merges the resource with the original input into a
+    // flat context object so downstream handlers can access both resource
+    // fields (worktreePath, branch) and input fields (file, description,
+    // scope).
     //
     // Side-effectful steps use tap() to preserve this context through
     // operations that don't produce meaningful output.
     ImplementAndReview: pipe(
-      merge<[WorktreeResource, Refactor]>(),
-
       // Side effects: implement refactor and commit changes
       tap(implement),
       tap(commit),
@@ -126,8 +120,8 @@ await workflowBuilder()
 
       // For each refactor: create worktree → work → create PR → cleanup
       //
-      // withResource passes [resource, refactor] to the action as a tuple.
-      // dispose receives the resource directly (just { worktreePath, branch }).
+      // withResource merges the resource into each refactor, so the action
+      // receives { worktreePath, branch, file, description, scope }.
       forEach(
         withResource({
           create: pipe(deriveBranch, createWorktree),

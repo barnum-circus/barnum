@@ -159,72 +159,95 @@ export function dropResult<TInput>(
 /**
  * RAII-style resource management combinator.
  *
- * Runs `create` to acquire a resource, then passes `[TResource, TIn]`
- * (the resource paired with the original input) to `action`. After the
- * action completes, `dispose` receives the resource for cleanup. The
- * overall combinator returns the action's output.
+ * Runs `create` to acquire a resource, then merges the resource with the
+ * original input into a flat object (`TResource & TIn`) for the action.
+ * After the action completes, `dispose` receives the merged object for
+ * cleanup (it can access resource fields it needs). The overall combinator
+ * returns the action's output.
  *
  * ```
  * TIn → create → TResource
- *     → action([TResource, TIn]) → TOut
- *     → dispose(TResource)       → (discarded)
+ *     → merge(TResource, TIn) → TResource & TIn
+ *     → action(TResource & TIn) → TOut
+ *     → dispose(TResource & TIn) → (discarded)
  *     → TOut
  * ```
  *
- * The action receives a tuple so it has access to both the resource and
- * the original pipeline data. Dispose only needs the resource — it doesn't
- * depend on the action's output.
+ * The action receives a flat merged object so handlers can access both
+ * resource fields (e.g. worktreePath, branch) and input fields (e.g.
+ * file, description) without manual merge().
+ *
+ * TIn is inferred from create's input type (which may be narrower than
+ * the full pipeline data type). The return type uses `__in?: any` to
+ * bypass __in invariance — pipe's contravariant __phantom_in check is
+ * sufficient to verify the pipeline data is a supertype of create's input.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function withResource<TIn, TResource, TOut>({
+export function withResource<
+  TIn extends Record<string, unknown>,
+  TResource extends Record<string, unknown>,
+  TOut,
+>({
   create,
   action,
   dispose,
 }: {
-  // ChainableAction so __in's covariance doesn't reject handlers
-  // that only need a subset of TIn's fields.
-  create: ChainableAction<NoInfer<TIn>, TResource>;
-  action: TypedAction<[TResource, TIn], TOut>;
-  // ChainableAction (not TypedAction) so __in's covariance doesn't
-  // reject handlers that accept a supertype of TResource.
+  create: ChainableAction<TIn, TResource>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  action: ChainableAction<any, TOut>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispose: ChainableAction<NoInfer<TResource>, any>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): TypedAction<TIn, TOut> {
-  // Step 1: parallel(create, identity) → [TResource, TIn]
-  const createAndKeepInput = typedAction<TIn, [TResource, TIn]>({
+  const mergeBuiltin: Action = {
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+  };
+
+  // Step 1: parallel(create, identity) → [TResource, TIn] → merge → TResource & TIn
+  const acquireAndMerge = chain(
+    typedAction<TIn, [TResource, TIn]>({
+      kind: "Parallel",
+      actions: [create as Action, identity() as Action],
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    typedAction<any, TResource & TIn>(mergeBuiltin),
+  );
+
+  // Step 2: parallel(action, identity) → [TOut, TResource & TIn]
+  // Keep merged object so dispose can access resource fields.
+  const actionAndKeepMerged = typedAction<TResource & TIn, [TOut, TResource & TIn]>({
     kind: "Parallel",
-    actions: [create as Action, identity() as Action],
+    actions: [action as Action, identity() as Action],
   });
 
-  // Step 2: parallel(action, extractIndex(0)) → [TOut, TResource]
-  const actionAndKeepResource = typedAction<[TResource, TIn], [TOut, TResource]>({
-    kind: "Parallel",
-    actions: [
-      action as Action,
-      extractIndex(0) as Action,
-    ],
-  });
-
-  // Step 3: extract TOut, run dispose on TResource in parallel
-  //   parallel(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, void]
-  const disposeAndKeepResult = typedAction<[TOut, TResource], [TOut, unknown]>({
+  // Step 3: parallel(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
+  // Dispose receives the full merged object; TResource & TIn extends TResource,
+  // so the dispose handler can access all resource fields it needs.
+  const disposeAndKeepResult = typedAction<[TOut, TResource & TIn], [TOut, unknown]>({
     kind: "Parallel",
     actions: [
       extractIndex(0) as Action,
       chain(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        extractIndex(1) as TypedAction<any, TResource>,
-        dispose as Action as TypedAction<TResource, unknown>,
+        extractIndex(1) as TypedAction<any, TResource & TIn>,
+        dispose as Action as TypedAction<TResource & TIn, unknown>,
       ) as Action,
     ],
   });
 
   // Step 4: extractIndex(0) → TOut
+  //
+  // Cast to `{ __in?: any }` to bypass __in invariance. TIn is inferred
+  // from create's input (e.g. {description: string}), which is narrower
+  // than the actual pipeline data (e.g. Refactor). Pipe's contravariant
+  // __phantom_in check correctly verifies compatibility; __in's covariant
+  // check would incorrectly reject the wider pipeline type.
   return chain(
-    chain(chain(createAndKeepInput, actionAndKeepResource), disposeAndKeepResult),
+    chain(chain(acquireAndMerge, actionAndKeepMerged), disposeAndKeepResult),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     extractIndex(0) as TypedAction<any, TOut>,
-  );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ) as TypedAction<TIn, TOut> & { __in?: any };
 }
 
 // ---------------------------------------------------------------------------
