@@ -162,7 +162,21 @@ branch(cases: {
 
 This gives exhaustiveness checking (required keys come from the definition) and per-case type derivation (from the definition, not from handler inputs).
 
-**My opinion:** The `{ kind, value }` convention is a clear win — it standardizes structure and enables auto-unwrapping. The phantom `__def` is elegant but adds complexity. It should be a separate refactor that builds on `{ kind, value }` standardization. The postfix `.branch()` improvement doesn't require either of these — it works with today's arbitrary-shape unions.
+**What `__def` solves and what it doesn't:**
+
+`__def` solves computing `BranchInput` — the branch's overall input type can be derived from the definition carried by whichever handler has a concrete type, so `drop()` doesn't need to contribute type information for that computation.
+
+But there are two separate type checks in a branch:
+1. **Pipe connection** — preceding action's output matches branch input. `__def` fixes this.
+2. **Per-case handler check** — each handler must accept its variant. `__def` doesn't help here.
+
+The per-case check still uses invariance. `drop()` with input `unknown` doesn't match `{ kind: "Clean"; value: void; __def?: ClassifyResultDef }` under invariance. You still need `drop<Clean>()` unless you ALSO relax invariance at the handler boundary to contravariant-only.
+
+So `__def` alone doesn't eliminate type params on drop/done. You need both:
+- `__def` — fixes BranchInput derivation
+- Contravariant case handler checking — fixes the handler boundary
+
+Neither is sufficient alone. Both together make the freeform branch clean.
 
 ## `tap` naming
 
@@ -180,9 +194,20 @@ Candidates:
 
 **My opinion:** `also` reads well as postfix: `action.also(sideEffect)` — "do action, also do sideEffect." Short, clear, non-jargon. Kotlin precedent. `effect` is a close second.
 
+## The invariance relaxation is the key piece
+
+Across all the approaches discussed — postfix `.branch()`, `__def` phantom data, `{ kind, value }` convention — the thing that actually eliminates type params on `drop`/`done`/`recur` in branch cases is **contravariant case handler checking**. Everything else is about where the branch input type comes from (preceding action, `__def`, handler inputs), but the handler boundary check is what forces the explicit annotations today.
+
+Case handlers are consumers — they receive a value and process it. A handler that accepts `unknown` can handle any variant. This is a contravariant position, and checking it invariantly is over-constrained.
+
+Options for relaxing it:
+- **Contravariant-only phantom type** for case handler positions (e.g., a `CaseHandler<In, Out>` type without the covariant `__in` field)
+- **`any` escape hatch** — accept `any` as matching any type from both directions (current workaround with `drop<any>()`)
+- **Postfix `.branch()` with `Extract`** — derive expected types from `Out`, check handlers against them; since `Out` provides the ground truth, the handler check can be looser
+
 ## Recommended next steps
 
 1. **Implement postfix `.tap()` / `.also()`** — eliminates the three-type-param mess on the standalone form. Independent of everything else.
-2. **Improve postfix `.branch()` type checking** — add exhaustiveness and per-case validation using `Extract<Out, { kind: K }>`. Independent of (1).
-3. **Evaluate `{ kind, value }` convention** — bigger change, affects handler definitions and the Rust executor. Separate refactor doc if pursued.
-4. **Evaluate phantom `__def`** — builds on (3). Separate refactor doc.
+2. **Improve postfix `.branch()` type checking** — add exhaustiveness and per-case validation using `Extract<Out, { kind: K }>`. This is the path of least resistance — postfix knows `Out`, and the handler check can be designed with the right variance from the start. Independent of (1).
+3. **Evaluate contravariant case handler checking** — the foundational fix that makes both postfix and freeform branches clean. Could be a `CaseHandler` type or a different encoding for branch case positions.
+4. **Evaluate `{ kind, value }` convention + `__def`** — bigger change, affects handler definitions and the Rust executor. Builds on (3) for full benefit. Separate refactor doc if pursued.
