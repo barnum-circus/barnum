@@ -1,9 +1,8 @@
 # Backlog
 
-## Rust crate extraction
+## Renames
 
-- **Extract TypeScript handler execution into its own crate** — `execute_typescript` and subprocess logic out of `barnum_event_loop`.
-- **Extract builtins into their own crate** — `execute_builtin` and `BuiltinError` out of `barnum_event_loop`. Keep the `HandlerKind` enum that knows about all handler types for now.
+- **Rename `configBuilder` to `workflowBuilder`** — The builder constructs a workflow, not a config. Update `ast.ts` export, all demos, and all tests.
 
 ## Docs to write
 
