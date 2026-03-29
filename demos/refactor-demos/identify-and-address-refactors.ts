@@ -90,9 +90,12 @@ await configBuilder()
             // Type-check/fix cycle (registered step for mutual recursion)
             steps.TypeCheckFix,
 
-            // Judge/revise loop: review the refactor, revise if needed
+            // Judge/revise loop: review the refactor, revise if needed.
+            // drop() discards the TypeCheckFix output — judgeRefactor
+            // reads the filesystem, not pipeline data.
             loop(
               pipe(
+                drop(),
                 judgeRefactor,
                 classifyJudgment,
                 branch({
