@@ -432,12 +432,18 @@ Leaning toward option 1 — a well-known error shape that the engine always prod
 
 ### `tryAction` vs explicit Result returns
 
-Should handlers return `Result` explicitly, or should the engine catch failures and wrap them? Both have value:
+Both. They serve different failure modes (see RUNTIME_TYPE_CHECKING.md):
 
-- **Explicit return**: Handler decides what's an error. Full type safety. Handler can return partial results on failure.
-- **`tryAction` wrapping**: Catches unexpected panics/timeouts. Handler code is simpler (just throw). But error type is engine-defined, not domain-specific.
+- **Explicit `Result` returns**: For non-deterministic handlers (LLMs, APIs). The handler catches its own errors (Zod parse failures, network errors) and returns `{ kind: "Err", value: ... }`. The error payload is domain-specific — the handler decides what to include (raw LLM output, HTTP status, parse error message). The AST retries via `loop`/`branch`.
 
-Probably both. Explicit Result returns for domain errors. `tryAction` for infrastructure failures.
+- **`tryAction` wrapping**: For infrastructure failures that bypass the handler's own error handling — panics, timeouts, OOM. The engine catches the failure and produces a structured `Err`. This is distinct from deterministic handler contract violations (`ContractViolation`), which are Byzantine faults and kill the workflow immediately.
+
+Summary:
+| Failure type | Mechanism | Retryable? |
+|---|---|---|
+| Deterministic handler schema violation | `ContractViolation` IPC → `Failed(ByzantineFault)` | No |
+| Non-deterministic handler domain error | Handler returns `Result` `Err` variant | Yes, via AST |
+| Infrastructure failure (panic, timeout) | `tryAction` wrapping → `Err` variant | Yes, via AST |
 
 ### Interaction with scope/exit
 

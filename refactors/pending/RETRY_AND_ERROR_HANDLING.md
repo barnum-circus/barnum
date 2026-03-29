@@ -1,35 +1,78 @@
-# Retry, Timeouts, and Output Validation
+# Retry, Timeouts, and Error Handling
 
 How to handle handler failures, bad output, and retry logic.
 
-## The problem space
+## The two failure modes
 
-Handlers can fail in several ways:
+See RUNTIME_TYPE_CHECKING.md for full details. The key distinction:
 
-1. **Handler throws** — process exits non-zero (currently fatal)
-2. **Handler returns wrong shape** — downstream handler gets garbage input, fails with a confusing error far from the source
-3. **Handler times out** — subprocess hangs forever (no timeout mechanism exists)
-4. **Handler returns a domain-level error** — e.g., Claude API returns "rate limited" (handler can model this as a Result)
+| Failure type | Example | Handler behavior | Engine response |
+|---|---|---|---|
+| **Byzantine fault** | Deterministic handler returns wrong type | Worker SDK sends `ContractViolation` IPC | `Failed(ByzantineFault)`, kill workflow |
+| **Domain failure** | LLM returns malformed JSON, API rate-limits | Handler catches error, returns `Result` `Err` | Routes normally; AST handles retry |
 
-Each failure mode needs a different response.
+Byzantine faults are not retryable. The AST's type guarantees are broken. The workflow is dead.
 
-## Retry in userland (no AST changes)
+Domain failures are data. They flow through the AST as `Result` variants. The AST retries via `loop`/`branch` or algebraic effects (`tryCatch`/`Perform(Throw)`).
+
+## Domain failures: explicit Result returns
+
+Handlers that call non-deterministic sources (LLMs, APIs, shell commands) should catch errors internally and return `Result`:
+
+```ts
+export const callApi = createHandler({
+  inputValidator: z.object({ url: z.string() }),
+  handle: async ({ value }): Promise<Result<ApiResponse, string>> => {
+    try {
+      const response = await fetch(value.url);
+      const data = await response.json();
+      return { kind: "Ok", value: data };
+    } catch (e) {
+      return { kind: "Err", value: e.message };
+    }
+  },
+}, "callApi");
+```
+
+The handler decides what constitutes an error. Full type safety. The handler can include diagnostic information in the `Err` payload (raw LLM output, HTTP status, etc.) that downstream retry logic can use.
+
+## Retry patterns
+
+### Simple retry via loop + branch
 
 If the handler models failure as a Result, retry is just loop + branch:
 
 ```ts
 loop(
   pipe(
-    tryAction(handler),
+    callApi,
     branch({
       Ok: done(),
-      Err: recur(),
+      Err: recur(),  // retry — discards error, re-runs with same input
     }),
   ),
 )
 ```
 
-This retries forever. To limit retries, we need a counter. Without context/variables, the counter must be threaded through the pipeline.
+This retries forever. To limit retries, thread a counter or use algebraic effects.
+
+### Retry with error feedback (LLM self-correction)
+
+For LLM handlers, the error payload often contains the raw output and the parse failure. Feed this back into the prompt:
+
+```ts
+loop(
+  pipe(
+    askAgent,
+    branch({
+      Ok: done(),
+      Err: pipe(augmentPromptWithFeedback, recur()),
+    }),
+  ),
+)
+```
+
+The `augmentPromptWithFeedback` handler appends the error message to the prompt context, giving the LLM a chance to correct its output.
 
 ### Retry with counter (current primitives)
 
@@ -37,25 +80,20 @@ Thread a `{ attempt: number, ... }` through the pipeline:
 
 ```ts
 pipe(
-  // Start: wrap input with attempt counter
   augment(constant({ attempt: 0 })),
-
   loop(
     pipe(
-      // Increment attempt
       augment(pipe(
         extractField("attempt"),
-        increment,  // handler: n => n + 1
-        tag("attempt"),  // wait, this doesn't work right
+        increment,
       )),
-
       // ... this gets ugly fast
     ),
   ),
 )
 ```
 
-This is painful. The counter threading pollutes the entire pipeline.
+This is painful. The counter threading pollutes the entire pipeline. Better options below.
 
 ### Retry as a combinator (new primitive)
 
@@ -63,35 +101,32 @@ A cleaner API: `retry(action, { maxAttempts: 3 })` as a new combinator.
 
 ```ts
 retry(riskyHandler, { maxAttempts: 3 })
-// Equivalent to: run handler, if it fails, retry up to 3 times
 // Returns: Ok(result) | Err(lastError)
 ```
 
-Implementation options:
+**Option A: Sugar over loop (userland)** — Doable but ugly without let-bindings or context.
 
-**Option A: Sugar over loop + tryAction (userland)**
+**Option B: New AST node (Rust-side)** — `{ kind: "Retry", action: Action, maxAttempts: number }`. The Rust scheduler handles the retry loop internally with an attempt counter. Much cleaner.
 
-```ts
-function retry<TIn, TOut>(
-  action: TypedAction<TIn, TOut>,
-  config: { maxAttempts: number },
-): TypedAction<TIn, Result<TOut, Error>> {
-  // Would need: counter threading, tryAction, loop, branch
-  // Requires context/variables to avoid threading the counter
-}
-```
+**Recommendation**: Option B. Retry is common enough and hard enough in userland that it warrants scheduler support.
 
-This is doable but ugly without context/variables.
+### Retry via algebraic effects
 
-**Option B: New AST node (Rust-side)**
+With algebraic effects (see EFFECTS_PHASE_3_TRYCATCH.md), retry becomes:
 
 ```ts
-{ kind: "Retry", action: Action, maxAttempts: number }
+loop((recur, done) =>
+  tryCatch(
+    pipe(invokeWithThrow(askAgent), done()),
+    (schemaError) => pipe(
+      augmentPromptWithFeedback(schemaError),
+      recur(),
+    ),
+  ),
+)
 ```
 
-The Rust scheduler handles the retry loop internally, with access to an attempt counter. This is much cleaner — the retry semantics live in the scheduler, not in the AST.
-
-**Recommendation**: Option B. Retry is common enough and hard enough in userland that it warrants scheduler support. The Rust side already wraps handler execution — adding a retry loop around that wrapper is straightforward.
+The handler returns `{ kind: "Err", ... }` which `invokeWithThrow` converts to `Perform(Throw)`. The `tryCatch` catches it and the loop retries.
 
 ## Output validation
 
@@ -99,64 +134,60 @@ The Rust scheduler handles the retry loop internally, with access to an attempt 
 
 Handlers declare `inputValidator` (zod schema) but not `outputValidator`. If a handler returns `{ naem: "typo" }` instead of `{ name: "value" }`, the error surfaces in the *next* handler's input validation — or worse, propagates silently.
 
-### Solution: add `outputValidator` to HandlerDefinition
+### Solution: add `outputValidator` to createHandler
 
 ```ts
 export const myHandler = createHandler({
   inputValidator: z.object({ file: z.string() }),
   outputValidator: z.object({ content: z.string() }),
   handle: async ({ value }) => {
-    // ... if this returns wrong shape, outputValidator catches it
+    return { content: readFile(value.file) };
   },
 });
 ```
 
-The worker validates the output before sending it to stdout:
+The worker SDK validates the output before sending the IPC payload:
 
 ```ts
-// worker.ts
 const result = await handler.__definition.handle({ value: input.value });
 
 if (handler.__definition.outputValidator) {
-  handler.__definition.outputValidator.parse(result);  // throws on mismatch
+  try {
+    handler.__definition.outputValidator.parse(result);
+  } catch (err) {
+    // Deterministic handler violated its contract.
+    sendIPC({ kind: "ContractViolation", handler: handler.name, error: err.message });
+    return;
+  }
 }
 
-process.stdout.write(JSON.stringify(result));
+sendIPC({ kind: "Yield", value: result });
 ```
+
+### When to use `outputValidator` vs internal Result returns
+
+- **Deterministic handlers** (pure transforms): Use `outputValidator`. A schema violation is a bug → `ContractViolation` → kill workflow.
+- **Non-deterministic handlers** (LLMs, APIs): Do NOT use `outputValidator`. Catch Zod errors inside the handler, return `Result`. A schema violation is expected → data flows through AST → retry.
 
 ### Should output validators be inferred?
 
-The `handle` function's return type is known at compile time. Could we auto-generate a zod validator from the TypeScript type?
-
 No — TypeScript types are erased at runtime. Zod schemas are runtime objects. You can't automatically bridge them. The user must explicitly provide the zod schema.
 
-However, we can **type-check** that the output validator matches the handle function's return type:
+However, TypeScript can **type-check** that the output validator matches the handle function's return type:
 
 ```ts
 export function createHandler<TValue, TOutput>(definition: {
-  inputValidator: z.ZodType<TValue>;
+  inputValidator?: z.ZodType<TValue>;
   outputValidator?: z.ZodType<TOutput>;  // Must match handle's return type
   handle: (context: { value: TValue }) => Promise<TOutput>;
 }): Handler<TValue, TOutput>;
 ```
-
-If the user provides an `outputValidator` that doesn't match the return type, TypeScript rejects it at compile time.
-
-### Is output validation always needed?
-
-For handlers that call Claude (non-deterministic output), output validation is critical — Claude might return malformed JSON, extra fields, or missing fields.
-
-For pure data transforms (`classifyErrors`, `deriveBranch`), the TypeScript compiler already ensures correctness. Output validation is redundant.
-
-**Recommendation**: Optional `outputValidator`. Strongly encouraged for handlers that invoke external processes (Claude, shell commands, APIs). Not needed for pure transforms.
 
 ## Timeouts
 
 ### Handler-level timeout
 
 The Rust scheduler spawns handler subprocesses. It can enforce a timeout per handler invocation.
-
-**Implementation**: Add `timeout_ms` to the handler config or step config. The Rust side uses `wait_timeout` on the child process.
 
 ```ts
 export const slowHandler = createHandler({
@@ -165,7 +196,7 @@ export const slowHandler = createHandler({
 });
 ```
 
-If the handler times out, the scheduler treats it as a failure (same as non-zero exit). Combined with `tryAction`, this produces an Err result.
+If the handler times out, the scheduler treats it as a failure. For deterministic handlers, this is a `ContractViolation` (the handler is broken). For non-deterministic handlers wrapped in `tryAction`, this produces an `Err` result.
 
 ### Workflow-level timeout
 
@@ -185,44 +216,46 @@ Named steps could have timeout metadata:
 })
 ```
 
-This requires extending the step registration API to accept metadata alongside the action.
-
-## Catching type errors at runtime
-
-### The handler boundary
-
-The handler subprocess is the trust boundary. Input comes from the scheduler (trusted) or from the previous handler's output (semi-trusted). Output goes to the scheduler for the next handler.
-
-Currently, `inputValidator` runs in the worker before calling `handle()`. Adding `outputValidator` closes the loop.
-
-### The scheduler boundary
-
-The Rust scheduler receives handler output as JSON. It could validate the JSON against a schema before routing it to the next handler. This requires shipping zod schemas (or JSON Schema equivalents) to the Rust side.
-
-**Recommendation**: Keep validation in the TypeScript worker. The Rust side is a transport layer — it shouldn't know about output shapes. Validation at the TypeScript handler boundary is sufficient.
-
-## How `tryAction` + retry + output validation compose
+## How these compose
 
 ```ts
-// Pattern: resilient handler with retry, timeout, and output validation
-retry(
-  tryAction(riskyHandler),  // wraps in Result
-  { maxAttempts: 3 },
-)
+// Deterministic handler with output validation:
+// If it fails → ContractViolation → workflow dies
+export const deriveBranch = createHandler({
+  inputValidator: z.object({ description: z.string() }),
+  outputValidator: z.object({ branch: z.string() }),
+  handle: async ({ value }) => ({
+    branch: value.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40),
+  }),
+});
 
-// riskyHandler has:
-//   outputValidator: z.object({ content: z.string() })
-//   timeout: 30_000
-//
-// If handler throws → tryAction catches → Err → retry
-// If handler times out → tryAction catches → Err → retry
-// If output invalid → outputValidator throws → tryAction catches → Err → retry
-// If output valid → Ok(result)
-// After 3 failures → Err(lastError) propagates
+// Non-deterministic handler with internal error handling:
+// If it fails → Result.err → AST retries
+export const askAgent = createHandler({
+  inputValidator: z.object({ prompt: z.string() }),
+  // No outputValidator — handler manages its own errors
+  handle: async ({ value }): Promise<Result<AgentOutput, string>> => {
+    try {
+      const raw = await llm.generate(value.prompt);
+      return { kind: "Ok", value: AgentOutputSchema.parse(JSON.parse(raw)) };
+    } catch (err) {
+      return { kind: "Err", value: err.message };
+    }
+  },
+});
+
+// Pipeline: retry the agent, use the deterministic transform
+pipe(
+  loop(pipe(
+    askAgent,
+    branch({ Ok: done(), Err: recur() }),
+  )),
+  deriveBranch,
+)
 ```
 
 ## Priority
 
-1. **Output validation** — low effort, high value. Just add optional `outputValidator` to handler definition and validate in worker.ts.
+1. **Output validation** — low effort, high value. Add optional `outputValidator` to handler definition, validate in worker SDK, send `ContractViolation` on failure.
 2. **Timeouts** — medium effort. Rust-side change to add timeout to subprocess spawning.
-3. **Retry** — depends on `tryAction` existing first. As an AST node (Option B), medium effort.
+3. **Retry combinator** — depends on `Result` type existing. As an AST node (Option B), medium effort.
