@@ -1,4 +1,4 @@
-import { type Action, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -159,9 +159,9 @@ export function pick<
 // DropResult — run an action for side effects, discard its output
 // ---------------------------------------------------------------------------
 
-export function dropResult<TInput, TOutput>(
-  action: TypedAction<TInput, TOutput>,
-): TypedAction<TInput, never> {
+export function dropResult<TInput, TOutput, TRefs extends string = never>(
+  action: Pipeable<TInput, TOutput, TRefs>,
+): TypedAction<TInput, never, TRefs> {
   return chain(action, drop());
 }
 
@@ -194,9 +194,9 @@ export function withResource<
   action,
   dispose,
 }: {
-  create: TypedAction<TIn, TResource>;
-  action: TypedAction<TResource & TIn, TOut>;
-  dispose: TypedAction<TResource, unknown>;
+  create: Pipeable<TIn, TResource>;
+  action: Pipeable<TResource & TIn, TOut>;
+  dispose: Pipeable<TResource, unknown>;
 }): TypedAction<TIn, TOut> {
   const mergeBuiltin: Action = {
     kind: "Invoke",
@@ -226,7 +226,7 @@ export function withResource<
       extractIndex<[TOut, TResource & TIn], 0>(0) as Action,
       chain(
         extractIndex<[TOut, TResource & TIn], 1>(1),
-        dispose as TypedAction<TResource & TIn, unknown>,
+        dispose as Pipeable<TResource & TIn, unknown>,
       ) as Action,
     ],
   });
@@ -256,7 +256,7 @@ export function augment<
   TOutput extends Record<string, unknown>,
   TRefs extends string = never,
 >(
-  action: TypedAction<TInput, TOutput, TRefs>,
+  action: Pipeable<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, TInput & TOutput, TRefs> {
   // Construct parallel(action, identity()) inline to avoid circular import
   // with parallel.ts (which imports constant from this file).
@@ -285,11 +285,11 @@ export function augment<
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
-export function tap<TInput extends Record<string, unknown>>(
-  action: TypedAction<TInput, unknown>,
-): TypedAction<TInput, TInput> {
-  const voided = chain(action, constant({}) as TypedAction<unknown, Record<string, unknown>>);
-  return augment(voided) as TypedAction<TInput, TInput>;
+export function tap<TInput extends Record<string, unknown>, TRefs extends string = never>(
+  action: Pipeable<TInput, unknown, TRefs>,
+): TypedAction<TInput, TInput, TRefs> {
+  const voided = chain(action, constant({}) as Pipeable<unknown, Record<string, unknown>>);
+  return augment(voided) as TypedAction<TInput, TInput, TRefs>;
 }
 
 // ---------------------------------------------------------------------------

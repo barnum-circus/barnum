@@ -34,6 +34,7 @@ import {
   constant,
   drop,
   extractField,
+  identity,
   tap,
   withResource,
   recur,
@@ -61,6 +62,14 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
+// The full context type inside the worktree action. withResource merges
+// the resource (createWorktree output) with the input (Refactor), giving
+// all five fields. Explicit type annotations on tap<Ctx>() are needed
+// because tap infers TInput from its action argument, which may only
+// declare a subset of the context fields. Without annotation, each tap
+// narrows the pipe's flow type to its handler's input type.
+type Ctx = Refactor & { worktreePath: string; branch: string };
+
 await workflowBuilder()
   .registerSteps(({ stepRef }) => ({
     // Mutual recursion: TypeCheck → Fix → TypeCheck
@@ -86,15 +95,15 @@ await workflowBuilder()
     // operations that don't produce meaningful output.
     ImplementAndReview: pipe(
       // Side effects: implement refactor and commit changes
-      tap(implement),
-      tap(commit),
+      tap<Ctx>(implement),
+      tap<Ctx>(commit),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      tap(stepRef("TypeCheck")),
+      tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
       // drop() discards the tap context — judgeRefactor takes no input.
-      tap(
+      tap<Ctx, "TypeCheck">(
         loop(
           pipe(drop(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
@@ -107,7 +116,7 @@ await workflowBuilder()
       ),
 
       // Create PR: generic handler, augment merges { prUrl } back.
-      augment(pipe(preparePRInput, createPR)),
+      augment<Ctx, { prUrl: string }>(pipe(preparePRInput, createPR)),
     ),
   }))
   .workflow(({ steps }) =>
@@ -122,9 +131,12 @@ await workflowBuilder()
       //
       // withResource merges the resource into each refactor, so the action
       // receives { worktreePath, branch, file, description, scope }.
+      // identity<Refactor>() at the start of the create pipeline declares
+      // the full input type (deriveBranch only needs {description}, but
+      // the actual input is Refactor with file and scope too).
       forEach(
         withResource({
-          create: pipe(deriveBranch, createWorktree),
+          create: pipe(identity<Refactor>(), deriveBranch, createWorktree),
           action: steps.ImplementAndReview,
           dispose: deleteWorktree,
         }),

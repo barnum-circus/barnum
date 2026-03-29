@@ -116,7 +116,7 @@ export type TypedAction<
   __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext, TRefs2 extends string = never>(
-    next: TypedAction<Out, TNext, TRefs2>,
+    next: Pipeable<Out, TNext, TRefs2>,
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
@@ -186,10 +186,10 @@ export type Pipeable<
 // Shared implementations (one closure, not per-instance)
 function thenMethod<TIn, TOut, TRefs extends string, TNext, TRefs2 extends string>(
   this: TypedAction<TIn, TOut, TRefs>,
-  next: TypedAction<TOut, TNext, TRefs2>,
+  next: Pipeable<TOut, TNext, TRefs2>,
 ): TypedAction<TIn, TNext, TRefs | TRefs2> {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  return typedAction({ kind: "Chain", first: this, rest: next });
+  return typedAction({ kind: "Chain", first: this, rest: next as Action });
 }
 
 function forEachMethod<TIn, TOut, TRefs extends string>(
@@ -448,9 +448,9 @@ export { chain } from "./chain.js";
 export { parallel } from "./parallel.js";
 
 export function forEach<In, Out, R extends string = never>(
-  action: TypedAction<In, Out, R>,
+  action: Pipeable<In, Out, R>,
 ): TypedAction<In[], Out[], R> {
-  return typedAction({ kind: "ForEach", action });
+  return typedAction({ kind: "ForEach", action: action as Action });
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
