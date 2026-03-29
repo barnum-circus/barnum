@@ -34,7 +34,7 @@ import {
   constant,
   drop,
   extractField,
-  identity,
+  pick,
   tap,
   withResource,
   recur,
@@ -94,29 +94,35 @@ await workflowBuilder()
     // Side-effectful steps use tap() to preserve this context through
     // operations that don't produce meaningful output.
     ImplementAndReview: pipe(
-      // Side effects: implement refactor and commit changes
-      tap<Ctx>(implement),
-      tap<Ctx>(commit),
+      // Side effects: implement refactor and commit changes.
+      // pick() narrows to exactly the fields each handler expects —
+      // invariance prevents passing extra fields across serialization boundaries.
+      tap(pipe(pick<Ctx, ["worktreePath", "description"]>("worktreePath", "description"), implement)),
+      tap(pipe(pick<Ctx, ["worktreePath"]>("worktreePath"), commit)),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
+      tap<Ctx, any, "TypeCheck">(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
-      // drop() discards the tap context — judgeRefactor takes no input.
-      tap<Ctx, "TypeCheck">(
+      // drop<any>() discards the tap context — judgeRefactor takes no input.
+      tap<Ctx, any, "TypeCheck">(
         loop(
-          pipe(drop(), judgeRefactor, classifyJudgment).branch({
+          pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
               extractField<Extract<ClassifyJudgmentResult, { kind: "NeedsWork" }>, "instructions">("instructions"),
-              applyFeedback.drop(), stepRef("TypeCheck"), recur(),
+              applyFeedback.drop(), stepRef("TypeCheck"), recur<any>(),
             ),
-            Approved: done(),
+            Approved: done<any>(),
           }),
         ),
       ),
 
-      // Create PR: generic handler, augment merges { prUrl } back.
-      augment<Ctx, { prUrl: string }>(pipe(preparePRInput, createPR)),
+      // Create PR: pick the fields preparePRInput needs, augment merges { prUrl } back.
+      augment<Ctx, { prUrl: string }>(pipe(
+        pick<Ctx, ["branch", "description"]>("branch", "description"),
+        preparePRInput,
+        createPR,
+      )),
     ),
   }))
   .workflow(({ steps }) =>
@@ -131,12 +137,11 @@ await workflowBuilder()
       //
       // withResource merges the resource into each refactor, so the action
       // receives { worktreePath, branch, file, description, scope }.
-      // identity<Refactor>() at the start of the create pipeline declares
-      // the full input type (deriveBranch only needs {description}, but
-      // the actual input is Refactor with file and scope too).
+      // pick() narrows Refactor to just {description} for deriveBranch —
+      // invariance requires exact type matches at handler boundaries.
       forEach(
         withResource({
-          create: pipe(identity<Refactor>(), deriveBranch, createWorktree),
+          create: pipe(pick<Refactor, ["description"]>("description"), deriveBranch, createWorktree),
           action: steps.ImplementAndReview,
           dispose: deleteWorktree,
         }),

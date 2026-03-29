@@ -49,7 +49,7 @@ await workflowBuilder()
           pipe(
             extractField<FileEntry, "file">("file"),
             migrate({ to: "Typescript" }),
-          ).augment(),
+          ).augment().pick("content", "outputPath"),
           writeFile,
         ),
       ).drop(),
@@ -60,9 +60,9 @@ await workflowBuilder()
           HasErrors: pipe(
             extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
             forEach(fix).drop(),
-            recur(),
+            recur<any>(),
           ),
-          Clean: done(),
+          Clean: done<any>(),
         }),
       ),
     ),

@@ -42,6 +42,7 @@ import {
 } from "./handlers.js";
 
 type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
+type Clean = Extract<ClassifyResult, { kind: "Clean" }>;
 
 // -----------------------------------------------------------------------
 // Named steps
@@ -80,16 +81,16 @@ describe("named steps", () => {
       .registerSteps({
         FixCycle: loop(
           pipe(
-            drop(),
+            drop<any>(),
             typeCheck,
             classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
-                recur(),
+                recur<any>(),
               ),
-              Clean: done(),
+              Clean: done<Clean>(),
             }),
           ),
         ),
@@ -115,16 +116,16 @@ describe("named steps", () => {
       .registerSteps({
         FixCycle: loop(
           pipe(
-            drop(),
+            drop<any>(),
             typeCheck,
             classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
-                recur(),
+                recur<any>(),
               ),
-              Clean: done(),
+              Clean: done<Clean>(),
             }),
           ),
         ),
@@ -149,8 +150,8 @@ describe("workflow self-reference", () => {
           constant([{ file: "a.ts", message: "err" }]),
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), drop(), self),
-            Clean: pipe(drop(), constant({ done: true })),
+            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), drop<any>(), self),
+            Clean: pipe(drop<Clean>(), constant({ done: true })),
           }),
         ),
       );
@@ -258,7 +259,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
     const cfg = workflowBuilder()
       .registerSteps(({ stepRef }) => ({
         TypeCheck: pipe(
-          drop(),
+          drop<any>(),
           typeCheck,
           classifyErrors,
           branch({
@@ -268,7 +269,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
         ),
         FixAll: pipe(
           forEach(fix),
-          drop(),
+          drop<any>(),
           stepRef("TypeCheck"),
         ),
       }))
@@ -278,7 +279,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
           setup,
           listFiles,
           forEach(migrate),
-          drop(),
+          drop<any>(),
           steps.TypeCheck,
         ),
       );
@@ -323,12 +324,12 @@ describe("kitchen sink", () => {
         // FixCycle: type-check, classify errors, fix or finish
         FixCycle: loop(
           pipe(
-            drop(),
+            drop<any>(),
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
-              Clean: done(),
+              HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
+              Clean: done<Clean>(),
             }),
           ),
         ),
@@ -340,8 +341,8 @@ describe("kitchen sink", () => {
           steps.MigrateAll,
           classifyErrors,
           branch({
-            HasErrors: pipe(drop(), self),  // restart the entire workflow
-            Clean: pipe(drop(), constant({ migrated: true })),
+            HasErrors: pipe(drop<HasErrors>(), self),  // restart the entire workflow
+            Clean: pipe(drop<Clean>(), constant({ migrated: true })),
           }),
         ),
       );

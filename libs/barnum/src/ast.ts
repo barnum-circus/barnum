@@ -92,16 +92,22 @@ export interface Config<Out = any> {
 // ---------------------------------------------------------------------------
 
 /**
- * An action with tracked input/output types. Phantom fields enforce variance
+ * An action with tracked input/output types. Phantom fields enforce invariance
  * and are never set at runtime — they exist only for the TypeScript compiler.
  *
- * __phantom_in: contravariant — ensures pipe/then chaining correctness
- *   (output of step N is assignable to input of step N+1)
- * __phantom_out: covariant — tracks output type
- * __in: covariant — enables config() to reject workflows that expect input
- *   (the contravariant phantom makes never the most permissive input,
- *   so a second covariant phantom is needed for the entry point check).
- *   NOT used in pipe/combinator parameter types — see Pipeable.
+ * Invariance is enforced through paired covariant/contravariant phantom fields:
+ *
+ *   In:  __phantom_in (contravariant) + __in (covariant) → invariant
+ *   Out: __phantom_out (covariant) + __phantom_out_check (contravariant) → invariant
+ *
+ * This ensures exact type matching at every pipeline connection point.
+ * Data crosses serialization boundaries to handlers in arbitrary languages
+ * (Rust, Python, etc.), so extra/missing fields are runtime errors.
+ *
+ * __in also enables config() to reject workflows that expect input
+ * (the contravariant __phantom_in makes never the most permissive input,
+ * so the covariant __in is needed for the entry point check).
+ *
  * Refs: tracks step reference names through combinators for compile-time
  *   validation in registerSteps (see ValidateStepRefs)
  */
@@ -112,6 +118,7 @@ export type TypedAction<
 > = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
+  __phantom_out_check?: (output: Out) => void;
   __in?: In;
   __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
@@ -148,25 +155,22 @@ export type TypedAction<
 };
 
 /**
- * Parameter type for pipe and combinators. Contains only the phantom fields
- * used for type inference — no `__in` and no methods.
+ * Parameter type for pipe and combinators. Contains the same phantom fields
+ * as TypedAction but without methods.
  *
- * Why no `__in`: The covariant In field creates inference conflicts when pipe
- * infers a shared type parameter T from both a previous step's Out and the
- * next step's In. Without `__in`, pipe infers T from `__phantom_out`
- * (covariant) and checks it via `__phantom_in` (contravariant), which allows
- * structural subtyping: ClassifyResult flows into branch({HasErrors: ..., Clean: ...}).
+ * Invariance: Both In and Out are invariant, matching TypedAction:
+ *   In:  __phantom_in (contravariant) + __in (covariant) → invariant
+ *   Out: __phantom_out (covariant) + __phantom_out_check (contravariant) → invariant
  *
- * Why no methods: TypedAction's methods (forEach, then, etc.) return full
- * TypedAction types with `__in`, which would re-introduce covariant inference
- * sites. Stripping methods ensures only __phantom_in and __phantom_out
- * participate in inference.
+ * Why no methods: TypedAction's methods (then, branch, etc.) participate in
+ * TS assignability checks in complex, recursive ways that interfere with
+ * generic inference in pipe overloads. Pipeable strips methods so that only
+ * phantom fields drive inference — predictable covariant/contravariant
+ * resolution, with invariance enforced when TS checks candidates from
+ * both sides of a connection.
  *
- * TypedAction (with __in and methods) is assignable to Pipeable because
- * Pipeable only requires a subset of properties.
- *
- * `__in` remains in TypedAction for config() — the entry-point check that
- * rejects workflows expecting input.
+ * TypedAction (with methods) is assignable to Pipeable because Pipeable
+ * only requires a subset of properties.
  */
 export type Pipeable<
   In = unknown,
@@ -175,6 +179,8 @@ export type Pipeable<
 > = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
+  __phantom_out_check?: (output: Out) => void;
+  __in?: In;
   __refs?: { _brand: Refs };
 };
 
@@ -454,10 +460,10 @@ export function forEach<In, Out, R extends string = never>(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function branch<TCases extends Record<string, Pipeable<any, any, any>>>(
+export function branch<TCases extends Record<string, Action>>(
   cases: TCases,
 ): TypedAction<
-  { kind: keyof TCases & string },
+  ExtractInput<TCases[keyof TCases & string]>,
   ExtractOutput<TCases[keyof TCases & string]>,
   ExtractRefs<TCases[keyof TCases & string]>
 > {

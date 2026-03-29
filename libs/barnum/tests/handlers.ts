@@ -43,7 +43,7 @@ export const verify = createHandler(
 export const deploy = createHandler(
   {
     inputValidator: z.object({ verified: z.boolean() }),
-    handle: async () => ({ deployed: true as const }),
+    handle: async (): Promise<{ deployed: boolean }> => ({ deployed: true }),
   },
   "deploy",
 );

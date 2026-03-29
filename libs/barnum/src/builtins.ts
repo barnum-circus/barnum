@@ -162,7 +162,13 @@ export function pick<
 export function dropResult<TInput, TOutput, TRefs extends string = never>(
   action: Pipeable<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, never, TRefs> {
-  return chain(action, drop());
+  // Build AST directly — chain inference fails when drop()'s generic TValue
+  // isn't constrained by context (resolves to unknown ≠ TOutput).
+  return typedAction({
+    kind: "Chain",
+    first: action as Action,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -189,6 +195,7 @@ export function withResource<
   TIn extends Record<string, unknown>,
   TResource extends Record<string, unknown>,
   TOut,
+  TDisposeOut = unknown,
 >({
   create,
   action,
@@ -196,7 +203,7 @@ export function withResource<
 }: {
   create: Pipeable<TIn, TResource>;
   action: Pipeable<TResource & TIn, TOut>;
-  dispose: Pipeable<TResource, unknown>;
+  dispose: Pipeable<TResource, TDisposeOut>;
 }): TypedAction<TIn, TOut> {
   const mergeBuiltin: Action = {
     kind: "Invoke",
@@ -258,15 +265,16 @@ export function augment<
 >(
   action: Pipeable<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, TInput & TOutput, TRefs> {
-  // Construct parallel(action, identity()) inline to avoid circular import
-  // with parallel.ts (which imports constant from this file).
-  const parallelNode = typedAction<TInput, [TOutput, TInput], TRefs>({
-    kind: "Parallel",
-    actions: [action as Action, identity() as Action],
+  // Build AST directly — chain inference fails because [TOutput, TInput]
+  // doesn't match merge()'s Record<string, unknown>[] with invariance.
+  return typedAction({
+    kind: "Chain",
+    first: {
+      kind: "Parallel",
+      actions: [action as Action, identity() as Action],
+    },
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
   });
-  // UnionToIntersection<A | B> is semantically A & B, but TypeScript
-  // can't reduce this at the generic level. Safe cast.
-  return chain(parallelNode, merge()) as TypedAction<TInput, TInput & TOutput, TRefs>;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,11 +293,27 @@ export function augment<
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
-export function tap<TInput extends Record<string, unknown>, TRefs extends string = never>(
-  action: Pipeable<TInput, unknown, TRefs>,
+export function tap<TInput extends Record<string, unknown>, TOutput = any, TRefs extends string = never>(
+  action: Pipeable<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, TInput, TRefs> {
-  const voided = chain(action, constant({}) as Pipeable<unknown, Record<string, unknown>>);
-  return augment(voided) as TypedAction<TInput, TInput, TRefs>;
+  // Build AST directly — internal plumbing (action → constant → augment)
+  // can't go through typed chain/augment with invariant phantom fields.
+  // tap: parallel(chain(action, constant({})), identity()) → merge
+  return typedAction({
+    kind: "Chain",
+    first: {
+      kind: "Parallel",
+      actions: [
+        {
+          kind: "Chain",
+          first: action as Action,
+          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: {} } } },
+        },
+        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+      ],
+    },
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -94,10 +94,10 @@ describe("handler types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("deploy: { verified: boolean } -> { deployed: true }", () => {
+  it("deploy: { verified: boolean } -> { deployed: boolean }", () => {
     const action = deploy;
     assertExact<IsExact<ExtractInput<typeof action>, { verified: boolean }>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: true }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
     expect(action.kind).toBe("Invoke");
   });
 
@@ -260,15 +260,15 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Parallel");
   });
 
-  it("branch: input is { kind: K }, output is case union (exhaustive)", () => {
+  it("branch: input is union of case handler inputs, output is case union", () => {
     const action = branch({
       Yes: deploy,
       No: deploy,
     });
     assertExact<
-      IsExact<ExtractInput<typeof action>, { kind: "Yes" | "No" }>
+      IsExact<ExtractInput<typeof action>, { verified: boolean }>
     >();
-    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: true }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
     expect(action.kind).toBe("Branch");
   });
 
@@ -283,7 +283,7 @@ describe("combinator types", () => {
     const action = pipe(
       classifyErrors,
       branch({
-        HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+        HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
         Clean: done<Clean>(),
       }),
     );
@@ -291,11 +291,11 @@ describe("combinator types", () => {
       IsExact<ExtractInput<typeof action>, TypeError[]>
     >();
     // Branch output is the union of recur's Continue and done's Break.
-    // recur() is a zero-arg generic, so TValue defaults to unknown.
+    // recur<any>() uses `any` as the invariance escape hatch for loop bodies.
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        | { kind: "Continue"; value: unknown }
+        | { kind: "Continue"; value: any }
         | { kind: "Break"; value: Clean }
       >
     >();
@@ -305,11 +305,11 @@ describe("combinator types", () => {
   it("loop with branch/recur/done: output is Break value type", () => {
     const action = loop(
       pipe(
-        drop(),
+        drop<any>(),
         typeCheck,
         classifyErrors,
         branch({
-          HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+          HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
           Clean: done<Clean>(),
         }),
       ),
@@ -330,11 +330,11 @@ describe("combinator types", () => {
       forEach(migrate),
       loop(
         pipe(
-          drop(),
+          drop<any>(),
           typeCheck,
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
             Clean: done<Clean>(),
           }),
         ),
@@ -428,9 +428,9 @@ describe("postfix operator types", () => {
       HasErrors: pipe(
         extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
         forEach(fix),
-        recur(),
+        recur<any>(),
       ),
-      Clean: done(),
+      Clean: done<Clean>(),
     });
     expect(action.kind).toBe("Chain");
   });
@@ -471,7 +471,7 @@ describe("pipe type safety", () => {
   it("accepts exhaustive branch", () => {
     const action = pipe(
       classifyErrors,
-      branch({ HasErrors: drop(), Clean: drop() }),
+      branch({ HasErrors: drop<HasErrors>(), Clean: drop<Clean>() }),
     );
     expect(action.kind).toBe("Chain");
   });
@@ -527,7 +527,7 @@ describe("step reference types", () => {
       assertExact<
         IsExact<ExtractInput<typeof steps.Deploy>, { verified: boolean }>
       >();
-      assertExact<IsExact<ExtractOutput<typeof steps.Deploy>, { deployed: true }>>();
+      assertExact<IsExact<ExtractOutput<typeof steps.Deploy>, { deployed: boolean }>>();
       return pipe(constant({ artifact: "test" }), steps.Verify, steps.Deploy);
     });
   });

@@ -32,6 +32,7 @@ import {
 } from "./handlers.js";
 
 type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
+type Clean = Extract<ClassifyResult, { kind: "Clean" }>;
 
 // -----------------------------------------------------------------------
 // Pipe
@@ -170,16 +171,16 @@ describe("loop", () => {
         forEach(migrate),
         loop(
           pipe(
-            drop(),
+            drop<any>(),
             typeCheck,
             classifyErrors,
             branch({
               HasErrors: pipe(
                 extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
-                recur(),
+                recur<any>(),
               ),
-              Clean: done(),
+              Clean: done<Clean>(),
             }),
           ),
         ),
@@ -281,7 +282,7 @@ describe("reader monad pattern", () => {
       pipe(
         constant({ initialized: true, project: "test" }),
         parallel(identity<{ initialized: boolean; project: string }>(), build),
-        merge(),
+        merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");

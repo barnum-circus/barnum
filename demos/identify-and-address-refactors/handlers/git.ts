@@ -44,7 +44,7 @@ export const createWorktree = createHandler({
 // --- Delete worktree ---
 
 export const deleteWorktree = createHandler({
-  inputValidator: z.object({ worktreePath: z.string() }),
+  inputValidator: z.object({ worktreePath: z.string(), branch: z.string() }),
   handle: async ({ value }) => {
     console.error(`[delete-worktree] Removing ${value.worktreePath}`);
 
