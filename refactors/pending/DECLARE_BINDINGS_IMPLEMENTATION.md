@@ -1245,6 +1245,101 @@ Update `demos/convert-folder-to-ts/run.ts` to demonstrate declare replacing a ta
 
 At minimum, add a comment in the demo showing the before/after.
 
+## Deferred: handler definition deduplication in the JS AST
+
+### The problem
+
+`declare` makes handler duplication worse. A VarRef used 5 times in the body produces 5 copies of the same AST subtree in the serialized JSON:
+
+```json
+{
+  "kind": "Invoke",
+  "handler": { "kind": "Builtin", "builtin": { "kind": "VarRef", "id": "__declare_0" } }
+}
+```
+
+This is small for VarRef builtins, but the general problem predates `declare`. Any handler used multiple times — `identity()` in every `augment`, a user handler referenced from multiple pipeline positions — is fully inlined at every use site. The serialized config duplicates the entire handler definition (module path, function name, or builtin kind) at every occurrence.
+
+### The solution: handler IDs in the JS AST
+
+The Rust flat representation already solves this: `HandlerId` indexes into a deduplicated handler pool, and `FlatAction::Invoke { handler: HandlerId }` carries just the index. The JS AST should do the same.
+
+Add a top-level `handlers` map to the `Config` type, and reference handlers by ID in the AST:
+
+```ts
+// BEFORE:
+interface Config {
+  workflow: Action;
+  steps?: Record<string, Action>;
+}
+
+// InvokeAction embeds the full handler definition:
+interface InvokeAction {
+  kind: "Invoke";
+  handler: HandlerKind;  // full definition inlined at every use site
+}
+
+// AFTER:
+interface Config {
+  workflow: Action;
+  steps?: Record<string, Action>;
+  handlers: Record<string, HandlerKind>;  // deduplicated pool
+}
+
+// InvokeAction references by ID:
+interface InvokeAction {
+  kind: "Invoke";
+  handler: string;  // key into config.handlers
+}
+```
+
+At definition time, `typedAction()` (or a config-level serialization pass) assigns each unique handler an ID and deduplicates. Identical handlers (same module/func, or same builtin kind + params) share the same ID.
+
+### Why this matters for declare
+
+Without deduplication, a `declare` block with one binding referenced N times produces N copies of the VarRef handler. With a handler pool, it produces one entry in the pool and N one-field references. The savings compound with user handlers that are large (long module paths, complex builtin parameters).
+
+### Implementation sketch
+
+This is a **serialization-time transform**, not a definition-time change. The in-memory TypedAction objects can continue to embed full handler definitions. The deduplication happens in `Config.toJSON()` / `RunnableConfig.toJSON()`:
+
+```ts
+class RunnableConfig {
+  toJSON(): Config {
+    const handlers: Record<string, HandlerKind> = {};
+    const handlerToId = new Map<string, string>();
+    let nextHandlerId = 0;
+
+    function intern(handler: HandlerKind): string {
+      const key = JSON.stringify(handler);  // structural equality
+      let id = handlerToId.get(key);
+      if (id === undefined) {
+        id = `__handler_${nextHandlerId++}`;
+        handlerToId.set(key, id);
+        handlers[id] = handler;
+      }
+      return id;
+    }
+
+    // Walk the AST, replacing every InvokeAction.handler with its interned ID.
+    const workflow = rewriteHandlers(this.workflow, intern);
+    const steps = this.steps
+      ? Object.fromEntries(
+          Object.entries(this.steps).map(([k, v]) => [k, rewriteHandlers(v, intern)])
+        )
+      : undefined;
+
+    return { workflow, steps, handlers };
+  }
+}
+```
+
+The Rust deserializer would need to resolve handler IDs back to `HandlerKind` during deserialization (or the flat representation's existing interning handles it — the flattener already deduplicates handlers by value).
+
+### Not blocking declare
+
+This is a config-wide optimization that predates declare and benefits all handlers. It should be a separate PR. Declare works fine without it — the duplication is a serialization size issue, not a correctness issue.
+
 ## Implementation order
 
 1. **Rust AST** (`barnum_ast/src/lib.rs`): Add `DeclareId`, `DeclareAction`, `VarRef`. Pure types, no logic.
