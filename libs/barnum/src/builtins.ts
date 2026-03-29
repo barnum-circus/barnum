@@ -1,4 +1,4 @@
-import { type Action, type LoopResult, type Pipeable, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type LoopResult, type Option as OptionT, type OptionDef, type Pipeable, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -350,3 +350,161 @@ export function range(
     handler: { kind: "Builtin", builtin: { kind: "Constant", value: result } },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Option namespace — combinators for Option<T> tagged unions
+// ---------------------------------------------------------------------------
+
+// Shared AST fragments for Option desugaring
+const TAG_SOME: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } } };
+const TAG_NONE: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } } };
+const EXTRACT_VALUE: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } };
+const DROP: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } };
+const IDENTITY: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } };
+
+/** Wrap branch cases with ExtractField("value") auto-unwrapping. */
+function optionBranch(someCaseBody: Action, noneCaseBody: Action): Action {
+  return {
+    kind: "Branch",
+    cases: {
+      Some: { kind: "Chain", first: EXTRACT_VALUE, rest: someCaseBody },
+      None: { kind: "Chain", first: EXTRACT_VALUE, rest: noneCaseBody },
+    },
+  };
+}
+
+/**
+ * Option namespace. All combinators produce TypedAction AST nodes that
+ * desugar to branch + existing builtins, except collect which uses the
+ * CollectSome builtin.
+ */
+export const Option = {
+  /**
+   * Wrap a value as Some. `T → Option<T>`
+   *
+   * Equivalent to `tag<OptionDef<T>, "Some">("Some")`.
+   */
+  some<T>(): TypedAction<T, OptionT<T>> {
+    return typedAction(TAG_SOME);
+  },
+
+  /**
+   * Produce a None. `void → Option<T>`
+   *
+   * Equivalent to `tag<OptionDef<T>, "None">("None")`.
+   */
+  none<T>(): TypedAction<void, OptionT<T>> {
+    return typedAction(TAG_NONE);
+  },
+
+  /**
+   * Transform the Some value. `Option<T> → Option<U>`
+   *
+   * Desugars to: `branch({ Some: pipe(action, tag("Some")), None: tag("None") })`
+   */
+  map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
+    return typedAction(optionBranch(
+      { kind: "Chain", first: action as Action, rest: TAG_SOME },
+      TAG_NONE,
+    ));
+  },
+
+  /**
+   * Extract the Some value or produce a default from an action.
+   * `Option<T> → T`
+   *
+   * The defaultAction takes no meaningful input (never) and must produce T.
+   * Use `Option.unwrapOr(constant("fallback"))`.
+   *
+   * The None branch drops its void payload before calling defaultAction,
+   * matching Rust's `unwrap_or_else(|| default)` where the closure takes
+   * no arguments.
+   *
+   * Desugars to: `branch({ Some: identity(), None: pipe(drop(), defaultAction) })`
+   */
+  unwrapOr<T>(defaultAction: Pipeable<never, T>): TypedAction<OptionT<T>, T> {
+    return typedAction({
+      kind: "Branch",
+      cases: {
+        Some: { kind: "Chain", first: EXTRACT_VALUE, rest: IDENTITY },
+        None: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: DROP, rest: defaultAction as Action } },
+      },
+    });
+  },
+
+  /**
+   * Unwrap a nested Option. `Option<Option<T>> → Option<T>`
+   *
+   * Desugars to: `branch({ Some: identity(), None: tag("None") })`
+   */
+  flatten<T>(): TypedAction<OptionT<OptionT<T>>, OptionT<T>> {
+    return typedAction(optionBranch(
+      IDENTITY,
+      TAG_NONE,
+    ));
+  },
+
+  /**
+   * Conditional keep. If Some, pass value to predicate which returns
+   * Option<T> (some() to keep, none() to discard). If None, stay None.
+   * `Option<T> → Option<T>`
+   *
+   * This has the same signature and desugaring as andThen with T=U.
+   * Named "filter" for readability when the intent is filtering.
+   *
+   * Desugars to: `branch({ Some: predicate, None: tag("None") })`
+   */
+  filter<T>(predicate: Pipeable<T, OptionT<T>>): TypedAction<OptionT<T>, OptionT<T>> {
+    return typedAction(optionBranch(
+      predicate as Action,
+      TAG_NONE,
+    ));
+  },
+
+  /**
+   * Collect Some values from an array, discarding Nones.
+   * `Option<T>[] → T[]`
+   *
+   * This is a builtin handler (CollectSome) — it can't be expressed
+   * as a composition of existing AST nodes because it requires
+   * array-level filtering logic.
+   */
+  collect<T>(): TypedAction<OptionT<T>[], T[]> {
+    return typedAction({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "CollectSome" } },
+    });
+  },
+
+  /**
+   * Test if the value is Some. `Option<T> → boolean`
+   *
+   * Rarely useful — branch on Some/None directly instead.
+   *
+   * Desugars to: `branch({ Some: pipe(drop(), constant(true)), None: pipe(drop(), constant(false)) })`
+   */
+  isSome<T>(): TypedAction<OptionT<T>, boolean> {
+    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
+    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
+    return typedAction(optionBranch(
+      { kind: "Chain", first: DROP, rest: constTrue },
+      { kind: "Chain", first: DROP, rest: constFalse },
+    ));
+  },
+
+  /**
+   * Test if the value is None. `Option<T> → boolean`
+   *
+   * Rarely useful — branch on Some/None directly instead.
+   *
+   * Desugars to: `branch({ Some: pipe(drop(), constant(false)), None: pipe(drop(), constant(true)) })`
+   */
+  isNone<T>(): TypedAction<OptionT<T>, boolean> {
+    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
+    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
+    return typedAction(optionBranch(
+      { kind: "Chain", first: DROP, rest: constFalse },
+      { kind: "Chain", first: DROP, rest: constTrue },
+    ));
+  },
+} as const;

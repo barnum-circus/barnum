@@ -9,6 +9,8 @@ import {
   type ExtractInput,
   type ExtractOutput,
   type LoopResult,
+  type Option,
+  type OptionDef,
   pipe,
   parallel,
   forEach,
@@ -26,6 +28,8 @@ import {
   range,
   recur,
   done,
+  tag,
+  Option as O,
 } from "../src/builtins.js";
 import {
   setup,
@@ -676,5 +680,138 @@ describe("step reference types", () => {
         >();
         return pipe(constant({ project: "test" }), steps.Pipeline);
       });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Postfix .mapOption() — this-parameter constraint prototype
+// ---------------------------------------------------------------------------
+
+describe("postfix .mapOption() type safety", () => {
+  it("compiles when Out is Option<T>", () => {
+    // Construct an action whose output is Option<{ verified: boolean }>
+    const optionAction = verify.tag<OptionDef<{ verified: boolean }>, "Some">("Some");
+    // mapOption should accept a handler that transforms the Some payload
+    const mapped = optionAction.mapOption(deploy);
+    assertExact<IsExact<ExtractInput<typeof mapped>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof mapped>, Option<{ deployed: boolean }>>>();
+    expect(mapped.kind).toBe("Chain");
+  });
+
+  it("rejects .mapOption() when Out is not Option<T>", () => {
+    // verify outputs { verified: boolean } — not an Option
+    // @ts-expect-error — mapOption requires Out to be Option<T>
+    verify.mapOption(deploy);
+  });
+
+  it("rejects .mapOption() when Out is a different tagged union", () => {
+    // classifyErrors outputs ClassifyResult = { kind: "HasErrors"; ... } | { kind: "Clean"; ... }
+    // Not Option<T> (which has kind "Some" | "None")
+    // @ts-expect-error — mapOption requires Out to be Option<T>
+    classifyErrors.mapOption(deploy);
+  });
+
+  it("preserves input type through mapOption", () => {
+    const optionAction = pipe(
+      constant({ artifact: "test" }),
+      verify,
+      tag<OptionDef<{ verified: boolean }>, "Some">("Some"),
+    );
+    const mapped = optionAction.mapOption(deploy);
+    assertExact<IsExact<ExtractInput<typeof mapped>, never>>();
+    assertExact<IsExact<ExtractOutput<typeof mapped>, Option<{ deployed: boolean }>>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Option namespace type safety
+// ---------------------------------------------------------------------------
+
+describe("Option namespace types", () => {
+  it("Option.some(): T → Option<T>", () => {
+    const action = O.some<string>();
+    assertExact<IsExact<ExtractInput<typeof action>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+  });
+
+  it("Option.none(): void → Option<T>", () => {
+    const action = O.none<number>();
+    assertExact<IsExact<ExtractInput<typeof action>, void>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
+  });
+
+  it("Option.map(action): Option<T> → Option<U>", () => {
+    const action = O.map<{ artifact: string }, { verified: boolean }>(verify);
+    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+  });
+
+  it("Option.map composes in pipe", () => {
+    const action = pipe(
+      O.some<{ artifact: string }>(),
+      O.map(verify),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+  });
+
+  it("Option.unwrapOr(defaultAction): Option<T> → T", () => {
+    const action = O.unwrapOr<string>(constant("fallback"));
+    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("Option.flatten(): Option<Option<T>> → Option<T>", () => {
+    const action = O.flatten<string>();
+    assertExact<IsExact<ExtractInput<typeof action>, Option<Option<string>>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+  });
+
+  it("Option.filter(predicate): Option<T> → Option<T>", () => {
+    // Predicate that keeps strings longer than 3 chars (returns Option<string>)
+    const predicate = pipe(
+      identity<string>(),
+      O.some<string>(), // trivial: always keep
+    );
+    const action = O.filter<string>(predicate);
+    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+  });
+
+  it("Option.collect(): Option<T>[] → T[]", () => {
+    const action = O.collect<string>();
+    assertExact<IsExact<ExtractInput<typeof action>, Option<string>[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string[]>>();
+  });
+
+  it("Option.isSome(): Option<T> → boolean", () => {
+    const action = O.isSome<string>();
+    assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+  });
+
+  it("Option.isNone(): Option<T> → boolean", () => {
+    const action = O.isNone<number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Option<number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+  });
+
+  it("full Option pipeline: construct → map → unwrapOr", () => {
+    const action = pipe(
+      O.some<{ artifact: string }>(),
+      O.map(verify),
+      O.unwrapOr(constant({ verified: false })),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+  });
+
+  it("forEach + Option.collect pipeline", () => {
+    const action = pipe(
+      forEach(O.map<{ artifact: string }, { verified: boolean }>(verify)),
+      O.collect<{ verified: boolean }>(),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>[]>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>>();
   });
 });

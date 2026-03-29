@@ -75,7 +75,8 @@ export type BuiltinKind =
   | { kind: "Flatten" }
   | { kind: "ExtractField"; value: string }
   | { kind: "ExtractIndex"; value: number }
-  | { kind: "Pick"; value: string[] };
+  | { kind: "Pick"; value: string[] }
+  | { kind: "CollectSome" };
 
 // ---------------------------------------------------------------------------
 // Config
@@ -154,6 +155,14 @@ export type TypedAction<
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>, Refs>;
+  /**
+   * Transform the Some value inside an Option output. Only callable when
+   * Out is Option<T>. Uses `this` parameter constraint to gate availability.
+   */
+  mapOption<TIn, T, U, TRefs extends string>(
+    this: TypedAction<TIn, Option<T>, TRefs>,
+    action: Pipeable<T, U>,
+  ): TypedAction<TIn, Option<U>, TRefs>;
 };
 
 /**
@@ -229,6 +238,13 @@ export type TaggedUnion<TDef extends Record<string, unknown>> = {
 
 /** Extract the variant map definition from a tagged union's phantom __def. */
 export type ExtractDef<T> = T extends { __def?: infer D } ? D : never;
+
+// ---------------------------------------------------------------------------
+// Option<T> — standard optional value type
+// ---------------------------------------------------------------------------
+
+export type OptionDef<T> = { Some: T; None: void };
+export type Option<T> = TaggedUnion<OptionDef<T>>;
 
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
@@ -345,6 +361,26 @@ function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
   });
 }
 
+function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
+  // Desugars to: self.then(branch({ Some: pipe(action, tag("Some")), None: tag("None") }))
+  // But branch auto-unwraps value, so:
+  //   Some case: receives T, runs action, wraps as Some
+  //   None case: receives void, wraps as None
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Branch",
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      cases: unwrapBranchCases({
+        Some: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } } } },
+        None: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } } },
+      }),
+    },
+  });
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -363,6 +399,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       get: { value: getMethod, configurable: true },
       augment: { value: augmentMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
+      mapOption: { value: mapOptionMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out, Refs>;
