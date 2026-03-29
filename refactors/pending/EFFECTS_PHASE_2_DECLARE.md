@@ -102,21 +102,46 @@ Alternative: each Handle holds only its own binding. If the ID doesn't match, th
 
 ## The HOAS pattern
 
-`declare` receives a callback. The callback gets opaque AST references (VarRefs). These are TypedAction nodes whose AST is `Perform(ReadVar("__declare_N"))`. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body.
+`declare` receives a callback. The callback gets opaque AST references (VarRefs). These are TypedAction nodes whose AST is `Perform(freshEffectId)` with a DeclareId payload. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body. Each `declare` invocation gensyms a fresh EffectId.
+
+### VarRef is generic over the bound type
+
+`VarRef<TValue>` wraps `TypedAction<never, TValue>`. Input is `never` because VarRefs don't consume pipeline input — they perform an effect that the handler resolves. Output is `TValue`, the concrete type of the bound value.
+
+Because `declare` is a generic function call (not a global declaration), TypeScript infers `TValue` from the binding expression:
 
 ```ts
-function declare<TIn, TBindings, TOut>(
+declare(
+  { name: computeName, count: computeCount },
+  // TypeScript infers: name: VarRef<string>, count: VarRef<number>
+  ({ name, count }) => pipe(
+    name,          // produces string
+    appendCount(count),  // count produces number
+  ),
+)
+```
+
+The HOAS callback is what makes this work. Each VarRef carries the concrete type of its binding. No manual annotations, no `unknown` casts.
+
+### Implementation
+
+```ts
+// VarRef<TValue> is a branded TypedAction
+type VarRef<TValue> = TypedAction<never, TValue>;
+
+function declare<TIn, TBindings extends Record<string, Pipeable<TIn, any>>, TOut>(
   bindings: TBindings,
-  body: (vars: VarRefs<TBindings>) => Pipeable<TIn, TOut>,
+  body: (vars: { [K in keyof TBindings]: VarRef<OutputOf<TBindings[K]>> }) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
-  const ids = generateIds(bindings);         // gensym: __declare_0, __declare_1, ...
-  const varRefs = createVarRefs(ids);        // TypedAction nodes wrapping Perform(ReadVar(id))
-  const bodyAst = body(varRefs);             // user builds the body using the opaque refs
-  return compileToHandlePerform(bindings, ids, bodyAst);
+  const effectId = generateUniqueId();       // fresh EffectId for this declare
+  const ids = generateDeclareIds(bindings);  // gensym per binding: __declare_0, __declare_1
+  const varRefs = createVarRefs(ids, effectId);  // each VarRef = Perform(effectId) with DeclareId payload
+  const bodyAst = body(varRefs);
+  return compileToHandlePerform(bindings, ids, effectId, bodyAst);
 }
 ```
 
-The VarRef type: `TypedAction<never, T>`. Input is `never` because VarRefs don't consume pipeline input — they perform an effect that the handler resolves. Output is `T`, the bound value's type.
+The key type: `VarRef<OutputOf<TBindings[K]>>`. TypeScript resolves `OutputOf` from the binding expression's output type, so the VarRef carries the exact type. If `computeName` is `Pipeable<Input, string>`, then `name` is `VarRef<string>`.
 
 ## Handle frame state for ReadVar
 
