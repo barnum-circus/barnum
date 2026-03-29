@@ -40,19 +40,18 @@ Chain(
 The handler DAG for ReadVar:
 
 ```ts
-// Handler receives: { payload: "__declare_0", cont_id: 42 }
-// It resolves the value and resumes.
+// Handler receives: { payload: "__declare_0" }
+// It resolves the value and produces a Resume tagged output.
 pipe(
-  parallel(
-    pipe(pick("payload"), resolveBinding),  // look up ID → bound value
-    pick("cont_id"),
-  ),
-  merge(),   // { value: <bound_value>, cont_id: 42 }
-  Resume(),
+  pick("payload"),
+  resolveBinding,         // builtin: look up DeclareId → bound value
+  tag("Resume"),          // produces { kind: "Resume", value: <bound_value> }
 )
 ```
 
-`resolveBinding` is a builtin or TypeScript invoke that maps a DeclareId to the stored value. The value is stored in the Handle frame's state at entry time (when the Chain delivers computeX's result to the Handle frame).
+The Handle frame interprets `{ kind: "Resume", value }` and delivers the value to the suspended continuation.
+
+`resolveBinding` is a builtin that maps a DeclareId to the stored value. The value is stored in the Handle frame's state at entry time (when the Chain delivers computeX's result to the Handle frame). This builtin accesses the Handle frame's internal state — it's the only part of this design that requires the Handle frame to hold domain-specific data (the bindings map). The alternative (passing state as a second field in the handler input) is discussed below.
 
 ### Object form (concurrent bindings)
 
@@ -130,10 +129,22 @@ struct ReadVarState {
 }
 ```
 
+### How the handler DAG accesses bindings
+
+The handler DAG needs to resolve a DeclareId to a value. Two options:
+
+**Option A: `resolveBinding` builtin (recommended).** The Handle frame stores bindings. `resolveBinding` is a new builtin kind that reads from the current Handle frame's state. The scheduler executes it by looking at the Handle frame that dispatched this handler invocation.
+
+**Option B: Handle frame passes state to handler DAG.** The Handle node has an optional `state` field. When a handler is dispatched, the handler receives `{ payload, state }` instead of just `{ payload }`. The handler DAG can then look up the DeclareId in the state map using normal pipeline operations (no special builtin needed). This is more general but adds complexity to every Handle frame, even those that don't need state.
+
+Recommendation: Option A for now. It's simpler, and ReadVar is the only effect that needs Handle-local state. If multiple effects need this pattern, migrate to Option B.
+
+### Nested declares and propagation
+
 When bubble_effect delivers a ReadVar(id) effect:
-1. Look up id in bindings.
-2. If found: resume the continuation with the value.
-3. If not found: re-perform the effect (propagate to outer Handle).
+1. The handler DAG calls `resolveBinding` with the DeclareId.
+2. If found: handler produces `{ kind: "Resume", value }`. Handle frame resumes the continuation.
+3. If not found: the handler produces a re-perform signal (or the `resolveBinding` builtin triggers re-propagation to the outer Handle).
 
 Step 3 handles nested declares where an inner body references an outer binding.
 

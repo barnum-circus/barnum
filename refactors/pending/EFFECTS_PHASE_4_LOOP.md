@@ -33,58 +33,30 @@ Handle(
 )
 ```
 
-The handler DAG for LoopControl dispatches on Continue vs Break:
+The handler DAG for LoopControl dispatches on Continue vs Break using the three universal continuation operations (see Phase 1):
 
 ```ts
-// Handler receives: { payload: { kind: "Continue"|"Break", value }, cont_id }
+// Handler receives: { payload: { kind: "Continue"|"Break", value } }
 pipe(
   pick("payload"),
   branch({
     Continue: pipe(
       extractField("value"),
-      // Re-enter the body. This is a jump back to the Handle's body ActionId.
-      // The cont_id is NOT used — the old continuation is discarded on Handle exit.
-      ReEnterBody(),
+      tag("RestartBody"),      // { kind: "RestartBody", value } — re-enter the body
     ),
     Break: pipe(
       extractField("value"),
-      // Exit the Handle frame with this value.
-      // Again, cont_id is not used.
-      ExitHandle(),
+      tag("Discard"),          // { kind: "Discard", value } — exit the Handle frame
     ),
   }),
 )
 ```
 
-`ReEnterBody` and `ExitHandle` are new builtins (or effect-handler-specific actions) that the Handle frame understands. Alternatively, the Handle frame can inspect the handler DAG's output and decide based on a tagged union.
+The Handle frame is domain-agnostic. It interprets the tagged output structurally:
+- `RestartBody`: tears down the old continuation, re-advances the body with the value.
+- `Discard`: tears down the continuation, delivers the value to the Handle's parent.
 
-### Alternative: Handle frame has built-in Continue/Break semantics
-
-Instead of the handler DAG doing the dispatch, the Handle frame for LoopControl could have hardcoded behavior:
-
-```rust
-// In the Handle frame's effect dispatch:
-match effect {
-    EffectType::LoopControl => {
-        match payload.get("kind") {
-            "Continue" => {
-                self.teardown_continuation(cont_root);
-                self.advance_body(payload.get("value"));
-            }
-            "Break" => {
-                self.teardown_continuation(cont_root);
-                self.deliver_to_parent(payload.get("value"));
-            }
-        }
-    }
-}
-```
-
-This is simpler. The handler DAG is unnecessary for LoopControl because the behavior is fully determined by the payload. The Handle frame does the dispatch internally.
-
-Recommendation: if we're using an enum for effect types, the Handle frame can have per-effect-type logic. LoopControl's logic is hardcoded in the Handle frame's dispatch. No handler DAG needed.
-
-If we later move to string-based effects, the handler DAG approach becomes necessary because the Handle frame can't know what "my_app:retry" means. But for framework-level effects (LoopControl, ReadVar, Throw), hardcoded logic is simpler.
+No LoopControl-specific logic exists in the Handle frame. The Handle frame is a pure structural router — it only knows Resume, Discard, and RestartBody. All semantic meaning (Continue = restart, Break = exit) lives in the handler DAG.
 
 ## recur() and done() rewrite
 

@@ -38,7 +38,7 @@ Replace the ad-hoc approach with a single general mechanism: algebraic effects v
 
 ### The target AST
 
-Replace `Loop` and `Step` with `Handle`, `Perform`, and `Resume`. The final node set:
+Replace `Loop` and `Step` with `Handle` and `Perform`. The final node set:
 
 | Node | Role | Status |
 |---|---|---|
@@ -49,9 +49,10 @@ Replace `Loop` and `Step` with `Handle`, `Perform`, and `Resume`. The final node
 | `ForEach` | Functorial map | Exists |
 | `Handle` | Install scoped effect handler | **New** |
 | `Perform` | Emit effect, suspend execution | **New** |
-| `Resume` | Inject value into suspended continuation | **New** |
 
-8 nodes total. `Loop` and `Step` become TS sugar that compiles to Handle/Perform/Resume. Every scope-based feature (declare, tryCatch, withTimeout, race, RAII, durable suspension) is TS sugar over these same three primitives.
+7 nodes total. `Loop` and `Step` become TS sugar that compiles to Handle/Perform. Every scope-based feature (declare, tryCatch, withTimeout, race, RAII, durable suspension) is TS sugar over these same two primitives.
+
+There is no `Resume` AST node. Resumption (and discarding, and body re-entry) are not AST-level concepts. They are the Handle frame's interpretation of the handler DAG's tagged output. Handler DAGs produce `{ kind: "Resume"|"Discard"|"RestartBody", value }`, and the Handle frame acts accordingly. This keeps cont_id tokens internal to the scheduler — handler DAGs never see them.
 
 ### The architectural insight
 
@@ -59,9 +60,9 @@ Two layers, each doing what it's good at:
 
 **TypeScript (HOAS)**: Provides the user-facing API. Callbacks receive opaque AST references (VarRefs, restart/exit jumps, step references). TypeScript's lexical scoping prevents collisions and enforces scope. The builder gensyms unique IDs. TypeScript's type system checks that inputs and outputs match at every connection point. All sugar expansion happens here.
 
-**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle, sever the link, dispatch the handler DAG with `{ payload, cont_id }`. When Resume fires, reconnect the continuation and deliver the value. When a Handle frame exits with un-resumed continuations, clean them up. That's it.
+**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle, sever the link, dispatch the handler DAG with `{ payload }`. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly. When a Handle frame exits, clean up orphaned continuations. That's it.
 
-The Rust engine is a pure structural router. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs written in TypeScript.
+The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs written in TypeScript.
 
 ### Control Plane / Data Plane boundary
 
@@ -115,15 +116,42 @@ Logging in particular is out-of-band. The Tokio driver captures stdout/stderr fr
 
 Do NOT add an `Effect::Log` or `Perform("barnum:log")`. It would route observability through the state machine's evaluation loop, making logs synchronous and coupling them to handler completion. Logging survives handler crashes precisely because it's out-of-band.
 
-### Effect routing: strings vs enum
+### Effect routing: gensym'd opaque IDs
 
-Two options for how Handle identifies which effects it intercepts:
+Effects are first-class tokens created by the TypeScript builder, using the same gensym mechanism as declare IDs and step references. The Rust engine routes on opaque `u32` IDs — it never interprets effect names.
 
-**Enum (recommended for now)**: A closed set of effect types defined in the protocol between TS and Rust. New effects require adding to the enum. Gives exhaustiveness checking in Rust match arms. Appropriate because all planned effects are framework-level, not user-defined.
+```ts
+// TypeScript: createEffect returns a typed token with a gensym'd ID.
+export const ReadVar = createEffect<DeclareId, Value>("ReadVar");
+export const Throw = createEffect<Value, never>("Throw");
+export const LoopControl = createEffect<LoopPayload, never>("LoopControl");
 
-**String keys (future option)**: Open-ended routing. Any string can be an effect type. The Rust engine matches on strings. No Rust changes for new effects. Appropriate if users ever need custom effects. Migration from enum to strings is straightforward — the scheduler logic doesn't change, only the matching mechanism.
+function createEffect<TPayload, TResume>(debugName: string) {
+  return {
+    id: generateUniqueId(),    // monotonic u32
+    debugName,                 // for logs/errors only
+    _payload: undefined as unknown as TPayload,   // phantom type
+    _resume: undefined as unknown as TResume,      // phantom type
+  };
+}
+```
 
-Start with enum. Migrate to strings if we need open-ended effects.
+```rust
+// Rust: opaque ID, no interpretation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EffectId(pub u32);
+
+pub enum FlatAction {
+    Handle { handlers: BTreeMap<EffectId, ActionId>, body: ActionId },
+    Perform { effect: EffectId },
+}
+```
+
+This avoids both the rigidity of a Rust enum (no recompilation for new effects) and the collision risk of global strings (IDs are unique by construction). A Handle block can only intercept an effect if it has the lexical reference to the effect token — this is the object-capability property for free.
+
+Framework-level effects (ReadVar, Throw, LoopControl) are defined as module-level exports. User-defined effects use the same mechanism. The Rust engine doesn't distinguish — it only matches integers.
+
+The `debugName` string is metadata for error messages and telemetry. It never participates in routing.
 
 ## The HOAS pattern
 
@@ -131,8 +159,10 @@ What we're already doing — and should do consistently — is Higher-Order Abst
 
 | Feature | HOAS callback | Opaque reference | Current status |
 |---|---|---|---|
+| `createEffect` | N/A (module-level factory) | EffectId (gensym'd u32) | Proposed |
 | `declare` | `({ x }) => body` | VarRef (gensym'd ID) | Proposed |
-| `loop` | `(recur, done) => body` | Perform(Continue), Perform(Break) | Not yet HOAS |
+| `loop` | `(recur, done) => body` | Perform(LoopControl) | Not yet HOAS |
+| `tryCatch` | `body, recovery` | Perform(Throw) | Proposed |
 | `scope` | `(restart, exit) => body` | Jump references | Not yet implemented |
 | `registerSteps` | `({ stepRef }) => steps` | Step references | Exists (string-based) |
 
@@ -146,7 +176,7 @@ For mutual recursion, HOAS requires batch registration (all nodes pre-allocated 
 
 ### Phase 1: Effect Substrate
 
-Build Handle/Perform/Resume in the Rust scheduler. The structural routing mechanism. No semantic effects yet — just the ability for a Perform to suspend, bubble up to a Handle, and be resumed or discarded.
+Build Handle/Perform in the Rust scheduler plus the tagged output interpretation (Resume/Discard/RestartBody). The structural routing mechanism. No semantic effects yet — just the ability for a Perform to suspend, bubble up to a Handle, and be acted on based on the handler DAG's tagged output.
 
 See: `EFFECTS_PHASE_1_SUBSTRATE.md`
 
@@ -211,20 +241,23 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 
 ### TypeScript changes
 
-- New AST node types: `HandleAction`, `PerformAction`, `ResumeAction`
-- `declare()` function: compiles to Chain + Handle(ReadVar) + Perform(ReadVar) + Resume
-- `tryCatch()` function: compiles to Handle(Throw) + Perform(Throw), no Resume
-- `loop()` rewritten: compiles to Handle(LoopControl) + Perform(Continue/Break)
-- `recur()` / `done()` rewritten: compile to Perform(Continue) / Perform(Break)
+- New AST node types: `HandleAction`, `PerformAction` (no ResumeAction — resumption is internal to the Handle frame)
+- `createEffect()` factory: returns typed effect tokens with gensym'd IDs
+- `declare()` function: compiles to Chain + Handle(ReadVar) + Perform(ReadVar)
+- `tryCatch()` function: compiles to Handle(Throw) + Perform(Throw)
+- `loop()` rewritten: compiles to Handle(LoopControl) + Perform(LoopControl)
+- `recur()` / `done()` rewritten: compile to Perform(LoopControl) with Continue/Break payload
 - `LoopAction` removed from Action union
 - `StepAction` potentially removed (replaced by Handle-based mutual recursion, or kept for backward compat during migration)
 
 ### Rust changes
 
-- New flat action types: `FlatHandle`, `FlatPerform`, `FlatResume`
+- `EffectId(u32)`: opaque effect routing key
+- New flat action types: `FlatHandle`, `FlatPerform`
 - New frame kind: `FrameKind::Handle` (one new variant, replaces LoopAction's frame kind)
 - `bubble_effect()`: new traversal method on WorkflowState — walks parent pointers to find matching Handle
-- Continuation management: sever/reconnect parent links, cont_id token generation and storage
+- Tagged output interpretation: Handle frame reads `{ kind, value }` from handler DAG and performs Resume, Discard, or RestartBody
+- Continuation management: sever/reconnect parent links, internal tracking per handler invocation
 - Teardown: recursive frame cleanup when continuations are discarded
 - `FrameKind::Loop` removed (after Phase 4)
 

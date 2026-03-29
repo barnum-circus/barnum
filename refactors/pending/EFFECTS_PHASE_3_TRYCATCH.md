@@ -33,17 +33,18 @@ Handle(
 )
 ```
 
-The handler DAG for Throw does NOT include Resume. It receives `{ payload: errorData, cont_id: N }` and runs the recovery action on the payload. It ignores cont_id. When the handler DAG completes, the Handle frame delivers the recovery result to its parent. The un-resumed continuation is cleaned up when the Handle frame exits.
+The handler DAG for Throw receives `{ payload: errorData }` and runs the recovery action on the payload. The handler produces a Discard tagged output: the continuation is dropped and the Handle frame exits with the recovery result.
 
 ```ts
 // The handler DAG:
 pipe(
-  pick("payload"),    // extract the error data, discard cont_id
+  pick("payload"),    // extract the error data
   recovery,           // run the recovery branch
+  tag("Discard"),     // produces { kind: "Discard", value: recoveryResult }
 )
 ```
 
-The cont_id is deliberately dropped from the pipeline. The continuation leaks in the slab until the Handle frame exits and cleans it up. This is fine — the Handle frame's exit cleanup is deterministic.
+The Handle frame interprets `{ kind: "Discard", value }`: it moves the continuation to orphaned_continuations and delivers `value` to its parent. The continuation is cleaned up when the Handle frame exits. This is deterministic — see Phase 1's cleanup lifecycle.
 
 ## Where Throw is performed
 
