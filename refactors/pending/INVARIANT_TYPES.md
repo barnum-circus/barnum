@@ -317,4 +317,4 @@ Variables don't carry extra fields because they're individually bound. This may 
 
 3. **Inference regression**: The `__in` covariant field helps TypeScript infer intermediate types in pipe chains (e.g., `extractField("errors")` without explicit type params). With Out also invariant, inference may actually improve in some cases (more constraints = more inference sites) or regress in others. Needs testing.
 
-4. **Pick at the engine level**: Should the Rust engine enforce Pick at runtime? Given invariance, the type system guarantees that only declared fields arrive at the handler. The Pick builtin still runs at runtime (constructs a new object), but the engine could also validate that the handler's input schema matches the incoming data exactly.
+4. **Engine-level Pick**: Deferred to DEFERRED_FEATURES.md. The engine could enforce schema-based input filtering at handler boundaries as defense-in-depth, but the type system should be the primary enforcement mechanism.

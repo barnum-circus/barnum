@@ -625,3 +625,13 @@ Implemented in `libs/barnum/src/builtins.ts`. `constant<T>(value)` and `range(st
 ## ~~Handler as Callable~~ (Implemented)
 
 Implemented in `libs/barnum/src/handler.ts`. `createHandler` returns a `CallableHandler` — a function that produces `TypedAction` when invoked, with Handler metadata (`__filePath`, `__definition`, brand symbol) attached via `Object.assign`. Direct invocation: `setup()` or `setup({ stepConfig: { timeout: 5000 } })`. `invoke()` still works for explicit invocation.
+
+## Engine-level Pick (Schema-based Input Filtering)
+
+With invariant types (INVARIANT_TYPES.md), the type system guarantees that only declared fields arrive at a handler boundary. The `pick` builtin constructs a new object with only the named fields at runtime.
+
+A more advanced feature: the engine itself could enforce input filtering at handler boundaries based on the handler's JSON schema. When the engine dispatches to a handler, it strips any fields not declared in the handler's `inputValidator` schema before serializing.
+
+This provides defense-in-depth: even if a type-level `pick` is accidentally omitted, the engine never sends undeclared fields to a handler. It also enables polyglot handlers — a Rust or Python handler that strict-deserializes its input would never see unexpected fields.
+
+**Why deferred**: The type system should be the primary enforcement mechanism. Engine-level filtering is a safety net, not a substitute. It also adds per-dispatch overhead (schema introspection) and requires all handlers to have schemas (currently `inputValidator` is optional). Worth revisiting once the invariant type system is stable and handler schemas are mandatory.
