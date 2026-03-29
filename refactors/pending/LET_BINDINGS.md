@@ -461,93 +461,96 @@ declare({
 )
 ```
 
-## Callbacks as scope boundaries: effects, error handling, and context
+## The unifying abstraction: scoped effects
 
-The `declare` callback pattern — "run some setup, execute a body, run some cleanup" — is a general mechanism. It's the same shape as try/catch, RAII, React context providers, and database transactions. All of them create a **scope** with entry/exit behavior controlled by the framework.
+`declare`, RAII, `tryCatch`, `withTimeout`, `loop` — these aren't five orthogonal features. They're five instances of one pattern, and the pattern is the thing worth understanding.
 
-### What scopes give you
+### The pattern: scheduler-managed scope frames
 
-A scope has three properties:
-1. **Entry**: something happens when the scope is entered (evaluate bindings, acquire resource, start transaction)
-2. **Body**: the user's code runs within the scope
-3. **Exit**: something happens when the scope exits (dispose resources, commit/rollback, catch errors)
+Every scope-creating combinator in Barnum follows the same structure:
 
-The callback in TypeScript is the natural way to express "here is a region of code where X is true." The callback's extent IS the scope.
+| Phase | What happens | Who controls it |
+|---|---|---|
+| **Enter** | Something is set up before the body runs | Scheduler's `advance` for this frame kind |
+| **Body** | User's code executes within the scope | Standard frame execution |
+| **Exit (success)** | Cleanup/finalization after body completes | Scheduler's `deliver` for this frame kind |
+| **Exit (error)** | Error-path cleanup after body fails | Scheduler's error propagation for this frame kind |
 
-### How this generalizes
+This is not an analogy. It's the literal implementation. Each scope type is:
 
-**RAII** (discussed above): Handlers declare cleanup. The scheduler runs cleanup when the enclosing `declare` scope exits. Entry = evaluate bindings. Exit = dispose.
+1. An AST node (so the user can express it)
+2. A frame kind (so the scheduler can track it)
+3. Entry logic in `advance`
+4. Exit logic in `deliver`
+5. Error-path logic
 
-**Error handling / catch**: A `tryCatch` combinator wraps a body in error-handling logic:
+The mechanism is always the same. What varies is what happens at entry and exit.
+
+### The instances
+
+| Combinator | Enter | Exit (success) | Exit (error) | What the callback captures |
+|---|---|---|---|---|
+| `declare` | Evaluate bindings, populate env | Remove bindings from env | Remove bindings, propagate error | Data (VarRefs) |
+| RAII (handler dispose) | (same as declare) | Dispose bound values, then remove | Dispose bound values, then propagate | (same as declare) |
+| `tryCatch` | Push error handler | Pop handler, deliver result | Execute recovery action | Nothing — two action args |
+| `withTimeout` | Start timer | Cancel timer, deliver result | Cancel body (if timer fires) or cancel timer (if body fails) | Nothing — duration + action arg |
+| `loop` (existing) | Start body | Deliver Break value | Propagate | Control flow (Continue/Break protocol) |
+| `scope` (hypothetical) | Record re-entry point | Deliver result | Propagate | Control flow (restart action) |
+
+Two things to notice:
+
+**RAII isn't a separate scope type.** It's `declare` with exit behavior. The handler's `dispose` metadata tells the scheduler what to do at scope exit. This is why RAII "interacts for free" with declare — declare provides the scope, the handler provides the cleanup, the scheduler connects them at the frame level. No new AST node. No new frame kind.
+
+**`loop` is already an instance of this pattern.** It has an AST node, a frame kind, entry logic (start body), exit logic (deliver Break value or re-enter on Continue), and error-path logic (propagate). We've been building scoped effects since the beginning — we just didn't name the pattern.
+
+### What this is, formally
+
+This is the **algebraic effects and handlers** model. Not the full generality (we don't need delimited continuations or effect polymorphism), but the core insight:
+
+- An **effect** is something that happens during execution that the scheduler handles: bind a variable, dispose a resource, catch an error, enforce a timeout, restart a loop.
+- A **handler** is a scope that intercepts effects and decides what to do: declare's env management, tryCatch's recovery, timeout's cancellation, loop's re-entry.
+- Effects are **scoped** — the handler applies to a specific region of the AST (the body), not globally.
+
+Traditional workflow engines handle this with a flat list of global hooks or middleware. Barnum's nested frames give us **lexically scoped** effect handling — the same capability that algebraic effects provide, but specialized to the workflow domain.
+
+Each instance captures something different (data, control flow, errors, time), but the *mechanism* — a scheduler frame with entry/body/exit behavior — is always the same.
+
+### Why declare is the right first step
+
+`declare` forces us to build every piece of the scope infrastructure:
+
+- **Scope-aware frame nesting**: Declare frames nest inside Chain/Parallel/ForEach/Loop. The frame tree already supports nesting, but declare adds environment management — threading data *across* frames rather than *through* them.
+- **Scope-exit protocol**: When a Declare frame is delivered to, the scheduler must clean up (remove bindings, later run dispose). This is the first scope type with meaningful exit behavior — Chain just passes through, Parallel collects results.
+- **Error-path scope exit**: If the body fails, bindings still need cleanup. This is the first time the scheduler needs to run exit logic on an error path.
+
+Once this exists, each subsequent scope type is incremental:
+
+- **RAII** adds: inspect bindings at Declare scope exit, call dispose on those whose handlers declared it. Zero new frame kinds. Zero new AST nodes. Just new logic in the existing Declare frame's exit path.
+- **`tryCatch`** adds: one new AST node, one new frame kind, entry = push handler, exit = pop handler or run recovery. The nesting/exit infrastructure already exists from declare.
+- **`withTimeout`** adds: one new AST node, one new frame kind, entry = start timer, exit = cancel timer or cancel body. Same pattern.
+- **`scope`/continuations** adds: one new AST node, one new frame kind, body re-entry via recorded ActionId. Same pattern.
+
+None of these duplicates declare's work. Each extends the same frame infrastructure with a new entry/exit behavior.
+
+### No redundancy, no extraction needed
+
+The concern was: will `declare` be redundant once we have the full picture? Will it need to be extracted into something more general?
+
+No. Here's why:
+
+**The unification is at the scheduler level, not the user API level.** The user sees specific, well-typed combinators: `declare`, `tryCatch`, `withTimeout`. Each has narrow types, specific error messages, clear semantics. The scheduler manages all of them using the same frame model. This is exactly how programming languages work — `let`, `try/catch`, `for`, `with` (Python), `defer` (Go) are all scoped effects. No language provides a single generic "scope" primitive instead. The specific constructs give better types, better errors, and better ergonomics.
+
+**`declare` is not "one of many" — it's foundational.** RAII literally *is* declare with exit behavior. Any scope that needs data bindings (`tryCatch` that captures the error, `withTimeout` that captures the elapsed time) will compose with declare, not replace it.
+
+**The infrastructure generalizes by construction.** We don't need to "extract" a shared scope mechanism later. The frame model IS the shared mechanism. Each new scope type adds a frame kind and wires up advance/deliver. That's the incremental cost, and it's small because the infrastructure already handles nesting, error propagation, and lifetime management.
+
+We're building one thing: **a scheduler that manages scoped effects via nested frames.** `declare` is the first effect type that exercises all the machinery. Everything else is a new frame kind with different entry/exit behavior.
+
+### Could Loop be expressed as a scope?
+
+Yes. Loop is a hardcoded continuation — it captures a body ActionId and re-enters it on Continue. A general scope primitive could subsume it:
 
 ```ts
-tryCatch(
-  body,
-  (error) => recoveryAction,  // callback receives error info
-)
-```
-
-The callback here is on the TS side (definition time) — it constructs the recovery AST. The scheduler catches errors from the body and executes the recovery action instead of propagating the error. This is a scope where entry = try and exit = catch.
-
-But `tryCatch` doesn't need the declare-style callback pattern — it's a combinator that takes two actions. It could be:
-
-```ts
-tryCatch({
-  body: pipe(deploy, verify),
-  catch: pipe(rollback, notify),  // receives the error as pipeline input
-})
-```
-
-No callback needed because there's nothing to "capture" — unlike `declare` where the callback captures VarRef AST nodes.
-
-**Timeouts**: A scope that limits execution time:
-
-```ts
-withTimeout(30_000, body)
-```
-
-Entry = start timer. Exit = cancel timer (if body completed) or cancel body (if timer fires). The scheduler's scope-exit logic handles cleanup. Again, no callback needed — just a combinator.
-
-**Context / providers**: More speculative. React-style context would provide a value to all handlers within a scope:
-
-```ts
-provide({ database: dbConnection }, body)
-```
-
-This is fundamentally different from `declare` because context crosses the handler boundary — TypeScript subprocess handlers would need access to the provided value. `declare` variables are AST-level references that resolve in the scheduler; context would be runtime values passed through the handler invocation protocol. This requires changes to the handler IPC protocol, not just the AST.
-
-Context is worth exploring separately, but it's a different mechanism from `declare` scopes.
-
-### The pattern
-
-All of these share the shape: **combinator creates a scope, scheduler manages entry/exit behavior.** The callback is only needed when the user needs to capture an opaque reference (VarRef in `declare`, restart in `scope`). Otherwise, the combinator just takes arguments.
-
-What they share at the scheduler level:
-- A frame type that tracks the scope's state
-- Entry logic in `advance`
-- Exit logic in `deliver` (or a new scope-exit path)
-- Error path handling (what happens if the body fails?)
-
-`declare` is the first scope mechanism. RAII is the first scope-exit behavior. Once both exist, adding more scope-exit behaviors (timeout cancellation, transaction rollback, error catching) is extending the same infrastructure.
-
-### Implementation order
-
-1. **`declare`** — scope with entry behavior (evaluate bindings). No exit behavior.
-2. **Handler-level dispose** — scope-exit behavior triggered by handler metadata. `declare` provides the scope boundary.
-3. **`tryCatch`** — scope-exit behavior triggered by errors. May or may not use `declare`; could be a standalone combinator.
-4. **`withTimeout`** — scope-exit behavior triggered by time. Requires scheduler-level timer support.
-5. **Context** — if ever. Requires handler IPC changes.
-
-## Relationship to scopes and continuations
-
-`declare` introduces a **scope** — a region of the AST where additional data is available. But the scope has no name, no label, no user-visible identity. It's purely structural: "within this callback, these VarRefs resolve." The scope boundary is the body's extent in the AST.
-
-### Could Loop be implemented as a scope?
-
-Loop is a hardcoded continuation: it captures a body `ActionId` and re-enters it on Continue. A general scope primitive could subsume it:
-
-```ts
-// Hypothetical: loop as scope + continuation
 scope((restart) =>
   pipe(
     body,
@@ -559,13 +562,15 @@ scope((restart) =>
 )
 ```
 
-Note: `scope` takes a callback, not a name. The callback receives `restart` — a `TypedAction` whose AST carries an auto-generated unique ID (same pattern as `declare`'s VarRefs). The user never names the scope. The ID is invisible. Collisions are impossible for the same reason as `declare`: monotonic counter.
+`scope` takes a callback. The callback receives `restart` — a `TypedAction` whose AST carries an auto-generated unique ID (same pattern as declare's VarRefs). The user never names the scope. Collisions are impossible: monotonic counter.
 
-The scheduler would implement `restart` by re-entering the scope's body ActionId with a new value — exactly what Loop's Continue already does.
+The scheduler implements `restart` by re-entering the scope's body ActionId with a new value — exactly what Loop's Continue already does.
 
-### Declare vs scope: orthogonal concepts
+But Loop should remain as a dedicated AST node even if we add `scope`. Loop has specific error messages ("loop body must return Continue/Break"), type-level enforcement of the Continue/Break protocol, and clear intent. `scope` would be the general escape hatch; Loop would be the ergonomic specialization. Same pattern as how languages keep `for` loops even though every `for` is expressible as a `while`.
 
-They capture different things:
+### Declare captures data, scope captures control flow
+
+They're both scoped effects. They both use the callback-receives-opaque-reference pattern with auto-generated IDs. But they capture fundamentally different things:
 
 | | `declare` | `scope` (hypothetical) |
 |---|---|---|
@@ -574,13 +579,19 @@ They capture different things:
 | **Body executes** | Exactly once | Zero or more times |
 | **Solves** | Prop drilling | Loop, early return, restart |
 
-Both use the same pattern at the JS level: a callback that receives opaque AST references carrying auto-generated IDs. Both are structurally anonymous — no user-facing names in the AST. But `declare` stores values in a `HashMap<Id, Value>`, while `scope` would store re-entry points as `ActionId`s in the frame tree.
+They compose rather than conflict. A declare inside a scope gives you both data bindings and control flow. A scope inside a declare gives you looping with access to outer variables.
 
-They share no implementation beyond the ID generation pattern. Don't unify them.
+### Implementation order
 
-### Recommendation
+Each step builds on the previous:
 
-Implement `declare` standalone. If `scope` is added later, it's a separate AST node with its own scheduler logic. The shared insight — "callback receives opaque references with auto-generated IDs, no user-facing names, no collisions" — is a pattern, not a shared abstraction.
+1. **`declare`** — the foundational scope type. Builds environment management, scope-exit protocol, error-path cleanup. All subsequent scope types reuse this infrastructure.
+2. **Handler-level dispose (RAII)** — not a new scope type; adds exit behavior to existing Declare frames. Tests the scope-exit protocol with real cleanup logic.
+3. **`tryCatch`** — new scope type for error handling. First scope type beyond declare, validates that the frame infrastructure generalizes.
+4. **`withTimeout`** — new scope type with external triggers (timer). Tests the cancellation model.
+5. **`scope`/continuations** — general control flow. Subsumes loop's re-entry pattern. Only if we need it.
+
+Each is incremental. Each validates the infrastructure built by the previous step.
 
 ## Scope rules
 
