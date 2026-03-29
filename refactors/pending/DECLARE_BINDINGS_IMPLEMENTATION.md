@@ -1340,6 +1340,59 @@ The Rust deserializer would need to resolve handler IDs back to `HandlerKind` du
 
 This is a config-wide optimization that predates declare and benefits all handlers. It should be a separate PR. Declare works fine without it — the duplication is a serialization size issue, not a correctness issue.
 
+## Deferred: explicit type annotations for named steps
+
+### The problem
+
+Named steps (`registerSteps`) have their input/output types fully inferred from the action assigned to them. When you write:
+
+```ts
+.registerSteps({ Deploy: deploy })
+```
+
+The type of `steps.Deploy` is inferred as `TypedAction<{ verified: boolean }, { deployed: boolean }>` from `deploy`'s type. When using the callback form with `stepRef`, mutual recursion makes things even more implicit — `stepRef("Fix")` returns `TypedAction<any, any, "Fix">`, and the step's actual types are only resolved by TypeScript's constraint solver working across the entire batch.
+
+This is convenient but arguably too implicit. In a large config with many steps, there's no declaration of what a step's contract is — you have to trace through the action's combinator chain to determine what goes in and comes out. If someone changes a handler deep in a step's pipeline, the step's type changes silently, potentially breaking callers in a way that's hard to trace.
+
+### What explicit types would look like
+
+Require type parameters on `registerSteps`:
+
+```ts
+// Option A: type parameters on the step definitions
+.registerSteps({
+  Deploy: step<{ verified: boolean }, { deployed: boolean }>(deploy),
+  HealthCheck: step<{ deployed: boolean }, { stable: true }>(loop(healthCheck)),
+})
+
+// Option B: type parameters on registerSteps itself
+.registerSteps<{
+  Deploy: TypedAction<{ verified: boolean }, { deployed: boolean }>,
+  HealthCheck: TypedAction<{ deployed: boolean }, { stable: true }>,
+}>({
+  Deploy: deploy,
+  HealthCheck: loop(healthCheck),
+})
+```
+
+Option A introduces a `step()` wrapper that asserts the action's type matches the declared signature. Option B puts the type map on `registerSteps` and validates each action against its declared type.
+
+### What this buys you
+
+1. **Readable contracts.** You can see a step's input/output types without tracing through its combinator pipeline.
+2. **Stable interfaces.** Changing a step's internals that accidentally changes its type produces an error at the step definition, not at every call site.
+3. **Documentation.** The type annotation IS the documentation — it states the step's contract explicitly.
+
+### What this costs
+
+1. **Verbosity.** Every step needs a type annotation. For simple steps (`Deploy: deploy`), the annotation is redundant.
+2. **Duplication.** The handler already declares its input/output types via its Zod validator. The step annotation repeats this.
+3. **Friction.** When iterating on a step's implementation, you have to update the type annotation alongside the action. Inference handles this automatically.
+
+### Recommendation
+
+Not blocking declare. Worth exploring as a separate ergonomics improvement. The strongest argument for it: `stepRef` returns `TypedAction<any, any>`, which means steps involved in mutual recursion have no type safety at their boundaries. Explicit annotations would close this hole — the declared types would be used for `stepRef` resolution instead of `any`.
+
 ## Implementation order
 
 1. **Rust AST** (`barnum_ast/src/lib.rs`): Add `DeclareId`, `DeclareAction`, `VarRef`. Pure types, no logic.

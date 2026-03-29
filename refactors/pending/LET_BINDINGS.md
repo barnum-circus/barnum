@@ -28,6 +28,120 @@ declare({
 
 `worktree` in the callback is not a value — it's a `TypedAction<never, T>` AST node. Placing it in a pipeline tells the scheduler "resolve this variable from the environment." The callback is metaprogramming: JavaScript code that produces an AST.
 
+### Realistic example: deployment pipeline
+
+A CI/CD workflow that derives several values from input and uses them at scattered points throughout the pipeline. Today, every intermediate step must accept and pass through fields it doesn't use.
+
+```ts
+// Input type:
+type DeployInput = {
+  repo: string;
+  sha: string;
+  environment: string;
+};
+
+// Handlers — each accepts only what it needs (invariant types):
+const buildImage     = createHandler<{ repo: string; sha: string }, { imageTag: string }>(...);
+const runTests       = createHandler<{ imageTag: string }, { passed: boolean }>(...);
+const deployToK8s    = createHandler<{ imageTag: string; environment: string }, { podName: string }>(...);
+const notifySlack    = createHandler<{ repo: string; environment: string; podName: string }, void>(...);
+const updateDashboard = createHandler<{ repo: string; sha: string; podName: string }, void>(...);
+```
+
+Without `declare`, you must thread everything through the entire pipeline:
+
+```ts
+// Without declare — every step must carry fields it doesn't need.
+// The pipeline value grows to include all fields any future step might use.
+pipe(
+  // Start: { repo, sha, environment }
+  augment(pipe(pick("repo", "sha"), buildImage)),
+  // Now: { repo, sha, environment, imageTag }
+  tap(pipe(pick("imageTag"), runTests)),
+  // Still: { repo, sha, environment, imageTag }
+  augment(pipe(pick("imageTag", "environment"), deployToK8s)),
+  // Now: { repo, sha, environment, imageTag, podName }
+  tap(pipe(pick("repo", "environment", "podName"), notifySlack)),
+  // Still: { repo, sha, environment, imageTag, podName }
+  pipe(pick("repo", "sha", "podName"), updateDashboard),
+)
+```
+
+Every step threads `repo`, `sha`, and `environment` through augment/tap/pick even though most steps don't use them. The pipeline value is a growing accumulation of every field any step has ever produced.
+
+With `declare`:
+
+```ts
+declare({
+  image: pipe(pick("repo", "sha"), buildImage),
+}, ({ image }) =>
+  pipe(
+    // runTests: just needs imageTag
+    image.then(pipe(pick("imageTag"), runTests)).dropOutput(),
+
+    // deployToK8s: needs imageTag + environment from pipeline input
+    parallel(image.then(pick("imageTag")), pick("environment"))
+      .then(merge())
+      .then(deployToK8s),
+
+    // TODO: this is awkward. Having to merge image output with pipeline
+    // input manually is not much better than augment. Consider whether
+    // declare should support multiple references more ergonomically.
+  ),
+)
+```
+
+Actually, a more natural use of `declare` — bind the derived values individually:
+
+```ts
+declare({
+  image: pipe(pick("repo", "sha"), buildImage),
+  input: identity(),  // capture the pipeline input itself as a variable
+}, ({ image, input }) =>
+  pipe(
+    // runTests: just needs imageTag from image
+    image.then(pick("imageTag")).then(runTests).dropOutput(),
+
+    // deployToK8s: needs imageTag from image + environment from input
+    parallel(
+      image.then(pick("imageTag")),
+      input.then(pick("environment")),
+    ).then(merge()).then(deployToK8s),
+
+    // notifySlack: needs repo+environment from input + podName from deploy
+    // ... but we don't have the deploy result as a variable.
+  ),
+)
+```
+
+This reveals a design tension: `declare` binds values computed **before** the body runs. Values produced **during** the body (like `podName` from `deployToK8s`) need either nested `declare` or pipeline threading. The ergonomic sweet spot is binding things derived from the initial input — configuration, environment, derived identifiers — and letting the body pipeline handle step-to-step data flow.
+
+The clearest win for `declare`:
+
+```ts
+// Bind all the "contextual" values once, reference them throughout.
+declare({
+  input: identity<DeployInput>(),
+  image: pipe(pick("repo", "sha"), buildImage),
+}, ({ input, image }) =>
+  pipe(
+    image.then(pick("imageTag")).then(runTests).dropOutput(),
+    image.then(pick("imageTag"))
+      .then(augment(input.then(pick("environment"))))
+      .then(deployToK8s),
+    // deployToK8s output: { podName }
+    augment(input.then(pick("repo", "sha")))
+      .then(augment(input.then(pick("environment"))))
+      .then(notifySlack)
+      .dropOutput(),
+    augment(input.then(pick("repo", "sha")))
+      .then(updateDashboard),
+  ),
+)
+```
+
+The key improvement: `input` and `image` are available at any point without threading. Steps that need `repo` grab it from `input`; steps that need `imageTag` grab it from `image`. No step is forced to accept fields it doesn't use just to pass them downstream.
+
 ## Identity model: unique IDs, no names, no collisions
 
 This is the most important design property and it permeates everything.
