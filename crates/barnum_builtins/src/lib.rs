@@ -121,6 +121,37 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
             })?;
             Ok(arr.get(index).cloned().unwrap_or(Value::Null))
         }
+
+        BuiltinKind::Pick { value: keys } => {
+            let Value::Array(key_values) = keys else {
+                return Err(BuiltinError {
+                    builtin: "Pick",
+                    expected: "array of field names",
+                    actual: keys.clone(),
+                });
+            };
+            let Value::Object(obj) = input else {
+                return Err(BuiltinError {
+                    builtin: "Pick",
+                    expected: "object",
+                    actual: input.clone(),
+                });
+            };
+            let mut picked = serde_json::Map::new();
+            for key_value in key_values {
+                let Value::String(key) = key_value else {
+                    return Err(BuiltinError {
+                        builtin: "Pick",
+                        expected: "string field name in keys array",
+                        actual: key_value.clone(),
+                    });
+                };
+                if let Some(value) = obj.get(key.as_str()) {
+                    picked.insert(key.clone(), value.clone());
+                }
+            }
+            Ok(Value::Object(picked))
+        }
     }
 }
 
@@ -267,5 +298,52 @@ mod tests {
             &json!([1, 2]),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn pick_selects_fields() {
+        let input = json!({"name": "Alice", "age": 30, "email": "a@b.com"});
+        let result = execute_builtin(
+            &BuiltinKind::Pick {
+                value: json!(["name", "age"]),
+            },
+            &input,
+        );
+        assert_eq!(result.unwrap(), json!({"name": "Alice", "age": 30}));
+    }
+
+    #[test]
+    fn pick_ignores_missing_fields() {
+        let input = json!({"name": "Alice"});
+        let result = execute_builtin(
+            &BuiltinKind::Pick {
+                value: json!(["name", "missing"]),
+            },
+            &input,
+        );
+        assert_eq!(result.unwrap(), json!({"name": "Alice"}));
+    }
+
+    #[test]
+    fn pick_rejects_non_object() {
+        let result = execute_builtin(
+            &BuiltinKind::Pick {
+                value: json!(["name"]),
+            },
+            &json!("not object"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn pick_empty_keys_returns_empty_object() {
+        let input = json!({"name": "Alice", "age": 30});
+        let result = execute_builtin(
+            &BuiltinKind::Pick {
+                value: json!([]),
+            },
+            &input,
+        );
+        assert_eq!(result.unwrap(), json!({}));
     }
 }

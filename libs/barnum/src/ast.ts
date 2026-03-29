@@ -74,7 +74,8 @@ export type BuiltinKind =
   | { kind: "Merge" }
   | { kind: "Flatten" }
   | { kind: "ExtractField"; value: string }
-  | { kind: "ExtractIndex"; value: number };
+  | { kind: "ExtractIndex"; value: number }
+  | { kind: "Pick"; value: string[] };
 
 // ---------------------------------------------------------------------------
 // Config
@@ -139,6 +140,10 @@ export type TypedAction<
    * to `In` so the intersection types correctly.
    */
   augment(): TypedAction<In, In & Out, Refs>;
+  /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
+  pick<TKeys extends (keyof Out & string)[]>(
+    ...keys: TKeys
+  ): TypedAction<In, Pick<Out, TKeys[number]>, Refs>;
 };
 
 
@@ -224,6 +229,15 @@ function augmentMethod(this: TypedAction): TypedAction {
   });
 }
 
+function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } } },
+  });
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -241,6 +255,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
       augment: { value: augmentMethod, configurable: true },
+      pick: { value: pickMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out, Refs>;

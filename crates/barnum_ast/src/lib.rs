@@ -206,6 +206,11 @@ pub enum BuiltinKind {
         /// The zero-based index to extract (must be a JSON number).
         value: Value,
     },
+    /// Select named fields from an object, producing a new object with only those fields.
+    Pick {
+        /// The field names to keep (must be a JSON array of strings).
+        value: Value,
+    },
 }
 
 // ---------------------------------------------------------------------------

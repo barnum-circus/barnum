@@ -142,6 +142,20 @@ export function extractIndex<
 }
 
 // ---------------------------------------------------------------------------
+// Pick — select named fields from an object
+// ---------------------------------------------------------------------------
+
+export function pick<
+  TObj extends Record<string, unknown>,
+  TKeys extends (keyof TObj & string)[],
+>(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // DropResult — run an action for side effects, discard its output
 // ---------------------------------------------------------------------------
 
