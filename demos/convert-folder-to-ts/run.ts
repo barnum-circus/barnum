@@ -4,13 +4,11 @@
  * Pipeline:
  *   1. Setup — clean output directory
  *   2. List JS files in src/ (returns { file, outputPath }[])
- *   3. For each file:
- *      a. augment: run migrate on "file" field, merge { content } back
- *      b. writeFile receives { content, file, outputPath }
+ *   3. For each file: migrate → writeFile
  *   4. Type-check/fix loop — run tsc, classify errors, fix or finish
  *
- * Demonstrates: pipe, forEach, loop, augment, extractField,
- * createHandlerWithConfig, and postfix operators (.branch, .drop).
+ * Demonstrates: pipe, forEach, loop, createHandlerWithConfig,
+ * and postfix operators (.branch, .drop).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -22,14 +20,13 @@ import {
   loop,
 } from "@barnum/barnum/src/ast.js";
 import {
-  augment,
   extractField,
   recur,
   done,
 } from "@barnum/barnum/src/builtins.js";
 
 import { setup, listFiles, migrate, writeFile } from "./handlers/convert.js";
-import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
+import { typeCheck, classifyErrors, fix, type ClassifyResult } from "./handlers/type-check-fix.js";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
@@ -40,16 +37,9 @@ await workflowBuilder()
       setup,
       listFiles,
 
-      // Phase 2: For each file, migrate and write
-      //
-      // augment runs migrate on the "file" field and merges { content }
-      // back into the original { file, outputPath } object.
-      forEach(
-        pipe(
-          augment(pipe(extractField("file"), migrate({ to: "Typescript" }))),
-          writeFile,
-        ),
-      ).drop(),
+      // Phase 2: For each file, migrate and write.
+      // migrate accepts { file, outputPath } and returns { content, outputPath }.
+      forEach(pipe(migrate({ to: "Typescript" }), writeFile)).drop(),
 
       // Phase 3: Type-check / fix loop
       //
@@ -58,7 +48,11 @@ await workflowBuilder()
       // before re-entering typeCheck.
       loop(
         pipe(typeCheck, classifyErrors).branch({
-          HasErrors: pipe(extractField("errors"), forEach(fix).drop().then(recur())),
+          HasErrors: pipe(
+            extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+            forEach(fix).drop(),
+            recur(),
+          ),
           Clean: done(),
         }),
       ),

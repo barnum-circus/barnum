@@ -59,11 +59,11 @@ export const listFiles = createHandler({
 }, "listFiles");
 
 export const migrate = createHandlerWithConfig({
-  inputValidator: z.string(),
+  inputValidator: z.object({ file: z.string(), outputPath: z.string() }),
   stepConfigValidator: z.object({ to: z.string() }),
-  handle: async ({ value: filePath, stepConfig }) => {
-    const source = readFileSync(filePath, "utf-8");
-    const fileName = path.basename(filePath);
+  handle: async ({ value, stepConfig }) => {
+    const source = readFileSync(value.file, "utf-8");
+    const fileName = path.basename(value.file);
 
     console.error(`[migrate] Converting ${fileName} to ${stepConfig.to} via Claude...`);
 
@@ -83,7 +83,7 @@ export const migrate = createHandlerWithConfig({
 
     const content = stripCodeFences(response);
     console.error(`[migrate] ${fileName}: ${content.split("\n").length} lines of ${stepConfig.to}`);
-    return { content };
+    return { content, outputPath: value.outputPath };
   },
 }, "migrate");
 

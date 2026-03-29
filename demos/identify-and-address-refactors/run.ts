@@ -67,7 +67,7 @@ await workflowBuilder()
       HasErrors: pipe(extractField("errors"), stepRef("Fix")),
       Clean: drop(),
     }),
-    Fix: forEach(fix).drop().then(stepRef("TypeCheck")),
+    Fix: pipe(forEach(fix).drop(), stepRef("TypeCheck")),
 
     // The action that runs inside each worktree.
     //
@@ -95,7 +95,7 @@ await workflowBuilder()
           pipe(drop(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
               extractField("instructions"),
-              applyFeedback.drop().then(stepRef("TypeCheck")).then(recur()),
+              applyFeedback.drop(), stepRef("TypeCheck"), recur(),
             ),
             Approved: done(),
           }),
