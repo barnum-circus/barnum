@@ -181,18 +181,71 @@ Options:
 
 **Recommendation:** Use a conditional. If `KindOf<Out>` is `never`, the cases parameter type should be `never` (compile error). This catches misuse at the call site.
 
+## Implementation strategy: test-first
+
+### Commit 1: Add failing tests
+
+Add to `libs/barnum/tests/types.test.ts`:
+
+```ts
+describe("postfix .branch() type safety", () => {
+  it("rejects non-exhaustive postfix branch", () => {
+    // @ts-expect-error — non-exhaustive: missing "Clean" case
+    classifyErrors.branch({ HasErrors: drop() });
+  });
+
+  it("rejects wrong handler type in postfix branch", () => {
+    classifyErrors.branch({
+      // @ts-expect-error — deploy expects { verified: boolean }, not HasErrors
+      HasErrors: deploy,
+      Clean: drop(),
+    });
+  });
+
+  it("accepts exhaustive postfix branch with bare drop()", () => {
+    classifyErrors.branch({
+      HasErrors: drop(),
+      Clean: drop(),
+    });
+  });
+
+  it("rejects .branch() on non-discriminated output", () => {
+    // deploy output is { deployed: boolean } — no `kind` field
+    // @ts-expect-error — Out has no kind, .branch() unavailable
+    deploy.branch({ A: drop() });
+  });
+});
+```
+
+Tests 1, 2, 4: `@ts-expect-error` is currently **unused** (the lines compile because `.branch()` doesn't validate). Unused `@ts-expect-error` is a TS error → tests are "broken".
+
+Test 3: Compiles today, will still compile after fix (contravariant handlers accept `drop()` with `unknown` input).
+
+### Commit 2: Implement
+
+1. Add `CaseHandler`, `KindOf` types to `ast.ts`
+2. Update postfix `.branch()` signature
+3. The `@ts-expect-error` directives in tests 1, 2, 4 become valid (the lines now error as expected) → tests pass
+
+The unused `@ts-expect-error` directives becoming valid **proves the fix works**.
+
+### Existing test updates
+
+- `libs/barnum/tests/patterns.test.ts:198` — `deploy.branch({ A: drop(), B: drop() })` breaks because `deploy` output has no `kind`. Change to use `classifyErrors.branch({ HasErrors: drop(), Clean: drop() })`.
+- All other existing postfix `.branch()` calls still compile — handlers satisfy `CaseHandler` via contravariance, and existing calls are already exhaustive.
+
 ## Files to change
 
 | File | Change |
 |------|--------|
 | `libs/barnum/src/ast.ts` | Add `CaseHandler`, `KindOf`; update postfix `.branch()` signature |
-| `libs/barnum/tests/types.test.ts` | Add exhaustiveness tests; update postfix `.branch()` type assertions |
-| `libs/barnum/tests/patterns.test.ts` | Verify existing postfix tests still pass |
+| `libs/barnum/tests/types.test.ts` | Add failing tests (commit 1); verify they pass after implementation (commit 2) |
+| `libs/barnum/tests/patterns.test.ts` | Update `deploy.branch()` test to use discriminated output; verify others still pass |
 | `libs/barnum/tests/steps.test.ts` | Verify showcase/kitchen-sink tests still pass |
-| Demos | No changes expected — they already use postfix `.branch()` with the patterns that work |
+| Demos | No changes expected — they already use postfix `.branch()` with exhaustive cases |
 
 ## Open questions
 
-1. **Inference stability** — Does TS reliably infer `TCases` when the constraint is a mapped type over `KindOf<Out>`? Need to prototype. If inference breaks, fallback is a conditional return type instead of a constrained parameter.
+1. **Inference stability** — The `.branch()` signature constrains `TCases` with a mapped type: `{ [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }`. TypeScript must infer `TCases` from the argument while simultaneously checking it against the constraint. If TS struggles — e.g., resolves `TCases` to the constraint type instead of the argument type, breaking `ExtractOutput` — the fallback is: keep `TCases extends Record<string, Action>` (easy to infer) and use a conditional return type that produces `never` when cases don't match the constraint. Prototype during implementation.
 
-2. **Non-exhaustive branches** — Should there be an escape hatch for intentionally non-exhaustive branches (e.g., only handling some variants and letting others fall through)? The Rust executor errors on unmatched kinds, so non-exhaustive is a runtime error anyway. Enforcing exhaustiveness at compile time seems correct.
+2. **Non-exhaustive branches** — Exhaustive matching only. No escape hatch for partial matching. To handle a subset of variants, use a `pick`-style combinator to narrow first, then exhaustively match including a `none`/`otherwise` case for unmatched variants. This is a separate feature to design later.

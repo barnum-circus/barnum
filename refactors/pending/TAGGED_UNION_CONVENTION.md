@@ -1,7 +1,7 @@
-# Tagged Union Convention: `{ kind, value }` + Phantom `__def`
+# Tagged Union Convention: `{ kind, value }`
 
 **Blocks:** nothing
-**Blocked by:** CONTRAVARIANT_CASE_HANDLERS.md (for full benefit in branch cases)
+**Blocked by:** CONTRAVARIANT_CASE_HANDLERS.md (branch validates handler types, so removing `extractField` actually changes behavior)
 
 ## Motivation
 
@@ -15,50 +15,34 @@ type ClassifyResult =
 
 HasErrors has `errors`, Clean has nothing. Each variant is a different shape. This means:
 - Branch case handlers must know the variant structure to extract fields (`extractField<HasErrors, "errors">("errors")`)
-- The standalone `branch()` derives its input type from handler inputs — when handlers are input-agnostic (drop, done), the derivation fails
-- No way to recover the full union definition from a single variant
+- Every union has a unique structure — no standard way to interact with variants
 
 ## Proposed convention
 
-All discriminated unions use `{ kind: K; value: T }`, with a phantom `__def` field carrying the full variant map:
+All discriminated unions use `{ kind: K; value: T }`:
 
 ```ts
-/** Standard tagged union type. Each variant has { kind, value, __def }. */
-type TaggedUnion<TDef extends Record<string, unknown>> = {
-  [K in keyof TDef & string]: { kind: K; value: TDef[K]; __def?: TDef };
-}[keyof TDef & string];
+type ClassifyResult =
+  | { kind: "HasErrors"; value: TypeError[] }
+  | { kind: "Clean"; value: void };
 ```
 
-Unions are defined as variant maps:
+### Two things this enables
 
-```ts
-type ClassifyResultDef = {
-  HasErrors: TypeError[];
-  Clean: void;
-};
-
-type ClassifyResult = TaggedUnion<ClassifyResultDef>;
-// = { kind: "HasErrors"; value: TypeError[]; __def?: ClassifyResultDef }
-// | { kind: "Clean"; value: void; __def?: ClassifyResultDef }
-```
-
-### Three things this enables
-
-1. **Standardized structure** — every variant has `kind` and `value`, nothing else (plus phantom `__def`)
-2. **Branch auto-unwraps** — branch extracts `value` before passing to the case handler, so handlers receive the payload directly
-3. **`__def` carries the full definition** — the standalone `branch()` can extract the variant map from any handler that has a concrete input type, recovering the full union even when other handlers use `drop()`
+1. **Standardized structure** — every variant has `kind` and `value`, nothing else
+2. **Branch auto-unwraps `value`** — branch extracts `value` before passing to the case handler, so handlers receive the payload directly. No more `extractField`.
 
 ### Precedent already in the codebase
 
 `LoopResult`, `recur()`, `done()`, and `tag()` already use `{ kind, value }`:
 
 ```ts
-// libs/barnum/src/ast.ts:473
+// libs/barnum/src/ast.ts
 type LoopResult<TContinue, TBreak> =
   | { kind: "Continue"; value: TContinue }
   | { kind: "Break"; value: TBreak };
 
-// libs/barnum/src/builtins.ts:65
+// libs/barnum/src/builtins.ts
 function recur<TValue>(): TypedAction<TValue, { kind: "Continue"; value: TValue }>
 function done<TValue>(): TypedAction<TValue, { kind: "Break"; value: TValue }>
 function tag<TValue, TKind extends string>(kind: TKind): TypedAction<TValue, { kind: TKind; value: TValue }>
@@ -66,31 +50,94 @@ function tag<TValue, TKind extends string>(kind: TKind): TypedAction<TValue, { k
 
 ## Changes
 
-### 1. Add `TaggedUnion` and `ExtractDef` to `ast.ts`
+### 1. Convert handler return types to `{ kind, value }`
 
-**File:** `libs/barnum/src/ast.ts`
+Every handler that produces a discriminated union changes from arbitrary shapes to `{ kind, value }`.
 
+#### `libs/barnum/tests/handlers.ts`
+
+Before:
 ```ts
-// New type utilities
+export type ClassifyResult =
+  | { kind: "HasErrors"; errors: TypeError[] }
+  | { kind: "Clean" };
 
-/** Standard tagged union. Variants carry { kind, value } plus phantom __def. */
-export type TaggedUnion<TDef extends Record<string, unknown>> = {
-  [K in keyof TDef & string]: { kind: K; value: TDef[K]; __def?: TDef };
-}[keyof TDef & string];
+export const classifyErrors = createHandler({
+  inputValidator: z.array(z.object({ file: z.string(), message: z.string() })),
+  handle: async ({ value }): Promise<ClassifyResult> =>
+    value.length > 0
+      ? { kind: "HasErrors", errors: value }
+      : { kind: "Clean" },
+}, "classifyErrors");
+```
 
-/** Extract the variant map definition from a tagged union's phantom __def. */
-type ExtractDef<T> = T extends { __def?: infer D } ? D : never;
+After:
+```ts
+export type ClassifyResult =
+  | { kind: "HasErrors"; value: TypeError[] }
+  | { kind: "Clean"; value: void };
+
+export const classifyErrors = createHandler({
+  inputValidator: z.array(z.object({ file: z.string(), message: z.string() })),
+  handle: async ({ value }): Promise<ClassifyResult> =>
+    value.length > 0
+      ? { kind: "HasErrors", value }
+      : { kind: "Clean", value: undefined },
+}, "classifyErrors");
+```
+
+#### `demos/convert-folder-to-ts/handlers/type-check-fix.ts`
+
+Before:
+```ts
+export type ClassifyResult =
+  | { kind: "HasErrors"; errors: TypeError[] }
+  | { kind: "Clean" };
+
+return { kind: "HasErrors", errors };
+return { kind: "Clean" };
+```
+
+After:
+```ts
+export type ClassifyResult =
+  | { kind: "HasErrors"; value: TypeError[] }
+  | { kind: "Clean"; value: void };
+
+return { kind: "HasErrors", value: errors };
+return { kind: "Clean", value: undefined };
+```
+
+#### `demos/identify-and-address-refactors/handlers/refactor.ts`
+
+Before:
+```ts
+export type ClassifyJudgmentResult =
+  | { kind: "Approved" }
+  | { kind: "NeedsWork"; instructions: string };
+
+return { kind: "Approved" };
+return { kind: "NeedsWork", instructions: judgment.instructions };
+```
+
+After:
+```ts
+export type ClassifyJudgmentResult =
+  | { kind: "Approved"; value: void }
+  | { kind: "NeedsWork"; value: string };
+
+return { kind: "Approved", value: undefined };
+return { kind: "NeedsWork", value: judgment.instructions };
 ```
 
 ### 2. Branch auto-unwraps `value`
 
 **File:** `libs/barnum/src/ast.ts` — standalone `branch()` and postfix `.branch()` runtime implementations
 
-The TypeScript-side branch inserts `ExtractField("value")` before each case handler in the AST. No Rust executor changes needed — the executor still passes the full value, but the first step of each case extracts `value`.
+The TypeScript-side branch inserts `ExtractField("value")` before each case handler in the AST. No Rust executor changes needed initially. Long-term, auto-unwrapping should move into the Rust executor as a fundamental language feature — branch should work like Rust `match`, unwrapping the payload before entering the arm.
 
 Before (runtime implementation):
 ```ts
-// libs/barnum/src/ast.ts — branchMethod (~line 208)
 function branchMethod(this: TypedAction, cases: Record<string, Action>): TypedAction {
   return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases } });
 }
@@ -114,9 +161,30 @@ function branchMethod(this: TypedAction, cases: Record<string, Action>): TypedAc
 
 Same change for the standalone `branch()` function body.
 
-### 3. Update `BranchInput` to use `__def`
+### 3. Update postfix `.branch()` type signature
 
-**File:** `libs/barnum/src/ast.ts`
+After auto-unwrap, case handlers receive the unwrapped payload, not the full variant. The postfix `.branch()` signature (from CONTRAVARIANT_CASE_HANDLERS) needs to reflect this:
+
+Before (after CONTRAVARIANT_CASE_HANDLERS):
+```ts
+branch<TCases extends { [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }>(
+  cases: TCases,
+): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
+```
+
+After (handler receives unwrapped payload):
+```ts
+/** Extract the value type from a { kind, value } variant. */
+type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
+
+branch<TCases extends { [K in KindOf<Out>]: CaseHandler<UnwrapVariant<Extract<Out, { kind: K }>>> }>(
+  cases: TCases,
+): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
+```
+
+### 4. Update `BranchInput` for auto-unwrap
+
+The standalone `branch()` derives its input type from handler inputs. After auto-unwrap, handlers receive payloads, so `BranchInput` wraps them back into `{ kind, value }`:
 
 Before:
 ```ts
@@ -127,114 +195,14 @@ type BranchInput<TCases> = {
 
 After:
 ```ts
-/**
- * Compute the branch input type. Prefers __def (the union definition carried
- * as phantom data) when available — this recovers the full union even when
- * some case handlers are input-agnostic (drop, done).
- *
- * Falls back to { kind: K } & ExtractInput<handler> when no handler carries __def.
- */
-type BranchDefFromCases<TCases> = ExtractDef<ExtractInput<TCases[keyof TCases & string]>>;
-
-type BranchInput<TCases> =
-  BranchDefFromCases<TCases> extends Record<string, unknown>
-    ? TaggedUnion<BranchDefFromCases<TCases>>
-    : { [K in keyof TCases & string]: { kind: K } & ExtractInput<TCases[K]> }[keyof TCases & string];
+type BranchInput<TCases> = {
+  [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
+}[keyof TCases & string];
 ```
 
-If any case handler carries `__def`, the full union is reconstructed from the definition. Otherwise, falls back to the current per-handler intersection.
+Note: `drop()` cases produce `{ kind: K; value: unknown }`. Under invariance, this doesn't match `{ kind: K; value: void }`. Standalone `branch()` with `drop()` cases still needs explicit type params. This is a known limitation — use postfix `.branch()` to avoid it.
 
-### 4. Update handler return types
-
-Every handler that produces a discriminated union changes from arbitrary shapes to `{ kind, value }`.
-
-#### `libs/barnum/tests/handlers.ts`
-
-Before:
-```ts
-export type ClassifyResult =
-  | { kind: "HasErrors"; errors: TypeError[] }
-  | { kind: "Clean" };
-
-export const classifyErrors = createHandler({
-  inputValidator: z.array(z.object({ file: z.string(), message: z.string() })),
-  handle: async ({ value }): Promise<ClassifyResult> =>
-    value.length > 0
-      ? { kind: "HasErrors", errors: value }
-      : { kind: "Clean" },
-}, "classifyErrors");
-```
-
-After:
-```ts
-export type ClassifyResultDef = {
-  HasErrors: TypeError[];
-  Clean: void;
-};
-export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
-
-export const classifyErrors = createHandler({
-  inputValidator: z.array(z.object({ file: z.string(), message: z.string() })),
-  handle: async ({ value }): Promise<ClassifyResult> =>
-    value.length > 0
-      ? { kind: "HasErrors", value }
-      : { kind: "Clean", value: undefined },
-}, "classifyErrors");
-```
-
-#### `demos/convert-folder-to-ts/handlers/type-check-fix.ts`
-
-Before:
-```ts
-export type ClassifyResult =
-  | { kind: "HasErrors"; errors: TypeError[] }
-  | { kind: "Clean" };
-
-// handle returns:
-return { kind: "HasErrors", errors };
-return { kind: "Clean" };
-```
-
-After:
-```ts
-export type ClassifyResultDef = {
-  HasErrors: TypeError[];
-  Clean: void;
-};
-export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
-
-// handle returns:
-return { kind: "HasErrors", value: errors };
-return { kind: "Clean", value: undefined };
-```
-
-#### `demos/identify-and-address-refactors/handlers/refactor.ts`
-
-Before:
-```ts
-export type ClassifyJudgmentResult =
-  | { kind: "Approved" }
-  | { kind: "NeedsWork"; instructions: string };
-
-// handle returns:
-return { kind: "Approved" };
-return { kind: "NeedsWork", instructions: judgment.instructions };
-```
-
-After:
-```ts
-export type ClassifyJudgmentResultDef = {
-  Approved: void;
-  NeedsWork: string;
-};
-export type ClassifyJudgmentResult = TaggedUnion<ClassifyJudgmentResultDef>;
-
-// handle returns:
-return { kind: "Approved", value: undefined };
-return { kind: "NeedsWork", value: judgment.instructions };
-```
-
-### 5. Update branch case handlers — remove `extractField`
+### 5. Remove `extractField` from branch case handlers
 
 Since branch auto-unwraps `value`, case handlers receive the payload directly. No more `extractField("errors")`.
 
@@ -252,16 +220,6 @@ classifyErrors.branch({
 ```
 
 After:
-```ts
-// Branch auto-unwraps value. HasErrors handler receives TypeError[] directly.
-classifyErrors.branch({
-  HasErrors: pipe(forEach(fix)),  // receives TypeError[], not { kind, errors }
-  Clean: drop(),
-})
-```
-
-Wait — `forEach(fix)` takes `TypeError[]` and applies `fix` to each element. That's correct. But the pipe has a single step, so it simplifies to just `forEach(fix)`:
-
 ```ts
 classifyErrors.branch({
   HasErrors: forEach(fix),
@@ -286,10 +244,8 @@ branch({
 After:
 ```ts
 branch({
-  HasErrors: pipe(forEach(fix), recur<any>()),  // receives TypeError[] directly
-  Clean: done(),  // contravariant: no type param on input side
-                   // done() output is { kind: "Break"; value: unknown } — loop output is unknown
-                   // If loop output type matters, use done<void>() to match Clean's payload
+  HasErrors: pipe(forEach(fix), recur<any>()),
+  Clean: done<void>(),
 })
 ```
 
@@ -336,64 +292,64 @@ pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
 })
 ```
 
-The `applyFeedback` handler accepts `z.string()` (a string). The `NeedsWork` variant's value is `string` (from `ClassifyJudgmentResultDef`). Branch auto-unwraps, so the handler receives the string directly.
+## Implementation strategy: test-first
 
-### 6. Update `LoopResult` to use `TaggedUnion`
+### Commit 1: Add failing tests
 
-`LoopResult` already follows the `{ kind, value }` convention. Add `__def` for consistency.
+Add to `libs/barnum/tests/types.test.ts`:
 
-Before (`libs/barnum/src/ast.ts:473`):
 ```ts
-export type LoopResult<TContinue, TBreak> =
-  | { kind: "Continue"; value: TContinue }
-  | { kind: "Break"; value: TBreak };
+describe("{ kind, value } convention", () => {
+  it("ClassifyResult uses { kind, value } form", () => {
+    // @ts-expect-error — remove after converting: HasErrors uses `errors` field, not `value`
+    assertExact<IsExact<
+      Extract<ClassifyResult, { kind: "HasErrors" }>,
+      { kind: "HasErrors"; value: TypeError[] }
+    >>();
+  });
+
+  it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
+    // After auto-unwrap, forEach(fix) receives TypeError[] directly — no extractField needed.
+    // @ts-expect-error — remove after implementing: forEach(fix) input doesn't match HasErrors variant
+    classifyErrors.branch({
+      HasErrors: forEach(fix),
+      Clean: drop(),
+    });
+  });
+});
 ```
 
-After:
-```ts
-type LoopResultDef<TContinue, TBreak> = {
-  Continue: TContinue;
-  Break: TBreak;
-};
+Test 1: The assertion fails because `HasErrors` currently has `errors: TypeError[]`, not `value: TypeError[]`. The `@ts-expect-error` suppresses it.
 
-export type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue, TBreak>>;
-```
+Test 2: After CONTRAVARIANT_CASE_HANDLERS, `.branch()` validates handler types. `forEach(fix)` expects `TypeError[]` but gets the full `HasErrors` variant. The `@ts-expect-error` suppresses the error.
 
-The expanded type is identical plus `__def`. No behavioral change.
+### Commit 2+: Implement
 
-## Files to change summary
+1. Convert handler return types to `{ kind, value }`
+2. Update branch to auto-unwrap `value`
+3. Update postfix `.branch()` type signature for unwrapped payloads
+4. Update `BranchInput` for auto-unwrap
+5. Remove `extractField` from branch cases
+6. **Remove `@ts-expect-error`** from the tests added in commit 1 — they now compile, proving the fix works.
+
+## Files to change
 
 | File | What changes |
 |------|-------------|
-| `libs/barnum/src/ast.ts` | Add `TaggedUnion`, `ExtractDef`; update `BranchInput`; update `LoopResult`; branch auto-unwraps `value` in runtime impls |
+| `libs/barnum/src/ast.ts` | Add `UnwrapVariant`; update `.branch()` signature; update `BranchInput`; branch auto-unwraps `value` in runtime impls |
 | `libs/barnum/src/builtins.ts` | No changes — `tag()`, `recur()`, `done()` already produce `{ kind, value }` |
-| `libs/barnum/tests/handlers.ts` | `ClassifyResult` → `TaggedUnion<ClassifyResultDef>`; handler returns `{ kind, value }` |
-| `libs/barnum/tests/types.test.ts` | Remove `extractField` from branch cases; update type assertions for ClassifyResult shape; update BranchInput assertions |
+| `libs/barnum/tests/handlers.ts` | `ClassifyResult` uses `{ kind, value }` form; handler returns `{ kind, value }` |
+| `libs/barnum/tests/types.test.ts` | Add failing tests (commit 1); remove `extractField` from branch cases; update type assertions; remove `@ts-expect-error` (commit 2) |
 | `libs/barnum/tests/patterns.test.ts` | Update branch test cases for auto-unwrapping |
 | `libs/barnum/tests/steps.test.ts` | Remove `extractField` from branch cases |
 | `libs/barnum/tests/round-trip.test.ts` | Update Branch test constant to use `{ kind, value }` shape |
-| `demos/convert-folder-to-ts/handlers/type-check-fix.ts` | `ClassifyResult` → `TaggedUnion`; handler returns `{ kind, value }` |
+| `demos/convert-folder-to-ts/handlers/type-check-fix.ts` | Handler returns `{ kind, value }` |
 | `demos/convert-folder-to-ts/run.ts` | Remove `extractField` from branch cases |
-| `demos/identify-and-address-refactors/handlers/refactor.ts` | `ClassifyJudgmentResult` → `TaggedUnion`; handler returns `{ kind, value }` |
+| `demos/identify-and-address-refactors/handlers/refactor.ts` | Handler returns `{ kind, value }` |
 | `demos/identify-and-address-refactors/run.ts` | Remove `extractField` from branch cases |
-
-## Order of operations
-
-1. **Add `TaggedUnion`, `ExtractDef` types** — pure additions, nothing breaks
-2. **Convert handler return types** to `TaggedUnion<Def>` — handlers change, but branch cases still work because extractField extracts from the new `value` field instead of the old custom fields
-3. **Update branch to auto-unwrap `value`** — runtime implementation change, removes the need for extractField in case handlers
-4. **Remove `extractField` from branch cases** — cleanup, enabled by step 3
-5. **Update `BranchInput` to use `__def`** — standalone `branch()` no longer needs typed drops (requires CONTRAVARIANT_CASE_HANDLERS for full benefit)
-6. **Update `LoopResult`** to use `TaggedUnion` — consistency
-
-Steps 2 and 3 can be combined. Steps 4 and 5 can be combined.
 
 ## Open questions
 
-1. **`tag()` and `__def`** — The `tag("Ok")` builtin produces `{ kind: "Ok"; value: T }` but doesn't add `__def`. Should it? `tag` wraps a single variant — it doesn't know the full union. You'd need a `tagAs<TDef>("Ok")` variant that knows the definition. Or rely on the handler's return type annotation to provide `__def` via the `TaggedUnion` type.
+1. **Rust executor** — Auto-unwrap starts as `ExtractField("value")` inserted in the TS AST. Long-term, this should be a fundamental part of the Rust executor's branch semantics (like Rust `match`). Separate follow-up.
 
-2. **Rust executor** — No changes needed. The executor passes the full value to each case. The auto-unwrap is handled by inserting `ExtractField("value")` in the TypeScript AST. But the Rust-side type schema (`barnum_ast`) may need updating if it validates variant shapes. Need to check.
-
-3. **`void` vs `undefined` vs `null` for empty variants** — `{ kind: "Clean"; value: void }` — at runtime, `value` would be `undefined` (since `void` is `undefined` in TS). The handler returns `{ kind: "Clean", value: undefined }`. The Rust executor would see `"value": null` in JSON. Need to verify serde handles this.
-
-4. **Migration path** — This is a breaking change to handler return types. Since we don't care about backward compatibility (per CLAUDE.md), this is fine. But it touches many files. Break the implementation into small commits per the branching strategy.
+2. **`void` vs `undefined` vs `null` for empty variants** — `{ kind: "Clean"; value: void }` — at runtime, `value` is `undefined`. The Rust executor sees `"value": null` in JSON. Need to verify serde handles this. Hopefully nothing breaks.
