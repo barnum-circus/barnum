@@ -72,7 +72,11 @@ let_({
 )
 ```
 
-## AST representation
+## Implementation approaches
+
+Two approaches, each with different tradeoffs.
+
+### Approach A: New AST nodes (Let + VarRef)
 
 A new `Let` action node and a `VarRef` builtin:
 
@@ -94,7 +98,72 @@ interface LetAction {
 
 Variables are an **environment**, not pipeline data. Pipeline data flows linearly through each step. Variables need to be accessible from any point in the body, regardless of what the current pipeline value is. `VarRef` reaches into a side channel (the environment) to get its value — it ignores the pipeline input entirely.
 
-## Scheduler changes
+**Pros**: The scheduler has full visibility into variable lifetimes. It can optimize (evaluate once, cache), enforce scoping, and integrate with error handling / RAII. The AST is self-contained — the Rust scheduler can execute it without calling back into JavaScript.
+
+**Cons**: New AST node, new Rust scheduler concept (variable environment). Every consumer of the AST (flattener, serializer, Rust engine) needs to handle `Let` and `VarRef`.
+
+### Approach B: JS-side AST rewriting (no new AST nodes)
+
+Instead of adding `Let` and `VarRef` to the AST, `let_` could work entirely in JavaScript by traversing and modifying the AST that the body callback produces.
+
+The idea: the body callback produces an AST containing placeholder nodes (VarRef-like sentinels). Before serializing, `let_` walks the AST tree in JavaScript and replaces each placeholder with the appropriate `extractIndex(i)` from a wrapping `Parallel` node.
+
+```ts
+function let_(bindings, body) {
+  const keys = Object.keys(bindings);
+  const bindingActions = Object.values(bindings);
+
+  // Create sentinel placeholders for the callback
+  const vars = {};
+  const sentinels = new Map();
+  keys.forEach((key, i) => {
+    const sentinel = typedAction({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+    });
+    // Mark this node so we can find it during traversal
+    Object.defineProperty(sentinel, "__varRef", { value: { name: key, index: i } });
+    vars[key] = sentinel;
+    sentinels.set(sentinel, i);
+  });
+
+  // Body callback runs, producing an AST with sentinel nodes
+  const rawBody = body(vars);
+
+  // Walk the AST, replacing sentinels with the real extraction logic:
+  // Each sentinel becomes: parallel(extractIndex(i_from_outer_tuple), identity())
+  // where the outer tuple is the Parallel node wrapping all bindings.
+  //
+  // Actually — this is where it gets complicated. The sentinel needs to
+  // "reach back" to the parallel result, but the pipeline value at the
+  // sentinel's position is whatever the upstream step produced, not the
+  // parallel tuple. Same fundamental problem as inline substitution.
+  const rewrittenBody = rewriteAst(rawBody, sentinels);
+
+  return pipe(
+    parallel(...bindingActions),
+    rewrittenBody,
+  );
+}
+```
+
+The problem is the same one that killed Options B and C from the earlier version of this doc: once the pipeline value moves past the parallel tuple, variable references can't reach back to extract from it. AST rewriting in JS-land doesn't change the runtime execution model — the Rust scheduler still only sees linear pipeline data flow.
+
+**However**, JS-side rewriting could work if the rewrite is more aggressive. Instead of simple sentinel replacement, `let_` could restructure the entire body AST to thread the variable tuple through every step. Concretely: every step in the body gets wrapped in a `parallel(step, identity())` node that preserves the variable tuple alongside the pipeline value, and every VarRef sentinel is replaced with the appropriate `extractIndex`.
+
+This is essentially CPS-transforming the body to carry the variable environment as an extra pipeline value. It's doable but produces an explosively larger AST (every step gets wrapped in parallel+identity).
+
+**Pros**: No changes to the Rust scheduler or AST definition. The entire feature lives in TypeScript. The serialized AST uses only existing node types.
+
+**Cons**:
+- AST explosion: every step in the body gets wrapped in parallel+identity to carry the environment. A 5-step body becomes ~15 nodes.
+- Fragile: the rewrite must handle every AST node type (Chain, Parallel, Branch, Loop, ForEach, Step). Missing a case is a bug.
+- Opaque: the Rust scheduler sees an explosion of parallel+extractIndex nodes with no semantic meaning. Debugging, logging, and optimization are harder.
+- Types: the TypeScript types become extremely complex because every intermediate step has a tuple type `[PipelineValue, VariableEnvironment]`.
+
+**When it makes sense**: If we want to prototype `let` quickly without touching Rust, this works as a proof of concept. But for production, Approach A (scheduler-native) is cleaner.
+
+## Scheduler changes (Approach A)
 
 ### Environment model
 
