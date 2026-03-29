@@ -13,23 +13,21 @@ This is the AST-level equivalent of JavaScript's `const { a, b } = ...`:
 const { branch, worktreePath } = await createWorktree(input);
 await implement({ worktreePath, description: input.description });
 
-// Barnum today — manual threading via withResource + tap + pick:
-withResource({
-  create: pipe(deriveBranch, createWorktree),
-  action: pipe(
-    tap(pipe(pick("worktreePath", "description"), implement)),
-    tap(pipe(pick("worktreePath"), commit)),
-  ),
-  dispose: deleteWorktree,
-})
+// Barnum today — manual threading via augment + tap + pick:
+pipe(
+  deriveBranch,
+  createWorktree,
+  tap(pipe(pick("worktreePath", "description"), implement)),
+  tap(pipe(pick("worktreePath"), commit)),
+)
 
 // Barnum with let bindings:
 let_({
-  resource: pipe(deriveBranch, createWorktree),
-}, ({ resource }) =>
+  worktree: pipe(deriveBranch, createWorktree),
+}, ({ worktree }) =>
   pipe(
-    resource.then(implement),
-    resource.then(commit),
+    worktree.then(pick("worktreePath", "description")).then(implement).dropOutput(),
+    worktree.then(pick("worktreePath")).then(commit),
   ),
 )
 ```
@@ -91,10 +89,10 @@ interface LetAction {
 }
 
 // New BuiltinKind variant
-| { kind: "VarRef"; name: string }
+| { kind: "VarRef"; id: string }  // unique ID, not a name
 ```
 
-`VarRef` resolves to the bound value at runtime. The scheduler maintains a variable environment (scope stack) alongside each execution frame.
+`VarRef` resolves to the bound value at runtime. The scheduler maintains a flat `Map<String, Value>` environment alongside each execution frame. Every binding gets a unique ID generated at definition time in JavaScript (e.g., a counter or UUID), so there is no shadowing — just unique keys.
 
 Variables are an **environment**, not pipeline data. Pipeline data flows linearly through each step. Variables need to be accessible from any point in the body, regardless of what the current pipeline value is. `VarRef` reaches into a side channel (the environment) to get its value — it ignores the pipeline input entirely.
 
@@ -179,9 +177,9 @@ When a `VarRef` is encountered, look up the name in the current environment. Thi
 ### Scope rules
 
 - **Lexical scoping**: Variables are scoped to the `let` body. Not visible outside.
-- **Shadowing**: Nested `let` blocks can shadow outer bindings.
-- **forEach**: Each iteration gets its own copy of the environment. Variables don't leak across iterations.
-- **parallel**: Each branch gets a copy of the environment. Bindings in one branch don't affect the other.
+- **Unique IDs, no shadowing**: Every let binding has a unique ID (generated at definition time in JS). There is no name-based shadowing — each binding is globally unique within the config. The scheduler environment is a flat map from ID to value.
+- **Shared environment**: `forEach` iterations and `parallel` branches all share the same environment (read-only, since variables are immutable). No copying needed. A VarRef in any branch or iteration resolves to the same cached value.
+- **Step boundaries**: The environment does NOT leak across step jumps. When execution transfers to a named step (via `stepRef` or `steps.X`), the step runs with an empty environment. Variables are a structuring mechanism within a step's body, not a cross-step data channel.
 - **No mutation**: Variables are bound once and never reassigned. This is `let`, not `var`. The environment is append-only within a scope.
 
 ### Implicit scoping via handler boundaries
