@@ -312,6 +312,102 @@ declare({
 
 This is fragile — if `implement` fails, `deleteWorktree` never runs. `withResource` guarantees cleanup. `declare` + RAII (see RAII.md if it exists) could replace `withResource`, but `declare` alone cannot.
 
+## Relationship to scopes and continuations
+
+`declare` introduces a **scope** — a region of the AST where additional names are available. This is the first scope mechanism in Barnum (steps are namespaced, not scoped — they're global within a config). It's worth examining whether `declare` is a special case of a more general primitive.
+
+### Declare as a restricted continuation
+
+Consider what `declare` does operationally:
+
+1. Evaluate some expressions (the bindings)
+2. Capture their results
+3. Execute a body that can reference those results from any position
+
+This is structurally similar to a **continuation** — specifically, a **delimited continuation** or `shift`/`reset` pair. The bindings compute values, and the body is a continuation that runs with those values available. The "delimited" part is the scope boundary: variables don't leak past the body.
+
+But `declare` is more restricted than a general continuation:
+
+- The body doesn't choose when or whether to execute — it always runs exactly once after all bindings complete.
+- The bindings can't reference the body's output (no feedback loop).
+- The environment is append-only (no mutation, no shadowing within a scope).
+
+A true continuation would allow the body to be invoked zero or more times, with arbitrary values, from arbitrary positions. `declare` is call-by-value with exactly-once execution — closer to a `let` binding in ML than a continuation in Scheme.
+
+### Could Loop be implemented in terms of scopes?
+
+Loop currently uses a special `Continue`/`Break` protocol. Could we instead model loop as a scope that captures a "restart" continuation?
+
+```
+// Hypothetical: loop as scope + continuation
+scope("restart", (restart) =>
+  pipe(
+    body,
+    branch({
+      Continue: restart,  // jump back to scope entry
+      Break: identity(),  // exit scope with value
+    }),
+  ),
+)
+```
+
+This is the `call/cc` or `shift`/`reset` pattern: `scope` captures the continuation "everything after this point", and `restart` re-invokes it. The loop is just repeated invocation of the continuation.
+
+**The key difference**: `declare` captures **values** in the environment. A loop-as-scope would capture **control flow** — the ability to jump back. These are fundamentally different:
+
+- `declare`'s environment is a `Map<Id, Value>` — data.
+- A loop continuation is an `ActionId` + `ParentRef` — a position in the frame tree.
+
+Loop already captures an `ActionId` (the body) and re-enters it. That's not a coincidence — it IS a continuation, just a hardcoded one. The question is whether generalizing this buys us anything.
+
+### What a general scope/continuation primitive would look like
+
+```ts
+// General scope: captures a named continuation
+scope("label", (jump) =>
+  pipe(
+    stepA,
+    // jump("label") restarts from scope entry with a new value
+    branch({
+      Retry: jump,
+      Done: identity(),
+    }),
+  ),
+)
+```
+
+This would subsume:
+- **Loop**: `scope` where one branch calls `jump` (Continue) and one exits (Break).
+- **Early return**: `scope` where some branch calls a different `jump` to exit early.
+- **Restart**: `scope` at the workflow level for retry-from-beginning.
+
+It would NOT subsume `declare`, because `declare` is about **data** (binding values in an environment), not **control flow** (jumping to a program point).
+
+### Should declare be implemented in terms of scope?
+
+No. They solve different problems:
+
+| | `declare` | `scope` (hypothetical) |
+|---|---|---|
+| **Captures** | Values (data) | Program point (control flow) |
+| **Environment** | `Map<Id, Value>` | `ActionId` + frame tree position |
+| **Body executes** | Exactly once | Zero or more times |
+| **Solves** | Prop drilling | Loop, early return, restart |
+
+You could technically implement `declare` using scope + parallel: "scope that evaluates bindings then continues." But this conflates two orthogonal concepts. The scheduler's mental model is cleaner when data (environment) and control (frames) are separate mechanisms.
+
+### Where they DO converge
+
+If we eventually add both `declare` (scoped data) and `scope` (scoped control), they share a common need: the ability to **nest scopes** and **resolve references by walking up the scope chain**. The `Environment` type we're building for `declare` — a flat map extended at each scope entry — is the same data structure you'd use for a scope chain in a general scope mechanism.
+
+This suggests that while `declare` and `scope` are distinct features, their implementation in the scheduler should share the environment infrastructure. The `Environment` type should be designed with this in mind: it should support both value bindings (for `declare`) and potentially continuation references (for a future `scope`), using the same ID-based lookup mechanism.
+
+### Recommendation
+
+Implement `declare` as specified — a standalone AST node with its own environment semantics. If we later add a general `scope`/continuation primitive, the environment infrastructure will generalize naturally. Don't prematurely unify them.
+
+The deeper insight: Barnum's AST nodes map to distinct **semantic categories**, not to a minimal set of primitives. `Chain` is sequencing, `Parallel` is fan-out, `Loop` is iteration, `Declare` is scoped data binding, and a hypothetical `Scope` would be scoped control flow. Each category has its own scheduler logic, error semantics, and debugging story. Reducing them to a single primitive (continuations) would make the scheduler simpler in theory but harder to debug, optimize, and explain in practice.
+
 ## Open questions
 
 1. **Should the pipeline input be implicitly available as a variable?** In the `withResource` example, the original input is just as important as the resource. Should `declare` implicitly bind the input under a special name (e.g., `_` or `input`)? Or is `identity()` in the bindings sufficient?
