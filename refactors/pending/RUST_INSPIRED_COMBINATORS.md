@@ -19,15 +19,33 @@ This is already a tagged union — `branch` dispatches on it naturally.
 |------|--------|----------------|
 | `.map(f)` | `mapOption(action)` | `branch({ Some: pipe(extractField("value"), action, tag("Some")), None: identity() })` |
 | `.and_then(f)` | `flatMapOption(action)` | `branch({ Some: pipe(extractField("value"), action), None: identity() })` — action must return Option |
-| `.unwrap_or(default)` | `unwrapOr(default)` | `branch({ Some: extractField("value"), None: constant(default) })` |
+| `.unwrap_or(default)` | `unwrapOptionOr(default)` | `branch({ Some: extractField("value"), None: default })` — `default` is an action |
 | `.unwrap()` | `unwrap()` | `branch({ Some: extractField("value"), None: panic("unwrap on None") })` — requires error handling |
 | `.is_some()` | N/A | `branch({ Some: constant(true), None: constant(false) })` |
 | `.or(other)` | `optionOr(other)` | `branch({ Some: identity(), None: other })` |
 | `.filter(pred)` | Hard — requires expression evaluation in AST |
 
+### Naming convention
+
+Include "option" in every name: `mapOption`, `flatMapOption`, `unwrapOptionOr`, `optionOr`. This avoids collision with potential Result variants and makes the semantics obvious at the call site.
+
+### `unwrapOr` takes an action, not a raw value
+
+`unwrapOr(constant("anonymous"))`, not `unwrapOr("anonymous")`. The default is an AST node — this keeps the combinator composable (the default can be a computation, not just a literal).
+
+### Postfix operators with `this` constraints
+
+The highest-value Option combinators should be postfix methods on TypedAction, gated by a `this` parameter constraint so they're only callable when `Out` matches the Option shape. See POSTFIX_OPERATORS.md § "Option/Result postfix operators (Phase 2)".
+
+```ts
+action.mapOption(transform)    // only available when Out is Option<T>
+action.unwrapOptionOr(default) // only available when Out is Option<T>
+action.optionOr(fallback)      // only available when Out is Option<T>
+```
+
 ### Which to provide as builtins?
 
-`mapOption`, `flatMapOption`, and `unwrapOr` are the highest value. Each saves 3+ lines of branch/extractField boilerplate. The rest are one-liners over `branch`.
+`mapOption`, `flatMapOption`, and `unwrapOptionOr` are the highest value. Each saves 3+ lines of branch/extractField boilerplate. The rest are one-liners over `branch`. Provide as both prefix functions and postfix methods (gated by `this` constraint).
 
 ## Result<T, E>
 
@@ -43,7 +61,7 @@ Produced by `tryAction(handler)` (see MISSING_LANGUAGE_FEATURES.md).
 | `.map_err(f)` | `mapErr(action)` | `branch({ Ok: identity(), Err: pipe(extractField("value"), action, tag("Err")) })` |
 | `.and_then(f)` | `flatMapOk(action)` | `branch({ Ok: pipe(extractField("value"), action), Err: identity() })` |
 | `.unwrap()` | `unwrapOk()` | `branch({ Ok: extractField("value"), Err: panic("unwrap on Err") })` |
-| `.unwrap_or(default)` | `unwrapOkOr(default)` | `branch({ Ok: extractField("value"), Err: constant(default) })` |
+| `.unwrap_or(default)` | `unwrapOkOr(default)` | `branch({ Ok: extractField("value"), Err: default })` — `default` is an action |
 | `?` operator | `scope` + `exit` | See LOOP_WITH_CLOSURE.md — `done()` / `exit()` is exactly `?` |
 
 ### The `?` operator
@@ -153,7 +171,7 @@ Rust's `collect()` uses `FromIterator` to collect into different container types
 ## Priority
 
 1. **`tryAction` + `scope`/`exit` (the ? operator)** — error handling is the biggest gap
-2. **`mapOption`, `flatMapOption`, `unwrapOr`** — Option combinators used constantly
+2. **`mapOption`, `flatMapOption`, `unwrapOptionOr`** — Option combinators used constantly
 3. **`collectSome` / `filterMap`** — filtering is fundamental to iteration
 4. **`mapOk`, `mapErr`, `propagate`** — Result combinators once tryAction exists
 5. **`partition`** — parallel error handling
