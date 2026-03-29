@@ -442,6 +442,34 @@ describe("postfix operator types", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Postfix .branch() type safety (contravariant case handlers)
+// ---------------------------------------------------------------------------
+
+describe("postfix .branch() type safety", () => {
+  it("rejects non-exhaustive postfix branch", () => {
+    // @ts-expect-error — non-exhaustive: missing "Clean" case
+    classifyErrors.branch({ HasErrors: drop() });
+  });
+
+  it("rejects wrong handler type in postfix branch", () => {
+    // @ts-expect-error — deploy expects { verified: boolean }, not HasErrors variant
+    classifyErrors.branch({ HasErrors: deploy, Clean: drop() });
+  });
+
+  it("accepts exhaustive postfix branch with bare drop()", () => {
+    classifyErrors.branch({
+      HasErrors: drop(),
+      Clean: drop(),
+    });
+  });
+
+  it("rejects .branch() on non-discriminated output", () => {
+    // @ts-expect-error — Out has no kind, .branch() should reject
+    deploy.branch({ A: drop() });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Pipe type errors
 // ---------------------------------------------------------------------------
 
