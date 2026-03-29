@@ -458,16 +458,12 @@ describe("{ kind, value } convention", () => {
 describe("phantom __def on tagged unions", () => {
   it("ClassifyResult variants carry __def phantom field", () => {
     type Def = { HasErrors: TypeError[]; Clean: void };
-    // After TaggedUnion conversion, variants include __def?: Def
-    // @ts-expect-error — ClassifyResult doesn't have __def yet
     assertExact<IsExact<Extract<ClassifyResult, { kind: "HasErrors" }>, { kind: "HasErrors"; value: TypeError[]; __def?: Def }>>();
   });
 
   it("LoopResult variants carry __def phantom field", () => {
     type Def = { Continue: { deployed: boolean }; Break: { stable: true } };
     type LR = LoopResult<{ deployed: boolean }, { stable: true }>;
-    // After TaggedUnion conversion, LoopResult variants include __def
-    // @ts-expect-error — LoopResult doesn't have __def yet
     assertExact<IsExact<Extract<LR, { kind: "Continue" }>, { kind: "Continue"; value: { deployed: boolean }; __def?: Def }>>();
   });
 });

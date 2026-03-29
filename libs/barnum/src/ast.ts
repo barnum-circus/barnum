@@ -128,8 +128,8 @@ export type TypedAction<
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
-  branch<TCases extends { [K in KindOf<Out>]: CaseHandler<UnwrapVariant<Extract<Out, { kind: K }>>> }>(
-    cases: [KindOf<Out>] extends [never] ? never : TCases,
+  branch<TCases extends { [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>> }>(
+    cases: [BranchKeys<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
   flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
@@ -210,11 +210,46 @@ type CaseHandler<TIn = unknown, TOut = unknown, TRefs extends string = never> = 
   __refs?: { _brand: TRefs };
 };
 
+// ---------------------------------------------------------------------------
+// Tagged Union — standard { kind, value } convention with phantom __def
+// ---------------------------------------------------------------------------
+
+/**
+ * Standard tagged union type. Each variant is `{ kind: K; value: TDef[K] }`
+ * with a phantom `__def` field carrying the full variant map. The __def
+ * field enables `.branch()` to decompose the union via simple indexing
+ * (`keyof ExtractDef<Out>` and `ExtractDef<Out>[K]`) instead of
+ * conditional types (`KindOf<Out>` and `Extract<Out, { kind: K }>`).
+ */
+export type TaggedUnion<TDef extends Record<string, unknown>> = {
+  [K in keyof TDef & string]: { kind: K; value: TDef[K]; __def?: TDef };
+}[keyof TDef & string];
+
+/** Extract the variant map definition from a tagged union's phantom __def. */
+export type ExtractDef<T> = T extends { __def?: infer D } ? D : never;
+
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 
 /** Extract the `value` field from a `{ kind, value }` variant. Falls back to T if no `value` field. */
 type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
+
+/**
+ * Branch case keys: prefer ExtractDef (simple keyof indexing) when the
+ * output carries __def. Falls back to KindOf (conditional type) for
+ * outputs without __def.
+ */
+type BranchKeys<Out> =
+  [ExtractDef<Out>] extends [never] ? KindOf<Out> : keyof ExtractDef<Out> & string;
+
+/**
+ * Branch case payload: prefer ExtractDef[K] (simple indexing) when available.
+ * Falls back to UnwrapVariant<Extract<Out, { kind: K }>> for outputs without __def.
+ */
+type BranchPayload<Out, K extends string> =
+  [ExtractDef<Out>] extends [never]
+    ? UnwrapVariant<Extract<Out, { kind: K }>>
+    : K extends keyof ExtractDef<Out> ? ExtractDef<Out>[K] : never;
 
 
 // ---------------------------------------------------------------------------
@@ -536,9 +571,12 @@ export function branch<TCases extends Record<string, Action>>(
   return typedAction({ kind: "Branch", cases: unwrapBranchCases(cases) });
 }
 
-export type LoopResult<TContinue, TBreak> =
-  | { kind: "Continue"; value: TContinue }
-  | { kind: "Break"; value: TBreak };
+type LoopResultDef<TContinue, TBreak> = {
+  Continue: TContinue;
+  Break: TBreak;
+};
+
+export type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue, TBreak>>;
 
 /**
  * Extract the Break value type from a LoopResult union.

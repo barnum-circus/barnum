@@ -24,9 +24,13 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-export type ClassifyJudgmentResult =
-  | { kind: "Approved"; value: void }
-  | { kind: "NeedsWork"; value: string };
+import type { TaggedUnion } from "@barnum/barnum/src/ast.js";
+
+type ClassifyJudgmentResultDef = {
+  Approved: void;
+  NeedsWork: string;
+};
+export type ClassifyJudgmentResult = TaggedUnion<ClassifyJudgmentResultDef>;
 
 // --- Discovery ---
 

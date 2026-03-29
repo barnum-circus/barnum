@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { createHandler } from "../src/handler.js";
-import type { LoopResult } from "../src/ast.js";
+import type { LoopResult, TaggedUnion } from "../src/ast.js";
 
 // ---------------------------------------------------------------------------
 // CI/CD pipeline handlers
@@ -107,9 +107,11 @@ export const typeCheck = createHandler(
 );
 
 // classifyErrors: TypeError[] → ClassifyResult
-export type ClassifyResult =
-  | { kind: "HasErrors"; value: TypeError[] }
-  | { kind: "Clean"; value: void };
+export type ClassifyResultDef = {
+  HasErrors: TypeError[];
+  Clean: void;
+};
+export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
 
 export const classifyErrors = createHandler(
   {

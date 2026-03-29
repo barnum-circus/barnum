@@ -18,9 +18,13 @@ export type TypeError = {
   message: string;
 };
 
-export type ClassifyResult =
-  | { kind: "HasErrors"; value: TypeError[] }
-  | { kind: "Clean"; value: void };
+import type { TaggedUnion } from "@barnum/barnum/src/ast.js";
+
+type ClassifyResultDef = {
+  HasErrors: TypeError[];
+  Clean: void;
+};
+export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
 
 // --- Helpers ---
 
