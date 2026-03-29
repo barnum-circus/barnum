@@ -357,8 +357,8 @@ tryScope(pipe(step1, step2, step3))
 |------|-------------|
 | `libs/barnum/src/ast.ts` | Add `ScopeAction` to `Action` union. Add `scope()` combinator. |
 | `libs/barnum/src/builtins.ts` | Add `exit()` constructor (or provide via scope closure). |
-| `libs/barnum_ast/src/lib.rs` | Add `Action::Scope` variant. Add `ScopeId` newtype. |
-| `libs/barnum_engine/src/workflow_state.rs` | Add `Frame::Scope` variant. Handle Exit tag unwinding. |
+| Rust AST (when it exists) | Add `Action::Scope` variant. Add `ScopeId` newtype. |
+| Rust engine (when it exists) | Add `Frame::Scope` variant. Handle Exit tag unwinding. |
 | `libs/barnum/tests/` | Tests for scope/exit behavior. |
 
 ### Existing functions that don't change

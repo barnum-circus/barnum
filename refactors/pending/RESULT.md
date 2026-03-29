@@ -480,7 +480,7 @@ Result-specific is cleaner for the common case. Generic can be added later if ne
 |------|-------------|
 | `libs/barnum/src/ast.ts` | Add `ResultDef<T, E>`, `Result<T, E>` type aliases. |
 | `libs/barnum/src/builtins.ts` | Add `Result` namespace object with all combinators. |
-| `libs/barnum_ast/src/lib.rs` | If adding `tryAction`: new `Action::Try` variant. |
-| `libs/barnum_engine/src/workflow_state.rs` | If adding `tryAction`: catch handler failures, produce Err variant. |
+| Rust AST (when it exists) | If adding `tryAction`: new `Action::Try` variant. |
+| Rust engine (when it exists) | If adding `tryAction`: catch handler failures, produce Err variant. |
 | `libs/barnum/tests/types.test.ts` | Type-level tests. |
 | `libs/barnum/tests/patterns.test.ts` | Runtime AST shape tests. |

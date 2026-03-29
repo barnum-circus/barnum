@@ -529,8 +529,4 @@ The `Option<T>` type itself is just `TaggedUnion<OptionDef<T>>` — same `{ kind
 
 **TypeScript** (`ast.ts`): Add `| { kind: "CollectSome" }` to `BuiltinKind`.
 
-**Rust AST** (`barnum_ast`): Add `BuiltinKind::CollectSome` variant.
-
-**Rust engine** (`barnum_engine`): Handle `CollectSome` in builtin execution — iterate input array, keep `{ kind: "Some" }` items, extract their `value` fields, return collected array.
-
-Schema files regenerate automatically via pre-commit hook (trivial — new enum variant).
+When a Rust AST crate exists: add `BuiltinKind::CollectSome` variant. When a Rust engine exists: handle `CollectSome` in builtin execution — iterate input array, keep `{ kind: "Some" }` items, extract their `value` fields, return collected array.
