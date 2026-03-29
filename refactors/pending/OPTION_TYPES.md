@@ -353,7 +353,15 @@ Option.collect<T>(): TypedAction<Option<T>[], T[]>
 
 Drop `None` values, unwrap `Some` values. This is Rust's `Iterator::flatten` over options.
 
-**Status**: Needs a new builtin or AST node. `forEach` + `branch` can't reduce array length — the scheduler executes each element independently and collects all results. A `CollectSome` builtin would filter during collection.
+Implemented as a **new builtin handler** (`CollectSome`), not a new AST node. Like `Flatten`, `ExtractField`, and `Tag`, it's a pure data transformation that the engine executes inline. No new control flow, no new frames, no AST changes.
+
+```ts
+// BuiltinKind — just a new variant:
+| { kind: "CollectSome" }
+
+// Engine: takes Option<T>[], returns T[]
+// Iterates the array, keeps items where kind === "Some", extracts value field.
+```
 
 ### `Option.filterMap` — map + collect in one step
 
@@ -363,9 +371,9 @@ Option.filterMap<TIn, TOut>(
 ): TypedAction<TIn[], TOut[]>
 ```
 
-For each element, run `action`. Collect `Some` values, discard `None`. Equivalent to `forEach(action).then(Option.collect())`.
+For each element, run `action`. Collect `Some` values, discard `None`.
 
-**Status**: Sugar over `forEach` + `Option.collect`. Implement `collect` first.
+Desugars to existing AST nodes: `forEach(action).then(Option.collect())`. No new AST needed — just composes `ForEach` + `CollectSome` builtin.
 
 ### `Option.partition` — split into Somes and Nones
 
@@ -373,7 +381,7 @@ For each element, run `action`. Collect `Some` values, discard `None`. Equivalen
 Option.partition<T>(): TypedAction<Option<T>[], { some: T[]; none: void[] }>
 ```
 
-**Status**: Low priority. `collect` covers the common case.
+Also a builtin handler if needed. Low priority — `collect` covers the common case.
 
 ## Querying (boolean predicates)
 
@@ -493,22 +501,17 @@ All Option combinators produce standard AST nodes (Branch, Chain, Invoke). The `
 
 The `Option<T>` type itself is just `TaggedUnion<OptionDef<T>>` — same `{ kind, value, __def? }` shape as any other tagged union. No special runtime support.
 
-### `collect` (collectSome) — needs new builtin
+### `collect` (collectSome) — new builtin handler
 
-`Option.collect()` is the one combinator that can't desugar to existing AST nodes. `forEach` always produces an output per input element. Filtering requires the scheduler to skip elements, which needs a new mechanism.
+`Option.collect()` is a new **builtin handler** (`CollectSome`), same category as `Flatten`, `ExtractField`, `Tag`. Pure data transformation — takes `Option<T>[]`, filters to `Some` variants, extracts values, returns `T[]`. No new AST nodes, no new frames, no new control flow. The engine already executes builtins inline.
 
-Options:
-1. **New builtin `CollectSome`**: A builtin handler that takes `Option<T>[]` and returns `T[]`. Simple, direct.
-2. **New `FilterMap` AST node**: Like `ForEach` but the action returns `Option<T>` and only `Some` values are collected. More general.
-3. **Defer**: Use `forEach(action)` → `Option<T>[]`, then post-process in a handler. Pragmatic but defeats the point of typed combinators.
-
-**Recommendation**: Option 2 (FilterMap AST node). It's the natural primitive — `collect` is just `filterMap(identity())`.
+`Option.filterMap(action)` composes existing primitives: `forEach(action).then(Option.collect())`. No dedicated AST node needed.
 
 ## Files to change
 
 | File | What changes |
 |------|-------------|
-| `libs/barnum/src/ast.ts` | Add `OptionDef<T>`, `Option<T>` type aliases. Add `FilterMap` to `Action` union if implementing `collect`. |
+| `libs/barnum/src/ast.ts` | Add `OptionDef<T>`, `Option<T>` type aliases. Add `CollectSome` to `BuiltinKind`. |
 | `libs/barnum/src/builtins.ts` | Add `Option` namespace object with all tier 1–2 combinators. Each is a thin wrapper around `branch` + existing builtins. |
 | `libs/barnum/tests/types.test.ts` | Type-level tests for Option combinators: `Option.map` preserves Option wrapper, `Option.andThen` chains correctly, `Option.unwrapOr` extracts, etc. |
 | `libs/barnum/tests/patterns.test.ts` | Runtime tests: Option combinators produce correct AST shapes. |
@@ -520,20 +523,14 @@ Options:
 - **`identity()`, `drop()`, `pipe()`, `constant()`** — Used inside Option combinators' desugarings. No change.
 - **`forEach()`** — Works on arrays. No change. `Option.filterMap` composes `forEach` + `Option.collect`.
 
-### New AST/engine work (for `collect` / `filterMap`)
+### New builtin for `collect`
 
-If implementing `Option.collect()`:
+`Option.collect()` is a new builtin handler, not a new AST node. No changes to the Action enum, no new frames, no new engine control flow.
 
-**TypeScript**: Add `FilterMap` to the `Action` union in `ast.ts`:
-```ts
-export interface FilterMapAction {
-  kind: "FilterMap";
-  action: Action;  // must return Option<T>; collects Some values
-}
-```
+**TypeScript** (`ast.ts`): Add `| { kind: "CollectSome" }` to `BuiltinKind`.
 
-**Rust engine** (`barnum_engine`): Add `FilterMap` handling to `WorkflowState`. Similar to `ForEach` but filters: run the action per element, collect only `Some` results, drop `None`. Needs `FlatAction::FilterMap` variant and corresponding `Frame::FilterMap` variant.
+**Rust AST** (`barnum_ast`): Add `BuiltinKind::CollectSome` variant.
 
-**Rust AST** (`barnum_ast`): Add `Action::FilterMap { action: Box<Action> }`.
+**Rust engine** (`barnum_engine`): Handle `CollectSome` in builtin execution — iterate input array, keep `{ kind: "Some" }` items, extract their `value` fields, return collected array.
 
-**Schema regeneration**: `barnum-config-schema.json`, `.zod.ts` files need regenerating after AST changes.
+**Schema regeneration**: Yes, but only because `BuiltinKind` changed (trivial diff).

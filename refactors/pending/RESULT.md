@@ -378,7 +378,7 @@ Result.collect<T, E>(): TypedAction<Result<T, E>[], Result<T[], E>>
 
 If all elements are `Ok`, collect values into `Ok(T[])`. On first `Err`, short-circuit with that error.
 
-This is Rust's `Iterator::collect::<Result<Vec<T>, E>>()`. Needs engine support — can't desugar to existing AST nodes.
+This is Rust's `Iterator::collect::<Result<Vec<T>, E>>()`. Implemented as a builtin handler (`CollectResult`) — same pattern as `CollectSome`.
 
 ### `Result.partition` — Result<T, E>[] → { ok: T[]; err: E[] }
 
