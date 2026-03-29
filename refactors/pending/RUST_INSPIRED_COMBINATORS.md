@@ -1,0 +1,160 @@
+# Rust-Inspired Combinators for Barnum
+
+How to bring Rust's Option, Result, Iterator, and combinator patterns into the workflow algebra.
+
+## Option<T>
+
+Barnum representation: `{ kind: "Some"; value: T } | { kind: "None" }`.
+
+This is already a tagged union — `branch` dispatches on it naturally.
+
+### Constructors
+
+- `some()` = `tag("Some")` — already exists
+- `none()` = `constant({ kind: "None" })` — already noted in OPTION_TYPES.md
+
+### Combinators
+
+| Rust | Barnum | Implementation |
+|------|--------|----------------|
+| `.map(f)` | `mapOption(action)` | `branch({ Some: pipe(extractField("value"), action, tag("Some")), None: identity() })` |
+| `.and_then(f)` | `flatMapOption(action)` | `branch({ Some: pipe(extractField("value"), action), None: identity() })` — action must return Option |
+| `.unwrap_or(default)` | `unwrapOr(default)` | `branch({ Some: extractField("value"), None: constant(default) })` |
+| `.unwrap()` | `unwrap()` | `branch({ Some: extractField("value"), None: panic("unwrap on None") })` — requires error handling |
+| `.is_some()` | N/A | `branch({ Some: constant(true), None: constant(false) })` |
+| `.or(other)` | `optionOr(other)` | `branch({ Some: identity(), None: other })` |
+| `.filter(pred)` | Hard — requires expression evaluation in AST |
+
+### Which to provide as builtins?
+
+`mapOption`, `flatMapOption`, and `unwrapOr` are the highest value. Each saves 3+ lines of branch/extractField boilerplate. The rest are one-liners over `branch`.
+
+## Result<T, E>
+
+Barnum representation: `{ kind: "Ok"; value: T } | { kind: "Err"; value: E }`.
+
+Produced by `tryAction(handler)` (see MISSING_LANGUAGE_FEATURES.md).
+
+### Combinators
+
+| Rust | Barnum | Implementation |
+|------|--------|----------------|
+| `.map(f)` | `mapOk(action)` | `branch({ Ok: pipe(extractField("value"), action, tag("Ok")), Err: identity() })` |
+| `.map_err(f)` | `mapErr(action)` | `branch({ Ok: identity(), Err: pipe(extractField("value"), action, tag("Err")) })` |
+| `.and_then(f)` | `flatMapOk(action)` | `branch({ Ok: pipe(extractField("value"), action), Err: identity() })` |
+| `.unwrap()` | `unwrapOk()` | `branch({ Ok: extractField("value"), Err: panic("unwrap on Err") })` |
+| `.unwrap_or(default)` | `unwrapOkOr(default)` | `branch({ Ok: extractField("value"), Err: constant(default) })` |
+| `?` operator | `scope` + `exit` | See LOOP_WITH_CLOSURE.md — `done()` / `exit()` is exactly `?` |
+
+### The `?` operator
+
+This is the killer feature. In Rust, `?` propagates errors up to the enclosing function. In Barnum, `scope` + `exit` does the same thing:
+
+```ts
+scope(({ exit }) =>
+  pipe(
+    tryAction(step1),
+    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+    tryAction(step2),
+    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+    tryAction(step3),
+    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+  ),
+)
+// output: last Ok value, or first Err value
+```
+
+Sugar: `propagate()` = `branch({ Ok: extractField("value"), Err: exit() })`. Then:
+
+```ts
+scope(({ exit }) =>
+  pipe(
+    tryAction(step1), propagate(exit),
+    tryAction(step2), propagate(exit),
+    tryAction(step3), propagate(exit),
+  ),
+)
+```
+
+Or even: `tryScope` as a primitive that automatically propagates Err:
+
+```ts
+tryScope(
+  pipe(step1, step2, step3),  // each step can "throw" by producing Err
+)
+```
+
+## Iterator / ForEach patterns
+
+`forEach` is Barnum's `map`. What about the rest of the iterator toolkit?
+
+| Rust | Barnum | Status |
+|------|--------|--------|
+| `.map(f)` | `forEach(action)` | Exists |
+| `.filter(pred)` | `filter(action)` | New — action returns boolean, scheduler drops false elements |
+| `.filter_map(f)` | `filterMap(action)` | New — action returns Option, collect Somes |
+| `.flat_map(f)` | `pipe(forEach(action), flatten())` | Exists via composition |
+| `.collect()` | Implicit — `forEach` already collects | Exists |
+| `.fold(init, f)` | No general fold (see MISSING_LANGUAGE_FEATURES.md) | Hard |
+| `.zip(other)` | `parallel(forEach(a), forEach(b))` then element-wise pair | Awkward |
+| `.enumerate()` | `enumerate()` | New — adds index: `[T] → [{ index: number, value: T }]` |
+| `.take(n)` | `take(n)` | New — builtin to slice first N elements |
+| `.skip(n)` | `skip(n)` | New — builtin to skip first N elements |
+| `.any(pred)` / `.all(pred)` | Compose with forEach + branch | Possible |
+| `.chain(other)` | Array concatenation builtin | New |
+| `.count()` | `count()` | New — builtin returning array length |
+
+### Which to provide?
+
+**High value**: `filter` and `filterMap` (= `collectSome`). These come up constantly — "process each file, skip failures."
+
+**Medium value**: `enumerate`, `count`, `take`, `skip`. Common array operations.
+
+**Low value**: `zip`, `fold`, `any`/`all`. Rarely needed in workflows.
+
+### filter implementation
+
+`filter` requires the action to return a boolean, and the scheduler drops elements where the result is false. This is a new AST node:
+
+```ts
+{ kind: "Filter", predicate: Action }
+```
+
+Alternative: `filterMap` is more general. Have the predicate return `Option<T>`, and the scheduler collects `Some` values. This avoids the boolean problem (booleans aren't tagged unions).
+
+```ts
+forEach(
+  pipe(
+    tryAction(processFile),
+    branch({
+      Ok: pipe(extractField("value"), some()),
+      Err: pipe(logError, none()),
+    }),
+  ),
+).then(collectSome())
+```
+
+## From / Into (type conversions)
+
+Rust's `From`/`Into` traits enable implicit conversions. In Barnum, there are no implicit conversions — everything is explicit `pipe(extractField(...), tag(...))`. This is correct for a workflow DSL. Implicit conversions would be confusing.
+
+**Skip this.** Explicit data shaping is a feature, not a bug.
+
+## collect() patterns
+
+Rust's `collect()` uses `FromIterator` to collect into different container types. Barnum's `forEach` always collects into an array. Other collection patterns:
+
+- **collectSome**: `Option<T>[] → T[]` — drop Nones, unwrap Somes
+- **collectOk**: `Result<T, E>[] → T[]` — drop Errs, unwrap Oks
+- **partition**: `Result<T, E>[] → { ok: T[], err: E[] }` — split into successes and failures
+
+`partition` is particularly useful: "run N tasks in parallel, handle successes and failures separately."
+
+## Priority
+
+1. **`tryAction` + `scope`/`exit` (the ? operator)** — error handling is the biggest gap
+2. **`mapOption`, `flatMapOption`, `unwrapOr`** — Option combinators used constantly
+3. **`collectSome` / `filterMap`** — filtering is fundamental to iteration
+4. **`mapOk`, `mapErr`, `propagate`** — Result combinators once tryAction exists
+5. **`partition`** — parallel error handling
+6. **`enumerate`, `count`, `take`, `skip`** — array utilities
