@@ -137,6 +137,37 @@ export function dropResult<TInput>(
 }
 
 // ---------------------------------------------------------------------------
+// WithResource — RAII-style create/action/dispose
+// ---------------------------------------------------------------------------
+
+/**
+ * RAII-style resource management combinator.
+ *
+ * Runs `create` to acquire a resource, `action` to use it, then `dispose`
+ * to clean up. `dispose` receives `action`'s output, so action must thread
+ * resource identity (e.g., a worktree path) through to its result.
+ *
+ * Returns `never` because dispose's result is discarded. The surrounding
+ * pipeline should not depend on withResource's output.
+ *
+ * **Limitation**: the action's result is lost after dispose. Ideally we'd
+ * return TOut while still running dispose, but that requires tuple
+ * destructuring combinators we don't have yet. See RAII_RESOURCE_MANAGEMENT.md.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function withResource<TIn, TResource, TOut>({
+  create,
+  action,
+  dispose,
+}: {
+  create: TypedAction<TIn, TResource>;
+  action: TypedAction<TResource, TOut>;
+  dispose: TypedAction<TOut, any>;
+}): TypedAction<TIn, never> {
+  return chain(create, chain(action, dropResult(dispose)));
+}
+
+// ---------------------------------------------------------------------------
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 
