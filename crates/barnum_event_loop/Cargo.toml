@@ -8,15 +8,15 @@ authors.workspace = true
 
 [dependencies]
 barnum_ast = { path = "../barnum_ast" }
+barnum_builtins = { path = "../barnum_builtins" }
 barnum_engine = { path = "../barnum_engine" }
+barnum_typescript_handler = { path = "../barnum_typescript_handler" }
 intern = { path = "../intern" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-barnum_ast = { path = "../barnum_ast" }
-intern = { path = "../intern" }
 serde_json.workspace = true
 
 [lints]
