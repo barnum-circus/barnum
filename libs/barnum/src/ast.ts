@@ -127,9 +127,9 @@ export type TypedAction<
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
-  /** Dispatch on a tagged union output. `a.branch(cases)` ≡ `pipe(a, branch(cases))`. */
-  branch<TCases extends Record<string, Action>>(
-    cases: TCases,
+  /** Dispatch on a tagged union output. Requires exhaustive case coverage. */
+  branch<TCases extends { [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }>(
+    cases: [KindOf<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
   flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
@@ -183,6 +183,35 @@ export type Pipeable<
   __in?: In;
   __refs?: { _brand: Refs };
 };
+
+/**
+ * Contravariant-only input checking for branch case handler positions.
+ *
+ * Omits __in (covariant input) and __phantom_out_check (contravariant output)
+ * compared to TypedAction/Pipeable. This gives:
+ *   In:  contravariant only (via __phantom_in)
+ *   Out: covariant only (via __phantom_out)
+ *
+ * Why contravariant input: a handler that accepts `unknown` (like drop())
+ * can handle any variant. (input: unknown) => void is assignable to
+ * (input: HasErrors) => void because HasErrors extends unknown.
+ *
+ * Why covariant output: the constraint doesn't restrict output types —
+ * they're inferred from the actual case handlers via ExtractOutput.
+ * TypedAction's invariant __phantom_out_check with Out=unknown would
+ * reject any handler with a specific output type, so we omit it.
+ *
+ * TypedAction is assignable to CaseHandler because CaseHandler only
+ * requires a subset of TypedAction's phantom fields.
+ */
+type CaseHandler<TIn = unknown, TOut = unknown, TRefs extends string = never> = Action & {
+  __phantom_in?: (input: TIn) => void;
+  __phantom_out?: () => TOut;
+  __refs?: { _brand: TRefs };
+};
+
+/** Extract all `kind` string literals from a discriminated union. */
+type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 
 
 // ---------------------------------------------------------------------------

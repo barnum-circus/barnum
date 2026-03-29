@@ -196,15 +196,15 @@ describe("loop", () => {
 
 describe("postfix operators", () => {
   it(".branch() produces Chain → Branch AST", () => {
-    const action = deploy.branch({
-      A: drop(),
-      B: drop(),
+    const action = classifyErrors.branch({
+      HasErrors: drop(),
+      Clean: drop(),
     });
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Invoke");
     expect(chain.rest.kind).toBe("Branch");
-    expect(Object.keys(chain.rest.cases)).toEqual(["A", "B"]);
+    expect(Object.keys(chain.rest.cases)).toEqual(["HasErrors", "Clean"]);
   });
 
   it(".flatten() produces Chain → Flatten AST", () => {
