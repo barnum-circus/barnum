@@ -82,13 +82,10 @@ type ReviewResult =
   | { kind: "RequiresHuman"; diffUrl: string };
 
 // AST interprets intent (inside a scope that provides suspendEffect):
-pipe(
-  invoke(automatedReview),
-  branch({
-    Approved: proceed,
-    RequiresHuman: suspendEffect,  // AST emits the effect, not the handler
-  }),
-)
+invoke(automatedReview).branch({
+  Approved: proceed,
+  RequiresHuman: suspendEffect,  // AST emits the effect, not the handler
+})
 ```
 
 This pattern is already how Barnum works. The `typeCheck -> classifyErrors -> branch` pattern in the demos is exactly intent-returning. The handler classifies errors and returns a tagged union. The AST branches on it. The handler never manipulates the execution graph.
@@ -100,13 +97,10 @@ function invokeWithThrow<TIn, TOut, TError>(
   handler: Pipeable<TIn, Result<TOut, TError>>,
   throwError: Pipeable<TError, never>,
 ) {
-  return pipe(
-    handler,
-    branch({
-      Ok: pick("value"),
-      Err: pipe(pick("error"), throwError),
-    }),
-  );
+  return handler.branch({
+    Ok: pick("value"),
+    Err: pipe(pick("error"), throwError),
+  });
 }
 
 // Usage — throwError comes from the HOAS callback:
