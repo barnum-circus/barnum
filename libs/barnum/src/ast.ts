@@ -459,11 +459,27 @@ export function forEach<In, Out, R extends string = never>(
   return typedAction({ kind: "ForEach", action: action as Action });
 }
 
+/**
+ * Compute the branch input type from its cases. For each case key K,
+ * intersects `{ kind: K }` with the case handler's input type, then
+ * unions all cases. This ensures the branch input is a proper tagged
+ * union with a `kind` discriminant matching the case keys.
+ *
+ * Example: `BranchInput<{ Yes: TypedAction<{x: 1}, ...>, No: TypedAction<{y: 2}, ...> }>`
+ *        = `{ kind: "Yes"; x: 1 } | { kind: "No"; y: 2 }`
+ *
+ * When a case handler uses `any` as input (e.g. stepRef), the intersection
+ * `{ kind: K } & any` collapses to `any`, which is the correct escape hatch.
+ */
+export type BranchInput<TCases> = {
+  [K in keyof TCases & string]: { kind: K } & ExtractInput<TCases[K]>;
+}[keyof TCases & string];
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function branch<TCases extends Record<string, Action>>(
   cases: TCases,
 ): TypedAction<
-  ExtractInput<TCases[keyof TCases & string]>,
+  BranchInput<TCases>,
   ExtractOutput<TCases[keyof TCases & string]>,
   ExtractRefs<TCases[keyof TCases & string]>
 > {

@@ -260,13 +260,18 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Parallel");
   });
 
-  it("branch: input is union of case handler inputs, output is case union", () => {
+  it("branch: input is discriminated union with kind, output is case union", () => {
     const action = branch({
       Yes: deploy,
       No: deploy,
     });
+    // BranchInput enforces { kind: K } for each case key
     assertExact<
-      IsExact<ExtractInput<typeof action>, { verified: boolean }>
+      IsExact<
+        ExtractInput<typeof action>,
+        | { kind: "Yes" } & { verified: boolean }
+        | { kind: "No" } & { verified: boolean }
+      >
     >();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
     expect(action.kind).toBe("Branch");
