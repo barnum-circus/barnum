@@ -1,8 +1,32 @@
-# Deferred: Capabilities, State Monad, Coroutine RPC
+# Deferred: Provider, Capabilities, State Monad, Coroutine RPC
 
 These are extensions to the Handle/Perform architecture that are NOT part of the current implementation plan. Captured here so the ideas aren't lost and so the current design doesn't accidentally preclude them.
 
 None of this should be built until Phases 1-6 are complete and stable.
+
+## Provider (Handle that always Resumes)
+
+A Handle whose handler DAG always produces `{ kind: "Resume", value }`. It intercepts a request effect and provides a dynamically computed value back to the continuation. The continuation resumes as if the Perform returned the provided value.
+
+`declare` is a degenerate provider — the value is pre-computed and stored in the Handle frame's bindings. A general `provider` would compute the value from the payload at interception time.
+
+```ts
+provider(
+  (request) => pipe(
+    fetchFromApi,
+    request,       // Perform — suspends, handler computes a value, continuation resumes with it
+    useResult,     // runs with the provided value
+  ),
+  (payload) => computeResponse(payload),  // handler DAG → { kind: "Resume", value }
+)
+```
+
+Use cases:
+- **Fallback/default values**: Catch a "might fail" signal, resume with a fallback instead of discarding the continuation (unlike tryCatch which discards).
+- **Dependency injection**: Body requests a service; the Handle provides a concrete implementation. Like React's Context.Provider.
+- **Dynamic configuration**: Body requests a config value; the Handle computes it based on environment, feature flags, etc.
+
+No new substrate work needed — this is just a Handle whose handler DAG produces Resume. The only question is whether a named surface combinator (`provider`) adds enough clarity over writing the Handle directly.
 
 ## Capabilities (Object-Capability Security)
 
