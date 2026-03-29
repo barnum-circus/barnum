@@ -9,8 +9,6 @@
  * process exits non-zero. Rust interprets that as a fatal workflow error.
  */
 
-export {};
-
 async function main(): Promise<void> {
   const [modulePath, exportName = "default"] = process.argv.slice(2);
 
@@ -43,9 +41,7 @@ async function main(): Promise<void> {
   process.stdout.write(JSON.stringify(result));
 }
 
-try {
-  await main();
-} catch (error) {
+main().catch((error) => {
   process.stderr.write(`worker: ${error}\n`);
   process.exit(1);
-}
+});

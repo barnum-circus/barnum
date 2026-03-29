@@ -37,6 +37,7 @@
 
     "unicorn/no-array-reduce": "off",
     "unicorn/no-process-exit": "off",
+    "unicorn/prefer-top-level-await": "off",
 
     "typescript/no-explicit-any": "off",
     "typescript/ban-types": "off",
