@@ -135,8 +135,10 @@ export type TypedAction<
   flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop())`. */
   drop(): TypedAction<In, never, Refs>;
-  /** Wrap output as a tagged union member. `a.tag("Ok")` ≡ `pipe(a, tag("Ok"))`. */
-  tag<TKind extends string>(kind: TKind): TypedAction<In, { kind: TKind; value: Out }, Refs>;
+  /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
+  tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
+    kind: TKind,
+  ): TypedAction<In, TaggedUnion<TDef>, Refs>;
   /** Extract a field from the output object. `a.get("name")` ≡ `pipe(a, extractField("name"))`. */
   get<TField extends keyof Out & string>(field: TField): TypedAction<In, Out[TField], Refs>;
   /**

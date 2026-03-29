@@ -107,9 +107,9 @@ await workflowBuilder()
         loop(
           pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
-              applyFeedback.drop(), stepRef("TypeCheck"), recur<any>(),
+              applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>(),
             ),
-            Approved: done<any>(),
+            Approved: done<any, any>(),
           }),
         ),
       ),

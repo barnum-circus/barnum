@@ -170,8 +170,8 @@ describe("loop", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(forEach(fix), recur<any>()),
-              Clean: done<void>(),
+              HasErrors: pipe(forEach(fix), recur<any, void>()),
+              Clean: done<any, void>(),
             }),
           ),
         ),
@@ -217,7 +217,7 @@ describe("postfix operators", () => {
   });
 
   it(".tag() produces Chain → Tag AST", () => {
-    const action = verify.tag("Ok");
+    const action = verify.tag<{ Ok: { verified: boolean } }, "Ok">("Ok");
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Invoke");

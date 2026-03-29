@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  type TaggedUnion,
   type TypedAction,
   type ExtractInput,
   type ExtractOutput,
@@ -288,15 +289,15 @@ describe("combinator types", () => {
     const action = pipe(
       classifyErrors,
       branch({
-        HasErrors: pipe(forEach(fix), recur<any>()),
-        Clean: done<void>(),
+        HasErrors: pipe(forEach(fix), recur<any, void>()),
+        Clean: done<any, void>(),
       }),
     );
     assertExact<
       IsExact<ExtractInput<typeof action>, TypeError[]>
     >();
     // Branch output is the union of recur's Continue and done's Break.
-    // recur<any>() uses `any` as the invariance escape hatch for loop bodies.
+    // recur<any, void>() uses `any` as the invariance escape hatch for loop bodies.
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
@@ -314,8 +315,8 @@ describe("combinator types", () => {
         typeCheck,
         classifyErrors,
         branch({
-          HasErrors: pipe(forEach(fix), recur<any>()),
-          Clean: done<void>(),
+          HasErrors: pipe(forEach(fix), recur<any, void>()),
+          Clean: done<any, void>(),
         }),
       ),
     );
@@ -339,8 +340,8 @@ describe("combinator types", () => {
           typeCheck,
           classifyErrors,
           branch({
-            HasErrors: pipe(forEach(fix), recur<any>()),
-            Clean: done<void>(),
+            HasErrors: pipe(forEach(fix), recur<any, void>()),
+            Clean: done<any, void>(),
           }),
         ),
       ),
@@ -393,13 +394,14 @@ describe("postfix operator types", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it(".tag(): wraps output in tagged union", () => {
-    const action = verify.tag("Success");
+  it(".tag(): wraps output in tagged union with __def", () => {
+    type Def = { Success: { verified: boolean }; Failure: string };
+    const action = verify.tag<Def, "Success">("Success");
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        { kind: "Success"; value: { verified: boolean } }
+        TaggedUnion<Def>
       >
     >();
     expect(action.kind).toBe("Chain");
@@ -427,8 +429,8 @@ describe("postfix operator types", () => {
       typeCheck,
       classifyErrors,
     ).branch({
-      HasErrors: pipe(forEach(fix), recur<any>()),
-      Clean: done<void>(),
+      HasErrors: pipe(forEach(fix), recur<any, void>()),
+      Clean: done<any, void>(),
     });
     expect(action.kind).toBe("Chain");
   });

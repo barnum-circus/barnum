@@ -85,8 +85,8 @@ describe("named steps", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(forEach(fix), recur<any>()),
-              Clean: done<void>(),
+              HasErrors: pipe(forEach(fix), recur<any, void>()),
+              Clean: done<any, void>(),
             }),
           ),
         ),
@@ -116,8 +116,8 @@ describe("named steps", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(forEach(fix), recur<any>()),
-              Clean: done<void>(),
+              HasErrors: pipe(forEach(fix), recur<any, void>()),
+              Clean: done<any, void>(),
             }),
           ),
         ),
@@ -321,8 +321,8 @@ describe("kitchen sink", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(forEach(fix), recur<any>()),
-              Clean: done<void>(),
+              HasErrors: pipe(forEach(fix), recur<any, void>()),
+              Clean: done<any, void>(),
             }),
           ),
         ),

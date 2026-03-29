@@ -1,4 +1,4 @@
-import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type LoopResult, type Pipeable, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -42,12 +42,22 @@ export function drop<TValue>(): TypedAction<TValue, never> {
 }
 
 // ---------------------------------------------------------------------------
-// Tag — wrap input as { kind, value }
+// Tag — wrap input as a tagged union variant
 // ---------------------------------------------------------------------------
 
-export function tag<TValue, TKind extends string>(
+/**
+ * Wrap input as a tagged union member. Requires the full variant map TDef
+ * so the output type carries __def for branch decomposition.
+ *
+ * Usage: tag<{ Ok: string; Err: number }, "Ok">("Ok")
+ *        input: string → output: TaggedUnion<{ Ok: string; Err: number }>
+ */
+export function tag<
+  TDef extends Record<string, unknown>,
+  TKind extends keyof TDef & string,
+>(
   kind: TKind,
-): TypedAction<TValue, { kind: TKind; value: TValue }> {
+): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
@@ -57,23 +67,30 @@ export function tag<TValue, TKind extends string>(
 // ---------------------------------------------------------------------------
 // Loop signals
 //
-// Return individual union members ({ kind: "Continue" } or { kind: "Break" })
-// rather than the full LoopResult<TContinue, TBreak> with `never` in the
-// opposite slot. This lets branch unify Out as the union of both members.
+// Both recur and done produce the full LoopResult<TContinue, TBreak> output
+// type so the __def phantom field carries the complete variant map. Both type
+// parameters are required — this ensures the branch output is a proper
+// TaggedUnion with consistent __def across all cases.
 // ---------------------------------------------------------------------------
 
-export function recur<TValue>(): TypedAction<
-  TValue,
-  { kind: "Continue"; value: TValue }
+export function recur<TContinue, TBreak>(): TypedAction<
+  TContinue,
+  LoopResult<TContinue, TBreak>
 > {
-  return tag("Continue");
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
+  });
 }
 
-export function done<TValue>(): TypedAction<
-  TValue,
-  { kind: "Break"; value: TValue }
+export function done<TContinue, TBreak>(): TypedAction<
+  TBreak,
+  LoopResult<TContinue, TBreak>
 > {
-  return tag("Break");
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } },
+  });
 }
 
 // ---------------------------------------------------------------------------

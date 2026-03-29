@@ -59,9 +59,9 @@ await workflowBuilder()
         pipe(typeCheck, classifyErrors).branch({
           HasErrors: pipe(
             forEach(fix).drop(),
-            recur<any>(),
+            recur<any, any>(),
           ),
-          Clean: done<any>(),
+          Clean: done<any, any>(),
         }),
       ),
     ),
