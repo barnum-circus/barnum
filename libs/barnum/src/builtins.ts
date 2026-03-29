@@ -1,4 +1,4 @@
-import { type Action, type ChainableAction, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -145,9 +145,8 @@ export function extractIndex<
 // DropResult — run an action for side effects, discard its output
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function dropResult<TInput>(
-  action: TypedAction<TInput, any>,
+export function dropResult<TInput, TOutput>(
+  action: TypedAction<TInput, TOutput>,
 ): TypedAction<TInput, never> {
   return chain(action, drop());
 }
@@ -161,26 +160,16 @@ export function dropResult<TInput>(
  *
  * Runs `create` to acquire a resource, then merges the resource with the
  * original input into a flat object (`TResource & TIn`) for the action.
- * After the action completes, `dispose` receives the merged object for
- * cleanup (it can access resource fields it needs). The overall combinator
- * returns the action's output.
+ * After the action completes, `dispose` receives the resource for cleanup.
+ * The overall combinator returns the action's output.
  *
  * ```
  * TIn → create → TResource
  *     → merge(TResource, TIn) → TResource & TIn
  *     → action(TResource & TIn) → TOut
- *     → dispose(TResource & TIn) → (discarded)
+ *     → dispose(TResource) → (discarded)
  *     → TOut
  * ```
- *
- * The action receives a flat merged object so handlers can access both
- * resource fields (e.g. worktreePath, branch) and input fields (e.g.
- * file, description) without manual merge().
- *
- * TIn is inferred from create's input type (which may be narrower than
- * the full pipeline data type). The return type uses `__in?: any` to
- * bypass __in invariance — pipe's contravariant __phantom_in check is
- * sufficient to verify the pipeline data is a supertype of create's input.
  */
 export function withResource<
   TIn extends Record<string, unknown>,
@@ -191,12 +180,9 @@ export function withResource<
   action,
   dispose,
 }: {
-  create: ChainableAction<TIn, TResource>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  action: ChainableAction<any, TOut>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  dispose: ChainableAction<NoInfer<TResource>, any>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  create: TypedAction<TIn, TResource>;
+  action: TypedAction<TResource & TIn, TOut>;
+  dispose: TypedAction<TResource, unknown>;
 }): TypedAction<TIn, TOut> {
   const mergeBuiltin: Action = {
     kind: "Invoke",
@@ -209,8 +195,7 @@ export function withResource<
       kind: "Parallel",
       actions: [create as Action, identity() as Action],
     }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    typedAction<any, TResource & TIn>(mergeBuiltin),
+    typedAction<[TResource, TIn], TResource & TIn>(mergeBuiltin),
   );
 
   // Step 2: parallel(action, identity) → [TOut, TResource & TIn]
@@ -221,33 +206,22 @@ export function withResource<
   });
 
   // Step 3: parallel(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
-  // Dispose receives the full merged object; TResource & TIn extends TResource,
-  // so the dispose handler can access all resource fields it needs.
   const disposeAndKeepResult = typedAction<[TOut, TResource & TIn], [TOut, unknown]>({
     kind: "Parallel",
     actions: [
-      extractIndex(0) as Action,
+      extractIndex<[TOut, TResource & TIn], 0>(0) as Action,
       chain(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        extractIndex(1) as TypedAction<any, TResource & TIn>,
-        dispose as Action as TypedAction<TResource & TIn, unknown>,
+        extractIndex<[TOut, TResource & TIn], 1>(1),
+        dispose as TypedAction<TResource & TIn, unknown>,
       ) as Action,
     ],
   });
 
   // Step 4: extractIndex(0) → TOut
-  //
-  // Cast to `{ __in?: any }` to bypass __in invariance. TIn is inferred
-  // from create's input (e.g. {description: string}), which is narrower
-  // than the actual pipeline data (e.g. Refactor). Pipe's contravariant
-  // __phantom_in check correctly verifies compatibility; __in's covariant
-  // check would incorrectly reject the wider pipeline type.
   return chain(
     chain(chain(acquireAndMerge, actionAndKeepMerged), disposeAndKeepResult),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    extractIndex(0) as TypedAction<any, TOut>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ) as TypedAction<TIn, TOut> & { __in?: any };
+    extractIndex<[TOut, unknown], 0>(0),
+  ) as TypedAction<TIn, TOut>;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,25 +230,19 @@ export function withResource<
 
 /**
  * Run `action` on the input, then merge the action's output fields back
- * into the original input object. Replaces the verbose
- * `parallel(action, identity()) → merge()` pattern.
- *
- * `TInput` is inferred from the pipeline context (not from the action's
- * input type), so augment preserves the full pipeline type. The action's
- * input is unchecked at compile time — runtime zod validators catch
- * mismatches.
+ * into the original input object. The action must accept exactly `TInput`.
+ * Use `pick` inside the action's pipe if the inner handler needs a subset.
  *
  * Example:
- *   augment(pipe(extractField("file"), migrate({ to: "Typescript" })))
- *   // { file, outputPath } → { content, file, outputPath }
+ *   augment(pipe(pick("file"), migrate))
+ *   // { file, outputPath } → { file, outputPath, content, migrated }
  */
 export function augment<
   TInput extends Record<string, unknown>,
   TOutput extends Record<string, unknown>,
   TRefs extends string = never,
 >(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  action: TypedAction<any, TOutput, TRefs>,
+  action: TypedAction<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, TInput & TOutput, TRefs> {
   // Construct parallel(action, identity()) inline to avoid circular import
   // with parallel.ts (which imports constant from this file).
@@ -293,32 +261,20 @@ export function augment<
 
 /**
  * Run `action` on the input for its side effects, then discard the action's
- * output and return the original input unchanged. Useful for side-effectful
- * steps (type-checking, committing) in a pipeline that needs to preserve
- * context.
- *
- * `TInput` is inferred from the pipeline context (not from the action's
- * input type), so tap preserves the full pipeline type through side-effectful
- * steps. The action's input is unchecked at compile time — runtime zod
- * validators catch mismatches.
+ * output and return the original input unchanged. The action must accept
+ * exactly `TInput`. Use `pick` inside the action's pipe if the inner
+ * handler needs a subset.
  *
  * Constraint: input must be an object (uses augment internally, which
  * relies on parallel + merge).
  *
  * Example:
- *   pipe(tap(implement), tap(commit), createPR)
- *   // context flows through implement and commit unchanged
+ *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
 export function tap<TInput extends Record<string, unknown>>(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  action: TypedAction<any, any, any>,
+  action: TypedAction<TInput, unknown>,
 ): TypedAction<TInput, TInput> {
-  // Replace action's output with {} via constant({}), then augment.
-  // augment runs parallel(voided, identity()) → merge().
-  // merge([{}, input]) = input, so the original value passes through.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const voided = chain(action, constant({}) as TypedAction<any, Record<string, unknown>>);
+  const voided = chain(action, constant({}) as TypedAction<unknown, Record<string, unknown>>);
   return augment(voided) as TypedAction<TInput, TInput>;
 }
 

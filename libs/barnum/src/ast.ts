@@ -112,22 +112,9 @@ export type TypedAction<
   __phantom_out?: () => Out;
   __in?: In;
   __refs?: { _brand: Refs };
-  /**
-   * Chain this action with another. `a.then(b)` ≡ `chain(a, b)`.
-   *
-   * Uses ChainableAction (not TypedAction) for `next` to avoid making Out
-   * invariant. TypedAction's `__in` field is covariant, but `.then()` puts
-   * Out in the In position of next. When TypeScript checks assignability of
-   * two TypedActions, it compares `.then()` methods structurally, recursing
-   * into the parameter type. If that parameter were full TypedAction, the
-   * `__in` field would create a covariant occurrence of Out that conflicts
-   * with the contravariant `__phantom_in`, making Out invariant.
-   *
-   * ChainableAction omits `__in`, breaking the recursive invariance while
-   * still type-checking next's input/output compatibility.
-   */
+  /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext, TRefs2 extends string = never>(
-    next: ChainableAction<Out, TNext, TRefs2>,
+    next: TypedAction<Out, TNext, TRefs2>,
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
@@ -154,24 +141,6 @@ export type TypedAction<
   augment(): TypedAction<In, In & Out, Refs>;
 };
 
-/**
- * TypedAction without `__in` — used as the parameter type for `.then()`.
- *
- * Omitting `__in` prevents recursive structural comparison from making Out
- * invariant. See the `.then()` doc on TypedAction for the full explanation.
- *
- * TypedAction values are assignable to ChainableAction (superset of fields),
- * so callers can pass any TypedAction to `.then()`.
- */
-export type ChainableAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
-  __phantom_in?: (input: In) => void;
-  __phantom_out?: () => Out;
-  __refs?: { _brand: Refs };
-};
 
 // ---------------------------------------------------------------------------
 // typedAction — attach .then() and .forEach() as non-enumerable methods
