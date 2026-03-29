@@ -53,12 +53,13 @@ pipe(
 
 **The problem**: If a handler throws, the entire workflow fails. There's no try/catch, no recovery, no partial failure handling.
 
-**How it might work**: A `tryAction` combinator that catches handler errors and returns a Result-like discriminated union:
+**How it might work**: A `tryAction` combinator that catches handler errors and returns a Result (per TAGGED_UNION_CONVENTION.md, all unions use `{ kind, value }`):
 
 ```ts
 pipe(
   tryAction(riskyHandler),
-  // produces { kind: "Ok", value: result } | { kind: "Err", value: error }
+  // produces Result<T, E> = { kind: "Ok"; value: T } | { kind: "Err"; value: E }
+  // branch auto-unwraps: Ok handler receives T, Err handler receives E
   branch({
     Ok: processResult,
     Err: handleError,

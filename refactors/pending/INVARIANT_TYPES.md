@@ -311,7 +311,7 @@ Variables don't carry extra fields because they're individually bound. This may 
 
 ## Open questions
 
-1. **Should `branch` case inputs be invariant?** Currently each branch case receives `{ kind: K }` (just the tag). If the original tagged union was `{ kind: "HasErrors", errors: string[] } | { kind: "Clean" }`, the HasErrors case receives `{ kind: "HasErrors", errors: string[] }` — including the value field. With invariance, the case handler must accept exactly this type. This seems fine.
+1. **Should `branch` case inputs be invariant?** Per TAGGED_UNION_CONVENTION.md, all unions use `{ kind: K; value: T }` and branch auto-unwraps `value`. After auto-unwrap, the HasErrors case handler receives `TypeError[]` (the payload), not the full variant. Invariance on the payload type means the handler must accept exactly `TypeError[]`. This is fine — the handler is typed against the payload, not the tagged wrapper. See also CONTRAVARIANT_CASE_HANDLERS.md for contravariant case handler checking.
 
 2. **`stepRef` return type**: Currently `TypedAction<any, any, N>`. Since step references are for mutual recursion (types unknown at definition time), they may need to remain `any`. This is a deliberate escape hatch, not a variance workaround.
 

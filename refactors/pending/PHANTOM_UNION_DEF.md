@@ -154,32 +154,45 @@ Falls back to `Record<string, Action>` when `ExtractDef<Out>` is `never` (non-`T
 
 ### Commit 1: Add failing tests
 
+The tests should demonstrate that branch inference actually improves — not just that types were added. The key behavioral change: `tag()` produces output that `.branch()` can decompose exhaustively via `__def`, and `.branch()` uses `ExtractDef` for simpler inference.
+
 Add to `libs/barnum/tests/types.test.ts`:
 
 ```ts
-describe("phantom __def", () => {
-  it("ClassifyResult carries __def with full variant map", () => {
-    type Def = Extract<ClassifyResult, { kind: "HasErrors" }> extends { __def?: infer D } ? D : never;
-    // @ts-expect-error — remove after implementing: ClassifyResult doesn't carry __def yet
-    assertExact<IsExact<Def, { HasErrors: TypeError[]; Clean: void }>>();
+describe("phantom __def: branch inference via ExtractDef", () => {
+  it("tag() output enables exhaustive .branch() decomposition", () => {
+    type ResultDef = { Ok: string; Err: number };
+
+    // tag() knows the full union. Its output is TaggedUnion<ResultDef>.
+    // .branch() derives case keys and payload types from __def on the output —
+    // it requires both "Ok" and "Err" cases because __def carries the full definition.
+    // @ts-expect-error — remove after implementing: tag<TDef, K>() doesn't exist yet
+    const tagged: TypedAction<string, TaggedUnion<ResultDef>> = tag<ResultDef, "Ok">("Ok");
+
+    // @ts-expect-error — remove after implementing: .branch() can't decompose via __def yet
+    tagged.branch({
+      Ok: drop(),
+      Err: drop(),
+    });
   });
 
-  it("tag() knows the full union", () => {
-    type ResultDef = { Ok: { verified: boolean }; Err: string };
-    // @ts-expect-error — remove after implementing: tag() doesn't accept TDef yet
-    const action = tag<ResultDef, "Ok">("Ok");
-  });
-
-  it("LoopResult carries __def", () => {
-    type LR = LoopResult<number, string>;
-    type Def = LR extends { __def?: infer D } ? D : never;
-    // @ts-expect-error — remove after implementing: LoopResult doesn't use TaggedUnion yet
-    assertExact<IsExact<Def, { Continue: number; Break: string }>>();
+  it(".branch() output type inferred through ExtractDef (no conditional types)", () => {
+    // After __def, .branch() constraint uses keyof ExtractDef<Out> instead of KindOf<Out>.
+    // This test verifies output type inference works through the simpler path.
+    // forEach(fix) output is void[], drop() output is never. Union is void[].
+    const action = classifyErrors.branch({
+      HasErrors: forEach(fix),
+      Clean: drop(),
+    });
+    // @ts-expect-error — remove after implementing: output type inference via ExtractDef-based .branch()
+    assertExact<IsExact<ExtractOutput<typeof action>, void[]>>();
   });
 });
 ```
 
-All three tests: `@ts-expect-error` suppresses real errors (types don't exist / don't match yet). Tests are "broken" in that the assertions would fail without the suppression.
+Test 1: Currently `tag<ResultDef, "Ok">()` doesn't exist → `@ts-expect-error` suppresses. After implementing, tag produces `TaggedUnion<ResultDef>` with `__def`, `.branch()` decomposes it exhaustively, and the test compiles.
+
+Test 2: After `__def`, `.branch()` infers output types through `ExtractDef<Out>[K]` (plain index) instead of `UnwrapVariant<Extract<Out, { kind: K }>>` (nested conditionals). The assertion verifies the inference chain works end-to-end.
 
 ### Commit 2: Implement
 

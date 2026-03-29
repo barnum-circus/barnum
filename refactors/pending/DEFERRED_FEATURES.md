@@ -8,26 +8,26 @@ Current builtins are flat exports from `builtins.ts`: `identity`, `constant`, `m
 
 Proposed namespacing via exported objects:
 
-### `result` — AttemptResult combinators
+### `result` — Result combinators
 
-For working with `AttemptResult<T>` (produced by `attempt()`):
+For working with `Result<T, E>` (per TAGGED_UNION_CONVENTION.md: `{ kind: "Ok"; value: T } | { kind: "Err"; value: E }`). Branch auto-unwraps `value`, so case handlers receive payloads directly. See RUST_INSPIRED_COMBINATORS.md for full combinator table.
 
 ```ts
 import { result } from "barnum/builtins";
 
-// Extract the Ok value, discarding Err (AttemptResult<T> → T | null)
+// Extract the Ok value, discarding Err (Result<T, E> → T | null)
 result.ok()
 
-// Extract the Err value, discarding Ok (AttemptResult<T> → unknown | null)
+// Extract the Err value, discarding Ok (Result<T, E> → E | null)
 result.err()
 
-// Unwrap Ok or throw (AttemptResult<T> → T)
+// Unwrap Ok or throw (Result<T, E> → T)
 result.unwrap()
 
-// Map over the Ok value (AttemptResult<T> → AttemptResult<U>)
+// Map over the Ok value (Result<T, E> → Result<U, E>)
 result.map(action)
 
-// Provide a fallback for Err (AttemptResult<T> → T)
+// Provide a fallback for Err (Result<T, E> → T)
 result.unwrapOr(fallbackAction)
 ```
 

@@ -166,15 +166,18 @@ Cancellation of the losing branches means: when one branch completes, the runtim
 
 ## Retry with backoff (updated — no Attempt)
 
+> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. Branch auto-unwraps `value` — case handlers receive the payload directly.
+
 ```typescript
 loop(
   pipe(
     callExternalApi(),
-    // Handler returns a Result: { kind: "Ok", value } or { kind: "Err", error }
+    // Handler returns a Result: { kind: "Ok"; value: T } | { kind: "Err"; value: E }
+    // Branch auto-unwraps: Ok handler receives T, Err handler receives E
     branch({
-      Ok: done(),          // Break the loop with the success value
+      Ok: done(),          // receives success value, breaks the loop
       Err: pipe(
-        computeBackoff(),  // error -> { delayMs: number }
+        computeBackoff(),  // receives error value, produces { delayMs: number }
         extractField("delayMs"),
         delay(???),        // dynamic duration — see open question
         recur(),           // Continue the loop

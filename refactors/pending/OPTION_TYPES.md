@@ -1,5 +1,7 @@
 # Option types: representing optional values in barnum pipelines
 
+> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. With PHANTOM_UNION_DEF.md, they use `TaggedUnion<Def>` for phantom `__def`. Branch auto-unwraps `value` — case handlers receive the payload directly.
+
 ## Problem
 
 Many real workflows need to express "this step might not produce a value." Examples:
@@ -9,24 +11,29 @@ Many real workflows need to express "this step might not produce a value." Examp
 - A lookup handler might not find a matching record
 - A validation step might accept or reject input
 
-Currently, handlers return arrays (empty = no results) or discriminated unions (`{ kind: "Found", value } | { kind: "NotFound" }`). There's no standardized option type or combinators that operate on it.
+Currently, handlers return arrays (empty = no results) or discriminated unions. There's no standardized option type or combinators that operate on it.
 
 ## Proposed option type
 
 ```ts
-type Option<T> =
-  | { kind: "Some"; value: T }
-  | { kind: "None" };
+type OptionDef<T> = {
+  Some: T;
+  None: void;
+};
+
+type Option<T> = TaggedUnion<OptionDef<T>>;
+// = { kind: "Some"; value: T; __def?: OptionDef<T> }
+// | { kind: "None"; value: void; __def?: OptionDef<T> }
 ```
 
-This is a discriminated union — it works directly with `branch`:
+This is a tagged union — it works directly with `branch`. Branch auto-unwraps `value`, so case handlers receive the payload directly:
 
 ```ts
 pipe(
   lookup,
   branch({
-    Some: pipe(extractField("value"), process),
-    None: fallback,
+    Some: process,   // receives T directly (auto-unwrapped)
+    None: fallback,  // receives void
   }),
 )
 ```
@@ -36,14 +43,14 @@ pipe(
 ### `some` / `none` — constructors
 
 ```ts
-function some<T>(): TypedAction<T, { kind: "Some"; value: T }>
-// Equivalent to: tag("Some")
+function some<T>(): TypedAction<T, Option<T>>
+// Equivalent to: tag<OptionDef<T>, "Some">("Some")
 
-function none(): TypedAction<never, { kind: "None" }>
-// Equivalent to: constant({ kind: "None" })
+function none<T>(): TypedAction<unknown, Option<T>>
+// Produces { kind: "None"; value: undefined } regardless of input
 ```
 
-`some` is just `tag("Some")`. `none` is just `constant({ kind: "None" })` — it's a fixed value with no dependency on pipeline input.
+`some` is `tag<OptionDef<T>, "Some">("Some")` — tag knows the full union. `none` produces a fixed `{ kind: "None"; value: undefined }`.
 
 ### `filterMap` — map + flatten options
 
@@ -60,19 +67,19 @@ Desugars to: `forEach(action)` → `Option<Out>[]` → new `collectSome` builtin
 ### `unwrapOr` — provide a default for None
 
 ```ts
-function unwrapOr<T>(defaultValue: T): TypedAction<Option<T>, T>
+function unwrapOr<T>(defaultAction: TypedAction<void, T>): TypedAction<Option<T>, T>
 ```
 
-Desugars to:
+Takes an **action** (AST), not a raw value. Use `unwrapOr(constant("anonymous"))`, not `unwrapOr("anonymous")`.
+
+Desugars to (with branch auto-unwrap):
 
 ```ts
 branch({
-  Some: extractField("value"),
-  None: pipe(drop(), constant(defaultValue)),
+  Some: identity(),  // receives T directly
+  None: defaultAction,  // receives void, produces T
 })
 ```
-
-Since this is just a branch, it might not need a dedicated combinator. But it's common enough that a named version improves readability.
 
 ## Where option types would be used
 
@@ -88,7 +95,7 @@ Option types shine for single-value lookups:
 pipe(
   lookupUser,
   branch({
-    Some: pipe(extractField("value"), processUser),
+    Some: processUser,  // receives User directly (auto-unwrapped)
     None: pipe(drop(), constant({ error: "not found" })),
   }),
 )
@@ -100,7 +107,7 @@ pipe(
 pipe(
   validate,           // T → Option<ValidatedT>
   branch({
-    Some: pipe(extractField("value"), save),
+    Some: save,        // receives ValidatedT directly
     None: pipe(drop(), logRejection),
   }),
 )
@@ -108,13 +115,13 @@ pipe(
 
 ## Implementation priority
 
-Low. The discriminated union pattern (`{ kind: "Some" | "None" }`) already works with `branch`. The builtins (`some`, `none`, `filterMap`, `unwrapOr`) are convenience — they don't enable new capabilities, just reduce boilerplate.
+Low. The discriminated union pattern already works with `branch`. The builtins (`some`, `none`, `filterMap`, `unwrapOr`) are convenience — they don't enable new capabilities, just reduce boilerplate.
 
 The main value is standardization: if all handlers use `Option<T>` instead of ad-hoc unions, combinators like `filterMap` and `unwrapOr` compose naturally.
 
 ## Interaction with other features
 
-- **`branch`**: Option types are just discriminated unions, so `branch` handles them directly.
-- **`loop`**: `LoopResult<TContinue, TBreak>` is structurally similar (`Continue`/`Break` vs `Some`/`None`). Could share implementation.
+- **`branch`**: Option types are tagged unions, so `branch` handles them directly. Auto-unwraps `value`.
+- **`loop`**: `LoopResult<TContinue, TBreak>` is structurally similar (`Continue`/`Break` vs `Some`/`None`). Both use `TaggedUnion`.
 - **`forEach`**: Arrays of options need `collectSome` or `filterMap` to extract values.
 - **Thunk builtins**: `some` and `none` are zero-arg generics, so they benefit from the thunk pattern: `pipe(validate, branch({ Some: ..., None: none }))`.

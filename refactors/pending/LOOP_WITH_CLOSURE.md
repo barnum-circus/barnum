@@ -1,5 +1,7 @@
 # Loop with closure providing scoped recur/done
 
+> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md. Branch auto-unwraps `value` — case handlers receive the payload directly. `LoopResult` uses `TaggedUnion<LoopResultDef>` per PHANTOM_UNION_DEF.md.
+
 ## Problem
 
 `recur()` and `done()` are top-level exports. They can be used anywhere in the AST, not just inside a `loop` body. This creates impossible states — using `recur()` outside a loop compiles fine in TypeScript but fails at runtime with a "no enclosing loop" error.
@@ -12,8 +14,8 @@ loop(({ recur, done }) =>
     typeCheck,
     classifyErrors,
     branch({
-      HasErrors: pipe(forEach(fix), drop(), recur()),
-      Clean: done(),
+      HasErrors: pipe(forEach(fix), drop(), recur()),  // receives TypeError[] (auto-unwrapped)
+      Clean: done(),  // receives void (auto-unwrapped)
     }),
   ),
 )

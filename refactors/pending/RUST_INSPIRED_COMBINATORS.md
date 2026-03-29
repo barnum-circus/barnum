@@ -2,25 +2,32 @@
 
 How to bring Rust's Option, Result, Iterator, and combinator patterns into the workflow algebra.
 
+> **Convention**: All discriminated unions use `{ kind: K; value: T }` form per TAGGED_UNION_CONVENTION.md, defined via `TaggedUnion<Def>` per PHANTOM_UNION_DEF.md. Branch auto-unwraps `value` — case handlers receive the payload directly.
+
 ## Option<T>
 
-Barnum representation: `{ kind: "Some"; value: T } | { kind: "None" }`.
+```ts
+type OptionDef<T> = { Some: T; None: void };
+type Option<T> = TaggedUnion<OptionDef<T>>;
+```
 
-This is already a tagged union — `branch` dispatches on it naturally.
+This is a tagged union — `branch` dispatches on it naturally. Branch auto-unwraps `value`, so `Some` handler receives `T` directly and `None` handler receives `void`.
 
 ### Constructors
 
-- `some()` = `tag("Some")` — already exists
-- `none()` = `constant({ kind: "None" })` — already noted in OPTION_TYPES.md
+- `some()` = `tag<OptionDef<T>, "Some">("Some")` — tag knows the full union
+- `none()` = produces `{ kind: "None"; value: undefined }` — fixed value
 
 ### Combinators
 
+Branch auto-unwraps `value`, so no `extractField("value")` needed in implementations:
+
 | Rust | Barnum | Implementation |
 |------|--------|----------------|
-| `.map(f)` | `mapOption(action)` | `branch({ Some: pipe(extractField("value"), action, tag("Some")), None: identity() })` |
-| `.and_then(f)` | `flatMapOption(action)` | `branch({ Some: pipe(extractField("value"), action), None: identity() })` — action must return Option |
-| `.unwrap_or(default)` | `unwrapOptionOr(default)` | `branch({ Some: extractField("value"), None: default })` — `default` is an action |
-| `.unwrap()` | `unwrap()` | `branch({ Some: extractField("value"), None: panic("unwrap on None") })` — requires error handling |
+| `.map(f)` | `mapOption(action)` | `branch({ Some: pipe(action, tag<OptionDef<U>, "Some">("Some")), None: identity() })` |
+| `.and_then(f)` | `flatMapOption(action)` | `branch({ Some: action, None: identity() })` — action must return Option |
+| `.unwrap_or(default)` | `unwrapOptionOr(default)` | `branch({ Some: identity(), None: default })` — `default` is an action |
+| `.unwrap()` | `unwrap()` | `branch({ Some: identity(), None: panic("unwrap on None") })` — requires error handling |
 | `.is_some()` | N/A | `branch({ Some: constant(true), None: constant(false) })` |
 | `.or(other)` | `optionOr(other)` | `branch({ Some: identity(), None: other })` |
 | `.filter(pred)` | Hard — requires expression evaluation in AST |
@@ -49,40 +56,45 @@ action.optionOr(fallback)      // only available when Out is Option<T>
 
 ## Result<T, E>
 
-Barnum representation: `{ kind: "Ok"; value: T } | { kind: "Err"; value: E }`.
+```ts
+type ResultDef<T, E> = { Ok: T; Err: E };
+type Result<T, E> = TaggedUnion<ResultDef<T, E>>;
+```
 
 Produced by `tryAction(handler)` (see MISSING_LANGUAGE_FEATURES.md).
 
 ### Combinators
 
+Branch auto-unwraps `value` — `Ok` handler receives `T`, `Err` handler receives `E`:
+
 | Rust | Barnum | Implementation |
 |------|--------|----------------|
-| `.map(f)` | `mapOk(action)` | `branch({ Ok: pipe(extractField("value"), action, tag("Ok")), Err: identity() })` |
-| `.map_err(f)` | `mapErr(action)` | `branch({ Ok: identity(), Err: pipe(extractField("value"), action, tag("Err")) })` |
-| `.and_then(f)` | `flatMapOk(action)` | `branch({ Ok: pipe(extractField("value"), action), Err: identity() })` |
-| `.unwrap()` | `unwrapOk()` | `branch({ Ok: extractField("value"), Err: panic("unwrap on Err") })` |
-| `.unwrap_or(default)` | `unwrapOkOr(default)` | `branch({ Ok: extractField("value"), Err: default })` — `default` is an action |
+| `.map(f)` | `mapOk(action)` | `branch({ Ok: pipe(action, tag<ResultDef<U, E>, "Ok">("Ok")), Err: identity() })` |
+| `.map_err(f)` | `mapErr(action)` | `branch({ Ok: identity(), Err: pipe(action, tag<ResultDef<T, F>, "Err">("Err")) })` |
+| `.and_then(f)` | `flatMapOk(action)` | `branch({ Ok: action, Err: identity() })` — action must return Result |
+| `.unwrap()` | `unwrapOk()` | `branch({ Ok: identity(), Err: panic("unwrap on Err") })` |
+| `.unwrap_or(default)` | `unwrapOkOr(default)` | `branch({ Ok: identity(), Err: default })` — `default` is an action |
 | `?` operator | `scope` + `exit` | See LOOP_WITH_CLOSURE.md — `done()` / `exit()` is exactly `?` |
 
 ### The `?` operator
 
-This is the killer feature. In Rust, `?` propagates errors up to the enclosing function. In Barnum, `scope` + `exit` does the same thing:
+This is the killer feature. In Rust, `?` propagates errors up to the enclosing function. In Barnum, `scope` + `exit` does the same thing. Branch auto-unwraps, so the `Ok` handler receives the value directly:
 
 ```ts
 scope(({ exit }) =>
   pipe(
     tryAction(step1),
-    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+    branch({ Ok: identity(), Err: exit() }),  // ? operator — Ok unwraps, Err exits scope
     tryAction(step2),
-    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+    branch({ Ok: identity(), Err: exit() }),
     tryAction(step3),
-    branch({ Ok: extractField("value"), Err: exit() }),  // ? operator
+    branch({ Ok: identity(), Err: exit() }),
   ),
 )
 // output: last Ok value, or first Err value
 ```
 
-Sugar: `propagate()` = `branch({ Ok: extractField("value"), Err: exit() })`. Then:
+Sugar: `propagate()` = `branch({ Ok: identity(), Err: exit() })`. Then:
 
 ```ts
 scope(({ exit }) =>
@@ -145,7 +157,7 @@ forEach(
   pipe(
     tryAction(processFile),
     branch({
-      Ok: pipe(extractField("value"), some()),
+      Ok: some(),     // auto-unwraps Ok value, wraps in Some
       Err: pipe(logError, none()),
     }),
   ),
