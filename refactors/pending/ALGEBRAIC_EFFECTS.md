@@ -177,91 +177,77 @@ Under the current strict sequential execution model, the two handlers always exi
 
 ## The scheduler's execution model
 
-### StepResult: the core ADT
+### Effect propagation: bubble_effect, not StepResult
 
-The scheduler evaluates frames by ticking them. Each tick returns one of:
+Effects don't propagate through the normal `deliver` path. When `advance` evaluates a Perform node, it calls a separate traversal method — `bubble_effect` — that walks parent pointers upward, bypassing all intermediate nodes, until it finds a matching Handle frame.
 
-```rust
-pub enum StepResult {
-    Done(Value),                       // frame completed, produced a value
-    Suspend(Effect, FrameState),       // frame emitted an effect, yielded its state
-    Dispatch(HandlerId, Value),        // frame hit an Invoke, needs external execution
-    Error(WorkflowError),              // frame failed
-}
+```
+bubble_effect(starting_parent, effect):
+  walk up ParentRef pointers
+  skip Chain, Parallel, Branch, ForEach — they don't know about effects
+  when Handle frame found:
+    sever the link between Handle and the subgraph below
+    dispatch effect to handler logic with the Continuation
 ```
 
-`Suspend` is the new variant. When a `Perform` node is evaluated, it returns `Suspend(effect, state)`. The scheduler propagates this upward.
+This means `StepResult` does not need a `Suspend` variant. Intermediate nodes don't need suspension logic. The effect bubbles up through parent pointers without touching any frame's advance/deliver logic. The existing frame kinds are completely unchanged.
 
-### Effect propagation (stack unwinding)
+### Continuation representation: disconnected subgraph, not a copy
 
-When the scheduler sees `Suspend`, it walks up the frame tree looking for a `Handle` frame that matches the effect type:
+The scheduler uses a slab (arena) of frames linked upward via parent pointers. A Continuation is not a copied set of frames. It's a disconnected subgraph still living in the slab, reachable via a root pointer.
 
-1. The Perform frame returns `Suspend(ReadVar("__0"), frame_state)`.
-2. The parent (say, a Chain frame) receives `Suspend`. It doesn't handle effects. It freezes its own state and returns `Suspend` to its parent.
-3. This continues up the tree until a Handle frame matching `ReadVar` is found.
-4. The Handle frame receives the effect payload and the frozen frames between itself and the Perform site.
+When a Perform suspends:
 
-The frozen frames between the Perform and the Handle are the **continuation**. They're a snapshot of the execution path that was interrupted.
-
-### Intermediate nodes don't handle effects
-
-Chain, Parallel, Branch, ForEach are ignorant of effects. They only understand `Done`, `Suspend`, `Dispatch`, and `Error`. When a child returns `Suspend`:
-
-- **Chain**: Freeze own state (remember which child completed, what the `rest` is). Return `Suspend` to parent.
-- **Branch**: Same — freeze state, propagate.
-- **ForEach**: Freeze state (which iterations completed, which suspended). Propagate.
-- **Parallel**: This is the interesting case (see below).
-
-### Parallel and suspension
-
-When `Parallel(A, B)` is running and A returns `Suspend`:
-
-1. The Parallel frame receives A's suspension.
-2. B may still be executing (if the scheduler is processing children round-robin) or may have already completed.
-3. The Parallel frame pauses. It freezes its state: A is suspended with `(effect, frame_state)`, B has its current status (Done, still running, etc.).
-4. The Parallel frame returns `Suspend` to its parent, passing the effect upward.
-
-When the Handle frame resumes the continuation:
-
-1. The Parallel frame is restored.
-2. A receives the resume value and transitions from Suspended to Done.
-3. The Parallel frame waits for B to also complete (if it hasn't already).
-4. Once both are Done, the Parallel frame returns `Done([result_a, result_b])`.
-
-When the Handle frame **discards** the continuation (Race scenario):
-
-1. The continuation (including the Parallel frame) is dropped.
-2. Dropping the Parallel frame drops B's execution state.
-3. If B had acquired resources, their disposal runs via Bracket handlers during teardown.
-
-### Continuation representation
-
-The continuation is the chain of frozen frames from the Perform site to the Handle site:
+1. The `bubble_effect` traversal walks parent pointers upward until it finds a matching Handle frame.
+2. It severs the parent link between the Handle frame and the subgraph below it.
+3. The severed subgraph is the Continuation — a root pointer to the top of the disconnected frames.
 
 ```rust
+/// A reified continuation is a pointer to the top of a disconnected
+/// subgraph inside the slab. No copying. No freezing. Just a severed link.
 pub struct Continuation {
-    /// Frozen frames, innermost first. Resuming pushes them
-    /// back onto the scheduler's active frame stack.
-    frames: Vec<FrozenFrame>,
-}
-
-impl Continuation {
-    /// Resume by restoring frozen frames and injecting the value
-    /// into the innermost frame.
-    pub fn resume(self, scheduler: &mut Scheduler, value: Value) { ... }
-
-    /// Discard by dropping all frozen frames, triggering cleanup.
-    pub fn discard(self, scheduler: &mut Scheduler) { ... }
+    pub root: Option<ParentRef>,
 }
 ```
 
-Rust's ownership model helps: dropping a Continuation drops the frozen frames, which can trigger RAII cleanup via the Drop trait on frame state that holds Bracket resources.
+Resuming: restore the severed parent link and deliver a value into the continuation's root frame. The dormant subgraph wakes up and execution proceeds.
+
+Discarding: traverse the disconnected subgraph downward, removing frames from the slab. For each removed frame: cancel pending external tasks, run Bracket dispose handlers for acquired resources. Rust's ownership model helps — dropping frame state triggers cleanup.
+
+### Why intermediate nodes don't need suspension logic
+
+This is the key architectural point. Chain, Parallel, Branch, ForEach don't know about effects. They don't need a `Suspend` state. When a child performs an effect:
+
+1. `bubble_effect` walks right past them via parent pointers.
+2. They sit dormant in the slab, waiting for completions that haven't arrived.
+3. When the Handle resumes the continuation, the child eventually receives a value through the normal `deliver` path.
+
+Parallel is the clearest example. `Parallel(A, B)` where A performs an effect:
+
+1. A's Perform calls `bubble_effect`. The traversal walks past the Parallel frame, finds the Handle.
+2. The Parallel frame sits in the slab with A's slot empty, B's slot possibly filled.
+3. The Handle resolves the effect and resumes the continuation. A eventually completes.
+4. The Parallel frame's existing `deliver` logic sees A's slot fill. If B is also done, it joins the results and delivers upward. No new code in Parallel.
+
+Parallel handled a suspension without containing a single line of suspension logic. It just waited for a completion that hadn't arrived yet — the same thing it does when an Invoke child is waiting for an external response.
 
 ### Multi-shot continuations (loop)
 
-Loop's Continue handler needs to re-enter the body. This looks like "resume the continuation multiple times," but it's simpler than general multi-shot continuations. The handler doesn't replay the old continuation — it starts a fresh execution of the body with the Continue value. The old continuation (from the Perform(Continue) site) is discarded.
+Loop's Continue handler needs to re-enter the body. This looks like "resume the continuation multiple times," but it's simpler. The handler doesn't replay the old continuation — it starts a fresh execution of the body with the Continue value. The old continuation (from the Perform(Continue) site) is discarded.
 
-So loop is actually zero-shot on Continue (discard the old continuation, start fresh) and zero-shot on Break (discard, exit). No multi-shot continuations are needed for any current or planned feature.
+Loop is zero-shot on Continue (discard old, start fresh) and zero-shot on Break (discard, exit). No multi-shot continuations are needed for any current or planned feature.
+
+### Teardown on discard
+
+When a Continuation is discarded (Race winner cancels loser, tryCatch discards on error), the scheduler must clean up the disconnected subgraph:
+
+1. Traverse downward from the continuation's root frame.
+2. For Parallel/ForEach frames: recurse into active children.
+3. For frames with pending external tasks: emit Cancel(TaskId) to the external driver.
+4. For frames with acquired Bracket resources: push dispose tasks to pending dispatches.
+5. Remove all traversed frames from the slab.
+
+This is explicit traversal, not garbage collection. The scheduler controls when and how teardown happens, ensuring dispose runs deterministically.
 
 ## Where Gemini's analysis was wrong
 
