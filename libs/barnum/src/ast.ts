@@ -143,6 +143,15 @@ export type TypedAction<
   tag<TKind extends string>(kind: TKind): TypedAction<In, { kind: TKind; value: Out }, Refs>;
   /** Extract a field from the output object. `a.get("name")` ≡ `pipe(a, extractField("name"))`. */
   get<TField extends keyof Out & string>(field: TField): TypedAction<In, Out[TField], Refs>;
+  /**
+   * Run this sub-pipeline, then merge its output back into the original input.
+   * `pipe(extractField("x"), transform).augment()` takes `In`, runs the
+   * sub-pipeline to get `Out`, and returns `In & Out`.
+   *
+   * Unlike the standalone `augment()` function, the postfix form has access
+   * to `In` so the intersection types correctly.
+   */
+  augment(): TypedAction<In, In & Out, Refs>;
 };
 
 /**
@@ -228,6 +237,24 @@ function getMethod(this: TypedAction, field: string): TypedAction {
   });
 }
 
+function augmentMethod(this: TypedAction): TypedAction {
+  // Construct: Parallel(this, identity) → Merge
+  // "this" is the sub-pipeline. augment() wraps it so the original input
+  // flows through identity alongside the sub-pipeline, then merges the results.
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: {
+      kind: "Parallel",
+      actions: [
+        this as Action,
+        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+      ],
+    },
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+  });
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -244,6 +271,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
+      augment: { value: augmentMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out, Refs>;
