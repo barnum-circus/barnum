@@ -591,10 +591,10 @@ Implement `declare` standalone. If `scope` is added later, it's a separate AST n
 - **Step boundaries are walls**: Step jumps (`stepRef`, `steps.X`) execute with an empty environment. Variables don't leak across step boundaries.
 - **Handlers can't see variables**: The only way to get data into a handler is through its input. Variables are a workflow graph structuring mechanism, not a handler state channel.
 
-## Open questions
+## Resolved questions
 
-1. **Body input type**: Should the body's pipeline input be `TIn` (same as declare's input — variables are supplementary) or `never` (all data must come through variables)? `TIn` is more flexible.
+1. **Body input type**: `TIn`. The body receives the same pipeline input as the declare block. Variables are supplementary — they don't replace the pipeline value.
 
-2. **Interaction with steps**: Can a step body contain `declare`? Can a binding reference a named step? No fundamental obstacle, but the interaction with step registration needs thought.
+2. **Interaction with steps**: Yes. A step body can contain `declare`. A binding can reference a named step. Nesting works fine.
 
-3. **Implicit input binding**: Should `declare` automatically bind the pipeline input as a variable? Or is `identity()` in the bindings sufficient for cases where you need it?
+3. **Implicit input binding**: No. If you want the pipeline input as a variable, bind it explicitly with `identity()`. No magic.
