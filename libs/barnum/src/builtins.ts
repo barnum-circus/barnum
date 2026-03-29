@@ -176,6 +176,11 @@ export function withResource<TIn, TResource, TOut>({
  * into the original input object. Replaces the verbose
  * `parallel(action, identity()) → merge()` pattern.
  *
+ * `TInput` is inferred from the pipeline context (not from the action's
+ * input type), so augment preserves the full pipeline type. The action's
+ * input is unchecked at compile time — runtime zod validators catch
+ * mismatches.
+ *
  * Example:
  *   augment(pipe(extractField("file"), migrate({ to: "Typescript" })))
  *   // { file, outputPath } → { content, file, outputPath }
@@ -185,7 +190,8 @@ export function augment<
   TOutput extends Record<string, unknown>,
   TRefs extends string = never,
 >(
-  action: TypedAction<TInput, TOutput, TRefs>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  action: TypedAction<any, TOutput, TRefs>,
 ): TypedAction<TInput, TInput & TOutput, TRefs> {
   // Construct parallel(action, identity()) inline to avoid circular import
   // with parallel.ts (which imports constant from this file).
@@ -196,6 +202,40 @@ export function augment<
   // UnionToIntersection<A | B> is semantically A & B, but TypeScript
   // can't reduce this at the generic level. Safe cast.
   return chain(parallelNode, merge()) as TypedAction<TInput, TInput & TOutput, TRefs>;
+}
+
+// ---------------------------------------------------------------------------
+// Tap — run an action for side effects, preserve original input
+// ---------------------------------------------------------------------------
+
+/**
+ * Run `action` on the input for its side effects, then discard the action's
+ * output and return the original input unchanged. Useful for side-effectful
+ * steps (type-checking, committing) in a pipeline that needs to preserve
+ * context.
+ *
+ * `TInput` is inferred from the pipeline context (not from the action's
+ * input type), so tap preserves the full pipeline type through side-effectful
+ * steps. The action's input is unchecked at compile time — runtime zod
+ * validators catch mismatches.
+ *
+ * Constraint: input must be an object (uses augment internally, which
+ * relies on parallel + merge).
+ *
+ * Example:
+ *   pipe(tap(implement), tap(commit), createPR)
+ *   // context flows through implement and commit unchanged
+ */
+export function tap<TInput extends Record<string, unknown>>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  action: TypedAction<any, any>,
+): TypedAction<TInput, TInput> {
+  // Replace action's output with {} via constant({}), then augment.
+  // augment runs parallel(voided, identity()) → merge().
+  // merge([{}, input]) = input, so the original value passes through.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const voided = chain(action, constant({}) as TypedAction<any, Record<string, unknown>>);
+  return augment(voided) as TypedAction<TInput, TInput>;
 }
 
 // ---------------------------------------------------------------------------

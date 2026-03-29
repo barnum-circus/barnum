@@ -65,16 +65,13 @@ export const migrate = createHandlerWithConfig({
 }, "migrate");
 
 // In production: mkdir -p parent dir, write content to outputPath.
-// Receives the merged result of parallel(migrate, identity):
-// { content, file, outputPath }.
 export const writeFile = createHandler({
   stepValueValidator: z.object({
     content: z.string(),
-    file: z.string(),
     outputPath: z.string(),
   }),
   handle: async ({ value }) => {
-    console.error(`[write-file] ${value.file} → ${value.outputPath} (${value.content.length} chars)`);
+    console.error(`[write-file] → ${value.outputPath} (${value.content.length} chars)`);
     return { writtenPath: value.outputPath };
   },
 }, "writeFile");

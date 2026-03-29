@@ -6,15 +6,16 @@
  *   2. For each file, analyze for refactoring opportunities
  *   3. Flatten into a single refactor list
  *   4. For each refactor, within an RAII worktree:
- *      a. Implement the refactor
- *      b. Commit changes
- *      c. Type-check/fix cycle (mutual recursion via registerSteps)
- *      d. Judge/revise loop — review quality, apply feedback if needed
- *      e. Create PR
+ *      a. Implement the refactor (tap: side effect, preserves context)
+ *      b. Commit changes (tap: side effect, preserves context)
+ *      c. Type-check/fix cycle (tap: side effect, preserves context)
+ *      d. Judge/revise loop (tap: side effect, preserves context)
+ *      e. Create PR (augment: enriches context with prUrl)
  *   5. Delete worktree (RAII dispose)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII), loop, branch, forEach, flatten, constant, pipe, drop.
+ * (RAII), loop, branch, forEach, flatten, constant, pipe, drop,
+ * augment, tap.
  *
  * Usage: pnpm exec tsx identify-and-address-refactors.ts
  */
@@ -27,10 +28,12 @@ import {
   branch,
 } from "@barnum/barnum/src/ast.js";
 import {
+  augment,
   constant,
   drop,
   extractField,
   flatten,
+  tap,
   withResource,
   recur,
   done,
@@ -39,15 +42,15 @@ import {
 import {
   listTargetFiles,
   analyze,
-  createWorktree,
-  deleteWorktree,
+  deriveBranch,
+  preparePRInput,
   implement,
   commit,
   judgeRefactor,
   classifyJudgment,
   applyFeedback,
-  createPR,
 } from "./handlers/refactor.js";
+import { createWorktree, deleteWorktree, createPR } from "./handlers/git.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
@@ -70,40 +73,42 @@ await configBuilder()
     ),
     Fix: pipe(forEach(fix), drop(), stepRef("TypeCheck")),
 
-    // The action that runs inside each worktree. Implements the refactor,
-    // commits, runs the type-check/fix cycle, judges quality in a loop,
-    // and creates a PR.
+    // The action that runs inside each worktree. Side-effectful steps
+    // use tap() to preserve the pipeline context ({ ...Refactor,
+    // worktreePath, branch }) through operations that don't produce
+    // meaningful output.
     ImplementAndReview: pipe(
-      implement,
-      commit,
-      drop(),
+      // Side effects: implement refactor and commit changes
+      tap(implement),
+      tap(commit),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      stepRef("TypeCheck"),
+      tap(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
-      // drop() discards the TypeCheck output — judgeRefactor
-      // reads the filesystem, not pipeline data.
-      loop(
-        pipe(
-          drop(),
-          judgeRefactor,
-          classifyJudgment,
-          branch({
-            NeedsWork: pipe(
-              extractField("instructions"),
-              applyFeedback,
-              drop(),
-              stepRef("TypeCheck"),
-              recur(),
-            ),
-            Approved: done(),
-          }),
+      tap(
+        loop(
+          pipe(
+            drop(),
+            judgeRefactor,
+            classifyJudgment,
+            branch({
+              NeedsWork: pipe(
+                extractField("instructions"),
+                applyFeedback,
+                drop(),
+                stepRef("TypeCheck"),
+                recur(),
+              ),
+              Approved: done(),
+            }),
+          ),
         ),
       ),
 
-      drop(),
-      createPR,
+      // Create PR: generic handler, augment merges { prUrl } back into
+      // context. The context still has worktreePath (needed by dispose).
+      augment(pipe(preparePRInput, createPR)),
     ),
   }))
   .workflow(({ steps }) =>
@@ -116,9 +121,13 @@ await configBuilder()
       flatten(),
 
       // For each refactor: create worktree → work → create PR → cleanup
+      //
+      // create uses augment to merge worktree fields ({ worktreePath,
+      // branch }) back into the Refactor object, giving the action the
+      // full context it needs.
       forEach(
         withResource({
-          create: createWorktree,
+          create: augment(pipe(deriveBranch, createWorktree)),
           action: steps.ImplementAndReview,
           dispose: deleteWorktree,
         }),

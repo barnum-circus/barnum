@@ -1,10 +1,9 @@
 // Handlers for the identify-and-address-refactors workflow.
 //
 // Discovery: listTargetFiles, analyze
-// Worktree lifecycle (RAII): createWorktree, deleteWorktree
+// Data shaping: deriveBranch, preparePRInput
 // Implementation: implement, commit
 // Review loop: judgeRefactor, classifyJudgment, applyFeedback
-// Delivery: createPR
 
 import { createHandler } from "@barnum/barnum/src/handler.js";
 import { z } from "zod";
@@ -17,12 +16,6 @@ export type Refactor = {
   scope: "function" | "module" | "cross-file";
 };
 
-export type WorktreeContext = {
-  worktreePath: string;
-  branch: string;
-  refactorDescription: string;
-};
-
 export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
@@ -30,11 +23,6 @@ export type JudgmentResult =
 export type ClassifyJudgmentResult =
   | { kind: "Approved" }
   | { kind: "NeedsWork"; instructions: string };
-
-export type PRResult = {
-  prUrl: string;
-  worktreePath: string;
-};
 
 // --- Discovery ---
 
@@ -74,77 +62,58 @@ export const analyze = createHandler({
   },
 }, "analyze");
 
-// --- Worktree lifecycle (RAII pair) ---
+// --- Data shaping ---
 
-// Create half: generate branch name, `git worktree add <path> -b <branch>`.
-export const createWorktree = createHandler({
+// Derive a git branch name from a refactor description.
+export const deriveBranch = createHandler({
+  stepValueValidator: z.object({ description: z.string() }),
+  handle: async ({ value }) => ({
+    branch: `refactor/${value.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+  }),
+}, "deriveBranch");
+
+// Prepare PR metadata from refactor context.
+export const preparePRInput = createHandler({
   stepValueValidator: z.object({
-    file: z.string(),
+    branch: z.string(),
     description: z.string(),
-    scope: z.enum(["function", "module", "cross-file"]),
   }),
-  handle: async ({ value: refactor }): Promise<WorktreeContext> => {
-    const slug = refactor.description
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .slice(0, 40);
-    const branch = `refactor/${slug}`;
-    const worktreePath = `/tmp/worktrees/${slug}`;
-    console.error(`[create-worktree] ${branch} at ${worktreePath}`);
-    return { worktreePath, branch, refactorDescription: refactor.description };
-  },
-}, "createWorktree");
-
-// Dispose half: `git worktree remove {worktreePath}`, optionally `git branch -D`.
-export const deleteWorktree = createHandler({
-  stepValueValidator: z.object({
-    prUrl: z.string(),
-    worktreePath: z.string(),
+  handle: async ({ value }) => ({
+    branch: value.branch,
+    title: `Refactor: ${value.description.slice(0, 60)}`,
+    body: `Automated refactor:\n\n${value.description}`,
   }),
-  handle: async ({ value }) => {
-    console.error(`[delete-worktree] Removing ${value.worktreePath} (PR: ${value.prUrl})`);
-  },
-}, "deleteWorktree");
+}, "preparePRInput");
 
 // --- Implementation ---
 
 // In production:
 //   Prompt: "You are working in {worktreePath}. Implement the following
-//   refactor: {refactorDescription}. Make minimal, focused changes.
-//   Edit only the files necessary."
+//   refactor: {description}. Make minimal, focused changes."
 export const implement = createHandler({
   stepValueValidator: z.object({
     worktreePath: z.string(),
-    branch: z.string(),
-    refactorDescription: z.string(),
+    description: z.string(),
   }),
-  handle: async ({ value: ctx }): Promise<WorktreeContext> => {
-    console.error(`[implement] Applying refactor in ${ctx.worktreePath}: ${ctx.refactorDescription}`);
-    return ctx;
+  handle: async ({ value }) => {
+    console.error(`[implement] Applying refactor in ${value.worktreePath}: ${value.description}`);
   },
 }, "implement");
 
 // In production: `git -C {worktreePath} add -A && git commit -m "{message}"`.
 export const commit = createHandler({
-  stepValueValidator: z.object({
-    worktreePath: z.string(),
-    branch: z.string(),
-    refactorDescription: z.string(),
-  }),
-  handle: async ({ value: ctx }): Promise<WorktreeContext> => {
-    console.error(`[commit] Committing in ${ctx.worktreePath} on ${ctx.branch}`);
-    return ctx;
+  stepValueValidator: z.object({ worktreePath: z.string() }),
+  handle: async ({ value }) => {
+    console.error(`[commit] Committing in ${value.worktreePath}`);
   },
 }, "commit");
 
 // --- Review loop ---
 
 // In production:
-//   Prompt: "Review the changes on branch {branch} in {worktreePath}.
-//   Evaluate whether this refactor is correct, complete, and follows
-//   best practices. If improvements are needed, provide specific
-//   instructions. Respond with { approved: true } or
-//   { approved: false, instructions: '...' }."
+//   Prompt: "Review the changes on the current branch. Evaluate whether
+//   this refactor is correct, complete, and follows best practices.
+//   If improvements are needed, provide specific instructions."
 export const judgeRefactor = createHandler({
   handle: async (): Promise<JudgmentResult> => {
     console.error("[judge-refactor] Reviewing changes...");
@@ -170,24 +139,10 @@ export const classifyJudgment = createHandler({
 
 // In production:
 //   Prompt: "The reviewer provided the following feedback on your refactor:
-//   {instructions}
-//   Apply these changes to the files in the worktree."
+//   {instructions}. Apply these changes to the files in the worktree."
 export const applyFeedback = createHandler({
   stepValueValidator: z.string(),
   handle: async ({ value: instructions }) => {
     console.error(`[apply-feedback] Applying: ${instructions}`);
   },
 }, "applyFeedback");
-
-// --- Delivery ---
-
-// In production: `git push origin {branch}`, then `gh pr create --title "..." --body "..."`.
-export const createPR = createHandler({
-  handle: async (): Promise<PRResult> => {
-    console.error("[create-pr] Pushing branch and creating PR...");
-    return {
-      prUrl: "https://github.com/org/repo/pull/42",
-      worktreePath: "/tmp/worktrees/current",
-    };
-  },
-}, "createPR");
