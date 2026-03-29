@@ -298,6 +298,21 @@ describe("Option namespace", () => {
     expect(noneCase.rest.handler.builtin.value).toBe("None");
   });
 
+  it("Option.andThen() produces Branch with action Some and Tag None", () => {
+    const action = O.andThen(pipe(verify, O.some<{ verified: boolean }>()));
+    expect(action.kind).toBe("Branch");
+    const branch = action as { kind: "Branch"; cases: any };
+    expect(Object.keys(branch.cases).sort()).toEqual(["None", "Some"]);
+    // Some case: ExtractField("value") → Chain(verify, Tag("Some"))
+    const someCase = branch.cases["Some"];
+    expect(someCase.kind).toBe("Chain");
+    expect(someCase.first.handler.builtin.kind).toBe("ExtractField");
+    // None case: ExtractField("value") → Tag("None")
+    const noneCase = branch.cases["None"];
+    expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
+    expect(noneCase.rest.handler.builtin.value).toBe("None");
+  });
+
   it("Option.unwrapOr() produces Branch with identity Some and drop+default None", () => {
     const action = O.unwrapOr(constant("fallback"));
     expect(action.kind).toBe("Branch");

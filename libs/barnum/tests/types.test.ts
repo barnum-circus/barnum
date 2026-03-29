@@ -755,6 +755,24 @@ describe("Option namespace types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
   });
 
+  it("Option.andThen(action): Option<T> → Option<U>", () => {
+    // andThen chains into an action that itself returns Option
+    const action = O.andThen<{ artifact: string }, { verified: boolean }>(
+      pipe(verify, O.some<{ verified: boolean }>()),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+  });
+
+  it("Option.andThen composes in pipe for chaining", () => {
+    const action = pipe(
+      O.some<{ artifact: string }>(),
+      O.andThen(pipe(verify, O.some<{ verified: boolean }>())),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<{ verified: boolean }>>>();
+  });
+
   it("Option.unwrapOr(defaultAction): Option<T> → T", () => {
     const action = O.unwrapOr<string>(constant("fallback"));
     assertExact<IsExact<ExtractInput<typeof action>, Option<string>>>();

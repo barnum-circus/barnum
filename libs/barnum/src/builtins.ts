@@ -410,6 +410,22 @@ export const Option = {
   },
 
   /**
+   * Monadic bind (flatMap). If Some, pass the value to action which
+   * returns Option<U>. If None, stay None. `Option<T> → Option<U>`
+   *
+   * This is the most fundamental combinator — map, flatten, and filter
+   * are all derivable from andThen + constructors.
+   *
+   * Desugars to: `branch({ Some: action, None: tag("None") })`
+   */
+  andThen<T, U>(action: Pipeable<T, OptionT<U>>): TypedAction<OptionT<T>, OptionT<U>> {
+    return typedAction(optionBranch(
+      action as Action,
+      TAG_NONE,
+    ));
+  },
+
+  /**
    * Extract the Some value or produce a default from an action.
    * `Option<T> → T`
    *
