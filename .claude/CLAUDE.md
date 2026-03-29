@@ -2,9 +2,9 @@
 
 Read `claude.local.md` in this directory before every response. Not optional.
 
-## Never use plan mode
+## NEVER use plan mode
 
-Do NOT use EnterPlanMode. Use `refactors/PROCESS.md` instead.
+**NEVER call EnterPlanMode. Ever. Under any circumstances.** Our equivalent of plan mode is writing and iterating on markdown files in `refactors/pending/`. Use `refactors/PROCESS.md` instead.
 
 # Jevin
 

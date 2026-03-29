@@ -187,6 +187,82 @@ describe("loop", () => {
 });
 
 // -----------------------------------------------------------------------
+// Postfix operators
+// -----------------------------------------------------------------------
+
+describe("postfix operators", () => {
+  it(".branch() produces Chain → Branch AST", () => {
+    const action = deploy.branch({
+      A: drop(),
+      B: drop(),
+    });
+    expect(action.kind).toBe("Chain");
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.first.kind).toBe("Invoke");
+    expect(chain.rest.kind).toBe("Branch");
+    expect(Object.keys(chain.rest.cases)).toEqual(["A", "B"]);
+  });
+
+  it(".flatten() produces Chain → Flatten AST", () => {
+    const action = forEach(forEach(verify)).flatten();
+    expect(action.kind).toBe("Chain");
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.first.kind).toBe("ForEach");
+    expect(chain.rest.kind).toBe("Invoke");
+    expect(chain.rest.handler.builtin.kind).toBe("Flatten");
+  });
+
+  it(".drop() produces Chain → Drop AST", () => {
+    const action = setup.drop();
+    expect(action.kind).toBe("Chain");
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.first.kind).toBe("Invoke");
+    expect(chain.rest.kind).toBe("Invoke");
+    expect(chain.rest.handler.builtin.kind).toBe("Drop");
+  });
+
+  it(".tag() produces Chain → Tag AST", () => {
+    const action = verify.tag("Ok");
+    expect(action.kind).toBe("Chain");
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.first.kind).toBe("Invoke");
+    expect(chain.rest.kind).toBe("Invoke");
+    expect(chain.rest.handler.builtin.kind).toBe("Tag");
+    expect(chain.rest.handler.builtin.value).toBe("Ok");
+  });
+
+  it(".get() produces Chain → ExtractField AST", () => {
+    const action = setup.get("project");
+    expect(action.kind).toBe("Chain");
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.first.kind).toBe("Invoke");
+    expect(chain.rest.kind).toBe("Invoke");
+    expect(chain.rest.handler.builtin.kind).toBe("ExtractField");
+    expect(chain.rest.handler.builtin.value).toBe("project");
+  });
+
+  it("postfix methods are chainable", () => {
+    // forEach(analyze).flatten().forEach().drop()
+    const action = forEach(verify).flatten().drop();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it("postfix .branch() produces valid AST for loop pattern", () => {
+    // Equivalent to: pipe(typeCheck, classifyErrors, branch({ ... }))
+    // Chain nesting differs (left vs right associative) but semantically equivalent
+    const action = pipe(typeCheck, classifyErrors).branch({
+      HasErrors: pipe(extractField("errors"), forEach(fix)),
+      Clean: drop(),
+    });
+    expect(action.kind).toBe("Chain");
+    // The rest should be a Branch node
+    const chain = action as { kind: "Chain"; first: any; rest: any };
+    expect(chain.rest.kind).toBe("Branch");
+    expect(Object.keys(chain.rest.cases)).toEqual(["HasErrors", "Clean"]);
+  });
+});
+
+// -----------------------------------------------------------------------
 // Reader monad pattern
 //
 // parallel(identity(), handler) → merge()

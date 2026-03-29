@@ -20,48 +20,9 @@ A postfix operator should:
 
 A postfix operator should NOT:
 1. Take the action as an *input* (that's a prefix combinator) — `.parallel()` and `.loop()` are wrong because they wrap the action, they don't chain after it
-2. Be a structural combinator that takes multiple arguments — `.branch({ ... })` is confusing because the receiver is the input, not a branch
+2. Be a structural combinator that takes multiple arguments — `.pipe()` is redundant with `.then()`
 
-## Good candidates
-
-### `.tap(action)` — run side effect, preserve value
-
-```ts
-implement.tap(commit).tap(typeCheck).then(createPR)
-// equivalent to: pipe(tap(implement), tap(commit), tap(typeCheck), createPR)
-```
-
-Wait — this reads wrong. `implement.tap(commit)` means "run implement, then tap commit." But the receiver is `implement`, not the tap target. Let's think again.
-
-Actually: `action.tap(sideEffect)` means "run action, then run sideEffect on the result for side effects, then return the result of action." This is:
-
-```ts
-pipe(action, tap(sideEffect))
-```
-
-That reads fine: "do action, and tap sideEffect along the way."
-
-### `.augment(action)` — enrich with extra fields
-
-```ts
-handler.augment(enricher)
-// equivalent to: pipe(handler, augment(enricher))
-```
-
-"Do handler, then augment with enricher's output."
-
-### `.mapOption(action)` — map over Some, pass through None
-
-```ts
-extractField("name").mapOption(normalize)
-// equivalent to: pipe(extractField("name"), mapOption(normalize))
-```
-
-### `.unwrapOr(default)` — unwrap Option with default
-
-```ts
-extractField("name").unwrapOr("anonymous")
-```
+## Approved (Phase 1)
 
 ### `.branch(cases)` — dispatch on tagged union output
 
@@ -73,16 +34,7 @@ classifyErrors.branch({
 // equivalent to: pipe(classifyErrors, branch({ HasErrors: ..., Clean: ... }))
 ```
 
-This is actually a strong candidate. The receiver produces the tagged union, and `.branch()` dispatches on it. Reads naturally: "classify errors, then branch."
-
-### `.loop()` — wrap in loop
-
-```ts
-body.loop()
-// equivalent to: loop(body)
-```
-
-This one is iffy. "body.loop()" reads as "run body in a loop," which is correct, but it obscures that `body` must produce Continue/Break tags.
+The receiver produces the tagged union, and `.branch()` dispatches on it. Reads naturally: "classify errors, then branch."
 
 ### `.flatten()` — flatten nested array
 
@@ -92,15 +44,6 @@ forEach(analyze).flatten()
 ```
 
 Reads well: "for each, analyze, then flatten."
-
-### `.merge()` — merge array of objects
-
-```ts
-parallel(a, b, c).merge()
-// equivalent to: pipe(parallel(a, b, c), merge())
-```
-
-Reads well: "run in parallel, then merge."
 
 ### `.drop()` — discard output
 
@@ -116,96 +59,113 @@ value.tag("Ok")
 // equivalent to: pipe(value, tag("Ok"))
 ```
 
-### `.extractField(field)` — extract field from output
+### `.get(field)` — extract field from output
 
 ```ts
-handler.extractField("name")
+handler.get("name")
 // equivalent to: pipe(handler, extractField("name"))
 ```
 
-Reads fine but is verbose. Maybe `.field("name")` or `.get("name")`?
+Renamed from `.extractField()` — shorter, reads well as postfix.
 
-### `.tryAction()` — wrap in error handler
+## Deferred
+
+### `.tap(action)` — run side effect, preserve value
+
+Not convinced this reads naturally. `action.tap(sideEffect)` means "run action, then run sideEffect for side effects, then return action's result." Defer until the value is clearer.
+
+### `.augment(action)` — enrich with extra fields
+
+Confusing as a postfix. Defer.
+
+### `.merge()` — merge array of objects
+
+Need to rethink the parallel + merge pattern first. `parallel(a, b, c)` gives a tuple, and `.merge()` would flatten it into an object. But maybe `parallel` should produce an object directly (keyed parallel), making `.merge()` unnecessary. Defer until parallel semantics are settled.
+
+### `.loop()` — wrap in loop
+
+Rejected. Loop semantics (must produce Continue/Break) aren't obvious from the method call. Use the prefix `loop(body)` instead.
+
+### `.try()` / `.attempt()` — wrap in error handler
+
+Skip for now. Need to think about how error handling works first.
+
+## Option/Result postfix operators (Phase 2)
+
+The Rust-inspired Option combinators (`mapOption`, `flatMapOption`, `unwrapOr`, etc.) could work as postfix operators **if** they are only available when `Out` matches the Option shape.
+
+TypeScript can enforce this via `this` parameter constraints or conditional return types:
 
 ```ts
-riskyHandler.try()
-// equivalent to: tryAction(riskyHandler)
+// Only callable when Out is Option<T>
+mapOption<TNext>(
+  this: TypedAction<In, { kind: "Some"; value: unknown } | { kind: "None" }, Refs>,
+  action: TypedAction</* inferred from Some's value */, TNext>,
+): TypedAction<In, { kind: "Some"; value: TNext } | { kind: "None" }, Refs>;
+
+unwrapOr(
+  this: TypedAction<In, { kind: "Some"; value: unknown } | { kind: "None" }, Refs>,
+  defaultValue: TypedAction<never, /* inferred from Some's value */>,
+): TypedAction<In, /* Some's value type */, Refs>;
 ```
 
-Hmm, `.try()` is a reserved word in JS. `.attempt()`?
+Note: `unwrapOr` takes an **action** (AST), not a raw value. Use `unwrapOr(constant("anonymous"))`, not `unwrapOr("anonymous")`.
+
+The naming convention: include "option" in the name (`mapOption`, `flatMapOption`, `unwrapOr`, `optionOr`) to distinguish from potential Result variants. But if the `this` constraint is tight enough, maybe just `.map()`, `.flatMap()`, `.or()` work.
+
+Open question: can TypeScript reliably infer `T` from a `this` constraint of `TypedAction<In, { kind: "Some"; value: T } | { kind: "None" }, Refs>`? Need to prototype.
 
 ## Candidates to avoid
 
 ### `.parallel(...)` — NO
 
-```ts
-action.parallel(other)  // Confusing — does this run action and other in parallel?
-```
-
 `parallel` is a fan-out from a single input. The receiver-as-input pattern is confusing.
 
 ### `.pipe(...)` — NO
 
-```ts
-action.pipe(next)  // Redundant with .then()
-```
+Redundant with `.then()`.
 
-`.then()` already does this.
+### `.loop()` — NO
 
-### `.loop()` — MAYBE
-
-Could go either way. It's not terrible but loop semantics (must produce Continue/Break) aren't obvious from the method call.
+Loop semantics aren't obvious from the method call.
 
 ## Implementation
 
-Each method is added in `typedAction()`:
+Each method is a shared closure, added in `typedAction()` via `Object.defineProperties`:
 
 ```ts
-function typedAction<In, Out, Refs>(action: Action): TypedAction<In, Out, Refs> {
-  Object.defineProperties(action, {
-    then: { value: thenMethod, configurable: true },
-    forEach: { value: forEachMethod, configurable: true },
-    tap: { value: tapMethod, configurable: true },
-    augment: { value: augmentMethod, configurable: true },
-    branch: { value: branchMethod, configurable: true },
-    flatten: { value: flattenMethod, configurable: true },
-    merge: { value: mergeMethod, configurable: true },
-    drop: { value: dropMethod, configurable: true },
-    // ...
-  });
-  return action as TypedAction<In, Out, Refs>;
+function branchMethod(this: TypedAction, cases: Record<string, Action>): TypedAction {
+  return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases } });
 }
+
+function flattenMethod(this: TypedAction): TypedAction {
+  return typedAction({
+    kind: "Chain", first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Flatten" } } },
+  });
+}
+
+// dropMethod, tagMethod, getMethod follow the same pattern
 ```
 
-Each method creates `pipe(this, combinator(...args))` and returns a new `TypedAction`.
+Future consideration: prototype chain instead of `Object.defineProperties`. Would avoid per-instance property attachment. Not blocking — the current approach works and the performance difference is negligible for an AST builder.
 
 ## Type signatures
 
-The tricky part: each method needs correct generic types on the TypedAction interface.
-
 ```ts
-interface TypedAction<In, Out, Refs> extends Action {
-  then<T, R extends string>(next: TypedAction<Out, T, R>): TypedAction<In, T, Refs | R>;
-  forEach(): TypedAction<In extends (infer E)[] ? In : never, Out[], Refs>;
-  tap(action: TypedAction<any, any>): TypedAction<In, Out, Refs>;
-  augment<T extends Record<string, unknown>>(action: TypedAction<any, T>): TypedAction<In, Out & T, Refs>;
-  branch<Cases extends Record<string, TypedAction<any, any>>>(cases: Cases): TypedAction<In, ...>;
-  flatten(): TypedAction<In, Out extends (infer E)[][] ? E[] : never, Refs>;
-  merge(): TypedAction<In, ..., Refs>;
+export type TypedAction<In, Out, Refs extends string = never> = Action & {
+  // ... existing phantoms and methods ...
+
+  branch<TCases extends Record<string, ChainableAction<any, any, any>>>(
+    cases: TCases,
+  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
+
+  flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : never, Refs>;
+
   drop(): TypedAction<In, never, Refs>;
-  tag<K extends string>(kind: K): TypedAction<In, { kind: K; value: Out }, Refs>;
-  extractField<F extends keyof Out & string>(field: F): TypedAction<In, Out[F], Refs>;
-}
+
+  tag<TKind extends string>(kind: TKind): TypedAction<In, { kind: TKind; value: Out }, Refs>;
+
+  get<TField extends keyof Out & string>(field: TField): TypedAction<In, Out[TField], Refs>;
+};
 ```
-
-`branch` typing is hard — it needs to infer the union of all case outputs. The prefix function already handles this with overloads. The postfix method would need the same treatment.
-
-## Recommendation
-
-**Phase 1**: Add `.tap()`, `.augment()`, `.branch()`, `.flatten()`, `.merge()`, `.drop()`, `.tag()`, `.extractField()`.
-
-These are all "do this, then apply transformation to the output" — the natural postfix pattern.
-
-**Phase 2**: Add Option/Result methods (`.mapOption()`, `.unwrapOr()`, `.mapOk()`, etc.) once those combinators exist.
-
-**Skip**: `.parallel()`, `.pipe()`, `.loop()` — these don't read naturally as postfix operations.

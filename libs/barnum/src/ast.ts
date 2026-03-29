@@ -131,6 +131,19 @@ export type TypedAction<
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
+  /** Dispatch on a tagged union output. `a.branch(cases)` ≡ `pipe(a, branch(cases))`. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  branch<TCases extends Record<string, ChainableAction<any, any, any>>>(
+    cases: TCases,
+  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
+  /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
+  flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : never, Refs>;
+  /** Discard output. `a.drop()` ≡ `pipe(a, drop())`. */
+  drop(): TypedAction<In, never, Refs>;
+  /** Wrap output as a tagged union member. `a.tag("Ok")` ≡ `pipe(a, tag("Ok"))`. */
+  tag<TKind extends string>(kind: TKind): TypedAction<In, { kind: TKind; value: Out }, Refs>;
+  /** Extract a field from the output object. `a.get("name")` ≡ `pipe(a, extractField("name"))`. */
+  get<TField extends keyof Out & string>(field: TField): TypedAction<In, Out[TField], Refs>;
 };
 
 /**
@@ -172,6 +185,50 @@ function forEachMethod<TIn, TOut, TRefs extends string>(
   return typedAction({ kind: "ForEach", action: this });
 }
 
+function branchMethod(
+  this: TypedAction,
+  cases: Record<string, Action>,
+): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases } });
+}
+
+function flattenMethod(this: TypedAction): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Flatten" } } },
+  });
+}
+
+function dropMethod(this: TypedAction): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } },
+  });
+}
+
+function tagMethod(this: TypedAction, kind: string): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } } },
+  });
+}
+
+function getMethod(this: TypedAction, field: string): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } } },
+  });
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -183,6 +240,11 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
     Object.defineProperties(action, {
       then: { value: thenMethod, configurable: true },
       forEach: { value: forEachMethod, configurable: true },
+      branch: { value: branchMethod, configurable: true },
+      flatten: { value: flattenMethod, configurable: true },
+      drop: { value: dropMethod, configurable: true },
+      tag: { value: tagMethod, configurable: true },
+      get: { value: getMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out, Refs>;

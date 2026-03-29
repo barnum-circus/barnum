@@ -346,6 +346,86 @@ describe("combinator types", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Postfix operator types
+// ---------------------------------------------------------------------------
+
+describe("postfix operator types", () => {
+  it(".branch(): input preserved, output is union of case outputs", () => {
+    const action = classifyErrors.branch({
+      HasErrors: pipe(extractField("errors"), forEach(fix)),
+      Clean: drop(),
+    });
+    assertExact<IsExact<ExtractInput<typeof action>, TypeError[]>>();
+    // Output is union: fix[]'s output | never (from drop)
+    assertExact<
+      IsExact<
+        ExtractOutput<typeof action>,
+        { file: string; fixed: boolean }[] | never
+      >
+    >();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it(".flatten(): nested array becomes flat", () => {
+    const action = forEach(forEach(verify)).flatten();
+    assertExact<
+      IsExact<ExtractInput<typeof action>, { artifact: string }[][]>
+    >();
+    assertExact<
+      IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>
+    >();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it(".drop(): output is never", () => {
+    const action = setup.drop();
+    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it(".tag(): wraps output in tagged union", () => {
+    const action = verify.tag("Success");
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<
+      IsExact<
+        ExtractOutput<typeof action>,
+        { kind: "Success"; value: { verified: boolean } }
+      >
+    >();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it(".get(): extracts field from output", () => {
+    const action = pipe(
+      constant({ name: "test", age: 42 }),
+    ).get("name");
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it(".get() chains with .then()", () => {
+    const action = pipe(
+      constant({ result: { data: [1, 2, 3] } }),
+    ).get("result").get("data");
+    assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
+    expect(action.kind).toBe("Chain");
+  });
+
+  it("postfix .branch() + .drop() compose in chain", () => {
+    const action = pipe(
+      typeCheck,
+      classifyErrors,
+    ).branch({
+      HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+      Clean: done(),
+    });
+    expect(action.kind).toBe("Chain");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Pipe type errors
 // ---------------------------------------------------------------------------
 
