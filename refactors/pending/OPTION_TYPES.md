@@ -533,4 +533,4 @@ The `Option<T>` type itself is just `TaggedUnion<OptionDef<T>>` — same `{ kind
 
 **Rust engine** (`barnum_engine`): Handle `CollectSome` in builtin execution — iterate input array, keep `{ kind: "Some" }` items, extract their `value` fields, return collected array.
 
-**Schema regeneration**: Yes, but only because `BuiltinKind` changed (trivial diff).
+Schema files regenerate automatically via pre-commit hook (trivial — new enum variant).
