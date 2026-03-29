@@ -18,8 +18,11 @@
  * (RAII with tuple), loop, forEach, constant, pipe, merge, augment, tap,
  * and postfix operators (.branch, .flatten, .drop).
  *
- * Usage: pnpm exec tsx identify-and-address-refactors.ts
+ * Usage: pnpm exec tsx run.ts
  */
+
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   workflowBuilder,
@@ -39,6 +42,9 @@ import {
   done,
 } from "@barnum/barnum/src/builtins.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const srcDir = path.resolve(__dirname, "src");
+
 import {
   listTargetFiles,
   analyze,
@@ -49,9 +55,13 @@ import {
   judgeRefactor,
   classifyJudgment,
   applyFeedback,
+  type ClassifyJudgmentResult,
+  type Refactor,
 } from "./handlers/refactor.js";
 import { createWorktree, deleteWorktree, createPR } from "./handlers/git.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
+
+type WorktreeResource = { worktreePath: string; branch: string };
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
@@ -79,7 +89,7 @@ await workflowBuilder()
     // Side-effectful steps use tap() to preserve this context through
     // operations that don't produce meaningful output.
     ImplementAndReview: pipe(
-      merge(),
+      merge<[WorktreeResource, Refactor]>(),
 
       // Side effects: implement refactor and commit changes
       tap(implement),
@@ -94,7 +104,7 @@ await workflowBuilder()
         loop(
           pipe(drop(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
-              extractField("instructions"),
+              extractField<Extract<ClassifyJudgmentResult, { kind: "NeedsWork" }>, "instructions">("instructions"),
               applyFeedback.drop(), stepRef("TypeCheck"), recur(),
             ),
             Approved: done(),
@@ -108,7 +118,7 @@ await workflowBuilder()
   }))
   .workflow(({ steps }) =>
     pipe(
-      constant({ folder: "/path/to/project" }),
+      constant({ folder: srcDir }),
       listTargetFiles,
 
       // Analyze each file for refactoring opportunities

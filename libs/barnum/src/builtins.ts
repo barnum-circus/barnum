@@ -1,4 +1,4 @@
-import { type Action, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type ChainableAction, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -181,10 +181,14 @@ export function withResource<TIn, TResource, TOut>({
   action,
   dispose,
 }: {
-  create: TypedAction<TIn, TResource>;
+  // ChainableAction so __in's covariance doesn't reject handlers
+  // that only need a subset of TIn's fields.
+  create: ChainableAction<NoInfer<TIn>, TResource>;
   action: TypedAction<[TResource, TIn], TOut>;
+  // ChainableAction (not TypedAction) so __in's covariance doesn't
+  // reject handlers that accept a supertype of TResource.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  dispose: TypedAction<TResource, any>;
+  dispose: ChainableAction<NoInfer<TResource>, any>;
 }): TypedAction<TIn, TOut> {
   // Step 1: parallel(create, identity) → [TResource, TIn]
   const createAndKeepInput = typedAction<TIn, [TResource, TIn]>({
@@ -210,7 +214,7 @@ export function withResource<TIn, TResource, TOut>({
       chain(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         extractIndex(1) as TypedAction<any, TResource>,
-        dispose,
+        dispose as Action as TypedAction<TResource, unknown>,
       ) as Action,
     ],
   });
@@ -284,7 +288,8 @@ export function augment<
  */
 export function tap<TInput extends Record<string, unknown>>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  action: TypedAction<any, any>,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  action: TypedAction<any, any, any>,
 ): TypedAction<TInput, TInput> {
   // Replace action's output with {} via constant({}), then augment.
   // augment runs parallel(voided, identity()) → merge().

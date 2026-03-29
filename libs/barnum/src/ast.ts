@@ -163,7 +163,7 @@ export type TypedAction<
  * TypedAction values are assignable to ChainableAction (superset of fields),
  * so callers can pass any TypedAction to `.then()`.
  */
-type ChainableAction<
+export type ChainableAction<
   In = unknown,
   Out = unknown,
   Refs extends string = never,
