@@ -126,6 +126,23 @@ export function extractField<
 }
 
 // ---------------------------------------------------------------------------
+// ExtractIndex — extract a single element from an array by index
+// ---------------------------------------------------------------------------
+
+export function extractIndex<
+  TTuple extends unknown[],
+  TIndex extends number,
+>(index: TIndex): TypedAction<TTuple, TTuple[TIndex]> {
+  return typedAction({
+    kind: "Invoke",
+    handler: {
+      kind: "Builtin",
+      builtin: { kind: "ExtractIndex", value: index },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // DropResult — run an action for side effects, discard its output
 // ---------------------------------------------------------------------------
 
@@ -143,16 +160,21 @@ export function dropResult<TInput>(
 /**
  * RAII-style resource management combinator.
  *
- * Runs `create` to acquire a resource, `action` to use it, then `dispose`
- * to clean up. `dispose` receives `action`'s output, so action must thread
- * resource identity (e.g., a worktree path) through to its result.
+ * Runs `create` to acquire a resource, then passes `[TResource, TIn]`
+ * (the resource paired with the original input) to `action`. After the
+ * action completes, `dispose` receives the resource for cleanup. The
+ * overall combinator returns the action's output.
  *
- * Returns `never` because dispose's result is discarded. The surrounding
- * pipeline should not depend on withResource's output.
+ * ```
+ * TIn → create → TResource
+ *     → action([TResource, TIn]) → TOut
+ *     → dispose(TResource)       → (discarded)
+ *     → TOut
+ * ```
  *
- * **Limitation**: the action's result is lost after dispose. Ideally we'd
- * return TOut while still running dispose, but that requires tuple
- * destructuring combinators we don't have yet. See RAII_RESOURCE_MANAGEMENT.md.
+ * The action receives a tuple so it has access to both the resource and
+ * the original pipeline data. Dispose only needs the resource — it doesn't
+ * depend on the action's output.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function withResource<TIn, TResource, TOut>({
@@ -161,10 +183,45 @@ export function withResource<TIn, TResource, TOut>({
   dispose,
 }: {
   create: TypedAction<TIn, TResource>;
-  action: TypedAction<TResource, TOut>;
-  dispose: TypedAction<TOut, any>;
-}): TypedAction<TIn, never> {
-  return chain(create, chain(action, dropResult(dispose)));
+  action: TypedAction<[TResource, TIn], TOut>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dispose: TypedAction<TResource, any>;
+}): TypedAction<TIn, TOut> {
+  // Step 1: parallel(create, identity) → [TResource, TIn]
+  const createAndKeepInput = typedAction<TIn, [TResource, TIn]>({
+    kind: "Parallel",
+    actions: [create as Action, identity() as Action],
+  });
+
+  // Step 2: parallel(action, extractIndex(0)) → [TOut, TResource]
+  const actionAndKeepResource = typedAction<[TResource, TIn], [TOut, TResource]>({
+    kind: "Parallel",
+    actions: [
+      action as Action,
+      extractIndex(0) as Action,
+    ],
+  });
+
+  // Step 3: extract TOut, run dispose on TResource in parallel
+  //   parallel(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, void]
+  const disposeAndKeepResult = typedAction<[TOut, TResource], [TOut, unknown]>({
+    kind: "Parallel",
+    actions: [
+      extractIndex(0) as Action,
+      chain(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        extractIndex(1) as TypedAction<any, TResource>,
+        dispose,
+      ) as Action,
+    ],
+  });
+
+  // Step 4: extractIndex(0) → TOut
+  return chain(
+    chain(chain(createAndKeepInput, actionAndKeepResource), disposeAndKeepResult),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    extractIndex(0) as TypedAction<any, TOut>,
+  );
 }
 
 // ---------------------------------------------------------------------------

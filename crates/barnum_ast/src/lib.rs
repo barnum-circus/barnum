@@ -201,6 +201,11 @@ pub enum BuiltinKind {
         /// The field name to extract (must be a JSON string).
         value: Value,
     },
+    /// Extract an element from an array by index.
+    ExtractIndex {
+        /// The zero-based index to extract (must be a JSON number).
+        value: Value,
+    },
 }
 
 // ---------------------------------------------------------------------------

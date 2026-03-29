@@ -6,16 +6,17 @@
  *   2. For each file, analyze for refactoring opportunities
  *   3. Flatten into a single refactor list
  *   4. For each refactor, within an RAII worktree:
- *      a. Implement the refactor (tap: side effect, preserves context)
- *      b. Commit changes (tap: side effect, preserves context)
- *      c. Type-check/fix cycle (tap: side effect, preserves context)
- *      d. Judge/revise loop (tap: side effect, preserves context)
- *      e. Create PR (augment: enriches context with prUrl)
- *   5. Delete worktree (RAII dispose)
+ *      a. merge() the [resource, input] tuple into a flat context
+ *      b. Implement the refactor (tap: side effect, preserves context)
+ *      c. Commit changes (tap: side effect, preserves context)
+ *      d. Type-check/fix cycle (tap: side effect, preserves context)
+ *      e. Judge/revise loop (tap: side effect, preserves context)
+ *      f. Create PR (augment: enriches context with prUrl)
+ *   5. Delete worktree (RAII dispose — receives the resource directly)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII), loop, branch, forEach, flatten, constant, pipe, drop,
- * augment, tap.
+ * (RAII with tuple), loop, branch, forEach, flatten, constant, pipe,
+ * drop, merge, augment, tap.
  *
  * Usage: pnpm exec tsx identify-and-address-refactors.ts
  */
@@ -33,6 +34,7 @@ import {
   drop,
   extractField,
   flatten,
+  merge,
   tap,
   withResource,
   recur,
@@ -73,11 +75,18 @@ await configBuilder()
     ),
     Fix: pipe(forEach(fix), drop(), stepRef("TypeCheck")),
 
-    // The action that runs inside each worktree. Side-effectful steps
-    // use tap() to preserve the pipeline context ({ ...Refactor,
-    // worktreePath, branch }) through operations that don't produce
-    // meaningful output.
+    // The action that runs inside each worktree.
+    //
+    // withResource passes [resource, input] as a tuple. merge() flattens
+    // it into a single context object so downstream handlers can access
+    // both resource fields (worktreePath, branch) and input fields
+    // (file, description, scope).
+    //
+    // Side-effectful steps use tap() to preserve this context through
+    // operations that don't produce meaningful output.
     ImplementAndReview: pipe(
+      merge(),
+
       // Side effects: implement refactor and commit changes
       tap(implement),
       tap(commit),
@@ -106,8 +115,7 @@ await configBuilder()
         ),
       ),
 
-      // Create PR: generic handler, augment merges { prUrl } back into
-      // context. The context still has worktreePath (needed by dispose).
+      // Create PR: generic handler, augment merges { prUrl } back.
       augment(pipe(preparePRInput, createPR)),
     ),
   }))
@@ -122,12 +130,11 @@ await configBuilder()
 
       // For each refactor: create worktree → work → create PR → cleanup
       //
-      // create uses augment to merge worktree fields ({ worktreePath,
-      // branch }) back into the Refactor object, giving the action the
-      // full context it needs.
+      // withResource passes [resource, refactor] to the action as a tuple.
+      // dispose receives the resource directly (just { worktreePath, branch }).
       forEach(
         withResource({
-          create: augment(pipe(deriveBranch, createWorktree)),
+          create: pipe(deriveBranch, createWorktree),
           action: steps.ImplementAndReview,
           dispose: deleteWorktree,
         }),

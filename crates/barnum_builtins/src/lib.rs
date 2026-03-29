@@ -98,6 +98,29 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
             };
             Ok(obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null))
         }
+
+        BuiltinKind::ExtractIndex { value: index } => {
+            let Some(index_number) = index.as_u64() else {
+                return Err(BuiltinError {
+                    builtin: "ExtractIndex",
+                    expected: "non-negative integer index",
+                    actual: index.clone(),
+                });
+            };
+            let Value::Array(arr) = input else {
+                return Err(BuiltinError {
+                    builtin: "ExtractIndex",
+                    expected: "array",
+                    actual: input.clone(),
+                });
+            };
+            let index = usize::try_from(index_number).map_err(|_| BuiltinError {
+                builtin: "ExtractIndex",
+                expected: "index within usize range",
+                actual: index.clone(),
+            })?;
+            Ok(arr.get(index).cloned().unwrap_or(Value::Null))
+        }
     }
 }
 
@@ -208,6 +231,40 @@ mod tests {
                 value: json!("field"),
             },
             &json!("not object"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_index_gets_value() {
+        let input = json!(["a", "b", "c"]);
+        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(1) }, &input);
+        assert_eq!(result.unwrap(), json!("b"));
+    }
+
+    #[test]
+    fn extract_index_out_of_bounds_returns_null() {
+        let input = json!(["a"]);
+        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(5) }, &input);
+        assert_eq!(result.unwrap(), Value::Null);
+    }
+
+    #[test]
+    fn extract_index_rejects_non_array() {
+        let result = execute_builtin(
+            &BuiltinKind::ExtractIndex { value: json!(0) },
+            &json!("not array"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn extract_index_rejects_non_integer() {
+        let result = execute_builtin(
+            &BuiltinKind::ExtractIndex {
+                value: json!("bad"),
+            },
+            &json!([1, 2]),
         );
         assert!(result.is_err());
     }

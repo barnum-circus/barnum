@@ -93,11 +93,9 @@ pub async fn execute_typescript(
         });
     }
 
-    serde_json::from_slice(&output.stdout).map_err(|source| {
-        TypeScriptHandlerError::InvalidOutput {
-            module: module.to_owned(),
-            func: func.to_owned(),
-            source,
-        }
+    serde_json::from_slice(&output.stdout).map_err(|source| TypeScriptHandlerError::InvalidOutput {
+        module: module.to_owned(),
+        func: func.to_owned(),
+        source,
     })
 }

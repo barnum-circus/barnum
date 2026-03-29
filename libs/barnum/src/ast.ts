@@ -73,7 +73,8 @@ export type BuiltinKind =
   | { kind: "Tag"; value: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "ExtractField"; value: string };
+  | { kind: "ExtractField"; value: string }
+  | { kind: "ExtractIndex"; value: number };
 
 // ---------------------------------------------------------------------------
 // Config
