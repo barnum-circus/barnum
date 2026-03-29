@@ -69,78 +69,69 @@ pipe(
 
 Every step threads `repo`, `sha`, and `environment` through augment/tap/pick even though most steps don't use them. The pipeline value is a growing accumulation of every field any step has ever produced.
 
-With `declare`:
+With `declare` — bind the contextual values, use nested declares when a mid-pipeline result is needed later:
 
 ```ts
-declare({
-  image: pipe(pick("repo", "sha"), buildImage),
-}, ({ image }) =>
-  pipe(
-    // runTests: just needs imageTag
-    image.then(pipe(pick("imageTag"), runTests)).dropOutput(),
-
-    // deployToK8s: needs imageTag + environment from pipeline input
-    parallel(image.then(pick("imageTag")), pick("environment"))
-      .then(merge())
-      .then(deployToK8s),
-
-    // TODO: this is awkward. Having to merge image output with pipeline
-    // input manually is not much better than augment. Consider whether
-    // declare should support multiple references more ergonomically.
-  ),
-)
-```
-
-Actually, a more natural use of `declare` — bind the derived values individually:
-
-```ts
-declare({
-  image: pipe(pick("repo", "sha"), buildImage),
-  input: identity(),  // capture the pipeline input itself as a variable
-}, ({ image, input }) =>
-  pipe(
-    // runTests: just needs imageTag from image
-    image.then(pick("imageTag")).then(runTests).dropOutput(),
-
-    // deployToK8s: needs imageTag from image + environment from input
-    parallel(
-      image.then(pick("imageTag")),
-      input.then(pick("environment")),
-    ).then(merge()).then(deployToK8s),
-
-    // notifySlack: needs repo+environment from input + podName from deploy
-    // ... but we don't have the deploy result as a variable.
-  ),
-)
-```
-
-This reveals a design tension: `declare` binds values computed **before** the body runs. Values produced **during** the body (like `podName` from `deployToK8s`) need either nested `declare` or pipeline threading. The ergonomic sweet spot is binding things derived from the initial input — configuration, environment, derived identifiers — and letting the body pipeline handle step-to-step data flow.
-
-The clearest win for `declare`:
-
-```ts
-// Bind all the "contextual" values once, reference them throughout.
+// Outer declare: bind values derived from the initial input.
+// These are evaluated in parallel before the body starts.
 declare({
   input: identity<DeployInput>(),
   image: pipe(pick("repo", "sha"), buildImage),
 }, ({ input, image }) =>
   pipe(
+    // runTests: just needs imageTag from image
     image.then(pick("imageTag")).then(runTests).dropOutput(),
-    image.then(pick("imageTag"))
-      .then(augment(input.then(pick("environment"))))
-      .then(deployToK8s),
+
+    // deployToK8s: needs imageTag from image + environment from input.
+    // Assemble its exact input from the two variables.
+    parallel(
+      image.then(pick("imageTag")),
+      input.then(pick("environment")),
+    ).then(merge()).then(deployToK8s),
+
     // deployToK8s output: { podName }
-    augment(input.then(pick("repo", "sha")))
-      .then(augment(input.then(pick("environment"))))
-      .then(notifySlack)
-      .dropOutput(),
-    augment(input.then(pick("repo", "sha")))
-      .then(updateDashboard),
+    // podName is a mid-pipeline result. Nested declare captures it
+    // as a variable so downstream steps can reference it alongside
+    // the original input and image.
+    declare({
+      deploy: identity<{ podName: string }>(),
+    }, ({ deploy }) =>
+      pipe(
+        // notifySlack: repo + environment from input, podName from deploy
+        parallel(
+          input.then(pick("repo", "environment")),
+          deploy.then(pick("podName")),
+        ).then(merge()).then(notifySlack).dropOutput(),
+
+        // updateDashboard: repo + sha from input, podName from deploy
+        parallel(
+          input.then(pick("repo", "sha")),
+          deploy.then(pick("podName")),
+        ).then(merge()).then(updateDashboard),
+      ),
+    ),
   ),
 )
 ```
 
-The key improvement: `input` and `image` are available at any point without threading. Steps that need `repo` grab it from `input`; steps that need `imageTag` grab it from `image`. No step is forced to accept fields it doesn't use just to pass them downstream.
+What this demonstrates:
+
+1. **Outer `declare`** binds `input` and `image` from the pipeline input. Both are available throughout the entire body without threading.
+
+2. **Nested `declare`** captures `podName` after `deployToK8s` runs. The inner body can reference `input`, `image` (from the outer scope), and `deploy` (from the inner scope). No collisions — each gets a unique ID.
+
+3. **Each handler receives exactly what it needs.** `notifySlack` gets `{ repo, environment, podName }` assembled from two variables. No step carries fields it doesn't use.
+
+4. **No augment/tap/pick threading.** The pipeline value at each point is either the output of the previous step or ignored (via `.dropOutput()`). Context comes from variable references, not the pipeline.
+
+Compare the two approaches:
+
+| | Without `declare` | With `declare` |
+|---|---|---|
+| Pipeline value | Accumulates every field | Just the current step's output |
+| Context access | `pick` from the bloated pipeline | `varRef.then(pick(...))` from variables |
+| Adding a new step | Must check if pipeline has the right fields | Reference the right variable |
+| Removing a step | Must verify downstream steps still have their fields | Variables are independent |
 
 ## Identity model: unique IDs, no names, no collisions
 
