@@ -96,25 +96,35 @@ Remove `LoopAction` from the tree AST union. Remove the Loop frame kind from the
 
 Run all demos. They should work unchanged because the surface API (`loop`, `recur`, `done`) is the same.
 
-## HOAS opportunity
+## HOAS (required, not optional)
 
-Currently, `recur()` and `done()` are standalone combinators. With HOAS, loop could provide them as callback parameters:
+Each `loop` invocation gensyms a fresh EffectId. The `recur` and `done` tokens are `Perform(thatId)` wrappers provided via the callback:
 
 ```ts
-// Current:
-loop(
-  pipe(body, branch({ HasErrors: pipe(fix, recur()), Clean: done() }))
-)
-
-// With HOAS:
 loop((recur, done) =>
-  pipe(body, branch({ HasErrors: pipe(fix, recur()), Clean: done() }))
+  pipe(body, branch({ HasErrors: pipe(fix, recur), Clean: done }))
 )
 ```
 
-The HOAS version ensures recur/done can only be used within the loop body (TypeScript scoping enforces this). The non-HOAS version allows recur/done to be used outside a loop, which is a runtime error ("unhandled LoopControl effect").
+`recur` wraps the value as `{ kind: "Continue", value }` and performs the effect. `done` wraps as `{ kind: "Break", value }` and performs. The Handle's handler DAG dispatches on Continue/Break and produces RestartBody/Discard tagged output.
 
-Recommendation: add the HOAS form as the primary API. Keep the standalone `recur()`/`done()` for backward compatibility and for use inside `registerSteps` where the loop callback isn't available.
+Because each loop has its own EffectId, nested loops get labeled breaks for free:
+
+```ts
+loop((recurOuter, doneOuter) =>
+  loop((recurInner, doneInner) =>
+    pipe(body, branch({
+      ContinueInner: recurInner,
+      BreakInner: doneInner,
+      BreakBoth: doneOuter,       // breaks out of BOTH loops
+    }))
+  )
+)
+```
+
+`doneOuter` is `Perform(effectId_3)`, `doneInner` is `Perform(effectId_4)`. The outer Handle matches `effectId_3`, the inner matches `effectId_4`. `doneOuter` bubbles past the inner Handle (no match) and is caught by the outer.
+
+There are no standalone `recur()`/`done()` combinators. The HOAS callback is the only way to get the tokens. If you need to pass them to a utility function, pass them as parameters — explicit propagation.
 
 ## Test strategy
 

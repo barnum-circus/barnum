@@ -159,14 +159,20 @@ What we're already doing — and should do consistently — is Higher-Order Abst
 
 | Feature | HOAS callback | Opaque reference | Current status |
 |---|---|---|---|
-| `createEffect` | N/A (module-level factory) | EffectId (gensym'd u32) | Proposed |
-| `declare` | `({ x }) => body` | VarRef (gensym'd ID) | Proposed |
-| `loop` | `(recur, done) => body` | Perform(LoopControl) | Not yet HOAS |
-| `tryCatch` | `body, recovery` | Perform(Throw) | Proposed |
+| `declare` | `({ x }) => body` | VarRef = `Perform(freshEffectId)` | Proposed |
+| `tryCatch` | `(throwError) => body, recovery` | throwError = `Perform(freshEffectId)` | Proposed |
+| `loop` | `(recur, done) => body` | recur/done = `Perform(freshEffectId)` | Not yet HOAS |
 | `scope` | `(restart, exit) => body` | Jump references | Not yet implemented |
 | `registerSteps` | `({ stepRef }) => steps` | Step references | Exists (string-based) |
 
-The pattern is: `combinator(callback)` where the callback receives opaque AST nodes and returns an AST that uses them. TypeScript enforces that references are used within their lexical scope. The builder gensyms the IDs.
+The pattern is: every combinator that installs a Handle:
+1. Gensyms a fresh `EffectId`
+2. Creates a `Handle` keyed on that ID
+3. Passes `Perform(thatId)` wrappers to the callback as opaque `Pipeable` nodes
+
+TypeScript enforces that references are used within their lexical scope. The builder gensyms the IDs. **There are no global/module-level effect tokens.** The HOAS callback is the sole distribution mechanism for effect tokens. If a utility function needs to throw, it receives the throw token as a parameter — explicit propagation, not ambient authority.
+
+This gives per-Handle precision: in nested tryCatch, `throwOuter` skips the inner handler and targets the outer one directly. In nested loops, `doneOuter` breaks out of both loops. No re-throwing, no labeled-break syntax — just lexical references.
 
 `registerSteps` currently uses user-visible string names (`stepRef("TypeCheck")`). Under HOAS, these would be opaque references from the batch callback. The names become metadata (for logs/errors), not identifiers.
 

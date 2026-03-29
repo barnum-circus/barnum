@@ -24,14 +24,43 @@ This is the first zero-shot continuation pattern. The handler never resumes. The
 
 ```ts
 // User writes:
-tryCatch(body, recovery)
+tryCatch(
+  (throwError) => body_using_throwError,
+  recovery,
+)
 
-// Compiles to:
+// TypeScript builder:
+// 1. Gensyms a fresh EffectId for this tryCatch instance
+// 2. Creates throwError = Perform(freshEffectId) wrapper
+// 3. Calls the callback to get the body AST
+// 4. Compiles to:
 Handle(
-  { "Throw": recovery },    // handler DAG = the recovery branch
-  body                       // may contain Perform(Throw) at error points
+  { [freshEffectId]: recoveryHandler },   // handler DAG = the recovery branch
+  body                                     // contains Perform(freshEffectId) at throw sites
 )
 ```
+
+The `throwError` token has type `Pipeable<TError, never>`. It takes the error payload and never returns — the continuation is discarded. TypeScript can enforce that code after `throwError` in a Chain is unreachable.
+
+Because each tryCatch mints its own EffectId, nested tryCatch gives precise targeting:
+
+```ts
+tryCatch((throwOuter) =>
+  tryCatch((throwInner) =>
+    pipe(
+      riskyAction,
+      branch({
+        Recoverable: throwInner,   // caught by inner
+        Fatal: throwOuter,          // skips inner, caught by outer
+      }),
+    ),
+    innerRecovery,
+  ),
+  outerRecovery,
+)
+```
+
+No re-throwing needed. `throwOuter` is `Perform(effectId_7)`, `throwInner` is `Perform(effectId_8)`. Each Handle matches its own ID.
 
 The handler DAG for Throw receives `{ payload: errorData }` and runs the recovery action on the payload. The handler produces a Discard tagged output: the continuation is dropped and the Handle frame exits with the recovery result.
 
@@ -50,9 +79,9 @@ The Handle frame interprets `{ kind: "Discard", value }`: it moves the continuat
 
 Throw can come from two sources:
 
-### 1. Explicit Perform(Throw) via the intent pattern
+### 1. Explicit throw via the intent pattern
 
-Handlers are opaque — they cannot emit effects directly. They return discriminated unions describing their intent. The AST interprets those unions and emits Perform(Throw) when appropriate.
+Handlers are opaque — they cannot emit effects directly. They return discriminated unions describing their intent. The AST interprets those unions and throws when appropriate.
 
 ```ts
 // Handler returns a result union:
@@ -62,41 +91,44 @@ type HandlerResult =
 
 // AST interprets the intent:
 tryCatch(
-  pipe(
+  (throwError) => pipe(
     invoke(riskyHandler),
     branch({
       Ok: pick("value"),
-      Err: pipe(pick("error"), Perform("Throw")),
+      Err: pipe(pick("error"), throwError),
     }),
   ),
   handleError,
 )
 ```
 
-This is boilerplate. A convenience combinator wraps it:
+A convenience combinator wraps the boilerplate. It takes the throw token as a parameter (explicit propagation):
 
 ```ts
-// invokeWithThrow: Invoke + branch on error union + Perform(Throw)
+// invokeWithThrow: Invoke + branch on error union + throw
 function invokeWithThrow<TIn, TOut, TErr>(
   handler: Pipeable<TIn, { kind: "Ok"; value: TOut } | { kind: "Err"; error: TErr }>,
+  throwError: Pipeable<TErr, never>,
 ): TypedAction<TIn, TOut> {
   return pipe(
     handler,
     branch({
       Ok: pick("value"),
-      Err: pipe(pick("error"), Perform("Throw")),
+      Err: pipe(pick("error"), throwError),
     }),
   );
 }
 
 // Usage:
 tryCatch(
-  pipe(invokeWithThrow(riskyHandler), processResult),
+  (throwError) => pipe(invokeWithThrow(riskyHandler, throwError), processResult),
   handleError,
 )
 ```
 
 The handler remains oblivious to the effect system. It returns data. The AST translates data into control flow. This is the Free Monad / Control Plane / Data Plane separation (see EFFECTS_ROADMAP.md).
+
+The throw token is always passed explicitly. If a utility function needs to throw, its API surface declares it — same pattern as Rust's `Result` return types.
 
 ### 2. Handler execution failure
 
