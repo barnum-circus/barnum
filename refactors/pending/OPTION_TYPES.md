@@ -375,13 +375,39 @@ Option.partition<T>(): TypedAction<Option<T>[], { some: T[]; none: void[] }>
 
 **Status**: Low priority. `collect` covers the common case.
 
+## Querying (boolean predicates)
+
+### `Option.isSome` / `Option.isNone`
+
+```ts
+Option.isSome<T>(): TypedAction<Option<T>, boolean>
+Option.isNone<T>(): TypedAction<Option<T>, boolean>
+```
+
+Desugar to:
+```ts
+// isSome
+branch({ Some: pipe(drop(), constant(true)), None: pipe(drop(), constant(false)) })
+// isNone
+branch({ Some: pipe(drop(), constant(false)), None: pipe(drop(), constant(true)) })
+```
+
+These are straightforward but rarely useful in practice — booleans can't feed into `branch`, so you'd almost always just branch on `Some`/`None` directly instead. Present for completeness.
+
+### `Option.isSomeAnd`
+
+```ts
+Option.isSomeAnd<T>(predicate: TypedAction<T, boolean>): TypedAction<Option<T>, boolean>
+```
+
+Desugars to:
+```ts
+branch({ Some: predicate, None: pipe(drop(), constant(false)) })
+```
+
+Same caveat — the boolean output limits composability. Use `branch` directly when possible.
+
 ## Combinators NOT ported from Rust
-
-### Boolean predicates: `isSome`, `isNone`, `isSomeAnd`
-
-These produce `boolean`. In barnum, booleans aren't tagged unions, so the result can't feed into `branch`. The tagged union itself IS the decision mechanism — you branch on `Some`/`None` directly. These predicates are useless without an `if` combinator.
-
-**Skip.** Use `branch` directly.
 
 ### Mutation: `getOrInsert`, `getOrInsertWith`, `take`, `replace`
 
@@ -391,13 +417,9 @@ These mutate the Option in place. Barnum values are immutable AST nodes.
 
 ### `unwrapOrDefault`
 
-Rust's `unwrap_or_default` uses `Default` trait. Barnum has no default concept. `unwrapOr(constant(defaultValue))` is the equivalent.
+Rust's `unwrap_or_default` uses the `Default` trait. Barnum has no traits. `unwrapOr(constant(defaultValue))` is the equivalent.
 
 **Skip.** Subsumed by `unwrapOr`.
-
-### `contains` (deprecated in Rust)
-
-Subsumed by `isSomeAnd`, which is itself skipped.
 
 ## Priority for implementation
 
@@ -481,3 +503,37 @@ Options:
 3. **Defer**: Use `forEach(action)` → `Option<T>[]`, then post-process in a handler. Pragmatic but defeats the point of typed combinators.
 
 **Recommendation**: Option 2 (FilterMap AST node). It's the natural primitive — `collect` is just `filterMap(identity())`.
+
+## Files to change
+
+| File | What changes |
+|------|-------------|
+| `libs/barnum/src/ast.ts` | Add `OptionDef<T>`, `Option<T>` type aliases. Add `FilterMap` to `Action` union if implementing `collect`. |
+| `libs/barnum/src/builtins.ts` | Add `Option` namespace object with all tier 1–2 combinators. Each is a thin wrapper around `branch` + existing builtins. |
+| `libs/barnum/tests/types.test.ts` | Type-level tests for Option combinators: `Option.map` preserves Option wrapper, `Option.andThen` chains correctly, `Option.unwrapOr` extracts, etc. |
+| `libs/barnum/tests/patterns.test.ts` | Runtime tests: Option combinators produce correct AST shapes. |
+
+### Existing functions that don't change
+
+- **`tag()`** — `Option.some()` and `Option.none()` call `tag<OptionDef<T>, K>()` internally. No signature change.
+- **`branch()`** — Already supports `TaggedUnion` via `ExtractDef`/`BranchKeys`/`BranchPayload`. No change.
+- **`identity()`, `drop()`, `pipe()`, `constant()`** — Used inside Option combinators' desugarings. No change.
+- **`forEach()`** — Works on arrays. No change. `Option.filterMap` composes `forEach` + `Option.collect`.
+
+### New AST/engine work (for `collect` / `filterMap`)
+
+If implementing `Option.collect()`:
+
+**TypeScript**: Add `FilterMap` to the `Action` union in `ast.ts`:
+```ts
+export interface FilterMapAction {
+  kind: "FilterMap";
+  action: Action;  // must return Option<T>; collects Some values
+}
+```
+
+**Rust engine** (`barnum_engine`): Add `FilterMap` handling to `WorkflowState`. Similar to `ForEach` but filters: run the action per element, collect only `Some` results, drop `None`. Needs `FlatAction::FilterMap` variant and corresponding `Frame::FilterMap` variant.
+
+**Rust AST** (`barnum_ast`): Add `Action::FilterMap { action: Box<Action> }`.
+
+**Schema regeneration**: `barnum-config-schema.json`, `.zod.ts` files need regenerating after AST changes.
