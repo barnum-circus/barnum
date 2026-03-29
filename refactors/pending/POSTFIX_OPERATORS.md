@@ -72,7 +72,17 @@ Renamed from `.extractField()` — shorter, reads well as postfix.
 
 ### `.tap(action)` — run side effect, preserve value
 
-Not convinced this reads naturally. `action.tap(sideEffect)` means "run action, then run sideEffect for side effects, then return action's result." Defer until the value is clearer.
+Want this. The postfix form solves a real ergonomic problem: the standalone `tap()` requires three type parameters (`TInput`, `TOutput`, `TRefs`) because it can't infer `TInput` from the pipeline context. The postfix form knows `Out` from `this`, so zero explicit type params are needed:
+
+```ts
+// Standalone: three type params, two of which are noise
+tap<Ctx, any, "TypeCheck">(stepRef("TypeCheck"))
+
+// Postfix: zero type params
+someCtxAction.tap(stepRef("TypeCheck"))
+```
+
+Signature: `tap<TRefs extends string = never>(action: Pipeable<Out, any, TRefs>): TypedAction<In, Out, Refs | TRefs>`. `Out` is known, `TRefs` is inferred from the argument, `TOutput` is hardcoded to `any` (tap discards it).
 
 ### `.augment(action)` — enrich with extra fields
 
