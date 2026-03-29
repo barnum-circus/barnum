@@ -132,12 +132,11 @@ export type TypedAction<
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
   /** Dispatch on a tagged union output. `a.branch(cases)` ≡ `pipe(a, branch(cases))`. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  branch<TCases extends Record<string, ChainableAction<any, any, any>>>(
+  branch<TCases extends Record<string, Action>>(
     cases: TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
-  flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : never, Refs>;
+  flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop())`. */
   drop(): TypedAction<In, never, Refs>;
   /** Wrap output as a tagged union member. `a.tag("Ok")` ≡ `pipe(a, tag("Ok"))`. */

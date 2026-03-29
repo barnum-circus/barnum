@@ -28,6 +28,7 @@ import {
   typeCheck,
   classifyErrors,
   fix,
+  type ClassifyResult,
 } from "./handlers.js";
 
 // -----------------------------------------------------------------------
@@ -251,7 +252,10 @@ describe("postfix operators", () => {
     // Equivalent to: pipe(typeCheck, classifyErrors, branch({ ... }))
     // Chain nesting differs (left vs right associative) but semantically equivalent
     const action = pipe(typeCheck, classifyErrors).branch({
-      HasErrors: pipe(extractField("errors"), forEach(fix)),
+      HasErrors: pipe(
+        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+        forEach(fix),
+      ),
       Clean: drop(),
     });
     expect(action.kind).toBe("Chain");

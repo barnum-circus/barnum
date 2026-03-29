@@ -352,7 +352,10 @@ describe("combinator types", () => {
 describe("postfix operator types", () => {
   it(".branch(): input preserved, output is union of case outputs", () => {
     const action = classifyErrors.branch({
-      HasErrors: pipe(extractField("errors"), forEach(fix)),
+      HasErrors: pipe(
+        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+        forEach(fix),
+      ),
       Clean: drop(),
     });
     assertExact<IsExact<ExtractInput<typeof action>, TypeError[]>>();
@@ -418,7 +421,11 @@ describe("postfix operator types", () => {
       typeCheck,
       classifyErrors,
     ).branch({
-      HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+      HasErrors: pipe(
+        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+        forEach(fix),
+        recur(),
+      ),
       Clean: done(),
     });
     expect(action.kind).toBe("Chain");
