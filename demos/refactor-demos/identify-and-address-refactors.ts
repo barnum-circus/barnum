@@ -52,6 +52,43 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
+// The action that runs inside each worktree, extracted for readability.
+// Implements the refactor, commits, runs the type-check/fix cycle,
+// judges quality in a loop, and creates a PR.
+const implementAndReview = (steps: { TypeCheck: any; Fix: any }) =>
+  pipe(
+    implement,
+    commit,
+    drop(),
+
+    // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
+    steps.TypeCheck,
+
+    // Judge/revise loop: review the refactor, revise if needed.
+    // drop() discards the TypeCheck output — judgeRefactor
+    // reads the filesystem, not pipeline data.
+    loop(
+      pipe(
+        drop(),
+        judgeRefactor,
+        classifyJudgment,
+        branch({
+          NeedsWork: pipe(
+            extractField("instructions"),
+            applyFeedback,
+            drop(),
+            steps.TypeCheck,
+            recur(),
+          ),
+          Approved: done(),
+        }),
+      ),
+    ),
+
+    drop(),
+    createPR,
+  );
+
 await configBuilder()
   // Mutual recursion: TypeCheck → Fix → TypeCheck
   //
@@ -83,38 +120,7 @@ await configBuilder()
       forEach(
         withResource({
           create: createWorktree,
-          action: pipe(
-            implement,
-            commit,
-            drop(),
-
-            // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-            steps.TypeCheck,
-
-            // Judge/revise loop: review the refactor, revise if needed.
-            // drop() discards the TypeCheck output — judgeRefactor
-            // reads the filesystem, not pipeline data.
-            loop(
-              pipe(
-                drop(),
-                judgeRefactor,
-                classifyJudgment,
-                branch({
-                  NeedsWork: pipe(
-                    extractField("instructions"),
-                    applyFeedback,
-                    drop(),
-                    steps.TypeCheck,
-                    recur(),
-                  ),
-                  Approved: done(),
-                }),
-              ),
-            ),
-
-            drop(),
-            createPR,
-          ),
+          action: implementAndReview(steps),
           dispose: deleteWorktree,
         }),
       ),
