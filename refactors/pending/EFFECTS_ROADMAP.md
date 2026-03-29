@@ -1,5 +1,7 @@
 # Algebraic Effects: Implementation Roadmap
 
+This document describes the **final state** after all phases are complete. The "What we have now" section is the starting point. "Where we're going" is the end state. The phases section describes the intermediate milestones to get there — see each phase's own doc for intermediate details.
+
 ## What we have now
 
 ### The tree AST (TypeScript)
@@ -79,30 +81,39 @@ type ReviewResult =
   | { kind: "Approved" }
   | { kind: "RequiresHuman"; diffUrl: string };
 
-// AST interprets intent:
+// AST interprets intent (inside a scope that provides suspendEffect):
 pipe(
   invoke(automatedReview),
   branch({
     Approved: proceed,
-    RequiresHuman: Perform("Suspend"),  // AST emits the effect, not the handler
+    RequiresHuman: suspendEffect,  // AST emits the effect, not the handler
   }),
 )
 ```
 
 This pattern is already how Barnum works. The `typeCheck -> classifyErrors -> branch` pattern in the demos is exactly intent-returning. The handler classifies errors and returns a tagged union. The AST branches on it. The handler never manipulates the execution graph.
 
-Convenience combinators should wrap common intent patterns. For example, `invokeWithThrow(handler)` wraps an Invoke + branch on error union + Perform(Throw):
+Convenience combinators should wrap common intent patterns. For example, `invokeWithThrow(handler, throwError)` wraps an Invoke + branch on error union + throw:
 
 ```ts
-function invokeWithThrow<TIn, TOut>(handler: Pipeable<TIn, Result<TOut, Error>>) {
+function invokeWithThrow<TIn, TOut, TError>(
+  handler: Pipeable<TIn, Result<TOut, TError>>,
+  throwError: Pipeable<TError, never>,
+) {
   return pipe(
     handler,
     branch({
       Ok: pick("value"),
-      Err: pipe(pick("error"), Perform("Throw")),
+      Err: pipe(pick("error"), throwError),
     }),
   );
 }
+
+// Usage — throwError comes from the HOAS callback:
+tryCatch(
+  (throwError) => invokeWithThrow(riskyHandler, throwError),
+  handleError,
+)
 ```
 
 ### The effect boundary: in-band vs out-of-band
@@ -118,21 +129,23 @@ Do NOT add an `Effect::Log` or `Perform("barnum:log")`. It would route observabi
 
 ### Effect routing: gensym'd opaque IDs
 
-Effects are first-class tokens created by the TypeScript builder, using the same gensym mechanism as declare IDs and step references. The Rust engine routes on opaque `u32` IDs — it never interprets effect names.
+Every Handle-installing combinator (`declare`, `tryCatch`, `loop`, etc.) gensyms a fresh `EffectId` at call time. The Rust engine routes on opaque `u32` IDs — it never interprets effect names.
 
 ```ts
-// TypeScript: createEffect returns a typed token with a gensym'd ID.
-export const ReadVar = createEffect<DeclareId, Value>("ReadVar");
-export const Throw = createEffect<Value, never>("Throw");
-export const LoopControl = createEffect<LoopPayload, never>("LoopControl");
+// Inside the declare() combinator:
+function declare(bindings, bodyCallback) {
+  const effectId = generateUniqueId();  // monotonic u32
+  const varRefs = createVarRefs(bindings, effectId);
+  const body = bodyCallback(varRefs);   // VarRefs are Perform(effectId)
+  return Handle({ [effectId]: readVarHandler }, body);
+}
 
-function createEffect<TPayload, TResume>(debugName: string) {
-  return {
-    id: generateUniqueId(),    // monotonic u32
-    debugName,                 // for logs/errors only
-    _payload: undefined as unknown as TPayload,   // phantom type
-    _resume: undefined as unknown as TResume,      // phantom type
-  };
+// Inside the tryCatch() combinator:
+function tryCatch(bodyCallback, recovery) {
+  const effectId = generateUniqueId();
+  const throwError = Perform(effectId);  // typed as Pipeable<TError, never>
+  const body = bodyCallback(throwError);
+  return Handle({ [effectId]: recoveryHandler(recovery) }, body);
 }
 ```
 
@@ -147,11 +160,9 @@ pub enum FlatAction {
 }
 ```
 
-This avoids both the rigidity of a Rust enum (no recompilation for new effects) and the collision risk of global strings (IDs are unique by construction). A Handle block can only intercept an effect if it has the lexical reference to the effect token — this is the object-capability property for free.
+There are no global/module-level effect tokens. Each combinator invocation creates its own EffectId. This avoids both the rigidity of a Rust enum (no recompilation for new effects) and the collision risk of global strings (IDs are unique by construction). A Handle block can only intercept effects whose EffectId it holds — the HOAS callback is the sole distribution mechanism.
 
-Framework-level effects (ReadVar, Throw, LoopControl) are defined as module-level exports. User-defined effects use the same mechanism. The Rust engine doesn't distinguish — it only matches integers.
-
-The `debugName` string is metadata for error messages and telemetry. It never participates in routing.
+The `debugName` string (passed to `generateUniqueId` for diagnostics) is metadata for error messages and telemetry. It never participates in routing.
 
 ## The HOAS pattern
 
@@ -248,11 +259,11 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 ### TypeScript changes
 
 - New AST node types: `HandleAction`, `PerformAction` (no ResumeAction — resumption is internal to the Handle frame)
-- `createEffect()` factory: returns typed effect tokens with gensym'd IDs
-- `declare()` function: compiles to Chain + Handle(ReadVar) + Perform(ReadVar)
-- `tryCatch()` function: compiles to Handle(Throw) + Perform(Throw)
-- `loop()` rewritten: compiles to Handle(LoopControl) + Perform(LoopControl)
-- `recur()` / `done()` rewritten: compile to Perform(LoopControl) with Continue/Break payload
+- Each Handle-installing combinator gensyms a fresh `EffectId` and provides `Perform(thatId)` wrappers via HOAS callback
+- `declare()` function: HOAS callback provides `VarRef<T>` nodes, compiles to Chain + Handle(freshId) + Perform(freshId)
+- `tryCatch()` function: HOAS callback provides `throwError` token, compiles to Handle(freshId) + Perform(freshId)
+- `loop()` rewritten: HOAS callback provides `recur`/`done` tokens, compiles to Handle(freshId) + Perform(freshId)
+- Standalone `recur()` / `done()` removed — tokens come from the HOAS callback only
 - `LoopAction` removed from Action union
 - `StepAction` potentially removed (replaced by Handle-based mutual recursion, or kept for backward compat during migration)
 
