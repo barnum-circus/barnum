@@ -87,6 +87,14 @@ branch({
 
 Both values in the record are thunks. TypeScript must unify `Out` across cases where some are `TypedAction` and others are `() => TypedAction`. This needs validation — if it doesn't work, `branch` could be excluded.
 
+## Note: generic handlers need the step config trick
+
+`createHandler` returns a concrete `Handler<In, Out>` — a fixed type determined by the validators. There's no way to make a handler generic (e.g., `T[] → T`), because the generic must be bound at handler creation time, before the pipeline's types flow through.
+
+Workaround: use `createHandlerWithConfig`. The step config carries the type information that would otherwise be a generic parameter. For example, a "first element" handler that takes `T[]` and returns `T` could use a step config to carry the expected element schema, and the TypeScript type system sees the config-bearing wrapper as a function that returns a concrete `TypedAction<SpecificArray, SpecificElement>`.
+
+This is a fundamental limitation of the handler-as-export-name architecture. A handler is a module + export name resolved at runtime. Generics would require the handler to be a TypeScript function called at config construction time, which is what `createHandlerWithConfig` provides via the curried `(config) => TypedAction` pattern.
+
 ## Alternative considered
 
 Loop-with-closure (`loop(({ recur, done }) => body)`) solves recur/done specifically but doesn't help drop, identity, merge, flatten. The thunk approach is orthogonal and more general.
