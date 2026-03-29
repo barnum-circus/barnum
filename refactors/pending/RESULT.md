@@ -77,7 +77,6 @@ Same as Option — Rust's eager/lazy pairs collapse:
 |---|---|---|
 | `unwrap_or(val)` / `unwrap_or_else(f)` | `Result.unwrapOr(action)` | Actions are already lazy |
 | `or(res)` / `or_else(f)` | `Result.or(action)` | Actions are already lazy |
-| `map_or(val, f)` / `map_or_else(d, f)` | `Result.mapOr(defaultAction, action)` | Actions are already lazy |
 
 ## Constructors
 
@@ -150,25 +149,6 @@ branch({
   Err: pipe(tap(action), Result.err<T, E>()),
 })
 ```
-
-### `Result.mapOr` — transform Ok or provide default
-
-```ts
-Result.mapOr<T, U, E>(
-  defaultAction: TypedAction<E, U>,
-  action: TypedAction<T, U>,
-): TypedAction<Result<T, E>, U>
-```
-
-Desugars to:
-```ts
-branch({
-  Ok: action,
-  Err: defaultAction,  // receives E, produces U
-})
-```
-
-Note: unlike Rust's `map_or` where the default is a value, the default here receives the `Err` payload. This is more powerful — the default can inspect the error.
 
 ## Boolean operations (and/or)
 
@@ -419,7 +399,6 @@ Not applicable — immutable AST nodes.
 ### Tier 2: useful
 
 - `Result.or(fallback)` — fallback on Err
-- `Result.mapOr(default, action)` — transform Ok or default from Err
 - `Result.flatten()` — unwrap nested Result
 - `Result.toOption()` — convert to Option
 - `propagate(exit)` — sugar for ? operator
