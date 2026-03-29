@@ -95,12 +95,13 @@ export interface Config<Out = any> {
  * An action with tracked input/output types. Phantom fields enforce variance
  * and are never set at runtime — they exist only for the TypeScript compiler.
  *
- * __phantom_in: contravariant — ensures pipe chaining correctness
+ * __phantom_in: contravariant — ensures pipe/then chaining correctness
  *   (output of step N is assignable to input of step N+1)
  * __phantom_out: covariant — tracks output type
  * __in: covariant — enables config() to reject workflows that expect input
  *   (the contravariant phantom makes never the most permissive input,
- *   so a second covariant phantom is needed for the entry point check)
+ *   so a second covariant phantom is needed for the entry point check).
+ *   NOT used in pipe/combinator parameter types — see Pipeable.
  * Refs: tracks step reference names through combinators for compile-time
  *   validation in registerSteps (see ValidateStepRefs)
  */
@@ -144,6 +145,37 @@ export type TypedAction<
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>, Refs>;
+};
+
+/**
+ * Parameter type for pipe and combinators. Contains only the phantom fields
+ * used for type inference — no `__in` and no methods.
+ *
+ * Why no `__in`: The covariant In field creates inference conflicts when pipe
+ * infers a shared type parameter T from both a previous step's Out and the
+ * next step's In. Without `__in`, pipe infers T from `__phantom_out`
+ * (covariant) and checks it via `__phantom_in` (contravariant), which allows
+ * structural subtyping: ClassifyResult flows into branch({HasErrors: ..., Clean: ...}).
+ *
+ * Why no methods: TypedAction's methods (forEach, then, etc.) return full
+ * TypedAction types with `__in`, which would re-introduce covariant inference
+ * sites. Stripping methods ensures only __phantom_in and __phantom_out
+ * participate in inference.
+ *
+ * TypedAction (with __in and methods) is assignable to Pipeable because
+ * Pipeable only requires a subset of properties.
+ *
+ * `__in` remains in TypedAction for config() — the entry-point check that
+ * rejects workflows expecting input.
+ */
+export type Pipeable<
+  In = unknown,
+  Out = unknown,
+  Refs extends string = never,
+> = Action & {
+  __phantom_in?: (input: In) => void;
+  __phantom_out?: () => Out;
+  __refs?: { _brand: Refs };
 };
 
 
@@ -422,7 +454,7 @@ export function forEach<In, Out, R extends string = never>(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function branch<TCases extends Record<string, TypedAction<any, any, any>>>(
+export function branch<TCases extends Record<string, Pipeable<any, any, any>>>(
   cases: TCases,
 ): TypedAction<
   { kind: keyof TCases & string },
@@ -436,10 +468,23 @@ export type LoopResult<TContinue, TBreak> =
   | { kind: "Continue"; value: TContinue }
   | { kind: "Break"; value: TBreak };
 
-export function loop<In, Out, R extends string = never>(
-  body: TypedAction<In, LoopResult<unknown, Out>, R>,
-): TypedAction<In, Out, R> {
-  return typedAction({ kind: "Loop", body });
+/**
+ * Extract the Break value type from a LoopResult union.
+ *
+ * Uses distributive conditional types to pick out the Break member(s)
+ * and extract their value type. This is necessary because TypeScript
+ * cannot decompose a union during generic inference — `loop<In, TContinue, Out>`
+ * would infer both TContinue and Out as the same union, losing the
+ * discriminant-based separation. By inferring the body's full output type
+ * and then extracting the Break value via a conditional, we get correct results.
+ */
+type ExtractBreakValue<T> = T extends { kind: "Break"; value: infer V } ? V : never;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function loop<In, TOut extends LoopResult<any, any>, R extends string = never>(
+  body: Pipeable<In, TOut, R>,
+): TypedAction<In, ExtractBreakValue<TOut>, R> {
+  return typedAction({ kind: "Loop", body: body as Action });
 }
 
 /**

@@ -41,6 +41,9 @@ import {
   type ClassifyResult,
 } from "./handlers.js";
 
+type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
+type Clean = Extract<ClassifyResult, { kind: "Clean" }>;
+
 // ---------------------------------------------------------------------------
 // Type assertion helpers (compile-time only)
 // ---------------------------------------------------------------------------
@@ -280,19 +283,20 @@ describe("combinator types", () => {
     const action = pipe(
       classifyErrors,
       branch({
-        HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
-        Clean: done(),
+        HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+        Clean: done<Clean>(),
       }),
     );
     assertExact<
       IsExact<ExtractInput<typeof action>, TypeError[]>
     >();
-    // Branch output is the union of recur's Continue and done's Break
+    // Branch output is the union of recur's Continue and done's Break.
+    // recur() is a zero-arg generic, so TValue defaults to unknown.
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
-        | { kind: "Continue"; value: { file: string; fixed: boolean }[] }
-        | { kind: "Break"; value: { kind: "Clean" } }
+        | { kind: "Continue"; value: unknown }
+        | { kind: "Break"; value: Clean }
       >
     >();
     expect(action.kind).toBe("Chain");
@@ -305,15 +309,15 @@ describe("combinator types", () => {
         typeCheck,
         classifyErrors,
         branch({
-          HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
-          Clean: done(),
+          HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+          Clean: done<Clean>(),
         }),
       ),
     );
     // Loop input: whatever drop() accepts (inferred from context)
     // Loop output: the Break value from done() in the Clean case
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { kind: "Clean" }>
+      IsExact<ExtractOutput<typeof action>, Clean>
     >();
     expect(action.kind).toBe("Loop");
   });
@@ -330,15 +334,15 @@ describe("combinator types", () => {
           typeCheck,
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
-            Clean: done(),
+            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
+            Clean: done<Clean>(),
           }),
         ),
       ),
     );
     assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, { kind: "Clean" }>
+      IsExact<ExtractOutput<typeof action>, Clean>
     >();
     expect(action.kind).toBe("Chain");
   });

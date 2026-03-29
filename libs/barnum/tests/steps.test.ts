@@ -38,7 +38,10 @@ import {
   typeCheck,
   classifyErrors,
   fix,
+  type ClassifyResult,
 } from "./handlers.js";
+
+type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
 
 // -----------------------------------------------------------------------
 // Named steps
@@ -82,7 +85,7 @@ describe("named steps", () => {
             classifyErrors,
             branch({
               HasErrors: pipe(
-                extractField("errors"),
+                extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
                 recur(),
               ),
@@ -117,7 +120,7 @@ describe("named steps", () => {
             classifyErrors,
             branch({
               HasErrors: pipe(
-                extractField("errors"),
+                extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
                 recur(),
               ),
@@ -146,7 +149,7 @@ describe("workflow self-reference", () => {
           constant([{ file: "a.ts", message: "err" }]),
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField("errors"), forEach(fix), drop(), self),
+            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), drop(), self),
             Clean: pipe(drop(), constant({ done: true })),
           }),
         ),
@@ -324,7 +327,7 @@ describe("kitchen sink", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(extractField("errors"), forEach(fix), recur()),
+              HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur()),
               Clean: done(),
             }),
           ),

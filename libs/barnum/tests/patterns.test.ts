@@ -31,6 +31,8 @@ import {
   type ClassifyResult,
 } from "./handlers.js";
 
+type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
+
 // -----------------------------------------------------------------------
 // Pipe
 // -----------------------------------------------------------------------
@@ -173,7 +175,7 @@ describe("loop", () => {
             classifyErrors,
             branch({
               HasErrors: pipe(
-                extractField("errors"),
+                extractField<HasErrors, "errors">("errors"),
                 forEach(fix),
                 recur(),
               ),
@@ -278,7 +280,7 @@ describe("reader monad pattern", () => {
     const cfg = config(
       pipe(
         constant({ initialized: true, project: "test" }),
-        parallel(identity(), build),
+        parallel(identity<{ initialized: boolean; project: string }>(), build),
         merge(),
       ),
     );
