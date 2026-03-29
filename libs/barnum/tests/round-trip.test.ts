@@ -62,10 +62,12 @@ describe("barnum round-trip", () => {
   });
 
   it("Branch", () => {
-    type BranchIn = { kind: "Yes"; verified: boolean } | { kind: "No"; verified: boolean };
+    type BranchIn =
+      | { kind: "Yes"; value: { verified: boolean } }
+      | { kind: "No"; value: { verified: boolean } };
     const cfg = workflowBuilder().workflow(() =>
       pipe(
-        constant<BranchIn>({ kind: "Yes", verified: true }),
+        constant<BranchIn>({ kind: "Yes", value: { verified: true } }),
         branch({ Yes: deploy, No: deploy }),
       ),
     );

@@ -33,7 +33,6 @@ import {
   augment,
   constant,
   drop,
-  extractField,
   pick,
   tap,
   withResource,
@@ -54,7 +53,6 @@ import {
   judgeRefactor,
   classifyJudgment,
   applyFeedback,
-  type ClassifyJudgmentResult,
   type Refactor,
 } from "./handlers/refactor.js";
 import { createWorktree, deleteWorktree, createPR } from "./handlers/git.js";
@@ -79,7 +77,7 @@ await workflowBuilder()
     // to TypeCheck. Neither step can be defined without referencing the
     // other, so both must be registered in the same batch via stepRef.
     TypeCheck: pipe(typeCheck, classifyErrors).branch({
-      HasErrors: pipe(extractField("errors"), stepRef("Fix")),
+      HasErrors: stepRef("Fix"),
       Clean: drop(),
     }),
     Fix: pipe(forEach(fix).drop(), stepRef("TypeCheck")),
@@ -109,7 +107,6 @@ await workflowBuilder()
         loop(
           pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
-              extractField<Extract<ClassifyJudgmentResult, { kind: "NeedsWork" }>, "instructions">("instructions"),
               applyFeedback.drop(), stepRef("TypeCheck"), recur<any>(),
             ),
             Approved: done<any>(),

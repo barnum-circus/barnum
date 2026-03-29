@@ -265,12 +265,12 @@ describe("combinator types", () => {
       Yes: deploy,
       No: deploy,
     });
-    // BranchInput enforces { kind: K } for each case key
+    // BranchInput wraps handler input in { kind: K; value: T }
     assertExact<
       IsExact<
         ExtractInput<typeof action>,
-        | { kind: "Yes" } & { verified: boolean }
-        | { kind: "No" } & { verified: boolean }
+        | { kind: "Yes"; value: { verified: boolean } }
+        | { kind: "No"; value: { verified: boolean } }
       >
     >();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
@@ -288,8 +288,8 @@ describe("combinator types", () => {
     const action = pipe(
       classifyErrors,
       branch({
-        HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
-        Clean: done<Clean>(),
+        HasErrors: pipe(forEach(fix), recur<any>()),
+        Clean: done<void>(),
       }),
     );
     assertExact<
@@ -301,7 +301,7 @@ describe("combinator types", () => {
       IsExact<
         ExtractOutput<typeof action>,
         | { kind: "Continue"; value: any }
-        | { kind: "Break"; value: Clean }
+        | { kind: "Break"; value: void }
       >
     >();
     expect(action.kind).toBe("Chain");
@@ -314,15 +314,15 @@ describe("combinator types", () => {
         typeCheck,
         classifyErrors,
         branch({
-          HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
-          Clean: done<Clean>(),
+          HasErrors: pipe(forEach(fix), recur<any>()),
+          Clean: done<void>(),
         }),
       ),
     );
     // Loop input: whatever drop() accepts (inferred from context)
-    // Loop output: the Break value from done() in the Clean case
+    // Loop output: the Break value from done() in the Clean case (void after auto-unwrap)
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Clean>
+      IsExact<ExtractOutput<typeof action>, void>
     >();
     expect(action.kind).toBe("Loop");
   });
@@ -339,15 +339,15 @@ describe("combinator types", () => {
           typeCheck,
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
-            Clean: done<Clean>(),
+            HasErrors: pipe(forEach(fix), recur<any>()),
+            Clean: done<void>(),
           }),
         ),
       ),
     );
     assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, Clean>
+      IsExact<ExtractOutput<typeof action>, void>
     >();
     expect(action.kind).toBe("Chain");
   });
@@ -361,10 +361,7 @@ describe("combinator types", () => {
 describe("postfix operator types", () => {
   it(".branch(): input preserved, output is union of case outputs", () => {
     const action = classifyErrors.branch({
-      HasErrors: pipe(
-        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
-        forEach(fix),
-      ),
+      HasErrors: forEach(fix),
       Clean: drop(),
     });
     assertExact<IsExact<ExtractInput<typeof action>, TypeError[]>>();
@@ -430,12 +427,8 @@ describe("postfix operator types", () => {
       typeCheck,
       classifyErrors,
     ).branch({
-      HasErrors: pipe(
-        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
-        forEach(fix),
-        recur<any>(),
-      ),
-      Clean: done<Clean>(),
+      HasErrors: pipe(forEach(fix), recur<any>()),
+      Clean: done<void>(),
     });
     expect(action.kind).toBe("Chain");
   });
@@ -447,14 +440,11 @@ describe("postfix operator types", () => {
 
 describe("{ kind, value } convention", () => {
   it("ClassifyResult uses { kind, value } form", () => {
-    // @ts-expect-error — remove after converting: HasErrors uses `errors` field, not `value`
     assertExact<IsExact<Extract<ClassifyResult, { kind: "HasErrors" }>, { kind: "HasErrors"; value: TypeError[] }>>();
   });
 
   it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
-    // After auto-unwrap, forEach(fix) receives TypeError[] directly — no extractField needed.
     classifyErrors.branch({
-      // @ts-expect-error — remove after implementing: forEach(fix) input doesn't match HasErrors variant
       HasErrors: forEach(fix),
       Clean: drop(),
     });
@@ -524,7 +514,7 @@ describe("pipe type safety", () => {
   it("accepts exhaustive branch", () => {
     const action = pipe(
       classifyErrors,
-      branch({ HasErrors: drop<HasErrors>(), Clean: drop<Clean>() }),
+      branch({ HasErrors: drop<TypeError[]>(), Clean: drop<void>() }),
     );
     expect(action.kind).toBe("Chain");
   });

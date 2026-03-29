@@ -11,7 +11,6 @@ import {
   constant,
   done,
   drop,
-  extractField,
   identity,
   merge,
   recur,
@@ -28,11 +27,7 @@ import {
   typeCheck,
   classifyErrors,
   fix,
-  type ClassifyResult,
 } from "./handlers.js";
-
-type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
-type Clean = Extract<ClassifyResult, { kind: "Clean" }>;
 
 // -----------------------------------------------------------------------
 // Pipe
@@ -175,12 +170,8 @@ describe("loop", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(
-                extractField<HasErrors, "errors">("errors"),
-                forEach(fix),
-                recur<any>(),
-              ),
-              Clean: done<Clean>(),
+              HasErrors: pipe(forEach(fix), recur<any>()),
+              Clean: done<void>(),
             }),
           ),
         ),
@@ -255,10 +246,7 @@ describe("postfix operators", () => {
     // Equivalent to: pipe(typeCheck, classifyErrors, branch({ ... }))
     // Chain nesting differs (left vs right associative) but semantically equivalent
     const action = pipe(typeCheck, classifyErrors).branch({
-      HasErrors: pipe(
-        extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
-        forEach(fix),
-      ),
+      HasErrors: forEach(fix),
       Clean: drop(),
     });
     expect(action.kind).toBe("Chain");

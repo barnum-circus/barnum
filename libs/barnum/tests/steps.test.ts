@@ -12,7 +12,6 @@ import {
   constant,
   done,
   drop,
-  extractField,
   recur,
 } from "../src/builtins.js";
 
@@ -39,6 +38,7 @@ import {
   classifyErrors,
   fix,
   type ClassifyResult,
+  type TypeError,
 } from "./handlers.js";
 
 type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
@@ -85,12 +85,8 @@ describe("named steps", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(
-                extractField<HasErrors, "errors">("errors"),
-                forEach(fix),
-                recur<any>(),
-              ),
-              Clean: done<Clean>(),
+              HasErrors: pipe(forEach(fix), recur<any>()),
+              Clean: done<void>(),
             }),
           ),
         ),
@@ -120,12 +116,8 @@ describe("named steps", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(
-                extractField<HasErrors, "errors">("errors"),
-                forEach(fix),
-                recur<any>(),
-              ),
-              Clean: done<Clean>(),
+              HasErrors: pipe(forEach(fix), recur<any>()),
+              Clean: done<void>(),
             }),
           ),
         ),
@@ -150,8 +142,8 @@ describe("workflow self-reference", () => {
           constant([{ file: "a.ts", message: "err" }]),
           classifyErrors,
           branch({
-            HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), drop<any>(), self),
-            Clean: pipe(drop<Clean>(), constant({ done: true })),
+            HasErrors: pipe(forEach(fix), drop<any>(), self),
+            Clean: pipe(drop<void>(), constant({ done: true })),
           }),
         ),
       );
@@ -160,8 +152,9 @@ describe("workflow self-reference", () => {
     assertKind(cfg.workflow, "Chain");
     assertKind(cfg.workflow.rest, "Chain");
     assertKind(cfg.workflow.rest.rest, "Branch");
-    // HasErrors: pipe(extractField, forEach(fix), drop, self)
-    // → Chain(extractField, Chain(forEach(fix), Chain(drop, self)))
+    // HasErrors case: auto-unwrap inserts ExtractField("value") before the handler.
+    // Handler: pipe(forEach(fix), drop, self)
+    // Full: Chain(ExtractField("value"), Chain(forEach(fix), Chain(drop, self)))
     const hasErrors = cfg.workflow.rest.rest.cases.HasErrors;
     assertKind(hasErrors, "Chain");
     assertKind(hasErrors.rest, "Chain");
@@ -264,7 +257,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
           classifyErrors,
           branch({
             HasErrors: stepRef("FixAll"),
-            Clean: drop(),
+            Clean: drop<void>(),
           }),
         ),
         FixAll: pipe(
@@ -328,8 +321,8 @@ describe("kitchen sink", () => {
             typeCheck,
             classifyErrors,
             branch({
-              HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix), recur<any>()),
-              Clean: done<Clean>(),
+              HasErrors: pipe(forEach(fix), recur<any>()),
+              Clean: done<void>(),
             }),
           ),
         ),
@@ -341,8 +334,8 @@ describe("kitchen sink", () => {
           steps.MigrateAll,
           classifyErrors,
           branch({
-            HasErrors: pipe(drop<HasErrors>(), self),  // restart the entire workflow
-            Clean: pipe(drop<Clean>(), constant({ migrated: true })),
+            HasErrors: pipe(drop<TypeError[]>(), self),  // restart the entire workflow
+            Clean: pipe(drop<void>(), constant({ migrated: true })),
           }),
         ),
       );
@@ -377,10 +370,12 @@ describe("kitchen sink", () => {
     assertKind(cfg.workflow.rest, "Chain");
     assertKind(cfg.workflow.rest.rest, "Chain");
     assertKind(cfg.workflow.rest.rest.rest, "Branch");
-    // HasErrors: pipe(drop, self) → Chain(drop, self)
+    // HasErrors: auto-unwrap + pipe(drop, self)
+    // → Chain(ExtractField("value"), Chain(drop, self))
     const hasErrors = cfg.workflow.rest.rest.rest.cases.HasErrors;
     assertKind(hasErrors, "Chain");
-    expect(hasErrors.rest).toEqual({
+    assertKind(hasErrors.rest, "Chain");
+    expect(hasErrors.rest.rest).toEqual({
       kind: "Step",
       step: { kind: "Root" },
     });

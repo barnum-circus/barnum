@@ -108,8 +108,8 @@ export const typeCheck = createHandler(
 
 // classifyErrors: TypeError[] → ClassifyResult
 export type ClassifyResult =
-  | { kind: "HasErrors"; errors: TypeError[] }
-  | { kind: "Clean" };
+  | { kind: "HasErrors"; value: TypeError[] }
+  | { kind: "Clean"; value: void };
 
 export const classifyErrors = createHandler(
   {
@@ -118,8 +118,8 @@ export const classifyErrors = createHandler(
     ),
     handle: async ({ value }): Promise<ClassifyResult> =>
       value.length > 0
-        ? { kind: "HasErrors", errors: value }
-        : { kind: "Clean" },
+        ? { kind: "HasErrors", value }
+        : { kind: "Clean", value: undefined },
   },
   "classifyErrors",
 );

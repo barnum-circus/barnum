@@ -25,8 +25,8 @@ export type JudgmentResult =
   | { approved: false; instructions: string };
 
 export type ClassifyJudgmentResult =
-  | { kind: "Approved" }
-  | { kind: "NeedsWork"; instructions: string };
+  | { kind: "Approved"; value: void }
+  | { kind: "NeedsWork"; value: string };
 
 // --- Discovery ---
 
@@ -188,10 +188,10 @@ export const classifyJudgment = createHandler({
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
     if (judgment.approved) {
       console.error("[classify-judgment] Approved");
-      return { kind: "Approved" };
+      return { kind: "Approved", value: undefined };
     }
     console.error(`[classify-judgment] Needs work: ${judgment.instructions}`);
-    return { kind: "NeedsWork", instructions: judgment.instructions };
+    return { kind: "NeedsWork", value: judgment.instructions };
   },
 }, "classifyJudgment");
 

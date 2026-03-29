@@ -127,8 +127,8 @@ export type TypedAction<
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
-  /** Dispatch on a tagged union output. Requires exhaustive case coverage. */
-  branch<TCases extends { [K in KindOf<Out>]: CaseHandler<Extract<Out, { kind: K }>> }>(
+  /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
+  branch<TCases extends { [K in KindOf<Out>]: CaseHandler<UnwrapVariant<Extract<Out, { kind: K }>>> }>(
     cases: [KindOf<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
@@ -213,6 +213,9 @@ type CaseHandler<TIn = unknown, TOut = unknown, TRefs extends string = never> = 
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 
+/** Extract the `value` field from a `{ kind, value }` variant. Falls back to T if no `value` field. */
+type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
+
 
 // ---------------------------------------------------------------------------
 // typedAction — attach .then() and .forEach() as non-enumerable methods
@@ -239,7 +242,7 @@ function branchMethod(
   cases: Record<string, Action>,
 ): TypedAction {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
-  return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases } });
+  return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases: unwrapBranchCases(cases) } });
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
@@ -489,19 +492,37 @@ export function forEach<In, Out, R extends string = never>(
 }
 
 /**
+ * Insert ExtractField("value") before each case handler in a branch.
+ * This implements auto-unwrapping: the engine dispatches on `kind`, then
+ * extracts `value` before passing to the handler. Case handlers receive
+ * the payload directly, not the full `{ kind, value }` variant.
+ */
+function unwrapBranchCases(cases: Record<string, Action>): Record<string, Action> {
+  const unwrapped: Record<string, Action> = {};
+  for (const key of Object.keys(cases)) {
+    unwrapped[key] = {
+      kind: "Chain",
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+      rest: cases[key],
+    };
+  }
+  return unwrapped;
+}
+
+/**
  * Compute the branch input type from its cases. For each case key K,
- * intersects `{ kind: K }` with the case handler's input type, then
- * unions all cases. This ensures the branch input is a proper tagged
- * union with a `kind` discriminant matching the case keys.
+ * wraps the case handler's input type in `{ kind: K; value: T }`.
+ * This ensures the branch input is a proper tagged union matching the
+ * `{ kind, value }` convention.
  *
- * Example: `BranchInput<{ Yes: TypedAction<{x: 1}, ...>, No: TypedAction<{y: 2}, ...> }>`
- *        = `{ kind: "Yes"; x: 1 } | { kind: "No"; y: 2 }`
+ * Example: `BranchInput<{ Yes: TypedAction<number, ...>, No: TypedAction<string, ...> }>`
+ *        = `{ kind: "Yes"; value: number } | { kind: "No"; value: string }`
  *
- * When a case handler uses `any` as input (e.g. stepRef), the intersection
- * `{ kind: K } & any` collapses to `any`, which is the correct escape hatch.
+ * When a case handler uses `any` as input (e.g. stepRef), the wrapping
+ * produces `{ kind: K; value: any }`, which is the correct escape hatch.
  */
 export type BranchInput<TCases> = {
-  [K in keyof TCases & string]: { kind: K } & ExtractInput<TCases[K]>;
+  [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
 }[keyof TCases & string];
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -512,7 +533,7 @@ export function branch<TCases extends Record<string, Action>>(
   ExtractOutput<TCases[keyof TCases & string]>,
   ExtractRefs<TCases[keyof TCases & string]>
 > {
-  return typedAction({ kind: "Branch", cases });
+  return typedAction({ kind: "Branch", cases: unwrapBranchCases(cases) });
 }
 
 export type LoopResult<TContinue, TBreak> =

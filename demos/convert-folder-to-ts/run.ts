@@ -28,7 +28,7 @@ import {
 } from "@barnum/barnum/src/builtins.js";
 
 import { setup, listFiles, migrate, writeFile } from "./handlers/convert.js";
-import { typeCheck, classifyErrors, fix, type ClassifyResult } from "./handlers/type-check-fix.js";
+import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 
 type FileEntry = { file: string; outputPath: string };
 
@@ -58,7 +58,6 @@ await workflowBuilder()
       loop(
         pipe(typeCheck, classifyErrors).branch({
           HasErrors: pipe(
-            extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
             forEach(fix).drop(),
             recur<any>(),
           ),

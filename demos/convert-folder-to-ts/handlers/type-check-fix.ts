@@ -19,8 +19,8 @@ export type TypeError = {
 };
 
 export type ClassifyResult =
-  | { kind: "HasErrors"; errors: TypeError[] }
-  | { kind: "Clean" };
+  | { kind: "HasErrors"; value: TypeError[] }
+  | { kind: "Clean"; value: void };
 
 // --- Helpers ---
 
@@ -90,10 +90,10 @@ export const classifyErrors = createHandler({
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
     if (errors.length > 0) {
       console.error(`[classify-errors] ${errors.length} error(s) to fix`);
-      return { kind: "HasErrors", errors };
+      return { kind: "HasErrors", value: errors };
     }
     console.error("[classify-errors] Clean — no type errors");
-    return { kind: "Clean" };
+    return { kind: "Clean", value: undefined };
   },
 }, "classifyErrors");
 
