@@ -6,53 +6,9 @@ How to bring Rust's Option, Result, Iterator, and combinator patterns into the w
 
 ## Option<T>
 
-```ts
-type OptionDef<T> = { Some: T; None: void };
-type Option<T> = TaggedUnion<OptionDef<T>>;
-```
+See **OPTION_TYPES.md** for the comprehensive Option combinator library (all Rust Option methods mapped to barnum, namespaced as `Option.map()`, `Option.andThen()`, etc.).
 
-This is a tagged union — `branch` dispatches on it naturally. Branch auto-unwraps `value`, so `Some` handler receives `T` directly and `None` handler receives `void`.
-
-### Constructors
-
-- `some()` = `tag<OptionDef<T>, "Some">("Some")` — tag knows the full union
-- `none()` = produces `{ kind: "None"; value: undefined }` — fixed value
-
-### Combinators
-
-Branch auto-unwraps `value`, so no `extractField("value")` needed in implementations:
-
-| Rust | Barnum | Implementation |
-|------|--------|----------------|
-| `.map(f)` | `mapOption(action)` | `branch({ Some: pipe(action, tag<OptionDef<U>, "Some">("Some")), None: identity() })` |
-| `.and_then(f)` | `flatMapOption(action)` | `branch({ Some: action, None: identity() })` — action must return Option |
-| `.unwrap_or(default)` | `unwrapOptionOr(default)` | `branch({ Some: identity(), None: default })` — `default` is an action |
-| `.unwrap()` | `unwrap()` | `branch({ Some: identity(), None: panic("unwrap on None") })` — requires error handling |
-| `.is_some()` | N/A | `branch({ Some: constant(true), None: constant(false) })` |
-| `.or(other)` | `optionOr(other)` | `branch({ Some: identity(), None: other })` |
-| `.filter(pred)` | Hard — requires expression evaluation in AST |
-
-### Naming convention
-
-Include "option" in every name: `mapOption`, `flatMapOption`, `unwrapOptionOr`, `optionOr`. This avoids collision with potential Result variants and makes the semantics obvious at the call site.
-
-### `unwrapOr` takes an action, not a raw value
-
-`unwrapOr(constant("anonymous"))`, not `unwrapOr("anonymous")`. The default is an AST node — this keeps the combinator composable (the default can be a computation, not just a literal).
-
-### Postfix operators with `this` constraints
-
-The highest-value Option combinators should be postfix methods on TypedAction, gated by a `this` parameter constraint so they're only callable when `Out` matches the Option shape. See POSTFIX_OPERATORS.md § "Option/Result postfix operators (Phase 2)".
-
-```ts
-action.mapOption(transform)    // only available when Out is Option<T>
-action.unwrapOptionOr(default) // only available when Out is Option<T>
-action.optionOr(fallback)      // only available when Out is Option<T>
-```
-
-### Which to provide as builtins?
-
-`mapOption`, `flatMapOption`, and `unwrapOptionOr` are the highest value. Each saves 3+ lines of branch/extractField boilerplate. The rest are one-liners over `branch`. Provide as both prefix functions and postfix methods (gated by `this` constraint).
+Summary: `Option<T> = TaggedUnion<{ Some: T; None: void }>`. All combinators live on an `Option` namespace object. Postfix methods gated by `this` constraint on TypedAction.
 
 ## Result<T, E>
 
