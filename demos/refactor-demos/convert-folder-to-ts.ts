@@ -9,8 +9,8 @@
  *      b. writeFile receives { content, file, outputPath }
  *   4. Type-check/fix loop — run tsc, classify errors, fix or finish
  *
- * Demonstrates: pipe, forEach, loop, branch, augment, drop,
- * extractField, recur, done, createHandlerWithConfig.
+ * Demonstrates: pipe, forEach, loop, augment, extractField,
+ * createHandlerWithConfig, and postfix operators (.branch, .drop).
  *
  * Usage: pnpm exec tsx convert-folder-to-ts.ts
  */
@@ -20,11 +20,9 @@ import {
   pipe,
   forEach,
   loop,
-  branch,
 } from "@barnum/barnum/src/ast.js";
 import {
   augment,
-  drop,
   extractField,
   recur,
   done,
@@ -51,23 +49,18 @@ await workflowBuilder()
           augment(pipe(extractField("file"), migrate({ to: "Typescript" }))),
           writeFile,
         ),
-      ),
-      drop(),
+      ).drop(),
 
       // Phase 3: Type-check / fix loop
       //
       // typeCheck operates on the filesystem, not a pipeline value.
-      // recur() feeds the fix results back, so drop() discards them
+      // recur() feeds the fix results back, so .drop() discards them
       // before re-entering typeCheck.
       loop(
-        pipe(
-          typeCheck,
-          classifyErrors,
-          branch({
-            HasErrors: pipe(extractField("errors"), forEach(fix), drop(), recur()),
-            Clean: done(),
-          }),
-        ),
+        pipe(typeCheck, classifyErrors).branch({
+          HasErrors: pipe(extractField("errors"), forEach(fix).drop().then(recur())),
+          Clean: done(),
+        }),
       ),
     ),
   )

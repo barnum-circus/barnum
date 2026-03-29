@@ -15,8 +15,8 @@
  *   5. Delete worktree (RAII dispose — receives the resource directly)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII with tuple), loop, branch, forEach, flatten, constant, pipe,
- * drop, merge, augment, tap.
+ * (RAII with tuple), loop, forEach, constant, pipe, merge, augment, tap,
+ * and postfix operators (.branch, .flatten, .drop).
  *
  * Usage: pnpm exec tsx identify-and-address-refactors.ts
  */
@@ -26,14 +26,12 @@ import {
   pipe,
   forEach,
   loop,
-  branch,
 } from "@barnum/barnum/src/ast.js";
 import {
   augment,
   constant,
   drop,
   extractField,
-  flatten,
   merge,
   tap,
   withResource,
@@ -65,15 +63,11 @@ await workflowBuilder()
     // Fix (HasErrors) or exits (Clean). Fix applies fixes and jumps back
     // to TypeCheck. Neither step can be defined without referencing the
     // other, so both must be registered in the same batch via stepRef.
-    TypeCheck: pipe(
-      typeCheck,
-      classifyErrors,
-      branch({
-        HasErrors: pipe(extractField("errors"), stepRef("Fix")),
-        Clean: drop(),
-      }),
-    ),
-    Fix: pipe(forEach(fix), drop(), stepRef("TypeCheck")),
+    TypeCheck: pipe(typeCheck, classifyErrors).branch({
+      HasErrors: pipe(extractField("errors"), stepRef("Fix")),
+      Clean: drop(),
+    }),
+    Fix: forEach(fix).drop().then(stepRef("TypeCheck")),
 
     // The action that runs inside each worktree.
     //
@@ -95,23 +89,16 @@ await workflowBuilder()
       tap(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
+      // drop() discards the tap context — judgeRefactor takes no input.
       tap(
         loop(
-          pipe(
-            drop(),
-            judgeRefactor,
-            classifyJudgment,
-            branch({
-              NeedsWork: pipe(
-                extractField("instructions"),
-                applyFeedback,
-                drop(),
-                stepRef("TypeCheck"),
-                recur(),
-              ),
-              Approved: done(),
-            }),
-          ),
+          pipe(drop(), judgeRefactor, classifyJudgment).branch({
+            NeedsWork: pipe(
+              extractField("instructions"),
+              applyFeedback.drop().then(stepRef("TypeCheck")).then(recur()),
+            ),
+            Approved: done(),
+          }),
         ),
       ),
 
@@ -125,8 +112,7 @@ await workflowBuilder()
       listTargetFiles,
 
       // Analyze each file for refactoring opportunities
-      forEach(analyze),
-      flatten(),
+      forEach(analyze).flatten(),
 
       // For each refactor: create worktree → work → create PR → cleanup
       //
