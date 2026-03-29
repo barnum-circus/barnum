@@ -149,10 +149,12 @@ function tryCatch(bodyCallback, recovery) {
 pub struct EffectId(pub u32);
 
 pub enum FlatAction {
-    Handle { handlers: BTreeMap<EffectId, ActionId>, body: ActionId },
+    Handle { effect: EffectId, handler: ActionId, body: ActionId },
     Perform { effect: EffectId },
 }
 ```
+
+Each Handle intercepts exactly one effect. Multiple effects in scope = nested Handles.
 
 There are no global/module-level effect tokens. Each combinator invocation creates its own EffectId. This avoids both the rigidity of a Rust enum (no recompilation for new effects) and the collision risk of global strings (IDs are unique by construction). A Handle block can only intercept effects whose EffectId it holds — the HOAS callback is the sole distribution mechanism.
 
