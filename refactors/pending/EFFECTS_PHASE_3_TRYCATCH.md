@@ -49,22 +49,53 @@ The cont_id is deliberately dropped from the pipeline. The continuation leaks in
 
 Throw can come from two sources:
 
-### 1. Explicit Perform(Throw) in user code
+### 1. Explicit Perform(Throw) via the intent pattern
 
-The user wraps a risky action in tryCatch and the action explicitly throws:
+Handlers are opaque — they cannot emit effects directly. They return discriminated unions describing their intent. The AST interprets those unions and emits Perform(Throw) when appropriate.
 
 ```ts
+// Handler returns a result union:
+type HandlerResult =
+  | { kind: "Ok"; value: Output }
+  | { kind: "Err"; error: string };
+
+// AST interprets the intent:
 tryCatch(
   pipe(
-    riskyAction,
+    invoke(riskyHandler),
     branch({
-      Error: Perform("Throw"),   // explicit throw
-      Ok: processResult,
+      Ok: pick("value"),
+      Err: pipe(pick("error"), Perform("Throw")),
     }),
   ),
   handleError,
 )
 ```
+
+This is boilerplate. A convenience combinator wraps it:
+
+```ts
+// invokeWithThrow: Invoke + branch on error union + Perform(Throw)
+function invokeWithThrow<TIn, TOut, TErr>(
+  handler: Pipeable<TIn, { kind: "Ok"; value: TOut } | { kind: "Err"; error: TErr }>,
+): TypedAction<TIn, TOut> {
+  return pipe(
+    handler,
+    branch({
+      Ok: pick("value"),
+      Err: pipe(pick("error"), Perform("Throw")),
+    }),
+  );
+}
+
+// Usage:
+tryCatch(
+  pipe(invokeWithThrow(riskyHandler), processResult),
+  handleError,
+)
+```
+
+The handler remains oblivious to the effect system. It returns data. The AST translates data into control flow. This is the Free Monad / Control Plane / Data Plane separation (see EFFECTS_ROADMAP.md).
 
 ### 2. Handler execution failure
 

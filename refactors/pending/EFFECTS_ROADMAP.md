@@ -63,6 +63,58 @@ Two layers, each doing what it's good at:
 
 The Rust engine is a pure structural router. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs written in TypeScript.
 
+### Control Plane / Data Plane boundary
+
+Handlers are opaque, pure computations. They receive input (JSON), return output (JSON). They cannot access the scheduler, cannot see variables, cannot emit effects, cannot pause the engine. This is the strict separation between:
+
+- **Control Plane (AST / Rust engine)**: Manages execution flow. Effects, variable resolution, error routing, timeouts, cancellation. The AST nodes and the scheduler.
+- **Data Plane (Handlers / TypeScript workers)**: Opaque computation. Receives data, returns data. No knowledge of the orchestrator's state.
+
+Handlers communicate intent by returning discriminated unions. The AST interprets those unions and translates intent into effects. This is the **Free Monad** pattern: handlers don't execute side-effects on the workflow; they return data structures describing intent. The AST inspects and acts.
+
+```ts
+// Handler returns intent:
+type ReviewResult =
+  | { kind: "Approved" }
+  | { kind: "RequiresHuman"; diffUrl: string };
+
+// AST interprets intent:
+pipe(
+  invoke(automatedReview),
+  branch({
+    Approved: proceed,
+    RequiresHuman: Perform("Suspend"),  // AST emits the effect, not the handler
+  }),
+)
+```
+
+This pattern is already how Barnum works. The `typeCheck -> classifyErrors -> branch` pattern in the demos is exactly intent-returning. The handler classifies errors and returns a tagged union. The AST branches on it. The handler never manipulates the execution graph.
+
+Convenience combinators should wrap common intent patterns. For example, `invokeWithThrow(handler)` wraps an Invoke + branch on error union + Perform(Throw):
+
+```ts
+function invokeWithThrow<TIn, TOut>(handler: Pipeable<TIn, Result<TOut, Error>>) {
+  return pipe(
+    handler,
+    branch({
+      Ok: pick("value"),
+      Err: pipe(pick("error"), Perform("Throw")),
+    }),
+  );
+}
+```
+
+### The effect boundary: in-band vs out-of-band
+
+Not everything should be an effect. The rule:
+
+- **In-band (effects)**: Things that mutate the execution path. Variable lookup, error handling, loop control, suspension, timeout cancellation. These MUST go through Handle/Perform because the scheduler must evaluate them to compute the next graph state.
+- **Out-of-band (driver/IPC)**: Things that observe without mutating. Logging, metrics, heartbeats, progress reporting. These MUST NOT go through Handle/Perform. They stream directly to the infrastructure layer.
+
+Logging in particular is out-of-band. The Tokio driver captures stdout/stderr from the worker subprocess. A separate task streams log lines to the observability stack. If the handler is killed by a timeout, logs emitted before the kill are preserved — they were streaming out-of-band, not buffered in a return value.
+
+Do NOT add an `Effect::Log` or `Perform("barnum:log")`. It would route observability through the state machine's evaluation loop, making logs synchronous and coupling them to handler completion. Logging survives handler crashes precisely because it's out-of-band.
+
 ### Effect routing: strings vs enum
 
 Two options for how Handle identifies which effects it intercepts:
