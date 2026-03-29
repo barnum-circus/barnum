@@ -25,7 +25,7 @@ export function callClaude(args: {
   const result = spawnSync("claude", cliArgs, {
     encoding: "utf-8",
     cwd: args.cwd ?? baseDir,
-    timeout: 120_000,
+    timeout: 300_000,
     env: {
       ...process.env,
       // Prevent "nested session" error if run from within Claude Code

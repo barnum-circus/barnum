@@ -12,7 +12,7 @@
  * Demonstrates: pipe, forEach, loop, augment, extractField,
  * createHandlerWithConfig, and postfix operators (.branch, .drop).
  *
- * Usage: pnpm exec tsx convert-folder-to-ts.ts
+ * Usage: pnpm exec tsx run.ts
  */
 
 import {
