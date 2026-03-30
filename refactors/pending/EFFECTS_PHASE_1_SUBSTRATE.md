@@ -60,7 +60,7 @@ Uses the existing `u32_newtype!` macro from `crates/u32_newtype`. Opaque `u32` g
 
 ## Generalized Handler State
 
-The Handle frame carries opaque state. The Rust engine never interprets it — it's just `serde_json::Value`. All semantic meaning (variable bindings, retry counters, resource handles) lives in the TypeScript handler DAGs that read and write the state.
+The Handle frame carries opaque state. The Rust engine never interprets it — it's just `serde_json::Value`. All semantic meaning (variable bindings, retry counters, resource handles) lives in the handler DAGs that read and write the state. Handler DAGs are normal AST subgraphs — authored in the TypeScript builder layer, but compiled to the same action nodes as everything else and executed by the Rust engine. Most handler DAGs (readVar, loop control, tryCatch routing) are built entirely from builtins and never leave Rust.
 
 ### How it works
 

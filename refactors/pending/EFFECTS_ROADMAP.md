@@ -64,7 +64,7 @@ Two layers, each doing what it's good at:
 
 **Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle. The Handle frame stores opaque state (`serde_json::Value`). The engine constructs `{ payload, state }` and dispatches the handler DAG. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly — optionally updating the Handle's state via `next_state`. The body subgraph is naturally frozen while the handler runs (the Perform point is stuck, so no parent pointers need severing). That's it.
 
-The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs built from existing AST builtins or TypeScript handlers.
+The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal AST subgraphs executed by the Rust engine. Most are built entirely from builtins (ExtractField, Tag, etc.) and never leave Rust. Some include Invoke nodes that call TypeScript functions.
 
 ### Control Plane / Data Plane boundary
 
