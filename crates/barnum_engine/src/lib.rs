@@ -972,7 +972,7 @@ impl WorkflowState {
                         effect_id,
                         body,
                         handler,
-                        state: None,
+                        state: Some(value.clone()),
                         status: HandleStatus::Free,
                     }),
                 });
@@ -2037,7 +2037,7 @@ mod tests {
                 value: json!("Resume"),
             }),
         );
-        // Handle's initial state is null (default). Body: Chain(Invoke(step), Perform(e))
+        // Handle's initial state = pipeline value ("input"). Body: Chain(Invoke(step), Perform(e))
         let mut engine = engine_from(handle(
             1,
             resume_with_state,
@@ -2049,12 +2049,12 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1); // step dispatched
 
-        // Complete step -> Perform fires -> handler gets { payload: "step_out", state: null }
-        // Handler extracts state (null) and resumes with null.
+        // Complete step -> Perform fires -> handler gets { payload: "step_out", state: "input" }
+        // Handler extracts state ("input") and resumes with it.
         let (result, _) =
             complete_and_drive(&mut engine, ts[0].task_id, json!("step_out")).unwrap();
-        // Resume with null -> deliver to Chain -> body done -> Handle exits.
-        assert_eq!(result, Some(json!(null)));
+        // Resume with "input" -> deliver to Chain -> body done -> Handle exits.
+        assert_eq!(result, Some(json!("input")));
     }
 
     /// Test 13: State update persists across handler invocations.

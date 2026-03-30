@@ -75,59 +75,9 @@ Handle initializes its state to the pipeline value (a one-line engine change: `s
 
 N bindings produce N nested Handle frames. This is the natural representation of N lexical bindings — `let a = ... in let b = ... in body`. Each `let` is a scope, each Handle is a scope.
 
-### Engine change: Handle initializes state from pipeline value
+### Engine: Handle initializes state from pipeline value
 
-In `advance()`, the `FlatAction::Handle` arm creates a HandleFrame. Currently, state starts as `None`. The change: clone the pipeline value into state before passing it to the body.
-
-**Before** (current, `crates/barnum_engine/src/lib.rs`):
-
-```rust
-FlatAction::Handle { effect_id } => {
-    let body = self.flat_config.handle_body(action_id);
-    let handler = self.flat_config.handle_handler(action_id);
-    let frame_id = self.insert_frame(Frame {
-        parent,
-        kind: FrameKind::Handle(HandleFrame {
-            effect_id,
-            body,
-            handler,
-            state: None,
-            status: HandleStatus::Free,
-        }),
-    });
-    self.advance(
-        body,
-        value,
-        Some(ParentRef::Handle { frame_id, side: HandleSide::Body }),
-    )?;
-}
-```
-
-**After:**
-
-```rust
-FlatAction::Handle { effect_id } => {
-    let body = self.flat_config.handle_body(action_id);
-    let handler = self.flat_config.handle_handler(action_id);
-    let frame_id = self.insert_frame(Frame {
-        parent,
-        kind: FrameKind::Handle(HandleFrame {
-            effect_id,
-            body,
-            handler,
-            state: Some(value.clone()),
-            status: HandleStatus::Free,
-        }),
-    });
-    self.advance(
-        body,
-        value,
-        Some(ParentRef::Handle { frame_id, side: HandleSide::Body }),
-    )?;
-}
-```
-
-One-line change: `state: None` → `state: Some(value.clone())`. The body still receives `value` unchanged. When a Perform fires, the handler receives `{ payload, state }` where `state` is this cloned pipeline value.
+**Already implemented.** In `advance()`, the `FlatAction::Handle` arm sets `state: Some(value.clone())` when creating a HandleFrame. The body still receives `value` unchanged. When a Perform fires, the handler receives `{ payload, state }` where `state` is the pipeline value that entered the Handle.
 
 ## Function definitions
 
