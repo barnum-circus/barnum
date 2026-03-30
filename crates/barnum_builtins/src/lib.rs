@@ -25,6 +25,7 @@ pub struct BuiltinError {
 ///
 /// Returns [`BuiltinError`] if the input doesn't match the builtin's
 /// expected type (e.g., `Merge` on a non-array).
+#[allow(clippy::too_many_lines)]
 pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Value, BuiltinError> {
     match builtin_kind {
         BuiltinKind::Constant { value } => Ok(value.clone()),
@@ -338,12 +339,7 @@ mod tests {
     #[test]
     fn pick_empty_keys_returns_empty_object() {
         let input = json!({"name": "Alice", "age": 30});
-        let result = execute_builtin(
-            &BuiltinKind::Pick {
-                value: json!([]),
-            },
-            &input,
-        );
+        let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input);
         assert_eq!(result.unwrap(), json!({}));
     }
 }
