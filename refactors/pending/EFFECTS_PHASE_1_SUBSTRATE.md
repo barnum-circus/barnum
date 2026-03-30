@@ -227,11 +227,46 @@ FlatAction::Handle { effect_id, handler } => {
 }
 
 FlatAction::Perform { effect_id } => {
-    self.bubble_effect(parent, effect_id, value)?;
+    self.dispatch_perform(parent, effect_id, value);
 }
 ```
 
-Handle stores input as state and passes the same input to body. Perform is a leaf — no frame.
+Handle stores input as state and passes the same input to body.
+
+Perform dispatches a task — it does not call `bubble_effect` during advance. The task is an identity builtin (driver echoes the payload back). When the task completes, `complete_task` runs `bubble_effect`. This keeps Perform consistent with every other leaf action: advance dispatches, the driver schedules, completions arrive via `complete_task`.
+
+The driver controls scheduling order for Perform tasks. In a Parallel with N Performs targeting the same Handle, depth-first scheduling (process each handler to completion before the next Perform) avoids stashing entirely. FIFO scheduling produces stashing, which the stash mechanism handles correctly. The engine is agnostic — it works with any driver scheduling strategy.
+
+### dispatch_perform
+
+```rust
+/// Stored alongside each Perform task. complete_task uses this
+/// to run bubble_effect when the driver echoes the payload back.
+struct PendingPerform {
+    starting_parent: Option<ParentRef>,
+    effect_id: EffectId,
+}
+
+fn dispatch_perform(
+    &mut self,
+    starting_parent: Option<ParentRef>,
+    effect_id: EffectId,
+    payload: Value,
+) {
+    let task_id = self.next_task_id();
+    self.task_to_perform.insert(task_id, PendingPerform {
+        starting_parent,
+        effect_id,
+    });
+    // Dispatch as identity builtin. Driver echoes payload back unchanged.
+    // bubble_effect runs in complete_task when the echo arrives.
+    self.dispatch_task(task_id, BuiltinKind::Identity, payload);
+}
+```
+
+No frame is created. The Perform's parent (e.g. a Chain frame or Parallel slot) waits for a value, identical to waiting for an Invoke's task to complete. When `bubble_effect` eventually dispatches the handler and the handler Resumes, the Resume delivers to `starting_parent`, unblocking the waiting frame.
+
+If the body is torn down (Discard/RestartBody) before the Perform task completes, the echoed payload arrives at `complete_task`, which runs `bubble_effect`. `bubble_effect` walks the parent chain, finds missing frames (generational arena returns None), and silently drops the effect. No cleanup of `task_to_perform` in `teardown_body` is needed — the entry is consumed on completion.
 
 ```rust
 pub enum AdvanceError {
@@ -244,7 +279,7 @@ pub enum AdvanceError {
 
 ## bubble_effect
 
-Walk parent pointers to find a Handle matching the effect ID. If the matching Handle is already suspended (continuation occupied), stash the effect for later.
+Called from `complete_task` when a Perform task completes (not during advance). Walks parent pointers to find a Handle matching the effect ID. If the matching Handle is already suspended (continuation occupied), stashes the effect for later.
 
 ```rust
 fn bubble_effect(
@@ -298,7 +333,7 @@ fn bubble_effect(
 
 O(depth of frame tree). Chain, Parallel, Branch, ForEach are invisible — the walk passes through them.
 
-The "Handle is busy" stash replaces the old assert. Two Performs for the same effect in a Parallel are handled naturally: the first dispatches the handler, the second is stashed. When the handler completes and sweep runs, the stashed effect retries and finds the Handle free.
+The "Handle is busy" stash is a safety net for concurrent Performs. Whether it fires depends on driver scheduling: depth-first scheduling processes each handler to completion before the next Perform, so the Handle is always free. FIFO scheduling fires all Performs before any handler completes, so subsequent Performs stash. Either way, the engine produces the correct result.
 
 ## dispatch_to_handler
 
@@ -334,7 +369,7 @@ fn dispatch_to_handler(
 }
 ```
 
-The body's frame tree stays connected — no parent pointers are nulled or rerouted. The Perform point is synchronously stuck (it triggered bubble_effect instead of producing a Dispatch), so no further synchronous execution propagates from that path. The handler runs as a new child of the Handle via HandlerChild.
+The body's frame tree stays connected — no parent pointers are nulled or rerouted. The Perform site is waiting for a delivery (like any other pending task), so no further synchronous execution propagates from that path. The handler runs as a new child of the Handle via HandlerChild.
 
 ### Utility: handle_frame_mut
 
@@ -356,7 +391,7 @@ Two situations require deferring work:
 
 1. **Async completions during suspension.** A Parallel branch has an in-flight external task. The branch's Handle ancestor is suspended (handler running). When the task completes, delivering its result would advance the frozen body.
 
-2. **Concurrent effects targeting a busy Handle.** Two Performs for the same effect fire in the same Parallel. The first dispatches the handler. The second finds the Handle occupied.
+2. **Concurrent effects targeting a busy Handle.** Two Perform tasks for the same effect complete while the Handle is occupied. This depends on driver scheduling — depth-first scheduling avoids it entirely, FIFO scheduling produces it. The stash handles both strategies correctly.
 
 Both cases are handled by a single mechanism: a global stash on WorkflowState. Items are stashed when they can't be processed immediately. After every handler completion, the engine sweeps the stash and retries each item against the current tree state.
 
@@ -380,6 +415,10 @@ enum StashedItem {
 
 pub struct WorkflowState {
     // existing fields: frames, flat_config, task_to_parent
+
+    /// Maps Perform task IDs to their effect info. complete_task checks this
+    /// before the normal delivery path. Consumed on completion.
+    task_to_perform: HashMap<TaskId, PendingPerform>,
 
     /// Work items deferred because their target Handle was busy or their
     /// target frame was inside a suspended body. Swept after every handler completion.
@@ -417,6 +456,16 @@ fn complete_task(
     task_id: TaskId,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
+    // Perform task: driver echoed the payload back. Run bubble_effect.
+    if let Some(pending_perform) = self.task_to_perform.remove(&task_id) {
+        self.bubble_effect(
+            pending_perform.starting_parent,
+            pending_perform.effect_id,
+            value, // payload, echoed by driver
+        ).map_err(CompleteError::from)?;
+        return Ok(None);
+    }
+
     match self.task_to_parent.remove(&task_id) {
         None => Ok(None), // task's frame was torn down, drop silently
         Some(parent_ref) => self.deliver_or_stash(parent_ref, value),
@@ -514,10 +563,11 @@ Handle(effect, handler,
 ```
 
 1. Advance: Parallel dispatches both branches. Invoke A and B dispatch external tasks.
-2. Task A completes. deliver -> Chain A trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
-3. Task B completes. deliver_or_stash -> find_suspended_ancestor finds Handle suspended -> **stashed as Delivery**.
-4a. Handler Resumes: deliver to Parallel slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> Parallel joins -> Handle exits.
-4b. Handler Discards: teardown_body removes Parallel, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value.
+2. Task A completes. deliver -> Chain A trampolines -> Perform -> dispatches Perform task A'.
+3. Driver processes Perform task A' -> complete_task -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
+4. Task B completes. deliver_or_stash -> find_suspended_ancestor finds Handle suspended -> **stashed as Delivery**.
+5a. Handler Resumes: deliver to Parallel slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> dispatches Perform task B'. Driver processes B' -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> Parallel joins -> Handle exits.
+5b. Handler Discards: teardown_body removes Parallel, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value. (Perform task B', if not yet completed, arrives later at complete_task -> bubble_effect -> frames gone -> silently dropped.)
 
 ### Example: concurrent Performs
 
@@ -530,11 +580,19 @@ Handle(effect, handler,
 )
 ```
 
-1. Advance: Parallel advances both children.
-2. First Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored.
-3. Second Perform -> bubble_effect -> Handle has continuation -> **stashed as Effect**.
-4. Handler Resumes: deliver to Parallel slot 0. sweep_stash -> retries stashed effect -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts.
-5. Second handler Resumes -> Parallel slot 1 -> joins -> Handle exits.
+1. Advance: Parallel advances both children. Both Performs dispatch tasks (P0, P1).
+
+**Depth-first driver scheduling (no stashing):**
+2. Driver processes P0 -> complete_task -> bubble_effect -> Handle free -> dispatch_to_handler -> handler dispatches task H0.
+3. Driver processes H0 (depth-first: newest task first) -> handler completes -> Resume -> deliver to Parallel slot 0. Handle free.
+4. Driver processes P1 -> complete_task -> bubble_effect -> Handle free -> dispatch_to_handler -> handler dispatches H1.
+5. Driver processes H1 -> Resume -> Parallel slot 1 -> joins -> Handle exits.
+
+**FIFO driver scheduling (with stashing):**
+2. Driver processes P0 -> bubble_effect -> Handle free -> dispatch_to_handler -> handler dispatches H0.
+3. Driver processes P1 -> bubble_effect -> Handle busy -> **stashed as Effect**.
+4. Driver processes H0 -> handler completes -> Resume -> deliver to Parallel slot 0. sweep_stash -> retries stashed effect -> Handle free -> dispatch_to_handler -> H1 dispatched.
+5. Driver processes H1 -> Resume -> Parallel slot 1 -> joins -> Handle exits.
 
 ## Handler completion
 
@@ -810,7 +868,7 @@ Both pass through unchanged.
 
 ## Interaction with existing frame kinds
 
-Chain, Parallel, Branch, ForEach: unchanged. If a child suspends via bubble_effect, the parent frame sits dormant with a pending slot. When resumed, the child delivers and the parent proceeds. This is structurally identical to waiting for an external Invoke to complete.
+Chain, Parallel, Branch, ForEach: unchanged. Perform dispatches a task like Invoke does — the parent frame sits dormant with a pending slot. When the handler eventually Resumes and delivers to the Perform's parent, the parent proceeds. No special handling needed.
 
 Loop (before Phase 4 migration): still exists as a separate frame kind. Doesn't interact with Handle/Perform. Replaced by nested Handles in Phase 4.
 
@@ -911,7 +969,7 @@ fn resume_with_state_handler() -> Action {
 
 21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_suspended_ancestor walks through HandlerChild -> skips Handle -> delivers normally. Handler completes.
 
-22. `Handle(e, handler, Parallel(Perform(e), Perform(e)))`. Both Performs fire during advance. First dispatches handler, second stashed as Effect. Handler resumes -> sweep -> retries stashed effect -> dispatches second handler. Second handler resumes -> Parallel joins.
+22. `Handle(e, handler, Parallel(Perform(e), Perform(e)))`. Both Performs dispatch tasks during advance. With FIFO completion order: first Perform's bubble_effect dispatches handler, second stashes. Handler resumes -> sweep -> retries -> dispatches second handler. With depth-first: each handler completes before the next Perform's bubble_effect runs, no stashing. Both orderings produce the same final result.
 
 23. `Handle(e1, h1, Handle(e2, h2, Parallel(Perform(e1), Perform(e2))))`. Two effects targeting different Handles. First Perform(e1) dispatches h1. Second Perform(e2) -> bubble_effect walks past Handle(e1) (wrong effect) -> finds Handle(e2) (free) -> dispatches h2. Both handlers run concurrently. Verify both resume correctly.
 
@@ -925,23 +983,26 @@ fn resume_with_state_handler() -> Action {
 1. Migrate frame store from `slab::Slab` to a generational arena (e.g. `thunderdome::Arena`)
 2. `EffectId(u16)` type
 3. `HandleAction`, `PerformAction` in tree AST
-3. `FlatAction::Handle`, `FlatAction::Perform` in flat table
-4. Flattener: flatten_action_at arms, fill_child_slot update, try_map_target passthrough
-5. `HandleFrame` struct, `FrameKind::Handle`
-6. `ContinuationRoot` struct
-7. `ParentRef::HandlerChild` variant
-8. `StashedItem` enum (Delivery + Effect)
-9. `bubble_effect` with Handle-busy stashing
-10. `dispatch_to_handler`
-11. `handle_handler_completion`, `apply_state_update`
-12. `resume_continuation`, `discard_continuation`, `restart_body`
-13. `teardown_body`, `is_descendant_of`
-14. `deliver_or_stash`, `complete_task` (updated), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
-15. `handle_frame_mut` accessor
-16. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
-17. `FlatConfig::handle_body` accessor
-18. Updated `deliver` for HandlerChild and Handle body-completion
-19. Tests per above
+4. `FlatAction::Handle`, `FlatAction::Perform` in flat table
+5. Flattener: flatten_action_at arms, fill_child_slot update, try_map_target passthrough
+6. `HandleFrame` struct, `FrameKind::Handle`
+7. `ContinuationRoot` struct
+8. `ParentRef::HandlerChild` variant
+9. `PendingPerform` struct, `task_to_perform: HashMap<TaskId, PendingPerform>` on WorkflowState
+10. `dispatch_perform` — Perform dispatches identity task, stores effect info
+11. `StashedItem` enum (Delivery + Effect)
+12. `bubble_effect` with Handle-busy stashing (called from `complete_task`, not advance)
+13. `dispatch_to_handler`
+14. `handle_handler_completion`, `apply_state_update`
+15. `resume_continuation`, `discard_continuation`, `restart_body`
+16. `teardown_body`, `is_descendant_of`
+17. `deliver_or_stash`, `complete_task` (updated: checks `task_to_perform` first), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
+18. `handle_frame_mut` accessor
+19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
+20. `FlatConfig::handle_body` accessor
+21. Updated `deliver` for HandlerChild and Handle body-completion
+22. Identity builtin (or Perform dispatch kind) for driver to echo payload
+23. Tests per above
 
 ## Out of scope
 
