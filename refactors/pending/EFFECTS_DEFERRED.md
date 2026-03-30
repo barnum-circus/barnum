@@ -111,8 +111,7 @@ fn bubble_effect(...) -> Result<StashOutcome, AdvanceError> {
     // try_for_each / find_map style — short-circuits on block or match.
     for (parent_ref, frame) in &mut parents {
         if Self::is_blocked_by_handle(parent_ref, &frame.kind) {
-            self.stashed_items.push(StashedItem::Effect { ... });
-            return Ok(StashOutcome::Stashed);
+            return Ok(StashOutcome::Blocked);
         }
         if let FrameKind::Handle(h) = &frame.kind {
             if h.effect_id == effect_id {
@@ -129,7 +128,7 @@ fn bubble_effect(...) -> Result<StashOutcome, AdvanceError> {
 }
 ```
 
-`deliver_or_stash` and `find_blocking_ancestor` would also use `parent_iter`, keeping the walk logic in one place. The iterator handles the "frame gone" case by terminating early (the caller checks whether it ended due to a missing frame or reaching the root).
+`try_deliver` and `find_blocking_ancestor` would also use `parent_iter`, keeping the walk logic in one place. The iterator handles the "frame gone" case by terminating early (the caller checks whether it ended due to a missing frame or reaching the root).
 
 Not worth building until the parent walk logic is needed in more places or the fused single-pass matters for performance.
 

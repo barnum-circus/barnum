@@ -230,7 +230,16 @@ FlatAction::Handle { effect_id, handler } => {
 
 FlatAction::Perform { effect_id } => {
     let parent = parent.ok_or(AdvanceError::UnhandledEffect { effect_id })?;
-    self.bubble_effect(parent, effect_id, value)?;
+    match self.bubble_effect(parent, effect_id, value)? {
+        StashOutcome::Consumed => {}
+        StashOutcome::Blocked(payload) => {
+            self.stashed_items.push_back(StashedItem::Effect {
+                starting_parent: parent,
+                effect_id,
+                payload,
+            });
+        }
+    }
 }
 ```
 
@@ -260,17 +269,20 @@ Called during advance when Perform executes (and during sweep_stash when retryin
 
 Handler edges can't match: the handler doesn't have lexical access to its own effect_id (enforced by TypeScript builder, see "Static analysis" section). If violated, the assert catches it.
 
-Returns `Result<StashOutcome, AdvanceError>`. The Perform advance arm discards the outcome. `sweep_stash` uses it to track progress.
+Returns `Result<StashOutcome, AdvanceError>`. Does NOT mutate the stash — the caller (Perform advance arm, `sweep_stash_once`) is responsible for pushing to the stash when `Blocked`.
 
 ```rust
-/// Whether a stashable operation was consumed or deferred.
-/// Used by deliver_or_stash, bubble_effect, and sweep_stash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether an effect was consumed or blocked.
+/// bubble_effect returns this WITHOUT mutating the stash — the caller
+/// is responsible for pushing to the stash when Blocked.
+#[derive(Debug)]
 enum StashOutcome {
-    /// Item was processed: delivered, dispatched to handler, or dropped (frame gone).
+    /// Effect was dispatched to a handler, or dropped (frame gone).
     Consumed,
-    /// Item was re-stashed: target is blocked by a suspended Handle.
-    Stashed,
+    /// Target is blocked by a suspended Handle. Caller must stash.
+    /// Returns the payload so the caller can reconstruct the StashedItem
+    /// without cloning.
+    Blocked(Value),
 }
 ```
 
@@ -284,14 +296,7 @@ fn bubble_effect(
     // First: can this effect proceed at all?
     match self.find_blocking_ancestor(starting_parent) {
         AncestorCheck::FrameGone => return Ok(StashOutcome::Consumed),
-        AncestorCheck::Blocked(_) => {
-            self.stashed_items.push_back(StashedItem::Effect {
-                starting_parent,
-                effect_id,
-                payload,
-            });
-            return Ok(StashOutcome::Stashed);
-        }
+        AncestorCheck::Blocked(_) => return Ok(StashOutcome::Blocked(payload)),
         AncestorCheck::Clear => {}
     }
 
@@ -337,7 +342,7 @@ fn find_and_dispatch_handler(
 }
 ```
 
-O(2 × depth of frame tree) — two walks: `find_blocking_ancestor` then `find_and_dispatch_handler`. These could be fused into a single pass, but the separation keeps `find_blocking_ancestor` as the single source of truth for the "can this proceed?" check, shared with `deliver_or_stash`. Depth is bounded by nesting level, not data size, so the constant factor is negligible.
+O(2 × depth of frame tree) — two walks: `find_blocking_ancestor` then `find_and_dispatch_handler`. These could be fused into a single pass, but the separation keeps `find_blocking_ancestor` as the single source of truth for the "can this proceed?" check, shared with `try_deliver`. Depth is bounded by nesting level, not data size, so the constant factor is negligible.
 
 ## dispatch_to_handler
 
@@ -422,23 +427,33 @@ pub struct WorkflowState {
 }
 ```
 
-### deliver_or_stash
+### try_deliver
+
+Checks whether delivery can proceed. Does NOT mutate the stash — the caller
+is responsible for stashing the item if blocked.
 
 ```rust
-fn deliver_or_stash(
+enum TryDeliverResult {
+    /// Delivery succeeded. Inner value is the workflow result, if any.
+    Delivered(Option<Value>),
+    /// Target frame is blocked by a suspended Handle.
+    /// Returns the value so the caller can stash without cloning.
+    Blocked(Value),
+    /// Target frame was torn down.
+    FrameGone,
+}
+
+fn try_deliver(
     &mut self,
     parent_ref: ParentRef,
     value: Value,
-) -> Result<(Option<Value>, StashOutcome), CompleteError> {
+) -> Result<TryDeliverResult, CompleteError> {
     match self.find_blocking_ancestor(parent_ref) {
-        AncestorCheck::FrameGone => Ok((None, StashOutcome::Consumed)),
-        AncestorCheck::Blocked(_) => {
-            self.stashed_items.push_back(StashedItem::Delivery { parent_ref, value });
-            Ok((None, StashOutcome::Stashed))
-        }
+        AncestorCheck::FrameGone => Ok(TryDeliverResult::FrameGone),
+        AncestorCheck::Blocked(_) => Ok(TryDeliverResult::Blocked(value)),
         AncestorCheck::Clear => {
             let result = self.deliver(Some(parent_ref), value)?;
-            Ok((result, StashOutcome::Consumed))
+            Ok(TryDeliverResult::Delivered(result))
         }
     }
 }
@@ -446,7 +461,7 @@ fn deliver_or_stash(
 
 ### complete_task
 
-Since Perform calls `bubble_effect` directly during advance (no task dispatched), `complete_task` only handles normal Invoke completions — same as the existing engine, plus the `deliver_or_stash` guard for suspended ancestors. Missing entries (teardown_body removed the task's entry) are silently dropped.
+Since Perform calls `bubble_effect` directly during advance (no task dispatched), `complete_task` only handles normal Invoke completions — same as the existing engine, plus the `try_deliver` guard for suspended ancestors. Missing entries (teardown_body removed the task's entry) are silently dropped.
 
 ```rust
 fn complete_task(
@@ -460,8 +475,14 @@ fn complete_task(
 
     match parent {
         Some(parent_ref) => {
-            let (result, _outcome) = self.deliver_or_stash(parent_ref, value)?;
-            Ok(result)
+            match self.try_deliver(parent_ref, value)? {
+                TryDeliverResult::Delivered(result) => Ok(result),
+                TryDeliverResult::Blocked(value) => {
+                    self.stashed_items.push_back(StashedItem::Delivery { parent_ref, value });
+                    Ok(None)
+                }
+                TryDeliverResult::FrameGone => Ok(None),
+            }
         }
         None => Ok(Some(value)),
     }
@@ -497,40 +518,51 @@ enum SweepResult {
 }
 
 /// Single pass over items that existed at the start. Pop from front, process
-/// one at a time. Re-stashed items are pushed to the back by
-/// process_stashed_item; the `n` bound ensures they aren't re-processed
-/// in this pass.
+/// one at a time. Blocked items are pushed to the back of the deque; the `n`
+/// bound ensures they aren't re-processed in this pass. When an item is
+/// consumed (tree state changed), immediately returns MadeProgress so the
+/// outer loop restarts — consuming one item may unblock others.
 fn sweep_stash_once(&mut self) -> Result<SweepResult, CompleteError> {
     let n = self.stashed_items.len();
     for _ in 0..n {
         let item = self.stashed_items.pop_front().unwrap();
-        let (result, outcome) = self.process_stashed_item(item)?;
-        if let Some(value) = result {
-            return Ok(SweepResult::WorkflowDone(value));
-        }
-        if outcome == StashOutcome::Consumed {
-            return Ok(SweepResult::MadeProgress);
+        match item {
+            StashedItem::Delivery { parent_ref, value } => {
+                match self.try_deliver(parent_ref, value)? {
+                    TryDeliverResult::Delivered(Some(value)) => {
+                        return Ok(SweepResult::WorkflowDone(value));
+                    }
+                    TryDeliverResult::Delivered(None) => {
+                        return Ok(SweepResult::MadeProgress);
+                    }
+                    TryDeliverResult::Blocked(value) => {
+                        self.stashed_items.push_back(StashedItem::Delivery {
+                            parent_ref,
+                            value,
+                        });
+                    }
+                    TryDeliverResult::FrameGone => {
+                        // Frame torn down. Item silently dropped.
+                    }
+                }
+            }
+            StashedItem::Effect { starting_parent, effect_id, payload } => {
+                match self.bubble_effect(starting_parent, effect_id, payload)? {
+                    StashOutcome::Consumed => {
+                        return Ok(SweepResult::MadeProgress);
+                    }
+                    StashOutcome::Blocked(payload) => {
+                        self.stashed_items.push_back(StashedItem::Effect {
+                            starting_parent,
+                            effect_id,
+                            payload,
+                        });
+                    }
+                }
+            }
         }
     }
     Ok(SweepResult::NoProgress)
-}
-
-/// Returns (workflow_result, outcome).
-/// Side effect: when outcome is Stashed, the item has already been pushed
-/// back to self.stashed_items (via deliver_or_stash / bubble_effect).
-fn process_stashed_item(
-    &mut self,
-    item: StashedItem,
-) -> Result<(Option<Value>, StashOutcome), CompleteError> {
-    match item {
-        StashedItem::Delivery { parent_ref, value } => {
-            self.deliver_or_stash(parent_ref, value)
-        }
-        StashedItem::Effect { starting_parent, effect_id, payload } => {
-            let outcome = self.bubble_effect(starting_parent, effect_id, payload)?;
-            Ok((None, outcome))
-        }
-    }
 }
 ```
 
@@ -567,7 +599,7 @@ No special cases. The fourth row (Handler + free) is unreachable today — `disp
 
 ### find_blocking_ancestor
 
-Walks the parent chain, checking `is_blocked_by_handle` at each step. Single source of truth for the "frame-gone or blocked?" question — both `deliver_or_stash` and `bubble_effect` delegate to this.
+Walks the parent chain, checking `is_blocked_by_handle` at each step. Single source of truth for the "frame-gone or blocked?" question — both `try_deliver` and `bubble_effect` delegate to this.
 
 ```rust
 /// Result of walking the parent chain looking for a blocking Handle.
@@ -618,7 +650,7 @@ Handle(effect, handler,
 
 1. Advance: All dispatches both branches. Invoke A and B dispatch external tasks.
 2. Task A completes. deliver -> Chain A trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
-3. Task B completes. deliver_or_stash -> find_blocking_ancestor -> is_blocked_by_handle: body child + suspended = blocked -> **stashed as Delivery**.
+3. Task B completes. try_deliver -> find_blocking_ancestor -> is_blocked_by_handle: body child + suspended = blocked -> Blocked -> **stashed as Delivery** by complete_task.
 4a. Handler Resumes: deliver to All slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> All joins -> Handle exits.
 4b. Handler Discards: teardown_body removes All, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value.
 
@@ -754,13 +786,17 @@ fn resume_continuation(
     perform_parent: ParentRef,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    // deliver_or_stash guards the delivery point: if the Perform's parent
+    // try_deliver guards the delivery point: if the Perform's parent
     // is inside another suspended Handle's body, the delivery is stashed
-    // rather than advancing the frozen body. This is the correct guard
-    // location — effects bubble freely and handlers run unconditionally,
-    // but the result is only delivered into the body when the body isn't frozen.
-    let (result, _outcome) = self.deliver_or_stash(perform_parent, value)?;
-    Ok(result)
+    // rather than advancing the frozen body.
+    match self.try_deliver(perform_parent, value)? {
+        TryDeliverResult::Delivered(result) => Ok(result),
+        TryDeliverResult::Blocked(value) => {
+            self.stashed_items.push_back(StashedItem::Delivery { parent_ref: perform_parent, value });
+            Ok(None)
+        }
+        TryDeliverResult::FrameGone => Ok(None),
+    }
 }
 ```
 
@@ -781,8 +817,14 @@ fn discard_continuation(
     self.frames.remove(handle_frame_id);
     match parent {
         Some(parent_ref) => {
-            let (result, _outcome) = self.deliver_or_stash(parent_ref, value)?;
-            Ok(result)
+            match self.try_deliver(parent_ref, value)? {
+                TryDeliverResult::Delivered(result) => Ok(result),
+                TryDeliverResult::Blocked(value) => {
+                    self.stashed_items.push_back(StashedItem::Delivery { parent_ref, value });
+                    Ok(None)
+                }
+                TryDeliverResult::FrameGone => Ok(None),
+            }
         }
         None => Ok(Some(value)), // top-level Handle discarded
     }
@@ -1058,7 +1100,7 @@ fn missing_fields_handler() -> Action {
 
 20. `Handle(mid, h_mid, Handle(inner, h_inner, All(Chain(Invoke(P1), Perform(mid)), Chain(Invoke(P2), Perform(inner)), Chain(Invoke(P3), Invoke(echo)))))`. P1 -> Perform(mid) -> mid suspends. P2, P3 stashed. Mid resumes -> sweep -> P2 delivered -> Perform(inner) -> inner suspends -> P3 re-stashed. Inner resumes -> sweep -> P3 delivered -> echo -> All joins.
 
-21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_blocking_ancestor walks through Handle { Handler } -> is_blocked_by_handle returns false (handler side is active) -> delivers normally. Handler completes.
+21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> try_deliver -> find_blocking_ancestor walks through Handle { Handler } -> is_blocked_by_handle returns false (handler side is active) -> delivers normally. Handler completes.
 
 22. `Handle(e, handler, All(Perform(e), Perform(e)))`. Both Performs execute synchronously during advance. First Perform's bubble_effect dispatches handler, second stashes (Handle busy). Handler resumes -> sweep -> retries stashed effect -> dispatches second handler. Second handler resumes -> All joins -> Handle exits.
 
@@ -1095,14 +1137,14 @@ fn missing_fields_handler() -> Action {
 6. `HandleFrame` struct, `FrameKind::Handle`
 7. `HandleSide` enum, `ParentRef::Handle { frame_id, side }` variant
 8. `StashedItem` enum (Delivery + Effect)
-9. `StashOutcome` enum, `AncestorCheck` enum
+9. `StashOutcome` enum, `AncestorCheck` enum, `TryDeliverResult` enum, `SweepResult` enum
 10. `bubble_effect`, `find_and_dispatch_handler` (called from advance, not complete_task)
 11. `dispatch_to_handler`
 12. `HandlerOutput` and `StateUpdate` serde enums
 13. `handle_handler_completion`, `apply_state_update`
 14. `resume_continuation`, `discard_continuation`, `restart_body`
 15. `teardown_body`, `is_descendant_of`
-16. `is_blocked_by_handle`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task`, `sweep_stash`, `process_stashed_item`
+16. `is_blocked_by_handle`, `find_blocking_ancestor`, `try_deliver`, `complete_task`, `sweep_stash`, `sweep_stash_once`
 17. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 18. `FlatConfig::handle_body` accessor
 19. Updated `deliver` for `Handle { Body }` and `Handle { Handler }` arms
