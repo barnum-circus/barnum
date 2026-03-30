@@ -249,7 +249,11 @@ fn bubble_effect(
 
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
-        let parent = &self.frames[parent_id.0];
+
+        // Frame may have been torn down (stashed effect retried after teardown).
+        let Some(parent) = self.frames.get(parent_id.0) else {
+            return Ok(()); // frame tree gone, silently drop
+        };
 
         if let FrameKind::Handle(handle_frame) = &parent.kind {
             if handle_frame.effect_id == effect_id {
