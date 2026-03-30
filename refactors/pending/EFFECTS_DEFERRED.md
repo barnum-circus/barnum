@@ -143,3 +143,42 @@ Possible approaches:
 3. **Zero-copy arena** — allocate handler inputs in a bump arena, pass references. Avoid `serde_json::Value` allocation entirely for internal flows.
 
 Not worth pursuing until profiling shows JSON construction is a bottleneck. The current `Value`-everywhere design keeps Phase 1 simple and consistent with the existing engine.
+
+## Teardown Optimization
+
+`teardown_body` is O(n × depth): it iterates every frame in the arena and walks each one's parent chain to check `is_descendant_of`. For a slab with n frames and tree depth d, this is O(n × d) per teardown. The `task_to_parent` cleanup adds another O(t) pass where t is the number of in-flight tasks, but t ≤ n so the frame walk dominates.
+
+Phase 1 accepts this cost — the arena is small during early use, and teardown only runs on Discard/RestartBody. But if workflows grow large (deep nesting, many concurrent branches), this becomes the bottleneck for handler completion.
+
+### Approach 1: Child pointers
+
+Each frame maintains a `Vec<FrameId>` of its direct children. `insert_frame` appends to the parent's child list. `teardown_body` walks the subtree top-down (BFS or DFS from the Handle's body child), collecting descendants in O(k) where k is the subtree size, not the full arena size.
+
+Trade-offs:
+- O(k) teardown instead of O(n × d). k ≤ n, and for a Handle whose body is one branch of a large All, k ≪ n.
+- Child list maintenance cost: one `Vec::push` per `insert_frame`, one `Vec::retain` or swap-remove per `frames.remove`. Both O(1) amortized.
+- Memory: one `Vec<FrameId>` per frame. For frames with few children (Chain has 1, Loop has 1), this is a 24-byte overhead (Vec's stack allocation) plus heap allocation on first push.
+- `SmallVec<[FrameId; 2]>` would inline up to 2 children (covers Chain, Loop, Handle) and only heap-allocate for All/ForEach with many children.
+
+### Approach 2: Subtree generation counter
+
+Each Handle frame holds a monotonic generation counter. When `teardown_body` runs, it bumps the counter. Every frame stores the generation it was created under. Frames whose generation doesn't match the current Handle generation are considered dead — `complete_task` and `sweep_stash` check the generation before delivering.
+
+Trade-offs:
+- O(1) teardown — just bump a counter. Dead frames are lazily collected.
+- Lazy collection means dead frames occupy arena slots until reclaimed. Needs a periodic GC pass or piggyback on sweep_stash.
+- Doesn't handle nested Handles cleanly — a nested Handle's generation is independent of its ancestor's. Teardown of an outer Handle should invalidate all inner frames, but inner frames check their own Handle's generation, not the outer one.
+- Complexity: generation tracking interacts with the generational arena's own generation counters, creating two levels of generation. Confusing.
+
+### Approach 3: Parent-pointer walk with early termination
+
+Keep the current parent-pointer-only structure but optimize `is_descendant_of` with a depth field. Each frame stores its depth (parent's depth + 1). `teardown_body` collects all frames with depth > Handle's depth whose parent chain passes through the Handle. The depth check prunes frames in unrelated subtrees early.
+
+Trade-offs:
+- Marginal improvement. Still O(n) iteration over the arena; the depth check only saves the parent walk for frames at shallower depths.
+- Simple to implement — one `u32` field per frame.
+- Not worth the complexity for a marginal constant-factor improvement.
+
+### Recommendation
+
+Approach 1 (child pointers) is the clear winner. O(k) teardown, simple implementation, no lazy-GC complexity. Use `SmallVec<[FrameId; 2]>` to avoid heap allocation for the common case (≤ 2 children). Defer until profiling shows teardown is a bottleneck or until workflows with large arenas become common.
