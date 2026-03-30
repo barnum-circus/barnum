@@ -30,7 +30,7 @@ There is no `ResumeAction`. Resumption, discarding, and body re-entry are the Ha
 
 ### Continuation operations (Rust enum)
 
-The handler DAG's output tells the Handle frame what to do with the suspended continuation. This is a closed Rust enum, not a tagged JSON string — these three operations are the scheduler's internal protocol, not user-extensible.
+The handler DAG's output tells the Handle frame what to do with the suspended continuation. This is a closed Rust enum — these are the scheduler's internal protocol, not user-extensible.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,14 +39,16 @@ pub enum ContinuationOp {
     Resume,
     /// Tear down the continuation. Deliver value to the Handle's parent. Handle exits.
     Discard,
-    /// Tear down the continuation. Re-enter the body from scratch with the value.
+    /// Tear down the continuation. Re-advance the body with the value. Handle stays alive.
     RestartBody,
 }
 ```
 
-Resume and Discard are the canonical two operations on continuations in the algebraic effects literature. RestartBody is our addition — in systems where handlers are real functions, "restart the body" is expressed as discard + recursive call. Our handler DAGs are finite AST graphs (not recursive functions), so RestartBody is a primitive.
+Resume and Discard are the canonical two operations on continuations in the algebraic effects literature. In systems with generalized tail call optimization (Koka, Unison), RestartBody is unnecessary — loops are pure recursion and the runtime optimizes away the frame growth.
 
-From the handler's perspective, there are really two decisions: resume the continuation, or discard it. RestartBody is a Discard that also re-enters the body — both Break and Continue discard the old continuation, they just differ in what the Handle frame does afterward (exit vs re-enter). No handler ever uses both Resume and RestartBody.
+RestartBody exists because our scheduler is a cooperative slab-based state machine without generalized TCO. Without it, a loop modeled as pure recursion (handler DAG = recursive ref to Handle node) pushes a new Handle frame per iteration → OOM. RestartBody is a localized trampoline: the Handle frame tears down the old body frames and re-advances the body ActionId. O(1) memory, no complex tail-call analysis.
+
+No handler ever uses both Resume and RestartBody. The partition is clean: ReadVar handlers always Resume. Throw handlers always Discard. Loop handlers use RestartBody (Continue) or Discard (Break).
 
 ### Effect routing: opaque gensym'd IDs
 
@@ -197,7 +199,7 @@ No changes. Same pattern as Parallel — each iteration is a slot, suspended ite
 
 ### Loop (before Phase 4 migration)
 
-During Phase 1, Loop still exists as a separate frame kind. It doesn't interact with Handle/Perform. After Phase 4, Loop is replaced by Handle(LoopControl).
+During Phase 1, Loop still exists as a separate frame kind. It doesn't interact with Handle/Perform. After Phase 4, Loop is replaced by two nested Handles (see Phase 4).
 
 ## Test strategy
 

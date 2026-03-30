@@ -6,16 +6,20 @@ Migrate the existing LoopAction from a dedicated frame kind to Handle/Perform su
 
 ## Prerequisites
 
-Phase 1 (Effect Substrate) complete. Phase 3's teardown (discarding continuations) is needed for both the Break and Continue paths — both discard the current continuation.
+Phase 1 (Effect Substrate) complete. Phase 3's teardown (discarding continuations) is needed for the Break path.
 
-## Two effects, not one
+## Two effects, two nested Handles
 
-Loop uses two separate effects with two nested Handles. There is no single "LoopControl" effect type with a Continue/Break payload. The routing is structural (which Handle catches it), not payload-based.
+Loop uses two separate effects. Each is a separate Handle with a trivial handler. No payload branching.
 
-- `recur` = `Perform(recurEffect)` → caught by inner Handle → `RestartBody` → restart the body
-- `done` = `Perform(doneEffect)` → bubbles past inner Handle → caught by outer Handle → `Discard` → exit the loop
+- `recur` = `Perform(recurEffect)` → caught by inner Handle → `RestartBody` → re-enter body
+- `done` = `Perform(doneEffect)` → bubbles past inner Handle → caught by outer Handle → `Discard` → exit loop
 
-Both paths discard the current continuation. They differ in what the Handle frame does next: re-enter the body (recur) or exit (done).
+### Why RestartBody, not a cyclic graph edge?
+
+The theoretically pure approach: model `recur` as a cyclic `Step` back to the body's ActionId, not as an effect. This is how Scheme/Lisp does it with `call/cc`. But without generalized tail call optimization (TCO) in the scheduler, each iteration pushes a new frame onto the slab. 10,000 iterations = 10,000 frames → OOM.
+
+RestartBody is a localized trampoline. The inner Handle frame tears down the old body frames and re-advances the body ActionId. O(1) memory. No complex tail-call analysis. If we later add TCO to the scheduler (which benefits all cyclic patterns, not just loops), RestartBody becomes unnecessary and can be removed.
 
 ## How loop compiles
 
@@ -30,8 +34,8 @@ loop((recur, done) =>
 // done = Perform(doneEffect)
 
 // Compiles to:
-Handle(doneEffect, tag("Discard"),
-  Handle(recurEffect, tag("RestartBody"),
+Handle(doneEffect, tag("Discard"),           // outer: done exits the loop
+  Handle(recurEffect, tag("RestartBody"),    // inner: recur restarts the body
     body
   )
 )
@@ -55,7 +59,7 @@ loop((recurOuter, doneOuter) =>
 )
 ```
 
-`doneOuter` bubbles past both inner Handles (wrong EffectIds) and is caught by the outer done Handle.
+`doneOuter` bubbles past the inner loop's two Handles (wrong EffectIds) and is caught by the outer loop's done Handle.
 
 ### HOAS is required
 
@@ -98,6 +102,7 @@ All existing loop tests must pass after migration:
 3. **Loop with declare**: Variables from an outer declare are accessible inside the loop body, including across Continue re-entries.
 4. **Loop with tryCatch**: Error inside loop body caught by tryCatch inside the loop. Loop continues.
 5. **tryCatch around loop**: Error inside loop body propagates past the loop's Handles to the tryCatch Handle.
+6. **O(1) memory**: Loop with 10,000 iterations does not grow the slab. RestartBody tears down old frames each iteration.
 
 ## Deliverables
 
