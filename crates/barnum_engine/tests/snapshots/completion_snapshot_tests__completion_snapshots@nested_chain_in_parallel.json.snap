@@ -105,7 +105,7 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: Some(
-                            IndexedChild {
+                            All {
                                 frame_id: Index {
                                     slot: 0,
                                     generation: Generation(1),
@@ -129,7 +129,7 @@ WorkflowState {
         TaskId(
             0,
         ): Some(
-            SingleChild {
+            Chain {
                 frame_id: Index {
                     slot: 1,
                     generation: Generation(1),
@@ -139,7 +139,7 @@ WorkflowState {
         TaskId(
             1,
         ): Some(
-            IndexedChild {
+            All {
                 frame_id: Index {
                     slot: 0,
                     generation: Generation(1),
@@ -277,7 +277,7 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: Some(
-                            IndexedChild {
+                            All {
                                 frame_id: Index {
                                     slot: 0,
                                     generation: Generation(1),
@@ -301,7 +301,7 @@ WorkflowState {
         TaskId(
             0,
         ): Some(
-            SingleChild {
+            Chain {
                 frame_id: Index {
                     slot: 1,
                     generation: Generation(1),
@@ -430,7 +430,7 @@ WorkflowState {
         TaskId(
             2,
         ): Some(
-            IndexedChild {
+            All {
                 frame_id: Index {
                     slot: 0,
                     generation: Generation(1),

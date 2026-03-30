@@ -46,7 +46,7 @@ match parent_ref {
 | Frame kind | ParentRef | Line |
 |---|---|---|
 | Chain | `SingleChild { frame_id }` | `lib.rs:298` |
-| All (Parallel) | `IndexedChild { frame_id, child_index: i }` | `lib.rs:322` |
+| All | `IndexedChild { frame_id, child_index: i }` | `lib.rs:322` |
 | ForEach | `IndexedChild { frame_id, child_index: i }` | `lib.rs:352` |
 | Loop | `SingleChild { frame_id }` | `lib.rs:384` |
 
@@ -157,7 +157,7 @@ Four construction sites, one-to-one replacement:
 // Chain (was SingleChild)
 self.advance(first, value, Some(ParentRef::Chain { frame_id }))?;
 
-// All/Parallel (was IndexedChild)
+// All (was IndexedChild)
 self.advance(child, value.clone(), Some(ParentRef::All { frame_id, child_index: i }))?;
 
 // ForEach (was IndexedChild)

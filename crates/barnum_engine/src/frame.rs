@@ -8,16 +8,30 @@ use serde_json::Value;
 pub type FrameId = thunderdome::Index;
 
 /// How a child frame refers to its parent.
+///
+/// One variant per frame kind — the variant determines the code path in
+/// `deliver`, eliminating nested `FrameKind` dispatch.
 #[derive(Debug, Clone, Copy)]
 pub enum ParentRef {
-    /// Parent has one active child (Chain, Loop).
-    SingleChild {
+    /// Parent is a Chain frame — sequential, single child.
+    Chain {
         /// The parent frame's ID.
         frame_id: FrameId,
     },
-    /// Parent has N children; this child occupies `child_index` (All,
-    /// `ForEach`).
-    IndexedChild {
+    /// Parent is a Loop frame — single child, Continue/Break dispatch.
+    Loop {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+    },
+    /// Parent is an All frame — indexed child in fan-out.
+    All {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+        /// This child's index in the parent's results vector.
+        child_index: usize,
+    },
+    /// Parent is a `ForEach` frame — indexed child per array element.
+    ForEach {
         /// The parent frame's ID.
         frame_id: FrameId,
         /// This child's index in the parent's results vector.
@@ -30,9 +44,10 @@ impl ParentRef {
     #[must_use]
     pub const fn frame_id(self) -> FrameId {
         match self {
-            ParentRef::SingleChild { frame_id } | ParentRef::IndexedChild { frame_id, .. } => {
-                frame_id
-            }
+            Self::Chain { frame_id }
+            | Self::Loop { frame_id }
+            | Self::All { frame_id, .. }
+            | Self::ForEach { frame_id, .. } => frame_id,
         }
     }
 }

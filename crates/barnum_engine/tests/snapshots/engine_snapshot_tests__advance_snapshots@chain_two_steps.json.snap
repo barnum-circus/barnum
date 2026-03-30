@@ -77,7 +77,7 @@ WorkflowState {
         TaskId(
             0,
         ): Some(
-            SingleChild {
+            Chain {
                 frame_id: Index {
                     slot: 0,
                     generation: Generation(1),

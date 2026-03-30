@@ -195,57 +195,66 @@ impl WorkflowState {
             return Ok(Some(value));
         };
 
-        let frame_id = parent_ref.frame_id();
-
         match parent_ref {
-            ParentRef::SingleChild { .. } => {
+            ParentRef::Chain { frame_id } => {
                 let frame = self.frames.remove(frame_id).expect("parent frame exists");
-                match frame.kind {
-                    FrameKind::Chain { rest } => {
-                        self.advance(rest, value, frame.parent)?;
+                let FrameKind::Chain { rest } = frame.kind else {
+                    unreachable!(
+                        "Chain ParentRef points to non-Chain frame: {:?}",
+                        frame.kind
+                    )
+                };
+                self.advance(rest, value, frame.parent)?;
+                Ok(None)
+            }
+
+            ParentRef::Loop { frame_id } => {
+                let frame = self.frames.remove(frame_id).expect("parent frame exists");
+                let FrameKind::Loop { body } = frame.kind else {
+                    unreachable!("Loop ParentRef points to non-Loop frame: {:?}", frame.kind)
+                };
+                match value["kind"].as_str() {
+                    Some("Continue") => {
+                        let frame_id = self.insert_frame(Frame {
+                            parent: frame.parent,
+                            kind: FrameKind::Loop { body },
+                        });
+                        self.advance(
+                            body,
+                            value["value"].clone(),
+                            Some(ParentRef::Loop { frame_id }),
+                        )?;
                         Ok(None)
                     }
-                    FrameKind::Loop { body } => match value["kind"].as_str() {
-                        Some("Continue") => {
-                            let frame_id = self.insert_frame(Frame {
-                                parent: frame.parent,
-                                kind: FrameKind::Loop { body },
-                            });
-                            self.advance(
-                                body,
-                                value["value"].clone(),
-                                Some(ParentRef::SingleChild { frame_id }),
-                            )?;
-                            Ok(None)
-                        }
-                        Some("Break") => self.deliver(frame.parent, value["value"].clone()),
-                        _ => Err(CompleteError::InvalidLoopResult { value }),
-                    },
-                    _ => unreachable!(
-                        "SingleChild parent must be Chain or Loop, got {:?}",
-                        frame.kind
-                    ),
+                    Some("Break") => self.deliver(frame.parent, value["value"].clone()),
+                    _ => Err(CompleteError::InvalidLoopResult { value }),
                 }
             }
-            ParentRef::IndexedChild { child_index, .. } => {
+
+            ParentRef::All {
+                frame_id,
+                child_index,
+            }
+            | ParentRef::ForEach {
+                frame_id,
+                child_index,
+            } => {
                 let frame = self.frames.get_mut(frame_id).expect("parent frame exists");
-                match &mut frame.kind {
-                    FrameKind::All { results } | FrameKind::ForEach { results } => {
-                        results[child_index] = Some(value);
-                        if results.iter().all(Option::is_some) {
-                            let collected: Vec<Value> =
-                                results.iter_mut().map(|r| r.take().unwrap()).collect();
-                            let parent = frame.parent;
-                            self.frames.remove(frame_id);
-                            self.deliver(parent, Value::Array(collected))
-                        } else {
-                            Ok(None)
-                        }
+                let results = match &mut frame.kind {
+                    FrameKind::All { results } | FrameKind::ForEach { results } => results,
+                    other => {
+                        unreachable!("All/ForEach ParentRef points to wrong frame: {:?}", other)
                     }
-                    _ => unreachable!(
-                        "IndexedChild parent must be All or ForEach, got {:?}",
-                        frame.kind
-                    ),
+                };
+                results[child_index] = Some(value);
+                if results.iter().all(Option::is_some) {
+                    let collected: Vec<Value> =
+                        results.iter_mut().map(|r| r.take().unwrap()).collect();
+                    let parent = frame.parent;
+                    self.frames.remove(frame_id);
+                    self.deliver(parent, Value::Array(collected))
+                } else {
+                    Ok(None)
                 }
             }
         }
@@ -295,7 +304,7 @@ impl WorkflowState {
                     parent,
                     kind: FrameKind::Chain { rest },
                 });
-                self.advance(first, value, Some(ParentRef::SingleChild { frame_id }))?;
+                self.advance(first, value, Some(ParentRef::Chain { frame_id }))?;
             }
 
             FlatAction::All { count } => {
@@ -320,7 +329,7 @@ impl WorkflowState {
                     self.advance(
                         child,
                         value.clone(),
-                        Some(ParentRef::IndexedChild {
+                        Some(ParentRef::All {
                             frame_id,
                             child_index: i,
                         }),
@@ -351,7 +360,7 @@ impl WorkflowState {
                     self.advance(
                         body,
                         element,
-                        Some(ParentRef::IndexedChild {
+                        Some(ParentRef::ForEach {
                             frame_id,
                             child_index: i,
                         }),
@@ -381,7 +390,7 @@ impl WorkflowState {
                     parent,
                     kind: FrameKind::Loop { body },
                 });
-                self.advance(body, value, Some(ParentRef::SingleChild { frame_id }))?;
+                self.advance(body, value, Some(ParentRef::Loop { frame_id }))?;
             }
 
             FlatAction::Step { target } => {
