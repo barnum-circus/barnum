@@ -227,6 +227,7 @@ FlatAction::Handle { effect_id, handler } => {
 }
 
 FlatAction::Perform { effect_id } => {
+    let parent = parent.ok_or(AdvanceError::UnhandledEffect { effect_id })?;
     self.dispatch_perform(parent, effect_id, value);
 }
 ```
@@ -242,7 +243,7 @@ The driver controls scheduling order for Perform tasks. In a Parallel with N Per
 ```rust
 fn dispatch_perform(
     &mut self,
-    starting_parent: Option<ParentRef>,
+    starting_parent: ParentRef,
     effect_id: EffectId,
     payload: Value,
 ) {
@@ -277,11 +278,11 @@ Called from `complete_task` when a Perform task completes (not during advance). 
 ```rust
 fn bubble_effect(
     &mut self,
-    starting_parent: Option<ParentRef>,
+    starting_parent: ParentRef,
     effect_id: EffectId,
     payload: Value,
 ) -> Result<(), AdvanceError> {
-    let mut current = starting_parent;
+    let mut current: Option<ParentRef> = Some(starting_parent);
 
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
@@ -304,15 +305,12 @@ fn bubble_effect(
                     return Ok(());
                 }
 
-                let perform_parent = starting_parent
-                    .expect("Perform with no parent cannot reach a Handle");
-
                 // Extract handler and state before dropping the immutable borrow.
                 let handler = handle_frame.handler;
                 let state = handle_frame.state.clone();
 
                 return self.dispatch_to_handler(
-                    parent_id, perform_parent, payload, handler, state,
+                    parent_id, starting_parent, payload, handler, state,
                 );
             }
         }
@@ -400,7 +398,7 @@ enum StashedItem {
     },
     /// An effect waiting to be bubbled.
     Effect {
-        starting_parent: Option<ParentRef>,
+        starting_parent: ParentRef,
         effect_id: EffectId,
         payload: Value,
     },
@@ -413,7 +411,7 @@ enum TaskOrigin {
     /// Normal handler invocation. Parent is where to deliver the result.
     Invoke { parent: Option<ParentRef> },
     /// Perform identity echo. complete_task runs bubble_effect on completion.
-    Perform { starting_parent: Option<ParentRef>, effect_id: EffectId },
+    Perform { starting_parent: ParentRef, effect_id: EffectId },
 }
 
 pub struct WorkflowState {
