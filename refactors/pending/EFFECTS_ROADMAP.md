@@ -144,9 +144,8 @@ function tryCatch(bodyCallback, recovery) {
 ```
 
 ```rust
-// Rust: opaque ID, no interpretation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EffectId(pub u32);
+// Rust: opaque ID, no interpretation. Uses existing u32_newtype! macro.
+u32_newtype!(EffectId);
 
 pub enum FlatAction {
     Handle { effect: EffectId, handler: ActionId, body: ActionId },
