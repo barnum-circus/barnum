@@ -39,24 +39,34 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: Loop {
-                body: ActionId(
-                    1,
-                ),
-            },
-        },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: Loop {
+                            body: ActionId(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 1,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             0,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
             },
         ),
     },
@@ -111,24 +121,34 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: Loop {
-                body: ActionId(
-                    1,
-                ),
-            },
-        },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(2),
+                    value: Frame {
+                        parent: None,
+                        kind: Loop {
+                            body: ActionId(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 1,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             1,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(2),
+                },
             },
         ),
     },
@@ -183,24 +203,34 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: Loop {
-                body: ActionId(
-                    1,
-                ),
-            },
-        },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(3),
+                    value: Frame {
+                        parent: None,
+                        kind: Loop {
+                            body: ActionId(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 1,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             2,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(3),
+                },
             },
         ),
     },
@@ -255,7 +285,20 @@ WorkflowState {
             0,
         ),
     },
-    frames: {},
+    frames: Arena {
+        storage: [
+            Empty(
+                EmptyEntry {
+                    generation: Generation(3),
+                    next_free: None,
+                },
+            ),
+        ],
+        len: 0,
+        first_free: Some(
+            FreePointer(0),
+        ),
+    },
     task_to_parent: {},
     pending_dispatches: [],
     next_task_id: 3,

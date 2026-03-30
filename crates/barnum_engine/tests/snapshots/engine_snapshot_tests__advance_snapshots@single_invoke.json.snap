@@ -31,7 +31,11 @@ WorkflowState {
             0,
         ),
     },
-    frames: {},
+    frames: Arena {
+        storage: [],
+        len: 0,
+        first_free: None,
+    },
     task_to_parent: {
         TaskId(
             0,

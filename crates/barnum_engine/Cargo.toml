@@ -14,7 +14,7 @@ barnum_ast = { path = "../barnum_ast" }
 intern = { path = "../intern" }
 serde = { workspace = true }
 serde_json = { workspace = true }
-slab = "0.4"
+thunderdome = "0.6"
 thiserror = { workspace = true }
 u32_newtype = { path = "../u32_newtype" }
 

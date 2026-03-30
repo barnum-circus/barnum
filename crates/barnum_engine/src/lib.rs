@@ -13,7 +13,7 @@ use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
 use frame::{Frame, FrameId, FrameKind, ParentRef};
 use intern::Lookup;
 use serde_json::Value;
-use slab::Slab;
+use thunderdome::Arena;
 use u32_newtype::u32_newtype;
 
 // ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ pub enum CompleteError {
 #[derive(Debug)]
 pub struct WorkflowState {
     flat_config: FlatConfig,
-    frames: Slab<Frame>,
+    frames: Arena<Frame>,
     task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
     pending_dispatches: Vec<Dispatch>,
     next_task_id: u32,
@@ -114,7 +114,7 @@ impl WorkflowState {
     pub fn new(flat_config: FlatConfig) -> Self {
         Self {
             flat_config,
-            frames: Slab::new(),
+            frames: Arena::new(),
             task_to_parent: BTreeMap::new(),
             pending_dispatches: Vec::new(),
             next_task_id: 0,
@@ -168,7 +168,7 @@ impl WorkflowState {
     // -- Private helpers --
 
     fn insert_frame(&mut self, frame: Frame) -> FrameId {
-        FrameId(self.frames.insert(frame))
+        self.frames.insert(frame)
     }
 
     #[allow(clippy::missing_const_for_fn)] // mutates self
@@ -199,7 +199,7 @@ impl WorkflowState {
 
         match parent_ref {
             ParentRef::SingleChild { .. } => {
-                let frame = self.frames.remove(frame_id.0);
+                let frame = self.frames.remove(frame_id).expect("parent frame exists");
                 match frame.kind {
                     FrameKind::Chain { rest } => {
                         self.advance(rest, value, frame.parent)?;
@@ -228,10 +228,7 @@ impl WorkflowState {
                 }
             }
             ParentRef::IndexedChild { child_index, .. } => {
-                let frame = self
-                    .frames
-                    .get_mut(frame_id.0)
-                    .expect("parent frame exists");
+                let frame = self.frames.get_mut(frame_id).expect("parent frame exists");
                 match &mut frame.kind {
                     FrameKind::Parallel { results } | FrameKind::ForEach { results } => {
                         results[child_index] = Some(value);
@@ -239,7 +236,7 @@ impl WorkflowState {
                             let collected: Vec<Value> =
                                 results.iter_mut().map(|r| r.take().unwrap()).collect();
                             let parent = frame.parent;
-                            self.frames.remove(frame_id.0);
+                            self.frames.remove(frame_id);
                             self.deliver(parent, Value::Array(collected))
                         } else {
                             Ok(None)
@@ -794,6 +791,34 @@ mod tests {
                 .complete(d[0].task_id, json!({"kind": "Break", "value": "done"}))
                 .unwrap(),
             Some(json!("done")),
+        );
+    }
+
+    // -- Arena / generational safety --
+
+    /// Removing a frame and reusing its slot must not let the old `FrameId`
+    /// resolve — the generational index rejects stale references.
+    #[test]
+    fn stale_frame_id_returns_none() {
+        let mut arena = Arena::<Frame>::new();
+
+        let old_id = arena.insert(Frame {
+            parent: None,
+            kind: FrameKind::Chain { rest: ActionId(0) },
+        });
+
+        arena.remove(old_id);
+
+        // Insert a new frame — thunderdome may reuse the same slot.
+        let _new_id = arena.insert(Frame {
+            parent: None,
+            kind: FrameKind::Loop { body: ActionId(0) },
+        });
+
+        // The old id must not resolve, even if the slot was reused.
+        assert!(
+            arena.get(old_id).is_none(),
+            "stale FrameId must not match a reused slot"
         );
     }
 }

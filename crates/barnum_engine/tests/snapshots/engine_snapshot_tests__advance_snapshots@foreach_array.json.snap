@@ -38,26 +38,36 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: ForEach {
-                results: [
-                    None,
-                    None,
-                    None,
-                ],
-            },
-        },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: ForEach {
+                            results: [
+                                None,
+                                None,
+                                None,
+                            ],
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 1,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             0,
         ): Some(
             IndexedChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
                 child_index: 0,
             },
         ),
@@ -65,9 +75,10 @@ WorkflowState {
             1,
         ): Some(
             IndexedChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
                 child_index: 1,
             },
         ),
@@ -75,9 +86,10 @@ WorkflowState {
             2,
         ): Some(
             IndexedChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
                 child_index: 2,
             },
         ),

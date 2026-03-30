@@ -62,38 +62,54 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: Loop {
-                body: ActionId(
-                    1,
-                ),
-            },
-        },
-        1: Frame {
-            parent: Some(
-                SingleChild {
-                    frame_id: FrameId(
-                        0,
-                    ),
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: Loop {
+                            body: ActionId(
+                                1,
+                            ),
+                        },
+                    },
                 },
             ),
-            kind: Chain {
-                rest: ActionId(
-                    3,
-                ),
-            },
-        },
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            SingleChild {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                            },
+                        ),
+                        kind: Chain {
+                            rest: ActionId(
+                                3,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 2,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             0,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    1,
-                ),
+                frame_id: Index {
+                    slot: 1,
+                    generation: Generation(1),
+                },
             },
         ),
     },

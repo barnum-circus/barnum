@@ -79,24 +79,34 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: Chain {
-                rest: ActionId(
-                    2,
-                ),
-            },
-        },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: Chain {
+                            rest: ActionId(
+                                2,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 1,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             0,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    0,
-                ),
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
             },
         ),
     },

@@ -62,64 +62,87 @@ WorkflowState {
             0,
         ),
     },
-    frames: {
-        0: Frame {
-            parent: None,
-            kind: ForEach {
-                results: [
-                    None,
-                    None,
-                ],
-            },
-        },
-        1: Frame {
-            parent: Some(
-                IndexedChild {
-                    frame_id: FrameId(
-                        0,
-                    ),
-                    child_index: 0,
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: ForEach {
+                            results: [
+                                None,
+                                None,
+                            ],
+                        },
+                    },
                 },
             ),
-            kind: Chain {
-                rest: ActionId(
-                    3,
-                ),
-            },
-        },
-        2: Frame {
-            parent: Some(
-                IndexedChild {
-                    frame_id: FrameId(
-                        0,
-                    ),
-                    child_index: 1,
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            IndexedChild {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                child_index: 0,
+                            },
+                        ),
+                        kind: Chain {
+                            rest: ActionId(
+                                3,
+                            ),
+                        },
+                    },
                 },
             ),
-            kind: Chain {
-                rest: ActionId(
-                    3,
-                ),
-            },
-        },
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            IndexedChild {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                child_index: 1,
+                            },
+                        ),
+                        kind: Chain {
+                            rest: ActionId(
+                                3,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 3,
+        first_free: None,
     },
     task_to_parent: {
         TaskId(
             0,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    1,
-                ),
+                frame_id: Index {
+                    slot: 1,
+                    generation: Generation(1),
+                },
             },
         ),
         TaskId(
             1,
         ): Some(
             SingleChild {
-                frame_id: FrameId(
-                    2,
-                ),
+                frame_id: Index {
+                    slot: 2,
+                    generation: Generation(1),
+                },
             },
         ),
     },

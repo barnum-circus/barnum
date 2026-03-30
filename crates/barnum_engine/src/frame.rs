@@ -3,10 +3,9 @@
 use barnum_ast::flat::ActionId;
 use serde_json::Value;
 
-/// Key into the engine's frame slab. Wraps the `usize` returned by
-/// [`Slab::insert`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FrameId(pub usize);
+/// Key into the engine's frame arena. Carries a generational index —
+/// accessing a removed-and-reused slot with a stale `FrameId` returns `None`.
+pub type FrameId = thunderdome::Index;
 
 /// How a child frame refers to its parent.
 #[derive(Debug, Clone, Copy)]
