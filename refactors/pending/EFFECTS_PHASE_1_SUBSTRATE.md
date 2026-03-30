@@ -450,39 +450,6 @@ fn deliver_or_stash(
 }
 ```
 
-### bubble_or_stash
-
-Symmetric with `deliver_or_stash`. Checks for suspended ancestors before calling `bubble_effect`. Without this, a Perform inside a handler (connected via HandlerChild to Handle_inner) that sits inside a suspended Handle_outer's body would dispatch a handler when it shouldn't — the body is frozen.
-
-`find_suspended_ancestor` handles this correctly: the HandlerChild edge skips Handle_inner (the handler is resolving it), but Handle_outer is reached via a normal SingleChild/IndexedChild edge and IS checked.
-
-```rust
-fn bubble_or_stash(
-    &mut self,
-    starting_parent: ParentRef,
-    effect_id: EffectId,
-    value: Value,
-) -> Result<Option<Value>, CompleteError> {
-    // Frame was torn down — silently drop.
-    if self.frames.get(starting_parent.frame_id()).is_none() {
-        return Ok(None);
-    }
-
-    if self.find_suspended_ancestor(starting_parent.frame_id()).is_some() {
-        self.stashed_items.push(StashedItem::Effect {
-            starting_parent,
-            effect_id,
-            payload: value,
-        });
-        Ok(None)
-    } else {
-        self.bubble_effect(starting_parent, effect_id, value)
-            .map_err(CompleteError::from)?;
-        Ok(None)
-    }
-}
-```
-
 ### complete_task
 
 ```rust
@@ -497,7 +464,8 @@ fn complete_task(
 
     match origin {
         TaskOrigin::Perform { starting_parent, effect_id } => {
-            self.bubble_or_stash(starting_parent, effect_id, value)
+            self.bubble_effect(starting_parent, effect_id, value)?;
+            Ok(None)
         }
         TaskOrigin::Invoke { parent: Some(parent_ref) } => {
             self.deliver_or_stash(parent_ref, value)
@@ -545,10 +513,11 @@ fn process_stashed_item(
             self.deliver_or_stash(parent_ref, value)
         }
         StashedItem::Effect { starting_parent, effect_id, payload } => {
-            // bubble_or_stash handles all cases: re-stashes if a suspended
-            // ancestor exists or if the target Handle is busy, dispatches
-            // if free, silently drops if frames are gone.
-            self.bubble_or_stash(starting_parent, effect_id, payload)
+            // bubble_effect handles all cases: re-stashes if the target
+            // Handle is busy, dispatches if free, silently drops if frames
+            // are gone.
+            self.bubble_effect(starting_parent, effect_id, payload)?;
+            Ok(None)
         }
     }
 }
@@ -744,7 +713,12 @@ fn resume_continuation(
     continuation: ContinuationRoot,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    self.deliver(Some(continuation.perform_parent), value)
+    // deliver_or_stash guards the delivery point: if the Perform's parent
+    // is inside another suspended Handle's body, the delivery is stashed
+    // rather than advancing the frozen body. This is the correct guard
+    // location — effects bubble freely and handlers run unconditionally,
+    // but the result is only delivered into the body when the body isn't frozen.
+    self.deliver_or_stash(continuation.perform_parent, value)
 }
 ```
 
@@ -764,7 +738,10 @@ fn discard_continuation(
     self.teardown_body(handle_frame_id);
     let parent = self.frames[handle_frame_id].parent;
     self.frames.remove(handle_frame_id);
-    Ok(self.deliver(parent, value)?)
+    match parent {
+        Some(parent_ref) => self.deliver_or_stash(parent_ref, value),
+        None => Ok(Some(value)), // top-level Handle discarded
+    }
 }
 ```
 
@@ -1036,7 +1013,7 @@ fn resume_with_state_handler() -> Action {
 14. `handle_handler_completion`, `apply_state_update`
 15. `resume_continuation`, `discard_continuation`, `restart_body`
 16. `teardown_body`, `is_descendant_of`
-17. `deliver_or_stash`, `bubble_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
+17. `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
 18. `handle_frame_mut` accessor
 19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 20. `FlatConfig::handle_body` accessor
