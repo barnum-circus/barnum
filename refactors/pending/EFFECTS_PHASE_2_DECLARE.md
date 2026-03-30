@@ -2,182 +2,191 @@
 
 ## Goal
 
-Implement `declare` as the first real algebraic effect. This exercises the resume path: a Perform(ReadVar) fires, the Handle looks up the bound value, and immediately resumes the continuation with it. End-to-end validation that the Phase 1 substrate works for data flow.
+Implement `declare` as the first real algebraic effect. This exercises the resume path: a Perform fires, the Handle reads from its opaque state and Resumes with the value. End-to-end validation that the Phase 1 substrate works for data flow.
 
 ## Prerequisites
 
 Phase 1 (Effect Substrate) complete.
 
-## The effect
+## Surface syntax
 
-```
-Effect: ReadVar
-Payload: DeclareId (string, e.g. "__declare_0")
-Handler behavior: Look up the DeclareId in the Handle frame's stored bindings.
-                  Resume the continuation with the bound value.
+The canonical form is an array of bindings followed by a body callback:
+
+```ts
+declare([exprA, exprB], ([a, b]) => body)
 ```
 
-This is the simplest possible effect pattern: perform, handle, resume. No discarding, no re-entry, no side effects. Pure data injection.
+Each array element is either:
+- **An action** (Pipeable) — evaluated with the declare's pipeline input
+- **A function** `([prev_vars...]) => action` — receives an array of all previously-bound values as VarRefs, returns an action
+
+The body callback receives an array of all VarRefs, one per binding. VarRefs are destructured positionally.
+
+### Examples
+
+**Concurrent bindings (no dependencies):**
+
+```ts
+declare([fetchUser, fetchConfig], ([user, config]) =>
+  pipe(user, processWithConfig(config))
+)
+```
+
+Both `fetchUser` and `fetchConfig` run concurrently. The body receives VarRefs for both.
+
+**Sequential binding (depends on previous):**
+
+```ts
+declare([
+  fetchUser,
+  ([user]) => fetchReposForUser(user),
+], ([user, repos]) =>
+  pipe(repos, forEach(processRepo))
+)
+```
+
+`fetchUser` runs first. Then `fetchReposForUser` receives a VarRef for user and runs. The body receives VarRefs for both.
+
+**Mixed concurrent and sequential:**
+
+```ts
+declare([
+  fetchUser,
+  fetchConfig,
+  ([user, config]) => deriveSettings(user, config),
+], ([user, config, settings]) =>
+  body
+)
+```
+
+`fetchUser` and `fetchConfig` run concurrently (neither is a function). `deriveSettings` runs after both complete (it's a function that receives previous VarRefs).
 
 ## How declare compiles
 
-### Single binding
+The TS macro splits the array into groups:
+
+1. **Leading non-function items** form a concurrent group (evaluated in Parallel).
+2. **Each function item** forms a sequential step (evaluated after all previous bindings).
+
+### Compilation: concurrent group
 
 ```ts
-// User writes:
-declare({ x: computeX }, ({ x }) => body_using_x)
-
-// TypeScript compiles to:
-Chain(
-  computeX,                              // evaluate binding eagerly
-  Handle(
-    { "ReadVar": handlerDAG },           // intercept ReadVar effects
-    body_with_VarRefs_as_Performs         // body, VarRefs replaced by Perform(ReadVar)
-  )
-)
-```
-
-The handler DAG for ReadVar:
-
-```ts
-// Handler receives: { payload: "__declare_0" }
-// It resolves the value and produces a Resume tagged output.
-pipe(
-  pick("payload"),
-  resolveBinding,         // builtin: look up DeclareId → bound value
-  tag("Resume"),          // produces { kind: "Resume", value: <bound_value> }
-)
-```
-
-The Handle frame interprets `{ kind: "Resume", value }` and delivers the value to the suspended continuation.
-
-`resolveBinding` is a builtin that maps a DeclareId to the stored value. The value is stored in the Handle frame's state at entry time (when the Chain delivers computeX's result to the Handle frame). This builtin accesses the Handle frame's internal state — it's the only part of this design that requires the Handle frame to hold domain-specific data (the bindings map). The alternative (passing state as a second field in the handler input) is discussed below.
-
-### Object form (concurrent bindings)
-
-```ts
-// User writes:
-declare({ a: exprA, b: exprB }, ({ a, b }) => body)
+declare([exprA, exprB], ([a, b]) => body)
 
 // Compiles to:
 Chain(
-  Parallel(exprA, exprB),      // evaluate bindings concurrently
-  Handle(
-    { "ReadVar": resolveAndResume },
-    body                         // contains Perform(ReadVar("__0")) and Perform(ReadVar("__1"))
+  Parallel(exprA, exprB, Identity),    // [valA, valB, pipeline_input]
+  Handle(effectId, readVarHandler,
+    Chain(ExtractIndex(2), body)        // body receives pipeline_input
   )
 )
 ```
 
-The Handle frame stores both bindings (keyed by gensym'd IDs). When either Perform(ReadVar) fires, the handler looks up the ID and resumes with the value.
+`Parallel(exprA, exprB, Identity)` evaluates both bindings concurrently AND preserves the original pipeline input (via Identity). The result is a tuple `[valA, valB, pipeline_input]`.
 
-### Array form (sequential, dependent bindings)
+The Handle stores this tuple as opaque state. The body receives the pipeline input (extracted via `ExtractIndex(2)`).
+
+When a VarRef fires (Perform), the handler DAG receives `{ payload: 0, state: [valA, valB, pipeline_input] }`. It extracts `state[payload]` and Resumes with it.
+
+### Compilation: sequential binding
 
 ```ts
-// User writes:
 declare([
-  { a: exprA },
-  ({ a }) => ({ b: exprB_using_a }),
-], ({ a, b }) => body)
-
-// Compiles to nested Chain + Handle:
-Chain(
   exprA,
-  Handle(
-    { "ReadVar": resolveAndResume_for_a },
+  ([a]) => exprB_using_a,
+], ([a, b]) => body)
+
+// Compiles to:
+Chain(
+  Parallel(exprA, Identity),           // [valA, pipeline_input]
+  Handle(effectId_group0, readVarHandler,
     Chain(
-      exprB_using_a,    // may contain Perform(ReadVar("__0")) to read a
-      Handle(
-        { "ReadVar": resolveAndResume_for_a_and_b },
-        body
+      // Evaluate exprB_using_a. It may Perform to read `a`.
+      exprB_using_a,                   // produces valB
+      // Now we have valB as pipeline value.
+      // Wrap: Parallel(Identity, Constant(???)) to get [valA, valB, pipeline_input]
+      // Actually: re-enter a new Handle with accumulated state.
+      Handle(effectId_group1, readVarHandler,
+        Chain(ExtractIndex(2), body)
       )
     )
   )
 )
 ```
 
-Each Handle frame adds one binding. Inner Handle frames can intercept ReadVar for their own binding and re-perform for outer bindings (or the Handle can hold all bindings accumulated so far).
+Each sequential step adds a nested Handle. The inner Handle's state accumulates all bindings so far. This is standard lexical scoping: each `let` binding opens a new scope.
 
-Alternative: each Handle holds only its own binding. If the ID doesn't match, the effect propagates to the outer Handle. This is simpler per-frame but requires walking the handler chain. Given that ReadVar resume is immediate (no async), the walk cost is negligible.
+### The readVar handler DAG
 
-## The HOAS pattern
+The handler DAG is identical for every declare — it's a pure structural operation:
 
-`declare` receives a callback. The callback gets opaque AST references (VarRefs). These are TypedAction nodes whose AST is `Perform(freshEffectId)` with a DeclareId payload. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body. Each `declare` invocation gensyms a fresh EffectId.
+```ts
+// Receives: { payload: <index>, state: [val0, val1, ..., pipeline_input] }
+// Returns:  { kind: "Resume", value: state[payload] }
+pipe(
+  parallel(pick("payload"), pick("state")),  // [index, state_tuple]
+  extractDynamic(),                           // state_tuple[index]
+  tag("Resume"),
+)
+```
 
-### VarRef is generic over the bound type
+This uses standard builtins. No special `resolveBinding` builtin. The engine is domain-ignorant — it just routes `{ payload, state }` to the handler DAG and acts on the tagged output.
 
-`VarRef<TValue>` wraps `TypedAction<never, TValue>`. Input is `never` because VarRefs don't consume pipeline input — they perform an effect that the handler resolves. Output is `TValue`, the concrete type of the bound value.
+**Note:** `extractDynamic` (dynamic index extraction) is a new builtin: given `[index, array]`, return `array[index]`. This is the only new builtin needed. It's a pure data operation — the engine doesn't know it's resolving a variable.
 
-Because `declare` is a generic function call (not a global declaration), TypeScript infers `TValue` from the binding expression:
+## VarRef: generic over the bound type
+
+`VarRef<TValue>` wraps `TypedAction<never, TValue>`. Input is `never` because VarRefs don't consume pipeline input — they perform an effect. Output is `TValue`, the concrete type of the bound value.
+
+Because `declare` is a generic function call, TypeScript infers `TValue` from each binding expression:
 
 ```ts
 declare(
-  { name: computeName, count: computeCount },
-  // TypeScript infers: name: VarRef<string>, count: VarRef<number>
-  ({ name, count }) => pipe(
-    name,          // produces string
-    appendCount(count),  // count produces number
+  [computeName, computeCount],
+  // TypeScript infers: [VarRef<string>, VarRef<number>]
+  ([name, count]) => pipe(
+    name,                 // produces string
+    appendCount(count),   // count produces number
   ),
 )
 ```
 
-The HOAS callback is what makes this work. Each VarRef carries the concrete type of its binding. No manual annotations, no `unknown` casts.
+Each VarRef carries the concrete type of its binding. No manual annotations, no `unknown` casts. The HOAS callback is what makes this work.
 
-### Implementation
+### Implementation sketch
 
 ```ts
-// VarRef<TValue> is a branded TypedAction
 type VarRef<TValue> = TypedAction<never, TValue>;
 
-function declare<TIn, TBindings extends Record<string, Pipeable<TIn, any>>, TOut>(
-  bindings: TBindings,
-  body: (vars: { [K in keyof TBindings]: VarRef<OutputOf<TBindings[K]>> }) => Pipeable<TIn, TOut>,
+function declare<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any>[]) => Pipeable<TIn, any>))[], TOut>(
+  bindings: [...TBindings],
+  body: (vars: InferVarRefs<TBindings>) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
-  const effectId = generateUniqueId();       // fresh EffectId for this declare
-  const ids = generateDeclareIds(bindings);  // gensym per binding: __declare_0, __declare_1
-  const varRefs = createVarRefs(ids, effectId);  // each VarRef = Perform(effectId) with DeclareId payload
-  const bodyAst = body(varRefs);
-  return compileToHandlePerform(bindings, ids, effectId, bodyAst);
+  const effectId = generateUniqueId();
+  const varRefs = bindings.map((_, i) => createVarRef(effectId, i));
+  const bodyAst = body(varRefs as any);
+  return compileToHandlePerform(bindings, effectId, bodyAst);
 }
 ```
 
-The key type: `VarRef<OutputOf<TBindings[K]>>`. TypeScript resolves `OutputOf` from the binding expression's output type, so the VarRef carries the exact type. If `computeName` is `Pipeable<Input, string>`, then `name` is `VarRef<string>`.
+The key type: `InferVarRefs<TBindings>` maps each binding to `VarRef<OutputOf<binding>>`. TypeScript resolves `OutputOf` from each binding expression's output type.
 
-## Handle frame state for ReadVar
+## The HOAS pattern
 
-When the Handle frame is entered, it receives the binding values from the upstream Chain (either a single value or a Parallel tuple). It stores them in a local map:
+Each `declare` invocation gensyms a fresh `EffectId`. The VarRefs are `Perform(effectId)` nodes with the binding index as payload. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body.
 
-```rust
-// In FrameKind::Handle for ReadVar:
-struct ReadVarState {
-    bindings: HashMap<DeclareId, Value>,
-}
-```
+Per the HOAS pattern established in the roadmap:
+1. Gensym a fresh `EffectId`
+2. Create a Handle keyed on that ID
+3. Provide `Perform(thatId)` wrappers to the callback as opaque `Pipeable` nodes
 
-### How the handler DAG accesses bindings
-
-The handler DAG needs to resolve a DeclareId to a value. Two options:
-
-**Option A: `resolveBinding` builtin (recommended).** The Handle frame stores bindings. `resolveBinding` is a new builtin kind that reads from the current Handle frame's state. The scheduler executes it by looking at the Handle frame that dispatched this handler invocation.
-
-**Option B: Handle frame passes state to handler DAG.** The Handle node has an optional `state` field. When a handler is dispatched, the handler receives `{ payload, state }` instead of just `{ payload }`. The handler DAG can then look up the DeclareId in the state map using normal pipeline operations (no special builtin needed). This is more general but adds complexity to every Handle frame, even those that don't need state.
-
-Recommendation: Option A for now. It's simpler, and ReadVar is the only effect that needs Handle-local state. If multiple effects need this pattern, migrate to Option B.
-
-### Nested declares and propagation
-
-When bubble_effect delivers a ReadVar(id) effect:
-1. The handler DAG calls `resolveBinding` with the DeclareId.
-2. If found: handler produces `{ kind: "Resume", value }`. Handle frame resumes the continuation.
-3. If not found: the handler produces a re-perform signal (or the `resolveBinding` builtin triggers re-propagation to the outer Handle).
-
-Step 3 handles nested declares where an inner body references an outer binding.
+For nested declares, each has its own `EffectId`. Inner VarRefs are caught by the inner Handle. Outer VarRefs bubble past the inner Handle (wrong effect) and are caught by the outer Handle.
 
 ## What this replaces
 
 | Current pattern | With declare |
 |---|---|
-| `augment(pipe(extract, transform))` | Bind the result, reference it later |
+| `augment(pipe(extract, transform))` | Bind the result, reference it later via VarRef |
 | `tap(sideEffect)` (to preserve context) | Side effect in body, context from VarRef |
 | `withResource({ create, action, dispose })` | Bind the resource (dispose comes in Phase 5) |
 | `pick("field1", "field2")` (to narrow for invariance) | Still needed — VarRef gives the full value, pick narrows it |
@@ -188,33 +197,48 @@ Step 3 handles nested declares where an inner body references an outer binding.
 
 ### TypeScript compilation tests
 
-1. Single-binding declare produces correct Handle/Perform AST.
-2. Object form with 2+ bindings produces Parallel + Handle.
-3. Array form with dependent bindings produces nested Chain + Handle.
-4. VarRef used in pipe produces Perform(ReadVar) in the right position.
+1. Single-binding declare produces correct Chain + Handle AST.
+2. Concurrent bindings (array of non-functions) produce Parallel + Handle.
+3. Sequential binding (function in array) produces nested Chain + Handle.
+4. Mixed concurrent/sequential produces correct grouping.
 5. VarRef type checking: binding type matches VarRef output type.
 
 ### Rust scheduler tests
 
-1. **Simple declare**: Bind a constant, reference it once. Verify correct value.
-2. **Multiple references**: Bind once, reference 3 times. Verify same value each time.
-3. **Nested declares**: Inner and outer bindings, inner body references both.
-4. **Declare inside ForEach**: Binding inside a forEach iteration. Each iteration gets its own Handle frame with the same bindings from the outer scope.
-5. **Declare inside Parallel**: Two parallel branches, both referencing the same outer binding. Verify both get the correct value.
-6. **Concurrent bindings (object form)**: Two bindings evaluated in parallel, both referenced in body.
-7. **Sequential bindings (array form)**: Second binding references first. Verify correct evaluation order and value.
+1. **Simple declare**: Handle with state = `[42]`. Perform fires with payload 0. Handler extracts state[0], Resumes. Verify body receives 42.
+2. **Multiple bindings**: Handle with state = `[1, 2, 3]`. Three Performs (payload 0, 1, 2) in a Chain. Verify each returns correct value.
+3. **Nested declares**: Inner Handle has state = `["inner"]`, outer has state = `["outer"]`. Inner Perform caught by inner Handle. Perform with outer's effectId bubbles past inner, caught by outer.
+4. **Concurrent bindings**: Parallel evaluates two expressions. Handle receives tuple. Verify correct variable resolution from tuple.
+5. **Sequential binding**: Chain evaluates first binding, then second (which Performs to read first). Verify correct evaluation order.
+6. **Declare inside ForEach**: Each iteration enters its own Handle frame. Verify isolation.
+7. **Declare inside Parallel**: Two branches reference the same outer declare. Verify both get correct values.
 
 ### Demo migration
 
-Rewrite the `identify-and-address-refactors` demo to use `declare` instead of `tap`/`augment`/`pick` for context threading. The demo should be shorter and clearer. This is the acceptance test.
+Rewrite the `identify-and-address-refactors` demo to use `declare` instead of `tap`/`augment`/`pick` for context threading. The demo should be shorter and clearer.
+
+## New builtin: ExtractDynamic
+
+```rust
+pub enum BuiltinKind {
+    // ... existing variants ...
+
+    /// Dynamic index extraction: given [index, array], return array[index].
+    /// Used by readVar handler DAGs to extract variables from state tuples.
+    ExtractDynamic,
+}
+```
+
+Input: `[index: number, array: any[]]`. Output: `array[index]`.
+
+This is the only new builtin. It's a pure data operation — no knowledge of variables or scoping.
 
 ## Deliverables
 
-1. `EffectType::ReadVar` variant
-2. Handle frame ReadVar state (bindings map)
-3. ReadVar handler logic in bubble_effect dispatch
-4. `declare()` TypeScript function (object form + array form)
-5. VarRef TypedAction construction
-6. Flattener support for Handle/Perform nodes with ReadVar
-7. Tests per above
-8. Demo migration
+1. `declare()` TypeScript function (array form with concurrent/sequential grouping)
+2. VarRef TypedAction construction (Perform with index payload)
+3. readVar handler DAG (using ExtractDynamic builtin)
+4. `ExtractDynamic` builtin kind (Rust + TypeScript)
+5. Flattener/engine support for ExtractDynamic (inline evaluation, no subprocess)
+6. Tests per above
+7. Demo migration
