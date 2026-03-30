@@ -381,7 +381,30 @@ When a Perform fires inside a Parallel branch, other branches may have external 
 
 The solution: **buffer at `complete_task`.** Before delivering, walk up from the target frame to check for a suspended Handle ancestor. If found, append the delivery to the continuation's `pending_deliveries`. If not, deliver normally.
 
+The core primitive is `deliver_or_buffer`: check for a suspended Handle ancestor, buffer if found, deliver if not. Both `complete_task` and `resume_continuation`'s replay loop use this same function.
+
 ```rust
+/// Deliver a value to a parent frame, unless the target is inside a
+/// suspended body. If suspended, buffer the delivery on the innermost
+/// suspended Handle's continuation. O(depth) per call.
+fn deliver_or_buffer(
+    &mut self,
+    parent_ref: ParentRef,
+    value: Value,
+) -> Result<Option<Value>, CompleteError> {
+    if let Some(handle_frame_id) = self.find_suspended_ancestor(parent_ref.frame_id()) {
+        let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
+            unreachable!();
+        };
+        let continuation = handle_frame.continuation.as_mut()
+            .expect("suspended Handle must have continuation");
+        continuation.pending_deliveries.push((parent_ref, value));
+        Ok(None)
+    } else {
+        self.deliver(Some(parent_ref), value)
+    }
+}
+
 fn complete_task(
     &mut self,
     task_id: TaskId,
@@ -392,22 +415,9 @@ fn complete_task(
         None => {
             // Task was already cancelled (frame torn down by Discard/RestartBody).
             // Silently drop the result.
-            return Ok(None);
+            Ok(None)
         }
-        Some(parent_ref) => {
-            // Check if the delivery target is inside a suspended body.
-            if let Some(handle_frame_id) = self.find_suspended_ancestor(parent_ref.frame_id()) {
-                let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
-                    unreachable!();
-                };
-                let continuation = handle_frame.continuation.as_mut()
-                    .expect("suspended Handle must have continuation");
-                continuation.pending_deliveries.push((parent_ref, value));
-                return Ok(None);
-            }
-
-            self.deliver(Some(parent_ref), value)
-        }
+        Some(parent_ref) => self.deliver_or_buffer(parent_ref, value),
     }
 }
 
@@ -429,7 +439,9 @@ fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
 }
 ```
 
-**Why `complete_task` is the only entry point that needs this check.** All internal deliveries happen synchronously within an `advance` → `deliver` chain. External task completions are the only way work arrives asynchronously. While `resume_continuation` replays buffered deliveries, it does so synchronously — no external tasks can complete during replay.
+**Why `deliver_or_buffer` is needed in both `complete_task` and replay.** `complete_task` is the entry point for external async completions — the obvious case. But during `resume_continuation`'s replay loop, a replayed delivery can trigger a Perform on a *different* Handle (e.g., inner), causing that Handle to suspend. Subsequent replayed deliveries may target frames inside that newly-suspended body. Without the `find_suspended_ancestor` check during replay, those deliveries would advance the frozen body.
+
+**Delivery migration across Handles.** A delivery originally buffered on Handle A can migrate to Handle B during replay. When A resumes and replays its buffer, `deliver_or_buffer` discovers that the target is now inside B's suspended body and buffers it there. No explicit transfer logic — `find_suspended_ancestor` finds the right Handle each time.
 
 **Why handler completions aren't buffered.** The handler's Invoke has `parent = SingleChild { frame_id: handle_frame_id }`. `find_suspended_ancestor` walks up from the Handle frame's parent (whatever is above the Handle). The Handle itself is not checked — only ancestors above it. So handler task completions deliver normally to the Handle frame, triggering `handle_handler_completion`.
 
@@ -579,7 +591,7 @@ pub enum CompleteError {
 
 ## Resume
 
-Reconnect the continuation. Deliver the Resume value, then replay any buffered async completions.
+Reconnect the continuation. Deliver the Resume value, then replay any buffered async completions. Each replay uses `deliver_or_buffer` so that deliveries targeting a newly-suspended inner Handle are buffered there, not delivered into the frozen body.
 
 ```rust
 fn resume_continuation(
@@ -596,22 +608,10 @@ fn resume_continuation(
     }
 
     // 2. Replay buffered async completions in arrival order.
-    let mut pending = VecDeque::from(continuation.pending_deliveries);
-    while let Some((parent_ref, value)) = pending.pop_front() {
-        // Check if the body got re-suspended during replay.
-        // A replayed delivery may trampoline through a Chain into a Perform,
-        // which fires bubble_effect and stores a new continuation.
-        if let FrameKind::Handle(handle_frame) = &self.frames[handle_frame_id.0].kind {
-            if let Some(new_continuation) = &mut handle_frame.continuation {
-                // Transfer remaining deliveries to the new continuation.
-                for remaining in pending {
-                    new_continuation.pending_deliveries.push(remaining);
-                }
-                return Ok(None);
-            }
-        }
-
-        let result = self.deliver(Some(parent_ref), value)?;
+    //    Use deliver_or_buffer for each: a previous replay may have caused
+    //    a Perform on a different Handle, suspending part of the tree.
+    for (parent_ref, value) in continuation.pending_deliveries {
+        let result = self.deliver_or_buffer(parent_ref, value)?;
         if result.is_some() {
             return Ok(result); // workflow completed
         }
@@ -623,7 +623,15 @@ fn resume_continuation(
 
 The body subgraph is still intact (we never severed it). Delivering to `perform_parent` is identical to what would have happened if the Perform had been a normal Invoke that completed.
 
-**Re-suspension during replay.** A replayed delivery might cause a Chain to trampoline into a Perform, which fires bubble_effect and stores a new continuation on the same Handle. The replay loop detects this (`continuation.is_some()` again) and transfers all remaining pending deliveries to the new continuation. The handler for this second Perform will eventually complete and trigger another resume, which replays from where we left off.
+**Delivery migration.** During replay, `deliver_or_buffer` may route a delivery to a *different* Handle's continuation. Consider middle/inner Handles with a Parallel body:
+
+1. Middle resumes. Replay P2's delivery → `deliver_or_buffer` → no suspended ancestor → deliver normally → Chain trampolines → Perform(inner) → inner suspends.
+2. Replay P3's delivery → `deliver_or_buffer` → `find_suspended_ancestor` finds inner → buffers P3 on inner's continuation.
+3. Inner's handler completes → `resume_continuation` on inner → replays P3 → `deliver_or_buffer` → no suspended ancestor → deliver normally.
+
+P3 migrated from middle's buffer to inner's buffer automatically. No explicit transfer logic.
+
+**Re-suspension on the same Handle.** If a replayed delivery triggers a Perform on THIS Handle (middle), `deliver_or_buffer` finds middle (since the remaining deliveries target frames inside middle's body, and middle just re-suspended). They get buffered on middle's new continuation. The second handler eventually completes and replays them.
 
 ## Discard
 
@@ -966,6 +974,20 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 18. **Re-suspension during replay**: Two parallel branches, both with `Chain(Invoke, Perform(effect))`. TaskA completes → Perform A fires → handler starts. TaskB completes → buffered. Handler Resumes → deliver to branch A's Perform parent → replay buffered delivery → Chain B trampolines → Perform B fires → **new continuation stored**. Verify the second handler receives a fresh dispatch. Second handler Resumes → body completes normally.
 
 19. **Multiple buffered deliveries**: Three parallel branches with Invokes. Branch A Performs. Branches B and C complete while handler runs. Both buffered. On Resume, both replayed in arrival order. Verify FIFO ordering.
+
+20. **Delivery migration across nested Handles**:
+    ```
+    Handle(middle, handler_middle,
+      Handle(inner, handler_inner,
+        Parallel(
+          Chain(Invoke(P1), Perform(middle)),
+          Chain(Invoke(P2), Perform(inner)),
+          Chain(Invoke(P3), Invoke(echo)),
+        )
+      )
+    )
+    ```
+    P1 completes → Perform(middle) → middle suspends. P2 and P3 complete → both buffered on middle's continuation. Middle resumes → replay P2 → Chain trampolines → Perform(inner) → inner suspends. Replay P3 → `deliver_or_buffer` finds inner is suspended → **P3 migrates to inner's buffer**. Inner resumes → replays P3 → deliver normally → echo dispatched → Parallel joins → workflow completes. Verify P3 was delivered exactly once and the final result includes all three branches.
 
 ### Integration tests
 
