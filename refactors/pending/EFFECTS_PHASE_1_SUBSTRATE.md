@@ -6,7 +6,9 @@ Build Handle/Perform in the Rust scheduler: effect bubbling, handler dispatch, c
 
 ## Prerequisites
 
-None.
+1. **Generational arena migration.** Replace `slab::Slab<Frame>` with a generational arena (e.g. `thunderdome::Arena<Frame>`). FrameId becomes a generational index. Required for stash correctness (see "Frame store" below).
+
+2. **ForEach async scheduling.** ForEach currently advances all iterations synchronously in a loop. If an iteration Performs, subsequent iterations' Performs pile up in the stash. Refactor ForEach to dispatch iterations through the event loop (async, like Parallel branches with external tasks) so each iteration is processed one at a time. This must land before Phase 1 so the stash mechanism doesn't have to handle N-1 simultaneous stashed effects from a single ForEach.
 
 ## New AST nodes (TypeScript)
 
@@ -150,6 +152,14 @@ impl FlatConfig {
 }
 ```
 
+## Frame store
+
+The frame store must be a generational arena (e.g. `thunderdome::Arena<Frame>`). FrameId is the arena's generational index — an opaque handle containing both a slot index and a generation counter. When a frame is removed, the slot's generation is bumped. If the slot is later reused by a new frame, the old FrameId's generation won't match, and `.get(stale_id)` returns None.
+
+This matters for the stash. A stashed Delivery or Effect holds a ParentRef containing a FrameId. If teardown_body removes the target frame and the slot is reused, the stashed item's FrameId is stale. Without generational indices, `.get(id)` would return the wrong frame. With them, `.get(id)` returns None and the stashed item is dropped.
+
+All frame access in the snippets below uses the generational FrameId directly (`self.frames.get(frame_id)`), not a raw index.
+
 ## Frame kind
 
 ```rust
@@ -251,7 +261,7 @@ fn bubble_effect(
         let parent_id = parent_ref.frame_id();
 
         // Frame may have been torn down (stashed effect retried after teardown).
-        let Some(parent) = self.frames.get(parent_id.0) else {
+        let Some(parent) = self.frames.get(parent_id) else {
             return Ok(()); // frame tree gone, silently drop
         };
 
@@ -333,7 +343,7 @@ The body's frame tree stays connected — no parent pointers are nulled or rerou
 ```rust
 /// Convenience accessor. Panics if the frame isn't a Handle.
 fn handle_frame_mut(&mut self, id: FrameId) -> &mut HandleFrame {
-    match &mut self.frames[id.0].kind {
+    match &mut self.frames[id].kind {
         FrameKind::Handle(handle_frame) => handle_frame,
         other => unreachable!(
             "expected Handle frame at {:?}, got {:?}", id, other
@@ -388,7 +398,7 @@ fn deliver_or_stash(
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
     // Target frame was torn down (Discard/RestartBody removed it).
-    if self.frames.get(parent_ref.frame_id().0).is_none() {
+    if self.frames.get(parent_ref.frame_id()).is_none() {
         return Ok(None);
     }
 
@@ -468,21 +478,21 @@ The loop terminates because each iteration either delivers at least one item (sh
 
 ```rust
 fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
-    let mut current = self.frames.get(frame_id.0)?.parent;
+    let mut current = self.frames.get(frame_id)?.parent;
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
 
         // HandlerChild: skip this Handle's suspension check. Handler
         // deliveries must reach the Handle to resolve the suspension.
         if !matches!(parent_ref, ParentRef::HandlerChild { .. }) {
-            if let FrameKind::Handle(handle_frame) = &self.frames[parent_id.0].kind {
+            if let FrameKind::Handle(handle_frame) = &self.frames[parent_id].kind {
                 if handle_frame.continuation.is_some() {
                     return Some(parent_id);
                 }
             }
         }
 
-        current = self.frames.get(parent_id.0)?.parent;
+        current = self.frames.get(parent_id)?.parent;
     }
     None
 }
@@ -539,7 +549,7 @@ ParentRef::HandlerChild { frame_id } => {
 }
 
 ParentRef::SingleChild { .. } => {
-    let frame = self.frames.remove(frame_id.0);
+    let frame = self.frames.remove(frame_id);
     match frame.kind {
         FrameKind::Chain { rest } => {
             self.advance(rest, value, frame.parent)?;
@@ -661,8 +671,8 @@ fn discard_continuation(
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
     self.teardown_body(handle_frame_id);
-    let parent = self.frames[handle_frame_id.0].parent;
-    self.frames.remove(handle_frame_id.0);
+    let parent = self.frames[handle_frame_id].parent;
+    self.frames.remove(handle_frame_id);
     Ok(self.deliver(parent, value)?)
 }
 ```
@@ -694,9 +704,9 @@ Remove all descendant frames and their task_to_parent entries. In-flight tasks r
 fn teardown_body(&mut self, handle_frame_id: FrameId) {
     let body_frames: Vec<FrameId> = self.frames
         .iter()
-        .filter_map(|(id, _)| {
-            if self.is_descendant_of(FrameId(id), handle_frame_id) {
-                Some(FrameId(id))
+        .filter_map(|(frame_id, _)| {
+            if self.is_descendant_of(frame_id, handle_frame_id) {
+                Some(frame_id)
             } else {
                 None
             }
@@ -704,7 +714,7 @@ fn teardown_body(&mut self, handle_frame_id: FrameId) {
         .collect();
 
     for frame_id in &body_frames {
-        self.frames.remove(frame_id.0);
+        self.frames.remove(frame_id);
     }
 
     let body_frame_set: std::collections::HashSet<FrameId> =
@@ -718,13 +728,13 @@ fn teardown_body(&mut self, handle_frame_id: FrameId) {
 }
 
 fn is_descendant_of(&self, frame_id: FrameId, ancestor_id: FrameId) -> bool {
-    let mut current = self.frames.get(frame_id.0).and_then(|f| f.parent);
+    let mut current = self.frames.get(frame_id).and_then(|f| f.parent);
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
         if parent_id == ancestor_id {
             return true;
         }
-        current = self.frames.get(parent_id.0).and_then(|f| f.parent);
+        current = self.frames.get(parent_id).and_then(|f| f.parent);
     }
     false
 }
@@ -914,8 +924,9 @@ fn resume_with_state_handler() -> Action {
 
 ## Deliverables
 
-1. `EffectId(u16)` type
-2. `HandleAction`, `PerformAction` in tree AST
+1. Migrate frame store from `slab::Slab` to a generational arena (e.g. `thunderdome::Arena`)
+2. `EffectId(u16)` type
+3. `HandleAction`, `PerformAction` in tree AST
 3. `FlatAction::Handle`, `FlatAction::Perform` in flat table
 4. Flattener: flatten_action_at arms, fill_child_slot update, try_map_target passthrough
 5. `HandleFrame` struct, `FrameKind::Handle`
