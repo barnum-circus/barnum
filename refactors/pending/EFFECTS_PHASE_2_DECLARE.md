@@ -34,13 +34,6 @@ Both `fetchUser` and `fetchConfig` run concurrently. The body receives VarRefs f
 
 ## How declare compiles
 
-The TS macro splits the array into groups:
-
-1. **Leading non-function items** form a concurrent group (evaluated in Parallel).
-2. **Each function item** forms a sequential step (evaluated after all previous bindings).
-
-### Compilation: concurrent group
-
 ```ts
 declare([exprA, exprB], ([a, b]) => body)
 
