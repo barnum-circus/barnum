@@ -4,6 +4,8 @@
 
 Implement `declare` as the first real algebraic effect. This exercises the resume path: a Perform fires, the Handle reads from its opaque state and Resumes with the value. End-to-end validation that the Phase 1 substrate works for data flow.
 
+**Phase 2 covers concurrent bindings only.** Sequential bindings (where a binding depends on previously-bound values) are deferred to Phase 2a — see `EFFECTS_PHASE_2A_SEQUENTIAL_DECLARE.md`.
+
 ## Prerequisites
 
 Phase 1 (Effect Substrate) complete.
@@ -16,15 +18,11 @@ The canonical form is an array of bindings followed by a body callback:
 declare([exprA, exprB], ([a, b]) => body)
 ```
 
-Each array element is either:
-- **An action** (Pipeable) — evaluated with the declare's pipeline input
-- **A function** `([prev_vars...]) => action` — receives an array of all previously-bound values as VarRefs, returns an action
+All bindings are actions (Pipeable) — evaluated concurrently with the declare's pipeline input.
 
 The body callback receives an array of all VarRefs, one per binding. VarRefs are destructured positionally.
 
-### Examples
-
-**Concurrent bindings (no dependencies):**
+### Example
 
 ```ts
 declare([fetchUser, fetchConfig], ([user, config]) =>
@@ -33,33 +31,6 @@ declare([fetchUser, fetchConfig], ([user, config]) =>
 ```
 
 Both `fetchUser` and `fetchConfig` run concurrently. The body receives VarRefs for both.
-
-**Sequential binding (depends on previous):**
-
-```ts
-declare([
-  fetchUser,
-  ([user]) => fetchReposForUser(user),
-], ([user, repos]) =>
-  pipe(repos, forEach(processRepo))
-)
-```
-
-`fetchUser` runs first. Then `fetchReposForUser` receives a VarRef for user and runs. The body receives VarRefs for both.
-
-**Mixed concurrent and sequential:**
-
-```ts
-declare([
-  fetchUser,
-  fetchConfig,
-  ([user, config]) => deriveSettings(user, config),
-], ([user, config, settings]) =>
-  body
-)
-```
-
-`fetchUser` and `fetchConfig` run concurrently (neither is a function). `deriveSettings` runs after both complete (it's a function that receives previous VarRefs).
 
 ## How declare compiles
 
@@ -87,34 +58,6 @@ Chain(
 The Handle stores this tuple as opaque state. The body receives the pipeline input (extracted via `ExtractIndex(2)`).
 
 When a VarRef fires (Perform), the handler DAG receives `{ payload: 0, state: [valA, valB, pipeline_input] }`. It extracts `state[payload]` and Resumes with it.
-
-### Compilation: sequential binding
-
-```ts
-declare([
-  exprA,
-  ([a]) => exprB_using_a,
-], ([a, b]) => body)
-
-// Compiles to:
-Chain(
-  Parallel(exprA, Identity),           // [valA, pipeline_input]
-  Handle(effectId_group0, readVarHandler,
-    Chain(
-      // Evaluate exprB_using_a. It may Perform to read `a`.
-      exprB_using_a,                   // produces valB
-      // Now we have valB as pipeline value.
-      // Wrap: Parallel(Identity, Constant(???)) to get [valA, valB, pipeline_input]
-      // Actually: re-enter a new Handle with accumulated state.
-      Handle(effectId_group1, readVarHandler,
-        Chain(ExtractIndex(2), body)
-      )
-    )
-  )
-)
-```
-
-Each sequential step adds a nested Handle. The inner Handle's state accumulates all bindings so far. This is standard lexical scoping: each `let` binding opens a new scope.
 
 ### The readVar handler DAG
 
@@ -158,7 +101,7 @@ Each VarRef carries the concrete type of its binding. No manual annotations, no 
 ```ts
 type VarRef<TValue> = TypedAction<never, TValue>;
 
-function declare<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any>[]) => Pipeable<TIn, any>))[], TOut>(
+function declare<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
@@ -170,6 +113,8 @@ function declare<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any
 ```
 
 The key type: `InferVarRefs<TBindings>` maps each binding to `VarRef<OutputOf<binding>>`. TypeScript resolves `OutputOf` from each binding expression's output type.
+
+**Note:** Phase 2 only accepts `Pipeable` bindings (concurrent). Phase 2a adds function bindings for sequential dependencies.
 
 ## The HOAS pattern
 
@@ -198,10 +143,8 @@ For nested declares, each has its own `EffectId`. Inner VarRefs are caught by th
 ### TypeScript compilation tests
 
 1. Single-binding declare produces correct Chain + Handle AST.
-2. Concurrent bindings (array of non-functions) produce Parallel + Handle.
-3. Sequential binding (function in array) produces nested Chain + Handle.
-4. Mixed concurrent/sequential produces correct grouping.
-5. VarRef type checking: binding type matches VarRef output type.
+2. Concurrent bindings produce All + Handle.
+3. VarRef type checking: binding type matches VarRef output type.
 
 ### Rust scheduler tests
 
@@ -209,9 +152,8 @@ For nested declares, each has its own `EffectId`. Inner VarRefs are caught by th
 2. **Multiple bindings**: Handle with state = `[1, 2, 3]`. Three Performs (payload 0, 1, 2) in a Chain. Verify each returns correct value.
 3. **Nested declares**: Inner Handle has state = `["inner"]`, outer has state = `["outer"]`. Inner Perform caught by inner Handle. Perform with outer's effectId bubbles past inner, caught by outer.
 4. **Concurrent bindings**: Parallel evaluates two expressions. Handle receives tuple. Verify correct variable resolution from tuple.
-5. **Sequential binding**: Chain evaluates first binding, then second (which Performs to read first). Verify correct evaluation order.
-6. **Declare inside ForEach**: Each iteration enters its own Handle frame. Verify isolation.
-7. **Declare inside Parallel**: Two branches reference the same outer declare. Verify both get correct values.
+5. **Declare inside ForEach**: Each iteration enters its own Handle frame. Verify isolation.
+6. **Declare inside All**: Two branches reference the same outer declare. Verify both get correct values.
 
 ### Demo migration
 
@@ -235,7 +177,7 @@ This is the only new builtin. It's a pure data operation — no knowledge of var
 
 ## Deliverables
 
-1. `declare()` TypeScript function (array form with concurrent/sequential grouping)
+1. `declare()` TypeScript function (concurrent bindings only)
 2. VarRef TypedAction construction (Perform with index payload)
 3. readVar handler DAG (using ExtractDynamic builtin)
 4. `ExtractDynamic` builtin kind (Rust + TypeScript)
