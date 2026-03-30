@@ -219,13 +219,15 @@ pub enum FrameKind {
     },
 }
 
-/// The severed continuation: tracks where to deliver Resume values
+/// The suspended continuation: tracks where to deliver Resume values
 /// and what to clean up on Discard/RestartBody.
 #[derive(Debug)]
 struct ContinuationRoot {
     /// Where the Perform would have delivered its result.
     /// On Resume, deliver the value here to continue the body.
-    perform_parent: Option<ParentRef>,
+    /// Not Option: a Perform with no parent has no Handle above it,
+    /// so bubble_effect returns UnhandledEffect before we get here.
+    perform_parent: ParentRef,
 }
 ```
 
@@ -292,7 +294,11 @@ fn bubble_effect(
 
         if let FrameKind::Handle { effect_id: handled_effect_id, .. } = &parent.kind {
             if *handled_effect_id == effect_id {
-                return self.dispatch_to_handler(parent_id, starting_parent, payload);
+                // starting_parent is guaranteed Some: if it were None, the while
+                // loop would never have entered and we'd have returned UnhandledEffect.
+                let perform_parent = starting_parent
+                    .expect("Perform with no parent cannot reach a Handle");
+                return self.dispatch_to_handler(parent_id, perform_parent, payload);
             }
         }
 
@@ -311,7 +317,7 @@ Walk up, compare integers, stop on match. Chain, Parallel, Branch, ForEach are i
 fn dispatch_to_handler(
     &mut self,
     handle_frame_id: FrameId,
-    perform_parent: Option<ParentRef>,
+    perform_parent: ParentRef,
     payload: Value,
 ) -> Result<(), AdvanceError> {
     // 1. Store the continuation (the Perform's delivery point).
@@ -486,7 +492,7 @@ fn resume_continuation(
 ) -> Result<Option<Value>, CompleteError> {
     // Deliver the value to where the Perform would have delivered.
     // This wakes up the Chain/Parallel/etc. that was waiting for the Perform's result.
-    self.deliver(continuation.perform_parent, value)
+    self.deliver(Some(continuation.perform_parent), value)
 }
 ```
 
