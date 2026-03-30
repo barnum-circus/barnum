@@ -285,7 +285,7 @@ fn bubble_effect(
     match self.find_blocking_ancestor(starting_parent) {
         AncestorCheck::FrameGone => return Ok(StashOutcome::Consumed),
         AncestorCheck::Blocked(_) => {
-            self.stashed_items.push(StashedItem::Effect {
+            self.stashed_items.push_back(StashedItem::Effect {
                 starting_parent,
                 effect_id,
                 payload,
@@ -418,7 +418,7 @@ pub struct WorkflowState {
 
     /// Work items deferred because their target Handle was busy or their
     /// target frame was inside a suspended body. Swept after every handler completion.
-    stashed_items: Vec<StashedItem>,
+    stashed_items: VecDeque<StashedItem>,
 }
 ```
 
@@ -433,7 +433,7 @@ fn deliver_or_stash(
     match self.find_blocking_ancestor(parent_ref) {
         AncestorCheck::FrameGone => Ok((None, StashOutcome::Consumed)),
         AncestorCheck::Blocked(_) => {
-            self.stashed_items.push(StashedItem::Delivery { parent_ref, value });
+            self.stashed_items.push_back(StashedItem::Delivery { parent_ref, value });
             Ok((None, StashOutcome::Stashed))
         }
         AncestorCheck::Clear => {
@@ -470,7 +470,7 @@ fn complete_task(
 
 ### sweep_stash
 
-Called after every handler completion. Retries stashed items one at a time. When an item is consumed (tree state changed), immediately restarts from the beginning — consuming one item may unblock others. When no item in a full pass is consumed, the stash is stable and the sweep exits.
+Called after every handler completion. Pops items from the front of the deque one at a time. When an item is consumed (tree state changed), immediately restarts — consuming one item may unblock others. Re-stashed items go to the back and aren't re-processed until the next pass (bounded by `n`). When no item in a full pass is consumed, the stash is stable and the sweep exits.
 
 O(N²) worst case: each full pass consumes at least one item, and there are at most N items.
 
@@ -496,19 +496,19 @@ enum SweepResult {
     NoProgress,
 }
 
-/// Single pass: take all stashed items, process until one is consumed or
-/// all are re-stashed. Items that get Stashed are pushed back to
-/// self.stashed_items by process_stashed_item internally.
+/// Single pass over items that existed at the start. Pop from front, process
+/// one at a time. Re-stashed items are pushed to the back by
+/// process_stashed_item; the `n` bound ensures they aren't re-processed
+/// in this pass.
 fn sweep_stash_once(&mut self) -> Result<SweepResult, CompleteError> {
-    let items = std::mem::take(&mut self.stashed_items);
-    let mut iter = items.into_iter();
-    for item in &mut iter {
+    let n = self.stashed_items.len();
+    for _ in 0..n {
+        let item = self.stashed_items.pop_front().unwrap();
         let (result, outcome) = self.process_stashed_item(item)?;
         if let Some(value) = result {
             return Ok(SweepResult::WorkflowDone(value));
         }
         if outcome == StashOutcome::Consumed {
-            self.stashed_items.extend(iter); // put unprocessed items back
             return Ok(SweepResult::MadeProgress);
         }
     }
