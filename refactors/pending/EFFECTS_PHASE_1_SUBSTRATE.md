@@ -478,9 +478,6 @@ Progress tracking uses per-item `StashOutcome` from `process_stashed_item`. Coun
 fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
     loop {
         let items = std::mem::take(&mut self.stashed_items);
-        if items.is_empty() {
-            return Ok(None);
-        }
         let mut any_consumed = false;
         for item in items {
             let (result, outcome) = self.process_stashed_item(item)?;
