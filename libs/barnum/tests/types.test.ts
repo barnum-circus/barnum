@@ -2,7 +2,7 @@
  * Pure type-level tests. Every test here is a compile-time assertion —
  * if it type-checks, the test passes. Runtime assertions are minimal.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   type TaggedUnion,
   type TypedAction,
@@ -12,12 +12,16 @@ import {
   type LoopResult,
   type Option,
   type OptionDef,
+  type VarRef,
   pipe,
   all,
   forEach,
   branch,
   loop,
   workflowBuilder,
+  bind,
+  bindInput,
+  resetEffectIdCounter,
 } from "../src/ast.js";
 import {
   constant,
@@ -26,6 +30,7 @@ import {
   merge,
   flatten,
   extractField,
+  extractIndex,
   range,
   recur,
   done,
@@ -877,5 +882,104 @@ describe("Option namespace types", () => {
     );
     assertExact<IsExact<ExtractInput<typeof action>, Option<{ artifact: string }>[]>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }[]>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bind / bindInput types
+// ---------------------------------------------------------------------------
+
+describe("bind types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("VarRef output type matches binding output", () => {
+    // computeName: Pipeable<{ project: string }, string>
+    const computeName = pipe(setup, extractField<{ initialized: boolean; project: string }, "project">("project"));
+
+    bind([computeName], ([name]) => {
+      // name should be VarRef<string> = TypedAction<never, string>
+      assertExact<IsExact<typeof name, VarRef<string>>>();
+      assertExact<IsExact<ExtractInput<typeof name>, never>>();
+      assertExact<IsExact<ExtractOutput<typeof name>, string>>();
+      return drop();
+    });
+  });
+
+  it("VarRef pipes into action expecting matching input", () => {
+    // verify expects { artifact: string }
+    bind([constant({ artifact: "test" })], ([artifact]) => {
+      // artifact: VarRef<{ artifact: string }>
+      // Piping into verify should compile
+      return pipe(artifact, verify);
+    });
+  });
+
+  it("VarRef rejects piping into action expecting wrong input", () => {
+    bind([constant("a string")], ([s]) => {
+      // s: VarRef<string>, verify expects { artifact: string }
+      // @ts-expect-error — string is not { artifact: string }
+      return pipe(s, verify);
+    });
+  });
+
+  it("multiple bindings infer distinct VarRef types", () => {
+    const stringAction = constant("hello");
+    const numberAction = constant(42);
+
+    bind([stringAction, numberAction], ([s, n]) => {
+      assertExact<IsExact<ExtractOutput<typeof s>, string>>();
+      assertExact<IsExact<ExtractOutput<typeof n>, number>>();
+      return drop();
+    });
+  });
+
+  it("bind output type matches body output type", () => {
+    const action = bind([constant("x")], ([_s]) => verify);
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+  });
+
+  it("bind input type matches binding input type", () => {
+    const action = bind([setup], ([_env]) => constant("done"));
+    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
+  });
+});
+
+describe("bindInput types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("infers VarRef type from explicit type parameter", () => {
+    bindInput<{ artifact: string }, { verified: boolean }>((input) => {
+      assertExact<IsExact<typeof input, VarRef<{ artifact: string }>>>();
+      assertExact<IsExact<ExtractOutput<typeof input>, { artifact: string }>>();
+      return pipe(input, verify);
+    });
+  });
+
+  it("output type matches body return type", () => {
+    const action = bindInput<{ artifact: string }, { verified: boolean }>((input) =>
+      pipe(input, verify),
+    );
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+  });
+
+  it("input type matches TIn parameter", () => {
+    const action = bindInput<{ project: string }, string>((_input) =>
+      constant("done"),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
+  });
+
+  it("body pipeline input is never (must use VarRef)", () => {
+    // The body function signature requires Pipeable<never, TOut>
+    // A pipeline starting from a VarRef has input never, so it works
+    bindInput<string, string>((input) => {
+      // input: VarRef<string> = TypedAction<never, string>
+      assertExact<IsExact<ExtractInput<typeof input>, never>>();
+      return input;
+    });
   });
 });

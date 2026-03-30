@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   all,
   config,
@@ -6,6 +6,9 @@ import {
   branch,
   pipe,
   forEach,
+  bind,
+  bindInput,
+  resetEffectIdCounter,
   type OptionDef,
 } from "../src/ast.js";
 import {
@@ -408,5 +411,191 @@ describe("reader monad pattern", () => {
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");
+  });
+});
+
+// -----------------------------------------------------------------------
+// bind / bindInput
+// -----------------------------------------------------------------------
+
+describe("bind", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("single binding produces Chain(All(..., Identity), Handle(readVar, Chain(ExtractIndex, body)))", () => {
+    const exprA = constant(42);
+    const bodyAction = identity<number>();
+    const result = bind([exprA], ([_a]) => bodyAction);
+
+    // Outer: Chain
+    expect(result.kind).toBe("Chain");
+    const outer = result as { kind: "Chain"; first: any; rest: any };
+
+    // First: All with 2 actions (binding + Identity)
+    expect(outer.first.kind).toBe("All");
+    expect(outer.first.actions).toHaveLength(2);
+    expect(outer.first.actions[0]).toEqual(exprA);
+    expect(outer.first.actions[1].handler.builtin.kind).toBe("Identity");
+
+    // Rest: Handle
+    expect(outer.rest.kind).toBe("Handle");
+    const handle = outer.rest as { kind: "Handle"; effect_id: number; handler: any; body: any };
+    expect(typeof handle.effect_id).toBe("number");
+
+    // Handle handler: readVar(0) = Chain(ExtractField("state"), Chain(ExtractIndex(0), Tag("Resume")))
+    expect(handle.handler.kind).toBe("Chain");
+    expect(handle.handler.first.handler.builtin.kind).toBe("ExtractField");
+    expect(handle.handler.first.handler.builtin.value).toBe("state");
+    expect(handle.handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.rest.first.handler.builtin.value).toBe(0);
+    expect(handle.handler.rest.rest.handler.builtin.kind).toBe("Tag");
+    expect(handle.handler.rest.rest.handler.builtin.value).toBe("Resume");
+
+    // Handle body: Chain(ExtractIndex(1), bodyAction)
+    expect(handle.body.kind).toBe("Chain");
+    expect(handle.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.body.first.handler.builtin.value).toBe(1);
+  });
+
+  it("two bindings produce two nested Handles with distinct effectIds", () => {
+    const exprA = constant("alice");
+    const exprB = constant(99);
+    const bodyAction = identity<string>();
+    const result = bind([exprA, exprB], ([_a, _b]) => bodyAction);
+
+    const outer = result as { kind: "Chain"; first: any; rest: any };
+
+    // All with 3 actions (2 bindings + Identity)
+    expect(outer.first.kind).toBe("All");
+    expect(outer.first.actions).toHaveLength(3);
+
+    // Outer Handle
+    const handle0 = outer.rest;
+    expect(handle0.kind).toBe("Handle");
+
+    // Inner Handle
+    const handle1 = handle0.body;
+    expect(handle1.kind).toBe("Handle");
+
+    // Distinct effectIds
+    expect(handle0.effect_id).not.toBe(handle1.effect_id);
+
+    // readVar indices: outer=0, inner=1
+    expect(handle0.handler.rest.first.handler.builtin.value).toBe(0);
+    expect(handle1.handler.rest.first.handler.builtin.value).toBe(1);
+
+    // Innermost body: Chain(ExtractIndex(2), bodyAction) — pipeline_input at index 2
+    expect(handle1.body.kind).toBe("Chain");
+    expect(handle1.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle1.body.first.handler.builtin.value).toBe(2);
+  });
+
+  it("VarRef is a Perform node with unique effectId", () => {
+    const exprA = constant("x");
+    let capturedVarRef: any;
+    bind([exprA], ([a]) => {
+      capturedVarRef = a;
+      return identity();
+    });
+
+    expect(capturedVarRef.kind).toBe("Perform");
+    expect(typeof capturedVarRef.effect_id).toBe("number");
+  });
+
+  it("effectIds are unique across separate bind calls", () => {
+    const effectIds: number[] = [];
+    bind([constant(1), constant(2)], ([_a, _b]) => {
+      return identity();
+    });
+    // First bind uses effectIds 0, 1
+
+    let ref1: any, ref2: any;
+    bind([constant(3), constant(4)], ([a, b]) => {
+      ref1 = a;
+      ref2 = b;
+      return identity();
+    });
+    // Second bind uses effectIds 2, 3
+    effectIds.push(ref1.effect_id, ref2.effect_id);
+
+    // All four effectIds (0, 1, 2, 3) are distinct
+    expect(ref1.effect_id).not.toBe(0);
+    expect(ref1.effect_id).not.toBe(1);
+    expect(ref2.effect_id).not.toBe(0);
+    expect(ref2.effect_id).not.toBe(1);
+    expect(ref1.effect_id).not.toBe(ref2.effect_id);
+  });
+
+  it("readVar(n) structure is Chain(ExtractField('state'), Chain(ExtractIndex(n), Tag('Resume')))", () => {
+    // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
+    const result = bind(
+      [constant("a"), constant("b"), constant("c")],
+      ([_a, _b, _c]) => identity(),
+    );
+
+    const outer = result as { kind: "Chain"; first: any; rest: any };
+    const handle0 = outer.rest;
+    const handle1 = handle0.body;
+    const handle2 = handle1.body;
+
+    for (const [handle, expectedIndex] of [[handle0, 0], [handle1, 1], [handle2, 2]] as const) {
+      const handler = handle.handler;
+      expect(handler.kind).toBe("Chain");
+      // ExtractField("state")
+      expect(handler.first.handler.builtin.kind).toBe("ExtractField");
+      expect(handler.first.handler.builtin.value).toBe("state");
+      // ExtractIndex(n)
+      expect(handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
+      expect(handler.rest.first.handler.builtin.value).toBe(expectedIndex);
+      // Tag("Resume")
+      expect(handler.rest.rest.handler.builtin.kind).toBe("Tag");
+      expect(handler.rest.rest.handler.builtin.value).toBe("Resume");
+    }
+  });
+});
+
+describe("bindInput", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("compiles to bind([identity()], ([input]) => pipe(drop(), body(input)))", () => {
+    const bodyAction = constant("result");
+    const result = bindInput<string, string>((_input) => bodyAction);
+
+    // Outer: Chain(All(Identity, Identity), Handle(...))
+    const outer = result as { kind: "Chain"; first: any; rest: any };
+    expect(outer.first.kind).toBe("All");
+    expect(outer.first.actions).toHaveLength(2);
+    // First action is identity (from bind([identity()], ...))
+    expect(outer.first.actions[0].handler.builtin.kind).toBe("Identity");
+    // Second action is identity (pipeline input preservation)
+    expect(outer.first.actions[1].handler.builtin.kind).toBe("Identity");
+
+    // Handle wraps the body
+    expect(outer.rest.kind).toBe("Handle");
+    const handle = outer.rest;
+
+    // Handle body: Chain(ExtractIndex(1), Chain(Drop, bodyAction))
+    expect(handle.body.kind).toBe("Chain");
+    expect(handle.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.body.first.handler.builtin.value).toBe(1);
+
+    // The rest of the body is Chain(Drop, bodyAction)
+    const bodyChain = handle.body.rest;
+    expect(bodyChain.kind).toBe("Chain");
+    expect(bodyChain.first.handler.builtin.kind).toBe("Drop");
+  });
+
+  it("VarRef from bindInput is a Perform node", () => {
+    let capturedRef: any;
+    bindInput<string, string>((input) => {
+      capturedRef = input;
+      return constant("result");
+    });
+
+    expect(capturedRef.kind).toBe("Perform");
+    expect(typeof capturedRef.effect_id).toBe("number");
   });
 });
