@@ -470,22 +470,25 @@ fn complete_task(
 
 ### sweep_stash
 
-Called after every handler completion. Takes the entire stash, retries each item. Uses O(N²) re-sweep: when any item is consumed, restart from the beginning. A naive first approach — optimize later once we can reason about tighter bounds.
+Called after every handler completion. Retries stashed items one at a time. When an item is consumed (tree state changed), immediately restarts from the beginning — consuming one item may unblock others. When no item in a full pass is consumed, the stash is stable and the sweep exits.
 
-Progress tracking uses per-item `StashOutcome` from `process_stashed_item`. Count-based comparison is insufficient: processing one item might consume it but create a new stash entry via cascading Performs, keeping the count identical despite progress.
+O(N²) worst case: each full pass consumes at least one item, and there are at most N items.
 
 ```rust
 fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
     loop {
         let items = std::mem::take(&mut self.stashed_items);
         let mut any_consumed = false;
-        for item in items {
+        let mut iter = items.into_iter();
+        for item in &mut iter {
             let (result, outcome) = self.process_stashed_item(item)?;
             if let Some(value) = result {
-                return Ok(Some(value));
+                return Ok(Some(value)); // workflow done, remaining items irrelevant
             }
             if outcome == StashOutcome::Consumed {
                 any_consumed = true;
+                self.stashed_items.extend(iter); // put unprocessed items back
+                break; // restart — tree state changed
             }
         }
         if !any_consumed {
