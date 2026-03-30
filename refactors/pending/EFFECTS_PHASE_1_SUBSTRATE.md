@@ -8,7 +8,7 @@ Build Handle/Perform in the Rust scheduler: effect bubbling, handler dispatch, c
 
 1. **Generational arena migration.** Replace `slab::Slab<Frame>` with a generational arena (e.g. `thunderdome::Arena<Frame>`). FrameId becomes a generational index. Required for stash correctness (see "Frame store" below).
 
-2. **ForEach async scheduling.** ForEach currently advances all iterations synchronously in a loop. If an iteration Performs, subsequent iterations' Performs pile up in the stash. Refactor ForEach to dispatch iterations through the event loop (async, like Parallel branches with external tasks) so each iteration is processed one at a time. This must land before Phase 1 so the stash mechanism doesn't have to handle N-1 simultaneous stashed effects from a single ForEach.
+2. **Deferred child dispatch.** Parallel and ForEach currently advance all children synchronously in a loop. If children Perform the same effect, subsequent Performs pile up in the stash — O(n^2) for N children. Refactor both to enqueue children into a pending advance queue, drained by a pump loop at top-level entry points. See `DEFERRED_CHILD_DISPATCH.md`.
 
 ## New AST nodes (TypeScript)
 
