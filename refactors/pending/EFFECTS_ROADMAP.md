@@ -144,8 +144,9 @@ function tryCatch(bodyCallback, recovery) {
 ```
 
 ```rust
-// Rust: opaque ID, no interpretation. Uses existing u32_newtype! macro.
-u32_newtype!(EffectId);
+// Rust: opaque ID, no interpretation. u16 to preserve 8-byte FlatEntry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EffectId(pub u16);
 
 pub enum FlatAction {
     Handle { effect_id: EffectId, handler: ActionId },  // body in child slot at action_id + 1
@@ -267,7 +268,7 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 
 ### Rust changes
 
-- `EffectId(u32)`: opaque effect routing key (using `u32_newtype!` macro)
+- `EffectId(u16)`: opaque effect routing key. `u16` preserves 8-byte `FlatEntry` constraint.
 - New flat action types: `FlatAction::Handle` (2-entry: body in child slot, like Chain), `FlatAction::Perform` (1-entry leaf). 8-byte `FlatEntry` constraint preserved.
 - New frame kind: `FrameKind::Handle` with fields: `effect_id`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
 - **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes `state_update: StateUpdate` (`Unchanged` or `Updated(Value)`).
