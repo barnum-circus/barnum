@@ -31,18 +31,18 @@ The Handle frame for Bracket tracks acquired resources. When the Handle frame ex
 
 ```ts
 // User writes:
-declare({ wt: pipe(deriveBranch, createWorktree) }, ({ wt }) => body)
+declare([pipe(deriveBranch, createWorktree)], ([wt]) => body)
 // Where createWorktree has dispose metadata.
 
+// Builder gensyms two EffectIds: bracketEffect, readVarEffect.
 // Compiles to nested handlers:
 Chain(
   pipe(deriveBranch, createWorktree),
-  Handle("Bracket", {
-    // Bracket handler stores the resource and manages disposal
-    Handle("ReadVar", {
-      body   // uses Perform(ReadVar) to access the worktree
-    })
-  })
+  Handle(bracketEffect, bracketHandler,
+    Handle(readVarEffect, readVarHandler,
+      body   // uses Perform(readVarEffect) to access the worktree
+    )
+  )
 )
 ```
 
@@ -70,17 +70,18 @@ Race is Handle + Parallel + cancellation. Not a new AST node.
 // User writes:
 race(actionA, actionB)
 
+// Builder gensyms a fresh EffectId: raceEffect.
+// Handler DAG: pipe(pick("payload"), tag("Discard"))
 // Compiles to:
-Handle(
-  { "FirstResult": pipe(pick("payload"), identity()) },
+Handle(raceEffect, raceHandler,
   Parallel(
-    Chain(actionA, Perform("FirstResult")),
-    Chain(actionB, Perform("FirstResult")),
+    Chain(actionA, Perform(raceEffect)),
+    Chain(actionB, Perform(raceEffect)),
   )
 )
 ```
 
-The handler receives the first completion and exits the Handle frame. The handler does NOT resume (no Resume in the DAG). On Handle exit, the un-completed Parallel branch is torn down via the standard continuation cleanup.
+The handler receives `{ payload: firstResult, state: ... }`, extracts the payload, and produces Discard. The Handle frame tears down the body (including the un-completed Parallel branch) and exits with the first result.
 
 ### Cancellation semantics
 
@@ -89,7 +90,7 @@ When the Handle exits with a live Parallel frame below it, teardown must:
 2. Run Bracket dispose for any resources the losing branch acquired.
 3. Remove all frames from the slab.
 
-This uses the same `teardown_continuation` from Phase 3. Race doesn't add new teardown logic — it exercises existing teardown under Parallel.
+This uses the same `teardown_body` from Phase 1. Race doesn't add new teardown logic — it exercises existing teardown under Parallel.
 
 ### Type safety
 
@@ -115,11 +116,9 @@ Timeout combines Handle with an external timer.
 // User writes:
 withTimeout(duration, body)
 
-// Compiles to:
-Handle(
-  { "Timeout": pipe(pick("payload"), throwTimeoutError) },
-  race(body, timer(duration))
-)
+// Compiles to race between body and timer:
+race(body, timer(duration))
+// Where timer(duration) is an Invoke resolved by the external driver.
 ```
 
 Or more precisely, timeout is race between the body and a timer action. The timer action is an Invoke that the external driver resolves after the duration. If the timer wins, the body is cancelled (via Race's semantics). If the body wins, the timer is cancelled.
@@ -165,8 +164,8 @@ The Race-based approach is simpler and doesn't require new driver protocol. Reco
 
 ## Deliverables
 
-1. `EffectType::Bracket` and `EffectType::FirstResult` variants
-2. Bracket Handle frame logic (track resources, dispose on exit)
+1. Bracket handler DAG (track resources in state, dispose on exit via `next_state`)
+2. Bracket Handle frame logic (state-based resource tracking, dispose on scope exit)
 3. `race()` TypeScript function
 4. `withTimeout()` TypeScript function
 5. Timer action (Invoke that external driver resolves after duration)
