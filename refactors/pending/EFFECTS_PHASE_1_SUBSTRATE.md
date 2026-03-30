@@ -537,15 +537,11 @@ Each Handle has two children: the body (reached via SingleChild/IndexedChild) an
 | Handler child + free | invariant violation | `false` + debug_assert |
 
 ```rust
-/// Returns true if `parent_ref` points into the suspended body of a
-/// Handle frame (i.e. this edge is the body side and the Handle has
-/// an active continuation).
-fn is_in_suspended_body(&self, parent_ref: ParentRef) -> bool {
-    let frame_id = parent_ref.frame_id();
-    let Some(frame) = self.frames.get(frame_id) else {
-        return false;
-    };
-    let FrameKind::Handle(handle_frame) = &frame.kind else {
+/// Pure logic: given the edge we used to reach a frame and that frame's kind,
+/// returns true if this edge points into the suspended body of a Handle.
+/// No frame lookup — caller provides the data.
+fn is_in_suspended_body(parent_ref: ParentRef, kind: &FrameKind) -> bool {
+    let FrameKind::Handle(handle_frame) = kind else {
         return false; // not a Handle, nothing to check
     };
     let suspended = handle_frame.continuation.is_some();
@@ -563,16 +559,18 @@ The debug_assert catches the impossible-today case where a HandlerChild edge exi
 
 ### find_suspended_ancestor
 
-Walks the parent chain, checking `is_in_suspended_body` at each step. Returns the first suspended Handle whose body we're inside.
+Walks the parent chain, checking `is_in_suspended_body` at each step. Returns the first suspended Handle whose body we're inside. If a frame is missing (torn down), the `?` terminates the walk — no silent `return false` conflating "frame gone" with "not suspended."
 
 ```rust
 fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
     let mut current = self.frames.get(frame_id)?.parent;
     while let Some(parent_ref) = current {
-        if self.is_in_suspended_body(parent_ref) {
-            return Some(parent_ref.frame_id());
+        let parent_id = parent_ref.frame_id();
+        let frame = self.frames.get(parent_id)?;
+        if Self::is_in_suspended_body(parent_ref, &frame.kind) {
+            return Some(parent_id);
         }
-        current = self.frames.get(parent_ref.frame_id())?.parent;
+        current = frame.parent;
     }
     None
 }
