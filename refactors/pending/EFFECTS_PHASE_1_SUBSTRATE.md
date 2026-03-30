@@ -475,31 +475,49 @@ Called after every handler completion. Retries stashed items one at a time. When
 O(N²) worst case: each full pass consumes at least one item, and there are at most N items.
 
 ```rust
+/// Outer loop: keep sweeping until a full pass makes no progress.
 fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
     loop {
-        let items = std::mem::take(&mut self.stashed_items);
-        let mut any_consumed = false;
-        let mut iter = items.into_iter();
-        for item in &mut iter {
-            let (result, outcome) = self.process_stashed_item(item)?;
-            if let Some(value) = result {
-                return Ok(Some(value)); // workflow done, remaining items irrelevant
-            }
-            // Stashed items are already back in self.stashed_items
-            // (process_stashed_item pushes them via deliver_or_stash).
-            if outcome == StashOutcome::Consumed {
-                any_consumed = true;
-                self.stashed_items.extend(iter); // put unprocessed items back
-                break; // restart — tree state changed
-            }
-        }
-        if !any_consumed {
-            return Ok(None);
+        match self.sweep_stash_once()? {
+            SweepResult::WorkflowDone(value) => return Ok(Some(value)),
+            SweepResult::MadeProgress => continue,
+            SweepResult::NoProgress => return Ok(None),
         }
     }
 }
 
+#[derive(Debug)]
+enum SweepResult {
+    /// A stashed item's delivery completed the workflow.
+    WorkflowDone(Value),
+    /// At least one item was consumed. Tree state changed — sweep again.
+    MadeProgress,
+    /// No items consumed. Stash is stable.
+    NoProgress,
+}
+
+/// Single pass: take all stashed items, process until one is consumed or
+/// all are re-stashed. Items that get Stashed are pushed back to
+/// self.stashed_items by process_stashed_item internally.
+fn sweep_stash_once(&mut self) -> Result<SweepResult, CompleteError> {
+    let items = std::mem::take(&mut self.stashed_items);
+    let mut iter = items.into_iter();
+    for item in &mut iter {
+        let (result, outcome) = self.process_stashed_item(item)?;
+        if let Some(value) = result {
+            return Ok(SweepResult::WorkflowDone(value));
+        }
+        if outcome == StashOutcome::Consumed {
+            self.stashed_items.extend(iter); // put unprocessed items back
+            return Ok(SweepResult::MadeProgress);
+        }
+    }
+    Ok(SweepResult::NoProgress)
+}
+
 /// Returns (workflow_result, outcome).
+/// Side effect: when outcome is Stashed, the item has already been pushed
+/// back to self.stashed_items (via deliver_or_stash / bubble_effect).
 fn process_stashed_item(
     &mut self,
     item: StashedItem,
