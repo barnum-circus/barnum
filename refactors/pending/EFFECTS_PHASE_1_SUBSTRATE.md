@@ -35,14 +35,50 @@ The handler DAG's output tells the Handle frame what to do with the suspended co
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContinuationOp {
-    /// Reconnect the continuation. Deliver value into it. Body continues from suspension point.
+    /// Reconnect the continuation. Deliver value to the Perform's parent.
+    /// Body continues from suspension point.
+    /// Value type: what the body expects at the Perform site.
     Resume,
-    /// Tear down the continuation. Deliver value to the Handle's parent. Handle exits.
+    /// Tear down the continuation. Deliver value to the Handle's parent.
+    /// Handle exits.
+    /// Value type: the Handle's output type.
     Discard,
-    /// Tear down the continuation. Re-advance the body with the value. Handle stays alive.
+    /// Tear down the continuation. Re-advance the body with the value.
+    /// Handle stays alive.
+    /// Value type: the body's input type.
     RestartBody,
 }
 ```
+
+The `value` field in each variant has a different semantic type:
+
+| Op | Value delivered to | Value type |
+|---|---|---|
+| Resume | Perform's parent (body continues) | What the body expects at the suspension point |
+| Discard | Handle's parent (Handle exits) | The Handle's output type |
+| RestartBody | Body re-entry (fresh start) | The body's input type |
+
+On the Rust side, all three are `serde_json::Value` — types are erased at serialization. On the TypeScript side, the handler DAG's output is a proper discriminated union with separate type parameters per variant:
+
+```ts
+type StateUpdate<TState> =
+  | { kind: "Unchanged" }
+  | { kind: "Updated"; value: TState };
+
+type HandlerOutput<TResume, TDiscard, TRestart, TState> =
+  | { kind: "Resume"; value: TResume; state_update: StateUpdate<TState> }
+  | { kind: "Discard"; value: TDiscard; state_update: StateUpdate<TState> }
+  | { kind: "RestartBody"; value: TRestart; state_update: StateUpdate<TState> };
+```
+
+In practice, no handler produces all three variants. Each combinator narrows the union:
+
+- **ReadVar handler**: `HandlerOutput<TValue, never, never, TState>` — only Resume.
+- **Throw handler**: `HandlerOutput<never, TRecoveryResult, never, TState>` — only Discard.
+- **Loop recur handler**: `HandlerOutput<never, never, TBodyInput, TState>` — only RestartBody.
+- **Loop done handler**: `HandlerOutput<never, TBreakValue, never, TState>` — only Discard.
+
+TypeScript enforces that each handler DAG only constructs the variants it should. A readVar handler that accidentally produces Discard is a type error.
 
 Resume and Discard are the canonical two operations on continuations in the algebraic effects literature. In systems with generalized tail call optimization (Koka, Unison), RestartBody is unnecessary — loops are pure recursion and the runtime optimizes away the frame growth.
 
