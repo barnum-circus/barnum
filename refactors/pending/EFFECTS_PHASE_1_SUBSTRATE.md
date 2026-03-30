@@ -225,9 +225,8 @@ pub enum FrameKind {
     Handle(HandleFrame),
 }
 
-/// The suspended continuation: tracks where to deliver Resume values,
-/// buffers async completions that arrive while suspended, and identifies
-/// what to clean up on Discard/RestartBody.
+/// The suspended continuation: tracks where to deliver Resume values
+/// and what to clean up on Discard/RestartBody.
 #[derive(Debug)]
 struct ContinuationRoot {
     /// Where the Perform would have delivered its result.
@@ -235,15 +234,10 @@ struct ContinuationRoot {
     /// Not Option: a Perform with no parent has no Handle above it,
     /// so bubble_effect returns UnhandledEffect before we get here.
     perform_parent: ParentRef,
-    /// External task completions that arrived while the body was suspended.
-    /// Buffered in arrival order. On Resume, replayed sequentially after
-    /// delivering the Resume value. On Discard/RestartBody, dropped
-    /// (the frames they target are torn down).
-    pending_deliveries: Vec<(ParentRef, Value)>,
 }
 ```
 
-One Handle, one effect, one handler, one continuation. All singular. At most one continuation exists at a time per Handle — the body subgraph is synchronously frozen at the Perform point, so no further Performs can fire from that execution path. However, other branches of a Parallel in the body may have in-flight external tasks that complete while the handler is running. These completions are buffered on the continuation (see "Async completions during suspension" below).
+One Handle, one effect, one handler, one continuation. All singular. At most one continuation exists at a time per Handle — the body subgraph is synchronously frozen at the Perform point, so no further Performs can fire from that execution path. However, other branches of a Parallel in the body may have in-flight external tasks that complete while the handler is running. These completions are stashed globally and swept after each handler completion (see "Async completions during suspension" below).
 
 ## advance for Handle and Perform
 
@@ -343,7 +337,6 @@ fn dispatch_to_handler(
     );
     handle_frame.continuation = Some(ContinuationRoot {
         perform_parent,
-        pending_deliveries: Vec::new(),
     });
     let handler = handle_frame.handler;
     let state = handle_frame.state.clone();
@@ -379,32 +372,47 @@ However, the body is NOT completely frozen — other branches of a Parallel may 
 
 When a Perform fires inside a Parallel branch, other branches may have external tasks still in flight. When those tasks complete, the engine must NOT deliver their results into the suspended body — that would advance the body (Chain trampolining, further actions executing) while the handler might Discard the entire subgraph.
 
-The solution: **buffer at `complete_task`.** Before delivering, walk up from the target frame to check for a suspended Handle ancestor. If found, append the delivery to the continuation's `pending_deliveries`. If not, deliver normally.
+The solution: a **global stash** on `WorkflowState`. When `complete_task` detects that a delivery would enter a suspended body, it pushes to the stash instead of delivering. After every handler completion (Resume, Discard, RestartBody), the engine sweeps the stash: each item is re-evaluated against the current tree state — delivered if reachable, re-stashed if still suspended, dropped if its target frame was torn down.
 
-The core primitive is `deliver_or_buffer`: check for a suspended Handle ancestor, buffer if found, deliver if not. Both `complete_task` and `resume_continuation`'s replay loop use this same function.
+This is the [Stash pattern](https://doc.akka.io/docs/akka/current/typed/stash.html) from actor frameworks: when an actor receives a message it cannot process in its current state, it stashes it. On state transition, it unstashes and retries.
+
+```rust
+pub struct WorkflowState {
+    // ... existing fields (frames, flat_config, task_to_parent) ...
+
+    /// Deliveries that arrived while their target frame was inside a
+    /// suspended Handle body. Swept after every handler completion.
+    stashed_deliveries: Vec<(ParentRef, Value)>,
+}
+```
+
+### deliver_or_stash: the core primitive
 
 ```rust
 /// Deliver a value to a parent frame, unless the target is inside a
-/// suspended body. If suspended, buffer the delivery on the innermost
-/// suspended Handle's continuation. O(depth) per call.
-fn deliver_or_buffer(
+/// suspended body. If suspended, push to the global stash. O(depth).
+fn deliver_or_stash(
     &mut self,
     parent_ref: ParentRef,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    if let Some(handle_frame_id) = self.find_suspended_ancestor(parent_ref.frame_id()) {
-        let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
-            unreachable!();
-        };
-        let continuation = handle_frame.continuation.as_mut()
-            .expect("suspended Handle must have continuation");
-        continuation.pending_deliveries.push((parent_ref, value));
+    // Target frame was torn down (Discard/RestartBody removed it).
+    if self.frames.get(parent_ref.frame_id().0).is_none() {
+        return Ok(None); // silently drop orphaned delivery
+    }
+
+    if self.find_suspended_ancestor(parent_ref.frame_id()).is_some() {
+        self.stashed_deliveries.push((parent_ref, value));
         Ok(None)
     } else {
         self.deliver(Some(parent_ref), value)
     }
 }
+```
 
+### complete_task
+
+```rust
 fn complete_task(
     &mut self,
     task_id: TaskId,
@@ -413,14 +421,70 @@ fn complete_task(
     let parent_ref = self.task_to_parent.remove(&task_id);
     match parent_ref {
         None => {
-            // Task was already cancelled (frame torn down by Discard/RestartBody).
+            // Task's frame was torn down (Discard/RestartBody).
             // Silently drop the result.
             Ok(None)
         }
-        Some(parent_ref) => self.deliver_or_buffer(parent_ref, value),
+        Some(parent_ref) => self.deliver_or_stash(parent_ref, value),
     }
 }
+```
 
+### sweep_stash: the unstash operation
+
+Called after every handler completion. Takes the entire stash, attempts each delivery. Items that are still blocked go back. Items whose target frames are gone are dropped.
+
+```rust
+fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
+    // Take the stash. Items added during this sweep (e.g., a delivery
+    // triggers a new Perform, re-stashing subsequent items) go into the
+    // fresh Vec and are picked up by the next iteration.
+    loop {
+        let stash = std::mem::take(&mut self.stashed_deliveries);
+        if stash.is_empty() {
+            return Ok(None);
+        }
+        for (parent_ref, value) in stash {
+            let result = self.deliver_or_stash(parent_ref, value)?;
+            if result.is_some() {
+                return Ok(result); // workflow completed
+            }
+        }
+        // Loop: delivering a stashed item may have caused a Resume
+        // (synchronous handler), which may have un-suspended more items.
+        // Sweep again until the stash stabilizes.
+    }
+}
+```
+
+The loop terminates because each iteration either makes progress (delivers at least one item) or the stash is empty. If no items were deliverable, they were all re-stashed in the same positions — `std::mem::take` returns them, the for loop re-stashes them, but `deliver_or_stash` puts them back. To avoid this livelock, the loop checks: if the stash size didn't decrease, all remaining items are blocked — stop.
+
+```rust
+fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
+    loop {
+        let stash = std::mem::take(&mut self.stashed_deliveries);
+        if stash.is_empty() {
+            return Ok(None);
+        }
+        let count_before = stash.len();
+        for (parent_ref, value) in stash {
+            let result = self.deliver_or_stash(parent_ref, value)?;
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+        // If nothing was delivered (stash size didn't shrink), all items
+        // are still blocked. Stop sweeping.
+        if self.stashed_deliveries.len() >= count_before {
+            return Ok(None);
+        }
+    }
+}
+```
+
+### find_suspended_ancestor
+
+```rust
 /// Walk up from `frame_id` looking for an ancestor Handle frame
 /// that has a suspended continuation. Returns the first one found
 /// (innermost suspended Handle).
@@ -439,13 +503,13 @@ fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
 }
 ```
 
-**Why `deliver_or_buffer` is needed in both `complete_task` and replay.** `complete_task` is the entry point for external async completions — the obvious case. But during `resume_continuation`'s replay loop, a replayed delivery can trigger a Perform on a *different* Handle (e.g., inner), causing that Handle to suspend. Subsequent replayed deliveries may target frames inside that newly-suspended body. Without the `find_suspended_ancestor` check during replay, those deliveries would advance the frozen body.
+### Why this works
 
-**Delivery migration across Handles.** A delivery originally buffered on Handle A can migrate to Handle B during replay. When A resumes and replays its buffer, `deliver_or_buffer` discovers that the target is now inside B's suspended body and buffers it there. No explicit transfer logic — `find_suspended_ancestor` finds the right Handle each time.
+**The stash is location-agnostic.** Items aren't associated with any particular Handle. Each sweep re-evaluates every item against the current tree state. An item originally stashed because Handle A was suspended might be delivered on the next sweep because A resumed — or re-stashed because Handle B suspended in the meantime. No transfer logic needed.
 
-**Why handler completions aren't buffered.** The handler's Invoke has `parent = SingleChild { frame_id: handle_frame_id }`. `find_suspended_ancestor` walks up from the Handle frame's parent (whatever is above the Handle). The Handle itself is not checked — only ancestors above it. So handler task completions deliver normally to the Handle frame, triggering `handle_handler_completion`.
+**Handler completions aren't stashed.** The handler's Invoke has `parent = SingleChild { frame_id: handle_frame_id }`. `find_suspended_ancestor` walks up from the Handle frame's parent (whatever is above the Handle). The Handle itself is not checked — only ancestors above it. So handler task completions deliver normally to the Handle frame, triggering `handle_handler_completion`.
 
-**Cancelled tasks.** When `teardown_body` runs (on Discard or RestartBody), it removes body frames from the slab and removes their `task_to_parent` entries. If those tasks later complete, `complete_task` finds no entry and silently drops the result. No explicit cancel signal is sent to the external driver — tasks run to completion, and their results are ignored.
+**Cancelled tasks.** When `teardown_body` runs (on Discard or RestartBody), it removes body frames from the slab and removes their `task_to_parent` entries. If those tasks later complete, `complete_task` finds no entry and silently drops the result. Stashed items targeting torn-down frames are dropped by `deliver_or_stash` on the next sweep (the frame doesn't exist in the slab). No explicit cancel signal is sent to the external driver — tasks run to completion, and their results are ignored.
 
 ### Concrete example
 
@@ -459,15 +523,16 @@ Handle(effect, handler,
 ```
 
 1. Advance: Parallel dispatches both branches. Chain A and Chain B created. Invoke A and B dispatch external tasks.
-2. Task A completes. `complete_task` → `find_suspended_ancestor(chain_a)` → no suspended Handle → deliver normally. Chain A trampolines → advance Perform → `bubble_effect` → `dispatch_to_handler`. Continuation stored. Handler starts.
-3. Task B completes. `complete_task` → `find_suspended_ancestor(chain_b)` → walks up to Parallel → walks up to Handle → Handle has `continuation.is_some()` → **buffer** `(chain_b_parent, taskB_result)` on continuation.
+2. Task A completes. `complete_task` → `find_suspended_ancestor(chain_a)` → no suspended Handle → deliver. Chain A trampolines → Perform → `bubble_effect` → `dispatch_to_handler`. Continuation stored. Handler starts.
+3. Task B completes. `complete_task` → `find_suspended_ancestor(chain_b)` → Handle has `continuation.is_some()` → **stashed**.
 4. Handler completes with Resume(V):
-   - `resume_continuation` delivers V to `perform_parent` (Parallel slot for branch A via Chain A's old parent). Chain A was removed by trampoline, so the parent is `ParallelChild { parallel_id, 0 }`. Parallel stores V in slot 0. Not all slots full → returns.
-   - Replay: deliver `(chain_b_parent, taskB_result)`. Chain B receives it, trampolines to Perform(effect). Perform fires `bubble_effect`. Handle has `continuation: None` (we cleared it). `dispatch_to_handler` runs normally. Second handler invocation starts.
-   - Second handler completes with Resume(W). Deliver W to Parallel slot 1 (via branch B's path). Both slots full. Parallel joins and delivers to Handle. Handle exits.
+   - `handle_handler_completion` → `resume_continuation` → deliver V to Parallel slot 0. Not all slots full.
+   - `sweep_stash`: take `[(chain_b_parent, taskB_result)]`. `deliver_or_stash` → Handle has `continuation: None` → deliver. Chain B trampolines → Perform → `dispatch_to_handler`. New continuation stored. Second handler starts.
+   - Stash is now empty. Sweep loop exits.
+   - Second handler completes with Resume(W). Deliver W to Parallel slot 1. Both full. Join. Handle exits.
 5. **OR** handler completes with Discard(E):
-   - `discard_continuation` drops `pending_deliveries` (taskB's buffered result is gone).
-   - `teardown_body` removes Parallel, Chain B, and their `task_to_parent` entries.
+   - `discard_continuation` → `teardown_body` removes Parallel, Chain B, their task entries.
+   - `sweep_stash`: take `[(chain_b_parent, taskB_result)]`. `deliver_or_stash` → frame doesn't exist → **dropped**.
    - Handle exits with E.
 
 ## Handler completion (deliver to Handle frame)
@@ -534,7 +599,7 @@ fn handle_handler_completion(
     // 3. Dispatch on the continuation operation.
     //    Resume and RestartBody carry state_update. Discard does not
     //    (the frame is about to be torn down).
-    match kind_str {
+    let result = match kind_str {
         "Resume" => {
             self.apply_state_update(handle_frame_id, &output)?;
             self.resume_continuation(handle_frame_id, continuation, value)
@@ -547,7 +612,16 @@ fn handle_handler_completion(
             self.restart_body(handle_frame_id, continuation, value)
         }
         _ => Err(CompleteError::InvalidHandlerOutput { value: output }),
+    }?;
+
+    // 4. After any continuation op, sweep the stash. Items that were
+    //    blocked by this Handle's suspension may now be deliverable.
+    //    Items whose frames were torn down (Discard/RestartBody) are
+    //    silently dropped.
+    if result.is_some() {
+        return Ok(result);
     }
+    self.sweep_stash()
 }
 
 fn apply_state_update(
@@ -591,47 +665,24 @@ pub enum CompleteError {
 
 ## Resume
 
-Reconnect the continuation. Deliver the Resume value, then replay any buffered async completions. Each replay uses `deliver_or_buffer` so that deliveries targeting a newly-suspended inner Handle are buffered there, not delivered into the frozen body.
+Reconnect the continuation. Deliver the Resume value to the Perform's original parent. The stash sweep (called by `handle_handler_completion` after this returns) handles any stashed deliveries.
 
 ```rust
 fn resume_continuation(
     &mut self,
-    handle_frame_id: FrameId,
+    _handle_frame_id: FrameId,
     continuation: ContinuationRoot,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    // 1. Deliver the Resume value to where the Perform would have delivered.
-    //    This wakes up the Chain/Parallel/etc. that was waiting for the Perform's result.
-    let result = self.deliver(Some(continuation.perform_parent), value)?;
-    if result.is_some() {
-        return Ok(result); // workflow completed
-    }
-
-    // 2. Replay buffered async completions in arrival order.
-    //    Use deliver_or_buffer for each: a previous replay may have caused
-    //    a Perform on a different Handle, suspending part of the tree.
-    for (parent_ref, value) in continuation.pending_deliveries {
-        let result = self.deliver_or_buffer(parent_ref, value)?;
-        if result.is_some() {
-            return Ok(result); // workflow completed
-        }
-    }
-
-    Ok(None)
+    // Deliver the value to where the Perform would have delivered.
+    // This wakes up the Chain/Parallel/etc. that was waiting for the Perform's result.
+    self.deliver(Some(continuation.perform_parent), value)
 }
 ```
 
-The body subgraph is still intact (we never severed it). Delivering to `perform_parent` is identical to what would have happened if the Perform had been a normal Invoke that completed.
+That's it. The body subgraph is still intact (we never severed it). Delivering to `perform_parent` is identical to what would have happened if the Perform had been a normal Invoke that completed.
 
-**Delivery migration.** During replay, `deliver_or_buffer` may route a delivery to a *different* Handle's continuation. Consider middle/inner Handles with a Parallel body:
-
-1. Middle resumes. Replay P2's delivery → `deliver_or_buffer` → no suspended ancestor → deliver normally → Chain trampolines → Perform(inner) → inner suspends.
-2. Replay P3's delivery → `deliver_or_buffer` → `find_suspended_ancestor` finds inner → buffers P3 on inner's continuation.
-3. Inner's handler completes → `resume_continuation` on inner → replays P3 → `deliver_or_buffer` → no suspended ancestor → deliver normally.
-
-P3 migrated from middle's buffer to inner's buffer automatically. No explicit transfer logic.
-
-**Re-suspension on the same Handle.** If a replayed delivery triggers a Perform on THIS Handle (middle), `deliver_or_buffer` finds middle (since the remaining deliveries target frames inside middle's body, and middle just re-suspended). They get buffered on middle's new continuation. The second handler eventually completes and replays them.
+The stash sweep runs after `resume_continuation` returns (in `handle_handler_completion`). It picks up any stashed deliveries that are now deliverable because this Handle is no longer suspended. Items targeting a different, still-suspended Handle stay stashed. Items targeting torn-down frames are silently dropped.
 
 ## Discard
 
@@ -680,7 +731,7 @@ fn restart_body(
 
 ## teardown_body: cleaning up the body subgraph
 
-Removes all frames that are descendants of the Handle (in the body subgraph, not in the handler) and removes their `task_to_parent` entries. In-flight external tasks are not explicitly cancelled — they run to completion, and when they do, `complete_task` finds no `task_to_parent` entry and silently drops the result. The `pending_deliveries` buffer on the ContinuationRoot was already taken by the caller (Discard/RestartBody) and is dropped.
+Removes all frames that are descendants of the Handle (in the body subgraph, not in the handler) and removes their `task_to_parent` entries. In-flight external tasks are not explicitly cancelled — they run to completion, and when they do, `complete_task` finds no `task_to_parent` entry and silently drops the result. Any stashed deliveries targeting torn-down frames are silently dropped by `deliver_or_stash` during the next `sweep_stash` call.
 
 ```rust
 fn teardown_body(&mut self, handle_frame_id: FrameId) {
@@ -964,10 +1015,10 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
       )
     )
     ```
-    Advance → both tasks dispatched. Complete taskA → Chain trampolines → Perform fires → handler starts. Complete taskB → `find_suspended_ancestor` finds the Handle → buffered on continuation. Handler completes with Resume → deliver to Parallel slot 0 → replay buffered delivery → Parallel slot 1 filled → Parallel joins → Handle exits. Verify final output contains both results.
+    Advance → both tasks dispatched. Complete taskA → Chain trampolines → Perform fires → handler starts. Complete taskB → `find_suspended_ancestor` finds the Handle → **stashed**. Handler completes with Resume → deliver to Parallel slot 0 → `sweep_stash` → stashed delivery now deliverable → Parallel slot 1 filled → Parallel joins → Handle exits. Verify final output contains both results.
 
 16. **Async completion during suspension (buffered, then discarded)**:
-    Same tree as test 15, but handler produces Discard. Complete taskA → Perform → handler starts. Complete taskB → buffered. Handler completes with Discard → `discard_continuation` drops pending_deliveries → `teardown_body` removes frames and task entries → Handle exits with discard value. Verify Parallel frame and Chain B are removed from slab. Verify buffered delivery is dropped.
+    Same tree as test 15, but handler produces Discard. Complete taskA → Perform → handler starts. Complete taskB → stashed. Handler completes with Discard → `teardown_body` removes frames and task entries → `sweep_stash` → stashed delivery's target frame is gone → **silently dropped**. Handle exits with discard value. Verify Parallel frame and Chain B are removed from slab.
 
 17. **Cancelled task completion (arrives after teardown)**: Same tree, but taskB completes AFTER discard has torn down the body. `complete_task` finds no `task_to_parent` entry → silently ignored. Verify no panic.
 
@@ -987,7 +1038,7 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
       )
     )
     ```
-    P1 completes → Perform(middle) → middle suspends. P2 and P3 complete → both buffered on middle's continuation. Middle resumes → replay P2 → Chain trampolines → Perform(inner) → inner suspends. Replay P3 → `deliver_or_buffer` finds inner is suspended → **P3 migrates to inner's buffer**. Inner resumes → replays P3 → deliver normally → echo dispatched → Parallel joins → workflow completes. Verify P3 was delivered exactly once and the final result includes all three branches.
+    P1 completes → Perform(middle) → middle suspends. P2 and P3 complete → both stashed. Middle resumes → `sweep_stash` → deliver P2 → Chain trampolines → Perform(inner) → inner suspends → P3 re-stashed (inner is now suspended). Inner resumes → `sweep_stash` → deliver P3 → echo dispatched → Parallel joins → workflow completes. Verify P3 was delivered exactly once and the final result includes all three branches.
 
 ### Integration tests
 
