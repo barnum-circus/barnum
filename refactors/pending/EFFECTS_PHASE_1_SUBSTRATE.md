@@ -1056,6 +1056,16 @@ fn resume_with_state_handler() -> Action {
 
 No semantic effects (ReadVar, Throw, LoopControl) — Phases 2-4. No TypeScript surface API changes. No RAII/Bracket (Phase 5). No durable suspension (Phase 6).
 
+## Static analysis (deferred)
+
+The following invariants should be enforced by TypeScript-side static analysis. The Rust engine has runtime defense-in-depth (HandlerChild skip in `bubble_effect`, `is_blocked_by_handle`), but these are belts-and-suspenders — the real enforcement belongs in the builder/compiler.
+
+### Handler cannot access its own effect
+
+A Handle's handler DAG must not contain Perform nodes for the Handle's own effect_id. The effect scope is lexically bound to the body, not the handler. The TypeScript builder should enforce this: the effect handle (the thing you pass to `perform()`) is only in scope inside the body closure, not the handler closure. Static analysis can verify this by checking that no Perform in the handler's subtree references the enclosing Handle's effect_id.
+
+If violated at runtime: `bubble_effect` skips the matching Handle (HandlerChild edge) and the effect bubbles to an outer Handle. If no outer Handle matches, `AdvanceError::UnhandledEffect` is returned.
+
 ## Cycle hazards
 
 The frame tree is acyclic. StepAction and RestartBody create new frames per invocation — no pointers back to existing frames. teardown_body scans the slab by ancestry, not graph traversal.
