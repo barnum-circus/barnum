@@ -123,6 +123,12 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
             Ok(arr.get(index).cloned().unwrap_or(Value::Null))
         }
 
+        BuiltinKind::TagResume => Ok(json!({ "kind": "Resume", "value": input })),
+
+        BuiltinKind::TagDiscard => Ok(json!({ "kind": "Discard", "value": input })),
+
+        BuiltinKind::TagRestartBody => Ok(json!({ "kind": "RestartBody", "value": input })),
+
         BuiltinKind::Pick { value: keys } => {
             let Value::Array(key_values) = keys else {
                 return Err(BuiltinError {
@@ -341,5 +347,29 @@ mod tests {
         let input = json!({"name": "Alice", "age": 30});
         let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input);
         assert_eq!(result.unwrap(), json!({}));
+    }
+
+    #[test]
+    fn tag_resume_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagResume, &json!(42));
+        assert_eq!(result.unwrap(), json!({"kind": "Resume", "value": 42}));
+    }
+
+    #[test]
+    fn tag_discard_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagDiscard, &json!("error"));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Discard", "value": "error"}),
+        );
+    }
+
+    #[test]
+    fn tag_restart_body_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagRestartBody, &json!({"retry": true}));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "RestartBody", "value": {"retry": true}}),
+        );
     }
 }

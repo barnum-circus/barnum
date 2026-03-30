@@ -257,6 +257,12 @@ pub enum BuiltinKind {
         /// The field names to keep (must be a JSON array of strings).
         value: Value,
     },
+    /// Wrap input as `{ kind: "Resume", value: <input> }`.
+    TagResume,
+    /// Wrap input as `{ kind: "Discard", value: <input> }`.
+    TagDiscard,
+    /// Wrap input as `{ kind: "RestartBody", value: <input> }`.
+    TagRestartBody,
 }
 
 // ---------------------------------------------------------------------------
