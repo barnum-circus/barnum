@@ -192,16 +192,16 @@ At most one continuation per Handle at a time. The body is synchronously frozen 
 
 ### ParentRef::HandlerChild
 
-The handler DAG runs as a child of the Handle frame. Its frames are descendants of the Handle in the slab. When a task inside the handler completes, `find_suspended_ancestor` would walk up and find this Handle's continuation is Some — stashing the handler's own task completion. Deadlock: the handler resolves the suspension, but its completions are stashed against the very suspension it's resolving.
+The handler DAG runs as a child of the Handle frame. Its frames are descendants of the Handle in the slab. When a task inside the handler completes, `find_blocking_ancestor` would walk up and find this Handle's continuation is Some — stashing the handler's own task completion. Deadlock: the handler resolves the suspension, but its completions are stashed against the very suspension it's resolving.
 
-Fix: a new ParentRef variant for handler children. `find_suspended_ancestor` skips a Handle's suspension check when traversed via HandlerChild.
+Fix: a new ParentRef variant for handler children. `is_from_inactive_side` checks the direction × state combination: a HandlerChild reaching a suspended Handle is on the active side (handler is running), so `find_blocking_ancestor` passes through. A body child reaching a suspended Handle is on the inactive side, so it blocks.
 
 ```rust
 pub enum ParentRef {
     SingleChild { frame_id: FrameId },
     IndexedChild { frame_id: FrameId, child_index: usize },
-    /// Handler DAG child. find_suspended_ancestor skips this Handle's
-    /// suspension check when traversed via this variant.
+    /// Handler DAG child. Distinguishes handler-side events from body-side
+    /// events so find_blocking_ancestor can determine which side is active.
     HandlerChild { frame_id: FrameId },
 }
 ```
@@ -348,8 +348,8 @@ fn dispatch_to_handler(
         "state": state,
     });
 
-    // Advance handler as HandlerChild. This prevents find_suspended_ancestor
-    // from stashing handler task completions against this Handle's suspension.
+    // Advance handler as HandlerChild. is_from_inactive_side sees
+    // HandlerChild + suspended = active side, so handler events proceed.
     self.advance(
         handler,
         handler_input,
@@ -441,7 +441,7 @@ fn deliver_or_stash(
         return Ok(None);
     }
 
-    if self.find_suspended_ancestor(parent_ref.frame_id()).is_some() {
+    if self.find_blocking_ancestor(parent_ref.frame_id()).is_some() {
         self.stashed_items.push(StashedItem::Delivery { parent_ref, value });
         Ok(None)
     } else {
@@ -525,49 +525,46 @@ fn process_stashed_item(
 
 The loop terminates because each iteration either delivers at least one item (shrinking the stash) or gives up. Delivering a stashed item may Resume a Handle, unblocking further items — the loop catches cascades.
 
-### is_in_suspended_body
+### is_from_inactive_side
 
-Each Handle has two children: the body (reached via SingleChild/IndexedChild) and the handler (reached via HandlerChild). When a Handle is suspended, the body side is suspended and the handler side is active. This method encapsulates the direction × state check:
+Each Handle has two sides: the body (reached via SingleChild/IndexedChild) and the handler (reached via HandlerChild). At any point, one side is active and the other is inactive. When the Handle is suspended (handler running), the body is inactive. When the Handle is free (body running), there is no handler — but stale handler tasks may still arrive.
 
-| Edge | Suspended | Result |
-|------|-----------|--------|
-| Body child + suspended | body suspended | `true` |
-| Body child + free | body running | `false` |
-| Handler child + suspended | handler active | `false` |
-| Handler child + free | invariant violation | `false` + debug_assert |
+This method answers: "did this event come from the inactive side?"
+
+| Edge | State | Active side | This event from | Result |
+|------|-------|-------------|-----------------|--------|
+| Body child | suspended | handler | inactive side | `true` |
+| Body child | free | body | active side | `false` |
+| Handler child | suspended | handler | active side | `false` |
+| Handler child | free | body | inactive side | `true` |
 
 ```rust
 /// Pure logic: given the edge we used to reach a frame and that frame's kind,
-/// returns true if this edge points into the suspended body of a Handle.
+/// returns true if this edge comes from the inactive side of a Handle.
 /// No frame lookup — caller provides the data.
-fn is_in_suspended_body(parent_ref: ParentRef, kind: &FrameKind) -> bool {
+fn is_from_inactive_side(parent_ref: ParentRef, kind: &FrameKind) -> bool {
     let FrameKind::Handle(handle_frame) = kind else {
         return false; // not a Handle, nothing to check
     };
     let suspended = handle_frame.continuation.is_some();
-    match parent_ref {
-        ParentRef::SingleChild { .. } | ParentRef::IndexedChild { .. } => suspended,
-        ParentRef::HandlerChild { .. } => {
-            debug_assert!(suspended, "HandlerChild of non-suspended Handle");
-            false
-        }
-    }
+    let is_body_child = !matches!(parent_ref, ParentRef::HandlerChild { .. });
+    is_body_child == suspended
 }
 ```
 
-The debug_assert catches the impossible-today case where a HandlerChild edge exists but the Handle isn't suspended. If a future primitive (e.g. race) unsuspends the Handle while handler tasks are still in-flight, this assert fires early rather than silently misrouting.
+No special cases. The fourth row (HandlerChild + free) is unreachable today — `dispatch_to_handler` always sets `continuation = Some(...)` before advancing the handler. With a future race primitive that unsuspends the Handle while handler tasks are in-flight, this row returns `true` naturally, causing stale handler deliveries to be stashed/dropped.
 
-### find_suspended_ancestor
+### find_blocking_ancestor
 
-Walks the parent chain, checking `is_in_suspended_body` at each step. Returns the first suspended Handle whose body we're inside. If a frame is missing (torn down), the `?` terminates the walk — no silent `return false` conflating "frame gone" with "not suspended."
+Walks the parent chain, checking `is_from_inactive_side` at each step. Returns the first Handle where the event is on the inactive side. If a frame is missing (torn down), the `?` terminates the walk.
 
 ```rust
-fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
+fn find_blocking_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
     let mut current = self.frames.get(frame_id)?.parent;
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
         let frame = self.frames.get(parent_id)?;
-        if Self::is_in_suspended_body(parent_ref, &frame.kind) {
+        if Self::is_from_inactive_side(parent_ref, &frame.kind) {
             return Some(parent_id);
         }
         current = frame.parent;
@@ -594,7 +591,7 @@ Handle(effect, handler,
 1. Advance: Parallel dispatches both branches. Invoke A and B dispatch external tasks.
 2. Task A completes. deliver -> Chain A trampolines -> Perform -> dispatches Perform task A'.
 3. Driver processes Perform task A' -> complete_task -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
-4. Task B completes. deliver_or_stash -> find_suspended_ancestor finds Handle suspended -> **stashed as Delivery**.
+4. Task B completes. deliver_or_stash -> find_blocking_ancestor -> is_from_inactive_side: body child + suspended = inactive side -> **stashed as Delivery**.
 5a. Handler Resumes: deliver to Parallel slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> dispatches Perform task B'. Driver processes B' -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> Parallel joins -> Handle exits.
 5b. Handler Discards: teardown_body removes Parallel, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value. (Perform task B', if not yet completed, arrives later at complete_task -> bubble_effect -> frames gone -> silently dropped.)
 
@@ -1009,7 +1006,7 @@ fn resume_with_state_handler() -> Action {
 
 20. `Handle(mid, h_mid, Handle(inner, h_inner, Parallel(Chain(Invoke(P1), Perform(mid)), Chain(Invoke(P2), Perform(inner)), Chain(Invoke(P3), Invoke(echo)))))`. P1 -> Perform(mid) -> mid suspends. P2, P3 stashed. Mid resumes -> sweep -> P2 delivered -> Perform(inner) -> inner suspends -> P3 re-stashed. Inner resumes -> sweep -> P3 delivered -> echo -> Parallel joins.
 
-21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_suspended_ancestor walks through HandlerChild -> is_in_suspended_body returns false (handler side is active) -> delivers normally. Handler completes.
+21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_blocking_ancestor walks through HandlerChild -> is_from_inactive_side returns false (handler side is active) -> delivers normally. Handler completes.
 
 22. `Handle(e, handler, Parallel(Perform(e), Perform(e)))`. Both Performs dispatch tasks during advance. With FIFO completion order: first Perform's bubble_effect dispatches handler, second stashes. Handler resumes -> sweep -> retries -> dispatches second handler. With depth-first: each handler completes before the next Perform's bubble_effect runs, no stashing. Both orderings produce the same final result.
 
@@ -1038,7 +1035,7 @@ fn resume_with_state_handler() -> Action {
 14. `handle_handler_completion`, `apply_state_update`
 15. `resume_continuation`, `discard_continuation`, `restart_body`
 16. `teardown_body`, `is_descendant_of`
-17. `is_in_suspended_body`, `find_suspended_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
+17. `is_from_inactive_side`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
 18. `handle_frame_mut` accessor
 19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 20. `FlatConfig::handle_body` accessor
