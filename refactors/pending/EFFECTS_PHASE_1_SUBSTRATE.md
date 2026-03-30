@@ -650,7 +650,7 @@ Handle(effect, handler,
 
 1. Advance: All dispatches both branches. Invoke A and B dispatch external tasks.
 2. Task A completes. deliver -> Chain A trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
-3. Task B completes. try_deliver -> find_blocking_ancestor -> is_blocked_by_handle: body child + suspended = blocked -> Blocked -> **stashed as Delivery** by complete_task.
+3. Task B completes. try_deliver -> find_blocking_ancestor -> is_blocked_by_handle: body child + suspended = blocked -> Blocked -> **stashed**.
 4a. Handler Resumes: deliver to All slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> All joins -> Handle exits.
 4b. Handler Discards: teardown_body removes All, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value.
 
