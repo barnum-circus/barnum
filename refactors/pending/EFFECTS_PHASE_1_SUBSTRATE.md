@@ -225,8 +225,9 @@ pub enum FrameKind {
     Handle(HandleFrame),
 }
 
-/// The suspended continuation: tracks where to deliver Resume values
-/// and what to clean up on Discard/RestartBody.
+/// The suspended continuation: tracks where to deliver Resume values,
+/// buffers async completions that arrive while suspended, and identifies
+/// what to clean up on Discard/RestartBody.
 #[derive(Debug)]
 struct ContinuationRoot {
     /// Where the Perform would have delivered its result.
@@ -234,10 +235,15 @@ struct ContinuationRoot {
     /// Not Option: a Perform with no parent has no Handle above it,
     /// so bubble_effect returns UnhandledEffect before we get here.
     perform_parent: ParentRef,
+    /// External task completions that arrived while the body was suspended.
+    /// Buffered in arrival order. On Resume, replayed sequentially after
+    /// delivering the Resume value. On Discard/RestartBody, dropped
+    /// (the frames they target are torn down).
+    pending_deliveries: Vec<(ParentRef, Value)>,
 }
 ```
 
-One Handle, one effect, one handler, one continuation. All singular. At most one continuation exists at a time because the entire body subgraph is suspended when a Perform fires — the Perform point is stuck, so the body can't complete.
+One Handle, one effect, one handler, one continuation. All singular. At most one continuation exists at a time per Handle — the body subgraph is synchronously frozen at the Perform point, so no further Performs can fire from that execution path. However, other branches of a Parallel in the body may have in-flight external tasks that complete while the handler is running. These completions are buffered on the continuation (see "Async completions during suspension" below).
 
 ## advance for Handle and Perform
 
@@ -337,6 +343,7 @@ fn dispatch_to_handler(
     );
     handle_frame.continuation = Some(ContinuationRoot {
         perform_parent,
+        pending_deliveries: Vec::new(),
     });
     let handler = handle_frame.handler;
     let state = handle_frame.state.clone();
@@ -362,9 +369,94 @@ fn dispatch_to_handler(
 }
 ```
 
-**Why we don't sever parent pointers.** The body subgraph is naturally frozen because the Perform point is stuck — the Perform was a leaf that triggered bubble_effect instead of producing a Dispatch. The Chain (or whatever frame is above the Perform) is waiting for a value that will never arrive until we Resume. Meanwhile, the handler DAG runs as a new child of the Handle, using the same `ParentRef::SingleChild` relationship. When the handler completes and delivers to the Handle, the Handle knows it's the handler (because `continuation.is_some()`). The body can't deliver to the Handle because the Perform point blocks it.
+**Why we don't sever parent pointers.** The body's frame tree stays connected. We don't null out or reroute any `ParentRef`. The Perform point is synchronously stuck (it triggered bubble_effect instead of producing a Dispatch), so no further synchronous execution propagates from that point. The handler DAG runs as a new child of the Handle, using the same `ParentRef::SingleChild` relationship. When the handler completes and delivers to the Handle, the Handle knows it's the handler (because `continuation.is_some()`).
 
-**Double Perform.** If a second Perform for the same effect fires while the handler is already running (e.g., two Performs in a Parallel), the assert fires. This is a structural invariant — algebraic effects suspend the body on the first Perform, and no further Performs can fire while suspended.
+However, the body is NOT completely frozen — other branches of a Parallel may have in-flight external tasks. When those tasks complete, their results must be **buffered**, not delivered. See "Async completions during suspension" below.
+
+**Double Perform (synchronous).** If two bare Performs for the same effect appear as immediate children of a Parallel (no async work between advance and Perform), the assert fires — the first Perform stores a continuation, and the second finds `continuation.is_some()`. This is a malformed AST. The TypeScript builder never produces it. Two Performs for the same effect in a Parallel always have async work (Invoke) before them, which means the second Perform can only fire after an external task completes — at which point it's intercepted by the buffering mechanism, not by `advance`.
+
+## Async completions during suspension
+
+When a Perform fires inside a Parallel branch, other branches may have external tasks still in flight. When those tasks complete, the engine must NOT deliver their results into the suspended body — that would advance the body (Chain trampolining, further actions executing) while the handler might Discard the entire subgraph.
+
+The solution: **buffer at `complete_task`.** Before delivering, walk up from the target frame to check for a suspended Handle ancestor. If found, append the delivery to the continuation's `pending_deliveries`. If not, deliver normally.
+
+```rust
+fn complete_task(
+    &mut self,
+    task_id: TaskId,
+    value: Value,
+) -> Result<Option<Value>, CompleteError> {
+    let parent_ref = self.task_to_parent.remove(&task_id);
+    match parent_ref {
+        None => {
+            // Task was already cancelled (frame torn down by Discard/RestartBody).
+            // Silently drop the result.
+            return Ok(None);
+        }
+        Some(parent_ref) => {
+            // Check if the delivery target is inside a suspended body.
+            if let Some(handle_frame_id) = self.find_suspended_ancestor(parent_ref.frame_id()) {
+                let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
+                    unreachable!();
+                };
+                let continuation = handle_frame.continuation.as_mut()
+                    .expect("suspended Handle must have continuation");
+                continuation.pending_deliveries.push((parent_ref, value));
+                return Ok(None);
+            }
+
+            self.deliver(Some(parent_ref), value)
+        }
+    }
+}
+
+/// Walk up from `frame_id` looking for an ancestor Handle frame
+/// that has a suspended continuation. Returns the first one found
+/// (innermost suspended Handle).
+fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
+    let mut current = self.frames.get(frame_id.0)?.parent;
+    while let Some(parent_ref) = current {
+        let parent_id = parent_ref.frame_id();
+        if let FrameKind::Handle(handle_frame) = &self.frames[parent_id.0].kind {
+            if handle_frame.continuation.is_some() {
+                return Some(parent_id);
+            }
+        }
+        current = self.frames.get(parent_id.0)?.parent;
+    }
+    None
+}
+```
+
+**Why `complete_task` is the only entry point that needs this check.** All internal deliveries happen synchronously within an `advance` → `deliver` chain. External task completions are the only way work arrives asynchronously. While `resume_continuation` replays buffered deliveries, it does so synchronously — no external tasks can complete during replay.
+
+**Why handler completions aren't buffered.** The handler's Invoke has `parent = SingleChild { frame_id: handle_frame_id }`. `find_suspended_ancestor` walks up from the Handle frame's parent (whatever is above the Handle). The Handle itself is not checked — only ancestors above it. So handler task completions deliver normally to the Handle frame, triggering `handle_handler_completion`.
+
+**Cancelled tasks.** When `teardown_body` runs (on Discard or RestartBody), it removes body frames from the slab and removes their `task_to_parent` entries. If those tasks later complete, `complete_task` finds no entry and silently drops the result. No explicit cancel signal is sent to the external driver — tasks run to completion, and their results are ignored.
+
+### Concrete example
+
+```
+Handle(effect, handler,
+  Parallel(
+    Chain(Invoke(taskA), Perform(effect)),
+    Chain(Invoke(taskB), Perform(effect)),
+  )
+)
+```
+
+1. Advance: Parallel dispatches both branches. Chain A and Chain B created. Invoke A and B dispatch external tasks.
+2. Task A completes. `complete_task` → `find_suspended_ancestor(chain_a)` → no suspended Handle → deliver normally. Chain A trampolines → advance Perform → `bubble_effect` → `dispatch_to_handler`. Continuation stored. Handler starts.
+3. Task B completes. `complete_task` → `find_suspended_ancestor(chain_b)` → walks up to Parallel → walks up to Handle → Handle has `continuation.is_some()` → **buffer** `(chain_b_parent, taskB_result)` on continuation.
+4. Handler completes with Resume(V):
+   - `resume_continuation` delivers V to `perform_parent` (Parallel slot for branch A via Chain A's old parent). Chain A was removed by trampoline, so the parent is `ParallelChild { parallel_id, 0 }`. Parallel stores V in slot 0. Not all slots full → returns.
+   - Replay: deliver `(chain_b_parent, taskB_result)`. Chain B receives it, trampolines to Perform(effect). Perform fires `bubble_effect`. Handle has `continuation: None` (we cleared it). `dispatch_to_handler` runs normally. Second handler invocation starts.
+   - Second handler completes with Resume(W). Deliver W to Parallel slot 1 (via branch B's path). Both slots full. Parallel joins and delivers to Handle. Handle exits.
+5. **OR** handler completes with Discard(E):
+   - `discard_continuation` drops `pending_deliveries` (taskB's buffered result is gone).
+   - `teardown_body` removes Parallel, Chain B, and their `task_to_parent` entries.
+   - Handle exits with E.
 
 ## Handler completion (deliver to Handle frame)
 
@@ -487,22 +579,51 @@ pub enum CompleteError {
 
 ## Resume
 
-Reconnect the continuation. Deliver the value into it. Body continues from the suspension point.
+Reconnect the continuation. Deliver the Resume value, then replay any buffered async completions.
 
 ```rust
 fn resume_continuation(
     &mut self,
-    _handle_frame_id: FrameId,
+    handle_frame_id: FrameId,
     continuation: ContinuationRoot,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    // Deliver the value to where the Perform would have delivered.
-    // This wakes up the Chain/Parallel/etc. that was waiting for the Perform's result.
-    self.deliver(Some(continuation.perform_parent), value)
+    // 1. Deliver the Resume value to where the Perform would have delivered.
+    //    This wakes up the Chain/Parallel/etc. that was waiting for the Perform's result.
+    let result = self.deliver(Some(continuation.perform_parent), value)?;
+    if result.is_some() {
+        return Ok(result); // workflow completed
+    }
+
+    // 2. Replay buffered async completions in arrival order.
+    let mut pending = VecDeque::from(continuation.pending_deliveries);
+    while let Some((parent_ref, value)) = pending.pop_front() {
+        // Check if the body got re-suspended during replay.
+        // A replayed delivery may trampoline through a Chain into a Perform,
+        // which fires bubble_effect and stores a new continuation.
+        if let FrameKind::Handle(handle_frame) = &self.frames[handle_frame_id.0].kind {
+            if let Some(new_continuation) = &mut handle_frame.continuation {
+                // Transfer remaining deliveries to the new continuation.
+                for remaining in pending {
+                    new_continuation.pending_deliveries.push(remaining);
+                }
+                return Ok(None);
+            }
+        }
+
+        let result = self.deliver(Some(parent_ref), value)?;
+        if result.is_some() {
+            return Ok(result); // workflow completed
+        }
+    }
+
+    Ok(None)
 }
 ```
 
-That's it. The body subgraph is still intact (we never severed it). Delivering to `perform_parent` is identical to what would have happened if the Perform had been a normal Invoke that completed.
+The body subgraph is still intact (we never severed it). Delivering to `perform_parent` is identical to what would have happened if the Perform had been a normal Invoke that completed.
+
+**Re-suspension during replay.** A replayed delivery might cause a Chain to trampoline into a Perform, which fires bubble_effect and stores a new continuation on the same Handle. The replay loop detects this (`continuation.is_some()` again) and transfers all remaining pending deliveries to the new continuation. The handler for this second Perform will eventually complete and trigger another resume, which replays from where we left off.
 
 ## Discard
 
@@ -551,7 +672,7 @@ fn restart_body(
 
 ## teardown_body: cleaning up the body subgraph
 
-Removes all frames that are descendants of the Handle (in the body subgraph, not in the handler) and cancels their pending tasks.
+Removes all frames that are descendants of the Handle (in the body subgraph, not in the handler) and removes their `task_to_parent` entries. In-flight external tasks are not explicitly cancelled — they run to completion, and when they do, `complete_task` finds no `task_to_parent` entry and silently drops the result. The `pending_deliveries` buffer on the ContinuationRoot was already taken by the caller (Discard/RestartBody) and is dropped.
 
 ```rust
 fn teardown_body(&mut self, handle_frame_id: FrameId) {
@@ -573,7 +694,9 @@ fn teardown_body(&mut self, handle_frame_id: FrameId) {
         self.frames.remove(frame_id.0);
     }
 
-    // Cancel pending tasks whose parent is in the body subgraph.
+    // Remove task_to_parent entries for body tasks.
+    // In-flight tasks will complete later; complete_task silently drops
+    // results for unknown task_ids.
     let body_frame_set: std::collections::HashSet<FrameId> = body_frames.into_iter().collect();
     self.task_to_parent.retain(|_, parent| {
         match parent {
@@ -706,22 +829,29 @@ Tests use synthetic effects — trivial handler DAGs that exercise the substrate
 ```rust
 // Helper: create a handler DAG that always Resumes with a fixed value.
 // Handler receives { payload, state } but ignores both.
-// Returns { kind: "Resume", value: 42 }.
 fn always_resume_handler(value: Value) -> Action {
     Action::Invoke(InvokeAction {
         handler: HandlerKind::Builtin(BuiltinHandler {
             builtin: BuiltinKind::Constant {
-                value: json!({ "kind": "Resume", "value": value }),
+                value: json!({
+                    "kind": "Resume",
+                    "value": value,
+                    "state_update": { "kind": "Unchanged" },
+                }),
             },
         }),
     })
 }
 
-// Helper: handler that Resumes with the payload (echo).
-// pipe(pick("payload"), tag("Resume"))
+// Helper: handler that Resumes with the payload (echo) and Unchanged state.
+// Produces { kind: "Resume", value: <payload>, state_update: { kind: "Unchanged" } }
 fn echo_resume_handler() -> Action {
+    // pipe(pick("payload"), augment with state_update, tag("Resume"))
+    // In practice, a chain of builtins that extracts payload, wraps it with
+    // the Unchanged state_update, and tags as Resume.
     chain(
         invoke_builtin(BuiltinKind::ExtractField { value: json!("payload") }),
+        // ... wrap with state_update: Unchanged ...
         invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
     )
 }
@@ -737,19 +867,21 @@ fn always_discard_handler(value: Value) -> Action {
     })
 }
 
-// Helper: handler that always RestartBody with the payload.
+// Helper: handler that always RestartBody with the payload and Unchanged state.
 fn always_restart_body_handler() -> Action {
     chain(
         invoke_builtin(BuiltinKind::ExtractField { value: json!("payload") }),
+        // ... wrap with state_update: Unchanged ...
         invoke_builtin(BuiltinKind::Tag { value: json!("RestartBody") }),
     )
 }
 
-// Helper: handler that reads state and Resumes with it.
-// pipe(pick("state"), tag("Resume"))
+// Helper: handler that reads state and Resumes with it, Unchanged state.
+// pipe(pick("state"), wrap with Unchanged, tag("Resume"))
 fn resume_with_state_handler() -> Action {
     chain(
         invoke_builtin(BuiltinKind::ExtractField { value: json!("state") }),
+        // ... wrap with state_update: Unchanged ...
         invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
     )
 }
@@ -801,7 +933,7 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 
 7. **Handle + Perform in Parallel**: One parallel branch Performs, the other completes normally. After Resume, the Parallel joins both results.
 
-8. **Discard cleans up slab**: After Discard, verify that all body frames are removed from the slab and pending tasks in the body are cancelled (not present in `task_to_parent`).
+8. **Discard cleans up slab**: After Discard, verify that all body frames are removed from the slab and `task_to_parent` entries for body tasks are removed.
 
 9. **Multiple Performs (sequential)**: Body Performs twice in a Chain. First Perform is Resumed, then second Perform fires and is Resumed. Verify both resume correctly.
 
@@ -814,6 +946,26 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 13. **StateUpdate::Updated updates state**: Handler produces `{ kind: "Resume", value: V, state_update: { kind: "Updated", value: S } }`. Body Performs again. Second handler invocation receives state = S (not the original state). Verify state was updated.
 
 14. **Handle body completes without Performing**: Body runs to completion without any Perform. Handle exits normally, delivers body result to parent. No continuation to clean up.
+
+15. **Async completion during suspension (buffered, then resumed)**:
+    ```
+    Handle(effect, echo_resume_handler(),
+      Parallel(
+        Chain(Invoke(taskA), Perform(effect)),
+        Invoke(taskB),
+      )
+    )
+    ```
+    Advance → both tasks dispatched. Complete taskA → Chain trampolines → Perform fires → handler starts. Complete taskB → `find_suspended_ancestor` finds the Handle → buffered on continuation. Handler completes with Resume → deliver to Parallel slot 0 → replay buffered delivery → Parallel slot 1 filled → Parallel joins → Handle exits. Verify final output contains both results.
+
+16. **Async completion during suspension (buffered, then discarded)**:
+    Same tree as test 15, but handler produces Discard. Complete taskA → Perform → handler starts. Complete taskB → buffered. Handler completes with Discard → `discard_continuation` drops pending_deliveries → `teardown_body` removes frames and task entries → Handle exits with discard value. Verify Parallel frame and Chain B are removed from slab. Verify buffered delivery is dropped.
+
+17. **Cancelled task completion (arrives after teardown)**: Same tree, but taskB completes AFTER discard has torn down the body. `complete_task` finds no `task_to_parent` entry → silently ignored. Verify no panic.
+
+18. **Re-suspension during replay**: Two parallel branches, both with `Chain(Invoke, Perform(effect))`. TaskA completes → Perform A fires → handler starts. TaskB completes → buffered. Handler Resumes → deliver to branch A's Perform parent → replay buffered delivery → Chain B trampolines → Perform B fires → **new continuation stored**. Verify the second handler receives a fresh dispatch. Second handler Resumes → body completes normally.
+
+19. **Multiple buffered deliveries**: Three parallel branches with Invokes. Branch A Performs. Branches B and C complete while handler runs. Both buffered. On Resume, both replayed in arrival order. Verify FIFO ordering.
 
 ### Integration tests
 
