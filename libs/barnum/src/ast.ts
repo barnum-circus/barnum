@@ -9,7 +9,9 @@ export type Action =
   | AllAction
   | BranchAction
   | LoopAction
-  | StepAction;
+  | StepAction
+  | HandleAction
+  | PerformAction;
 
 export interface InvokeAction {
   kind: "Invoke";
@@ -45,6 +47,18 @@ export interface LoopAction {
 export interface StepAction {
   kind: "Step";
   step: StepRef;
+}
+
+export interface HandleAction {
+  kind: "Handle";
+  effect_id: number;
+  body: Action;
+  handler: Action;
+}
+
+export interface PerformAction {
+  kind: "Perform";
+  effect_id: number;
 }
 
 export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
@@ -558,6 +572,7 @@ export type ValidateStepRefs<
 export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
 export { all } from "./all.js";
+export { bind, bindInput, type VarRef, type InferVarRefs, resetEffectIdCounter } from "./bind.js";
 
 export function forEach<In, Out, R extends string = never>(
   action: Pipeable<In, Out, R>,
