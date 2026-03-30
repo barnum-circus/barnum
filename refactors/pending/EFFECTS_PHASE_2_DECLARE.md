@@ -82,19 +82,11 @@ When a Perform fires, the engine calls the handler with `{ payload, state }`. Fo
 
 ```ts
 function readVar(n: number): Action {
-  return {
-    kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "state" } } },
-    rest: {
-      kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
-      rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
-    },
-  };
+  return pipe(extractField("state"), extractIndex(n), tag("Resume")) as Action;
 }
 ```
 
-Desugared: `Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))`.
+Type parameters on `extractField`, `extractIndex`, and `tag` are elided — this is an internal function, not user-facing. The expanded AST is `Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))`.
 
 ### `VarRef<TValue>` — typed reference to a bound value
 
@@ -136,17 +128,22 @@ function declare<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
   // 3. Invoke the body callback with the VarRefs.
   const bodyAction = body(varRefs as any);
 
-  // 4. Compile to: Chain(All(...bindings, Identity), nestedHandles)
-  const allActions = [...bindings, identity()] as Action[];
+  // 4. Build nested Handles from inside out.
+  //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-
-  // 5. Build nested Handles from inside out.
-  let inner: Action = { kind: "Chain", first: extractIndex(pipelineInputIndex), rest: bodyAction as Action };
+  let inner = chain(extractIndex(pipelineInputIndex), bodyAction);
   for (let i = effectIds.length - 1; i >= 0; i--) {
-    inner = { kind: "Handle", effectId: effectIds[i], handler: readVar(i), body: inner };
+    // Handle and Perform are Phase 1 AST nodes — no constructor yet.
+    inner = typedAction({
+      kind: "Handle",
+      effectId: effectIds[i],
+      handler: readVar(i),
+      body: inner as Action,
+    });
   }
 
-  return typedAction({ kind: "Chain", first: { kind: "All", actions: allActions }, rest: inner });
+  // 5. All(...bindings, identity()) → nested Handles
+  return chain(all(...bindings, identity()), inner);
 }
 ```
 
@@ -180,18 +177,21 @@ The `ImplementAndReview` step is the primary beneficiary. It currently uses `tap
 ### Before (current)
 
 ```ts
-type Ctx = Refactor & { worktreePath: string; branch: string };
+type WorktreeEnv = Refactor & { worktreePath: string; branch: string };
 
 ImplementAndReview: pipe(
-  // Side effects: tap preserves Ctx, pick narrows for invariance
-  tap(pipe(pick<Ctx, ["worktreePath", "description"]>("worktreePath", "description"), implement)),
-  tap(pipe(pick<Ctx, ["worktreePath"]>("worktreePath"), commit)),
+  // Side effects: tap preserves WorktreeEnv, pick narrows for invariance
+  tap(pipe(
+    pick<WorktreeEnv, ["worktreePath", "description"]>("worktreePath", "description"),
+    implement,
+  )),
+  tap(pipe(pick<WorktreeEnv, ["worktreePath"]>("worktreePath"), commit)),
 
   // Type-check/fix cycle
-  tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
+  tap<WorktreeEnv, "TypeCheck">(stepRef("TypeCheck")),
 
   // Judge/revise loop
-  tap<Ctx, "TypeCheck">(
+  tap<WorktreeEnv, "TypeCheck">(
     loop(
       pipe(drop(), judgeRefactor, classifyJudgment).branch({
         NeedsWork: pipe(applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>()),
@@ -200,9 +200,9 @@ ImplementAndReview: pipe(
     ),
   ),
 
-  // Create PR: augment merges { prUrl } back into Ctx
-  augment<Ctx, { prUrl: string }>(pipe(
-    pick<Ctx, ["branch", "description"]>("branch", "description"),
+  // Create PR: augment merges { prUrl } back into WorktreeEnv
+  augment<WorktreeEnv, { prUrl: string }>(pipe(
+    pick<WorktreeEnv, ["branch", "description"]>("branch", "description"),
     preparePRInput,
     createPR,
   )),
@@ -210,8 +210,8 @@ ImplementAndReview: pipe(
 ```
 
 **Problems:**
-- Every `tap` needs an explicit `<Ctx>` type annotation to prevent narrowing.
-- `augment` needs both `<Ctx, { prUrl: string }>` type parameters.
+- Every `tap` needs an explicit `<WorktreeEnv>` type annotation to prevent narrowing.
+- `augment` needs both `<WorktreeEnv, { prUrl: string }>` type parameters.
 - `pick` duplicates field names as both type parameters and string arguments.
 - The intent (preserve context, run side effect) is obscured by the machinery.
 
@@ -219,14 +219,19 @@ ImplementAndReview: pipe(
 
 ```ts
 ImplementAndReview: declare(
-  [identity<Ctx>()],    // bind the full context as a VarRef
-  ([ctx]) => pipe(
-    // Side effects: ctx VarRef provides context, .drop() discards output
-    pipe(ctx, pick("worktreePath", "description"), implement).drop(),
-    pipe(ctx, pick("worktreePath"), commit).drop(),
+  // Bind the full worktree environment as a VarRef.
+  // Note: the explicit identity<WorktreeEnv>() annotation is needed today
+  // because handler types aren't statically declared. Once we add static
+  // handler type declarations, declare will infer the type from context
+  // and this annotation disappears.
+  [identity<WorktreeEnv>()],
+  ([env]) => pipe(
+    // Side effects: env VarRef provides context, .drop() discards output
+    pipe(env, pick("worktreePath", "description"), implement).drop(),
+    pipe(env, pick("worktreePath"), commit).drop(),
 
     // Type-check/fix cycle
-    pipe(ctx, pick("worktreePath"), stepRef("TypeCheck")).drop(),
+    pipe(env, pick("worktreePath"), stepRef("TypeCheck")).drop(),
 
     // Judge/revise loop
     loop(
@@ -236,17 +241,17 @@ ImplementAndReview: declare(
       }),
     ).drop(),
 
-    // Create PR — no augment needed, ctx provides context independently
-    pipe(ctx, pick("branch", "description"), preparePRInput, createPR),
+    // Create PR — no augment needed, env provides context independently
+    pipe(env, pick("branch", "description"), preparePRInput, createPR),
   ),
 ),
 ```
 
 **What changed:**
-- `tap(X)` → `X.drop()` — no `tap` needed to preserve context; `ctx` VarRef gives it back anytime.
-- `augment<Ctx, { prUrl: string }>(...)` → just `pipe(ctx, ...)` — no merge-back step; the VarRef is always available.
-- `<Ctx>` type annotations on `tap` disappear — `ctx` carries the type.
-- `pick` no longer needs explicit type parameters — `ctx` produces `Ctx`, so `pick("worktreePath")` infers from the pipeline.
+- `tap(X)` → `X.drop()` — no `tap` needed to preserve context; `env` VarRef gives it back anytime.
+- `augment<WorktreeEnv, { prUrl: string }>(...)` → just `pipe(env, ...)` — no merge-back step; the VarRef is always available.
+- `<WorktreeEnv>` type annotations on `tap` disappear — `env` carries the type.
+- `pick` no longer needs explicit type parameters — `env` produces `WorktreeEnv`, so `pick("worktreePath")` infers from the pipeline.
 - `pick` is still used for invariance narrowing (serialization boundaries require exact types).
 
 ### convert-folder-to-ts
