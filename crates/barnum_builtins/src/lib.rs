@@ -123,6 +123,10 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
             Ok(arr.get(index).cloned().unwrap_or(Value::Null))
         }
 
+        BuiltinKind::TagContinue => Ok(json!({ "kind": "Continue", "value": input })),
+
+        BuiltinKind::TagBreak => Ok(json!({ "kind": "Break", "value": input })),
+
         BuiltinKind::TagResume => Ok(json!({ "kind": "Resume", "value": input })),
 
         BuiltinKind::TagDiscard => Ok(json!({ "kind": "Discard", "value": input })),
@@ -347,6 +351,18 @@ mod tests {
         let input = json!({"name": "Alice", "age": 30});
         let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input);
         assert_eq!(result.unwrap(), json!({}));
+    }
+
+    #[test]
+    fn tag_continue_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagContinue, &json!(5));
+        assert_eq!(result.unwrap(), json!({"kind": "Continue", "value": 5}));
+    }
+
+    #[test]
+    fn tag_break_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done"));
+        assert_eq!(result.unwrap(), json!({"kind": "Break", "value": "done"}),);
     }
 
     #[test]
