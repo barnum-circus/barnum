@@ -67,9 +67,9 @@ N bindings produce N nested Handle frames. This is the natural representation of
 
 An earlier design used one shared effectId with the binding index as payload and an `ExtractDynamic` builtin to do runtime index lookup into the state tuple. This is dynamically typed — `extractDynamic([index, [User, Config]])` returns `unknown` because the index is a runtime value and each element has a different type. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved.
 
-### Phase 1 implication
+### Prerequisite: Handle state_init
 
-The per-binding-effectId design requires Handle to support a `state_init` expression that extracts the initial state from the pipeline value. Phase 1's Handle mechanism must support this — the Handle frame's state is not the raw pipeline value, but the result of evaluating `state_init` on it. This is a detail to address during Phase 1 implementation.
+The per-binding-effectId design requires Handle to support a `state_init` expression. See `HANDLE_STATE_INIT.md` — this can be implemented independently before Phase 2.
 
 ## VarRef: generic over the bound type
 
@@ -162,6 +162,5 @@ The per-binding-effectId design uses only existing builtins (`ExtractIndex`, `Ex
 1. `declare()` TypeScript function (concurrent bindings only, per-binding effectId)
 2. VarRef TypedAction construction (Perform with binding-specific effectId, no payload)
 3. Nested Handle compilation (one Handle per binding, trivial handler)
-4. Phase 1 support for `state_init` in Handle (extract initial state from pipeline value)
-5. Tests per above
-6. Demo migration
+4. Tests per above
+5. Demo migration
