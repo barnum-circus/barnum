@@ -258,10 +258,10 @@ pub enum AdvanceError {
 
 ## bubble_effect
 
-Called during advance when Perform executes (and during sweep_stash when retrying stashed effects). Walks parent pointers to find a Handle matching the effect ID. At each Handle:
+Called during advance when Perform executes (and during sweep_stash when retrying stashed effects). Two phases:
 
-1. `is_blocked_by_handle` — am I on the wrong side? If so, stash.
-2. Match effect_id — if this Handle matches, it's guaranteed free (if it were suspended, step 1 would have caught body child + suspended). Dispatch.
+1. `find_blocking_ancestor` — is the starting frame gone or blocked? If so, consume (drop) or stash.
+2. `find_and_dispatch_handler` — walk parent pointers to find a Handle matching the effect ID and dispatch.
 
 Handler edges can't match: the handler doesn't have lexical access to its own effect_id (enforced by TypeScript builder, see "Static analysis" section). If violated, the assert catches it.
 
@@ -286,19 +286,10 @@ fn bubble_effect(
     effect_id: EffectId,
     payload: Value,
 ) -> Result<StashOutcome, AdvanceError> {
-    let mut current: Option<ParentRef> = Some(starting_parent);
-
-    while let Some(parent_ref) = current {
-        let parent_id = parent_ref.frame_id();
-
-        // Frame may have been torn down (stashed effect retried after teardown).
-        let Some(parent) = self.frames.get(parent_id) else {
-            return Ok(StashOutcome::Consumed); // frame tree gone, silently drop
-        };
-
-        // Same blocking check as deliver_or_stash. If we're on the wrong
-        // side of any Handle on the way up, stash.
-        if Self::is_blocked_by_handle(parent_ref, &parent.kind) {
+    // First: can this effect proceed at all?
+    match self.find_blocking_ancestor(starting_parent.frame_id()) {
+        AncestorCheck::FrameGone => return Ok(StashOutcome::Consumed),
+        AncestorCheck::Blocked(_) => {
             self.stashed_items.push(StashedItem::Effect {
                 starting_parent,
                 effect_id,
@@ -306,15 +297,33 @@ fn bubble_effect(
             });
             return Ok(StashOutcome::Stashed);
         }
+        AncestorCheck::Clear => {}
+    }
+
+    // Not blocked — walk the parent chain to find the matching Handle.
+    // All ancestors are guaranteed present and unblocked.
+    self.find_and_dispatch_handler(starting_parent, effect_id, payload)
+}
+
+/// Walks the parent chain to find a Handle matching `effect_id` and dispatches.
+/// Caller must ensure `find_blocking_ancestor` returned `Clear` first.
+fn find_and_dispatch_handler(
+    &mut self,
+    starting_parent: ParentRef,
+    effect_id: EffectId,
+    payload: Value,
+) -> Result<StashOutcome, AdvanceError> {
+    let mut current: Option<ParentRef> = Some(starting_parent);
+
+    while let Some(parent_ref) = current {
+        let parent_id = parent_ref.frame_id();
+        let parent = &self.frames[parent_id]; // safe: find_blocking_ancestor confirmed present
 
         if let FrameKind::Handle(handle_frame) = &parent.kind {
             if handle_frame.effect_id == effect_id {
-                // Guaranteed free: if this Handle were suspended,
-                // is_blocked_by_handle (body child + suspended) would
-                // have stashed above.
                 assert!(
                     handle_frame.continuation.is_none(),
-                    "effect matched a suspended Handle — is_blocked_by_handle should have caught this"
+                    "effect matched a suspended Handle — find_blocking_ancestor should have caught this"
                 );
 
                 let handler = handle_frame.handler;
@@ -333,11 +342,9 @@ fn bubble_effect(
 }
 ```
 
-O(depth of frame tree). Chain, All, Branch, ForEach are invisible — the walk passes through them. `is_blocked_by_handle` is the only guard needed — it catches body-side concurrent Performs (body child + suspended = blocked) and any stale handler events (handler child + free = blocked).
+O(2 × depth of frame tree) — two walks: `find_blocking_ancestor` then `find_and_dispatch_handler`. These could be fused into a single pass, but the separation keeps `find_blocking_ancestor` as the single source of truth for the "can this proceed?" check, shared with `deliver_or_stash`. Depth is bounded by nesting level, not data size, so the constant factor is negligible.
 
 ## dispatch_to_handler
-
-`bubble_effect` already holds an immutable reference to the HandleFrame when it finds a match. It extracts `handler` and `state` from that reference, then passes them to `dispatch_to_handler`. No re-lookup needed — `dispatch_to_handler` just sets the continuation and advances the handler.
 
 ```rust
 fn dispatch_to_handler(
@@ -424,17 +431,16 @@ fn deliver_or_stash(
     parent_ref: ParentRef,
     value: Value,
 ) -> Result<(Option<Value>, StashOutcome), CompleteError> {
-    // Target frame was torn down (Discard/RestartBody removed it).
-    if self.frames.get(parent_ref.frame_id()).is_none() {
-        return Ok((None, StashOutcome::Consumed));
-    }
-
-    if self.find_blocking_ancestor(parent_ref.frame_id()).is_some() {
-        self.stashed_items.push(StashedItem::Delivery { parent_ref, value });
-        Ok((None, StashOutcome::Stashed))
-    } else {
-        let result = self.deliver(Some(parent_ref), value)?;
-        Ok((result, StashOutcome::Consumed))
+    match self.find_blocking_ancestor(parent_ref.frame_id()) {
+        AncestorCheck::FrameGone => Ok((None, StashOutcome::Consumed)),
+        AncestorCheck::Blocked(_) => {
+            self.stashed_items.push(StashedItem::Delivery { parent_ref, value });
+            Ok((None, StashOutcome::Stashed))
+        }
+        AncestorCheck::Clear => {
+            let result = self.deliver(Some(parent_ref), value)?;
+            Ok((result, StashOutcome::Consumed))
+        }
     }
 }
 ```
@@ -542,20 +548,36 @@ No special cases. The fourth row (Handler + free) is unreachable today — `disp
 
 ### find_blocking_ancestor
 
-Walks the parent chain, checking `is_blocked_by_handle` at each step. Returns the first Handle that blocks the event. If a frame is missing (torn down), the `?` terminates the walk.
+Walks the parent chain, checking `is_blocked_by_handle` at each step. Single source of truth for the "frame-gone or blocked?" question — both `deliver_or_stash` and `bubble_effect` delegate to this.
 
 ```rust
-fn find_blocking_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
-    let mut current = self.frames.get(frame_id)?.parent;
+/// Result of walking the parent chain looking for a blocking Handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AncestorCheck {
+    /// No blocking ancestor found. The event can proceed.
+    Clear,
+    /// A suspended Handle blocks this event.
+    Blocked(FrameId),
+    /// A frame in the ancestor chain was torn down (stale reference).
+    FrameGone,
+}
+
+fn find_blocking_ancestor(&self, frame_id: FrameId) -> AncestorCheck {
+    let Some(frame) = self.frames.get(frame_id) else {
+        return AncestorCheck::FrameGone;
+    };
+    let mut current = frame.parent;
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
-        let frame = self.frames.get(parent_id)?;
-        if Self::is_blocked_by_handle(parent_ref, &frame.kind) {
-            return Some(parent_id);
+        let Some(parent) = self.frames.get(parent_id) else {
+            return AncestorCheck::FrameGone;
+        };
+        if Self::is_blocked_by_handle(parent_ref, &parent.kind) {
+            return AncestorCheck::Blocked(parent_id);
         }
-        current = frame.parent;
+        current = parent.parent;
     }
-    None
+    AncestorCheck::Clear
 }
 ```
 
@@ -1008,17 +1030,18 @@ fn resume_with_state_handler() -> Action {
 6. `HandleFrame` struct, `FrameKind::Handle`
 7. `HandleSide` enum, `ParentRef::Handle { frame_id, side }` variant
 8. `StashedItem` enum (Delivery + Effect)
-9. `bubble_effect` with Handle-busy stashing (called from advance, not complete_task)
-10. `dispatch_to_handler`
-11. `HandlerOutput` and `StateUpdate` serde enums
-12. `handle_handler_completion`, `apply_state_update`
-13. `resume_continuation`, `discard_continuation`, `restart_body`
-14. `teardown_body`, `is_descendant_of`
-15. `is_blocked_by_handle`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task`, `sweep_stash`, `process_stashed_item`
-16. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
-17. `FlatConfig::handle_body` accessor
-18. Updated `deliver` for `Handle { Body }` and `Handle { Handler }` arms
-19. Tests per above
+9. `StashOutcome` enum, `AncestorCheck` enum
+10. `bubble_effect`, `find_and_dispatch_handler` (called from advance, not complete_task)
+11. `dispatch_to_handler`
+12. `HandlerOutput` and `StateUpdate` serde enums
+13. `handle_handler_completion`, `apply_state_update`
+14. `resume_continuation`, `discard_continuation`, `restart_body`
+15. `teardown_body`, `is_descendant_of`
+16. `is_blocked_by_handle`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task`, `sweep_stash`, `process_stashed_item`
+17. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
+18. `FlatConfig::handle_body` accessor
+19. Updated `deliver` for `Handle { Body }` and `Handle { Handler }` arms
+20. Tests per above
 
 ## Out of scope
 
