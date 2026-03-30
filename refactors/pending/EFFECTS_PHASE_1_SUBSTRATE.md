@@ -485,6 +485,8 @@ fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
             if let Some(value) = result {
                 return Ok(Some(value)); // workflow done, remaining items irrelevant
             }
+            // Stashed items are already back in self.stashed_items
+            // (process_stashed_item pushes them via deliver_or_stash).
             if outcome == StashOutcome::Consumed {
                 any_consumed = true;
                 self.stashed_items.extend(iter); // put unprocessed items back
