@@ -310,8 +310,8 @@ export function augment<
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
-export function tap<TInput extends Record<string, unknown>, TOutput = any, TRefs extends string = never>(
-  action: Pipeable<TInput, TOutput, TRefs>,
+export function tap<TInput extends Record<string, unknown>, TRefs extends string = never>(
+  action: Pipeable<TInput, any, TRefs>,
 ): TypedAction<TInput, TInput, TRefs> {
   // Build AST directly — internal plumbing (action → constant → augment)
   // can't go through typed chain/augment with invariant phantom fields.

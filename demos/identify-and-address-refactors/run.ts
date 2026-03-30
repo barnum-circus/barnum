@@ -102,11 +102,11 @@ await workflowBuilder()
       tap(pipe(pick<Ctx, ["worktreePath"]>("worktreePath"), commit)),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      tap<Ctx, any, "TypeCheck">(stepRef("TypeCheck")),
+      tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
       // drop() discards the tap context — judgeRefactor takes no input.
-      tap<Ctx, any, "TypeCheck">(
+      tap<Ctx, "TypeCheck">(
         loop(
           pipe(drop(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
