@@ -318,11 +318,8 @@ fn bubble_effect(
                     "effect matched a suspended Handle — is_blocked_by_handle should have caught this"
                 );
 
-                let handler = handle_frame.handler;
-                let state = handle_frame.state.clone();
-
                 self.dispatch_to_handler(
-                    parent_id, starting_parent, payload, handler, state,
+                    parent_id, starting_parent, payload,
                 )?;
                 return Ok(None);
             }
@@ -345,22 +342,17 @@ fn dispatch_to_handler(
     handle_frame_id: FrameId,
     perform_parent: ParentRef,
     payload: Value,
-    handler: ActionId,
-    state: Value,
 ) -> Result<(), AdvanceError> {
-    // Store the continuation. Re-borrow the Handle frame mutably
-    // (bubble_effect's immutable borrow was dropped before this call).
     let handle_frame = self.handle_frame_mut(handle_frame_id);
     handle_frame.continuation = Some(ContinuationRoot { perform_parent });
+    let handler = handle_frame.handler;
+    let state = handle_frame.state.clone();
 
-    // Construct handler input.
     let handler_input = serde_json::json!({
         "payload": payload,
         "state": state,
     });
 
-    // Advance handler as HandlerChild. is_blocked_by_handle sees
-    // HandlerChild + suspended = not blocked, so handler events proceed.
     self.advance(
         handler,
         handler_input,
