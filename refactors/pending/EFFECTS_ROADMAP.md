@@ -148,8 +148,8 @@ function tryCatch(bodyCallback, recovery) {
 u32_newtype!(EffectId);
 
 pub enum FlatAction {
-    Handle { effect: EffectId, handler: ActionId, body: ActionId },
-    Perform { effect: EffectId },
+    Handle { effect_id: EffectId, handler: ActionId, body: ActionId },
+    Perform { effect_id: EffectId },
 }
 ```
 

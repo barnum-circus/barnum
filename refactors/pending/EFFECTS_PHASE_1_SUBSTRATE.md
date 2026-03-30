@@ -13,14 +13,14 @@ None. This is the foundation.
 ```ts
 export interface HandleAction {
   kind: "Handle";
-  effect: number;     // EffectId (opaque u32)
+  effect_id: number;  // EffectId (opaque u32)
   handler: Action;    // the handler DAG to run when the effect fires
   body: Action;       // the body to execute within this Handle's scope
 }
 
 export interface PerformAction {
   kind: "Perform";
-  effect: number;     // must match some enclosing Handle's effect
+  effect_id: number;  // must match some enclosing Handle's effect_id
 }
 ```
 
@@ -99,13 +99,13 @@ pub enum FlatAction<T> {
     // ... existing variants (Invoke, Chain, Parallel, ForEach, Branch, Loop, Step) ...
 
     Handle {
-        effect: EffectId,
+        effect_id: EffectId,
         handler: ActionId,
         body: ActionId,
     },
 
     Perform {
-        effect: EffectId,
+        effect_id: EffectId,
     },
 }
 ```
@@ -114,7 +114,7 @@ Handle is a 1-entry action (no child slots needed — handler and body are Actio
 
 Both need to be added to `FlatAction::try_map_target` (trivial — they pass through unchanged like Invoke/Chain/etc.).
 
-The 8-byte `FlatEntry` size invariant must still hold. Handle has three `u32` fields (effect, handler, body) = 12 bytes + discriminant. This BREAKS the 8-byte constraint. Options:
+The 8-byte `FlatEntry` size invariant must still hold. Handle has three `u32` fields (effect_id, handler, body) = 12 bytes + discriminant. This BREAKS the 8-byte constraint. Options:
 
 1. Relax the constraint to 16 bytes.
 2. Store handler in a side table (like how Chain stores `first` as a child slot).
@@ -133,7 +133,7 @@ pub enum FrameKind {
     // ... existing variants (Chain, Parallel, ForEach, Loop) ...
 
     Handle {
-        effect: EffectId,
+        effect_id: EffectId,
         handler: ActionId,
         body: ActionId,
         /// Opaque state. Initialized from the Handle's input value.
@@ -163,11 +163,11 @@ One Handle, one effect, one handler, one continuation. All singular. At most one
 New match arms in `WorkflowState::advance`:
 
 ```rust
-FlatAction::Handle { effect, handler, body } => {
+FlatAction::Handle { effect_id, handler, body } => {
     let frame_id = self.insert_frame(Frame {
         parent,
         kind: FrameKind::Handle {
-            effect,
+            effect_id,
             handler,
             body,
             state: value.clone(),       // input = initial state
@@ -177,8 +177,8 @@ FlatAction::Handle { effect, handler, body } => {
     self.advance(body, value, Some(ParentRef::SingleChild { frame_id }))?;
 }
 
-FlatAction::Perform { effect } => {
-    self.bubble_effect(parent, effect, value)?;
+FlatAction::Perform { effect_id } => {
+    self.bubble_effect(parent, effect_id, value)?;
 }
 ```
 
@@ -191,23 +191,23 @@ pub enum AdvanceError {
     // ... existing variants ...
 
     /// A Perform fired but no enclosing Handle intercepts this effect.
-    #[error("unhandled effect: {effect}")]
+    #[error("unhandled effect: {effect_id}")]
     UnhandledEffect {
         /// The effect ID that was not intercepted.
-        effect: EffectId,
+        effect_id: EffectId,
     },
 }
 ```
 
 ## bubble_effect: the core traversal
 
-When a Perform is evaluated, the scheduler walks up parent pointers looking for a Handle frame whose `effect` field matches.
+When a Perform is evaluated, the scheduler walks up parent pointers looking for a Handle frame whose `effect_id` field matches.
 
 ```rust
 fn bubble_effect(
     &mut self,
     starting_parent: Option<ParentRef>,
-    effect: EffectId,
+    effect_id: EffectId,
     payload: Value,
 ) -> Result<(), AdvanceError> {
     let mut current = starting_parent;
@@ -216,8 +216,8 @@ fn bubble_effect(
         let parent_id = parent_ref.frame_id();
         let parent = &self.frames[parent_id.0];
 
-        if let FrameKind::Handle { effect: handled_effect, .. } = &parent.kind {
-            if *handled_effect == effect {
+        if let FrameKind::Handle { effect_id: handled_effect_id, .. } = &parent.kind {
+            if *handled_effect_id == effect_id {
                 return self.dispatch_to_handler(parent_id, starting_parent, payload);
             }
         }
@@ -225,7 +225,7 @@ fn bubble_effect(
         current = parent.parent;
     }
 
-    Err(AdvanceError::UnhandledEffect { effect })
+    Err(AdvanceError::UnhandledEffect { effect_id })
 }
 ```
 
@@ -504,13 +504,13 @@ pub enum Action {
 }
 
 pub struct HandleAction {
-    pub effect: EffectId,
+    pub effect_id: EffectId,
     pub handler: Box<Action>,
     pub body: Box<Action>,
 }
 
 pub struct PerformAction {
-    pub effect: EffectId,
+    pub effect_id: EffectId,
 }
 ```
 
@@ -519,18 +519,18 @@ pub struct PerformAction {
 New match arms in `UnresolvedFlatConfig::flatten_action_at`:
 
 ```rust
-Action::Handle(HandleAction { effect, handler, body }) => {
+Action::Handle(HandleAction { effect_id, handler, body }) => {
     let handler_id = self.flatten_action(*handler, workflow_root)?;
     let body_id = self.flatten_action(*body, workflow_root)?;
     FlatAction::Handle {
-        effect,
+        effect_id,
         handler: handler_id,
         body: body_id,
     }
 }
 
-Action::Perform(PerformAction { effect }) => {
-    FlatAction::Perform { effect }
+Action::Perform(PerformAction { effect_id }) => {
+    FlatAction::Perform { effect_id }
 }
 ```
 
@@ -557,8 +557,8 @@ fn fill_child_slot(&mut self, action: Action, ...) {
 ### try_map_target addition
 
 ```rust
-FlatAction::Handle { effect, handler, body } => FlatAction::Handle { effect, handler, body },
-FlatAction::Perform { effect } => FlatAction::Perform { effect },
+FlatAction::Handle { effect_id, handler, body } => FlatAction::Handle { effect_id, handler, body },
+FlatAction::Perform { effect_id } => FlatAction::Perform { effect_id },
 ```
 
 Both pass through unchanged (no Step target to resolve).
