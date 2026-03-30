@@ -270,10 +270,10 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 
 - `EffectId(u16)`: opaque effect routing key. `u16` preserves 8-byte `FlatEntry` constraint.
 - New flat action types: `FlatAction::Handle` (2-entry: body in child slot, like Chain), `FlatAction::Perform` (1-entry leaf). 8-byte `FlatEntry` constraint preserved.
-- New frame kind: `FrameKind::Handle` with fields: `effect_id`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
+- New frame kind: `FrameKind::Handle` with fields: `effect_id`, `handler`, `body`, `state: Value`, `continuation: Option<ParentRef>`
 - **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes `state_update: StateUpdate` (`Unchanged` or `Updated(Value)`).
 - `bubble_effect()`: walks parent pointers to find matching Handle. O(depth).
-- `dispatch_to_handler()`: stores `ContinuationRoot`, constructs `{ payload, state }`, advances handler DAG as child of Handle frame. Body subgraph is naturally frozen (Perform point is stuck) — no parent pointer severing needed.
+- `dispatch_to_handler()`: stores the `ParentRef` continuation, constructs `{ payload, state }`, advances handler DAG as child of Handle frame. Body subgraph is naturally frozen (Perform point is stuck) — no parent pointer severing needed.
 - `handle_handler_completion()`: parses `{ kind, value, state_update }`, dispatches on `ContinuationOp` (Resume / Discard / RestartBody)
 - `resume_continuation()`: delivers value to the Perform's original parent
 - `discard_continuation()`: tears down body, Handle exits with value
