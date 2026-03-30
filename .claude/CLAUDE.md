@@ -27,7 +27,7 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 
 ## Voice-to-text corrections
 
-- "pull" → "pool", "Working Deer" → "working dir", "troop"/"troops" → "troupe", "Sanders" → "serde"
+- "pull" → "pool", "Working Deer" → "working dir", "troop"/"troops" → "troupe", "Sanders" → "serde", "path" → "past", "parse" → "past"
 
 ## Rules
 
@@ -52,6 +52,7 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 4. **Impossible states are unrepresentable.**
 5. **Signatures are maximally narrow.** Only accept what callers pass. Only return what can actually be produced.
 6. **Flaky tests are unacceptable.** Never increase timeouts.
+7. **Prefer two-variant enums over booleans.** Booleans are opaque at call sites and in return types. Use a named enum with two variants instead (e.g., `Consumed`/`Stashed` not `true`/`false`).
 
 ## Generated artifacts
 
