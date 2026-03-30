@@ -194,7 +194,7 @@ At most one continuation per Handle at a time. The body is synchronously frozen 
 
 The handler DAG runs as a child of the Handle frame. Its frames are descendants of the Handle in the slab. When a task inside the handler completes, `find_blocking_ancestor` would walk up and find this Handle's continuation is Some — stashing the handler's own task completion. Deadlock: the handler resolves the suspension, but its completions are stashed against the very suspension it's resolving.
 
-Fix: a new ParentRef variant for handler children. `is_from_inactive_side` checks the direction × state combination: a HandlerChild reaching a suspended Handle is on the active side (handler is running), so `find_blocking_ancestor` passes through. A body child reaching a suspended Handle is on the inactive side, so it blocks.
+Fix: a new ParentRef variant for handler children. `is_blocked_by_handle` checks the direction × state combination: a HandlerChild reaching a suspended Handle is not blocked (handler is running), so `find_blocking_ancestor` passes through. A body child reaching a suspended Handle is blocked (body can't progress).
 
 ```rust
 pub enum ParentRef {
@@ -281,7 +281,7 @@ fn bubble_effect(
     starting_parent: ParentRef,
     effect_id: EffectId,
     payload: Value,
-) -> Result<(), AdvanceError> {
+) -> Result<Option<Value>, CompleteError> {
     let mut current: Option<ParentRef> = Some(starting_parent);
 
     while let Some(parent_ref) = current {
@@ -289,7 +289,7 @@ fn bubble_effect(
 
         // Frame may have been torn down (stashed effect retried after teardown).
         let Some(parent) = self.frames.get(parent_id) else {
-            return Ok(()); // frame tree gone, silently drop
+            return Ok(None); // frame tree gone, silently drop
         };
 
         if let FrameKind::Handle(handle_frame) = &parent.kind {
@@ -302,23 +302,24 @@ fn bubble_effect(
                         effect_id,
                         payload,
                     });
-                    return Ok(());
+                    return Ok(None);
                 }
 
                 // Extract handler and state before dropping the immutable borrow.
                 let handler = handle_frame.handler;
                 let state = handle_frame.state.clone();
 
-                return self.dispatch_to_handler(
+                self.dispatch_to_handler(
                     parent_id, starting_parent, payload, handler, state,
-                );
+                )?;
+                return Ok(None);
             }
         }
 
         current = parent.parent;
     }
 
-    Err(AdvanceError::UnhandledEffect { effect_id })
+    Err(AdvanceError::UnhandledEffect { effect_id }.into())
 }
 ```
 
@@ -348,8 +349,8 @@ fn dispatch_to_handler(
         "state": state,
     });
 
-    // Advance handler as HandlerChild. is_from_inactive_side sees
-    // HandlerChild + suspended = active side, so handler events proceed.
+    // Advance handler as HandlerChild. is_blocked_by_handle sees
+    // HandlerChild + suspended = not blocked, so handler events proceed.
     self.advance(
         handler,
         handler_input,
@@ -464,14 +465,12 @@ fn complete_task(
 
     match origin {
         TaskOrigin::Perform { starting_parent, effect_id } => {
-            self.bubble_effect(starting_parent, effect_id, value)?;
-            Ok(None)
+            self.bubble_effect(starting_parent, effect_id, value)
         }
         TaskOrigin::Invoke { parent: Some(parent_ref) } => {
             self.deliver_or_stash(parent_ref, value)
         }
         TaskOrigin::Invoke { parent: None } => {
-            // Top-level workflow completed.
             Ok(Some(value))
         }
     }
@@ -513,11 +512,7 @@ fn process_stashed_item(
             self.deliver_or_stash(parent_ref, value)
         }
         StashedItem::Effect { starting_parent, effect_id, payload } => {
-            // bubble_effect handles all cases: re-stashes if the target
-            // Handle is busy, dispatches if free, silently drops if frames
-            // are gone.
-            self.bubble_effect(starting_parent, effect_id, payload)?;
-            Ok(None)
+            self.bubble_effect(starting_parent, effect_id, payload)
         }
     }
 }
@@ -525,24 +520,24 @@ fn process_stashed_item(
 
 The loop terminates because each iteration either delivers at least one item (shrinking the stash) or gives up. Delivering a stashed item may Resume a Handle, unblocking further items — the loop catches cascades.
 
-### is_from_inactive_side
+### is_blocked_by_handle
 
 Each Handle has two sides: the body (reached via SingleChild/IndexedChild) and the handler (reached via HandlerChild). At any point, one side is active and the other is inactive. When the Handle is suspended (handler running), the body is inactive. When the Handle is free (body running), there is no handler — but stale handler tasks may still arrive.
 
-This method answers: "did this event come from the inactive side?"
+This method answers: "does this Handle block the event?"
 
-| Edge | State | Active side | This event from | Result |
-|------|-------|-------------|-----------------|--------|
-| Body child | suspended | handler | inactive side | `true` |
-| Body child | free | body | active side | `false` |
-| Handler child | suspended | handler | active side | `false` |
-| Handler child | free | body | inactive side | `true` |
+| Edge | State | Blocked? |
+|------|-------|----------|
+| Body child | suspended | yes — body can't progress |
+| Body child | free | no — body is running |
+| Handler child | suspended | no — handler is running |
+| Handler child | free | yes — stale handler event |
 
 ```rust
 /// Pure logic: given the edge we used to reach a frame and that frame's kind,
-/// returns true if this edge comes from the inactive side of a Handle.
+/// returns true if this Handle blocks the event.
 /// No frame lookup — caller provides the data.
-fn is_from_inactive_side(parent_ref: ParentRef, kind: &FrameKind) -> bool {
+fn is_blocked_by_handle(parent_ref: ParentRef, kind: &FrameKind) -> bool {
     let FrameKind::Handle(handle_frame) = kind else {
         return false; // not a Handle, nothing to check
     };
@@ -556,7 +551,7 @@ No special cases. The fourth row (HandlerChild + free) is unreachable today — 
 
 ### find_blocking_ancestor
 
-Walks the parent chain, checking `is_from_inactive_side` at each step. Returns the first Handle where the event is on the inactive side. If a frame is missing (torn down), the `?` terminates the walk.
+Walks the parent chain, checking `is_blocked_by_handle` at each step. Returns the first Handle that blocks the event. If a frame is missing (torn down), the `?` terminates the walk.
 
 ```rust
 fn find_blocking_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
@@ -564,7 +559,7 @@ fn find_blocking_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
         let frame = self.frames.get(parent_id)?;
-        if Self::is_from_inactive_side(parent_ref, &frame.kind) {
+        if Self::is_blocked_by_handle(parent_ref, &frame.kind) {
             return Some(parent_id);
         }
         current = frame.parent;
@@ -591,7 +586,7 @@ Handle(effect, handler,
 1. Advance: Parallel dispatches both branches. Invoke A and B dispatch external tasks.
 2. Task A completes. deliver -> Chain A trampolines -> Perform -> dispatches Perform task A'.
 3. Driver processes Perform task A' -> complete_task -> bubble_effect -> Handle is free -> dispatch_to_handler. Continuation stored, handler starts.
-4. Task B completes. deliver_or_stash -> find_blocking_ancestor -> is_from_inactive_side: body child + suspended = inactive side -> **stashed as Delivery**.
+4. Task B completes. deliver_or_stash -> find_blocking_ancestor -> is_blocked_by_handle: body child + suspended = blocked -> **stashed as Delivery**.
 5a. Handler Resumes: deliver to Parallel slot 0. sweep_stash -> deliver B -> Chain B trampolines -> Perform -> dispatches Perform task B'. Driver processes B' -> bubble_effect -> Handle is free -> dispatch_to_handler. Second handler starts. Second handler Resumes -> Parallel joins -> Handle exits.
 5b. Handler Discards: teardown_body removes Parallel, Chain B, task entries. sweep_stash -> stashed B's target frame is gone -> **dropped**. Handle exits with discard value. (Perform task B', if not yet completed, arrives later at complete_task -> bubble_effect -> frames gone -> silently dropped.)
 
@@ -1006,7 +1001,7 @@ fn resume_with_state_handler() -> Action {
 
 20. `Handle(mid, h_mid, Handle(inner, h_inner, Parallel(Chain(Invoke(P1), Perform(mid)), Chain(Invoke(P2), Perform(inner)), Chain(Invoke(P3), Invoke(echo)))))`. P1 -> Perform(mid) -> mid suspends. P2, P3 stashed. Mid resumes -> sweep -> P2 delivered -> Perform(inner) -> inner suspends -> P3 re-stashed. Inner resumes -> sweep -> P3 delivered -> echo -> Parallel joins.
 
-21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_blocking_ancestor walks through HandlerChild -> is_from_inactive_side returns false (handler side is active) -> delivers normally. Handler completes.
+21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_blocking_ancestor walks through HandlerChild -> is_blocked_by_handle returns false (handler side is active) -> delivers normally. Handler completes.
 
 22. `Handle(e, handler, Parallel(Perform(e), Perform(e)))`. Both Performs dispatch tasks during advance. With FIFO completion order: first Perform's bubble_effect dispatches handler, second stashes. Handler resumes -> sweep -> retries -> dispatches second handler. With depth-first: each handler completes before the next Perform's bubble_effect runs, no stashing. Both orderings produce the same final result.
 
@@ -1035,7 +1030,7 @@ fn resume_with_state_handler() -> Action {
 14. `handle_handler_completion`, `apply_state_update`
 15. `resume_continuation`, `discard_continuation`, `restart_body`
 16. `teardown_body`, `is_descendant_of`
-17. `is_from_inactive_side`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
+17. `is_blocked_by_handle`, `find_blocking_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
 18. `handle_frame_mut` accessor
 19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 20. `FlatConfig::handle_body` accessor
