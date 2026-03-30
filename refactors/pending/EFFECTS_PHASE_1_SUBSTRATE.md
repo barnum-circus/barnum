@@ -316,7 +316,7 @@ fn bubble_effect(
                     // Guaranteed free: if this Handle were suspended,
                     // is_blocked_by_handle (body child + suspended) would
                     // have stashed above.
-                    debug_assert!(
+                    assert!(
                         handle_frame.continuation.is_none(),
                         "body-side match on a suspended Handle should be unreachable"
                     );
