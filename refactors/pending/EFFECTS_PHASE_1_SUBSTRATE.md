@@ -26,14 +26,27 @@ export interface PerformAction {
 
 Two new nodes. Each Handle intercepts exactly one effect. If you need to handle multiple effects, nest multiple Handles — that's composition.
 
-There is no `ResumeAction`. Resumption, discarding, and body re-entry are the Handle frame's interpretation of the handler DAG's tagged output:
+There is no `ResumeAction`. Resumption, discarding, and body re-entry are the Handle frame's interpretation of the handler DAG's output.
 
-```ts
-// Handler DAG output — one of three continuation operations:
-| { kind: "Resume", value: Value }       // deliver value to suspended continuation
-| { kind: "Discard", value: Value }      // tear down continuation, exit Handle with value
-| { kind: "RestartBody", value: Value }  // tear down continuation, re-enter body with value
+### Continuation operations (Rust enum)
+
+The handler DAG's output tells the Handle frame what to do with the suspended continuation. This is a closed Rust enum, not a tagged JSON string — these three operations are the scheduler's internal protocol, not user-extensible.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContinuationOp {
+    /// Reconnect the continuation. Deliver value into it. Body continues from suspension point.
+    Resume,
+    /// Tear down the continuation. Deliver value to the Handle's parent. Handle exits.
+    Discard,
+    /// Tear down the continuation. Re-enter the body from scratch with the value.
+    RestartBody,
+}
 ```
+
+Resume and Discard are the canonical two operations on continuations in the algebraic effects literature. RestartBody is our addition — in systems where handlers are real functions, "restart the body" is expressed as discard + recursive call. Our handler DAGs are finite AST graphs (not recursive functions), so RestartBody is a primitive.
+
+From the handler's perspective, there are really two decisions: resume the continuation, or discard it. RestartBody is a Discard that also re-enters the body — both Break and Continue discard the old continuation, they just differ in what the Handle frame does afterward (exit vs re-enter). No handler ever uses both Resume and RestartBody.
 
 ### Effect routing: opaque gensym'd IDs
 

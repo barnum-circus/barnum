@@ -1,4 +1,4 @@
-# Phase 4: Loop Migration (LoopControl Effect)
+# Phase 4: Loop Migration
 
 ## Goal
 
@@ -6,109 +6,42 @@ Migrate the existing LoopAction from a dedicated frame kind to Handle/Perform su
 
 ## Prerequisites
 
-Phase 1 (Effect Substrate) complete. Phases 2 and 3 are not strict prerequisites, but Phase 3's teardown work (discarding continuations) is needed for the Break path.
+Phase 1 (Effect Substrate) complete. Phase 3's teardown (discarding continuations) is needed for both the Break and Continue paths — both discard the current continuation.
 
-## The effect
+## Two effects, not one
 
-```
-Effect: LoopControl
-Payload: { kind: "Continue", value: Value } | { kind: "Break", value: Value }
-Handler behavior:
-  Continue: Discard the old continuation. Re-enter the body with the new value.
-  Break: Discard the continuation. Exit the Handle frame with the value.
-```
+Loop uses two separate effects with two nested Handles. There is no single "LoopControl" effect type with a Continue/Break payload. The routing is structural (which Handle catches it), not payload-based.
 
-Both paths are zero-shot: the continuation from the Perform site is always discarded. Continue starts a fresh body execution. Break exits the scope. No multi-shot continuations.
+- `recur` = `Perform(recurEffect)` → caught by inner Handle → `RestartBody` → restart the body
+- `done` = `Perform(doneEffect)` → bubbles past inner Handle → caught by outer Handle → `Discard` → exit the loop
+
+Both paths discard the current continuation. They differ in what the Handle frame does next: re-enter the body (recur) or exit (done).
 
 ## How loop compiles
 
 ```ts
 // User writes:
-loop(body)
-
-// Compiles to:
-Handle(
-  { "LoopControl": loopHandler },
-  body   // contains Perform(LoopControl) via recur() and done()
-)
-```
-
-The handler DAG for LoopControl dispatches on Continue vs Break using the three universal continuation operations (see Phase 1):
-
-```ts
-// Handler receives: { payload: { kind: "Continue"|"Break", value } }
-pipe(
-  pick("payload"),
-  branch({
-    Continue: pipe(
-      extractField("value"),
-      tag("RestartBody"),      // { kind: "RestartBody", value } — re-enter the body
-    ),
-    Break: pipe(
-      extractField("value"),
-      tag("Discard"),          // { kind: "Discard", value } — exit the Handle frame
-    ),
-  }),
-)
-```
-
-The Handle frame is domain-agnostic. It interprets the tagged output structurally:
-- `RestartBody`: tears down the old continuation, re-advances the body with the value.
-- `Discard`: tears down the continuation, delivers the value to the Handle's parent.
-
-No LoopControl-specific logic exists in the Handle frame. The Handle frame is a pure structural router — it only knows Resume, Discard, and RestartBody. All semantic meaning (Continue = restart, Break = exit) lives in the handler DAG.
-
-## recur() and done() rewrite
-
-Currently:
-- `recur()` compiles to a builtin that produces `{ kind: "Continue", value }` (a tagged union that Loop's frame kind understands).
-- `done()` compiles to a builtin that produces `{ kind: "Break", value }`.
-
-After migration:
-- `recur()` compiles to `pipe(tag("Continue"), Perform("LoopControl"))`.
-- `done()` compiles to `pipe(tag("Break"), Perform("LoopControl"))`.
-
-The surface API doesn't change. `recur<TIn, TOut>()` and `done<TIn, TOut>()` still have the same type signatures. Only the AST they produce changes.
-
-## Migration strategy
-
-### Step 1: Implement LoopControl effect in Handle frame
-
-Add `EffectType::LoopControl` to the enum. Add the Continue/Break dispatch logic to the Handle frame's effect handler. This runs alongside the existing LoopAction frame kind.
-
-### Step 2: Add a loop-via-Handle compilation path
-
-In TypeScript, add a flag or separate function (`loopV2`?) that compiles to Handle/Perform instead of LoopAction. Run all existing loop tests against both paths.
-
-### Step 3: Verify test parity
-
-Every existing loop test must pass with both the old LoopAction path and the new Handle/Perform path. The outputs must be identical.
-
-### Step 4: Switch default compilation
-
-Change `loop()` to compile to Handle/Perform. The old LoopAction path is dead code.
-
-### Step 5: Remove LoopAction
-
-Remove `LoopAction` from the tree AST union. Remove the Loop frame kind from the Rust scheduler. Remove the flattener's Loop handling. The only loop mechanism is Handle(LoopControl).
-
-### Step 6: Verify demos
-
-Run all demos. They should work unchanged because the surface API (`loop`, `recur`, `done`) is the same.
-
-## HOAS (required, not optional)
-
-Each `loop` invocation gensyms a fresh EffectId. The `recur` and `done` tokens are `Perform(thatId)` wrappers provided via the callback:
-
-```ts
 loop((recur, done) =>
   pipe(body, branch({ HasErrors: pipe(fix, recur), Clean: done }))
 )
+
+// Builder gensyms two EffectIds: recurEffect, doneEffect
+// recur = Perform(recurEffect)
+// done = Perform(doneEffect)
+
+// Compiles to:
+Handle(doneEffect, tag("Discard"),
+  Handle(recurEffect, tag("RestartBody"),
+    body
+  )
+)
 ```
 
-`recur` wraps the value as `{ kind: "Continue", value }` and performs the effect. `done` wraps as `{ kind: "Break", value }` and performs. The Handle's handler DAG dispatches on Continue/Break and produces RestartBody/Discard tagged output.
+Each handler DAG is trivial — just tag the value with the continuation operation. No branching.
 
-Because each loop has its own EffectId, nested loops get labeled breaks for free:
+### Nested loops: labeled breaks for free
+
+Each loop invocation mints its own pair of EffectIds. Nested loops have distinct Handles:
 
 ```ts
 loop((recurOuter, doneOuter) =>
@@ -122,15 +55,35 @@ loop((recurOuter, doneOuter) =>
 )
 ```
 
-`doneOuter` is `Perform(effectId_3)`, `doneInner` is `Perform(effectId_4)`. The outer Handle matches `effectId_3`, the inner matches `effectId_4`. `doneOuter` bubbles past the inner Handle (no match) and is caught by the outer.
+`doneOuter` bubbles past both inner Handles (wrong EffectIds) and is caught by the outer done Handle.
 
-There are no standalone `recur()`/`done()` combinators. The HOAS callback is the only way to get the tokens. If you need to pass them to a utility function, pass them as parameters — explicit propagation.
+### HOAS is required
+
+There are no standalone `recur()`/`done()` combinators. The HOAS callback is the only way to get the tokens. If you need to pass them to a utility function, pass them as parameters.
+
+## Migration strategy
+
+### Step 1: Compile loop to Handle/Perform
+
+Change `loop()` to produce two nested Handles instead of LoopAction. The HOAS callback replaces the current standalone `recur()`/`done()`.
+
+### Step 2: Verify test parity
+
+All existing loop tests must pass with the new compilation. The outputs must be identical.
+
+### Step 3: Remove LoopAction
+
+Remove `LoopAction` from the tree AST union. Remove `FrameKind::Loop` from the Rust scheduler. Remove the flattener's Loop handling. Remove standalone `recur()`/`done()`.
+
+### Step 4: Verify demos
+
+Run all demos. They should work unchanged because the surface API (`loop`) is the same.
 
 ## Test strategy
 
 ### Regression tests
 
-All existing loop tests must pass after migration. These include:
+All existing loop tests must pass after migration:
 - Simple loop with Break
 - Loop with Continue (multiple iterations)
 - Nested loops
@@ -140,18 +93,16 @@ All existing loop tests must pass after migration. These include:
 
 ### New tests
 
-1. **recur/done outside loop**: Verify `UnhandledEffect(LoopControl)` error.
-2. **Loop with declare**: Variables from an outer declare are accessible inside the loop body, including across Continue re-entries.
-3. **Loop with tryCatch**: Error inside loop body caught by tryCatch inside the loop. Loop continues.
-4. **tryCatch around loop**: Error inside loop body propagates past the loop's Handle to the tryCatch Handle.
+1. **recur/done outside loop**: Verify `UnhandledEffect` error.
+2. **Labeled break**: Inner loop breaks out of outer loop via `doneOuter`.
+3. **Loop with declare**: Variables from an outer declare are accessible inside the loop body, including across Continue re-entries.
+4. **Loop with tryCatch**: Error inside loop body caught by tryCatch inside the loop. Loop continues.
+5. **tryCatch around loop**: Error inside loop body propagates past the loop's Handles to the tryCatch Handle.
 
 ## Deliverables
 
-1. `EffectType::LoopControl` variant
-2. Handle frame LoopControl dispatch (Continue → re-enter body, Break → exit)
-3. `recur()` / `done()` rewritten to Perform(LoopControl)
-4. `loop()` rewritten to produce Handle(LoopControl, body)
-5. HOAS form: `loop((recur, done) => body)`
-6. Migration: both paths run in parallel, test parity verified
-7. LoopAction removed from tree AST and Rust scheduler
-8. All existing tests pass
+1. `loop()` rewritten to produce two nested Handles (HOAS callback)
+2. `recur` / `done` tokens provided via callback, not standalone combinators
+3. Migration: test parity verified against existing loop tests
+4. LoopAction and FrameKind::Loop removed from tree AST and Rust scheduler
+5. All existing tests pass
