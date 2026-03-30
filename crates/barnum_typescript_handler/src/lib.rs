@@ -16,7 +16,8 @@ use tokio::process::Command;
 #[derive(Debug, thiserror::Error)]
 pub enum TypeScriptHandlerError {
     /// The subprocess exited with a non-zero exit code.
-    #[error("handler {module}:{func} failed (exit {exit_code}): {stderr}")]
+    /// Stderr is inherited (printed to terminal), not captured.
+    #[error("handler {module}:{func} failed (exit {exit_code})")]
     SubprocessFailed {
         /// Module path of the failed handler.
         module: String,
@@ -24,8 +25,6 @@ pub enum TypeScriptHandlerError {
         func: String,
         /// Process exit code.
         exit_code: i32,
-        /// Captured stderr output.
-        stderr: String,
     },
     /// The subprocess returned invalid JSON on stdout.
     #[error("handler {module}:{func} returned invalid JSON: {source}")]
@@ -71,7 +70,7 @@ pub async fn execute_typescript(
         .arg(format!("{executor} {worker_path} {module} {func}"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
         .spawn()
         .expect("failed to spawn handler process");
 
@@ -89,7 +88,6 @@ pub async fn execute_typescript(
             module: module.to_owned(),
             func: func.to_owned(),
             exit_code: output.status.code().unwrap_or(-1),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         });
     }
 

@@ -79,6 +79,7 @@ export const migrate = createHandlerWithConfig({
         source,
         "```",
       ].join("\n"),
+      allowedTools: [],
     });
 
     const content = stripCodeFences(response);
