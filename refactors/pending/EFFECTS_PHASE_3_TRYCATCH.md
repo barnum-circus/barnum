@@ -62,18 +62,18 @@ tryCatch((throwOuter) =>
 
 No re-throwing needed. `throwOuter` is `Perform(effectId_7)`, `throwInner` is `Perform(effectId_8)`. Each Handle matches its own ID.
 
-The handler DAG for Throw receives `{ payload: errorData }` and runs the recovery action on the payload. The handler produces a Discard tagged output: the continuation is dropped and the Handle frame exits with the recovery result.
+The handler DAG for Throw receives `{ payload: errorData, state: ... }` (state is unused for tryCatch) and runs the recovery action on the payload. The handler produces a Discard tagged output: the continuation is torn down and the Handle frame exits with the recovery result.
 
 ```ts
 // The handler DAG:
 pipe(
-  pick("payload"),    // extract the error data
+  pick("payload"),    // extract the error data from { payload, state }
   recovery,           // run the recovery branch
   tag("Discard"),     // produces { kind: "Discard", value: recoveryResult }
 )
 ```
 
-The Handle frame interprets `{ kind: "Discard", value }`: it moves the continuation to orphaned_continuations and delivers `value` to its parent. The continuation is cleaned up when the Handle frame exits. This is deterministic — see Phase 1's cleanup lifecycle.
+The Handle frame interprets `{ kind: "Discard", value }`: it tears down the body subgraph via `teardown_body` and delivers `value` to its parent. This is deterministic — see Phase 1's `discard_continuation` method.
 
 ## Where Throw is performed
 
@@ -144,47 +144,9 @@ Option B is cleaner long-term but changes existing error semantics. Recommend Op
 
 ## Frame teardown on discard
 
-When the Handle frame exits with an un-resumed continuation, it must clean up:
+When the handler produces Discard, `discard_continuation` (from Phase 1) calls `teardown_body` to clean up the body subgraph. See Phase 1's `teardown_body` and `is_descendant_of` for the implementation.
 
-```rust
-fn teardown_continuation(&mut self, root: FrameId) {
-    let mut stack = vec![root];
-    while let Some(frame_id) = stack.pop() {
-        let frame = self.frames.remove(frame_id);
-        match frame.kind {
-            FrameKind::Parallel { children, .. } => {
-                // Recurse into active children
-                for child in children {
-                    if let Some(child_id) = child.frame_id() {
-                        stack.push(child_id);
-                    }
-                }
-            }
-            FrameKind::ForEach { iterations, .. } => {
-                for iter in iterations {
-                    if let Some(iter_id) = iter.frame_id() {
-                        stack.push(iter_id);
-                    }
-                }
-            }
-            FrameKind::Handle { continuations, .. } => {
-                // Nested Handle with its own continuations — tear those down too
-                for (_, cont_root) in continuations {
-                    stack.push(cont_root);
-                }
-            }
-            _ => {}
-        }
-
-        // Cancel any pending external tasks mapped to this frame
-        if let Some(task_id) = self.pending_tasks.remove_by_frame(frame_id) {
-            self.pending_cancellations.push(task_id);
-        }
-    }
-}
-```
-
-This is depth-first traversal of the orphaned subgraph. Every frame is removed from the slab. Pending external tasks are cancelled. Nested Handle frames with their own continuations are recursively torn down.
+The teardown scans the slab for all frames that are descendants of the Handle frame, removes them, and cancels their pending tasks via `task_to_parent.retain`. Nested Handle frames with their own suspended continuations are naturally cleaned up because their body frames are also descendants.
 
 ## Nested tryCatch
 
@@ -205,10 +167,10 @@ This works naturally with bubble_effect: the Throw walks past the inner Handle (
 ## tryCatch + declare interaction
 
 ```ts
-declare({ resource: acquireResource }, ({ resource }) =>
+declare([acquireResource], ([resource]) =>
   tryCatch(
-    pipe(resource.then(useResource), riskyStep),
-    pipe(resource.then(cleanupPartialWork), reportError),
+    (throwError) => pipe(resource, useResource, riskyStep(throwError)),
+    pipe(resource, cleanupPartialWork, reportError),
   ),
 )
 ```
@@ -246,11 +208,8 @@ The ReadVar and Throw effects compose without interference because they're route
 
 ## Deliverables
 
-1. `EffectType::Throw` variant
-2. Handle frame Throw handler logic (discard continuation, advance recovery)
-3. `teardown_continuation` method — recursive frame cleanup
-4. Pending task cancellation during teardown
-5. `tryCatch()` TypeScript function
-6. `throwError()` / `Perform("Throw")` TypeScript helper
-7. Flattener support
-8. Tests per above
+1. `tryCatch()` TypeScript function (HOAS callback provides `throwError` token)
+2. Handler DAG: `pipe(pick("payload"), recovery, tag("Discard"))` — constructed by the `tryCatch` combinator
+3. Compilation: `Handle(freshEffectId, recoveryHandler, body)` where `throwError = Perform(freshEffectId)`
+4. Phase 1's `discard_continuation` / `teardown_body` handles frame cleanup (no new Rust work)
+5. Tests per above

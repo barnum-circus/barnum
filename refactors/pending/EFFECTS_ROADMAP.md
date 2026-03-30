@@ -54,7 +54,7 @@ Replace `Loop` and `Step` with `Handle` and `Perform`. The final node set:
 
 7 nodes total. `Loop` and `Step` become TS sugar that compiles to Handle/Perform. Every scope-based feature (declare, tryCatch, withTimeout, race, RAII, durable suspension) is TS sugar over these same two primitives.
 
-There is no `Resume` AST node. Resumption (and discarding, and body re-entry) are not AST-level concepts. They are the Handle frame's interpretation of the handler DAG's tagged output. Handler DAGs produce `{ kind: "Resume"|"Discard"|"RestartBody", value }`, and the Handle frame acts accordingly. This keeps cont_id tokens internal to the scheduler — handler DAGs never see them.
+There is no `Resume` AST node. Resumption (and discarding, and body re-entry) are not AST-level concepts. They are the Handle frame's interpretation of the handler DAG's tagged output. Handler DAGs produce `{ kind: "Resume"|"Discard"|"RestartBody", value, next_state? }`, and the Handle frame acts accordingly. This keeps cont_id tokens internal to the scheduler — handler DAGs never see them.
 
 ### The architectural insight
 
@@ -62,9 +62,9 @@ Two layers, each doing what it's good at:
 
 **TypeScript (HOAS)**: Provides the user-facing API. Callbacks receive opaque AST references (VarRefs, restart/exit jumps, step references). TypeScript's lexical scoping prevents collisions and enforces scope. The builder gensyms unique IDs. TypeScript's type system checks that inputs and outputs match at every connection point. All sugar expansion happens here.
 
-**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle, sever the link, dispatch the handler DAG with `{ payload }`. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly. When a Handle frame exits, clean up orphaned continuations. That's it.
+**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle. The Handle frame stores opaque state (`serde_json::Value`). The engine constructs `{ payload, state }` and dispatches the handler DAG. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly — optionally updating the Handle's state via `next_state`. The body subgraph is naturally frozen while the handler runs (the Perform point is stuck, so no parent pointers need severing). That's it.
 
-The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs written in TypeScript.
+The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal workflow graphs built from existing AST builtins or TypeScript handlers.
 
 ### Control Plane / Data Plane boundary
 
@@ -153,6 +153,8 @@ pub enum FlatAction {
 }
 ```
 
+State is not in the flat table — it's computed at runtime. When the engine enters a Handle frame, it stores its input value as the frame's opaque `state: serde_json::Value`. The TypeScript compilation layer shapes the input via Chain/Parallel prefixes so the Handle receives the right state.
+
 Each Handle intercepts exactly one effect. Multiple effects in scope = nested Handles.
 
 There are no global/module-level effect tokens. Each combinator invocation creates its own EffectId. This avoids both the rigidity of a Rust enum (no recompilation for new effects) and the collision risk of global strings (IDs are unique by construction). A Handle block can only intercept effects whose EffectId it holds — the HOAS callback is the sole distribution mechanism.
@@ -165,7 +167,7 @@ What we're already doing — and should do consistently — is Higher-Order Abst
 
 | Feature | HOAS callback | Opaque reference | Current status |
 |---|---|---|---|
-| `declare` | `({ x }) => body` | VarRef = `Perform(freshEffectId)` | Proposed |
+| `declare` | `([a, b]) => body` | VarRef = `Perform(freshEffectId)` | Proposed |
 | `tryCatch` | `(throwError) => body, recovery` | throwError = `Perform(freshEffectId)` | Proposed |
 | `loop` | `(recur, done) => body` | recur/done = `Perform(freshEffectId)` | Not yet HOAS |
 | `scope` | `(restart, exit) => body` | Jump references | Not yet implemented |
@@ -255,22 +257,30 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 
 - New AST node types: `HandleAction`, `PerformAction` (no ResumeAction — resumption is internal to the Handle frame)
 - Each Handle-installing combinator gensyms a fresh `EffectId` and provides `Perform(thatId)` wrappers via HOAS callback
-- `declare()` function: HOAS callback provides `VarRef<T>` nodes, compiles to Chain + Handle(freshId) + Perform(freshId)
+- `declare()` function: array form, HOAS callback provides `VarRef<T>` nodes, compiles to `Chain(Parallel(exprs..., Identity), Handle(freshId, readVarHandler, Chain(ExtractIndex(n), body)))`
 - `tryCatch()` function: HOAS callback provides `throwError` token, compiles to Handle(freshId) + Perform(freshId)
-- `loop()` rewritten: HOAS callback provides `recur`/`done` tokens, compiles to Handle(freshId) + Perform(freshId)
+- `loop()` rewritten: HOAS callback provides `recur`/`done` tokens, compiles to two nested Handles
 - Standalone `recur()` / `done()` removed — tokens come from the HOAS callback only
 - `LoopAction` removed from Action union
 - `StepAction` kept — migrate callsites in-repo as needed, no external users
+- New `ExtractDynamic` builtin kind: given `[index, array]`, returns `array[index]`. Used by readVar handler DAGs.
 
 ### Rust changes
 
-- `EffectId(u32)`: opaque effect routing key
-- New flat action types: `FlatHandle`, `FlatPerform`
-- New frame kind: `FrameKind::Handle` (one new variant, replaces LoopAction's frame kind)
-- `bubble_effect()`: new traversal method on WorkflowState — walks parent pointers to find matching Handle
-- Tagged output interpretation: Handle frame reads `{ kind, value }` from handler DAG and performs Resume, Discard, or RestartBody
-- Continuation management: sever/reconnect parent links, internal tracking per handler invocation
-- Teardown: recursive frame cleanup when continuations are discarded
+- `EffectId(u32)`: opaque effect routing key (using `u32_newtype!` macro)
+- New flat action types: `FlatAction::Handle`, `FlatAction::Perform`
+- `FlatEntry` size assertion relaxed from 8 to 16 bytes (Handle has 3 `u32` fields)
+- New frame kind: `FrameKind::Handle` with fields: `effect`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
+- **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes optional `next_state` to update the frame's state.
+- `bubble_effect()`: walks parent pointers to find matching Handle. O(depth).
+- `dispatch_to_handler()`: stores `ContinuationRoot`, constructs `{ payload, state }`, advances handler DAG as child of Handle frame. Body subgraph is naturally frozen (Perform point is stuck) — no parent pointer severing needed.
+- `handle_handler_completion()`: parses `{ kind, value, next_state? }`, dispatches on `ContinuationOp` (Resume / Discard / RestartBody)
+- `resume_continuation()`: delivers value to the Perform's original parent
+- `discard_continuation()`: tears down body, Handle exits with value
+- `restart_body()`: tears down body, re-advances body ActionId with value
+- `teardown_body()`: scans slab for descendant frames, removes them, cancels pending tasks. O(n × depth).
+- `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
+- `ExtractDynamic` builtin kind
 - `FrameKind::Loop` removed (after Phase 4)
 
 ### What doesn't change
