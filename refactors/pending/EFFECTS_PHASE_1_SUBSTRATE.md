@@ -447,13 +447,9 @@ fn process_stashed_item(
             self.deliver_or_stash(parent_ref, value)
         }
         StashedItem::Effect { starting_parent, effect_id, payload } => {
-            // bubble_effect will stash again if the Handle is still busy,
-            // or dispatch if it's free, or drop if the frame was torn down.
-            if let Some(ref parent_ref) = starting_parent {
-                if self.frames.get(parent_ref.frame_id().0).is_none() {
-                    return Ok(None); // Perform's parent was torn down, drop
-                }
-            }
+            // bubble_effect handles all cases: stashes again if Handle
+            // is still busy, dispatches if free, returns UnhandledEffect
+            // if the frame tree was torn down.
             self.bubble_effect(starting_parent, effect_id, payload)
                 .map_err(CompleteError::from)?;
             Ok(None)
