@@ -44,7 +44,6 @@ declare([fetchUser, fetchConfig], ([user, config]) => body)
 
 // Pseudo-AST notation:
 //   Handle(effectId, handler, body)
-//   readVar(n) = Chain(ExtractField("state"), ExtractIndex(n), Tag("Resume"))
 
 // Compiles to:
 Chain(
@@ -65,48 +64,91 @@ N bindings produce N nested Handle frames. This is the natural representation of
 
 ### Why not a shared effectId
 
-An earlier design used one shared effectId with the binding index as payload and an `ExtractDynamic` builtin to do runtime index lookup into the state tuple. This is dynamically typed — `extractDynamic([index, [User, Config]])` returns `unknown` because the index is a runtime value and each element has a different type. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved.
+An alternative design uses one shared effectId with the binding index as payload and a runtime index lookup. This is dynamically typed — the index is a runtime value and each tuple element has a different type, so the result is `unknown`. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved through the TS compiler.
 
 ### Engine change: Handle initializes state from pipeline value
 
 The only engine change needed: when creating a Handle frame, set `state: Some(value.clone())` instead of `state: None`. The body still receives the pipeline value unchanged. This is a one-line change in the `FlatAction::Handle` arm of `advance()`.
 
-## VarRef: generic over the bound type
+## Function definitions
 
-`VarRef<TValue>` wraps `TypedAction<never, TValue>`. Input is `never` because VarRefs don't consume pipeline input — they perform an effect. Output is `TValue`, the concrete type of the bound value.
+All functions introduced in this doc, with concrete implementations.
 
-Because `declare` is a generic function call, TypeScript infers `TValue` from each binding expression:
+### `readVar(n)` — handler DAG for the nth binding
+
+Returns an action that extracts the nth value from the Handle's state tuple and resumes with it. This is the handler DAG passed to each Handle in the compiled output.
+
+When a Perform fires, the engine calls the handler with `{ payload, state }`. For declare, `state` is the full All output tuple (e.g. `[User, Config, pipeline_input]`). The handler extracts `state[n]` and wraps it as `{ kind: "Resume", value: state[n] }`.
 
 ```ts
-declare(
-  [computeName, computeCount],
-  // TypeScript infers: [VarRef<string>, VarRef<number>]
-  ([name, count]) => pipe(
-    name,                 // produces string
-    appendCount(count),   // count produces number
-  ),
-)
+function readVar(n: number): Action {
+  return {
+    kind: "Chain",
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "state" } } },
+    rest: {
+      kind: "Chain",
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
+      rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
+    },
+  };
+}
 ```
 
-Each VarRef carries the concrete type of its binding. No manual annotations, no `unknown` casts. The HOAS callback is what makes this work.
+Desugared: `Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))`.
 
-### Implementation sketch
+### `VarRef<TValue>` — typed reference to a bound value
+
+A VarRef is a `Perform` node wrapped with phantom types. Input is `never` because VarRefs don't consume pipeline input — they raise an effect. Output is `TValue`, the concrete type of the bound value.
 
 ```ts
 type VarRef<TValue> = TypedAction<never, TValue>;
+
+function createVarRef<TValue>(effectId: EffectId): VarRef<TValue> {
+  return typedAction({ kind: "Perform", effectId });
+}
+```
+
+### `InferVarRefs<TBindings>` — map bindings to VarRef types
+
+Maps each binding's output type to a VarRef. TypeScript resolves `ExtractOutput` from each binding expression.
+
+```ts
+type InferVarRefs<TBindings extends Pipeable<any, any>[]> = {
+  [K in keyof TBindings]: VarRef<ExtractOutput<TBindings[K]>>;
+};
+```
+
+### `declare()` — the user-facing function
+
+```ts
+let nextEffectId = 0;
 
 function declare<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
-  const effectIds = bindings.map(() => generateUniqueId());
+  // 1. Gensym one effectId per binding.
+  const effectIds = bindings.map(() => EffectId(nextEffectId++));
+
+  // 2. Create VarRefs (Perform nodes) for each binding.
   const varRefs = effectIds.map((id) => createVarRef(id));
-  const bodyAst = body(varRefs as any);
-  return compileToNestedHandles(bindings, effectIds, bodyAst);
+
+  // 3. Invoke the body callback with the VarRefs.
+  const bodyAction = body(varRefs as any);
+
+  // 4. Compile to: Chain(All(...bindings, Identity), nestedHandles)
+  const allActions = [...bindings, identity()] as Action[];
+  const pipelineInputIndex = bindings.length;
+
+  // 5. Build nested Handles from inside out.
+  let inner: Action = { kind: "Chain", first: extractIndex(pipelineInputIndex), rest: bodyAction as Action };
+  for (let i = effectIds.length - 1; i >= 0; i--) {
+    inner = { kind: "Handle", effectId: effectIds[i], handler: readVar(i), body: inner };
+  }
+
+  return typedAction({ kind: "Chain", first: { kind: "All", actions: allActions }, rest: inner });
 }
 ```
-
-The key type: `InferVarRefs<TBindings>` maps each binding to `VarRef<OutputOf<binding>>`. TypeScript resolves `OutputOf` from each binding expression's output type.
 
 **Note:** Phase 2 only accepts `Pipeable` bindings (concurrent). Phase 2a adds function bindings for sequential dependencies.
 
@@ -126,41 +168,164 @@ For nested declares, each binding across all declares has its own `EffectId`. In
 | Current pattern | With declare |
 |---|---|
 | `augment(pipe(extract, transform))` | Bind the result, reference it later via VarRef |
-| `tap(sideEffect)` (to preserve context) | Side effect in body, context from VarRef |
-| `withResource({ create, action, dispose })` | Bind the resource (dispose comes in Phase 5) |
+| `tap(sideEffect)` (to preserve context) | Side effect in body with `.drop()`, context from VarRef |
 | `pick("field1", "field2")` (to narrow for invariance) | Still needed — VarRef gives the full value, pick narrows it |
 
 `augment` and `tap` become unnecessary for context threading. `pick` remains necessary for handler input narrowing (invariance at serialization boundaries).
 
+## Demo migration: identify-and-address-refactors
+
+The `ImplementAndReview` step is the primary beneficiary. It currently uses `tap`, `augment`, and `pick` with verbose type annotations to thread a 5-field context through a sequence of side effects.
+
+### Before (current)
+
+```ts
+type Ctx = Refactor & { worktreePath: string; branch: string };
+
+ImplementAndReview: pipe(
+  // Side effects: tap preserves Ctx, pick narrows for invariance
+  tap(pipe(pick<Ctx, ["worktreePath", "description"]>("worktreePath", "description"), implement)),
+  tap(pipe(pick<Ctx, ["worktreePath"]>("worktreePath"), commit)),
+
+  // Type-check/fix cycle
+  tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
+
+  // Judge/revise loop
+  tap<Ctx, "TypeCheck">(
+    loop(
+      pipe(drop(), judgeRefactor, classifyJudgment).branch({
+        NeedsWork: pipe(applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>()),
+        Approved: done<any, any>(),
+      }),
+    ),
+  ),
+
+  // Create PR: augment merges { prUrl } back into Ctx
+  augment<Ctx, { prUrl: string }>(pipe(
+    pick<Ctx, ["branch", "description"]>("branch", "description"),
+    preparePRInput,
+    createPR,
+  )),
+),
+```
+
+**Problems:**
+- Every `tap` needs an explicit `<Ctx>` type annotation to prevent narrowing.
+- `augment` needs both `<Ctx, { prUrl: string }>` type parameters.
+- `pick` duplicates field names as both type parameters and string arguments.
+- The intent (preserve context, run side effect) is obscured by the machinery.
+
+### After (with declare)
+
+```ts
+ImplementAndReview: declare(
+  [identity<Ctx>()],    // bind the full context as a VarRef
+  ([ctx]) => pipe(
+    // Side effects: ctx VarRef provides context, .drop() discards output
+    pipe(ctx, pick("worktreePath", "description"), implement).drop(),
+    pipe(ctx, pick("worktreePath"), commit).drop(),
+
+    // Type-check/fix cycle
+    pipe(ctx, pick("worktreePath"), stepRef("TypeCheck")).drop(),
+
+    // Judge/revise loop
+    loop(
+      pipe(drop(), judgeRefactor, classifyJudgment).branch({
+        NeedsWork: pipe(applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>()),
+        Approved: done<any, any>(),
+      }),
+    ).drop(),
+
+    // Create PR — no augment needed, ctx provides context independently
+    pipe(ctx, pick("branch", "description"), preparePRInput, createPR),
+  ),
+),
+```
+
+**What changed:**
+- `tap(X)` → `X.drop()` — no `tap` needed to preserve context; `ctx` VarRef gives it back anytime.
+- `augment<Ctx, { prUrl: string }>(...)` → just `pipe(ctx, ...)` — no merge-back step; the VarRef is always available.
+- `<Ctx>` type annotations on `tap` disappear — `ctx` carries the type.
+- `pick` no longer needs explicit type parameters — `ctx` produces `Ctx`, so `pick("worktreePath")` infers from the pipeline.
+- `pick` is still used for invariance narrowing (serialization boundaries require exact types).
+
+### convert-folder-to-ts
+
+The `.augment().pick()` pattern in this demo is already concise:
+
+```ts
+pipe(extractField<FileEntry, "file">("file"), migrate({ to: "Typescript" })).augment().pick("content", "outputPath")
+```
+
+`declare` could replace this, but the improvement is marginal — the augment pattern is well-suited for this simple one-step enrichment. This demo does not need migration.
+
 ## Test strategy
 
-### TypeScript compilation tests
+### TypeScript compilation tests (AST output)
 
-1. Single-binding declare produces correct Chain + Handle AST.
-2. Two concurrent bindings produce All + nested Handles.
-3. VarRef type checking: binding type matches VarRef output type.
+These tests verify that `declare()` produces the correct AST structure. Compare the output of `declare(...)` against expected `Action` objects using `toEqual` (non-enumerable methods are invisible to `toEqual`).
 
-### Rust scheduler tests
+1. **Single binding**: `declare([exprA], ([a]) => body)` produces:
+   - `Chain(All(exprA, Identity), Handle(effectId_0, readVar(0), Chain(ExtractIndex(1), body)))`.
+   - Verify: outer All has 2 actions (binding + Identity). Handle wraps the body. ExtractIndex(1) feeds pipeline_input to body.
 
-1. **Simple declare**: One Handle with state = `42`. Perform fires. Handler resumes with state. Verify body receives 42.
-2. **Multiple bindings**: Two nested Handles with state = `1` and `2`. Two Performs in a Chain. Verify each returns correct value from its Handle.
-3. **Nested declares**: Inner declare's Handle has state = `"inner"`, outer's has state = `"outer"`. Inner VarRef caught by inner Handle. Outer VarRef bubbles past inner, caught by outer.
-4. **Concurrent bindings**: All evaluates two expressions. Nested Handles each extract their binding. Verify correct variable resolution.
-5. **Declare inside ForEach**: Each iteration enters its own Handle frames. Verify isolation.
-6. **Declare inside All**: Two branches reference the same outer declare. Verify both get correct values.
+2. **Two bindings**: `declare([exprA, exprB], ([a, b]) => body)` produces:
+   - `Chain(All(exprA, exprB, Identity), Handle(effectId_0, readVar(0), Handle(effectId_1, readVar(1), Chain(ExtractIndex(2), body))))`.
+   - Verify: outer All has 3 actions. Two nested Handles with distinct effectIds. readVar indices match positions. ExtractIndex(2) for pipeline_input.
 
-### Demo migration
+3. **VarRef is a Perform node**: Each VarRef passed to the body callback is `{ kind: "Perform", effectId: <unique> }` with `TypedAction<never, TValue>` phantom types.
 
-Rewrite the `identify-and-address-refactors` demo to use `declare` instead of `tap`/`augment`/`pick` for context threading. The demo should be shorter and clearer.
+4. **EffectIds are unique across bindings**: Two bindings produce two different effectIds. Two separate `declare` calls produce four distinct effectIds total.
+
+5. **readVar(n) structure**: `readVar(0)` is `Chain(ExtractField("state"), Chain(ExtractIndex(0), Tag("Resume")))`. Verify for n=0, n=1, n=2.
+
+### TypeScript type-level tests (tsc compilation)
+
+These tests verify compile-time type safety by asserting that certain expressions typecheck (or fail to typecheck).
+
+1. **VarRef output type matches binding output**: If `computeName` is `Pipeable<SomeInput, string>`, then the VarRef `name` in `declare([computeName], ([name]) => ...)` is `VarRef<string>` (i.e. `TypedAction<never, string>`). Verify by piping the VarRef into an action that expects `string` input — should compile. Piping into an action that expects `number` input — should fail.
+
+2. **Body input type is the declare input type**: The body callback returns `Pipeable<TIn, TOut>` where `TIn` matches the declare's input. If `declare` receives `Pipeable<Config, ...>` bindings, the body pipeline's input type is `Config`.
+
+3. **Multiple bindings infer distinct VarRef types**: `declare([stringAction, numberAction], ([s, n]) => ...)` gives `s: VarRef<string>` and `n: VarRef<number>`. Mixing them up (passing `s` where `number` is expected) fails.
+
+4. **Declare output type matches body output type**: `declare([...], ([...]) => actionReturningFoo)` has output type `Foo`.
+
+### Rust engine tests
+
+These tests verify the runtime behavior of the Handle/Perform substrate when driven by declare-shaped ASTs. Construct the ASTs directly in Rust (no TS macro involved).
+
+1. **Single binding, single read**: Construct `Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo))))`. Advance with input `"input"`. All produces `[42, "input"]`. Handle state = `[42, "input"]`. Perform fires, handler extracts state[0] = 42, resumes. Chain trampolines to echo with 42. Complete echo. Verify workflow output.
+
+2. **Single binding, body ignores VarRef**: `Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(ExtractIndex(1), Invoke(echo))))`. Body extracts pipeline_input (index 1) and passes it to echo, never Performing. Handle exits normally. Verify echo receives `"input"`.
+
+3. **Two bindings, two reads**: `Chain(All(Constant("alice"), Constant(99), Identity), Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(Perform(e0), Chain(Invoke(mid), Perform(e1))))))`. First Perform → handler0 → resumes with "alice". Chain to mid. Second Perform → handler1 → resumes with 99. Verify mid receives "alice", workflow exits with 99.
+
+4. **Two bindings, reads in reverse order**: Same as test 3 but body is `Chain(Perform(e1), Perform(e0))`. First Perform(e1) bubbles past Handle(e1) — wait, e1 IS the inner Handle. First Perform(e1) is caught by inner Handle. Second Perform(e0) bubbles past inner Handle, caught by outer. Verify correct values returned for each.
+
+5. **Nested declares**: Outer declare binds "outer", inner declare binds "inner". Inner VarRef reads "inner" from inner Handle. Outer VarRef bubbles past inner Handle, reads "outer" from outer Handle. Verify both values correct. AST: `Handle(e_outer, readVar(0), Chain(ExtractIndex(1), Handle(e_inner, readVar(0), Chain(ExtractIndex(1), Chain(Perform(e_outer), Perform(e_inner))))))`. The outer All produces `["outer", <tuple from inner All>]`. The inner All produces `["inner", pipeline_input]`.
+
+6. **Declare inside ForEach**: `ForEach(Chain(All(Identity, Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo)))))`. Input `[10, 20]`. Each iteration binds its own element. Verify echo receives 10 and 20 respectively (Handle frames are per-iteration, not shared).
+
+7. **Declare inside All (shared outer Handle)**: `Handle(e_outer, readVar(0), Chain(ExtractIndex(1), All(Chain(Perform(e_outer), Invoke(a)), Chain(Perform(e_outer), Invoke(b)))))`. All tuple = `[42, pipeline_input]`. Both branches Perform(e_outer). First dispatches handler, second stashed (Handle suspended). Handler resumes, first branch continues. Sweep retries second Perform. Verify both branches receive 42.
+
+8. **Handler receives correct state shape**: Construct a Handle with a TS handler (not builtin) so we can inspect the dispatch value. Advance, trigger Perform. Verify the handler dispatch value is `{ "payload": <perform_input>, "state": <all_output_tuple> }`.
+
+9. **readVar(n) produces correct HandlerOutput**: Wire up readVar(1) as the handler for a Handle. State = `["a", "b", "c"]`. Trigger Perform. Drive builtins. Verify the handler output is `{ "kind": "Resume", "value": "b" }` and the resumed value delivered to the Perform site is `"b"`.
 
 ## No new builtins
 
-The per-binding-effectId design uses only existing builtins (`ExtractIndex`, `ExtractField`, `Tag`). The `ExtractDynamic` builtin from the earlier shared-effectId design is no longer needed.
+The per-binding-effectId design uses only existing builtins (`ExtractIndex`, `ExtractField`, `Tag`). No new builtins are needed.
 
 ## Deliverables
 
 1. `declare()` TypeScript function (concurrent bindings only, per-binding effectId)
-2. VarRef TypedAction construction (Perform with binding-specific effectId, no payload)
-3. Nested Handle compilation (one Handle per binding, trivial handler)
-4. Tests per above
-5. Demo migration
+2. `VarRef` type alias and `createVarRef()` construction
+3. `InferVarRefs` mapped type
+4. `readVar(n)` handler DAG factory
+5. Nested Handle compilation in `declare()`
+6. Engine change: Handle initializes state from pipeline value
+7. TypeScript compilation tests (AST structure)
+8. TypeScript type-level tests (tsc)
+9. Rust engine tests (runtime behavior)
+10. Demo migration: identify-and-address-refactors `ImplementAndReview` step
