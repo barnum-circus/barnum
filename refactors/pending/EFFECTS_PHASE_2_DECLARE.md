@@ -43,11 +43,11 @@ bindInput<WorktreeEnv>((env) => pipe(
 ))
 ```
 
-`bindInput` is syntactic sugar for `bind([identity()], ([input]) => body(input))`.
+`bindInput` is syntactic sugar for `bind([identity()], ([input]) => pipe(drop(), body(input)))` — the pipeline input is bound to a VarRef and then dropped, so the body must access it through the VarRef.
 
 ## How bind compiles
 
-Each binding gets its own effectId — the natural HOAS representation where each binder creates a fresh name. This avoids the dynamic typing problem that a shared effectId with runtime index would introduce (see "Why not a shared effectId" below).
+Each binding gets its own effectId — the natural HOAS representation where each binder creates a fresh name.
 
 ```
 bind([fetchUser, fetchConfig], ([user, config]) => body)
@@ -75,13 +75,59 @@ Handle initializes its state to the pipeline value (a one-line engine change: `s
 
 N bindings produce N nested Handle frames. This is the natural representation of N lexical bindings — `let a = ... in let b = ... in body`. Each `let` is a scope, each Handle is a scope.
 
-### Why not a shared effectId
-
-An alternative design uses one shared effectId with the binding index as payload and a runtime index lookup. This is dynamically typed — the index is a runtime value and each tuple element has a different type, so the result is `unknown`. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved through the TS compiler.
-
 ### Engine change: Handle initializes state from pipeline value
 
-The only engine change needed: when creating a Handle frame, set `state: Some(value.clone())` instead of `state: None`. The body still receives the pipeline value unchanged. This is a one-line change in the `FlatAction::Handle` arm of `advance()`.
+In `advance()`, the `FlatAction::Handle` arm creates a HandleFrame. Currently, state starts as `None`. The change: clone the pipeline value into state before passing it to the body.
+
+**Before** (current, `crates/barnum_engine/src/lib.rs`):
+
+```rust
+FlatAction::Handle { effect_id } => {
+    let body = self.flat_config.handle_body(action_id);
+    let handler = self.flat_config.handle_handler(action_id);
+    let frame_id = self.insert_frame(Frame {
+        parent,
+        kind: FrameKind::Handle(HandleFrame {
+            effect_id,
+            body,
+            handler,
+            state: None,
+            status: HandleStatus::Free,
+        }),
+    });
+    self.advance(
+        body,
+        value,
+        Some(ParentRef::Handle { frame_id, side: HandleSide::Body }),
+    )?;
+}
+```
+
+**After:**
+
+```rust
+FlatAction::Handle { effect_id } => {
+    let body = self.flat_config.handle_body(action_id);
+    let handler = self.flat_config.handle_handler(action_id);
+    let frame_id = self.insert_frame(Frame {
+        parent,
+        kind: FrameKind::Handle(HandleFrame {
+            effect_id,
+            body,
+            handler,
+            state: Some(value.clone()),
+            status: HandleStatus::Free,
+        }),
+    });
+    self.advance(
+        body,
+        value,
+        Some(ParentRef::Handle { frame_id, side: HandleSide::Body }),
+    )?;
+}
+```
+
+One-line change: `state: None` → `state: Some(value.clone())`. The body still receives `value` unchanged. When a Perform fires, the handler receives `{ payload, state }` where `state` is this cloned pipeline value.
 
 ## Function definitions
 

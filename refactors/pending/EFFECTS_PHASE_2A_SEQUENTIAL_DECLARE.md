@@ -2,7 +2,7 @@
 
 ## Goal
 
-Extend `declare` to support sequential bindings where a binding can depend on previously-bound values. Phase 2 implements concurrent-only bindings; this phase adds the function form that enables dependencies between bindings.
+Extend `bind` to support sequential bindings where a binding can depend on previously-bound values. Phase 2 implements concurrent-only bindings; this phase adds the function form that enables dependencies between bindings.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ Phase 2 (Variable Declarations) complete.
 A binding can be a function that receives an array of all previously-bound VarRefs:
 
 ```ts
-declare([
+bind([
   exprA,
   ([a]) => exprB_using_a,
 ], ([a, b]) => body)
@@ -26,7 +26,7 @@ declare([
 **Sequential binding (depends on previous):**
 
 ```ts
-declare([
+bind([
   fetchUser,
   ([user]) => fetchReposForUser(user),
 ], ([user, repos]) =>
@@ -39,7 +39,7 @@ declare([
 **Mixed concurrent and sequential:**
 
 ```ts
-declare([
+bind([
   fetchUser,
   fetchConfig,
   ([user, config]) => deriveSettings(user, config),
@@ -61,7 +61,7 @@ The TS macro splits the binding array into groups:
 ## Compilation
 
 ```
-declare([
+bind([
   exprA,
   ([a]) => exprB_using_a,
 ], ([a, b]) => body)
@@ -88,10 +88,10 @@ Handle state is initialized to the pipeline value (same as Phase 2). For the out
 
 ## Type changes
 
-The `declare` signature changes to accept both forms:
+The `bind` signature changes to accept both forms:
 
 ```ts
-function declare<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any>[]) => Pipeable<TIn, any>))[], TOut>(
+function bind<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any>[]) => Pipeable<TIn, any>))[], TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut>
@@ -109,7 +109,7 @@ function declare<TIn, TBindings extends (Pipeable<TIn, any> | ((vars: VarRef<any
 
 ## Deliverables
 
-1. Extend `declare()` to accept function bindings
+1. Extend `bind()` to accept function bindings
 2. Grouping logic (split array into concurrent/sequential groups)
 3. Nested Handle compilation for sequential groups
 4. Updated `InferVarRefs` type to handle function form
