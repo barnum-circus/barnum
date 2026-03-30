@@ -1005,6 +1005,7 @@ impl WorkflowState {
 }
 
 #[cfg(test)]
+#[allow(clippy::doc_markdown)]
 mod tests {
     use super::*;
     use barnum_ast::flat::flatten;
@@ -1432,5 +1433,768 @@ mod tests {
             arena.get(old_id).is_none(),
             "stale FrameId must not match a reused slot"
         );
+    }
+
+    // -- Handle / Perform helpers --
+
+    fn handle(effect_id: u16, handler: Action, body: Action) -> Action {
+        Action::Handle(HandleAction {
+            effect_id: EffectId(effect_id),
+            body: Box::new(body),
+            handler: Box::new(handler),
+        })
+    }
+
+    fn perform(effect_id: u16) -> Action {
+        Action::Perform(PerformAction {
+            effect_id: EffectId(effect_id),
+        })
+    }
+
+    fn invoke_builtin(builtin: BuiltinKind) -> Action {
+        Action::Invoke(InvokeAction {
+            handler: HandlerKind::Builtin(BuiltinHandler { builtin }),
+        })
+    }
+
+    fn constant_handler(value: Value) -> Action {
+        invoke_builtin(BuiltinKind::Constant { value })
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn always_resume_handler(value: Value) -> Action {
+        constant_handler(json!({
+            "kind": "Resume",
+            "value": value,
+        }))
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn always_discard_handler(value: Value) -> Action {
+        constant_handler(json!({
+            "kind": "Discard",
+            "value": value,
+        }))
+    }
+
+    fn echo_resume_handler() -> Action {
+        chain(
+            invoke_builtin(BuiltinKind::ExtractField {
+                value: json!("payload"),
+            }),
+            invoke_builtin(BuiltinKind::Tag {
+                value: json!("Resume"),
+            }),
+        )
+    }
+
+    fn garbage_output_handler() -> Action {
+        constant_handler(json!({ "kind": "Unknown" }))
+    }
+
+    fn missing_fields_handler() -> Action {
+        constant_handler(json!({ "kind": "Resume" }))
+    }
+
+    /// Process all pending builtin dispatches. Returns TypeScript dispatches
+    /// for manual completion and workflow result (if the workflow terminated).
+    #[allow(clippy::unwrap_used, clippy::type_complexity)]
+    fn drive_builtins(
+        engine: &mut WorkflowState,
+    ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
+        let mut ts_dispatches: Vec<Dispatch> = Vec::new();
+        loop {
+            let dispatches = engine.take_pending_dispatches();
+            if dispatches.is_empty() {
+                break;
+            }
+            let mut had_builtin = false;
+            for dispatch in dispatches {
+                match engine.handler(dispatch.handler_id).clone() {
+                    HandlerKind::Builtin(builtin_handler) => {
+                        let result = barnum_builtins::execute_builtin(
+                            &builtin_handler.builtin,
+                            &dispatch.value,
+                        )
+                        .unwrap();
+                        if let Some(value) = engine.complete(dispatch.task_id, result)? {
+                            return Ok((Some(value), ts_dispatches));
+                        }
+                        had_builtin = true;
+                    }
+                    HandlerKind::TypeScript(_) => {
+                        ts_dispatches.push(dispatch);
+                    }
+                }
+            }
+            if !had_builtin {
+                break;
+            }
+        }
+        Ok((None, ts_dispatches))
+    }
+
+    /// Complete a task and then drive all resulting builtins.
+    #[allow(clippy::unwrap_used)]
+    fn complete_and_drive(
+        engine: &mut WorkflowState,
+        task_id: TaskId,
+        value: Value,
+    ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
+        let result = engine.complete(task_id, value)?;
+        if result.is_some() {
+            let ts = engine.take_pending_dispatches();
+            return Ok((result, ts));
+        }
+        drive_builtins(engine)
+    }
+
+    // -- Handle / Perform tests --
+
+    // Test 1: Bare Perform with no enclosing Handle → UnhandledEffect.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn perform_without_handle_errors() {
+        let mut engine = engine_from(perform(1));
+        let root = engine.workflow_root();
+        let err = engine.advance(root, json!(null), None).unwrap_err();
+        assert!(
+            matches!(err, AdvanceError::UnhandledEffect { effect_id } if effect_id == EffectId(1)),
+            "expected UnhandledEffect, got: {err:?}",
+        );
+    }
+
+    // Test 2: Handle(e, always_resume(42), Chain(Perform(e), Invoke(echo))).
+    /// Perform fires, handler resumes with 42, Chain trampolines to echo with 42.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn handle_resume_chains_to_next() {
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!(42)),
+            chain(perform(1), invoke("./echo.ts", "echo")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform fires synchronously during advance. The handler DAG
+        // (Constant) produces a dispatch. Drive builtins to process it.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        // Chain trampolines to echo with the resumed value.
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!(42));
+
+        // Complete echo.
+        let result = engine
+            .complete(ts[0].task_id, json!("echo_result"))
+            .unwrap();
+        assert_eq!(result, Some(json!("echo_result")));
+    }
+
+    /// Test 3: Handle(e, always_discard("error"), Chain(Perform(e), Invoke(unreachable))).
+    /// Handler discards, body torn down, Handle exits with "error". Invoke never runs.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn handle_discard_skips_rest_of_chain() {
+        let mut engine = engine_from(handle(
+            1,
+            always_discard_handler(json!("error")),
+            chain(perform(1), invoke("./unreachable.ts", "nope")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, Some(json!("error")));
+        // No TypeScript dispatches — unreachable invoke never ran.
+        assert!(ts.is_empty());
+    }
+
+    /// Test 5: Perform(outer) skips inner Handle, caught by outer.
+    /// Handle(outer, h_outer, Handle(inner, h_inner, Perform(outer))).
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn perform_skips_non_matching_handle() {
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!("outer_handled")),
+            handle(
+                2,
+                always_resume_handler(json!("inner_handled")),
+                perform(1), // effect_id=1, skips inner (effect_id=2)
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        // Outer handler resumed, inner Handle's body gets the value.
+        // But Perform(1) is the entire inner body, so delivery goes to
+        // Handle(inner)'s parent = Handle(outer)'s body.
+        // Inner Handle exits with "outer_handled", then outer Handle exits.
+        assert_eq!(result, Some(json!("outer_handled")));
+        assert!(ts.is_empty());
+    }
+
+    /// Test 6: Perform is first half of Chain. After Resume(V), Chain rest receives V.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn perform_in_chain_first_resumes_to_rest() {
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!("resumed_value")),
+            chain(perform(1), invoke("./next.ts", "next")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("resumed_value"));
+
+        let result = engine.complete(ts[0].task_id, json!("final")).unwrap();
+        assert_eq!(result, Some(json!("final")));
+    }
+
+    /// Test 7: One branch of All Performs, the other completes normally.
+    /// After Resume, All joins both.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn handle_all_one_performs_one_normal() {
+        // Handle(e, echo_resume, All(Chain(Invoke(A), Perform(e)), Invoke(B)))
+        let mut engine = engine_from(handle(
+            1,
+            echo_resume_handler(),
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), perform(1)),
+                invoke("./b.ts", "b"),
+            ]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2); // A and B dispatched
+
+        // Complete A -> Chain trampolines to Perform -> handler dispatched.
+        let (result, ts2) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, None);
+        // echo_resume echoes "a_out" back. Resume delivers to All slot 0.
+        assert!(ts2.is_empty());
+
+        // Complete B -> All slot 1.
+        let result = engine.complete(ts[1].task_id, json!("b_out")).unwrap();
+        // All joins with [resumed_value, "b_out"].
+        assert_eq!(result, Some(json!(["a_out", "b_out"])));
+    }
+
+    /// Test 8: After Discard, body frames removed from arena, task_to_parent entries removed.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn discard_cleans_up_frames_and_tasks() {
+        // Handle(e, always_discard("done"), Chain(Invoke(A), Perform(e)))
+        let mut engine = engine_from(handle(
+            1,
+            always_discard_handler(json!("done")),
+            chain(invoke("./a.ts", "a"), perform(1)),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // A dispatched.
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 1);
+
+        // Complete A -> Perform -> handler -> Discard.
+        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, Some(json!("done")));
+
+        // Verify frames are empty — Handle frame was removed, Chain consumed during trampoline.
+        assert_eq!(engine.frames.len(), 0);
+        assert!(engine.task_to_parent.is_empty());
+    }
+
+    /// Test 9: Body Performs twice in a Chain. First resumed, then second fires.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn two_performs_in_chain() {
+        // Handle(e, echo_resume, Chain(Perform(e), Chain(Invoke(mid), Perform(e))))
+        let mut engine = engine_from(handle(
+            1,
+            echo_resume_handler(),
+            chain(perform(1), chain(invoke("./mid.ts", "mid"), perform(1))),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // First Perform fires during advance. Drive builtins for echo_resume handler.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        // Handler echoed "input" back. Chain trampolines to Chain(mid, Perform).
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("input"));
+
+        // Complete mid -> inner Chain trampolines to second Perform -> handler ->
+        // Resume with "mid_out" -> deliver to Handle{Body} -> body done -> Handle exits.
+        let (result, ts2) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("mid_out")).unwrap();
+        assert_eq!(result, Some(json!("mid_out")));
+        assert!(ts2.is_empty());
+    }
+
+    /// Test 10: RestartBody multiple times then Discard.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn restart_body_multiple_then_discard() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            chain(invoke("./body.ts", "step"), perform(1)),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("init"), None).unwrap();
+
+        let mut body_dispatches = engine.take_pending_dispatches();
+        assert_eq!(body_dispatches.len(), 1);
+
+        let frame_count_before = engine.frames.len();
+
+        for _ in 0..3 {
+            // Complete body step -> Perform fires -> handler dispatched.
+            let (_, handler_dispatches) =
+                complete_and_drive(&mut engine, body_dispatches[0].task_id, json!("body_out"))
+                    .unwrap();
+            assert_eq!(handler_dispatches.len(), 1);
+
+            // Complete handler with RestartBody.
+            let result = engine
+                .complete(
+                    handler_dispatches[0].task_id,
+                    json!({"kind": "RestartBody", "value": "restarted"}),
+                )
+                .unwrap();
+            assert_eq!(result, None);
+
+            // New body step dispatched after restart.
+            body_dispatches = engine.take_pending_dispatches();
+            assert_eq!(body_dispatches.len(), 1);
+            assert_eq!(body_dispatches[0].value, json!("restarted"));
+        }
+
+        // Frames shouldn't grow across restarts.
+        assert!(
+            engine.frames.len() <= frame_count_before,
+            "arena grew: {} -> {}",
+            frame_count_before,
+            engine.frames.len(),
+        );
+
+        // Final iteration: Discard instead of RestartBody.
+        let (_, handler_dispatches) =
+            complete_and_drive(&mut engine, body_dispatches[0].task_id, json!("body_out")).unwrap();
+        let result = engine
+            .complete(
+                handler_dispatches[0].task_id,
+                json!({"kind": "Discard", "value": "gave_up"}),
+            )
+            .unwrap();
+        assert_eq!(result, Some(json!("gave_up")));
+        assert_eq!(engine.frames.len(), 0);
+    }
+
+    /// Test 14: Body runs without Performing. Handle exits normally.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn handle_body_no_perform_exits_normally() {
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!("unused")),
+            invoke("./body.ts", "run"),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 1); // body invoke dispatched
+
+        let result = engine
+            .complete(ts[0].task_id, json!("body_result"))
+            .unwrap();
+        // Body done, no Perform, Handle exits with body result.
+        assert_eq!(result, Some(json!("body_result")));
+    }
+
+    /// Test 15: Stash scenario — completion during suspension.
+    /// Handle(e, echo_resume, All(Chain(Invoke(A), Perform(e)), Invoke(B)))
+    /// Complete A -> Perform -> handler. Complete B -> stashed. Handler resumes -> sweep -> B delivered -> All joins.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn stash_delivery_during_suspension() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), perform(1)),
+                invoke("./b.ts", "b"),
+            ]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2); // A and B
+
+        // Complete A -> Chain trampolines to Perform -> handler dispatched.
+        let (result, handler_ts) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(handler_ts.len(), 1); // handler TS dispatch
+
+        // Complete B while handler is running -> stashed.
+        let result = engine.complete(ts[1].task_id, json!("b_out")).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(engine.stashed_items.len(), 1);
+
+        // Complete handler with Resume.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            handler_ts[0].task_id,
+            json!({"kind": "Resume", "value": "a_resumed"}),
+        )
+        .unwrap();
+        // Resume delivers to All slot 0. sweep_stash delivers B to All slot 1. All joins.
+        assert_eq!(result, Some(json!(["a_resumed", "b_out"])));
+        assert!(engine.stashed_items.is_empty());
+    }
+
+    /// Test 16: Same as test 15 but handler Discards. B stashed, teardown, sweep drops B.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn stash_dropped_after_discard() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), perform(1)),
+                invoke("./b.ts", "b"),
+            ]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2);
+
+        // Complete A -> Perform -> handler dispatched.
+        let (_, handler_ts) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+
+        // Complete B -> stashed.
+        engine.complete(ts[1].task_id, json!("b_out")).unwrap();
+        assert_eq!(engine.stashed_items.len(), 1);
+
+        // Handler Discards.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            handler_ts[0].task_id,
+            json!({"kind": "Discard", "value": "discarded"}),
+        )
+        .unwrap();
+        // Teardown removes All frame, Handle frame removed, body torn down.
+        assert_eq!(result, Some(json!("discarded")));
+        assert_eq!(engine.frames.len(), 0);
+        // Stashed B remains (orphaned) — sweep_stash is not called when
+        // workflow terminates. This is correct: orphaned items are irrelevant.
+    }
+
+    /// Test 22: All(Perform(e), Perform(e)) — concurrent Performs.
+    /// First dispatches handler, second stashed. After resume, sweep retries.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn concurrent_performs_serialized() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![perform(1), perform(1)]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // During advance: All advances both Performs.
+        // First Perform: bubble_effect -> dispatch handler (Handle becomes Suspended).
+        // Second Perform: find_blocking_ancestor -> Handle busy -> stashed as Effect.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1); // handler dispatch for first Perform
+        assert_eq!(engine.stashed_items.len(), 1); // second Perform stashed
+
+        // Complete first handler with Resume.
+        let (result, handler2_ts) = complete_and_drive(
+            &mut engine,
+            ts[0].task_id,
+            json!({"kind": "Resume", "value": "first_resumed"}),
+        )
+        .unwrap();
+        // Resume delivers to All slot 0. sweep_stash retries second effect ->
+        // Handle free -> dispatches second handler.
+        assert_eq!(result, None);
+        assert_eq!(handler2_ts.len(), 1);
+        assert!(engine.stashed_items.is_empty());
+
+        // Complete second handler.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            handler2_ts[0].task_id,
+            json!({"kind": "Resume", "value": "second_resumed"}),
+        )
+        .unwrap();
+        assert_eq!(result, Some(json!(["first_resumed", "second_resumed"])),);
+    }
+
+    /// Test 24: Handler returns garbage output → InvalidHandlerOutput error.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn garbage_handler_output_errors() {
+        let mut engine = engine_from(handle(1, garbage_output_handler(), perform(1)));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Handler Constant returns { kind: "Unknown" }.
+        let err = drive_builtins(&mut engine).unwrap_err();
+        assert!(
+            matches!(err, CompleteError::InvalidHandlerOutput { .. }),
+            "expected InvalidHandlerOutput, got: {err:?}",
+        );
+    }
+
+    /// Test 25: Handler returns { kind: "Resume" } with missing value → InvalidHandlerOutput.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn missing_fields_handler_output_errors() {
+        let mut engine = engine_from(handle(1, missing_fields_handler(), perform(1)));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let err = drive_builtins(&mut engine).unwrap_err();
+        assert!(
+            matches!(err, CompleteError::InvalidHandlerOutput { .. }),
+            "expected InvalidHandlerOutput, got: {err:?}",
+        );
+    }
+
+    /// Test 27: Effect shadowing — inner Handle intercepts same effect_id.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn effect_shadowing_inner_catches() {
+        // Handle(e, outer_handler, Handle(e, inner_handler, Perform(e)))
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!("outer")),
+            handle(1, always_resume_handler(json!("inner")), perform(1)),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Inner Handle catches the Perform. Handler resumes with "inner".
+        // Inner body done -> inner Handle exits -> outer body done -> outer Handle exits.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, Some(json!("inner")));
+        assert!(ts.is_empty());
+    }
+
+    /// Test 30: Handle(e, handler, Perform(e)) — Perform is direct child of Handle body.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn perform_direct_child_of_handle_body() {
+        let mut engine = engine_from(handle(
+            1,
+            always_resume_handler(json!("resumed")),
+            perform(1),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform's parent is Handle{Body}. bubble_effect checks is_blocked_by_handle.
+        // Handle is Free -> not blocked -> handler dispatched.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        // Handler resumes with "resumed". Deliver to Handle{Body} -> body done -> exit.
+        assert_eq!(result, Some(json!("resumed")));
+        assert!(ts.is_empty());
+    }
+
+    /// Test 12: resume_with_state_handler — handler extracts state, resumes with it.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn resume_with_state() {
+        // Handler DAG: ExtractField("state") -> Tag("Resume")
+        // This means the handler echoes the Handle's state back as the resume value.
+        let resume_with_state = chain(
+            invoke_builtin(BuiltinKind::ExtractField {
+                value: json!("state"),
+            }),
+            invoke_builtin(BuiltinKind::Tag {
+                value: json!("Resume"),
+            }),
+        );
+        // Handle's initial state is null (default). Body: Chain(Invoke(step), Perform(e))
+        let mut engine = engine_from(handle(
+            1,
+            resume_with_state,
+            chain(invoke("./step.ts", "step"), perform(1)),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 1); // step dispatched
+
+        // Complete step -> Perform fires -> handler gets { payload: "step_out", state: null }
+        // Handler extracts state (null) and resumes with null.
+        let (result, _) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("step_out")).unwrap();
+        // Resume with null -> deliver to Chain -> body done -> Handle exits.
+        assert_eq!(result, Some(json!(null)));
+    }
+
+    /// Test 13: State update persists across handler invocations.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn state_update_persists() {
+        // Handler: TS handler we manually complete (so we can control state_update).
+        // Body: Chain(Perform(e), Chain(Invoke(mid), Perform(e)))
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            chain(perform(1), chain(invoke("./mid.ts", "mid"), perform(1))),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // First Perform fires during advance -> handler dispatched.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1);
+
+        // First handler: Resume with state_update.
+        let result = engine
+            .complete(
+                ts[0].task_id,
+                json!({
+                    "kind": "Resume",
+                    "value": "v1",
+                    "state_update": { "kind": "Updated", "value": "new_state" }
+                }),
+            )
+            .unwrap();
+        assert_eq!(result, None);
+
+        // Chain trampolines to mid.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("v1"));
+
+        // Complete mid -> Chain trampolines to second Perform -> handler dispatched.
+        let (_, handler_ts) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("mid_out")).unwrap();
+        assert_eq!(handler_ts.len(), 1);
+
+        // Second handler receives state = "new_state" (persisted from first handler).
+        // We verify by checking the dispatch value.
+        assert_eq!(
+            handler_ts[0].value,
+            json!({ "payload": "mid_out", "state": "new_state" }),
+        );
+
+        // Complete second handler with Resume.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            handler_ts[0].task_id,
+            json!({"kind": "Resume", "value": "v2"}),
+        )
+        .unwrap();
+        // Body done -> Handle exits.
+        assert_eq!(result, Some(json!("v2")));
+    }
+
+    /// Test 21: Multi-step handler Chain. Handler side is never blocked.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn multi_step_handler_chain() {
+        // Handler: Chain(Invoke(step1), Invoke(step2))
+        // Body: Perform(e)
+        let mut engine = engine_from(handle(
+            1,
+            chain(invoke("./step1.ts", "s1"), invoke("./step2.ts", "s2")),
+            perform(1),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform fires -> handler Chain starts -> step1 dispatched.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1);
+
+        // Complete step1 -> Chain trampolines to step2.
+        let result = engine.complete(ts[0].task_id, json!("s1_out")).unwrap();
+        assert_eq!(result, None);
+
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("s1_out"));
+
+        // Complete step2 -> handler done -> handle_handler_completion called.
+        // step2 returns the HandlerOutput JSON.
+        let result = engine
+            .complete(ts[0].task_id, json!({"kind": "Resume", "value": "final"}))
+            .unwrap();
+        assert_eq!(result, Some(json!("final")));
+    }
+
+    /// Test 23: Two effects targeting different Handles.
+    /// Handle(e1, h1, Handle(e2, h2, All(Perform(e1), Perform(e2))))
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn two_effects_different_handles() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./h1.ts", "h1"),
+            handle(
+                2,
+                invoke("./h2.ts", "h2"),
+                parallel(vec![perform(1), perform(2)]),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // During advance: All advances both Performs.
+        // Perform(e1): bubble_effect walks up from All -> Handle(e2) (wrong effect) ->
+        //   Handle(e1) (matches, free) -> dispatches h1. Handle(e1) suspends.
+        // Perform(e2): find_blocking_ancestor from All -> Handle(e2) (free, body, not blocked) ->
+        //   Handle(e1) (body, suspended) -> Blocked! Stashed as Effect.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 1); // h1 dispatch
+        assert_eq!(engine.stashed_items.len(), 1);
+
+        // Complete h1 with Resume.
+        let (result, h2_ts) = complete_and_drive(
+            &mut engine,
+            ts[0].task_id,
+            json!({"kind": "Resume", "value": "e1_resumed"}),
+        )
+        .unwrap();
+        // Resume delivers to All slot 0. sweep_stash retries Perform(e2) ->
+        // Handle(e1) free -> walk to Handle(e2) (matches, free) -> dispatches h2.
+        assert_eq!(result, None);
+        assert_eq!(h2_ts.len(), 1);
+
+        // Complete h2 with Resume.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            h2_ts[0].task_id,
+            json!({"kind": "Resume", "value": "e2_resumed"}),
+        )
+        .unwrap();
+        assert_eq!(result, Some(json!(["e1_resumed", "e2_resumed"])),);
     }
 }

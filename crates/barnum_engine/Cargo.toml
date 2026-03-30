@@ -20,6 +20,7 @@ u32_newtype = { path = "../u32_newtype" }
 
 [dev-dependencies]
 barnum_ast = { path = "../barnum_ast" }
+barnum_builtins = { path = "../barnum_builtins" }
 intern = { path = "../intern" }
 insta = { version = "1", features = ["glob"] }
 serde = { workspace = true }

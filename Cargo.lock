@@ -122,6 +122,7 @@ name = "barnum_engine"
 version = "0.2.4"
 dependencies = [
  "barnum_ast",
+ "barnum_builtins",
  "insta",
  "intern",
  "serde",
