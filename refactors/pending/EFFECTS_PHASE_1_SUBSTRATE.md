@@ -200,23 +200,29 @@ impl FlatConfig {
 The frame kind stores all three IDs (effect_id, handler, body) even though the flat table only stores two. The body `ActionId` is resolved from the child slot during `advance` and stored in the frame for RestartBody re-entry.
 
 ```rust
+/// Named struct for the Handle frame's state. Lives inside
+/// `FrameKind::Handle(HandleFrame)` — avoids anonymous struct
+/// fields and lets methods take `&mut HandleFrame` directly.
+#[derive(Debug)]
+pub struct HandleFrame {
+    pub effect_id: EffectId,
+    pub handler: ActionId,
+    /// Resolved from the child slot during advance. Stored here
+    /// because RestartBody needs it to re-enter the body.
+    pub body: ActionId,
+    /// Opaque state. Initialized from the Handle's input value.
+    /// Updated by handler DAG output's `state_update` field.
+    pub state: Value,
+    /// The suspended continuation, if a Perform has fired and the handler is running.
+    /// None when the body is running normally.
+    /// Some when the body is suspended and the handler is in flight.
+    pub continuation: Option<ContinuationRoot>,
+}
+
 pub enum FrameKind {
     // ... existing variants (Chain, Parallel, ForEach, Loop) ...
 
-    Handle {
-        effect_id: EffectId,
-        handler: ActionId,
-        /// Resolved from the child slot during advance. Stored here
-        /// because RestartBody needs it to re-enter the body.
-        body: ActionId,
-        /// Opaque state. Initialized from the Handle's input value.
-        /// Updated by handler DAG output's `state_update` field.
-        state: Value,
-        /// The suspended continuation, if a Perform has fired and the handler is running.
-        /// None when the body is running normally.
-        /// Some when the body is suspended and the handler is in flight.
-        continuation: Option<ContinuationRoot>,
-    },
+    Handle(HandleFrame),
 }
 
 /// The suspended continuation: tracks where to deliver Resume values
@@ -242,13 +248,13 @@ FlatAction::Handle { effect_id, handler } => {
     let body = self.flat_config.handle_body(action_id);
     let frame_id = self.insert_frame(Frame {
         parent,
-        kind: FrameKind::Handle {
+        kind: FrameKind::Handle(HandleFrame {
             effect_id,
             handler,
             body,
             state: value.clone(),       // input = initial state
             continuation: None,
-        },
+        }),
     });
     self.advance(body, value, Some(ParentRef::SingleChild { frame_id }))?;
 }
@@ -292,8 +298,8 @@ fn bubble_effect(
         let parent_id = parent_ref.frame_id();
         let parent = &self.frames[parent_id.0];
 
-        if let FrameKind::Handle { effect_id: handled_effect_id, .. } = &parent.kind {
-            if *handled_effect_id == effect_id {
+        if let FrameKind::Handle(handle_frame) = &parent.kind {
+            if handle_frame.effect_id == effect_id {
                 // starting_parent is guaranteed Some: if it were None, the while
                 // loop would never have entered and we'd have returned UnhandledEffect.
                 let perform_parent = starting_parent
@@ -321,20 +327,19 @@ fn dispatch_to_handler(
     payload: Value,
 ) -> Result<(), AdvanceError> {
     // 1. Store the continuation (the Perform's delivery point).
-    let frame = &mut self.frames[handle_frame_id.0];
-    let (handler, state) = match &mut frame.kind {
-        FrameKind::Handle { handler, state, continuation, .. } => {
-            assert!(
-                continuation.is_none(),
-                "double Perform: Handle already has a suspended continuation"
-            );
-            *continuation = Some(ContinuationRoot {
-                perform_parent,
-            });
-            (*handler, state.clone())
-        }
-        _ => unreachable!("dispatch_to_handler called on non-Handle frame"),
+    //    bubble_effect guarantees this is a Handle frame.
+    let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
+        unreachable!("dispatch_to_handler called on non-Handle frame");
     };
+    assert!(
+        handle_frame.continuation.is_none(),
+        "double Perform: Handle already has a suspended continuation"
+    );
+    handle_frame.continuation = Some(ContinuationRoot {
+        perform_parent,
+    });
+    let handler = handle_frame.handler;
+    let state = handle_frame.state.clone();
 
     // 2. Construct handler input: { payload, state }.
     let handler_input = serde_json::json!({
@@ -370,7 +375,7 @@ ParentRef::SingleChild { .. } => {
     // Check if this is a handler completion (not a body completion).
     let is_handler_completion = matches!(
         &self.frames[frame_id.0].kind,
-        FrameKind::Handle { continuation: Some(_), .. }
+        FrameKind::Handle(HandleFrame { continuation: Some(_), .. })
     );
 
     if is_handler_completion {
@@ -387,7 +392,7 @@ ParentRef::SingleChild { .. } => {
         FrameKind::Loop { body } => {
             // ... existing Loop logic ...
         }
-        FrameKind::Handle { .. } => {
+        FrameKind::Handle(_) => {
             // Body completed normally. No continuation to clean up.
             // Handle exits, deliver value to parent.
             self.deliver(frame.parent, value)
@@ -416,11 +421,11 @@ fn handle_handler_completion(
     let value = output["value"].clone();
 
     // 2. Take the continuation from the frame.
-    let continuation = match &mut self.frames[handle_frame_id.0].kind {
-        FrameKind::Handle { continuation, .. } => continuation.take()
-            .expect("handler completion requires stored continuation"),
-        _ => unreachable!(),
+    let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
+        unreachable!("handle_handler_completion called on non-Handle frame");
     };
+    let continuation = handle_frame.continuation.take()
+        .expect("handler completion requires stored continuation");
 
     // 3. Dispatch on the continuation operation.
     //    Resume and RestartBody carry state_update. Discard does not
@@ -454,9 +459,10 @@ fn apply_state_update(
         "Unchanged" => Ok(()),
         "Updated" => {
             let new_state = output["state_update"]["value"].clone();
-            if let FrameKind::Handle { state, .. } = &mut self.frames[handle_frame_id.0].kind {
-                *state = new_state;
-            }
+            let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id.0].kind else {
+                unreachable!("apply_state_update called on non-Handle frame");
+            };
+            handle_frame.state = new_state;
             Ok(())
         }
         _ => Err(CompleteError::InvalidHandlerOutput { value: output.clone() }),
@@ -534,10 +540,10 @@ fn restart_body(
     self.teardown_body(handle_frame_id);
 
     // 2. Re-advance the body with the new value.
-    let body = match &self.frames[handle_frame_id.0].kind {
-        FrameKind::Handle { body, .. } => *body,
-        _ => unreachable!(),
+    let FrameKind::Handle(handle_frame) = &self.frames[handle_frame_id.0].kind else {
+        unreachable!("restart_body called on non-Handle frame");
     };
+    let body = handle_frame.body;
     self.advance(body, value, Some(ParentRef::SingleChild { frame_id: handle_frame_id }))?;
     Ok(None)
 }
