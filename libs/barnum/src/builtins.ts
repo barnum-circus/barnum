@@ -34,7 +34,7 @@ export function identity<TValue>(): TypedAction<TValue, TValue> {
 // Drop — discard pipeline value
 // ---------------------------------------------------------------------------
 
-export function drop<TValue>(): TypedAction<TValue, never> {
+export function drop<TValue = any>(): TypedAction<TValue, never> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Drop" } },
