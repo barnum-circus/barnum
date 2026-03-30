@@ -8,6 +8,7 @@ import {
   type TypedAction,
   type ExtractInput,
   type ExtractOutput,
+  type ExtractRefs,
   type LoopResult,
   type Option,
   type OptionDef,
@@ -499,6 +500,51 @@ describe("postfix .branch() type safety", () => {
   it("rejects .branch() on non-discriminated output", () => {
     // @ts-expect-error — Out has no kind, .branch() should reject
     deploy.branch({ A: drop() });
+  });
+
+  it("accepts case handlers with step refs (non-never Refs)", () => {
+    // stepRef returns TypedAction<any, any, N> — the N brand must be
+    // accepted by the branch constraint (CaseHandler allows string refs).
+    // This is critical for mutual recursion patterns: branch dispatches
+    // to named steps via stepRef inside .branch() cases.
+    workflowBuilder()
+      .registerSteps(({ stepRef }) => ({
+        TypeCheck: classifyErrors.branch({
+          HasErrors: stepRef("Fix"),
+          Clean: drop(),
+        }),
+        Fix: pipe(forEach(fix).drop(), stepRef("TypeCheck")),
+      }));
+    // Type-checks iff CaseHandler constraint accepts non-never refs.
+    // Before fix: CaseHandler defaulted TRefs=never, rejecting stepRef("Fix").
+  });
+
+  it("branch collects refs from case handlers", () => {
+    // Branch return type should union refs from all case handlers.
+    const branched = classifyErrors.branch({
+      HasErrors: drop(),
+      Clean: drop(),
+    });
+    // With no step refs, Refs should be never
+    assertExact<IsExact<ExtractRefs<typeof branched>, never>>();
+  });
+
+  it("branch propagates refs from step refs in cases", () => {
+    // When case handlers carry step refs, .branch() collects them.
+    workflowBuilder()
+      .registerSteps(({ stepRef }) => {
+        const branched = classifyErrors.branch({
+          HasErrors: stepRef("Fix"),
+          Clean: stepRef("Other"),
+        });
+        // Refs should be "Fix" | "Other"
+        assertExact<IsExact<ExtractRefs<typeof branched>, "Fix" | "Other">>();
+        return {
+          Fix: drop() as TypedAction<any, any>,
+          Other: drop() as TypedAction<any, any>,
+          Root: branched,
+        };
+      });
   });
 });
 

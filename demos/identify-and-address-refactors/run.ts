@@ -105,10 +105,10 @@ await workflowBuilder()
       tap<Ctx, any, "TypeCheck">(stepRef("TypeCheck")),
 
       // Judge/revise loop: review the refactor, revise if needed.
-      // drop<any>() discards the tap context — judgeRefactor takes no input.
+      // drop() discards the tap context — judgeRefactor takes no input.
       tap<Ctx, any, "TypeCheck">(
         loop(
-          pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
+          pipe(drop(), judgeRefactor, classifyJudgment).branch({
             NeedsWork: pipe(
               applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>(),
             ),
