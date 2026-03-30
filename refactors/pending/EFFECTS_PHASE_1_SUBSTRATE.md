@@ -67,16 +67,20 @@ type StateUpdate<TState> =
 
 type HandlerOutput<TResume, TDiscard, TRestart, TState> =
   | { kind: "Resume"; value: TResume; state_update: StateUpdate<TState> }
-  | { kind: "Discard"; value: TDiscard; state_update: StateUpdate<TState> }
+  | { kind: "Discard"; value: TDiscard }
   | { kind: "RestartBody"; value: TRestart; state_update: StateUpdate<TState> };
 ```
 
+Discard has no `state_update` — the Handle frame is being torn down, so updating its state is meaningless. Only Resume and RestartBody carry state updates because the Handle frame survives those operations.
+
 In practice, no handler produces all three variants. Each combinator narrows the union:
 
-- **ReadVar handler**: `HandlerOutput<TValue, never, never, TState>` — only Resume.
-- **Throw handler**: `HandlerOutput<never, TRecoveryResult, never, TState>` — only Discard.
-- **Loop recur handler**: `HandlerOutput<never, never, TBodyInput, TState>` — only RestartBody.
-- **Loop done handler**: `HandlerOutput<never, TBreakValue, never, TState>` — only Discard.
+- **ReadVar handler**: `HandlerOutput<TValue, never, never, TState>` — only Resume, always `Unchanged`.
+- **Throw handler**: `HandlerOutput<never, TRecoveryResult, never, TState>` — only Discard (no state_update).
+- **Loop recur handler**: `HandlerOutput<never, never, TBodyInput, TState>` — only RestartBody, always `Unchanged`.
+- **Loop done handler**: `HandlerOutput<never, TBreakValue, never, TState>` — only Discard (no state_update).
+- **Retry handler**: `HandlerOutput<never, TError, TBodyInput, TState>` — RestartBody with `Updated(count - 1)`, or Discard when exhausted.
+- **withState Put handler**: `HandlerOutput<null, never, never, TState>` — Resume with `Updated(new_value)`.
 
 TypeScript enforces that each handler DAG only constructs the variants it should. A readVar handler that accidentally produces Discard is a type error.
 
@@ -108,23 +112,26 @@ The Handle frame carries opaque state. The Rust engine never interprets it — i
    ```
    The handler DAG uses standard, domain-ignorant builtins (`ExtractField`, `Pick`, etc.) to extract what it needs from the state.
 
-3. **Handler output.** The handler DAG produces a tagged output with an explicit state update:
+3. **Handler output.** The handler DAG produces a tagged output. Resume and RestartBody carry an explicit `state_update`; Discard does not (the frame is about to be destroyed).
+
+   Resume (state survives — Handle stays alive, body continues):
    ```json
-   {
-     "kind": "Resume"|"Discard"|"RestartBody",
-     "value": <result>,
-     "state_update": { "kind": "Unchanged" }
-   }
+   { "kind": "Resume", "value": <result>, "state_update": { "kind": "Unchanged" } }
+   { "kind": "Resume", "value": <result>, "state_update": { "kind": "Updated", "value": <new_state> } }
    ```
-   To update the Handle frame's state:
+
+   RestartBody (state survives — Handle stays alive, body restarts):
    ```json
-   {
-     "kind": "Resume",
-     "value": <result>,
-     "state_update": { "kind": "Updated", "value": <new_state> }
-   }
+   { "kind": "RestartBody", "value": <body_input>, "state_update": { "kind": "Unchanged" } }
+   { "kind": "RestartBody", "value": <body_input>, "state_update": { "kind": "Updated", "value": <new_state> } }
    ```
-   The `state_update` field is a discriminated union, not optional. The Rust enum:
+
+   Discard (frame destroyed — no state_update):
+   ```json
+   { "kind": "Discard", "value": <exit_value> }
+   ```
+
+   The `state_update` field is a discriminated union. The Rust enum:
    ```rust
    #[derive(Debug, Clone, PartialEq, Eq)]
    pub enum StateUpdate {
@@ -386,35 +393,51 @@ fn handle_handler_completion(
         })?;
     let value = output["value"].clone();
 
-    // 2. Apply state update.
-    let state_update_kind = output["state_update"]["kind"].as_str()
-        .ok_or_else(|| CompleteError::InvalidHandlerOutput {
-            value: output.clone(),
-        })?;
-    match state_update_kind {
-        "Unchanged" => {}
-        "Updated" => {
-            let new_state = output["state_update"]["value"].clone();
-            if let FrameKind::Handle { state, .. } = &mut self.frames[handle_frame_id.0].kind {
-                *state = new_state;
-            }
-        }
-        _ => return Err(CompleteError::InvalidHandlerOutput { value: output }),
-    }
-
-    // 3. Take the continuation from the frame.
+    // 2. Take the continuation from the frame.
     let continuation = match &mut self.frames[handle_frame_id.0].kind {
         FrameKind::Handle { continuation, .. } => continuation.take()
             .expect("handler completion requires stored continuation"),
         _ => unreachable!(),
     };
 
-    // 4. Dispatch on the continuation operation.
+    // 3. Dispatch on the continuation operation.
+    //    Resume and RestartBody carry state_update. Discard does not
+    //    (the frame is about to be torn down).
     match kind_str {
-        "Resume" => self.resume_continuation(handle_frame_id, continuation, value),
-        "Discard" => self.discard_continuation(handle_frame_id, continuation, value),
-        "RestartBody" => self.restart_body(handle_frame_id, continuation, value),
+        "Resume" => {
+            self.apply_state_update(handle_frame_id, &output)?;
+            self.resume_continuation(handle_frame_id, continuation, value)
+        }
+        "Discard" => {
+            self.discard_continuation(handle_frame_id, continuation, value)
+        }
+        "RestartBody" => {
+            self.apply_state_update(handle_frame_id, &output)?;
+            self.restart_body(handle_frame_id, continuation, value)
+        }
         _ => Err(CompleteError::InvalidHandlerOutput { value: output }),
+    }
+}
+
+fn apply_state_update(
+    &mut self,
+    handle_frame_id: FrameId,
+    output: &Value,
+) -> Result<(), CompleteError> {
+    let state_update_kind = output["state_update"]["kind"].as_str()
+        .ok_or_else(|| CompleteError::InvalidHandlerOutput {
+            value: output.clone(),
+        })?;
+    match state_update_kind {
+        "Unchanged" => Ok(()),
+        "Updated" => {
+            let new_state = output["state_update"]["value"].clone();
+            if let FrameKind::Handle { state, .. } = &mut self.frames[handle_frame_id.0].kind {
+                *state = new_state;
+            }
+            Ok(())
+        }
+        _ => Err(CompleteError::InvalidHandlerOutput { value: output.clone() }),
     }
 }
 ```
