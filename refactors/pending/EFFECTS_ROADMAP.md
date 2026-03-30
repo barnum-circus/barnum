@@ -148,7 +148,7 @@ function tryCatch(bodyCallback, recovery) {
 u32_newtype!(EffectId);
 
 pub enum FlatAction {
-    Handle { effect_id: EffectId, handler: ActionId, body: ActionId },
+    Handle { effect_id: EffectId, handler: ActionId },  // body in child slot at action_id + 1
     Perform { effect_id: EffectId },
 }
 ```
@@ -268,9 +268,8 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 ### Rust changes
 
 - `EffectId(u32)`: opaque effect routing key (using `u32_newtype!` macro)
-- New flat action types: `FlatAction::Handle`, `FlatAction::Perform`
-- `FlatEntry` size assertion relaxed from 8 to 16 bytes (Handle has 3 `u32` fields)
-- New frame kind: `FrameKind::Handle` with fields: `effect`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
+- New flat action types: `FlatAction::Handle` (2-entry: body in child slot, like Chain), `FlatAction::Perform` (1-entry leaf). 8-byte `FlatEntry` constraint preserved.
+- New frame kind: `FrameKind::Handle` with fields: `effect_id`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
 - **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes `state_update: StateUpdate` (`Unchanged` or `Updated(Value)`).
 - `bubble_effect()`: walks parent pointers to find matching Handle. O(depth).
 - `dispatch_to_handler()`: stores `ContinuationRoot`, constructs `{ payload, state }`, advances handler DAG as child of Handle frame. Body subgraph is naturally frozen (Perform point is stuck) — no parent pointer severing needed.

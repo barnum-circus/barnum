@@ -156,10 +156,14 @@ The engine remains a pure structural router. It shuttles opaque JSON between fra
 pub enum FlatAction<T> {
     // ... existing variants (Invoke, Chain, Parallel, ForEach, Branch, Loop, Step) ...
 
+    /// Install a scoped effect handler. Body is a child slot at `action_id + 1`
+    /// (same pattern as Chain stores `first`).
+    ///
+    /// 2-entry action: the Handle entry itself, followed by one child slot
+    /// for the body.
     Handle {
         effect_id: EffectId,
         handler: ActionId,
-        body: ActionId,
     },
 
     Perform {
@@ -168,23 +172,29 @@ pub enum FlatAction<T> {
 }
 ```
 
-Handle is a 1-entry action (no child slots needed — handler and body are ActionIds pointing elsewhere in the table). Perform is a 1-entry action.
+Handle is a 2-entry action (like Chain): the Handle entry itself, followed by one child slot for the body. The body child slot is either an inlined single-entry action or a `ChildRef` to a multi-entry subtree elsewhere. The handler is an `ActionId` pointing elsewhere in the table. This keeps Handle at two `u32` fields, preserving the 8-byte `FlatEntry` constraint.
+
+Perform is a 1-entry action (like Invoke).
 
 Both need to be added to `FlatAction::try_map_target` (trivial — they pass through unchanged like Invoke/Chain/etc.).
 
-The 8-byte `FlatEntry` size invariant must still hold. Handle has three `u32` fields (effect_id, handler, body) = 12 bytes + discriminant. This BREAKS the 8-byte constraint. Options:
-
-1. Relax the constraint to 16 bytes.
-2. Store handler in a side table (like how Chain stores `first` as a child slot).
-3. Use a `HandleId` that indexes into a separate `handles` table.
-
-Recommendation: option 1 (relax to 16 bytes). The 8-byte target was nice-to-have, not a hard constraint. The alternative designs add indirection for minimal gain. Update the static assertion:
+A `handle_body` accessor on `FlatConfig` resolves the child slot, mirroring `chain_first`:
 
 ```rust
-const _: () = assert!(std::mem::size_of::<FlatEntry<ActionId>>() <= 16);
+impl FlatConfig {
+    /// Returns the body `ActionId` for a Handle (resolves the child
+    /// slot at `action_id + 1`).
+    #[must_use]
+    pub fn handle_body(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::Handle { .. }));
+        self.resolve_child_slot(id + 1)
+    }
+}
 ```
 
 ## New frame kind (Rust scheduler)
+
+The frame kind stores all three IDs (effect_id, handler, body) even though the flat table only stores two. The body `ActionId` is resolved from the child slot during `advance` and stored in the frame for RestartBody re-entry.
 
 ```rust
 pub enum FrameKind {
@@ -193,6 +203,8 @@ pub enum FrameKind {
     Handle {
         effect_id: EffectId,
         handler: ActionId,
+        /// Resolved from the child slot during advance. Stored here
+        /// because RestartBody needs it to re-enter the body.
         body: ActionId,
         /// Opaque state. Initialized from the Handle's input value.
         /// Updated by handler DAG output's `state_update` field.
@@ -221,7 +233,8 @@ One Handle, one effect, one handler, one continuation. All singular. At most one
 New match arms in `WorkflowState::advance`:
 
 ```rust
-FlatAction::Handle { effect_id, handler, body } => {
+FlatAction::Handle { effect_id, handler } => {
+    let body = self.flat_config.handle_body(action_id);
     let frame_id = self.insert_frame(Frame {
         parent,
         kind: FrameKind::Handle {
@@ -603,12 +616,13 @@ New match arms in `UnresolvedFlatConfig::flatten_action_at`:
 
 ```rust
 Action::Handle(HandleAction { effect_id, handler, body }) => {
+    // Child slot for body (same pattern as Chain allocates a slot for first).
+    self.alloc();
     let handler_id = self.flatten_action(*handler, workflow_root)?;
-    let body_id = self.flatten_action(*body, workflow_root)?;
+    self.fill_child_slot(*body, action_id + 1, workflow_root)?;
     FlatAction::Handle {
         effect_id,
         handler: handler_id,
-        body: body_id,
     }
 }
 
@@ -617,11 +631,11 @@ Action::Perform(PerformAction { effect_id }) => {
 }
 ```
 
-Handle flattens handler and body as separate subtrees (like ForEach/Loop flatten their body). Perform is a leaf (like Invoke, but with no handler).
+Handle is a 2-entry action (like Chain): one entry for itself, one child slot for the body. The handler is flattened elsewhere and stored as an `ActionId` in the variant. Perform is a 1-entry leaf.
 
 ### fill_child_slot addition
 
-Handle is a multi-entry action (3 ActionIds). Add to the multi-entry branch:
+Handle is a multi-entry action (2 entries). Add to the multi-entry branch:
 
 ```rust
 fn fill_child_slot(&mut self, action: Action, ...) {
@@ -640,7 +654,7 @@ fn fill_child_slot(&mut self, action: Action, ...) {
 ### try_map_target addition
 
 ```rust
-FlatAction::Handle { effect_id, handler, body } => FlatAction::Handle { effect_id, handler, body },
+FlatAction::Handle { effect_id, handler } => FlatAction::Handle { effect_id, handler },
 FlatAction::Perform { effect_id } => FlatAction::Perform { effect_id },
 ```
 
@@ -806,7 +820,7 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 11. `teardown_body` + `is_descendant_of`
 12. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 13. Updated `deliver` for Handle (body-completion and handler-completion paths)
-14. Relaxed `FlatEntry` size assertion to 16 bytes
+14. `FlatConfig::handle_body` accessor (resolves child slot at `action_id + 1`)
 15. Tests per above
 
 ## What this phase does NOT include
