@@ -72,23 +72,38 @@ The Handle frame carries opaque state. The Rust engine never interprets it — i
    ```
    The handler DAG uses standard, domain-ignorant builtins (`ExtractField`, `Pick`, etc.) to extract what it needs from the state.
 
-3. **Handler output.** The handler DAG produces a tagged output:
+3. **Handler output.** The handler DAG produces a tagged output with an explicit state update:
    ```json
-   { "kind": "Resume"|"Discard"|"RestartBody", "value": <result> }
+   {
+     "kind": "Resume"|"Discard"|"RestartBody",
+     "value": <result>,
+     "state_update": { "kind": "Unchanged" }
+   }
    ```
-   Optionally, the output includes `"next_state"` to update the Handle frame's state:
+   To update the Handle frame's state:
    ```json
-   { "kind": "Resume", "value": <result>, "next_state": <new_state> }
+   {
+     "kind": "Resume",
+     "value": <result>,
+     "state_update": { "kind": "Updated", "value": <new_state> }
+   }
    ```
-   If `next_state` is absent, state is unchanged. If present, the engine overwrites the frame's state.
+   The `state_update` field is a discriminated union, not optional. The Rust enum:
+   ```rust
+   #[derive(Debug, Clone, PartialEq, Eq)]
+   pub enum StateUpdate {
+       Unchanged,
+       Updated(Value),
+   }
+   ```
 
 ### Why this eliminates abstraction leaks
 
 Under this architecture, there is no cache. There are no variables. There is only a delimited scope that holds an arbitrary state value, and an effect handler that reads and writes to that state.
 
-- **`declare`** uses state as a read-only dictionary (the Reader monad). Handler extracts the requested variable from the state map, Resumes with it. `next_state` is never set.
-- **`withState`** uses state as a read/write cell (the State monad). Get handler Resumes with the current state. Put handler Resumes with null and sets `next_state` to the new value.
-- **`retry`** uses state to hold an integer counter. On each Throw, the handler decrements the counter in `next_state` and produces RestartBody. When the counter reaches zero, it produces Discard.
+- **`declare`** uses state as a read-only dictionary (the Reader monad). Handler extracts the requested variable from the state map, Resumes with it. State update is always `Unchanged`.
+- **`withState`** uses state as a read/write cell (the State monad). Get handler Resumes with the current state (`Unchanged`). Put handler Resumes with null and produces `Updated(new_value)`.
+- **`retry`** uses state to hold an integer counter. On each Throw, the handler produces `Updated(count - 1)` and RestartBody. When the counter reaches zero, it produces Discard with `Unchanged`.
 
 The engine remains a pure structural router. It shuttles opaque JSON between frames and handler DAGs. All semantic meaning is constructed entirely out of context-free AST combinators in the TypeScript layer.
 
@@ -137,7 +152,7 @@ pub enum FrameKind {
         handler: ActionId,
         body: ActionId,
         /// Opaque state. Initialized from the Handle's input value.
-        /// Updated by handler DAG output's `next_state` field.
+        /// Updated by handler DAG output's `state_update` field.
         state: Value,
         /// The suspended continuation, if a Perform has fired and the handler is running.
         /// None when the body is running normally.
@@ -335,11 +350,20 @@ fn handle_handler_completion(
         })?;
     let value = output["value"].clone();
 
-    // 2. Update state if next_state is present.
-    if let Some(next_state) = output.get("next_state") {
-        if let FrameKind::Handle { state, .. } = &mut self.frames[handle_frame_id.0].kind {
-            *state = next_state.clone();
+    // 2. Apply state update.
+    let state_update_kind = output["state_update"]["kind"].as_str()
+        .ok_or_else(|| CompleteError::InvalidHandlerOutput {
+            value: output.clone(),
+        })?;
+    match state_update_kind {
+        "Unchanged" => {}
+        "Updated" => {
+            let new_state = output["state_update"]["value"].clone();
+            if let FrameKind::Handle { state, .. } = &mut self.frames[handle_frame_id.0].kind {
+                *state = new_state;
+            }
         }
+        _ => return Err(CompleteError::InvalidHandlerOutput { value: output }),
     }
 
     // 3. Take the continuation from the frame.
@@ -699,7 +723,7 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 
 12. **Resume with state**: Handler DAG reads state and Resumes with it (the `resume_with_state_handler`). Verify the body receives the state value at the Perform point.
 
-13. **next_state updates state**: Handler produces `{ kind: "Resume", value: V, next_state: S }`. Body Performs again. Second handler invocation receives state = S (not the original state). Verify state was updated.
+13. **StateUpdate::Updated updates state**: Handler produces `{ kind: "Resume", value: V, state_update: { kind: "Updated", value: S } }`. Body Performs again. Second handler invocation receives state = S (not the original state). Verify state was updated.
 
 14. **Handle body completes without Performing**: Body runs to completion without any Perform. Handle exits normally, delivers body result to parent. No continuation to clean up.
 
@@ -718,7 +742,7 @@ All handlers are built from Constant, ExtractField, and Tag builtins — no Type
 6. `ContinuationRoot` struct
 7. `bubble_effect` traversal
 8. `dispatch_to_handler` (sever, construct `{ payload, state }`, advance handler)
-9. `handle_handler_completion` (parse `{ kind, value, next_state? }`, dispatch on ContinuationOp)
+9. `handle_handler_completion` (parse `{ kind, value, state_update }`, dispatch on ContinuationOp)
 10. `resume_continuation`, `discard_continuation`, `restart_body`
 11. `teardown_body` + `is_descendant_of`
 12. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`

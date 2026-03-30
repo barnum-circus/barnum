@@ -164,7 +164,7 @@ The Race-based approach is simpler and doesn't require new driver protocol. Reco
 
 ## Deliverables
 
-1. Bracket handler DAG (track resources in state, dispose on exit via `next_state`)
+1. Bracket handler DAG (track resources in state, dispose on exit via `StateUpdate::Updated`)
 2. Bracket Handle frame logic (state-based resource tracking, dispose on scope exit)
 3. `race()` TypeScript function
 4. `withTimeout()` TypeScript function

@@ -54,7 +54,7 @@ Replace `Loop` and `Step` with `Handle` and `Perform`. The final node set:
 
 7 nodes total. `Loop` and `Step` become TS sugar that compiles to Handle/Perform. Every scope-based feature (declare, tryCatch, withTimeout, race, RAII, durable suspension) is TS sugar over these same two primitives.
 
-There is no `Resume` AST node. Resumption (and discarding, and body re-entry) are not AST-level concepts. They are the Handle frame's interpretation of the handler DAG's tagged output. Handler DAGs produce `{ kind: "Resume"|"Discard"|"RestartBody", value, next_state? }`, and the Handle frame acts accordingly. This keeps cont_id tokens internal to the scheduler — handler DAGs never see them.
+There is no `Resume` AST node. Resumption (and discarding, and body re-entry) are not AST-level concepts. They are the Handle frame's interpretation of the handler DAG's tagged output. Handler DAGs produce `{ kind: "Resume"|"Discard"|"RestartBody", value, state_update: { kind: "Unchanged" } | { kind: "Updated", value } }`, and the Handle frame acts accordingly. This keeps cont_id tokens internal to the scheduler — handler DAGs never see them.
 
 ### The architectural insight
 
@@ -62,7 +62,7 @@ Two layers, each doing what it's good at:
 
 **TypeScript (HOAS)**: Provides the user-facing API. Callbacks receive opaque AST references (VarRefs, restart/exit jumps, step references). TypeScript's lexical scoping prevents collisions and enforces scope. The builder gensyms unique IDs. TypeScript's type system checks that inputs and outputs match at every connection point. All sugar expansion happens here.
 
-**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle. The Handle frame stores opaque state (`serde_json::Value`). The engine constructs `{ payload, state }` and dispatches the handler DAG. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly — optionally updating the Handle's state via `next_state`. The body subgraph is naturally frozen while the handler runs (the Perform point is stuck, so no parent pointers need severing). That's it.
+**Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle. The Handle frame stores opaque state (`serde_json::Value`). The engine constructs `{ payload, state }` and dispatches the handler DAG. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly — applying the `state_update` (`Unchanged` or `Updated(new_value)`). The body subgraph is naturally frozen while the handler runs (the Perform point is stuck, so no parent pointers need severing). That's it.
 
 The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal AST subgraphs executed by the Rust engine. Most are built entirely from builtins (ExtractField, Tag, etc.) and never leave Rust. Some include Invoke nodes that call TypeScript functions.
 
@@ -271,10 +271,10 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 - New flat action types: `FlatAction::Handle`, `FlatAction::Perform`
 - `FlatEntry` size assertion relaxed from 8 to 16 bytes (Handle has 3 `u32` fields)
 - New frame kind: `FrameKind::Handle` with fields: `effect`, `handler`, `body`, `state: Value`, `continuation: Option<ContinuationRoot>`
-- **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes optional `next_state` to update the frame's state.
+- **Generalized Handler State**: Handle frame stores its input as opaque `state: serde_json::Value`. Handler DAGs receive `{ payload, state }`. Handler output includes `state_update: StateUpdate` (`Unchanged` or `Updated(Value)`).
 - `bubble_effect()`: walks parent pointers to find matching Handle. O(depth).
 - `dispatch_to_handler()`: stores `ContinuationRoot`, constructs `{ payload, state }`, advances handler DAG as child of Handle frame. Body subgraph is naturally frozen (Perform point is stuck) — no parent pointer severing needed.
-- `handle_handler_completion()`: parses `{ kind, value, next_state? }`, dispatches on `ContinuationOp` (Resume / Discard / RestartBody)
+- `handle_handler_completion()`: parses `{ kind, value, state_update }`, dispatches on `ContinuationOp` (Resume / Discard / RestartBody)
 - `resume_continuation()`: delivers value to the Perform's original parent
 - `discard_continuation()`: tears down body, Handle exits with value
 - `restart_body()`: tears down body, re-advances body ActionId with value
