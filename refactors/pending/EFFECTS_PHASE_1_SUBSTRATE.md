@@ -699,14 +699,15 @@ The handler DAG produces a tagged JSON value. Rather than string-matching on `ou
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind")]
 enum HandlerOutput {
-    Resume { value: Value, state_update: StateUpdate },
+    Resume { value: Value, #[serde(default)] state_update: StateUpdate },
     Discard { value: Value },
-    RestartBody { value: Value, state_update: StateUpdate },
+    RestartBody { value: Value, #[serde(default)] state_update: StateUpdate },
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(tag = "kind")]
 enum StateUpdate {
+    #[default]
     Unchanged,
     Updated { value: Value },
 }

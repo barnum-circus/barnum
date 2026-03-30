@@ -182,3 +182,17 @@ Trade-offs:
 ### Recommendation
 
 Approach 1 (child pointers) is the clear winner. O(k) teardown, simple implementation, no lazy-GC complexity. Use `SmallVec<[FrameId; 2]>` to avoid heap allocation for the common case (≤ 2 children). Defer until profiling shows teardown is a bottleneck or until workflows with large arenas become common.
+
+## Handler Panic Recovery
+
+If `advance` fails inside `dispatch_to_handler` — after the Handle is already marked `Suspended` — the Handle is stuck: no running handler, body frozen, no recovery path. The `Suspended` status is never rolled back.
+
+This happens when the handler DAG contains an unhandled Perform (or triggers any other `AdvanceError`). The TypeScript builder prevents this in practice (see "Static analysis" in Phase 1 doc), and Phase 1 treats it as a programmer error (the assert/error propagates up).
+
+A future robustness pass should:
+
+1. **Roll back on advance failure.** If `self.advance(handler, ...)` returns `Err`, restore `HandleStatus::Free` and propagate the error. The body remains frozen at the Perform point with no Resume forthcoming — the workflow is broken either way, but at least the Handle isn't in an impossible state (Suspended with no handler).
+
+2. **Generalize to handler panics.** If the handler DAG dispatches an external task and the task panics/fails, the engine needs a way to un-suspend the Handle. Options: propagate the error as a Discard (tears down body, Handle exits with error), or propagate as a special "handler failed" signal that the TypeScript layer can catch.
+
+3. **Interact with RAII/Bracket (Phase 5).** If a Handle is inside a `withResource` block and the handler fails, the resource's dispose action must still run. The recovery path must not skip dispose.
