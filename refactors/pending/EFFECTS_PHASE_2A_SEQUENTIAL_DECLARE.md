@@ -60,30 +60,31 @@ The TS macro splits the binding array into groups:
 
 ## Compilation
 
-```ts
+```
 declare([
   exprA,
   ([a]) => exprB_using_a,
 ], ([a, b]) => body)
 
+// Pseudo-AST notation (same as Phase 2):
+//   Handle(effectId, stateInit, handler, body)
+//   readVarHandler = Chain(ExtractField("state"), Tag("Resume"))
+
 // Compiles to:
 Chain(
-  All(exprA, Identity),                // [valA, pipeline_input]
-  Handle(effectId_group0, readVarHandler,
+  All(exprA, Identity),                                          // → [valA, pipeline_input]
+  Handle(effectId_a, ExtractIndex(0), readVarHandler,
     Chain(
-      // Evaluate exprB_using_a. It may Perform to read `a`.
-      exprB_using_a,                   // produces valB
-      // Now we have valB as pipeline value.
-      // Re-enter a new Handle with accumulated state.
-      Handle(effectId_group1, readVarHandler,
-        Chain(ExtractIndex(2), body)
+      All(Chain(ExtractIndex(1), exprB_using_a), ExtractIndex(1)),  // → [valB, pipeline_input]
+      Handle(effectId_b, ExtractIndex(0), readVarHandler,
+        Chain(ExtractIndex(1), body)                               // body gets pipeline_input
       )
     )
   )
 )
 ```
 
-Each sequential step adds a nested Handle. The inner Handle's state accumulates all bindings so far. This is standard lexical scoping: each `let` binding opens a new scope.
+Each sequential step adds a nested Handle. Each Handle stores exactly one binding's value (per-binding-effectId, same as Phase 2). Between sequential steps, an `All` preserves `pipeline_input` alongside the new binding's value so both remain available downstream.
 
 ## Type changes
 

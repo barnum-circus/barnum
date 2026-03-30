@@ -34,41 +34,42 @@ Both `fetchUser` and `fetchConfig` run concurrently. The body receives VarRefs f
 
 ## How declare compiles
 
-```ts
-declare([exprA, exprB], ([a, b]) => body)
+Each binding gets its own effectId — the natural HOAS representation where each binder creates a fresh name. This avoids the dynamic typing problem that a shared effectId with runtime index would introduce (see "Why not a shared effectId" below).
+
+```
+declare([fetchUser, fetchConfig], ([user, config]) => body)
+
+// user   = Perform(effectId_0)   — no payload
+// config = Perform(effectId_1)   — no payload
+
+// Pseudo-AST notation:
+//   Handle(effectId, stateInit, handler, body)
+//   readVarHandler = Chain(ExtractField("state"), Tag("Resume"))
 
 // Compiles to:
 Chain(
-  Parallel(exprA, exprB, Identity),    // [valA, valB, pipeline_input]
-  Handle(effectId, readVarHandler,
-    Chain(ExtractIndex(2), body)        // body receives pipeline_input
+  All(fetchUser, fetchConfig, Identity),           // → [User, Config, Input]
+  Handle(effectId_0, ExtractIndex(0), readVarHandler,
+    Handle(effectId_1, ExtractIndex(1), readVarHandler,
+      Chain(ExtractIndex(2), body)                 // body gets pipeline_input
+    )
   )
 )
 ```
 
-`Parallel(exprA, exprB, Identity)` evaluates both bindings concurrently AND preserves the original pipeline input (via Identity). The result is a tuple `[valA, valB, pipeline_input]`.
+`All(fetchUser, fetchConfig, Identity)` evaluates all bindings concurrently AND preserves the pipeline input (via Identity). The result is a tuple `[User, Config, pipeline_input]`.
 
-The Handle stores this tuple as opaque state. The body receives the pipeline input (extracted via `ExtractIndex(2)`).
+Each Handle stores exactly one bound value as state. The `stateInit` expression (e.g. `ExtractIndex(0)`) runs on the pipeline input entering the Handle and initializes the frame's state. `readVarHandler` is trivial: extract the `"state"` field from the handler input and Resume with it. The Perform carries no payload — the effectId alone identifies which binding.
 
-When a VarRef fires (Perform), the handler DAG receives `{ payload: 0, state: [valA, valB, pipeline_input] }`. It extracts `state[payload]` and Resumes with it.
+N bindings produce N nested Handle frames. This is the natural representation of N lexical bindings — `let a = ... in let b = ... in body`. Each `let` is a scope, each Handle is a scope.
 
-### The readVar handler DAG
+### Why not a shared effectId
 
-The handler DAG is identical for every declare — it's a pure structural operation:
+An earlier design used one shared effectId with the binding index as payload and an `ExtractDynamic` builtin to do runtime index lookup into the state tuple. This is dynamically typed — `extractDynamic([index, [User, Config]])` returns `unknown` because the index is a runtime value and each element has a different type. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved.
 
-```ts
-// Receives: { payload: <index>, state: [val0, val1, ..., pipeline_input] }
-// Returns:  { kind: "Resume", value: state[payload] }
-pipe(
-  parallel(pick("payload"), pick("state")),  // [index, state_tuple]
-  extractDynamic(),                           // state_tuple[index]
-  tag("Resume"),
-)
-```
+### Phase 1 implication
 
-This uses standard builtins. No special `resolveBinding` builtin. The engine is domain-ignorant — it just routes `{ payload, state }` to the handler DAG and acts on the tagged output.
-
-**Note:** `extractDynamic` (dynamic index extraction) is a new builtin: given `[index, array]`, return `array[index]`. This is the only new builtin needed. It's a pure data operation — the engine doesn't know it's resolving a variable.
+The per-binding-effectId design requires Handle to support a `state_init` expression that extracts the initial state from the pipeline value. Phase 1's Handle mechanism must support this — the Handle frame's state is not the raw pipeline value, but the result of evaluating `state_init` on it. This is a detail to address during Phase 1 implementation.
 
 ## VarRef: generic over the bound type
 
@@ -98,10 +99,10 @@ function declare<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => Pipeable<TIn, TOut>,
 ): TypedAction<TIn, TOut> {
-  const effectId = generateUniqueId();
-  const varRefs = bindings.map((_, i) => createVarRef(effectId, i));
+  const effectIds = bindings.map(() => generateUniqueId());
+  const varRefs = effectIds.map((id) => createVarRef(id));
   const bodyAst = body(varRefs as any);
-  return compileToHandlePerform(bindings, effectId, bodyAst);
+  return compileToNestedHandles(bindings, effectIds, bodyAst);
 }
 ```
 
@@ -111,14 +112,14 @@ The key type: `InferVarRefs<TBindings>` maps each binding to `VarRef<OutputOf<bi
 
 ## The HOAS pattern
 
-Each `declare` invocation gensyms a fresh `EffectId`. The VarRefs are `Perform(effectId)` nodes with the binding index as payload. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body.
+Each binding gensyms its own fresh `EffectId`. Each VarRef is a `Perform(effectId)` node with no payload — the effectId alone identifies the binding. TypeScript's lexical scoping ensures VarRefs can only be used within the callback body.
 
-Per the HOAS pattern established in the roadmap:
-1. Gensym a fresh `EffectId`
-2. Create a Handle keyed on that ID
-3. Provide `Perform(thatId)` wrappers to the callback as opaque `Pipeable` nodes
+Per the HOAS pattern:
+1. Gensym a fresh `EffectId` **per binding**
+2. Create nested Handles, one per binding, each keyed on its effectId
+3. Provide `Perform(effectId_i)` wrappers to the callback as opaque `Pipeable` nodes
 
-For nested declares, each has its own `EffectId`. Inner VarRefs are caught by the inner Handle. Outer VarRefs bubble past the inner Handle (wrong effect) and are caught by the outer Handle.
+For nested declares, each binding across all declares has its own `EffectId`. Inner VarRefs are caught by the nearest matching Handle. Outer VarRefs bubble past inner Handles (wrong effectId) and are caught by the outer Handle.
 
 ## What this replaces
 
@@ -136,44 +137,31 @@ For nested declares, each has its own `EffectId`. Inner VarRefs are caught by th
 ### TypeScript compilation tests
 
 1. Single-binding declare produces correct Chain + Handle AST.
-2. Concurrent bindings produce All + Handle.
+2. Two concurrent bindings produce All + nested Handles.
 3. VarRef type checking: binding type matches VarRef output type.
 
 ### Rust scheduler tests
 
-1. **Simple declare**: Handle with state = `[42]`. Perform fires with payload 0. Handler extracts state[0], Resumes. Verify body receives 42.
-2. **Multiple bindings**: Handle with state = `[1, 2, 3]`. Three Performs (payload 0, 1, 2) in a Chain. Verify each returns correct value.
-3. **Nested declares**: Inner Handle has state = `["inner"]`, outer has state = `["outer"]`. Inner Perform caught by inner Handle. Perform with outer's effectId bubbles past inner, caught by outer.
-4. **Concurrent bindings**: Parallel evaluates two expressions. Handle receives tuple. Verify correct variable resolution from tuple.
-5. **Declare inside ForEach**: Each iteration enters its own Handle frame. Verify isolation.
+1. **Simple declare**: One Handle with state = `42`. Perform fires. Handler resumes with state. Verify body receives 42.
+2. **Multiple bindings**: Two nested Handles with state = `1` and `2`. Two Performs in a Chain. Verify each returns correct value from its Handle.
+3. **Nested declares**: Inner declare's Handle has state = `"inner"`, outer's has state = `"outer"`. Inner VarRef caught by inner Handle. Outer VarRef bubbles past inner, caught by outer.
+4. **Concurrent bindings**: All evaluates two expressions. Nested Handles each extract their binding. Verify correct variable resolution.
+5. **Declare inside ForEach**: Each iteration enters its own Handle frames. Verify isolation.
 6. **Declare inside All**: Two branches reference the same outer declare. Verify both get correct values.
 
 ### Demo migration
 
 Rewrite the `identify-and-address-refactors` demo to use `declare` instead of `tap`/`augment`/`pick` for context threading. The demo should be shorter and clearer.
 
-## New builtin: ExtractDynamic
+## No new builtins
 
-```rust
-pub enum BuiltinKind {
-    // ... existing variants ...
-
-    /// Dynamic index extraction: given [index, array], return array[index].
-    /// Used by readVar handler DAGs to extract variables from state tuples.
-    ExtractDynamic,
-}
-```
-
-Input: `[index: number, array: any[]]`. Output: `array[index]`.
-
-This is the only new builtin. It's a pure data operation — no knowledge of variables or scoping.
+The per-binding-effectId design uses only existing builtins (`ExtractIndex`, `ExtractField`, `Tag`). The `ExtractDynamic` builtin from the earlier shared-effectId design is no longer needed.
 
 ## Deliverables
 
-1. `declare()` TypeScript function (concurrent bindings only)
-2. VarRef TypedAction construction (Perform with index payload)
-3. readVar handler DAG (using ExtractDynamic builtin)
-4. `ExtractDynamic` builtin kind (Rust + TypeScript)
-5. Flattener/engine support for ExtractDynamic (inline evaluation, no subprocess)
-6. Tests per above
-7. Demo migration
+1. `declare()` TypeScript function (concurrent bindings only, per-binding effectId)
+2. VarRef TypedAction construction (Perform with binding-specific effectId, no payload)
+3. Nested Handle compilation (one Handle per binding, trivial handler)
+4. Phase 1 support for `state_init` in Handle (extract initial state from pipeline value)
+5. Tests per above
+6. Demo migration
