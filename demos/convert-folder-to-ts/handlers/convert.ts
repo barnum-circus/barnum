@@ -93,6 +93,7 @@ export const writeFile = createHandler({
     outputPath: z.string(),
   }),
   handle: async ({ value }) => {
+    console.error(`[write-file] Writing ${value.outputPath}...`);
     const dir = path.dirname(value.outputPath);
     if (!existsSync(dir)) {
       mkdirSync(dir, { recursive: true });

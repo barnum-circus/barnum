@@ -124,9 +124,12 @@ export const assessWorthiness = createHandler({
 
 export const deriveBranch = createHandler({
   inputValidator: z.object({ description: z.string() }),
-  handle: async ({ value }) => ({
-    branch: `refactor/${value.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
-  }),
+  handle: async ({ value }) => {
+    console.error(`[derive-branch] Deriving branch name from: ${value.description.slice(0, 60)}`);
+    return {
+      branch: `refactor/${value.description.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40)}`,
+    };
+  },
 }, "deriveBranch");
 
 export const preparePRInput = createHandler({
@@ -134,11 +137,14 @@ export const preparePRInput = createHandler({
     branch: z.string(),
     description: z.string(),
   }),
-  handle: async ({ value }) => ({
-    branch: value.branch,
-    title: `Refactor: ${value.description.slice(0, 60)}`,
-    body: `Automated refactor:\n\n${value.description}`,
-  }),
+  handle: async ({ value }) => {
+    console.error(`[prepare-pr-input] Preparing PR for branch ${value.branch}`);
+    return {
+      branch: value.branch,
+      title: `Refactor: ${value.description.slice(0, 60)}`,
+      body: `Automated refactor:\n\n${value.description}`,
+    };
+  },
 }, "preparePRInput");
 
 // --- Implementation ---
@@ -230,6 +236,7 @@ export const classifyJudgment = createHandler({
     z.object({ approved: z.literal(false), instructions: z.string() }),
   ]),
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
+    console.error(`[classify-judgment] Classifying judgment (approved=${judgment.approved})`);
     if (judgment.approved) {
       console.error("[classify-judgment] Approved");
       return { kind: "Approved", value: undefined };

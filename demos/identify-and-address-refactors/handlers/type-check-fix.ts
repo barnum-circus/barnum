@@ -92,6 +92,7 @@ export const classifyErrors = createHandler({
     z.object({ file: z.string(), message: z.string() }),
   ),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
+    console.error(`[classify-errors] Called with ${errors.length} error(s)`);
     if (errors.length > 0) {
       console.error(`[classify-errors] ${errors.length} error(s) to fix`);
       return { kind: "HasErrors", value: errors };
