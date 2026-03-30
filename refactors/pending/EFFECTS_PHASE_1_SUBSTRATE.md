@@ -28,19 +28,7 @@ Each Handle intercepts one effect. Multiple effects in scope = nested Handles. T
 
 ### Continuation operations
 
-Closed enum. Scheduler-internal protocol, not user-extensible.
-
-```rust
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ContinuationOp {
-    /// Deliver value to the Perform's parent. Body continues from suspension point.
-    Resume,
-    /// Tear down the body. Deliver value to the Handle's parent. Handle exits.
-    Discard,
-    /// Tear down the body. Re-advance the body from scratch with the value.
-    RestartBody,
-}
-```
+Closed set. Scheduler-internal protocol, not user-extensible. Dispatched via `HandlerOutput` serde deserialization — no separate enum needed.
 
 | Op | Value delivered to | Value type |
 |---|---|---|
@@ -161,6 +149,15 @@ All frame access in the snippets below uses the generational FrameId directly (`
 ## Frame kind
 
 ```rust
+/// Whether the Handle is free (body running) or suspended (handler running).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandleStatus {
+    /// Body is running. No handler active.
+    Free,
+    /// Handler is running. The ParentRef is the Perform's delivery point.
+    Suspended(ParentRef),
+}
+
 #[derive(Debug)]
 pub struct HandleFrame {
     pub effect_id: EffectId,
@@ -170,9 +167,7 @@ pub struct HandleFrame {
     /// Opaque state. Initialized from Handle's input.
     /// Mutated by handler output's state_update field.
     pub state: Value,
-    /// The Perform's delivery point, stored while the handler is running.
-    /// None when body is running normally.
-    pub continuation: Option<ParentRef>,
+    pub status: HandleStatus,
 }
 
 pub enum FrameKind {
@@ -181,11 +176,11 @@ pub enum FrameKind {
 }
 ```
 
-At most one continuation per Handle at a time. The body is synchronously frozen at the Perform point, so no further Performs fire from that execution path. If concurrent Performs target the same Handle (e.g. two branches of an All both Perform the same effect), the first dispatches the handler and subsequent ones are stashed until the Handle is free (see "Stash mechanism" below).
+At most one suspended continuation per Handle at a time. The body is synchronously frozen at the Perform point, so no further Performs fire from that execution path. If concurrent Performs target the same Handle (e.g. two branches of an All both Perform the same effect), the first dispatches the handler and subsequent ones are stashed until the Handle is free (see "Stash mechanism" below).
 
 ### ParentRef::Handle
 
-The handler DAG runs as a child of the Handle frame. Its frames are descendants of the Handle in the slab. When a task inside the handler completes, `find_blocking_ancestor` would walk up and find this Handle's continuation is Some — stashing the handler's own task completion. Deadlock: the handler resolves the suspension, but its completions are stashed against the very suspension it's resolving.
+The handler DAG runs as a child of the Handle frame. Its frames are descendants of the Handle in the slab. When a task inside the handler completes, `find_blocking_ancestor` would walk up and find this Handle is Suspended — stashing the handler's own task completion. Deadlock: the handler resolves the suspension, but its completions are stashed against the very suspension it's resolving.
 
 Fix: the Handle ParentRef variant carries a `HandleSide` discriminator. `is_blocked_by_handle` checks the side × state combination: a Handler child reaching a suspended Handle is not blocked (handler is running), so `find_blocking_ancestor` passes through. A Body child reaching a suspended Handle is blocked (body can't progress).
 
@@ -224,7 +219,7 @@ FlatAction::Handle { effect_id, handler } => {
             handler,
             body,
             state: value.clone(),
-            continuation: None,
+            status: HandleStatus::Free,
         }),
     });
     self.advance(body, value, Some(ParentRef::Handle {
@@ -243,7 +238,7 @@ Handle stores input as state and passes the same input to body.
 
 Perform calls `bubble_effect` directly during advance. No task is dispatched — the effect bubbles synchronously. If the matching Handle is free, `bubble_effect` dispatches the handler immediately. If the Handle is busy (another handler is already running), the effect is stashed.
 
-No frame is created for Perform. The Perform's parent (e.g. a Chain frame or All slot) waits for a value, identical to waiting for an Invoke's task to complete. When the handler eventually Resumes, the Resume delivers to the Perform's parent (stored in the continuation), unblocking the waiting frame.
+No frame is created for Perform. The Perform's parent (e.g. a Chain frame or All slot) waits for a value, identical to waiting for an Invoke's task to complete. When the handler eventually Resumes, the Resume delivers to the Perform's parent (stored in the `Suspended` variant), unblocking the waiting frame.
 
 In an All with N Performs targeting the same Handle, the first Perform's `bubble_effect` dispatches the handler (Handle becomes suspended). The remaining Performs' `bubble_effect` calls find the Handle busy (`is_blocked_by_handle`: body child + suspended = blocked) and stash. After the first handler completes and the stash is swept, stashed effects retry and dispatch their handlers one at a time. Synchronous, deterministic, no driver scheduling dependency.
 
@@ -287,7 +282,7 @@ fn bubble_effect(
     payload: Value,
 ) -> Result<StashOutcome, AdvanceError> {
     // First: can this effect proceed at all?
-    match self.find_blocking_ancestor(starting_parent.frame_id()) {
+    match self.find_blocking_ancestor(starting_parent) {
         AncestorCheck::FrameGone => return Ok(StashOutcome::Consumed),
         AncestorCheck::Blocked(_) => {
             self.stashed_items.push(StashedItem::Effect {
@@ -322,7 +317,7 @@ fn find_and_dispatch_handler(
         if let FrameKind::Handle(handle_frame) = &parent.kind {
             if handle_frame.effect_id == effect_id {
                 assert!(
-                    handle_frame.continuation.is_none(),
+                    matches!(handle_frame.status, HandleStatus::Free),
                     "effect matched a suspended Handle — find_blocking_ancestor should have caught this"
                 );
 
@@ -358,7 +353,11 @@ fn dispatch_to_handler(
     let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id].kind else {
         unreachable!("dispatch_to_handler called on non-Handle frame")
     };
-    handle_frame.continuation = Some(perform_parent);
+    assert!(
+        matches!(handle_frame.status, HandleStatus::Free),
+        "dispatch_to_handler called on already-suspended Handle"
+    );
+    handle_frame.status = HandleStatus::Suspended(perform_parent);
 
     let handler_input = serde_json::json!({
         "payload": payload,
@@ -431,7 +430,7 @@ fn deliver_or_stash(
     parent_ref: ParentRef,
     value: Value,
 ) -> Result<(Option<Value>, StashOutcome), CompleteError> {
-    match self.find_blocking_ancestor(parent_ref.frame_id()) {
+    match self.find_blocking_ancestor(parent_ref) {
         AncestorCheck::FrameGone => Ok((None, StashOutcome::Consumed)),
         AncestorCheck::Blocked(_) => {
             self.stashed_items.push(StashedItem::Delivery { parent_ref, value });
@@ -538,13 +537,13 @@ fn is_blocked_by_handle(parent_ref: ParentRef, kind: &FrameKind) -> bool {
     let FrameKind::Handle(handle_frame) = kind else {
         return false; // not a Handle, nothing to check
     };
-    let suspended = handle_frame.continuation.is_some();
+    let suspended = matches!(handle_frame.status, HandleStatus::Suspended(_));
     let is_body_child = matches!(parent_ref, ParentRef::Handle { side: HandleSide::Body, .. });
     is_body_child == suspended
 }
 ```
 
-No special cases. The fourth row (Handler + free) is unreachable today — `dispatch_to_handler` always sets `continuation = Some(...)` before advancing the handler. With a future race primitive that unsuspends the Handle while handler tasks are in-flight, this row returns `true` naturally, causing stale handler deliveries to be stashed/dropped.
+No special cases. The fourth row (Handler + free) is unreachable today — `dispatch_to_handler` always sets `status = Suspended(...)` before advancing the handler. With a future race primitive that unsuspends the Handle while handler tasks are in-flight, this row returns `true` naturally, causing stale handler deliveries to be stashed/dropped.
 
 ### find_blocking_ancestor
 
@@ -562,11 +561,12 @@ enum AncestorCheck {
     FrameGone,
 }
 
-fn find_blocking_ancestor(&self, frame_id: FrameId) -> AncestorCheck {
-    let Some(frame) = self.frames.get(frame_id) else {
-        return AncestorCheck::FrameGone;
-    };
-    let mut current = frame.parent;
+/// Takes the edge (ParentRef) leading to the first frame, so the first
+/// edge is checked by is_blocked_by_handle. This matters when Perform
+/// is a direct child of its matching Handle — the Handle itself must
+/// be checked for suspension.
+fn find_blocking_ancestor(&self, starting_edge: ParentRef) -> AncestorCheck {
+    let mut current: Option<ParentRef> = Some(starting_edge);
     while let Some(parent_ref) = current {
         let parent_id = parent_ref.frame_id();
         let Some(parent) = self.frames.get(parent_id) else {
@@ -637,7 +637,7 @@ ParentRef::Handle { frame_id, side: HandleSide::Body } => {
 }
 ```
 
-`HandleSide` distinguishes handler completion from body completion structurally — no runtime check on `continuation.is_some()`.
+`HandleSide` distinguishes handler completion from body completion structurally — no runtime check on `HandleStatus`.
 
 ### HandlerOutput deserialization
 
@@ -676,20 +676,23 @@ fn handle_handler_completion(
     let FrameKind::Handle(handle_frame) = &mut self.frames[handle_frame_id].kind else {
         unreachable!("handle_handler_completion called on non-Handle frame")
     };
-    let perform_parent = handle_frame.continuation.take()
-        .expect("handler completion requires stored continuation");
+    let HandleStatus::Suspended(perform_parent) = std::mem::replace(
+        &mut handle_frame.status, HandleStatus::Free,
+    ) else {
+        unreachable!("handler completion requires Suspended status")
+    };
 
     let result = match output {
         HandlerOutput::Resume { value, state_update } => {
             self.apply_state_update(handle_frame_id, state_update);
-            self.resume_continuation(handle_frame_id, perform_parent, value)
+            self.resume_continuation(perform_parent, value)
         }
         HandlerOutput::Discard { value } => {
-            self.discard_continuation(handle_frame_id, perform_parent, value)
+            self.discard_continuation(handle_frame_id, value)
         }
         HandlerOutput::RestartBody { value, state_update } => {
             self.apply_state_update(handle_frame_id, state_update);
-            self.restart_body(handle_frame_id, perform_parent, value)
+            self.restart_body(handle_frame_id, value)
         }
     }?;
 
@@ -728,7 +731,6 @@ Deliver the value to where the Perform would have delivered. The body subgraph i
 ```rust
 fn resume_continuation(
     &mut self,
-    _handle_frame_id: FrameId,
     perform_parent: ParentRef,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
@@ -752,7 +754,6 @@ Tear down the body. Handle exits with the value.
 fn discard_continuation(
     &mut self,
     handle_frame_id: FrameId,
-    _perform_parent: ParentRef,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
     self.teardown_body(handle_frame_id);
@@ -776,7 +777,6 @@ Tear down the body. Re-advance from scratch.
 fn restart_body(
     &mut self,
     handle_frame_id: FrameId,
-    _perform_parent: ParentRef,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
     self.teardown_body(handle_frame_id);
@@ -963,6 +963,37 @@ fn resume_with_state_handler() -> Action {
         invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
     )
 }
+
+/// Retry handler: reads state as integer counter.
+/// If counter > 0: RestartBody with Updated(counter - 1).
+/// If counter == 0: Discard with "gave up".
+/// (Implemented as a Branch on counter == 0.)
+fn retry_handler(give_up_value: Value) -> Action {
+    // In practice this would be a Branch on ExtractField("state") == 0.
+    // Pseudo-handler — exact AST depends on Branch/comparison builtins.
+    // The test should construct this using the real Branch combinator.
+    todo!("construct from Branch + decrement builtins")
+}
+
+fn garbage_output_handler() -> Action {
+    Action::Invoke(InvokeAction {
+        handler: HandlerKind::Builtin(BuiltinHandler {
+            builtin: BuiltinKind::Constant {
+                value: json!({ "kind": "Unknown" }),
+            },
+        }),
+    })
+}
+
+fn missing_fields_handler() -> Action {
+    Action::Invoke(InvokeAction {
+        handler: HandlerKind::Builtin(BuiltinHandler {
+            builtin: BuiltinKind::Constant {
+                value: json!({ "kind": "Resume" }),
+            },
+        }),
+    })
+}
 ```
 
 ### Unit tests
@@ -1011,7 +1042,21 @@ fn resume_with_state_handler() -> Action {
 
 22. `Handle(e, handler, All(Perform(e), Perform(e)))`. Both Performs execute synchronously during advance. First Perform's bubble_effect dispatches handler, second stashes (Handle busy). Handler resumes -> sweep -> retries stashed effect -> dispatches second handler. Second handler resumes -> All joins -> Handle exits.
 
-23. `Handle(e1, h1, Handle(e2, h2, All(Perform(e1), Perform(e2))))`. Two effects targeting different Handles. First Perform(e1) dispatches h1. Second Perform(e2) -> bubble_effect walks past Handle(e1) (wrong effect) -> finds Handle(e2) (free) -> dispatches h2. Both handlers run concurrently. Verify both resume correctly.
+23. `Handle(e1, h1, Handle(e2, h2, All(Perform(e1), Perform(e2))))`. Two effects targeting different Handles. First Perform(e1): bubble_effect walks past Handle(e2) (wrong effect), dispatches h1 on Handle(e1). Handle(e1) suspends. Second Perform(e2): find_blocking_ancestor walks up from All -> Handle(e2) (free, not blocked) -> Handle(e1) (body child + suspended = blocked). Stashed as Effect. Handler h1 resumes -> sweep -> retries stashed effect -> Handle(e1) free -> walk finds Handle(e2) (free, matches) -> dispatches h2. Second handler resumes -> All joins -> Handle(e2) exits -> Handle(e1) exits. Effects in nested Handles are serialized, not concurrent.
+
+24. `Handle(e, handler_returns_garbage, Perform(e))`. Handler DAG produces `{ "kind": "Unknown" }`. `handle_handler_completion` fails to deserialize. Expect `CompleteError::InvalidHandlerOutput`. Verify the error message contains the serde diagnostic.
+
+25. `Handle(e, handler_returns_missing_fields, Perform(e))`. Handler DAG produces `{ "kind": "Resume" }` (missing `value` and `state_update`). Expect `CompleteError::InvalidHandlerOutput`.
+
+26. RestartBody + state mutation (retry pattern). Handler reads state counter, if > 0 produces `RestartBody { value: input, state_update: Updated(counter - 1) }`, else `Discard { value: "gave up" }`. Body Performs once per iteration. Verify: handler invoked N+1 times (N restarts + 1 discard), state decrements each iteration, Handle exits with "gave up". Slab doesn't grow across iterations.
+
+27. Effect shadowing: `Handle(e, outer_handler, Handle(e, inner_handler, Perform(e)))`. Both Handles intercept the same effect_id. Perform(e) should be caught by the innermost Handle (inner_handler). outer_handler is never invoked. Verify inner_handler runs and its Resume value is delivered to the Perform's parent.
+
+28. Effect shadowing with bypass: `Handle(e, outer_handler, Handle(e, always_discard("x"), Chain(Perform(e), Perform(e))))`. First Perform caught by inner Handle, inner discards. Handle(inner) exits with "x". Outer Handle's body continues. Second Perform(e) no longer has an inner Handle — now caught by outer Handle. outer_handler runs.
+
+29. Stashed Delivery targeting a torn-down frame. `Handle(e, always_discard(42), All(Chain(Invoke(A), Perform(e)), Invoke(B)))`. B completes first -> stashed (Handle is free but All slot is waiting, so delivery proceeds normally to All... actually B just delivers to All slot 1). A completes -> Perform -> handler -> Discard -> teardown removes All frame. Sweep: stashed items with parent pointing to removed All frame -> find_blocking_ancestor returns FrameGone -> silently dropped. (Variant: force the stash by having A complete first, Perform dispatches handler, then B completes -> stashed. Discard tears down -> sweep drops B.)
+
+30. `Handle(e, handler, Perform(e))` where Perform is a direct child of the Handle body. Perform's parent is `ParentRef::Handle { frame_id, side: Body }`. bubble_effect passes this ParentRef to find_blocking_ancestor, which checks is_blocked_by_handle on the Handle frame itself. When the Handle is free: body child + free = not blocked, returns Clear, handler dispatched. When the Handle is already suspended (concurrent Perform from another branch): body child + suspended = blocked, returns Blocked, effect stashed. (This exercises the first-edge check.)
 
 ### Integration tests
 

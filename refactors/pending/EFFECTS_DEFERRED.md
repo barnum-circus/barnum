@@ -132,3 +132,15 @@ fn bubble_effect(...) -> Result<StashOutcome, AdvanceError> {
 `deliver_or_stash` and `find_blocking_ancestor` would also use `parent_iter`, keeping the walk logic in one place. The iterator handles the "frame gone" case by terminating early (the caller checks whether it ended due to a missing frame or reaching the root).
 
 Not worth building until the parent walk logic is needed in more places or the fused single-pass matters for performance.
+
+## Typed Internal Data Representation
+
+The engine currently uses `serde_json::Value` uniformly for all data flowing through the DAG. When `dispatch_to_handler` constructs `json!({"payload": payload, "state": state})` and the handler is entirely builtins (Constant, ExtractField, Tag), the data never leaves Rust — building a `serde_json::Value` just to destructure it in the next builtin is pure overhead.
+
+Possible approaches:
+
+1. **Two advance paths** — one for `Value` (external handlers at IPC boundaries), one for a typed internal representation. Doubles the surface area.
+2. **Unified enum** — `enum FlowData { Json(Value), Structured(InternalRepr) }`. Every builtin handler handles both variants. Structured data is lazily serialized to JSON only at IPC boundaries.
+3. **Zero-copy arena** — allocate handler inputs in a bump arena, pass references. Avoid `serde_json::Value` allocation entirely for internal flows.
+
+Not worth pursuing until profiling shows JSON construction is a bottleneck. The current `Value`-everywhere design keeps Phase 1 simple and consistent with the existing engine.
