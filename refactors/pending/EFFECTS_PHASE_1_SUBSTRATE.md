@@ -273,7 +273,7 @@ pub enum AdvanceError {
 
 ## bubble_effect
 
-Called from `complete_task` when a Perform task completes (not during advance). Walks parent pointers to find a Handle matching the effect ID. If the matching Handle is already suspended (continuation occupied), stashes the effect for later.
+Called from `complete_task` when a Perform task completes (not during advance). Walks parent pointers to find a Handle matching the effect ID. At each Handle, checks `is_blocked_by_handle` first (same logic as `deliver_or_stash`'s `find_blocking_ancestor` walk, but integrated into the same traversal). If blocked by any Handle on the way up, stashes. If the matching Handle is busy, stashes. If the matching Handle is free, dispatches.
 
 ```rust
 fn bubble_effect(
@@ -292,11 +292,23 @@ fn bubble_effect(
             return Ok(None); // frame tree gone, silently drop
         };
 
+        // Same blocking check as deliver_or_stash. If we're on the wrong
+        // side of any Handle on the way up, stash — don't dispatch a handler
+        // whose result can't be delivered into the frozen body anyway.
+        if Self::is_blocked_by_handle(parent_ref, &parent.kind) {
+            self.stashed_items.push(StashedItem::Effect {
+                starting_parent,
+                effect_id,
+                payload,
+            });
+            return Ok(None);
+        }
+
         if let FrameKind::Handle(handle_frame) = &parent.kind {
             if handle_frame.effect_id == effect_id {
                 if handle_frame.continuation.is_some() {
-                    // Handle is busy (already running a handler for a prior Perform).
-                    // Stash this effect. It will be retried after the current handler completes.
+                    // Handle is busy (already running a handler for a prior
+                    // Perform). Stash for retry after the handler completes.
                     self.stashed_items.push(StashedItem::Effect {
                         starting_parent,
                         effect_id,
@@ -323,9 +335,9 @@ fn bubble_effect(
 }
 ```
 
-O(depth of frame tree). Chain, Parallel, Branch, ForEach are invisible — the walk passes through them.
+O(depth of frame tree). At each Handle, two checks: (1) `is_blocked_by_handle` — am I on the wrong side? (2) effect_id match + busy/free. Chain, Parallel, Branch, ForEach are invisible — the walk passes through them.
 
-The "Handle is busy" stash is a safety net for concurrent Performs. Whether it fires depends on driver scheduling: depth-first scheduling processes each handler to completion before the next Perform, so the Handle is always free. FIFO scheduling fires all Performs before any handler completes, so subsequent Performs stash. Either way, the engine produces the correct result.
+The blocking check avoids premature handler dispatch. Without it, an effect bubbling through a suspended outer Handle would dispatch its handler, only for the result to be stashed at the delivery point. With it, the effect itself is stashed, and the handler runs only after the outer suspension clears.
 
 ## dispatch_to_handler
 
