@@ -22,6 +22,35 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Install dependencies (barnum)
+        run: pnpm install --frozen-lockfile
+        working-directory: libs/barnum
+      - name: TypeScript type-check (barnum)
+        run: pnpm exec tsc --noEmit
+        working-directory: libs/barnum
+      - name: Run tests (barnum)
+        run: pnpm exec vitest run
+        working-directory: libs/barnum
+      - name: Install and type-check demos
+        run: |
+          for demo in demos/*/; do
+            if [ -f "$demo/tsconfig.json" ]; then
+              echo "=== $demo ==="
+              (cd "$demo" && pnpm install --frozen-lockfile && pnpm exec tsc --noEmit)
+            fi
+          done
+
   # Gate for Rust jobs - skips if no changes to crates/, libs/, etc.
   gate-rust:
     runs-on: ubuntu-latest

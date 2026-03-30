@@ -12,8 +12,13 @@ RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
 if [ -n "$TS_FILES" ]; then
     echo "Running TypeScript type-check (barnum)..."
     pnpm --filter barnum exec tsc --noEmit || { echo "tsc --noEmit failed (barnum)"; exit 1; }
-    echo "Running TypeScript type-check (demos/simple-workflow)..."
-    (cd demos/simple-workflow && pnpm exec tsc --noEmit) || { echo "tsc --noEmit failed (demos)"; exit 1; }
+
+    for demo in demos/*/; do
+        if [ -f "$demo/tsconfig.json" ]; then
+            echo "Running TypeScript type-check ($demo)..."
+            (cd "$demo" && pnpm exec tsc --noEmit) || { echo "tsc --noEmit failed ($demo)"; exit 1; }
+        fi
+    done
 fi
 
 if [ -z "$RUST_FILES" ]; then
