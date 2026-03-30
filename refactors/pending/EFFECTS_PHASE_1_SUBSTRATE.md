@@ -525,21 +525,22 @@ fn process_stashed_item(
 
 The loop terminates because each iteration either delivers at least one item (shrinking the stash) or gives up. Delivering a stashed item may Resume a Handle, unblocking further items — the loop catches cascades.
 
-### is_on_frozen_side
+### is_in_suspended_body
 
-Each Handle has two children: the body (reached via SingleChild/IndexedChild) and the handler (reached via HandlerChild). When a Handle is suspended, the body side is frozen and the handler side is active. This method encapsulates the direction × state check:
+Each Handle has two children: the body (reached via SingleChild/IndexedChild) and the handler (reached via HandlerChild). When a Handle is suspended, the body side is suspended and the handler side is active. This method encapsulates the direction × state check:
 
 | Edge | Suspended | Result |
 |------|-----------|--------|
-| Body child + suspended | frozen | `true` |
-| Body child + free | active | `false` |
-| Handler child + suspended | active (resolving) | `false` |
+| Body child + suspended | body suspended | `true` |
+| Body child + free | body running | `false` |
+| Handler child + suspended | handler active | `false` |
 | Handler child + free | invariant violation | `false` + debug_assert |
 
 ```rust
-/// Returns true if `parent_ref` points into the frozen (inactive) side
-/// of a Handle frame.
-fn is_on_frozen_side(&self, parent_ref: ParentRef) -> bool {
+/// Returns true if `parent_ref` points into the suspended body of a
+/// Handle frame (i.e. this edge is the body side and the Handle has
+/// an active continuation).
+fn is_in_suspended_body(&self, parent_ref: ParentRef) -> bool {
     let frame_id = parent_ref.frame_id();
     let Some(frame) = self.frames.get(frame_id) else {
         return false;
@@ -562,13 +563,13 @@ The debug_assert catches the impossible-today case where a HandlerChild edge exi
 
 ### find_suspended_ancestor
 
-Walks the parent chain, checking `is_on_frozen_side` at each step. Returns the first suspended Handle whose body we're inside.
+Walks the parent chain, checking `is_in_suspended_body` at each step. Returns the first suspended Handle whose body we're inside.
 
 ```rust
 fn find_suspended_ancestor(&self, frame_id: FrameId) -> Option<FrameId> {
     let mut current = self.frames.get(frame_id)?.parent;
     while let Some(parent_ref) = current {
-        if self.is_on_frozen_side(parent_ref) {
+        if self.is_in_suspended_body(parent_ref) {
             return Some(parent_ref.frame_id());
         }
         current = self.frames.get(parent_ref.frame_id())?.parent;
@@ -1010,7 +1011,7 @@ fn resume_with_state_handler() -> Action {
 
 20. `Handle(mid, h_mid, Handle(inner, h_inner, Parallel(Chain(Invoke(P1), Perform(mid)), Chain(Invoke(P2), Perform(inner)), Chain(Invoke(P3), Invoke(echo)))))`. P1 -> Perform(mid) -> mid suspends. P2, P3 stashed. Mid resumes -> sweep -> P2 delivered -> Perform(inner) -> inner suspends -> P3 re-stashed. Inner resumes -> sweep -> P3 delivered -> echo -> Parallel joins.
 
-21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_suspended_ancestor walks through HandlerChild -> is_on_frozen_side returns false (handler side is active) -> delivers normally. Handler completes.
+21. `Handle(e, Chain(Invoke(step1), Invoke(step2)), Chain(Perform(e), ...))`. Handler is a multi-step Chain. Step1 completes -> Chain trampolines to step2 -> dispatches. Step2 completes -> deliver_or_stash -> find_suspended_ancestor walks through HandlerChild -> is_in_suspended_body returns false (handler side is active) -> delivers normally. Handler completes.
 
 22. `Handle(e, handler, Parallel(Perform(e), Perform(e)))`. Both Performs dispatch tasks during advance. With FIFO completion order: first Perform's bubble_effect dispatches handler, second stashes. Handler resumes -> sweep -> retries -> dispatches second handler. With depth-first: each handler completes before the next Perform's bubble_effect runs, no stashing. Both orderings produce the same final result.
 
@@ -1039,7 +1040,7 @@ fn resume_with_state_handler() -> Action {
 14. `handle_handler_completion`, `apply_state_update`
 15. `resume_continuation`, `discard_continuation`, `restart_body`
 16. `teardown_body`, `is_descendant_of`
-17. `is_on_frozen_side`, `find_suspended_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
+17. `is_in_suspended_body`, `find_suspended_ancestor`, `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`
 18. `handle_frame_mut` accessor
 19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 20. `FlatConfig::handle_body` accessor
