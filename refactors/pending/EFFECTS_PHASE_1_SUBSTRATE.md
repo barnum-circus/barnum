@@ -240,13 +240,6 @@ The driver controls scheduling order for Perform tasks. In a Parallel with N Per
 ### dispatch_perform
 
 ```rust
-/// Stored alongside each Perform task. complete_task uses this
-/// to run bubble_effect when the driver echoes the payload back.
-struct PendingPerform {
-    starting_parent: Option<ParentRef>,
-    effect_id: EffectId,
-}
-
 fn dispatch_perform(
     &mut self,
     starting_parent: Option<ParentRef>,
@@ -254,7 +247,7 @@ fn dispatch_perform(
     payload: Value,
 ) {
     let task_id = self.next_task_id();
-    self.task_to_perform.insert(task_id, PendingPerform {
+    self.task_origin.insert(task_id, TaskOrigin::Perform {
         starting_parent,
         effect_id,
     });
@@ -266,7 +259,7 @@ fn dispatch_perform(
 
 No frame is created. The Perform's parent (e.g. a Chain frame or Parallel slot) waits for a value, identical to waiting for an Invoke's task to complete. When `bubble_effect` eventually dispatches the handler and the handler Resumes, the Resume delivers to `starting_parent`, unblocking the waiting frame.
 
-If the body is torn down (Discard/RestartBody) before the Perform task completes, the echoed payload arrives at `complete_task`, which runs `bubble_effect`. `bubble_effect` walks the parent chain, finds missing frames (generational arena returns None), and silently drops the effect. No cleanup of `task_to_perform` in `teardown_body` is needed — the entry is consumed on completion.
+If the body is torn down (Discard/RestartBody) before the Perform task completes, the echoed payload arrives at `complete_task`, which runs `bubble_effect`. `bubble_effect` walks the parent chain, finds missing frames (generational arena returns None), and silently drops the effect. No cleanup of `task_origin` in `teardown_body` is needed — the Perform entry is consumed on completion.
 
 ```rust
 pub enum AdvanceError {
@@ -413,12 +406,23 @@ enum StashedItem {
     },
 }
 
-pub struct WorkflowState {
-    // existing fields: frames, flat_config, task_to_parent
+/// What a task represents. A TaskId exists in exactly one map entry.
+/// Impossible states (task in two maps, or task with no origin) are unrepresentable.
+#[derive(Debug)]
+enum TaskOrigin {
+    /// Normal handler invocation. Parent is where to deliver the result.
+    Invoke { parent: Option<ParentRef> },
+    /// Perform identity echo. complete_task runs bubble_effect on completion.
+    Perform { starting_parent: Option<ParentRef>, effect_id: EffectId },
+}
 
-    /// Maps Perform task IDs to their effect info. complete_task checks this
-    /// before the normal delivery path. Consumed on completion.
-    task_to_perform: HashMap<TaskId, PendingPerform>,
+pub struct WorkflowState {
+    // existing fields: frames, flat_config
+
+    /// Maps every in-flight task to its origin. Replaces the previous
+    /// task_to_parent + task_to_perform split — a single map eliminates
+    /// the impossible state of a TaskId existing in both.
+    task_origin: HashMap<TaskId, TaskOrigin>,
 
     /// Work items deferred because their target Handle was busy or their
     /// target frame was inside a suspended body. Swept after every handler completion.
@@ -456,19 +460,23 @@ fn complete_task(
     task_id: TaskId,
     value: Value,
 ) -> Result<Option<Value>, CompleteError> {
-    // Perform task: driver echoed the payload back. Run bubble_effect.
-    if let Some(pending_perform) = self.task_to_perform.remove(&task_id) {
-        self.bubble_effect(
-            pending_perform.starting_parent,
-            pending_perform.effect_id,
-            value, // payload, echoed by driver
-        ).map_err(CompleteError::from)?;
-        return Ok(None);
-    }
+    let Some(origin) = self.task_origin.remove(&task_id) else {
+        return Ok(None); // unknown task, silently drop
+    };
 
-    match self.task_to_parent.remove(&task_id) {
-        None => Ok(None), // task's frame was torn down, drop silently
-        Some(parent_ref) => self.deliver_or_stash(parent_ref, value),
+    match origin {
+        TaskOrigin::Perform { starting_parent, effect_id } => {
+            self.bubble_effect(starting_parent, effect_id, value)
+                .map_err(CompleteError::from)?;
+            Ok(None)
+        }
+        TaskOrigin::Invoke { parent: Some(parent_ref) } => {
+            self.deliver_or_stash(parent_ref, value)
+        }
+        TaskOrigin::Invoke { parent: None } => {
+            // Top-level workflow completed.
+            Ok(Some(value))
+        }
     }
 }
 ```
@@ -549,7 +557,7 @@ The HandlerChild check prevents deadlock. Without it, a multi-step handler like 
 
 ### Cancelled tasks
 
-When `teardown_body` runs (Discard or RestartBody), it removes body frames and their `task_to_parent` entries. Late-arriving completions find no entry and are silently dropped. Stashed items targeting torn-down frames are dropped during the next sweep. No explicit cancel signal is sent to the external driver.
+When `teardown_body` runs (Discard or RestartBody), it removes body frames and their `task_origin` entries (Invoke entries whose parent points into the body). Late-arriving completions find no entry and are silently dropped. Perform entries are not cleaned up — they're consumed on completion, and `bubble_effect` silently drops effects whose frames are gone. Stashed items targeting torn-down frames are dropped during the next sweep. No explicit cancel signal is sent to the external driver.
 
 ### Example
 
@@ -754,7 +762,7 @@ fn restart_body(
 
 ## teardown_body
 
-Remove all descendant frames and their task_to_parent entries. In-flight tasks run to completion; their results are silently dropped when complete_task finds no entry.
+Remove all descendant frames and their `task_origin` entries (Invoke variants whose parent points into the body). In-flight tasks run to completion; their results are silently dropped when complete_task finds no entry.
 
 ```rust
 fn teardown_body(&mut self, handle_frame_id: FrameId) {
@@ -775,10 +783,15 @@ fn teardown_body(&mut self, handle_frame_id: FrameId) {
 
     let body_frame_set: std::collections::HashSet<FrameId> =
         body_frames.into_iter().collect();
-    self.task_to_parent.retain(|_, parent| {
-        match parent {
-            Some(parent_ref) => !body_frame_set.contains(&parent_ref.frame_id()),
-            None => true,
+    self.task_origin.retain(|_, origin| {
+        match origin {
+            TaskOrigin::Invoke { parent: Some(parent_ref) } => {
+                !body_frame_set.contains(&parent_ref.frame_id())
+            }
+            // Invoke with no parent (top-level) and Perform entries are kept.
+            // Perform entries are consumed on completion; bubble_effect
+            // silently drops effects whose frames are gone.
+            _ => true,
         }
     });
 }
@@ -941,7 +954,7 @@ fn resume_with_state_handler() -> Action {
 
 7. One branch of a Parallel Performs, the other completes normally. After Resume, Parallel joins both.
 
-8. After Discard, body frames removed from slab, task_to_parent entries removed.
+8. After Discard, body frames removed from arena, task_origin entries removed.
 
 9. Body Performs twice in a Chain. First resumed, then second fires and is resumed.
 
@@ -988,7 +1001,7 @@ fn resume_with_state_handler() -> Action {
 6. `HandleFrame` struct, `FrameKind::Handle`
 7. `ContinuationRoot` struct
 8. `ParentRef::HandlerChild` variant
-9. `PendingPerform` struct, `task_to_perform: HashMap<TaskId, PendingPerform>` on WorkflowState
+9. `TaskOrigin` enum (Invoke + Perform), `task_origin: HashMap<TaskId, TaskOrigin>` replacing both `task_to_parent` and `task_to_perform`
 10. `dispatch_perform` — Perform dispatches identity task, stores effect info
 11. `StashedItem` enum (Delivery + Effect)
 12. `bubble_effect` with Handle-busy stashing (called from `complete_task`, not advance)
@@ -996,7 +1009,7 @@ fn resume_with_state_handler() -> Action {
 14. `handle_handler_completion`, `apply_state_update`
 15. `resume_continuation`, `discard_continuation`, `restart_body`
 16. `teardown_body`, `is_descendant_of`
-17. `deliver_or_stash`, `complete_task` (updated: checks `task_to_perform` first), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
+17. `deliver_or_stash`, `complete_task` (updated: single `task_origin` lookup), `sweep_stash`, `process_stashed_item`, `find_suspended_ancestor`
 18. `handle_frame_mut` accessor
 19. `AdvanceError::UnhandledEffect`, `CompleteError::InvalidHandlerOutput`
 20. `FlatConfig::handle_body` accessor
