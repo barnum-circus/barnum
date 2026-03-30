@@ -167,7 +167,7 @@ export function withResource<
   action: TypedAction<TResource & TIn, TOut>;
   dispose: TypedAction<TResource, unknown>;
 }): TypedAction<TIn, TOut> {
-  // ... (internal merge unchanged — still parallel + merge internally)
+  // ... (internal merge unchanged — still all + merge internally)
 }
 ```
 
@@ -240,7 +240,7 @@ The solution: `augment` should be parameterized differently. The user explicitly
 augment(pipe(pick("file"), migrate))
 ```
 
-But then the pipe inside augment goes `TInput → { file: string } → { file: string, migrated: boolean }`. Augment needs the action to start from TInput and produce TOutput. With invariance, `pick("file")` takes TInput and outputs `{ file: string }`, then `migrate` takes `{ file: string }` — types match at every step. Augment's internal `parallel(action, identity())` produces `[TOutput, TInput]`, then merge produces `TOutput & TInput`. This works — augment's action param can be `TypedAction<TInput, TOutput>` and the pipe inside handles the narrowing.
+But then the pipe inside augment goes `TInput → { file: string } → { file: string, migrated: boolean }`. Augment needs the action to start from TInput and produce TOutput. With invariance, `pick("file")` takes TInput and outputs `{ file: string }`, then `migrate` takes `{ file: string }` — types match at every step. Augment's internal `all(action, identity())` produces `[TOutput, TInput]`, then merge produces `TOutput & TInput`. This works — augment's action param can be `TypedAction<TInput, TOutput>` and the pipe inside handles the narrowing.
 
 No change needed to augment's signature — the caller just inserts `pick` inside the pipe.
 

@@ -4,7 +4,7 @@ import path from "path";
 import { describe, expect, it } from "vitest";
 
 import {
-  parallel,
+  all,
   workflowBuilder,
   loop,
   branch,
@@ -47,9 +47,9 @@ describe("barnum round-trip", () => {
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Parallel", () => {
+  it("All", () => {
     const cfg = workflowBuilder().workflow(() =>
-      pipe(constant({ artifact: "test" }), parallel(verify, verify)),
+      pipe(constant({ artifact: "test" }), all(verify, verify)),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });

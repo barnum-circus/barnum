@@ -58,7 +58,7 @@ Each `dispatch()` call:
 - Spawns a tokio task (lightweight — not a thread; multiplexed on the tokio thread pool)
 - The task executes the handler (currently a no-op returning `{}`), sends the result, and completes
 
-`recv()` returns the next completed result. Results may arrive in any order when multiple tasks are in flight (Parallel, ForEach).
+`recv()` returns the next completed result. Results may arrive in any order when multiple tasks are in flight (All, ForEach).
 
 All handlers return an empty JSON object for this milestone. Real TypeScript handler execution replaces this later (see TYPESCRIPT_HANDLER_INVOCATION.md).
 
@@ -98,8 +98,8 @@ The loop:
 
 This handles:
 - **Chain**: completion of step N produces a dispatch for step N+1 (trampoline)
-- **Parallel**: all children dispatched at once, completions arrive one at a time, Parallel frame collects results
-- **ForEach**: same as Parallel but over array elements
+- **All**: all children dispatched at once, completions arrive one at a time, All frame collects results
+- **ForEach**: same as All but over array elements
 - **Loop**: body completion produces either Break (terminal) or Continue (re-dispatch)
 - **Nesting**: arbitrary combinations of the above
 

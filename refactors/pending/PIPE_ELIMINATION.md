@@ -145,7 +145,7 @@ declare({
 }, ({ input, image }) =>
   pipe(
     image.then(pick("imageTag")).then(runTests).dropOutput(),
-    parallel(
+    all(
       image.then(pick("imageTag")),
       input.then(pick("environment")),
     ).then(merge()).then(deployToK8s),
@@ -153,11 +153,11 @@ declare({
       deploy: identity<{ podName: string }>(),
     }, ({ deploy }) =>
       pipe(
-        parallel(
+        all(
           input.then(pick("repo", "environment")),
           deploy.then(pick("podName")),
         ).then(merge()).then(notifySlack).dropOutput(),
-        parallel(
+        all(
           input.then(pick("repo", "sha")),
           deploy.then(pick("podName")),
         ).then(merge()).then(updateDashboard),
@@ -167,7 +167,7 @@ declare({
 )
 ```
 
-Precise, but verbose. Nested declares for mid-pipeline bindings. Manual parallel + merge to assemble inputs from multiple sources.
+Precise, but verbose. Nested declares for mid-pipeline bindings. Manual all + merge to assemble inputs from multiple sources.
 
 ### With accumulative sequence
 
@@ -303,7 +303,7 @@ The underlying mechanism is the same: evaluate an expression, bind the result to
 
 1. **No prop drilling.** Every intermediate result is in scope by name. No augment/tap/pick workarounds.
 
-2. **Explicit data dependencies.** Each combinator declares what it reads. The scheduler can parallelize independent steps automatically. `notifySlack` depends on `input` and `deploy`; `updateDashboard` depends on `input` and `deploy`. They don't depend on each other, so the scheduler can run them in parallel without the user writing `parallel(...)`.
+2. **Explicit data dependencies.** Each combinator declares what it reads. The scheduler can parallelize independent steps automatically. `notifySlack` depends on `input` and `deploy`; `updateDashboard` depends on `input` and `deploy`. They don't depend on each other, so the scheduler can run them in parallel without the user writing `all(...)`.
 
 3. **Simpler mental model for complex workflows.** The deployment pipeline reads top to bottom. No nesting, no callback pyramid. Each step says where its data comes from.
 

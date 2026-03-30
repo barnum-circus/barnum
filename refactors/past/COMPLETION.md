@@ -114,13 +114,13 @@ A handler invocation finished successfully and produced a value. Now that value 
 - **Chain:** The value is the output of the chain's first child. Use it as input to advance the `rest` action. This is the "trampoline" — completion triggers more expansion.
 - **Loop:** The value is the loop body's output. If it says `Continue`, re-insert a new Loop frame and re-advance the body with the new value (the loop frame must persist across iterations — each Continue creates a fresh frame). If `Break`, the loop is done — complete the loop's parent with the break value.
 - **Attempt:** The child succeeded. Wrap the value as `{ kind: "Ok", value }` and complete the attempt's parent. (First pass: wraps unconditionally. Proper Attempt semantics — structured error types, catching failures — are deferred.)
-- **Parallel / ForEach:** The value is one child's result. Store it in the results slot at `child_index`. If all slots are filled, collect them into an array and complete the parent. If not, do nothing — more children are still in flight.
+- **All / ForEach:** The value is one child's result. Store it in the results slot at `child_index`. If all slots are filled, collect them into an array and complete the parent. If not, do nothing — more children are still in flight.
 
-The key insight: `complete` either **terminates** (returns a terminal result), **mutates** a frame in place (Parallel/ForEach partial result), or **continues** by calling `advance` again (Chain/Loop). It never blocks — everything is synchronous state manipulation.
+The key insight: `complete` either **terminates** (returns a terminal result), **mutates** a frame in place (All/ForEach partial result), or **continues** by calling `advance` again (Chain/Loop). It never blocks — everything is synchronous state manipulation.
 
-Each arm asserts the expected `ParentRef` variant. Chain/Loop/Attempt use `SingleChild`; Parallel/ForEach use `IndexedChild`.
+Each arm asserts the expected `ParentRef` variant. Chain/Loop/Attempt use `SingleChild`; All/ForEach use `IndexedChild`.
 
-For Parallel and ForEach, we **do not** remove the frame. We mutate it in place via `get_mut` and only remove it when all results are collected.
+For All and ForEach, we **do not** remove the frame. We mutate it in place via `get_mut` and only remove it when all results are collected.
 
 ```rust
 fn complete(
@@ -182,7 +182,7 @@ fn complete(
             let frame = self.frames.get_mut(frame_id.0)
                 .expect("parent frame exists");
             match &mut frame.kind {
-                FrameKind::Parallel { results }
+                FrameKind::All { results }
                 | FrameKind::ForEach { results } => {
                     results[child_index] = Some(value);
                     if results.iter().all(Option::is_some) {
@@ -196,7 +196,7 @@ fn complete(
                     }
                 }
                 _ => unreachable!(
-                    "IndexedChild parent must be Parallel or ForEach, got {:?}",
+                    "IndexedChild parent must be All or ForEach, got {:?}",
                     frame.kind
                 ),
             }
@@ -322,10 +322,10 @@ fn nested_chain_completes() {
     );
 }
 
-/// Parallel(A, B): complete both -> workflow done with [a_result, b_result].
+/// All(A, B): complete both -> workflow done with [a_result, b_result].
 #[test]
-fn parallel_collects_results() {
-    let mut engine = engine_from(parallel(vec![
+fn all_collects_results() {
+    let mut engine = engine_from(all(vec![
         invoke("./a.ts", "a"),
         invoke("./b.ts", "b"),
     ]));

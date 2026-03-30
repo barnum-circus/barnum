@@ -6,7 +6,7 @@ The nested `Config` (tree of `Action` nodes with step references by name) is fla
 
 **Note:** `ActionId`, `FlatConfigEntryId`, `HandlerId`, and `Count` are `u32` newtypes via a `u32_newtype!` macro (modeled after isograph's `u64_newtypes` crate). To be created when implementation starts.
 
-**`ActionId` vs `FlatConfigEntryId`:** Both are indices into `FlatConfig::entries`. `ActionId` is guaranteed to point to an action entry (Invoke, Pipe, Parallel, ForEach, Branch, Loop, Attempt, Step). `FlatConfigEntryId` is a raw position that might also be a ChildRef or BranchKey — produced by `ActionId + u32` arithmetic when computing child slot positions relative to a parent. `resolve_child_slot(FlatConfigEntryId) -> ActionId` resolves the indirection.
+**`ActionId` vs `FlatConfigEntryId`:** Both are indices into `FlatConfig::entries`. `ActionId` is guaranteed to point to an action entry (Invoke, Pipe, All, ForEach, Branch, Loop, Attempt, Step). `FlatConfigEntryId` is a raw position that might also be a ChildRef or BranchKey — produced by `ActionId + u32` arithmetic when computing child slot positions relative to a parent. `resolve_child_slot(FlatConfigEntryId) -> ActionId` resolves the indirection.
 
 ```rust
 /// ActionId + offset = FlatConfigEntryId (child slot position relative to parent).
@@ -47,7 +47,7 @@ enum FlatAction<T> {
 
     /// Fan-out: same input to all children, collect results as array.
     /// Parent is followed by `count` child slots in the entry array.
-    Parallel { count: Count },
+    All { count: Count },
 
     /// Map over array input.
     ForEach { body: ActionId },
@@ -69,7 +69,7 @@ enum FlatAction<T> {
 
 /// A slot in the entry array. Either an action or inline data (ChildRef/BranchKey).
 ///
-/// Child slots after Pipe/Parallel/Branch contain either:
+/// Child slots after Pipe/All/Branch contain either:
 /// - `Action(...)` — a single-entry child inlined directly into the slot
 /// - `ChildRef { action }` — a pointer to a multi-entry child elsewhere
 ///
@@ -82,7 +82,7 @@ enum FlatAction<T> {
 enum FlatEntry<T> {
     Action(FlatAction<T>),
 
-    /// Child pointer for multi-entry children (Pipe/Parallel/Branch).
+    /// Child pointer for multi-entry children (Pipe/All/Branch).
     /// Points to the root ActionId of a child subtree.
     ChildRef { action: ActionId },
 
@@ -102,7 +102,7 @@ impl<T> FlatAction<T> {
             FlatAction::Step { target } => FlatAction::Step { target: f(target)? },
             FlatAction::Invoke { handler } => FlatAction::Invoke { handler },
             FlatAction::Pipe { count } => FlatAction::Pipe { count },
-            FlatAction::Parallel { count } => FlatAction::Parallel { count },
+            FlatAction::All { count } => FlatAction::All { count },
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
             FlatAction::Loop { body } => FlatAction::Loop { body },
@@ -155,7 +155,7 @@ struct FlatConfig {
 
 ### Accessors
 
-The interpreter works with `ActionId` and `FlatAction`. Child slots (positions after Pipe/Parallel/Branch) are `FlatConfigEntryId`s — resolve them via `resolve_child_slot` to get an `ActionId`, then call `action()` to get the `FlatAction`.
+The interpreter works with `ActionId` and `FlatAction`. Child slots (positions after Pipe/All/Branch) are `FlatConfigEntryId`s — resolve them via `resolve_child_slot` to get an `ActionId`, then call `action()` to get the `FlatAction`.
 
 ```rust
 impl FlatConfig {
@@ -184,11 +184,11 @@ impl FlatConfig {
         }
     }
 
-    /// Returns the child ActionIds for a Pipe or Parallel.
+    /// Returns the child ActionIds for a Pipe or All.
     fn children(&self, id: ActionId) -> impl Iterator<Item = ActionId> + '_ {
         let count = match self.action(id) {
-            FlatAction::Pipe { count } | FlatAction::Parallel { count } => count.0,
-            other => panic!("expected Pipe or Parallel, got {other:?}"),
+            FlatAction::Pipe { count } | FlatAction::All { count } => count.0,
+            other => panic!("expected Pipe or All, got {other:?}"),
         };
         (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
@@ -219,8 +219,8 @@ impl FlatConfig {
 DFS flattening into a single flat vec. No side tables. Four methods:
 
 - **`flatten_action`** — allocate a slot, then `flatten_action_at` into it. Returns ActionId.
-- **`flatten_action_at`** — write an action's root entry into a given slot. The single match over all Action variants. For Pipe/Parallel/Branch, also `alloc_many` for child slots and `fill_child_slots`.
-- **`fill_child_slot`** — put an action into a child slot. Single-entry children are inlined via `flatten_action_at`. Multi-entry children (Pipe/Parallel/Branch) are flattened elsewhere via `flatten_action` and a ChildRef is written into the slot.
+- **`flatten_action_at`** — write an action's root entry into a given slot. The single match over all Action variants. For Pipe/All/Branch, also `alloc_many` for child slots and `fill_child_slots`.
+- **`fill_child_slot`** — put an action into a child slot. Single-entry children are inlined via `flatten_action_at`. Multi-entry children (Pipe/All/Branch) are flattened elsewhere via `flatten_action` and a ChildRef is written into the slot.
 - **`fill_child_slots`** — loop: call `fill_child_slot` for each child.
 
 Handlers are interned via `IndexSet<HandlerKind>`: `insert_full` returns `(index, was_new)`, giving O(1) dedup with stable insertion-order indices. The `IndexSet` lives on `UnresolvedFlatConfig` during building; `resolve()` converts it to a `Vec<HandlerKind>` for the final `FlatConfig`.
@@ -276,7 +276,7 @@ impl UnresolvedFlatConfig {
     /// Write an action's root entry into an existing slot. The single match
     /// over all Action variants — no duplication.
     ///
-    /// For Pipe/Parallel/Branch, child slots are alloc_many'd immediately
+    /// For Pipe/All/Branch, child slots are alloc_many'd immediately
     /// after the slot. This means the slot must be at the end of the vec
     /// for multi-entry actions (guaranteed when called from flatten_action).
     fn flatten_action_at(
@@ -298,11 +298,11 @@ impl UnresolvedFlatConfig {
                 FlatAction::Pipe { count }
             }
 
-            Action::Parallel { actions } => {
+            Action::All { actions } => {
                 let count = Count(actions.len() as u32);
                 self.alloc_many(count);
                 self.fill_child_slots(actions, action_id + 1, workflow_root)?;
-                FlatAction::Parallel { count }
+                FlatAction::All { count }
             }
 
             Action::Branch { cases } => {
@@ -349,7 +349,7 @@ impl UnresolvedFlatConfig {
 
     /// Fill a child slot with an action. Single-entry actions are inlined
     /// directly into the slot (the FlatConfigEntryId becomes an ActionId).
-    /// Multi-entry actions (Pipe/Parallel/Branch) are flattened elsewhere
+    /// Multi-entry actions (Pipe/All/Branch) are flattened elsewhere
     /// via flatten_action, and a ChildRef is written into the slot.
     fn fill_child_slot(
         &mut self,
@@ -358,7 +358,7 @@ impl UnresolvedFlatConfig {
         workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         match action {
-            Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
+            Action::Pipe { .. } | Action::All { .. } | Action::Branch { .. } => {
                 let action_id = self.flatten_action(action, workflow_root)?;
                 self.entries[slot.0 as usize] =
                     Some(FlatEntry::ChildRef { action: action_id });
@@ -455,8 +455,8 @@ fn flatten_single_invoke()
 fn flatten_pipe()
 // entries: [Pipe{3}, Invoke(0), Invoke(1), Invoke(2)]
 
-/// Parallel: same layout as Pipe but with Parallel variant.
-fn flatten_parallel()
+/// All: same layout as Pipe but with All variant.
+fn flatten_all()
 
 /// ForEach: explicit body ActionId.
 fn flatten_foreach()
@@ -488,14 +488,14 @@ fn flatten_single_child_chain()
 /// Deep nesting: Attempt > Loop > Pipe.
 fn flatten_deep_nesting()
 
-/// Pipe inside Parallel inside Loop.
+/// Pipe inside All inside Loop.
 fn flatten_nested_combinators()
 
 /// Branch cases containing compound subtrees.
 fn flatten_branch_with_subtrees()
 
-/// Parallel containing Parallels (ChildRef for each).
-fn flatten_parallel_of_parallels()
+/// All containing Alls (ChildRef for each).
+fn flatten_all_of_alls()
 
 /// Pipe with Loop child: Loop inlined, body elsewhere.
 fn flatten_pipe_with_loop_child()
@@ -577,7 +577,7 @@ fn action_rejects_childref()
 #[should_panic]
 fn action_rejects_branchkey()
 
-/// BranchKey in a Pipe/Parallel child slot panics.
+/// BranchKey in a Pipe/All child slot panics.
 #[should_panic]
 fn branchkey_in_pipe_slot_panics()
 ```

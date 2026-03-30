@@ -1,13 +1,12 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
 ---
 FlatConfig {
     entries: [
         Action(
-            Parallel {
+            All {
                 count: Count(
                     2,
                 ),

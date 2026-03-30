@@ -2,15 +2,15 @@ import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast
 import { constant } from "./builtins.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function parallel(): TypedAction<any, []>;
-export function parallel<In, O1, R1 extends string>(
+export function all(): TypedAction<any, []>;
+export function all<In, O1, R1 extends string>(
   a1: Pipeable<In, O1, R1>,
 ): TypedAction<In, [O1], R1>;
-export function parallel<In, O1, O2, R1 extends string, R2 extends string>(
+export function all<In, O1, O2, R1 extends string, R2 extends string>(
   a1: Pipeable<In, O1, R1>,
   a2: Pipeable<In, O2, R2>,
 ): TypedAction<In, [O1, O2], R1 | R2>;
-export function parallel<
+export function all<
   In, O1, O2, O3,
   R1 extends string, R2 extends string, R3 extends string,
 >(
@@ -18,7 +18,7 @@ export function parallel<
   a2: Pipeable<In, O2, R2>,
   a3: Pipeable<In, O3, R3>,
 ): TypedAction<In, [O1, O2, O3], R1 | R2 | R3>;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4,
   R1 extends string, R2 extends string, R3 extends string, R4 extends string,
 >(
@@ -27,7 +27,7 @@ export function parallel<
   a3: Pipeable<In, O3, R3>,
   a4: Pipeable<In, O4, R4>,
 ): TypedAction<In, [O1, O2, O3, O4], R1 | R2 | R3 | R4>;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string,
@@ -38,7 +38,7 @@ export function parallel<
   a4: Pipeable<In, O4, R4>,
   a5: Pipeable<In, O5, R5>,
 ): TypedAction<In, [O1, O2, O3, O4, O5], R1 | R2 | R3 | R4 | R5>;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5, O6,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string, R6 extends string,
@@ -50,7 +50,7 @@ export function parallel<
   a5: Pipeable<In, O5, R5>,
   a6: Pipeable<In, O6, R6>,
 ): TypedAction<In, [O1, O2, O3, O4, O5, O6], R1 | R2 | R3 | R4 | R5 | R6>;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5, O6, O7,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string, R6 extends string,
@@ -68,7 +68,7 @@ export function parallel<
   [O1, O2, O3, O4, O5, O6, O7],
   R1 | R2 | R3 | R4 | R5 | R6 | R7
 >;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5, O6, O7, O8,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string, R6 extends string,
@@ -87,7 +87,7 @@ export function parallel<
   [O1, O2, O3, O4, O5, O6, O7, O8],
   R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8
 >;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5, O6, O7, O8, O9,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string, R6 extends string,
@@ -107,7 +107,7 @@ export function parallel<
   [O1, O2, O3, O4, O5, O6, O7, O8, O9],
   R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9
 >;
-export function parallel<
+export function all<
   In, O1, O2, O3, O4, O5, O6, O7, O8, O9, O10,
   R1 extends string, R2 extends string, R3 extends string,
   R4 extends string, R5 extends string, R6 extends string,
@@ -129,9 +129,9 @@ export function parallel<
   [O1, O2, O3, O4, O5, O6, O7, O8, O9, O10],
   R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10
 >;
-export function parallel(...actions: Action[]): Action {
+export function all(...actions: Action[]): Action {
   if (actions.length === 0) {
     return constant([]);
   }
-  return typedAction({ kind: "Parallel", actions });
+  return typedAction({ kind: "All", actions });
 }

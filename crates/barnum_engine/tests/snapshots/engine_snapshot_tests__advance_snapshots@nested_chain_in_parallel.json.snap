@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 32
 expression: engine
 input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
 ---
@@ -8,7 +7,7 @@ WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
-                Parallel {
+                All {
                     count: Count(
                         2,
                     ),
@@ -91,7 +90,7 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: None,
-                        kind: Parallel {
+                        kind: All {
                             results: [
                                 None,
                                 None,

@@ -139,7 +139,7 @@ When `deploy({ target: "production" })` is called, it produces:
 
 ```
 Chain(
-  Parallel([
+  All([
     Invoke(Builtin(Identity)),
     Invoke(Builtin(Constant({ target: "production" })))
   ]),
@@ -147,11 +147,11 @@ Chain(
 )
 ```
 
-Parallel receives the pipeline value, passes it to both children:
+All receives the pipeline value, passes it to both children:
 - Identity builtin returns the pipeline value unchanged (scheduler executes inline, no subprocess)
 - Constant builtin returns `{ target: "production" }`, ignoring its input (scheduler executes inline, no subprocess)
 
-Parallel collects: `[pipelineValue, { target: "production" }]`
+All collects: `[pipelineValue, { target: "production" }]`
 
 Chain feeds this tuple to the TypeScript handler, which unpacks it via the internal wrapper.
 
@@ -165,7 +165,7 @@ The handler's `__definition.handle` on the exported object is a wrapper that unp
 // What the worker calls:
 handler.__definition.handle({ value: input.value })
 
-// input.value is [pipelineValue, configValue] from the Parallel
+// input.value is [pipelineValue, configValue] from the All
 // The wrapper unpacks it:
 internalHandle = async ({ value }) => {
   const [pipelineValue, config] = value;
@@ -236,7 +236,7 @@ function createHandlerWithConfig(definition, exportName?) {
     return {
       kind: "Chain",
       first: {
-        kind: "Parallel",
+        kind: "All",
         actions: [
           { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
           { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },

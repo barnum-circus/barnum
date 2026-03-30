@@ -227,25 +227,25 @@ export function withResource<
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },
   };
 
-  // Step 1: parallel(create, identity) → [TResource, TIn] → merge → TResource & TIn
+  // Step 1: all(create, identity) → [TResource, TIn] → merge → TResource & TIn
   const acquireAndMerge = chain(
     typedAction<TIn, [TResource, TIn]>({
-      kind: "Parallel",
+      kind: "All",
       actions: [create as Action, identity() as Action],
     }),
     typedAction<[TResource, TIn], TResource & TIn>(mergeBuiltin),
   );
 
-  // Step 2: parallel(action, identity) → [TOut, TResource & TIn]
+  // Step 2: all(action, identity) → [TOut, TResource & TIn]
   // Keep merged object so dispose can access resource fields.
   const actionAndKeepMerged = typedAction<TResource & TIn, [TOut, TResource & TIn]>({
-    kind: "Parallel",
+    kind: "All",
     actions: [action as Action, identity() as Action],
   });
 
-  // Step 3: parallel(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
+  // Step 3: all(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
   const disposeAndKeepResult = typedAction<[TOut, TResource & TIn], [TOut, unknown]>({
-    kind: "Parallel",
+    kind: "All",
     actions: [
       extractIndex<[TOut, TResource & TIn], 0>(0) as Action,
       chain(
@@ -287,7 +287,7 @@ export function augment<
   return typedAction({
     kind: "Chain",
     first: {
-      kind: "Parallel",
+      kind: "All",
       actions: [action as Action, identity() as Action],
     },
     rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
@@ -305,7 +305,7 @@ export function augment<
  * handler needs a subset.
  *
  * Constraint: input must be an object (uses augment internally, which
- * relies on parallel + merge).
+ * relies on all + merge).
  *
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
@@ -315,11 +315,11 @@ export function tap<TInput extends Record<string, unknown>, TOutput = any, TRefs
 ): TypedAction<TInput, TInput, TRefs> {
   // Build AST directly — internal plumbing (action → constant → augment)
   // can't go through typed chain/augment with invariant phantom fields.
-  // tap: parallel(chain(action, constant({})), identity()) → merge
+  // tap: all(chain(action, constant({})), identity()) → merge
   return typedAction({
     kind: "Chain",
     first: {
-      kind: "Parallel",
+      kind: "All",
       actions: [
         {
           kind: "Chain",

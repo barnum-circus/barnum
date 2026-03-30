@@ -18,7 +18,7 @@ Adding `.then()` and `.forEach()` methods on `TypedAction` enables method chaini
 initialize.then(build).then(deploy).then(report)
 ```
 
-Both styles produce identical AST nodes. Method chaining reads better for linear pipelines; free functions read better for fanout (`parallel`) and branching (`branch`).
+Both styles produce identical AST nodes. Method chaining reads better for linear pipelines; free functions read better for fanout (`all`) and branching (`branch`).
 
 ## Design
 
@@ -69,7 +69,7 @@ class ActionNode<In = unknown, Out = unknown, Refs extends string = never> {
 
 ### Free functions remain
 
-`pipe()`, `forEach()`, `loop()`, `parallel()`, `branch()` still work. They can delegate to methods internally:
+`pipe()`, `forEach()`, `loop()`, `all()`, `branch()` still work. They can delegate to methods internally:
 
 ```ts
 export function pipe<T1, T2, T3>(
@@ -80,7 +80,7 @@ export function pipe<T1, T2, T3>(
 }
 ```
 
-`parallel()` and `branch()` stay as free functions only -- they don't have natural method syntax.
+`all()` and `branch()` stay as free functions only -- they don't have natural method syntax.
 
 ## Usage examples
 
@@ -96,7 +96,7 @@ initialize.then(deploy({ target: "production" })).then(report)
 
 // Mixed: free functions where they read better
 initialize.then(
-  parallel(checkHealth, notify, report)
+  all(checkHealth, notify, report)
 )
 ```
 

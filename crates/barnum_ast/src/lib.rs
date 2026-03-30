@@ -56,9 +56,9 @@ pub enum Action {
     /// Parallel map over an array input. Applies the action to each element.
     ForEach(ForEachAction),
 
-    /// Parallel fanout. Passes the same input to all actions, collects results
+    /// Fanout. Passes the same input to all actions, collects results
     /// as an array.
-    Parallel(ParallelAction),
+    All(AllAction),
 
     /// N-ary branch on the `kind` field of a discriminated union input.
     Branch(BranchAction),
@@ -99,10 +99,10 @@ pub struct ForEachAction {
     pub action: Box<Action>,
 }
 
-/// Parallel fanout.
+/// Fanout: passes the same input to all actions, collects results as a tuple.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ParallelAction {
-    /// Independent actions to execute in parallel.
+pub struct AllAction {
+    /// Independent actions to execute.
     pub actions: Vec<Action>,
 }
 

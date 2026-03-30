@@ -203,11 +203,11 @@ This requires expression evaluation in the AST — a slippery slope toward a ful
 
 **Priority**: LOW. `branch` with explicit tagging is more principled.
 
-### Parallel with different inputs (fan-out)
+### All with different inputs (fan-out)
 
-`parallel` sends the same input to all branches. What about sending different data to each?
+`all` sends the same input to all branches. What about sending different data to each?
 
-Already solved: `parallel(pipe(extractField("a"), actionA), pipe(extractField("b"), actionB))`.
+Already solved: `all(pipe(extractField("a"), actionA), pipe(extractField("b"), actionB))`.
 
 ## Feature Priority Summary
 

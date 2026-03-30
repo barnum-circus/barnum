@@ -15,7 +15,7 @@ pub enum ParentRef {
         /// The parent frame's ID.
         frame_id: FrameId,
     },
-    /// Parent has N children; this child occupies `child_index` (Parallel,
+    /// Parent has N children; this child occupies `child_index` (All,
     /// `ForEach`).
     IndexedChild {
         /// The parent frame's ID.
@@ -49,7 +49,7 @@ pub enum FrameKind {
         rest: ActionId,
     },
     /// Fan-out: collecting results from N parallel branches.
-    Parallel {
+    All {
         /// Slot per child; `None` until the child completes.
         results: Vec<Option<Value>>,
     },

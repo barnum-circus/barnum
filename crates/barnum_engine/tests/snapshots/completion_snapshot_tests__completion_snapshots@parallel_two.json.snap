@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
-assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/parallel_two.json
 ---
@@ -9,7 +8,7 @@ WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
-                Parallel {
+                All {
                     count: Count(
                         2,
                     ),
@@ -63,7 +62,7 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: None,
-                        kind: Parallel {
+                        kind: All {
                             results: [
                                 None,
                                 None,
@@ -130,7 +129,7 @@ WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
-                Parallel {
+                All {
                     count: Count(
                         2,
                     ),
@@ -184,7 +183,7 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: None,
-                        kind: Parallel {
+                        kind: All {
                             results: [
                                 None,
                                 Some(
@@ -223,7 +222,7 @@ WorkflowState {
     flat_config: FlatConfig {
         entries: [
             Action(
-                Parallel {
+                All {
                     count: Count(
                         2,
                     ),

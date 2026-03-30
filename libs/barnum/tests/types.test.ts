@@ -12,7 +12,7 @@ import {
   type Option,
   type OptionDef,
   pipe,
-  parallel,
+  all,
   forEach,
   branch,
   loop,
@@ -252,17 +252,17 @@ describe("combinator types", () => {
     expect(action.kind).toBe("ForEach");
   });
 
-  it("parallel: same input, tuple output", () => {
-    const action = parallel(verify, verify);
+  it("all: same input, tuple output", () => {
+    const action = all(verify, verify);
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
-    // parallel output is [Out1, Out2]
+    // all output is [Out1, Out2]
     assertExact<
       IsExact<
         ExtractOutput<typeof action>,
         [{ verified: boolean }, { verified: boolean }]
       >
     >();
-    expect(action.kind).toBe("Parallel");
+    expect(action.kind).toBe("All");
   });
 
   it("branch: input is discriminated union with kind, output is case union", () => {

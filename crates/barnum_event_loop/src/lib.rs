@@ -232,8 +232,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parallel_two_invokes() {
-        let flat_config = flatten(config(Action::Parallel(barnum_ast::ParallelAction {
+    async fn all_two_invokes() {
+        let flat_config = flatten(config(Action::All(barnum_ast::AllAction {
             actions: vec![
                 constant(serde_json::json!({"a": 1})),
                 constant(serde_json::json!({"b": 2})),
@@ -247,7 +247,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Parallel collects results into an array
+        // All collects results into an array
         assert_eq!(result, serde_json::json!([{"a": 1}, {"b": 2}]));
     }
 }

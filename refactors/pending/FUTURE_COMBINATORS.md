@@ -12,7 +12,7 @@ function extractIndex<TTuple extends unknown[], TIndex extends number>(
 
 Rust builtin: `ExtractIndex { value: usize }`. Implementation: `input.as_array()?[index].clone()`.
 
-Primary motivation: enables tuple-based `withResource` redesign where `parallel(create, identity())` produces `[TResource, TIn]` and we need to extract elements by position.
+Primary motivation: enables tuple-based `withResource` redesign where `all(create, identity())` produces `[TResource, TIn]` and we need to extract elements by position.
 
 ## extractField should return Option, not panic
 
@@ -84,9 +84,9 @@ Implementation with `extractIndex`:
 
 ```
 TIn
-→ parallel(create, identity())           → [TResource, TIn]
-→ parallel(action, extractIndex(0))      → [TOut, TResource]
-→ parallel(extractIndex(0), chain(extractIndex(1), dispose))  → [TOut, void]
+→ all(create, identity())           → [TResource, TIn]
+→ all(action, extractIndex(0))      → [TOut, TResource]
+→ all(extractIndex(0), chain(extractIndex(1), dispose))  → [TOut, void]
 → extractIndex(0)                        → TOut
 ```
 

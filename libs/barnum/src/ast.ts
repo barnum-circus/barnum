@@ -6,7 +6,7 @@ export type Action =
   | InvokeAction
   | ChainAction
   | ForEachAction
-  | ParallelAction
+  | AllAction
   | BranchAction
   | LoopAction
   | StepAction;
@@ -27,8 +27,8 @@ export interface ForEachAction {
   action: Action;
 }
 
-export interface ParallelAction {
-  kind: "Parallel";
+export interface AllAction {
+  kind: "All";
   actions: Action[];
 }
 
@@ -129,7 +129,7 @@ export type TypedAction<
   /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
   forEach(): TypedAction<In[], Out[], Refs>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
-  branch<TCases extends { [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>> }>(
+  branch<TCases extends { [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>, unknown, string> }>(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
@@ -335,14 +335,14 @@ function getMethod(this: TypedAction, field: string): TypedAction {
 }
 
 function augmentMethod(this: TypedAction): TypedAction {
-  // Construct: Parallel(this, identity) → Merge
+  // Construct: All(this, identity) → Merge
   // "this" is the sub-pipeline. augment() wraps it so the original input
   // flows through identity alongside the sub-pipeline, then merges the results.
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: {
-      kind: "Parallel",
+      kind: "All",
       actions: [
         this as Action,
         { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
@@ -557,7 +557,7 @@ export type ValidateStepRefs<
 
 export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
-export { parallel } from "./parallel.js";
+export { all } from "./all.js";
 
 export function forEach<In, Out, R extends string = never>(
   action: Pipeable<In, Out, R>,

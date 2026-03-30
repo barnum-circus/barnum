@@ -1,13 +1,12 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 41
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/parallel_empty.json
 ---
 FlatConfig {
     entries: [
         Action(
-            Parallel {
+            All {
                 count: Count(
                     0,
                 ),

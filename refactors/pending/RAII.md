@@ -2,7 +2,7 @@
 
 ## Motivation
 
-`withResource` currently handles the create/use/dispose pattern as a combinator — a TypeScript function that desugars into `parallel + merge + extractIndex` nodes. It works, but it's a complex encoding of a simple idea: "run cleanup when this scope exits."
+`withResource` currently handles the create/use/dispose pattern as a combinator — a TypeScript function that desugars into `all + merge + extractIndex` nodes. It works, but it's a complex encoding of a simple idea: "run cleanup when this scope exits."
 
 What if RAII were a first-class AST primitive instead of a combinator-level encoding? What if handlers themselves could declare cleanup behavior?
 
@@ -11,13 +11,13 @@ What if RAII were a first-class AST primitive instead of a combinator-level enco
 `withResource({ create, action, dispose })` is pure sugar over existing AST nodes:
 
 ```
-TIn → parallel(create, identity) → merge → action → parallel(extractResult, dispose) → extractResult
+TIn → all(create, identity) → merge → action → all(extractResult, dispose) → extractResult
 ```
 
 This encoding has several properties:
 - Dispose runs after action completes successfully
 - Dispose does NOT run if action fails (no error handling yet)
-- The encoding is complex: 4 intermediate steps, multiple parallel nodes, extractIndex gymnastics
+- The encoding is complex: 4 intermediate steps, multiple all nodes, extractIndex gymnastics
 - Every user of RAII pays this AST complexity tax
 
 ## Proposal: RAII as an AST node
@@ -39,10 +39,10 @@ The scheduler handles the create/merge/action/dispose lifecycle internally. Disp
 
 This is what `withResource` already does, but as a scheduler primitive instead of a combinator encoding. The benefits:
 
-1. **Simpler AST**: One node instead of nested Chain/Parallel/Merge/ExtractIndex
+1. **Simpler AST**: One node instead of nested Chain/All/Merge/ExtractIndex
 2. **Guaranteed cleanup**: The scheduler can enforce dispose-on-exit, including on error paths
-3. **Debuggability**: The scheduler sees "WithResource" in the frame tree, not an opaque chain of parallel+extract nodes
-4. **Optimization**: The scheduler can special-case the lifecycle instead of executing the generic parallel/merge machinery
+3. **Debuggability**: The scheduler sees "WithResource" in the frame tree, not an opaque chain of all+extract nodes
+4. **Optimization**: The scheduler can special-case the lifecycle instead of executing the generic all/merge machinery
 
 ### Option 2: Scope + defer (generalized RAII)
 
@@ -109,7 +109,7 @@ This is linear types / affine types in disguise: the handler's output is a resou
 
 **Pros**: The create/dispose pairing is declared once, at the handler level. Callers don't need to think about cleanup — it happens automatically.
 
-**Cons**: Implicit behavior. The caller doesn't see the cleanup in the pipeline. If a resource is passed to multiple steps (via `parallel` or variable references), when does dispose run? When all references are dead? That's garbage collection, not RAII.
+**Cons**: Implicit behavior. The caller doesn't see the cleanup in the pipeline. If a resource is passed to multiple steps (via `all` or variable references), when does dispose run? When all references are dead? That's garbage collection, not RAII.
 
 ### Comparison
 
@@ -168,6 +168,6 @@ The ordering: error handling first, then RAII. RAII without error handling is eq
 
 2. **Scope + defer vs WithResource AST node**: Scope + defer is more general but adds two new concepts. WithResource as an AST node is simpler but less flexible. The generality of scope + defer may not be needed if most workflows have at most one resource.
 
-3. **Handler destructors**: Appealing but introduces implicit resource tracking. The "when does dispose run" question is hard in the presence of `parallel` and variable sharing. Linear types (must use exactly once) are the rigorous answer, but that's a heavy type system feature.
+3. **Handler destructors**: Appealing but introduces implicit resource tracking. The "when does dispose run" question is hard in the presence of `all` and variable sharing. Linear types (must use exactly once) are the rigorous answer, but that's a heavy type system feature.
 
 4. **Interaction with lazy let bindings**: If bindings are lazy and a binding creates a resource, does the thunk carry a dispose? If the thunk is never forced, no resource is created and no cleanup is needed. If it is forced, the resource exists and needs cleanup. This is natural — lazy evaluation + RAII means resources are created on-demand and cleaned up on scope exit.

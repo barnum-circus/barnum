@@ -163,7 +163,7 @@ if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
 
 ### Noop scheduler deprecation
 
-The noop scheduler (`ExecutionMode::Noop`) returns `{}` for every TypeScript handler. All existing Rust tests use it — they verify structural mechanics (Chain trampolining, Parallel collection, Loop Continue/Break) but never check actual data flow.
+The noop scheduler (`ExecutionMode::Noop`) returns `{}` for every TypeScript handler. All existing Rust tests use it — they verify structural mechanics (Chain trampolining, All collection, Loop Continue/Break) but never check actual data flow.
 
 With builtins, tests should use `Constant`, `Identity`, `Tag`, etc. as real handlers and assert on real output values. The noop mode becomes unnecessary — replace all noop-based tests with builtin-based tests that exercise real execution.
 

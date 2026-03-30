@@ -37,10 +37,10 @@ Each test case is a JSON file:
 
 ```json
 {
-  "name": "parallel_three_invokes",
+  "name": "all_three_invokes",
   "config": {
     "workflow": {
-      "Parallel": {
+      "All": {
         "actions": [
           { "Invoke": { "handler": { "TypeScript": { "module": "./a.ts", "func": "a" } } } },
           { "Invoke": { "handler": { "TypeScript": { "module": "./b.ts", "func": "b" } } } },
@@ -88,7 +88,7 @@ After `start()`, snapshot:
     "Root": {
       "children": [
         {
-          "Parallel": {
+          "All": {
             "results": [null, null],
             "children": [
               { "Invoke": {} },
@@ -175,8 +175,8 @@ fn render_frame(engine: &Engine, frame_id: FrameId) -> serde_json::Value {
             "rest_action_id": rest.0,
             "child": children.first().map(|c| render_frame(engine, *c))
         }),
-        FrameKind::Parallel { results } => json!({
-            "kind": "Parallel",
+        FrameKind::All { results } => json!({
+            "kind": "All",
             "results": results,
             "children": children.into_iter()
                 .map(|c| render_frame(engine, c))
@@ -221,16 +221,16 @@ crates/barnum_event_loop/
     advance/             ← test case JSON files
       single_invoke.json
       chain_two_steps.json
-      parallel_three.json
+      all_three.json
       foreach_array.json
       foreach_empty.json
       branch_matching.json
       loop_body.json
       attempt_child.json
       step_named.json
-      nested_chain_in_parallel.json
+      nested_chain_in_all.json
       deep_chain.json
-      parallel_empty.json
+      all_empty.json
       foreach_empty_in_chain.json
     engine_snapshot_tests.rs  ← test harness
 ```

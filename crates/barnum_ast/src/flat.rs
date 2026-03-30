@@ -37,7 +37,7 @@ u32_newtype!(
 );
 
 u32_newtype!(
-    /// Count of children (Parallel) or cases (Branch).
+    /// Count of children (All) or cases (Branch).
     Count
 );
 
@@ -95,7 +95,7 @@ pub enum FlatAction<T> {
 
     /// Fan-out: same input to all children, collect results as array.
     /// Parent is followed by `count` child slots in the entry array.
-    Parallel {
+    All {
         /// Number of child slots following this entry.
         count: Count,
     },
@@ -142,7 +142,7 @@ impl<T> FlatAction<T> {
             FlatAction::Step { target } => FlatAction::Step { target: f(target)? },
             FlatAction::Invoke { handler } => FlatAction::Invoke { handler },
             FlatAction::Chain { rest } => FlatAction::Chain { rest },
-            FlatAction::Parallel { count } => FlatAction::Parallel { count },
+            FlatAction::All { count } => FlatAction::All { count },
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
             FlatAction::Loop { body } => FlatAction::Loop { body },
@@ -153,7 +153,7 @@ impl<T> FlatAction<T> {
 /// A slot in the entry array. Either an action or inline data
 /// (ChildRef/BranchKey).
 ///
-/// Child slots after Chain/Parallel/Branch contain either:
+/// Child slots after Chain/All/Branch contain either:
 /// - `Action(...)` — a single-entry child inlined directly into the slot
 /// - `ChildRef { action }` — a pointer to a multi-entry child elsewhere
 ///
@@ -167,7 +167,7 @@ pub enum FlatEntry<T> {
     /// An executable action.
     Action(FlatAction<T>),
 
-    /// Child pointer for multi-entry children (Chain/Parallel/Branch).
+    /// Child pointer for multi-entry children (Chain/All/Branch).
     /// Points to the root `ActionId` of a child subtree.
     ChildRef {
         /// The `ActionId` of the child subtree root.
@@ -300,11 +300,11 @@ impl FlatConfig {
         self.resolve_child_slot(id + 1)
     }
 
-    /// Returns the child `ActionId`s for a Parallel.
+    /// Returns the child `ActionId`s for a All.
     pub fn parallel_children(&self, id: ActionId) -> impl Iterator<Item = ActionId> + '_ {
         let count = match self.action(id) {
-            FlatAction::Parallel { count } => count.0,
-            other => panic!("expected Parallel, got {other:?}"),
+            FlatAction::All { count } => count.0,
+            other => panic!("expected All, got {other:?}"),
         };
         (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
@@ -389,7 +389,7 @@ impl UnresolvedFlatConfig {
     /// Write an action's root entry into an existing slot. The single match
     /// over all `Action` variants — no duplication.
     ///
-    /// For Chain/Parallel/Branch, child slots are allocated immediately
+    /// For Chain/All/Branch, child slots are allocated immediately
     /// after the slot. This means the slot must be at the end of the vec
     /// for multi-entry actions (guaranteed when called from `flatten_action`).
     fn flatten_action_at(
@@ -415,11 +415,11 @@ impl UnresolvedFlatConfig {
                 }
             }
 
-            Action::Parallel(crate::ParallelAction { actions }) => {
+            Action::All(crate::AllAction { actions }) => {
                 let count = Count(actions.len() as u32);
                 self.alloc_many(count);
                 self.fill_child_slots(actions, action_id + 1, workflow_root)?;
-                FlatAction::Parallel { count }
+                FlatAction::All { count }
             }
 
             Action::Branch(BranchAction { cases }) => {
@@ -466,7 +466,7 @@ impl UnresolvedFlatConfig {
 
     /// Fill a child slot with an action. Single-entry actions are inlined
     /// directly into the slot (the `FlatConfigEntryId` becomes an `ActionId`).
-    /// Multi-entry actions (Chain/Parallel/Branch) are flattened elsewhere
+    /// Multi-entry actions (Chain/All/Branch) are flattened elsewhere
     /// via `flatten_action`, and a `ChildRef` is written into the slot.
     fn fill_child_slot(
         &mut self,
@@ -475,7 +475,7 @@ impl UnresolvedFlatConfig {
         workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         match action {
-            Action::Chain { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
+            Action::Chain { .. } | Action::All { .. } | Action::Branch { .. } => {
                 let action_id = self.flatten_action(action, workflow_root)?;
                 self.entries[slot.0 as usize] = Some(FlatEntry::ChildRef { action: action_id });
             }
@@ -628,9 +628,9 @@ mod tests {
         }
     }
 
-    /// Helper: create a Parallel action.
+    /// Helper: create a All action.
     fn parallel(actions: Vec<Action>) -> Action {
-        Action::Parallel(crate::ParallelAction { actions })
+        Action::All(crate::AllAction { actions })
     }
 
     /// Helper: create a `ForEach` action.
@@ -740,7 +740,7 @@ mod tests {
         assert_eq!(flat.chain_first(ActionId(2)), ActionId(3));
     }
 
-    /// Parallel: fan-out with `count` child slots.
+    /// All: fan-out with `count` child slots.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_parallel() {
@@ -753,7 +753,7 @@ mod tests {
         assert_eq!(flat.entries.len(), 3);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Parallel { count: Count(2) }
+            FlatAction::All { count: Count(2) }
         );
 
         let children: Vec<_> = flat.parallel_children(ActionId(0)).collect();
@@ -820,11 +820,11 @@ mod tests {
 
     // -- Nesting --
 
-    /// Chain with multi-entry first: first is Parallel → `ChildRef`.
+    /// Chain with multi-entry first: first is All → `ChildRef`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_chain_with_multi_entry_first() {
-        // Chain(Parallel(X, Y), B) — first is multi-entry, gets ChildRef.
+        // Chain(All(X, Y), B) — first is multi-entry, gets ChildRef.
         let action = pipe(vec![
             parallel(vec![invoke("./x.ts", "x"), invoke("./y.ts", "y")]),
             invoke("./b.ts", "b"),
@@ -832,9 +832,9 @@ mod tests {
         let flat = flatten(config(action)).unwrap();
 
         // 0: Chain { rest: 2 }
-        // 1: ChildRef { action: 3 }   ← first is multi-entry Parallel
+        // 1: ChildRef { action: 3 }   ← first is multi-entry All
         // 2: Invoke(handler_b)         ← rest
-        // 3: Parallel { count: 2 }
+        // 3: All { count: 2 }
         // 4: Invoke(handler_x)
         // 5: Invoke(handler_y)
         assert_eq!(flat.entries.len(), 6);
@@ -842,11 +842,11 @@ mod tests {
             flat.action(ActionId(0)),
             FlatAction::Chain { rest: ActionId(2) }
         );
-        // first is via ChildRef → Parallel at ActionId(3).
+        // first is via ChildRef → All at ActionId(3).
         assert_eq!(flat.chain_first(ActionId(0)), ActionId(3));
         assert_eq!(
             flat.action(ActionId(3)),
-            FlatAction::Parallel { count: Count(2) }
+            FlatAction::All { count: Count(2) }
         );
     }
 
@@ -878,7 +878,7 @@ mod tests {
         );
     }
 
-    /// Chain inside Parallel inside Loop.
+    /// Chain inside All inside Loop.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_nested_combinators() {
@@ -887,14 +887,14 @@ mod tests {
         let action = loop_action(par);
         let flat = flatten(config(action)).unwrap();
 
-        // Loop(0) -> Parallel(1) -> [ChildRef(Chain(...)), Invoke(3)]
+        // Loop(0) -> All(1) -> [ChildRef(Chain(...)), Invoke(3)]
         assert_eq!(
             flat.action(ActionId(0)),
             FlatAction::Loop { body: ActionId(1) }
         );
         assert_eq!(
             flat.action(ActionId(1)),
-            FlatAction::Parallel { count: Count(2) }
+            FlatAction::All { count: Count(2) }
         );
 
         // First child: Chain is multi-entry, gets ChildRef.
@@ -928,7 +928,7 @@ mod tests {
         }
     }
 
-    /// Parallel containing Parallels (`ChildRef` for each).
+    /// All containing Alls (`ChildRef` for each).
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_parallel_of_parallels() {
@@ -939,14 +939,14 @@ mod tests {
 
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Parallel { count: Count(2) }
+            FlatAction::All { count: Count(2) }
         );
 
         let children: Vec<_> = flat.parallel_children(ActionId(0)).collect();
         assert_eq!(children.len(), 2);
-        // Both children are multi-entry Parallels → ChildRefs.
+        // Both children are multi-entry Alls → ChildRefs.
         for child in children {
-            assert!(matches!(flat.action(child), FlatAction::Parallel { .. }));
+            assert!(matches!(flat.action(child), FlatAction::All { .. }));
         }
     }
 

@@ -13,7 +13,7 @@ A frame tracks the engine's execution state at one structural combinator. Frames
 Every combinator follows one of two patterns:
 
 - **Single-child**: has one active child. When the child completes, the frame either completes upward (Attempt, Chain) or re-enters the child (Loop on Continue). No indexing.
-- **Fan-out**: has N children running concurrently. Each child fills a slot. When all slots are filled, the frame collects results and completes upward (Parallel, ForEach).
+- **Fan-out**: has N children running concurrently. Each child fills a slot. When all slots are filled, the frame collects results and completes upward (All, ForEach).
 
 ```rust
 struct Frame {
@@ -26,7 +26,7 @@ enum ParentRef {
     /// Used by: Chain, Loop, Attempt.
     SingleChild { frame_id: FrameId },
     /// Parent has N children, this is child at `child_index`.
-    /// Used by: Parallel, ForEach.
+    /// Used by: All, ForEach.
     IndexedChild { frame_id: FrameId, child_index: usize },
 }
 
@@ -41,8 +41,8 @@ enum FrameKind {
     /// Sequential: run first child, then trampoline to rest.
     Chain { rest: ActionId },
 
-    /// Collecting results from N parallel branches.
-    Parallel { results: Vec<Option<Value>> },
+    /// Collecting results from N all branches.
+    All { results: Vec<Option<Value>> },
 
     /// Collecting results from N array elements.
     ForEach { results: Vec<Option<Value>> },
@@ -113,12 +113,12 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
             self.advance(first, value, ParentRef::SingleChild { frame_id });
         }
 
-        FlatAction::Parallel { count } => {
+        FlatAction::All { count } => {
             let children: Vec<ActionId> =
-                self.flat_config.parallel_children(action_id).collect();
+                self.flat_config.all_children(action_id).collect();
             let frame_id = self.insert_frame(Frame {
                 parent: Some(parent),
-                kind: FrameKind::Parallel {
+                kind: FrameKind::All {
                     results: vec![None; count.0 as usize],
                 },
             });
@@ -249,7 +249,7 @@ fn complete_single(&mut self, frame_id: FrameId, value: Value) {
 fn complete_indexed(&mut self, frame_id: FrameId, child_index: usize, value: Value) {
     let frame = self.frames.get_mut(frame_id.0).expect("frame not found");
     let results = match &mut frame.kind {
-        FrameKind::Parallel { results } | FrameKind::ForEach { results } => results,
+        FrameKind::All { results } | FrameKind::ForEach { results } => results,
         other => panic!("complete_indexed called on {other:?}"),
     };
 
@@ -284,7 +284,7 @@ fn error(&mut self, parent_ref: ParentRef, error: String) {
             self.complete(parent, wrapped);
         }
 
-        FrameKind::Parallel { .. } | FrameKind::ForEach { .. } => {
+        FrameKind::All { .. } | FrameKind::ForEach { .. } => {
             let parent = frame.parent.expect("non-root frame has parent");
             self.cancel_descendants(frame_id);
             self.error(parent, error);
@@ -332,8 +332,8 @@ fn single_invoke()                      // start → 1 dispatch
 fn chain_dispatches_first_only()         // chain(a, b) → 1 dispatch (a)
 fn chain_trampolines_on_completion()     // complete a → dispatches b
 fn nested_chain_completes()              // chain(a, chain(b, c)) → full pipeline
-fn parallel_dispatches_all()            // parallel of 3 → 3 dispatches
-fn parallel_collects_results()          // all complete → array result
+fn all_dispatches_all()                 // all of 3 → 3 dispatches
+fn all_collects_results()               // all complete → array result
 fn foreach_dispatches_per_element()     // 3 elements → 3 dispatches
 fn branch_dispatches_matching_case()    // only the selected case
 fn loop_continue_re_dispatches()        // Continue → same handler again
@@ -343,8 +343,8 @@ fn attempt_catches_failure()            // Err wrapper, no propagation
 fn step_follows_named()                 // enters the step's action
 fn step_follows_root()                  // re-enters workflow
 fn error_propagates_through_chain()
-fn error_cancels_parallel_siblings()
-fn nested_chain_in_parallel()
+fn error_cancels_all_siblings()
+fn nested_chain_in_all()
 ```
 
 Test helpers: `invoke(name)` builds an `Action::Invoke`. `success(v)` builds `TaskResult::Success`. `engine_from(config)` flattens and constructs.

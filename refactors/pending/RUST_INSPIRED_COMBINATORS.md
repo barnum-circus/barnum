@@ -82,7 +82,7 @@ tryScope(
 | `.flat_map(f)` | `pipe(forEach(action), flatten())` | Exists via composition |
 | `.collect()` | Implicit — `forEach` already collects | Exists |
 | `.fold(init, f)` | No general fold (see MISSING_LANGUAGE_FEATURES.md) | Hard |
-| `.zip(other)` | `parallel(forEach(a), forEach(b))` then element-wise pair | Awkward |
+| `.zip(other)` | `all(forEach(a), forEach(b))` then element-wise pair | Awkward |
 | `.enumerate()` | `enumerate()` | New — adds index: `[T] → [{ index: number, value: T }]` |
 | `.take(n)` | `take(n)` | New — builtin to slice first N elements |
 | `.skip(n)` | `skip(n)` | New — builtin to skip first N elements |

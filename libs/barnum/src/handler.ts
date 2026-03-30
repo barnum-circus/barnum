@@ -156,7 +156,7 @@ export function createHandlerWithConfig(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
-  // Internal handle that unpacks the [value, config] tuple from Parallel
+  // Internal handle that unpacks the [value, config] tuple from All
   const internalDefinition: UntypedHandlerDefinition = {
     handle: ({ value }: { value: unknown }) => {
       const [pipelineValue, config] = value as [unknown, unknown];
@@ -186,7 +186,7 @@ export function createHandlerWithConfig(
     typedAction({
       kind: "Chain",
       first: {
-        kind: "Parallel",
+        kind: "All",
         actions: [
           { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
           { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },

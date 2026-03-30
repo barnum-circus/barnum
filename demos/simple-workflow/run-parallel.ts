@@ -1,12 +1,12 @@
 /**
- * Demo: deployment pipeline with parallel post-deploy checks.
+ * Demo: deployment pipeline with all post-deploy checks.
  *
- * Pipeline: initialize → build → deploy → parallel(check-health, notify, report)
+ * Pipeline: initialize → build → deploy → all(check-health, notify, report)
  *
- * Usage: pnpm exec tsx run-parallel.ts
+ * Usage: pnpm exec tsx run-all.ts
  */
 
-import { workflowBuilder, pipe, parallel } from "@barnum/barnum/src/ast.js";
+import { workflowBuilder, pipe, all } from "@barnum/barnum/src/ast.js";
 import initialize from "./handlers/initialize.js";
 import build from "./handlers/build.js";
 import deploy from "./handlers/deploy.js";
@@ -14,7 +14,7 @@ import report from "./handlers/report.js";
 import checkHealth from "./handlers/check-health.js";
 import notify from "./handlers/notify.js";
 
-console.error("=== Running parallel post-deploy workflow ===\n");
+console.error("=== Running all post-deploy workflow ===\n");
 
 await workflowBuilder()
   .workflow(() =>
@@ -22,7 +22,7 @@ await workflowBuilder()
       initialize,
       build,
       deploy,
-      parallel(checkHealth, notify, report),
+      all(checkHealth, notify, report),
     ),
   )
   .run();

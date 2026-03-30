@@ -36,7 +36,7 @@ pub enum Action {
     Invoke(InvokeAction),
     Chain(ChainAction),
     ForEach(ForEachAction),
-    Parallel(ParallelAction),
+    All(AllAction),
     Branch(BranchAction),
     Loop(LoopAction),
     Step(StepAction),
@@ -47,7 +47,7 @@ pub enum Action {
     Invoke(InvokeAction),
     Chain(ChainAction),
     ForEach(ForEachAction),
-    Parallel(ParallelAction),
+    All(AllAction),
     Branch(BranchAction),
     Loop(LoopAction),
     Step(StepAction),
@@ -115,7 +115,7 @@ pub enum BuiltinKind {
 pub enum FlatAction<T> {
     Invoke { handler: HandlerId },
     Chain { rest: ActionId },
-    Parallel { count: Count },
+    All { count: Count },
     ForEach { body: ActionId },
     Branch { count: Count },
     Loop { body: ActionId },
@@ -126,7 +126,7 @@ pub enum FlatAction<T> {
 pub enum FlatAction<T> {
     Invoke { handler: HandlerId },
     Chain { rest: ActionId },
-    Parallel { count: Count },
+    All { count: Count },
     ForEach { body: ActionId },
     Branch { count: Count },
     Loop { body: ActionId },
@@ -226,10 +226,10 @@ Declare is a multi-entry action — add it to the match for multi-entry dispatch
 
 ```rust
 // BEFORE:
-Action::Chain { .. } | Action::Parallel { .. } | Action::Branch { .. } => {
+Action::Chain { .. } | Action::All { .. } | Action::Branch { .. } => {
 
 // AFTER:
-Action::Chain { .. } | Action::Parallel { .. } | Action::Branch { .. } | Action::Declare { .. } => {
+Action::Chain { .. } | Action::All { .. } | Action::Branch { .. } | Action::Declare { .. } => {
 ```
 
 #### Update import in `flat.rs`
@@ -435,9 +435,9 @@ When all binding results are collected, construct the new environment and advanc
 // In the IndexedChild match arm, extend the pattern:
 
 // BEFORE:
-FrameKind::Parallel { results } | FrameKind::ForEach { results } => {
+FrameKind::All { results } | FrameKind::ForEach { results } => {
 
-// AFTER — add a separate arm for Declare before the Parallel/ForEach arm:
+// AFTER — add a separate arm for Declare before the All/ForEach arm:
 FrameKind::Declare { body, results, ids, parent_env } => {
     results[child_index] = Some(value);
     if results.iter().all(Option::is_some) {
@@ -517,7 +517,7 @@ pub enum FrameKind {
         rest: ActionId,
         env: Environment,
     },
-    Parallel {
+    All {
         results: Vec<Option<Value>>,
     },
     ForEach {
@@ -593,7 +593,7 @@ FrameKind::Loop { body, env } => match value["kind"].as_str() {
 },
 ```
 
-Parallel and ForEach don't call advance during delivery — they just collect results. No changes needed for those.
+All and ForEach don't call advance during delivery — they just collect results. No changes needed for those.
 
 ### 5. Builtins — `crates/barnum_builtins/src/lib.rs`
 
@@ -615,7 +615,7 @@ export type Action =
   | InvokeAction
   | ChainAction
   | ForEachAction
-  | ParallelAction
+  | AllAction
   | BranchAction
   | LoopAction
   | StepAction;
@@ -625,7 +625,7 @@ export type Action =
   | InvokeAction
   | ChainAction
   | ForEachAction
-  | ParallelAction
+  | AllAction
   | BranchAction
   | LoopAction
   | StepAction
@@ -972,14 +972,14 @@ fn declare_parallel_bindings() {
 fn declare_nested_scopes() {
     // declare({ x: compute_x },
     //   declare({ y: compute_y },
-    //     parallel(varref("x"), varref("y"))
+    //     all(varref("x"), varref("y"))
     //   )
     // )
     let mut engine = engine_from(declare_action(
         vec![("x", invoke("./x.ts", "run"))],
         declare_action(
             vec![("y", invoke("./y.ts", "run"))],
-            parallel(vec![varref("x"), varref("y")]),
+            all(vec![varref("x"), varref("y")]),
         ),
     ));
     let root = engine.workflow_root();
@@ -1203,7 +1203,7 @@ describe("declare binding types", () => {
         inner: constant("hello"),
       }, ({ inner }) =>
         // Both outer and inner are accessible.
-        parallel(outer, inner),
+        all(outer, inner),
       ),
     );
     assertExact<IsExact<ExtractOutput<typeof action>, [number, string]>>();

@@ -6,7 +6,7 @@ Every zero-arg builtin (`drop`, `identity`, `recur`, `done`, `merge`, `flatten`)
 
 ## Proposal
 
-Combinators (`pipe`, `chain`, `parallel`, `forEach`, `loop`, `branch`) accept either a `TypedAction` or a `() => TypedAction`. If they receive a function, they call it at construction time to produce the action.
+Combinators (`pipe`, `chain`, `all`, `forEach`, `loop`, `branch`) accept either a `TypedAction` or a `() => TypedAction`. If they receive a function, they call it at construction time to produce the action.
 
 ```ts
 // Before
@@ -55,7 +55,7 @@ This is safe because `TypedAction` is a plain object (never callable). Handlers 
 Replace every `TypedAction` parameter with `ActionLike` in:
 - `pipe` (all arity overloads)
 - `chain`
-- `parallel`
+- `all`
 - `forEach`
 - `loop`
 - `branch` (the `Record<K, ...>` value type)

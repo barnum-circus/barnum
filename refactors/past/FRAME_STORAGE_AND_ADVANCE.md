@@ -4,7 +4,7 @@ Implementation plan for the first engine milestone: store frames and expand an `
 
 **Depends on:** ENGINE.md (design), flat.rs (FlatConfig, FlatAction, ActionId, etc.)
 
-**Scope:** Frame storage, the `advance` function (including `complete` as a private dependency — needed for empty ForEach/Parallel), `Engine::new`, `Engine::start`, `Engine::take_pending_dispatches`. Task correlation (`TaskId`, `task_to_frame`, `on_task_completed`) and terminal result (`EngineResult`, `result`) are a separate step.
+**Scope:** Frame storage, the `advance` function (including `complete` as a private dependency — needed for empty ForEach/All), `Engine::new`, `Engine::start`, `Engine::take_pending_dispatches`. Task correlation (`TaskId`, `task_to_frame`, `on_task_completed`) and terminal result (`EngineResult`, `result`) are a separate step.
 
 ## The advance/complete cycle
 
@@ -12,7 +12,7 @@ The engine operates in a two-phase cycle:
 
 1. **advance(ActionId, Value, parent)** — expand an ActionId into frames. Walks the flat table, creates frames for structural combinators, and bottoms out at Invoke leaves with pending dispatches. This is "given a cursor into the flat table, build the frame tree until everything is waiting on external work."
 
-2. **complete(ParentRef, Value)** — a child finished; advance the parent frame. Reads the frame, decides what to do next (Chain: trampoline to rest, Loop: re-enter or break, Parallel: fill a result slot), and may call `advance()` to expand the next subtree.
+2. **complete(ParentRef, Value)** — a child finished; advance the parent frame. Reads the frame, decides what to do next (Chain: trampoline to rest, Loop: re-enter or break, All: fill a result slot), and may call `advance()` to expand the next subtree.
 
 The cycle:
 ```
@@ -73,7 +73,7 @@ struct Frame {
 enum ParentRef {
     /// Parent has one active child (Chain, Loop, Attempt).
     SingleChild { frame_id: FrameId },
-    /// Parent has N children; this child occupies `child_index` (Parallel, ForEach).
+    /// Parent has N children; this child occupies `child_index` (All, ForEach).
     IndexedChild { frame_id: FrameId, child_index: usize },
 }
 
@@ -85,8 +85,8 @@ enum FrameKind {
     Invoke,
     /// Sequential: first child active, then trampoline to `rest`.
     Chain { rest: ActionId },
-    /// Fan-out: collecting results from N parallel branches.
-    Parallel { results: Vec<Option<Value>> },
+    /// Fan-out: collecting results from N all branches.
+    All { results: Vec<Option<Value>> },
     /// Fan-out: collecting results from N array elements.
     ForEach { results: Vec<Option<Value>> },
     /// Fixed-point: re-enter body on Continue, complete on Break.
@@ -176,7 +176,7 @@ Called from:
 |---|---|---|
 | Invoke | Yes (leaf) | None — bottoms out |
 | Chain | Yes | 1 (first child) |
-| Parallel | Yes | N (one per child) |
+| All | Yes | N (one per child) |
 | ForEach | Yes | N (one per array element) |
 | Loop | Yes | 1 (body) |
 | Attempt | Yes | 1 (child) |
@@ -187,7 +187,7 @@ Branch and Step are tail calls. They redirect to another ActionId without creati
 
 ### Value cloning
 
-Parallel clones the input value for each child. ForEach moves each array element. Chain, Loop, Attempt, Branch, Step pass the value through without cloning. Invoke consumes the value into the Dispatch.
+All clones the input value for each child. ForEach moves each array element. Chain, Loop, Attempt, Branch, Step pass the value through without cloning. Invoke consumes the value into the Dispatch.
 
 ### Branch case lookup
 
@@ -239,17 +239,17 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
             self.advance(first, value, ParentRef::SingleChild { frame_id });
         }
 
-        FlatAction::Parallel { count } => {
+        FlatAction::All { count } => {
             if count.0 == 0 {
                 // No children — vacuously complete with empty array.
                 self.complete(parent, Value::Array(vec![]));
                 return;
             }
             let children: Vec<ActionId> =
-                self.flat_config.parallel_children(action_id).collect();
+                self.flat_config.all_children(action_id).collect();
             let frame_id = self.insert_frame(Frame {
                 parent: Some(parent),
-                kind: FrameKind::Parallel {
+                kind: FrameKind::All {
                     results: vec![None; count.0 as usize],
                 },
             });
@@ -323,7 +323,7 @@ fn advance(&mut self, action_id: ActionId, value: Value, parent: ParentRef) {
 }
 ```
 
-**Empty ForEach/Parallel:** When ForEach receives `[]` or Parallel has 0 children, no frame is created. Instead, advance immediately calls `complete(parent, Value::Array(vec![]))` — the empty result propagates upward, potentially triggering further advance calls (e.g., Chain trampoline). No stuck frames.
+**Empty ForEach/All:** When ForEach receives `[]` or All has 0 children, no frame is created. Instead, advance immediately calls `complete(parent, Value::Array(vec![]))` — the empty result propagates upward, potentially triggering further advance calls (e.g., Chain trampoline). No stuck frames.
 
 Branch uses `key.lookup()` (from `intern::Lookup` on `KindDiscriminator`) rather than `key.as_str()`. ENGINE.md uses `key.as_str()` which needs to be updated to match.
 
@@ -331,9 +331,9 @@ Branch uses `key.lookup()` (from `intern::Lookup` on `KindDiscriminator`) rather
 
 ## complete (private, needed by advance)
 
-`advance` calls `complete` for the empty ForEach/Parallel edge cases. The empty result propagates upward through the frame tree — Chain trampolines to rest (calling advance again), Root silently removes itself, etc. This means complete must be fully implemented even though it's not part of the public API in this milestone.
+`advance` calls `complete` for the empty ForEach/All edge cases. The empty result propagates upward through the frame tree — Chain trampolines to rest (calling advance again), Root silently removes itself, etc. This means complete must be fully implemented even though it's not part of the public API in this milestone.
 
-No-op stub. Called by advance for empty ForEach/Parallel — the value is discarded. The full implementation is in COMPLETION.md.
+No-op stub. Called by advance for empty ForEach/All — the value is discarded. The full implementation is in COMPLETION.md.
 
 ```rust
 fn complete(&mut self, _parent_ref: ParentRef, _value: Value) {
@@ -416,8 +416,8 @@ mod tests {
         })
     }
 
-    fn parallel(actions: Vec<Action>) -> Action {
-        Action::Parallel(ParallelAction { actions })
+    fn all(actions: Vec<Action>) -> Action {
+        Action::All(AllAction { actions })
     }
 
     fn for_each(action: Action) -> Action {
@@ -501,10 +501,10 @@ mod tests {
         );
     }
 
-    /// Parallel(A, B, C): all 3 dispatched on start, all receive the same input.
+    /// All(A, B, C): all 3 dispatched on start, all receive the same input.
     #[test]
-    fn parallel_dispatches_all() {
-        let mut engine = engine_from(parallel(vec![
+    fn all_dispatches_all() {
+        let mut engine = engine_from(all(vec![
             invoke("./a.ts", "a"),
             invoke("./b.ts", "b"),
             invoke("./c.ts", "c"),
@@ -591,10 +591,10 @@ mod tests {
         );
     }
 
-    /// Nested: Chain inside Parallel. Parallel(Chain(A, B), C) → dispatches A and C.
+    /// Nested: Chain inside All. All(Chain(A, B), C) → dispatches A and C.
     #[test]
-    fn nested_chain_in_parallel() {
-        let mut engine = engine_from(parallel(vec![
+    fn nested_chain_in_all() {
+        let mut engine = engine_from(all(vec![
             chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")),
             invoke("./c.ts", "c"),
         ]));
@@ -602,7 +602,7 @@ mod tests {
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 2);
-        // A (first of chain) and C (direct parallel child).
+        // A (first of chain) and C (direct all child).
         let handlers: Vec<_> = dispatches
             .iter()
             .map(|d| engine.handler(d.handler_id).clone())
@@ -642,11 +642,11 @@ mod tests {
         assert_eq!(dispatches.len(), 0);
     }
 
-    /// Parallel with empty children: no dispatches.
+    /// All with empty children: no dispatches.
     /// complete is a no-op, so the empty result is discarded.
     #[test]
-    fn parallel_empty() {
-        let mut engine = engine_from(parallel(vec![]));
+    fn all_empty() {
+        let mut engine = engine_from(all(vec![]));
         engine.start(json!(null));
 
         let dispatches = engine.take_pending_dispatches();
@@ -659,7 +659,7 @@ mod tests {
 
 - Task correlation (TaskId, on_task_completed)
 - Chain trampoline on external completion
-- Parallel/ForEach result collection from external completions
+- All/ForEach result collection from external completions
 - Loop Continue/Break
 - Attempt Ok/Err wrapping
 - Error propagation

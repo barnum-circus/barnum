@@ -50,11 +50,11 @@ Containers with a single element can be unwrapped:
 
 ```
 Pipe([a])       → a
-Parallel([a])   → a  (output still wrapped in array? depends on semantics)
+All([a])        → a  (output still wrapped in array? depends on semantics)
 ForEach(a)      → a  (when input is known to be a single-element array?)
 ```
 
-`Pipe([a])` is always safe to simplify. `Parallel([a])` requires care: if the output type wraps results in a tuple, removing the container changes the type. This optimization may only be valid when the type system can prove it's safe.
+`Pipe([a])` is always safe to simplify. `All([a])` requires care: if the output type wraps results in a tuple, removing the container changes the type. This optimization may only be valid when the type system can prove it's safe.
 
 ## Dead branch elimination
 
@@ -78,4 +78,4 @@ constant({kind: "Num", value: 1})
 
 ## Future: parallel scheduling hints
 
-The compiler could analyze data dependencies to determine which branches of a parallel can start immediately vs. which depend on shared setup. This is more of an execution planner than a compilation pass.
+The compiler could analyze data dependencies to determine which branches of an all can start immediately vs. which depend on shared setup. This is more of an execution planner than a compilation pass.

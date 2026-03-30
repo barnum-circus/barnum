@@ -183,7 +183,7 @@ impl WorkflowState {
     /// - **No parent:** workflow done — return the terminal value.
     /// - **Chain:** trampoline — advance the `rest` action with the value.
     /// - **Loop:** inspect `Continue`/`Break` — re-enter or deliver to parent.
-    /// - **Parallel/ForEach:** store in results slot; if all slots filled,
+    /// - **All/ForEach:** store in results slot; if all slots filled,
     ///   collect into array and deliver to parent.
     #[allow(clippy::expect_used, clippy::unwrap_used)]
     fn deliver(
@@ -230,7 +230,7 @@ impl WorkflowState {
             ParentRef::IndexedChild { child_index, .. } => {
                 let frame = self.frames.get_mut(frame_id).expect("parent frame exists");
                 match &mut frame.kind {
-                    FrameKind::Parallel { results } | FrameKind::ForEach { results } => {
+                    FrameKind::All { results } | FrameKind::ForEach { results } => {
                         results[child_index] = Some(value);
                         if results.iter().all(Option::is_some) {
                             let collected: Vec<Value> =
@@ -243,7 +243,7 @@ impl WorkflowState {
                         }
                     }
                     _ => unreachable!(
-                        "IndexedChild parent must be Parallel or ForEach, got {:?}",
+                        "IndexedChild parent must be All or ForEach, got {:?}",
                         frame.kind
                     ),
                 }
@@ -298,7 +298,7 @@ impl WorkflowState {
                 self.advance(first, value, Some(ParentRef::SingleChild { frame_id }))?;
             }
 
-            FlatAction::Parallel { count } => {
+            FlatAction::All { count } => {
                 if count.0 == 0 {
                     // No children — vacuously complete with empty array.
                     self.deliver(parent, Value::Array(vec![]))
@@ -312,7 +312,7 @@ impl WorkflowState {
                     self.flat_config.parallel_children(action_id).collect();
                 let frame_id = self.insert_frame(Frame {
                     parent,
-                    kind: FrameKind::Parallel {
+                    kind: FrameKind::All {
                         results: vec![None; count.0 as usize],
                     },
                 });
@@ -424,7 +424,7 @@ mod tests {
     }
 
     fn parallel(actions: Vec<Action>) -> Action {
-        Action::Parallel(ParallelAction { actions })
+        Action::All(AllAction { actions })
     }
 
     fn for_each(action: Action) -> Action {
@@ -505,7 +505,7 @@ mod tests {
         );
     }
 
-    /// Parallel(A, B, C): all 3 dispatched on advance, all receive the same
+    /// All(A, B, C): all 3 dispatched on advance, all receive the same
     /// input.
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -597,7 +597,7 @@ mod tests {
         );
     }
 
-    /// Nested: Chain inside Parallel. Parallel(Chain(A, B), C) -> dispatches A
+    /// Nested: Chain inside All. All(Chain(A, B), C) -> dispatches A
     /// and C.
     #[test]
     #[allow(clippy::unwrap_used)]
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(dispatches.len(), 0);
     }
 
-    /// Parallel with empty children: no dispatches, immediate completion.
+    /// All with empty children: no dispatches, immediate completion.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn parallel_empty() {
@@ -715,7 +715,7 @@ mod tests {
         );
     }
 
-    /// `Parallel(A, B)`: complete both -> workflow done with collected results.
+    /// `All(A, B)`: complete both -> workflow done with collected results.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn parallel_collects_results() {

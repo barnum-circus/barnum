@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  parallel,
+  all,
   config,
   loop,
   branch,
@@ -92,26 +92,26 @@ describe("forEach", () => {
 });
 
 // -----------------------------------------------------------------------
-// Parallel
+// All
 // -----------------------------------------------------------------------
 
-describe("parallel", () => {
+describe("all", () => {
   it("accepts actions with the same input type", () => {
-    const workflow = parallel(verify, verify);
-    expect(workflow.kind).toBe("Parallel");
+    const workflow = all(verify, verify);
+    expect(workflow.kind).toBe("All");
   });
 
   it("rejects actions with different input types", () => {
     // setup expects { project: string }, verify expects { artifact: string }
     // @ts-expect-error — input types do not unify
-    parallel(setup, verify);
+    all(setup, verify);
   });
 
-  it("composes with parallel and branch", () => {
+  it("composes with all and branch", () => {
     const cfg = config(
       pipe(
         constant({ project: "test" }),
-        parallel(
+        all(
           setup,
           pipe(
             setup,
@@ -394,16 +394,16 @@ describe("Option namespace", () => {
 // -----------------------------------------------------------------------
 // Reader monad pattern
 //
-// parallel(identity(), handler) → merge()
+// all(identity(), handler) → merge()
 // Preserves the original input alongside the handler's output.
 // -----------------------------------------------------------------------
 
 describe("reader monad pattern", () => {
-  it("preserves context via parallel + identity + merge", () => {
+  it("preserves context via all + identity + merge", () => {
     const cfg = config(
       pipe(
         constant({ initialized: true, project: "test" }),
-        parallel(identity<{ initialized: boolean; project: string }>(), build),
+        all(identity<{ initialized: boolean; project: string }>(), build),
         merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
       ),
     );

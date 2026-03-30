@@ -97,7 +97,7 @@ Chain { rest: ActionId },
 
 Chain is a **2-entry action**: the Chain entry itself (with `rest` as an explicit `ActionId` field), followed by one child slot for `first`. The child slot is either an inlined single-entry action or a `ChildRef` to a multi-entry subtree elsewhere.
 
-This is optimal for the common case: `Chain(Invoke, Chain(...))`. The Invoke (single-entry) inlines into the child slot — zero indirection. The `rest` (often another Chain) is a direct `ActionId` — also zero indirection. `ChildRef` is only needed when `first` is multi-entry (Parallel, Branch, or another Chain), which is uncommon.
+This is optimal for the common case: `Chain(Invoke, Chain(...))`. The Invoke (single-entry) inlines into the child slot — zero indirection. The `rest` (often another Chain) is a direct `ActionId` — also zero indirection. `ChildRef` is only needed when `first` is multi-entry (All, Branch, or another Chain), which is uncommon.
 
 `FlatEntry<ActionId>` stays 8 bytes. Chain has one `ActionId` field, same as ForEach/Loop/Attempt.
 
@@ -120,15 +120,15 @@ The `fill_child_slot` multi-entry check adds `Chain` to the list:
 
 ```rust
 // Before:
-Action::Pipe { .. } | Action::Parallel { .. } | Action::Branch { .. } => { ... ChildRef ... }
+Action::Pipe { .. } | Action::All { .. } | Action::Branch { .. } => { ... ChildRef ... }
 
 // After:
-Action::Chain { .. } | Action::Parallel { .. } | Action::Branch { .. } => { ... ChildRef ... }
+Action::Chain { .. } | Action::All { .. } | Action::Branch { .. } => { ... ChildRef ... }
 ```
 
 ### 6. FlatConfig accessors
 
-Rename `children()` to `parallel_children()` — it's now only used by Parallel.
+Rename `children()` to `all_children()` — it's now only used by All.
 
 Add a Chain accessor:
 
@@ -163,7 +163,7 @@ Update all Pipe tests to use Chain. Example layout change:
 //   5 entries total. No ChildRefs — all firsts are single-entry Invokes.
 ```
 
-When `first` is multi-entry (e.g. `pipe(parallel(...), invoke(...))`), the child slot at `action_id + 1` contains a `ChildRef` pointing to the Parallel allocated elsewhere. `rest` is unaffected — it's always a direct `ActionId` field, not a child slot.
+When `first` is multi-entry (e.g. `pipe(all(...), invoke(...))`), the child slot at `action_id + 1` contains a `ChildRef` pointing to the All allocated elsewhere. `rest` is unaffected — it's always a direct `ActionId` field, not a child slot.
 
 ### 9. JSON schema regeneration
 
@@ -179,13 +179,13 @@ Update any tests that assert on the serialized Pipe shape. The `pipe()` combinat
 ## What simplifies
 
 - **Engine**: No index tracking, no frame mutation for sequential execution. Every frame follows the single-child or fan-out pattern. `ParentRef` becomes an enum (SingleChild vs IndexedChild) — impossible states unrepresentable.
-- **`children()`/`fill_child_slots()`**: No longer shared by Pipe and Parallel. Chain uses `fill_child_slot` (singular) once (for `first`). `rest` is a direct `ActionId`. Parallel keeps `fill_child_slots` (plural) for N children. Clearer separation.
+- **`children()`/`fill_child_slots()`**: No longer shared by Pipe and All. Chain uses `fill_child_slot` (singular) once (for `first`). `rest` is a direct `ActionId`. All keeps `fill_child_slots` (plural) for N children. Clearer separation.
 
 ## What doesn't change
 
 - **User-facing `pipe()` API**: All overloads identical. Just the implementation body changes.
-- **Parallel, Branch, ForEach, Loop, Attempt, Step, Invoke**: All unchanged.
-- **Child slot model**: Chain uses the same inlining/ChildRef machinery as Parallel and Branch.
+- **All, Branch, ForEach, Loop, Attempt, Step, Invoke**: All unchanged.
+- **Child slot model**: Chain uses the same inlining/ChildRef machinery as All and Branch.
 - **Two-pass step resolution**: Unchanged.
 - **Handler interning**: Unchanged.
 - **8-byte `FlatEntry<ActionId>`**: Preserved. Chain has one `ActionId` field.

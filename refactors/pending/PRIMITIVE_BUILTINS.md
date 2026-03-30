@@ -29,11 +29,11 @@ startsWith("http")  // string → boolean
 
 BuiltinKind: `{ kind: "Add", value: 5 }`
 
-**Binary** — operates on a tuple from the pipeline (result of `parallel`):
+**Binary** — operates on a tuple from the pipeline (result of `all`):
 
 ```ts
 pipe(
-  parallel(getPrice, getTax),
+  all(getPrice, getTax),
   Math.add(),  // [number, number] → number
 )
 ```
@@ -353,12 +353,12 @@ The `try` variants return `Option<T>`, letting the pipeline handle failure via `
 
 ## Interaction with let-bindings
 
-Many of these builtins become more useful with let-bindings (LET_BINDINGS.md). Without them, combining two pipeline values requires `parallel` + a binary builtin:
+Many of these builtins become more useful with let-bindings (LET_BINDINGS.md). Without them, combining two pipeline values requires `all` + a binary builtin:
 
 ```ts
 // "total = price * quantity" without let-bindings:
 pipe(
-  parallel(extractField("price"), extractField("quantity")),
+  all(extractField("price"), extractField("quantity")),
   Num.mul(),  // binary form
 )
 
@@ -419,7 +419,7 @@ The `expect` calls produce Byzantine fault panics — the workflow dies with a c
 
 ### Tier 4: binary overloads
 
-- Binary forms of all Math and Comparison builtins (for `parallel` → combine patterns)
+- Binary forms of all Math and Comparison builtins (for `all` → combine patterns)
 
 ## Open questions
 
@@ -429,7 +429,7 @@ The `expect` calls produce Byzantine fault panics — the workflow dies with a c
 
 ### Should binary forms exist?
 
-Binary forms (`Num.add()` operating on `[number, number]`) add API surface. The same thing is achievable with `parallel(a, b)` → parameterized form. But that requires an intermediate `extractIndex` step. Binary forms are cleaner for the `parallel(a, b) → combine` pattern.
+Binary forms (`Num.add()` operating on `[number, number]`) add API surface. The same thing is achievable with `all(a, b)` → parameterized form. But that requires an intermediate `extractIndex` step. Binary forms are cleaner for the `all(a, b) → combine` pattern.
 
 ### Should `Obj.set` exist?
 
