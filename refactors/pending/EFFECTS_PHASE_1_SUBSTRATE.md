@@ -276,8 +276,9 @@ pub enum AdvanceError {
 Called from `complete_task` when a Perform task completes (not during advance). Walks parent pointers to find a Handle matching the effect ID. At each Handle:
 
 1. `is_blocked_by_handle` — am I on the wrong side? If so, stash.
-2. Skip effect matching for HandlerChild edges — a handler doesn't catch its own effect. The effect bubbles past to the next outer Handle (standard shallow handler semantics).
-3. Match effect_id — if this Handle matches and we're on the body side, it's guaranteed free (if it were suspended, step 1 would have stashed). Dispatch.
+2. Match effect_id — if this Handle matches, it's guaranteed free (if it were suspended, step 1 would have caught body child + suspended). Dispatch.
+
+HandlerChild edges can't match: the handler doesn't have lexical access to its own effect_id (enforced by TypeScript builder, see "Static analysis" section). If violated, the assert catches it.
 
 ```rust
 fn bubble_effect(
@@ -307,28 +308,23 @@ fn bubble_effect(
             return Ok(None);
         }
 
-        // Only match effects from the body side. HandlerChild = we're the
-        // handler for this Handle. A handler performing its own effect
-        // bubbles past to an outer Handle (shallow handler semantics).
-        if !matches!(parent_ref, ParentRef::HandlerChild { .. }) {
-            if let FrameKind::Handle(handle_frame) = &parent.kind {
-                if handle_frame.effect_id == effect_id {
-                    // Guaranteed free: if this Handle were suspended,
-                    // is_blocked_by_handle (body child + suspended) would
-                    // have stashed above.
-                    assert!(
-                        handle_frame.continuation.is_none(),
-                        "body-side match on a suspended Handle should be unreachable"
-                    );
+        if let FrameKind::Handle(handle_frame) = &parent.kind {
+            if handle_frame.effect_id == effect_id {
+                // Guaranteed free: if this Handle were suspended,
+                // is_blocked_by_handle (body child + suspended) would
+                // have stashed above.
+                assert!(
+                    handle_frame.continuation.is_none(),
+                    "effect matched a suspended Handle — is_blocked_by_handle should have caught this"
+                );
 
-                    let handler = handle_frame.handler;
-                    let state = handle_frame.state.clone();
+                let handler = handle_frame.handler;
+                let state = handle_frame.state.clone();
 
-                    self.dispatch_to_handler(
-                        parent_id, starting_parent, payload, handler, state,
-                    )?;
-                    return Ok(None);
-                }
+                self.dispatch_to_handler(
+                    parent_id, starting_parent, payload, handler, state,
+                )?;
+                return Ok(None);
             }
         }
 
@@ -339,7 +335,7 @@ fn bubble_effect(
 }
 ```
 
-O(depth of frame tree). Chain, Parallel, Branch, ForEach are invisible — the walk passes through them. The `is_blocked_by_handle` check subsumes the old "Handle is busy" stash for body-side concurrent Performs. The HandlerChild skip gives correct re-perform semantics — a handler that Performs its own effect chains to the next outer Handle.
+O(depth of frame tree). Chain, Parallel, Branch, ForEach are invisible — the walk passes through them. `is_blocked_by_handle` is the only guard needed — it catches body-side concurrent Performs (body child + suspended = blocked) and any stale handler events (handler child + free = blocked).
 
 ## dispatch_to_handler
 
