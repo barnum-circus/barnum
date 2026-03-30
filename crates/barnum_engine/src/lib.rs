@@ -6,12 +6,14 @@
 
 pub mod frame;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
+use barnum_ast::EffectId;
 use barnum_ast::HandlerKind;
 use barnum_ast::flat::{ActionId, FlatAction, FlatConfig, HandlerId};
-use frame::{Frame, FrameId, FrameKind, ParentRef};
+use frame::{Frame, FrameId, FrameKind, HandleFrame, HandleSide, HandleStatus, ParentRef};
 use intern::Lookup;
+use serde::Deserialize;
 use serde_json::Value;
 use thunderdome::Arena;
 use u32_newtype::u32_newtype;
@@ -67,6 +69,13 @@ pub enum AdvanceError {
         /// The `kind` value that had no matching case.
         kind: String,
     },
+    /// A `Perform` node was reached but no enclosing `Handle` matches
+    /// the effect type.
+    #[error("unhandled effect: {effect_id}")]
+    UnhandledEffect {
+        /// The effect type that was not handled.
+        effect_id: EffectId,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +95,129 @@ pub enum CompleteError {
     /// An advance error occurred during Chain trampoline or Loop re-entry.
     #[error(transparent)]
     Advance(#[from] AdvanceError),
+    /// A handler returned a value that doesn't deserialize as a valid
+    /// [`HandlerOutput`].
+    #[error("invalid handler output: {source}")]
+    InvalidHandlerOutput {
+        /// The serde deserialization error.
+        #[from]
+        source: serde_json::Error,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// HandlerOutput / StateUpdate (serde types)
+// ---------------------------------------------------------------------------
+
+/// The output of a handler DAG, deserialized from the handler's return value.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind")]
+enum HandlerOutput {
+    /// Resume the body at the Perform site with the given value.
+    Resume {
+        /// The value to deliver to the Perform's parent.
+        value: Value,
+        /// Whether to update the Handle's state.
+        #[serde(default)]
+        state_update: StateUpdate,
+    },
+    /// Discard the continuation. Tear down the body and deliver the value
+    /// to the Handle's parent.
+    Discard {
+        /// The value to deliver to the Handle's parent.
+        value: Value,
+    },
+    /// Tear down the body and re-advance from the Handle's body action.
+    RestartBody {
+        /// The input value for the re-advanced body.
+        value: Value,
+        /// Whether to update the Handle's state.
+        #[serde(default)]
+        state_update: StateUpdate,
+    },
+}
+
+/// Whether a handler updated the Handle's state.
+#[derive(Debug, Default, Deserialize)]
+#[serde(tag = "kind")]
+enum StateUpdate {
+    /// State unchanged.
+    #[default]
+    Unchanged,
+    /// Replace the state with a new value.
+    Updated {
+        /// The new state value.
+        value: Value,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// StashedItem / engine enums
+// ---------------------------------------------------------------------------
+
+/// A deferred work item waiting to be processed.
+#[derive(Debug)]
+enum StashedItem {
+    /// A task completion waiting to be delivered.
+    Delivery {
+        /// Where to deliver the value.
+        parent_ref: ParentRef,
+        /// The value to deliver.
+        value: Value,
+    },
+    /// An effect waiting to be bubbled.
+    Effect {
+        /// The Perform's parent — where bubbling starts.
+        starting_parent: ParentRef,
+        /// Which effect type.
+        effect_id: EffectId,
+        /// The Perform's input value (handler payload).
+        payload: Value,
+    },
+}
+
+/// Result of checking the ancestor chain for blockers.
+#[derive(Debug)]
+enum AncestorCheck {
+    /// No blockers — the path to the root (or target Handle) is clear.
+    Clear,
+    /// A suspended Handle blocks the path.
+    Blocked,
+    /// A frame in the ancestor chain was torn down (generational arena miss).
+    FrameGone,
+}
+
+/// Result of `try_deliver` — does NOT mutate the stash.
+#[derive(Debug)]
+enum TryDeliverResult {
+    /// Delivery succeeded. Inner value is the workflow result, if any.
+    Delivered(Option<Value>),
+    /// Target frame is blocked by a suspended Handle. Returns the value
+    /// so the caller can stash without cloning.
+    Blocked(Value),
+    /// Target frame was torn down.
+    FrameGone,
+}
+
+/// Result of `bubble_effect` — does NOT mutate the stash.
+#[derive(Debug)]
+enum StashOutcome {
+    /// Effect was dispatched to a handler, or dropped (frame gone).
+    Consumed,
+    /// Target is blocked by a suspended Handle. Returns the payload
+    /// so the caller can stash without cloning.
+    Blocked(Value),
+}
+
+/// Result of a single sweep pass over the stash.
+#[derive(Debug)]
+enum SweepResult {
+    /// The workflow produced a terminal value.
+    WorkflowDone(Value),
+    /// At least one item was consumed — tree state may have changed.
+    MadeProgress,
+    /// No items were consumed — all remain blocked or stash was empty.
+    NoProgress,
 }
 
 // ---------------------------------------------------------------------------
@@ -104,6 +236,7 @@ pub struct WorkflowState {
     frames: Arena<Frame>,
     task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
     pending_dispatches: Vec<Dispatch>,
+    stashed_items: VecDeque<StashedItem>,
     next_task_id: u32,
 }
 
@@ -117,6 +250,7 @@ impl WorkflowState {
             frames: Arena::new(),
             task_to_parent: BTreeMap::new(),
             pending_dispatches: Vec::new(),
+            stashed_items: VecDeque::new(),
             next_task_id: 0,
         }
     }
@@ -162,7 +296,22 @@ impl WorkflowState {
         value: Value,
     ) -> Result<Option<Value>, CompleteError> {
         let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
-        self.deliver(parent, value)
+        let result = match parent {
+            Some(parent_ref) => match self.try_deliver(parent_ref, value)? {
+                TryDeliverResult::Delivered(result) => result,
+                TryDeliverResult::Blocked(value) => {
+                    self.stashed_items
+                        .push_back(StashedItem::Delivery { parent_ref, value });
+                    None
+                }
+                TryDeliverResult::FrameGone => None,
+            },
+            None => Some(value),
+        };
+        if result.is_some() {
+            return Ok(result);
+        }
+        self.sweep_stash()
     }
 
     // -- Private helpers --
@@ -176,6 +325,408 @@ impl WorkflowState {
         let id = TaskId(self.next_task_id);
         self.next_task_id += 1;
         id
+    }
+
+    // -- Effect infrastructure --
+
+    /// Check whether a `ParentRef`'s path to the root is blocked by a
+    /// suspended Handle, or whether the frame has been torn down.
+    ///
+    /// Walks from `parent_ref` up the parent chain. At each edge, checks
+    /// whether the edge crosses from a body child into a suspended Handle.
+    fn find_blocking_ancestor(&self, parent_ref: ParentRef) -> AncestorCheck {
+        // Check each edge starting from the initial parent_ref.
+        let mut current_ref = parent_ref;
+        loop {
+            let Some(frame) = self.frames.get(current_ref.frame_id()) else {
+                return AncestorCheck::FrameGone;
+            };
+
+            // Does this edge cross into a suspended Handle body?
+            if Self::is_blocked_by_handle(&current_ref, &frame.kind) {
+                return AncestorCheck::Blocked;
+            }
+
+            // Move up to the next edge.
+            let Some(next_ref) = frame.parent else {
+                return AncestorCheck::Clear;
+            };
+            current_ref = next_ref;
+        }
+    }
+
+    /// Does this parent edge cross from a body child into a suspended Handle?
+    const fn is_blocked_by_handle(parent_ref: &ParentRef, parent_kind: &FrameKind) -> bool {
+        if let ParentRef::Handle {
+            side: HandleSide::Body,
+            ..
+        } = parent_ref
+            && let FrameKind::Handle(handle_frame) = parent_kind
+        {
+            return matches!(handle_frame.status, HandleStatus::Suspended(_));
+        }
+        false
+    }
+
+    /// Check if delivery is possible and deliver if so. Does NOT push
+    /// to the stash — the caller is responsible for stashing on `Blocked`.
+    fn try_deliver(
+        &mut self,
+        parent_ref: ParentRef,
+        value: Value,
+    ) -> Result<TryDeliverResult, CompleteError> {
+        match self.find_blocking_ancestor(parent_ref) {
+            AncestorCheck::FrameGone => Ok(TryDeliverResult::FrameGone),
+            AncestorCheck::Blocked => Ok(TryDeliverResult::Blocked(value)),
+            AncestorCheck::Clear => {
+                let result = self.deliver(Some(parent_ref), value)?;
+                Ok(TryDeliverResult::Delivered(result))
+            }
+        }
+    }
+
+    /// Walk the parent chain from `starting_parent` upward looking for a
+    /// Handle that matches `effect_id`. If found, dispatch to it. Does NOT
+    /// mutate the stash.
+    #[allow(clippy::expect_used)]
+    fn bubble_effect(
+        &mut self,
+        starting_parent: ParentRef,
+        effect_id: EffectId,
+        payload: Value,
+    ) -> Result<StashOutcome, AdvanceError> {
+        // First: can this effect proceed at all?
+        match self.find_blocking_ancestor(starting_parent) {
+            AncestorCheck::FrameGone => return Ok(StashOutcome::Consumed),
+            AncestorCheck::Blocked => return Ok(StashOutcome::Blocked(payload)),
+            AncestorCheck::Clear => {}
+        }
+
+        // Not blocked — walk the parent chain to find the matching Handle.
+        self.find_and_dispatch_handler(starting_parent, effect_id, payload)
+    }
+
+    /// Walk from `starting_parent` upward. All ancestors are guaranteed
+    /// present and unblocked (caller checked via `find_blocking_ancestor`).
+    #[allow(clippy::expect_used)]
+    fn find_and_dispatch_handler(
+        &mut self,
+        starting_parent: ParentRef,
+        effect_id: EffectId,
+        payload: Value,
+    ) -> Result<StashOutcome, AdvanceError> {
+        let mut current_frame_id = starting_parent.frame_id();
+        loop {
+            let frame = self
+                .frames
+                .get(current_frame_id)
+                .expect("ancestor guaranteed present by find_blocking_ancestor");
+            if let FrameKind::Handle(handle_frame) = &frame.kind
+                && handle_frame.effect_id == effect_id
+            {
+                // Found the matching Handle. Dispatch to it.
+                let perform_parent = starting_parent;
+                self.dispatch_to_handler(current_frame_id, perform_parent, payload)?;
+                return Ok(StashOutcome::Consumed);
+            }
+            let Some(next_parent) = frame.parent else {
+                return Err(AdvanceError::UnhandledEffect { effect_id });
+            };
+            current_frame_id = next_parent.frame_id();
+        }
+    }
+
+    /// Dispatch a handler for a matched effect. Suspends the Handle and
+    /// advances the handler DAG.
+    #[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+    fn dispatch_to_handler(
+        &mut self,
+        handle_frame_id: FrameId,
+        perform_parent: ParentRef,
+        payload: Value,
+    ) -> Result<(), AdvanceError> {
+        // Look up the handler ActionId while we have immutable access.
+        let handle_frame = self
+            .frames
+            .get(handle_frame_id)
+            .expect("Handle frame exists");
+        let FrameKind::Handle(ref handle) = handle_frame.kind else {
+            unreachable!("dispatch_to_handler called on non-Handle frame");
+        };
+        let handler_action_id = handle.handler;
+        let state = handle.state.clone();
+
+        // Assert the Handle is free before suspending.
+        assert!(
+            matches!(handle.status, HandleStatus::Free),
+            "dispatch_to_handler: Handle must be Free, got {:?}",
+            handle.status,
+        );
+
+        // Mark the Handle as suspended.
+        let handle_frame = self
+            .frames
+            .get_mut(handle_frame_id)
+            .expect("Handle frame exists");
+        let FrameKind::Handle(ref mut handle) = handle_frame.kind else {
+            unreachable!();
+        };
+        handle.status = HandleStatus::Suspended(perform_parent);
+
+        // Build the handler input: { payload, state }.
+        let handler_input = serde_json::json!({
+            "payload": payload,
+            "state": state,
+        });
+
+        // Advance the handler DAG.
+        self.advance(
+            handler_action_id,
+            handler_input,
+            Some(ParentRef::Handle {
+                frame_id: handle_frame_id,
+                side: HandleSide::Handler,
+            }),
+        )?;
+
+        Ok(())
+    }
+
+    /// Process the handler's completion value.
+    #[allow(clippy::expect_used)]
+    fn handle_handler_completion(
+        &mut self,
+        handle_frame_id: FrameId,
+        handler_value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
+        let handler_output: HandlerOutput = serde_json::from_value(handler_value)?;
+
+        match handler_output {
+            HandlerOutput::Resume {
+                value,
+                state_update,
+            } => {
+                self.apply_state_update(handle_frame_id, state_update);
+                self.resume_continuation(handle_frame_id, value)
+            }
+            HandlerOutput::Discard { value } => self.discard_continuation(handle_frame_id, value),
+            HandlerOutput::RestartBody {
+                value,
+                state_update,
+            } => {
+                self.apply_state_update(handle_frame_id, state_update);
+                self.restart_body(handle_frame_id, value)
+            }
+        }
+    }
+
+    /// Apply a state update to a Handle frame.
+    #[allow(clippy::expect_used)]
+    fn apply_state_update(&mut self, handle_frame_id: FrameId, state_update: StateUpdate) {
+        if let StateUpdate::Updated { value } = state_update {
+            let frame = self
+                .frames
+                .get_mut(handle_frame_id)
+                .expect("Handle frame exists");
+            let FrameKind::Handle(ref mut handle) = frame.kind else {
+                unreachable!("apply_state_update on non-Handle frame");
+            };
+            handle.state = Some(value);
+        }
+    }
+
+    /// Resume the body at the Perform site.
+    #[allow(clippy::expect_used)]
+    fn resume_continuation(
+        &mut self,
+        handle_frame_id: FrameId,
+        value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
+        let frame = self
+            .frames
+            .get_mut(handle_frame_id)
+            .expect("Handle frame exists");
+        let FrameKind::Handle(ref mut handle) = frame.kind else {
+            unreachable!("resume_continuation on non-Handle frame");
+        };
+        let HandleStatus::Suspended(perform_parent) = handle.status else {
+            unreachable!("resume_continuation: Handle must be Suspended");
+        };
+        handle.status = HandleStatus::Free;
+
+        match self.try_deliver(perform_parent, value)? {
+            TryDeliverResult::Delivered(result) => Ok(result),
+            TryDeliverResult::Blocked(value) => {
+                self.stashed_items.push_back(StashedItem::Delivery {
+                    parent_ref: perform_parent,
+                    value,
+                });
+                Ok(None)
+            }
+            TryDeliverResult::FrameGone => Ok(None),
+        }
+    }
+
+    /// Discard the continuation. Tear down the body, deliver to Handle's parent.
+    #[allow(clippy::expect_used)]
+    fn discard_continuation(
+        &mut self,
+        handle_frame_id: FrameId,
+        value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
+        self.teardown_body(handle_frame_id);
+        let frame = self
+            .frames
+            .remove(handle_frame_id)
+            .expect("Handle frame exists");
+        let parent = frame.parent;
+
+        match parent {
+            Some(parent_ref) => match self.try_deliver(parent_ref, value)? {
+                TryDeliverResult::Delivered(result) => Ok(result),
+                TryDeliverResult::Blocked(value) => {
+                    self.stashed_items
+                        .push_back(StashedItem::Delivery { parent_ref, value });
+                    Ok(None)
+                }
+                TryDeliverResult::FrameGone => Ok(None),
+            },
+            None => Ok(Some(value)),
+        }
+    }
+
+    /// Restart the body. Tear down, re-advance from the body action.
+    #[allow(clippy::expect_used)]
+    fn restart_body(
+        &mut self,
+        handle_frame_id: FrameId,
+        value: Value,
+    ) -> Result<Option<Value>, CompleteError> {
+        self.teardown_body(handle_frame_id);
+        let frame = self
+            .frames
+            .get_mut(handle_frame_id)
+            .expect("Handle frame exists");
+        let FrameKind::Handle(ref mut handle) = frame.kind else {
+            unreachable!("restart_body on non-Handle frame");
+        };
+        let body_action_id = handle.body;
+        handle.status = HandleStatus::Free;
+        self.advance(
+            body_action_id,
+            value,
+            Some(ParentRef::Handle {
+                frame_id: handle_frame_id,
+                side: HandleSide::Body,
+            }),
+        )?;
+        Ok(None)
+    }
+
+    /// Remove all frames that are descendants of the given Handle's body.
+    fn teardown_body(&mut self, handle_frame_id: FrameId) {
+        // Collect frame IDs to remove (can't mutate arena while iterating).
+        let to_remove: Vec<FrameId> = self
+            .frames
+            .iter()
+            .filter_map(|(frame_id, _)| {
+                if self.is_descendant_of_body(frame_id, handle_frame_id) {
+                    Some(frame_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for frame_id in &to_remove {
+            self.frames.remove(*frame_id);
+        }
+
+        // Remove task_to_parent entries pointing into the torn-down subtree.
+        self.task_to_parent
+            .retain(|_, parent| parent.is_none_or(|p| !to_remove.contains(&p.frame_id())));
+    }
+
+    /// Is `frame_id` a descendant of the given Handle's body side?
+    fn is_descendant_of_body(&self, frame_id: FrameId, handle_frame_id: FrameId) -> bool {
+        let mut current_id = frame_id;
+        loop {
+            let Some(frame) = self.frames.get(current_id) else {
+                return false;
+            };
+            let Some(parent_ref) = frame.parent else {
+                return false;
+            };
+            if parent_ref.frame_id() == handle_frame_id {
+                // This frame's parent is the Handle. Check if it's on the body side.
+                return matches!(
+                    parent_ref,
+                    ParentRef::Handle {
+                        side: HandleSide::Body,
+                        ..
+                    }
+                );
+            }
+            current_id = parent_ref.frame_id();
+        }
+    }
+
+    // -- Sweep stash --
+
+    /// Repeatedly sweep the stash until no progress is made.
+    fn sweep_stash(&mut self) -> Result<Option<Value>, CompleteError> {
+        loop {
+            match self.sweep_stash_once()? {
+                SweepResult::WorkflowDone(value) => return Ok(Some(value)),
+                SweepResult::MadeProgress => {}
+                SweepResult::NoProgress => return Ok(None),
+            }
+        }
+    }
+
+    /// Single pass over items that existed at the start.
+    #[allow(clippy::expect_used)]
+    fn sweep_stash_once(&mut self) -> Result<SweepResult, CompleteError> {
+        let n = self.stashed_items.len();
+        for _ in 0..n {
+            let item = self.stashed_items.pop_front().expect("stash has n items");
+            match item {
+                StashedItem::Delivery { parent_ref, value } => {
+                    match self.try_deliver(parent_ref, value)? {
+                        TryDeliverResult::Delivered(Some(value)) => {
+                            return Ok(SweepResult::WorkflowDone(value));
+                        }
+                        TryDeliverResult::Delivered(None) => {
+                            return Ok(SweepResult::MadeProgress);
+                        }
+                        TryDeliverResult::Blocked(value) => {
+                            self.stashed_items
+                                .push_back(StashedItem::Delivery { parent_ref, value });
+                        }
+                        TryDeliverResult::FrameGone => {
+                            // Frame torn down. Item silently dropped.
+                        }
+                    }
+                }
+                StashedItem::Effect {
+                    starting_parent,
+                    effect_id,
+                    payload,
+                } => match self.bubble_effect(starting_parent, effect_id, payload)? {
+                    StashOutcome::Consumed => {
+                        return Ok(SweepResult::MadeProgress);
+                    }
+                    StashOutcome::Blocked(payload) => {
+                        self.stashed_items.push_back(StashedItem::Effect {
+                            starting_parent,
+                            effect_id,
+                            payload,
+                        });
+                    }
+                },
+            }
+        }
+        Ok(SweepResult::NoProgress)
     }
 
     /// Deliver a value to the parent that was waiting for it.
@@ -228,6 +779,21 @@ impl WorkflowState {
                     }
                     Some("Break") => self.deliver(frame.parent, value["value"].clone()),
                     _ => Err(CompleteError::InvalidLoopResult { value }),
+                }
+            }
+
+            ParentRef::Handle { frame_id, side } => {
+                match side {
+                    HandleSide::Body => {
+                        // Body completed normally (no Perform fired).
+                        // Deliver to the Handle's parent.
+                        let frame = self.frames.remove(frame_id).expect("parent frame exists");
+                        self.deliver(frame.parent, value)
+                    }
+                    HandleSide::Handler => {
+                        // Handler completed. Process the output.
+                        self.handle_handler_completion(frame_id, value)
+                    }
                 }
             }
 
@@ -395,6 +961,43 @@ impl WorkflowState {
 
             FlatAction::Step { target } => {
                 self.advance(target, value, parent)?;
+            }
+
+            FlatAction::Handle { effect_id } => {
+                let body = self.flat_config.handle_body(action_id);
+                let handler = self.flat_config.handle_handler(action_id);
+                let frame_id = self.insert_frame(Frame {
+                    parent,
+                    kind: FrameKind::Handle(HandleFrame {
+                        effect_id,
+                        body,
+                        handler,
+                        state: None,
+                        status: HandleStatus::Free,
+                    }),
+                });
+                self.advance(
+                    body,
+                    value,
+                    Some(ParentRef::Handle {
+                        frame_id,
+                        side: HandleSide::Body,
+                    }),
+                )?;
+            }
+
+            FlatAction::Perform { effect_id } => {
+                let parent = parent.ok_or(AdvanceError::UnhandledEffect { effect_id })?;
+                match self.bubble_effect(parent, effect_id, value)? {
+                    StashOutcome::Consumed => {}
+                    StashOutcome::Blocked(payload) => {
+                        self.stashed_items.push_back(StashedItem::Effect {
+                            starting_parent: parent,
+                            effect_id,
+                            payload,
+                        });
+                    }
+                }
             }
         }
         Ok(())

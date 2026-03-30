@@ -83,6 +83,7 @@ WorkflowState {
         ),
     },
     pending_dispatches: [],
+    stashed_items: [],
     next_task_id: 2,
 }
 Pending: [
@@ -178,6 +179,7 @@ WorkflowState {
         ),
     },
     pending_dispatches: [],
+    stashed_items: [],
     next_task_id: 2,
 }
 Pending: []
@@ -234,6 +236,7 @@ WorkflowState {
     },
     task_to_parent: {},
     pending_dispatches: [],
+    stashed_items: [],
     next_task_id: 2,
 }
 Pending: []

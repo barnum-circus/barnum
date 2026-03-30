@@ -14,8 +14,8 @@ use std::ops::Add;
 use u32_newtype::u32_newtype;
 
 use crate::{
-    Action, BranchAction, ChainAction, Config, HandlerKind, InvokeAction, KindDiscriminator,
-    StepName, StepRef,
+    Action, BranchAction, ChainAction, Config, EffectId, HandleAction, HandlerKind, InvokeAction,
+    KindDiscriminator, PerformAction, StepName, StepRef,
 };
 
 u32_newtype!(
@@ -125,6 +125,21 @@ pub enum FlatAction<T> {
         /// Target action (unresolved or resolved depending on `T`).
         target: T,
     },
+
+    /// Effect handler. 3-entry action: this entry, then a child slot for
+    /// the body (at `action_id + 1`), then a child slot for the handler
+    /// (at `action_id + 2`).
+    Handle {
+        /// Which effect type this handler intercepts.
+        effect_id: EffectId,
+    },
+
+    /// Raise an effect. Single-entry action (like Invoke). The input
+    /// becomes the handler's payload.
+    Perform {
+        /// Which effect type to raise.
+        effect_id: EffectId,
+    },
 }
 
 impl<T> FlatAction<T> {
@@ -146,6 +161,8 @@ impl<T> FlatAction<T> {
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
             FlatAction::Loop { body } => FlatAction::Loop { body },
+            FlatAction::Handle { effect_id } => FlatAction::Handle { effect_id },
+            FlatAction::Perform { effect_id } => FlatAction::Perform { effect_id },
         })
     }
 }
@@ -309,6 +326,22 @@ impl FlatConfig {
         (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
 
+    /// Returns the body `ActionId` for a Handle (resolves the child
+    /// slot at `action_id + 1`).
+    #[must_use]
+    pub fn handle_body(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::Handle { .. }));
+        self.resolve_child_slot(id + 1)
+    }
+
+    /// Returns the handler `ActionId` for a Handle (resolves the child
+    /// slot at `action_id + 2`).
+    #[must_use]
+    pub fn handle_handler(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::Handle { .. }));
+        self.resolve_child_slot(id + 2)
+    }
+
     /// Returns (key, action) pairs for a Branch.
     pub fn branch_cases(
         &self,
@@ -459,6 +492,20 @@ impl UnresolvedFlatConfig {
                     target: StepTarget::Resolved(root),
                 }
             }
+
+            Action::Handle(HandleAction {
+                effect_id,
+                body,
+                handler,
+            }) => {
+                self.alloc(); // child slot for body (at action_id + 1)
+                self.alloc(); // child slot for handler (at action_id + 2)
+                self.fill_child_slot(*body, action_id + 1, workflow_root)?;
+                self.fill_child_slot(*handler, action_id + 2, workflow_root)?;
+                FlatAction::Handle { effect_id }
+            }
+
+            Action::Perform(PerformAction { effect_id }) => FlatAction::Perform { effect_id },
         };
         self.entries[action_id.0 as usize] = Some(FlatEntry::Action(entry));
         Ok(())
@@ -475,7 +522,10 @@ impl UnresolvedFlatConfig {
         workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         match action {
-            Action::Chain { .. } | Action::All { .. } | Action::Branch { .. } => {
+            Action::Chain { .. }
+            | Action::All { .. }
+            | Action::Branch { .. }
+            | Action::Handle { .. } => {
                 let action_id = self.flatten_action(action, workflow_root)?;
                 self.entries[slot.0 as usize] = Some(FlatEntry::ChildRef { action: action_id });
             }

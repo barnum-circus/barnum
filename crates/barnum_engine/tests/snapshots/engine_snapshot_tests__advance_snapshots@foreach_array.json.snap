@@ -122,5 +122,6 @@ WorkflowState {
             value: Number(30),
         },
     ],
+    stashed_items: [],
     next_task_id: 3,
 }

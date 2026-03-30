@@ -37,6 +37,19 @@ string_key_newtype!(
     KindDiscriminator
 );
 
+/// Identifies an effect type. Shared between [`HandleAction`] (intercepts
+/// effects of this type) and [`PerformAction`] (raises an effect of this type).
+///
+/// `u16` to keep [`FlatEntry`](flat::FlatEntry) at 8 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct EffectId(pub u16);
+
+impl std::fmt::Display for EffectId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Action (the AST)
 // ---------------------------------------------------------------------------
@@ -69,6 +82,14 @@ pub enum Action {
 
     /// Named step reference for mutual recursion and DAG topologies.
     Step(StepAction),
+
+    /// Effect handler. Intercepts effects of type `effect_id` raised by
+    /// [`Perform`](Action::Perform) nodes in the body.
+    Handle(HandleAction),
+
+    /// Raise an effect. Suspends the continuation until the nearest
+    /// enclosing [`Handle`](Action::Handle) for this effect type processes it.
+    Perform(PerformAction),
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +147,31 @@ pub struct LoopAction {
 pub struct StepAction {
     /// Which step to jump to.
     pub step: StepRef,
+}
+
+/// Effect handler.
+///
+/// Runs `body`; when a [`Perform`](Action::Perform) with matching
+/// `effect_id` is encountered, the body suspends and `handler` executes.
+/// The handler's output determines the continuation operation
+/// (Resume, Discard, or `RestartBody`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandleAction {
+    /// Which effect type this handler intercepts.
+    pub effect_id: EffectId,
+    /// The action to run (may contain Perform nodes).
+    pub body: Box<Action>,
+    /// The handler DAG invoked when the effect fires.
+    pub handler: Box<Action>,
+}
+
+/// Raise an effect. The nearest enclosing [`Handle`](Action::Handle) with
+/// matching `effect_id` intercepts it. The Perform's input becomes the
+/// handler's payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PerformAction {
+    /// Which effect type to raise.
+    pub effect_id: EffectId,
 }
 
 /// Target of a step reference.
