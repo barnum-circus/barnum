@@ -43,15 +43,15 @@ declare([fetchUser, fetchConfig], ([user, config]) => body)
 // config = Perform(effectId_1)   — no payload
 
 // Pseudo-AST notation:
-//   Handle(effectId, stateInit, handler, body)
-//   readVarHandler = Chain(ExtractField("state"), Tag("Resume"))
+//   Handle(effectId, handler, body)
+//   readVar(n) = Chain(ExtractField("state"), ExtractIndex(n), Tag("Resume"))
 
 // Compiles to:
 Chain(
-  All(fetchUser, fetchConfig, Identity),           // → [User, Config, Input]
-  Handle(effectId_0, ExtractIndex(0), readVarHandler,
-    Handle(effectId_1, ExtractIndex(1), readVarHandler,
-      Chain(ExtractIndex(2), body)                 // body gets pipeline_input
+  All(fetchUser, fetchConfig, Identity),       // → [User, Config, Input]
+  Handle(effectId_0, readVar(0),
+    Handle(effectId_1, readVar(1),
+      Chain(ExtractIndex(2), body)             // body gets pipeline_input
     )
   )
 )
@@ -59,7 +59,7 @@ Chain(
 
 `All(fetchUser, fetchConfig, Identity)` evaluates all bindings concurrently AND preserves the pipeline input (via Identity). The result is a tuple `[User, Config, pipeline_input]`.
 
-Each Handle stores exactly one bound value as state. The `stateInit` expression (e.g. `ExtractIndex(0)`) runs on the pipeline input entering the Handle and initializes the frame's state. `readVarHandler` is trivial: extract the `"state"` field from the handler input and Resume with it. The Perform carries no payload — the effectId alone identifies which binding.
+Handle initializes its state to the pipeline value (a one-line engine change: `state: None` → `state: Some(value.clone())`). All nested Handles receive the same tuple as state. Each handler extracts the bound value at its known index: `readVar(n)` does `ExtractField("state") → ExtractIndex(n) → Tag("Resume")`. The Perform carries no payload — the effectId alone identifies which binding.
 
 N bindings produce N nested Handle frames. This is the natural representation of N lexical bindings — `let a = ... in let b = ... in body`. Each `let` is a scope, each Handle is a scope.
 
@@ -67,9 +67,9 @@ N bindings produce N nested Handle frames. This is the natural representation of
 
 An earlier design used one shared effectId with the binding index as payload and an `ExtractDynamic` builtin to do runtime index lookup into the state tuple. This is dynamically typed — `extractDynamic([index, [User, Config]])` returns `unknown` because the index is a runtime value and each element has a different type. The per-binding-effectId design eliminates this: each handler extracts a statically-known index, so the types are preserved.
 
-### Prerequisite: Handle state_init
+### Engine change: Handle initializes state from pipeline value
 
-The per-binding-effectId design requires Handle to support a `state_init` expression. See `HANDLE_STATE_INIT.md` — this can be implemented independently before Phase 2.
+The only engine change needed: when creating a Handle frame, set `state: Some(value.clone())` instead of `state: None`. The body still receives the pipeline value unchanged. This is a one-line change in the `FlatAction::Handle` arm of `advance()`.
 
 ## VarRef: generic over the bound type
 

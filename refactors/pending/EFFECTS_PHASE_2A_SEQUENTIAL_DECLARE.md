@@ -67,24 +67,24 @@ declare([
 ], ([a, b]) => body)
 
 // Pseudo-AST notation (same as Phase 2):
-//   Handle(effectId, stateInit, handler, body)
-//   readVarHandler = Chain(ExtractField("state"), Tag("Resume"))
+//   Handle(effectId, handler, body)
+//   readVar(n) = Chain(ExtractField("state"), ExtractIndex(n), Tag("Resume"))
 
 // Compiles to:
 Chain(
-  All(exprA, Identity),                                          // → [valA, pipeline_input]
-  Handle(effectId_a, ExtractIndex(0), readVarHandler,
+  All(exprA, Identity),                                            // → [valA, pipeline_input]
+  Handle(effectId_a, readVar(0),
     Chain(
-      All(Chain(ExtractIndex(1), exprB_using_a), ExtractIndex(1)),  // → [valB, pipeline_input]
-      Handle(effectId_b, ExtractIndex(0), readVarHandler,
-        Chain(ExtractIndex(1), body)                               // body gets pipeline_input
+      All(Chain(ExtractIndex(1), exprB_using_a), Identity),        // → [valB, [valA, pipeline_input]]
+      Handle(effectId_b, readVar(0),
+        Chain(ExtractIndex(1), Chain(ExtractIndex(1), body))        // body gets pipeline_input
       )
     )
   )
 )
 ```
 
-Each sequential step adds a nested Handle. Each Handle stores exactly one binding's value (per-binding-effectId, same as Phase 2). Between sequential steps, an `All` preserves `pipeline_input` alongside the new binding's value so both remain available downstream.
+Handle state is initialized to the pipeline value (same as Phase 2). For the outer Handle, state = `[valA, pipeline_input]` and `readVar(0)` extracts `valA`. For the inner Handle, state = `[valB, [valA, pipeline_input]]` and `readVar(0)` extracts `valB`. The outer Handle's VarRef still works because it bubbles past the inner Handle and hits the outer one, whose state contains `valA` at index 0.
 
 ## Type changes
 
