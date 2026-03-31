@@ -608,6 +608,7 @@ export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
 export { resetEffectIdCounter } from "./effect-id.js";
 export { tryCatch, invokeWithThrow } from "./try-catch.js";
+export { race, sleep, withTimeout, invokeWithTimeout } from "./race.js";
 
 export function forEach<In, Out, R extends string = never>(
   action: Pipeable<In, Out, R>,
