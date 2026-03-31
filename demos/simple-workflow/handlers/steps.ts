@@ -16,13 +16,13 @@ export const implementRefactor = createHandler({
   },
 }, "implementRefactor");
 
-export const typeCheck = createHandler({
+export const typeCheckFiles = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    console.error(`[typeCheck] Type-checking ${file}`);
+    console.error(`[typeCheckFiles] Type-checking ${file}`);
     return file;
   },
-}, "typeCheck");
+}, "typeCheckFiles");
 
 export const fixTypeErrors = createHandler({
   inputValidator: z.string(),
@@ -32,9 +32,18 @@ export const fixTypeErrors = createHandler({
   },
 }, "fixTypeErrors");
 
+export const createPullRequest = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    console.error(`[createPullRequest] Creating PR for ${file}`);
+    return file;
+  },
+}, "createPullRequest");
+
 export const commitChanges = createHandler({
   inputValidator: z.string(),
-  handle: async ({ value: file }): Promise<void> => {
+  handle: async ({ value: file }) => {
     console.error(`[commitChanges] Committing ${file}`);
+    return file;
   },
 }, "commitChanges");
