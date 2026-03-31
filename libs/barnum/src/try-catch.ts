@@ -1,6 +1,5 @@
-import { type Action, type Pipeable, type Result, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast.js";
 import { allocateEffectId } from "./effect-id.js";
-import { identity } from "./builtins.js";
 
 // ---------------------------------------------------------------------------
 // tryCatch — type-level error handling via Handle/Perform
@@ -53,43 +52,3 @@ export function tryCatch<TIn, TOut, TError>(
   });
 }
 
-// ---------------------------------------------------------------------------
-// invokeWithThrow — convenience for handlers returning Result<TOut, TError>
-// ---------------------------------------------------------------------------
-
-/**
- * Convenience combinator for handlers that return `Result<TOut, TError>`.
- * Branches on the result: Ok passes through via identity, Err throws via
- * the provided throw token.
- *
- * `Result<TOut, TError>` is a `TaggedUnion<{ Ok: TOut; Err: TError }>`.
- * Branch auto-unwraps `value`, so the Ok case receives `TOut` directly
- * and the Err case receives `TError` directly.
- *
- * Compiles to:
- *   Chain(handler, Branch({ Ok: Chain(ExtractField("value"), Identity), Err: Chain(ExtractField("value"), throwError) }))
- */
-export function invokeWithThrow<TIn, TOut, TError>(
-  handler: Pipeable<TIn, Result<TOut, TError>>,
-  throwError: Pipeable<TError, never>,
-): TypedAction<TIn, TOut> {
-  return typedAction({
-    kind: "Chain",
-    first: handler as Action,
-    rest: {
-      kind: "Branch",
-      cases: {
-        Ok: {
-          kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
-          rest: identity() as Action,
-        },
-        Err: {
-          kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
-          rest: throwError as Action,
-        },
-      },
-    },
-  });
-}
