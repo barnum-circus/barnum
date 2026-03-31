@@ -739,7 +739,7 @@ type LoopResultDef<TContinue, TBreak> = {
 export type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue, TBreak>>;
 
 // ---------------------------------------------------------------------------
-// Shared AST fragment for scope/loop: handler that restarts the body
+// Shared AST constants for control flow compilation
 // ---------------------------------------------------------------------------
 
 const EXTRACT_PAYLOAD: Action = {
@@ -752,9 +752,19 @@ const TAG_RESTART_BODY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "RestartBody" } },
 };
 
+const TAG_DISCARD: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Discard" } },
+};
+
 const TAG_CONTINUE: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
+};
+
+const TAG_BREAK: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } },
 };
 
 const IDENTITY: Action = {
@@ -762,18 +772,99 @@ const IDENTITY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Identity" } },
 };
 
-/** Handler that extracts the payload and tags it as RestartBody. */
+/** Handler: extract payload, tag as RestartBody. Used by recur and loop. */
 const RESTART_BODY_HANDLER: Action = {
   kind: "Chain",
   first: EXTRACT_PAYLOAD,
   rest: TAG_RESTART_BODY,
 };
 
+/** Handler: extract payload, tag as Discard. Used by earlyReturn. */
+const DISCARD_HANDLER: Action = {
+  kind: "Chain",
+  first: EXTRACT_PAYLOAD,
+  rest: TAG_DISCARD,
+};
+
+// ---------------------------------------------------------------------------
+// recur — restart body primitive
+// ---------------------------------------------------------------------------
+
 /**
- * Build the scope/loop compiled form:
- * Chain(Tag("Continue"), Handle(effectId, RestartBodyHandler, Branch({ Continue: body, Break: identity() })))
+ * Restartable scope. The body callback receives `restart`, a TypedAction that
+ * re-executes the body from the beginning with a new input value.
+ *
+ * If the body completes normally → output is TOut.
+ * If restart fires → body re-executes with the restarted value.
+ *
+ * Compiled form: Handle(effectId, body, RestartBodyHandler)
  */
-function buildScopeAction(effectId: number, body: Action): Action {
+export function recur<TIn, TOut, TRefs extends string = never>(
+  bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut, TRefs>,
+): TypedAction<TIn, TOut, TRefs> {
+  const effectId = allocateEffectId();
+
+  const restartAction = typedAction<TIn, never>({
+    kind: "Perform",
+    effect_id: effectId,
+  });
+
+  const body = bodyFn(restartAction) as Action;
+
+  return typedAction({
+    kind: "Handle",
+    effect_id: effectId,
+    body,
+    handler: RESTART_BODY_HANDLER,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// earlyReturn — exit scope primitive
+// ---------------------------------------------------------------------------
+
+/**
+ * Early return scope. The body callback receives `earlyReturn`, a TypedAction
+ * that exits the scope immediately with the returned value.
+ *
+ * If the body completes normally → output is TOut.
+ * If earlyReturn fires → output is TEarlyReturn.
+ * Combined output: TEarlyReturn | TOut.
+ *
+ * Compiled form: Handle(effectId, body, DiscardHandler)
+ */
+export function earlyReturn<TIn, TEarlyReturn, TOut, TRefs extends string = never>(
+  bodyFn: (earlyReturn: TypedAction<TEarlyReturn, never>) => Pipeable<TIn, TOut, TRefs>,
+): TypedAction<TIn, TEarlyReturn | TOut, TRefs> {
+  const effectId = allocateEffectId();
+
+  const earlyReturnAction = typedAction<TEarlyReturn, never>({
+    kind: "Perform",
+    effect_id: effectId,
+  });
+
+  const body = bodyFn(earlyReturnAction) as Action;
+
+  return typedAction({
+    kind: "Handle",
+    effect_id: effectId,
+    body,
+    handler: DISCARD_HANDLER,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// loop — fixed-point iteration (built on recur + earlyReturn mechanics)
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the loop compiled form:
+ * Chain(Tag("Continue"), Handle(effectId, Branch({ Continue: body, Break: identity() }), RestartBodyHandler))
+ *
+ * Multiplexes recur (Continue tag → restart → re-enters body) and done
+ * (Break tag → restart → exits via Branch) through a single effectId.
+ */
+function buildLoopAction(effectId: number, body: Action): Action {
   return {
     kind: "Chain",
     first: TAG_CONTINUE,
@@ -794,12 +885,12 @@ function buildScopeAction(effectId: number, body: Action): Action {
 
 /**
  * Fixed-point iteration. The body callback receives `recur` and `done`:
- * - `recur`: placed at the end of a pipeline to restart the loop with a new input
- * - `done`: placed at the end of a pipeline to exit the loop with the break value
+ * - `recur`: restart the loop with a new input
+ * - `done`: exit the loop with the break value
  *
  * Both are TypedAction values (not functions), consistent with throwError in tryCatch.
  *
- * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and race.
+ * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and earlyReturn.
  */
 export function loop<TIn, TBreak, TRefs extends string = never>(
   bodyFn: (
@@ -819,37 +910,13 @@ export function loop<TIn, TBreak, TRefs extends string = never>(
 
   const doneAction = typedAction<TBreak, never>({
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } } },
+    first: TAG_BREAK,
     rest: perform,
   });
 
   const body = bodyFn(recurAction, doneAction) as Action;
 
-  return typedAction(buildScopeAction(effectId, body));
-}
-
-/**
- * Early return scope. The body callback receives `jump`, a TypedAction that
- * exits the scope with the jumped value.
- *
- * If the body completes normally → output is TOut.
- * If jump fires → output is TJump.
- * Combined output: TJump | TOut.
- */
-export function scope<TIn, TJump, TOut, TRefs extends string = never>(
-  bodyFn: (jump: TypedAction<TJump, never>) => Pipeable<TIn, TOut, TRefs>,
-): TypedAction<TIn, TJump | TOut, TRefs> {
-  const effectId = allocateEffectId();
-
-  const jumpAction = typedAction<TJump, never>({
-    kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } } },
-    rest: { kind: "Perform", effect_id: effectId },
-  });
-
-  const body = bodyFn(jumpAction) as Action;
-
-  return typedAction(buildScopeAction(effectId, body));
+  return typedAction(buildLoopAction(effectId, body));
 }
 
 /**

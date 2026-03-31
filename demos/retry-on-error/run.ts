@@ -1,7 +1,7 @@
 /**
  * Retry-on-error demo: fallible pipeline with tryCatch, withTimeout,
- * loop, and scope. Catches handler errors and timeouts in the same catch
- * block, but exits immediately on catastrophic failures via scope.
+ * loop, and earlyReturn. Catches handler errors and timeouts in the same
+ * catch block, but exits immediately on catastrophic failures via earlyReturn.
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -10,7 +10,7 @@ import {
   workflowBuilder,
   pipe,
   loop,
-  scope,
+  earlyReturn,
   tryCatch,
   withTimeout,
 } from "@barnum/barnum/src/ast.js";
@@ -21,7 +21,7 @@ console.error("=== Retry-on-error demo ===\n");
 
 await workflowBuilder()
   .workflow(() =>
-    scope<any, string, any>((earlyReturn) =>
+    earlyReturn<any, string, any>((earlyReturn) =>
       loop<any, any>((recur, done) =>
         pipe(
           drop<any>(),
