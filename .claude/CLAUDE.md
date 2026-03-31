@@ -80,7 +80,7 @@ See claude.local.md. Always run the full suite — isolated test runs are unreli
 
 ## Commits
 
-- **Commit immediately after every change.** Then push.
+- **Commit immediately after every change.** Do not push — git push is currently broken.
 - **Small commits always.** One logical unit per commit.
 - **No PRs.** Push branches, let CI run. User handles merging.
 - **Landing on master:** branch must pass CI first (except trivial markdown).
