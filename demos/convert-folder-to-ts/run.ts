@@ -21,10 +21,7 @@ import {
   all,
   bindInput,
 } from "@barnum/barnum/src/ast.js";
-import {
-  recur,
-  done,
-} from "@barnum/barnum/src/builtins.js";
+import { drop } from "@barnum/barnum/src/builtins.js";
 
 import { setup, listFiles, migrate, writeFile } from "./handlers/convert.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
@@ -52,12 +49,12 @@ await workflowBuilder()
           ),
         ),
       ).drop(),
-
+    ).then(
       // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
-      loop(
-        typeCheck.then(classifyErrors).branch({
-          HasErrors: forEach(fix).drop().then(recur<never, void>()),
-          Clean: done<never, void>(),
+      loop<any, void>((recur, done) =>
+        pipe(drop<any>(), typeCheck, classifyErrors).branch({
+          HasErrors: pipe(forEach(fix), recur),
+          Clean: done,
         }),
       ),
     ),

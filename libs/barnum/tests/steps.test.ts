@@ -10,9 +10,7 @@ import {
 } from "../src/ast.js";
 import {
   constant,
-  done,
   drop,
-  recur,
 } from "../src/builtins.js";
 
 /**
@@ -70,7 +68,12 @@ describe("named steps", () => {
       .registerSteps({ Deploy: deploy })
       .registerSteps({ HealthCheck: healthCheck })
       .workflow(({ steps }) =>
-        pipe(constant({ verified: true }), steps.Deploy, loop(steps.HealthCheck)),
+        pipe(
+          constant({ verified: true }),
+          steps.Deploy,
+        ).then(loop<any, any>((recur, done) =>
+          steps.HealthCheck.branch({ Continue: recur, Break: done }),
+        )),
       );
     expect(cfg.steps).toHaveProperty("Deploy");
     expect(cfg.steps).toHaveProperty("HealthCheck");
@@ -79,16 +82,11 @@ describe("named steps", () => {
   it("uses named steps for a fix cycle", () => {
     const cfg = workflowBuilder()
       .registerSteps({
-        FixCycle: loop(
-          pipe(
-            drop<any>(),
-            typeCheck,
-            classifyErrors,
-            branch({
-              HasErrors: pipe(forEach(fix), recur<any, void>()),
-              Clean: done<any, void>(),
-            }),
-          ),
+        FixCycle: loop<any, void>((recur, done) =>
+          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+            HasErrors: pipe(forEach(fix), recur),
+            Clean: done,
+          }),
         ),
       })
       .workflow(({ steps }) =>
@@ -110,16 +108,11 @@ describe("named steps", () => {
         Migrate: pipe(listFiles, forEach(migrate)),
       })
       .registerSteps({
-        FixCycle: loop(
-          pipe(
-            drop<any>(),
-            typeCheck,
-            classifyErrors,
-            branch({
-              HasErrors: pipe(forEach(fix), recur<any, void>()),
-              Clean: done<any, void>(),
-            }),
-          ),
+        FixCycle: loop<any, void>((recur, done) =>
+          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+            HasErrors: pipe(forEach(fix), recur),
+            Clean: done,
+          }),
         ),
       })
       .workflow(({ steps }) =>
@@ -315,16 +308,11 @@ describe("kitchen sink", () => {
           stepRef("FixCycle"), // jump to the fix cycle defined below
         ),
         // FixCycle: type-check, classify errors, fix or finish
-        FixCycle: loop(
-          pipe(
-            drop<any>(),
-            typeCheck,
-            classifyErrors,
-            branch({
-              HasErrors: pipe(forEach(fix), recur<any, void>()),
-              Clean: done<any, void>(),
-            }),
-          ),
+        FixCycle: loop<any, void>((recur, done) =>
+          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+            HasErrors: pipe(forEach(fix), recur),
+            Clean: done,
+          }),
         ),
       }))
       // ── Workflow: orchestrate with self-restart on persistent errors ──
@@ -333,11 +321,10 @@ describe("kitchen sink", () => {
           constant({ project: "my-app" }),
           steps.MigrateAll,
           classifyErrors,
-          branch({
-            HasErrors: pipe(drop<TypeError[]>(), self),  // restart the entire workflow
-            Clean: pipe(drop<void>(), constant({ migrated: true })),
-          }),
-        ),
+        ).branch({
+          HasErrors: pipe(drop<TypeError[]>(), self),  // restart the entire workflow
+          Clean: pipe(drop<void>(), constant({ migrated: true })),
+        }),
       );
 
     // ── Verify structure ──
@@ -364,15 +351,13 @@ describe("kitchen sink", () => {
       step: { kind: "Named", name: "FixCycle" },
     });
 
-    // Workflow: pipe(constant, steps.MigrateAll, classifyErrors, branch)
-    // → Chain(constant, Chain(steps.MigrateAll, Chain(classifyErrors, branch)))
+    // Workflow: pipe(constant, steps.MigrateAll, classifyErrors).branch({...})
+    // → Chain(Chain(constant, Chain(MigrateAll, classifyErrors)), Branch({...}))
     assertKind(cfg.workflow, "Chain");
-    assertKind(cfg.workflow.rest, "Chain");
-    assertKind(cfg.workflow.rest.rest, "Chain");
-    assertKind(cfg.workflow.rest.rest.rest, "Branch");
+    assertKind(cfg.workflow.rest, "Branch");
     // HasErrors: auto-unwrap + pipe(drop, self)
     // → Chain(ExtractField("value"), Chain(drop, self))
-    const hasErrors = cfg.workflow.rest.rest.rest.cases.HasErrors;
+    const hasErrors = cfg.workflow.rest.cases.HasErrors;
     assertKind(hasErrors, "Chain");
     assertKind(hasErrors.rest, "Chain");
     expect(hasErrors.rest.rest).toEqual({

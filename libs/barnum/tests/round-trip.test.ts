@@ -1,7 +1,7 @@
 import { execFileSync } from "child_process";
 import { fileURLToPath } from "url";
 import path from "path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   all,
@@ -10,6 +10,7 @@ import {
   branch,
   pipe,
   forEach,
+  resetEffectIdCounter,
 } from "../src/ast.js";
 import { constant } from "../src/builtins.js";
 import {
@@ -33,6 +34,10 @@ function roundTrip(input: unknown): unknown {
 }
 
 describe("barnum round-trip", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
   it("Invoke", () => {
     const cfg = workflowBuilder().workflow(() =>
       pipe(constant({ project: "test" }), setup),
@@ -76,7 +81,11 @@ describe("barnum round-trip", () => {
 
   it("Loop", () => {
     const cfg = workflowBuilder().workflow(() =>
-      pipe(constant({ deployed: true }), loop(healthCheck)),
+      constant({ deployed: true }).then(
+        loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+          healthCheck.branch({ Continue: recur, Break: done }),
+        ),
+      ),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });

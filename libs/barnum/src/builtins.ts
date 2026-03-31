@@ -1,4 +1,4 @@
-import { type Action, type LoopResult, type Option as OptionT, type Pipeable, type Result as ResultT, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type Option as OptionT, type Pipeable, type Result as ResultT, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -61,35 +61,6 @@ export function tag<
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Loop signals
-//
-// Both recur and done produce the full LoopResult<TContinue, TBreak> output
-// type so the __def phantom field carries the complete variant map.
-// Defaults to `any` so callers can omit type params — the loop body
-// context provides the actual types.
-// ---------------------------------------------------------------------------
-
-export function recur<TContinue = any, TBreak = any>(): TypedAction<
-  TContinue,
-  LoopResult<TContinue, TBreak>
-> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
-  });
-}
-
-export function done<TContinue = any, TBreak = any>(): TypedAction<
-  TBreak,
-  LoopResult<TContinue, TBreak>
-> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } },
   });
 }
 

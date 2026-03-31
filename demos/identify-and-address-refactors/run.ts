@@ -34,8 +34,6 @@ import {
   drop,
   pick,
   withResource,
-  recur,
-  done,
   Option,
 } from "@barnum/barnum/src/builtins.js";
 
@@ -67,10 +65,10 @@ type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: strin
 await workflowBuilder()
   // Type-check/fix: run tsc, fix errors, repeat until clean.
   .registerSteps({
-    TypeCheckFix: loop(
-      pipe(drop(), typeCheck, classifyErrors).branch({
-        HasErrors: forEach(fix).drop().then(recur<any, void>()),
-        Clean: done<any, void>(),
+    TypeCheckFix: loop<any, void>((recur, done) =>
+      pipe(drop<any>(), typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix), recur),
+        Clean: done,
       }),
     ),
   })
@@ -81,10 +79,10 @@ await workflowBuilder()
       implementAndReviewParams.pick("worktreePath").then(steps.TypeCheckFix).drop(),
 
       // Judge quality; revise and re-check if needed.
-      loop(
-        judgeRefactor.then(classifyJudgment).branch({
-          NeedsWork: applyFeedback.then(steps.TypeCheckFix).drop().then(recur<never, void>()),
-          Approved: done<never, void>(),
+      loop<any, void>((recur, done) =>
+        pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
+          NeedsWork: pipe(applyFeedback, steps.TypeCheckFix, recur),
+          Approved: done,
         }),
       ).drop(),
 

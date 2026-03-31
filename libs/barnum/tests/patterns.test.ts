@@ -13,11 +13,9 @@ import {
 } from "../src/ast.js";
 import {
   constant,
-  done,
   drop,
   identity,
   merge,
-  recur,
   tag,
   Option as O,
   Result as R,
@@ -153,15 +151,29 @@ describe("branch", () => {
 // -----------------------------------------------------------------------
 
 describe("loop", () => {
-  it("accepts body returning LoopResult", () => {
-    const workflow = loop(healthCheck);
-    expect(workflow.kind).toBe("Loop");
+  beforeEach(() => {
+    resetEffectIdCounter();
   });
 
-  it("rejects body not returning LoopResult", () => {
-    // verify: { artifact: string } → { verified: boolean } — not a LoopResult
-    // @ts-expect-error — loop body must return LoopResult<In, Out>
-    loop(verify);
+  it("produces Chain(Tag(Continue), Handle(...)) AST", () => {
+    const workflow = loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+      healthCheck.branch({ Continue: recur, Break: done }),
+    );
+    expect(workflow.kind).toBe("Chain");
+    const chain = workflow as any;
+    // First: Tag("Continue")
+    expect(chain.first.handler.builtin.kind).toBe("Tag");
+    expect(chain.first.handler.builtin.value).toBe("Continue");
+    // Rest: Handle
+    expect(chain.rest.kind).toBe("Handle");
+    expect(typeof chain.rest.effect_id).toBe("number");
+    // Handle body: Branch with Continue/Break cases
+    expect(chain.rest.body.kind).toBe("Branch");
+    expect(Object.keys(chain.rest.body.cases).sort()).toEqual(["Break", "Continue"]);
+    // Handle handler: Chain(ExtractField("payload"), Tag("RestartBody"))
+    expect(chain.rest.handler.kind).toBe("Chain");
+    expect(chain.rest.handler.first.handler.builtin.value).toBe("payload");
+    expect(chain.rest.handler.rest.handler.builtin.value).toBe("RestartBody");
   });
 
   it("composes type-check loop with branch", () => {
@@ -171,18 +183,16 @@ describe("loop", () => {
         setup,
         listFiles,
         forEach(migrate),
-        loop(
-          pipe(
-            drop<any>(),
-            typeCheck,
-            classifyErrors,
-            branch({
-              HasErrors: pipe(forEach(fix), recur<any, void>()),
-              Clean: done<any, void>(),
-            }),
-          ),
-        ),
-      ),
+      ).then(loop<any, void>((recur, done) =>
+        pipe(
+          drop<any>(),
+          typeCheck,
+          classifyErrors,
+        ).branch({
+          HasErrors: pipe(forEach(fix), recur),
+          Clean: done,
+        }),
+      )),
     );
     expect(cfg.workflow.kind).toBe("Chain");
   });

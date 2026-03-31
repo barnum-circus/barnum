@@ -39,8 +39,6 @@ import {
   extractField,
   extractIndex,
   range,
-  recur,
-  done,
   tag,
   Option as O,
   Result as R,
@@ -297,53 +295,30 @@ describe("combinator types", () => {
   });
 
   it("loop: input matches Continue type, output is Break type", () => {
-    const action = loop(healthCheck);
+    const action = loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+      healthCheck.branch({ Continue: recur, Break: done }),
+    );
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
-    expect(action.kind).toBe("Loop");
-  });
-
-  it("branch with recur/done: output is union of Continue and Break members", () => {
-    const action = pipe(
-      classifyErrors,
-      branch({
-        HasErrors: pipe(forEach(fix), recur<any, void>()),
-        Clean: done<any, void>(),
-      }),
-    );
-    assertExact<
-      IsExact<ExtractInput<typeof action>, TypeError[]>
-    >();
-    // Branch output is the union of recur's Continue and done's Break.
-    // recur<any, void>() uses `any` as the invariance escape hatch for loop bodies.
-    assertExact<
-      IsExact<
-        ExtractOutput<typeof action>,
-        | { kind: "Continue"; value: any }
-        | { kind: "Break"; value: void }
-      >
-    >();
     expect(action.kind).toBe("Chain");
   });
 
   it("loop with branch/recur/done: output is Break value type", () => {
-    const action = loop(
+    const action = loop<any, void>((recur, done) =>
       pipe(
         drop<any>(),
         typeCheck,
         classifyErrors,
-        branch({
-          HasErrors: pipe(forEach(fix), recur<any, void>()),
-          Clean: done<any, void>(),
-        }),
-      ),
+      ).branch({
+        HasErrors: pipe(forEach(fix), recur),
+        Clean: done,
+      }),
     );
-    // Loop input: whatever drop() accepts (inferred from context)
-    // Loop output: the Break value from done() in the Clean case (void after auto-unwrap)
+    // Loop output: the Break value from done in the Clean case (void after auto-unwrap)
     assertExact<
       IsExact<ExtractOutput<typeof action>, void>
     >();
-    expect(action.kind).toBe("Loop");
+    expect(action.kind).toBe("Chain");
   });
 
   it("full pipeline: constant → handlers → forEach → loop", () => {
@@ -352,18 +327,16 @@ describe("combinator types", () => {
       setup,
       listFiles,
       forEach(migrate),
-      loop(
-        pipe(
-          drop<any>(),
-          typeCheck,
-          classifyErrors,
-          branch({
-            HasErrors: pipe(forEach(fix), recur<any, void>()),
-            Clean: done<any, void>(),
-          }),
-        ),
-      ),
-    );
+    ).then(loop<any, void>((recur, done) =>
+      pipe(
+        drop<any>(),
+        typeCheck,
+        classifyErrors,
+      ).branch({
+        HasErrors: pipe(forEach(fix), recur),
+        Clean: done,
+      }),
+    ));
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<
       IsExact<ExtractOutput<typeof action>, void>
@@ -447,8 +420,8 @@ describe("postfix operator types", () => {
       typeCheck,
       classifyErrors,
     ).branch({
-      HasErrors: pipe(forEach(fix), recur<any, void>()),
-      Clean: done<any, void>(),
+      HasErrors: forEach(fix),
+      Clean: drop(),
     });
     expect(action.kind).toBe("Chain");
   });
