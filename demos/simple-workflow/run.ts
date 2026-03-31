@@ -4,9 +4,9 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { workflowBuilder, pipe, forEach } from "@barnum/barnum/src/ast.js";
+import { workflowBuilder } from "@barnum/barnum/src/ast.js";
 import { listFiles, refactor } from "./handlers/steps.js";
 
 await workflowBuilder()
-  .workflow(() => pipe(listFiles, forEach(refactor).drop()))
+  .workflow(() => listFiles.then(refactor.forEach().drop()))
   .run();
