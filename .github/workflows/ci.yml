@@ -166,7 +166,7 @@ jobs:
 
   build-macos-x64:
     needs: [gate-rust, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -190,6 +190,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" =~ ^refs/tags/v ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_REF" == "refs/heads/trapeze" ]]; then
+            VERSION="0.0.0-trapeze-${GITHUB_SHA::8}"
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
@@ -209,7 +211,7 @@ jobs:
 
   build-macos-arm64:
     needs: [gate-rust, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: macos-latest
     timeout-minutes: 5
     steps:
@@ -233,6 +235,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" =~ ^refs/tags/v ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_REF" == "refs/heads/trapeze" ]]; then
+            VERSION="0.0.0-trapeze-${GITHUB_SHA::8}"
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
@@ -279,6 +283,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" =~ ^refs/tags/v ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_REF" == "refs/heads/trapeze" ]]; then
+            VERSION="0.0.0-trapeze-${GITHUB_SHA::8}"
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
@@ -298,7 +304,7 @@ jobs:
 
   build-linux-arm64:
     needs: [gate-rust, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -325,6 +331,8 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" =~ ^refs/tags/v ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
+          elif [[ "$GITHUB_REF" == "refs/heads/trapeze" ]]; then
+            VERSION="0.0.0-trapeze-${GITHUB_SHA::8}"
           else
             VERSION="0.0.0-main-${GITHUB_SHA::8}"
           fi
@@ -344,7 +352,7 @@ jobs:
 
   build-windows-x64:
     needs: [gate-rust, test]
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: windows-latest
     timeout-minutes: 5
     steps:
@@ -369,6 +377,8 @@ jobs:
         run: |
           if ($env:GITHUB_REF -match '^refs/tags/v(.+)$') {
             $VERSION = $Matches[1]
+          } elseif ($env:GITHUB_REF -eq 'refs/heads/trapeze') {
+            $VERSION = "0.0.0-trapeze-$($env:GITHUB_SHA.Substring(0,8))"
           } else {
             $VERSION = "0.0.0-main-$($env:GITHUB_SHA.Substring(0,8))"
           }
@@ -387,7 +397,7 @@ jobs:
           path: target/x86_64-pc-windows-msvc/release/barnum.exe
 
   publish:
-    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v'))
+    if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
     needs: [gate-rust, fmt, lockfiles, clippy, test, build-macos-x64, build-macos-arm64, build-linux-x64, build-linux-arm64, build-windows-x64]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -474,39 +484,34 @@ jobs:
           chmod +x libs/barnum/artifacts/linux-x64/barnum
           chmod +x libs/barnum/artifacts/linux-arm64/barnum
 
-      - name: Set version for main branch
-        if: "!startsWith(github.ref, 'refs/tags/v')"
+      - name: Set version and npm tag
+        id: version
         run: |
-          VERSION="0.0.0-main-${GITHUB_SHA::8}"
+          if [[ "$GITHUB_REF" =~ ^refs/tags/v ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            NPM_TAG="latest"
+          elif [[ "$GITHUB_REF" == "refs/heads/trapeze" ]]; then
+            VERSION="0.0.0-trapeze-${GITHUB_SHA::8}"
+            NPM_TAG="trapeze"
+          else
+            VERSION="0.0.0-main-${GITHUB_SHA::8}"
+            NPM_TAG="main"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "npm_tag=$NPM_TAG" >> $GITHUB_OUTPUT
           cd libs/troupe
           npm version $VERSION --no-git-tag-version
           cd ../barnum
           npm version $VERSION --no-git-tag-version
 
-      - name: Publish troupe to npm (main tag)
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        run: npm publish --access public --tag main
+      - name: Publish troupe to npm
+        run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }}
         working-directory: libs/troupe
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish barnum to npm (main tag)
-        if: "!startsWith(github.ref, 'refs/tags/v')"
-        run: npm publish --access public --tag main
-        working-directory: libs/barnum
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish troupe to npm (latest tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npm publish --access public --tag latest
-        working-directory: libs/troupe
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish barnum to npm (latest tag)
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npm publish --access public --tag latest
+      - name: Publish barnum to npm
+        run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }}
         working-directory: libs/barnum
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
