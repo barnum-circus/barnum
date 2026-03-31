@@ -41,6 +41,7 @@
 
     "typescript/no-explicit-any": "off",
     "typescript/ban-types": "off",
-    "typescript/no-empty-object-type": "off"
+    "typescript/no-empty-object-type": "off",
+    "typescript/no-use-before-define": "off"
   }
 }

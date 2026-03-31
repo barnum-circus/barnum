@@ -371,14 +371,12 @@ function thenMethod<TIn, TOut, TRefs extends string, TNext, TRefs2 extends strin
   this: TypedAction<TIn, TOut, TRefs>,
   next: Pipeable<TOut, TNext, TRefs2>,
 ): TypedAction<TIn, TNext, TRefs | TRefs2> {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({ kind: "Chain", first: this, rest: next as Action });
 }
 
 function forEachMethod<TIn, TOut, TRefs extends string>(
   this: TypedAction<TIn, TOut, TRefs>,
 ): TypedAction<TIn[], TOut[], TRefs> {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({ kind: "ForEach", action: this });
 }
 
@@ -386,12 +384,10 @@ function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
 ): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases: unwrapBranchCases(cases) } });
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -400,7 +396,6 @@ function flattenMethod(this: TypedAction): TypedAction {
 }
 
 function dropMethod(this: TypedAction): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -409,7 +404,6 @@ function dropMethod(this: TypedAction): TypedAction {
 }
 
 function tagMethod(this: TypedAction, kind: string): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -418,7 +412,6 @@ function tagMethod(this: TypedAction, kind: string): TypedAction {
 }
 
 function getMethod(this: TypedAction, field: string): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -430,7 +423,6 @@ function augmentMethod(this: TypedAction): TypedAction {
   // Construct: All(this, identity) → Merge
   // "this" is the sub-pipeline. augment() wraps it so the original input
   // flows through identity alongside the sub-pipeline, then merges the results.
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: {
@@ -445,7 +437,6 @@ function augmentMethod(this: TypedAction): TypedAction {
 }
 
 function mergeMethod(this: TypedAction): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -454,7 +445,6 @@ function mergeMethod(this: TypedAction): TypedAction {
 }
 
 function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
@@ -467,14 +457,12 @@ function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
   // But branch auto-unwraps value, so:
   //   Some case: receives T, runs action, wraps as Some
   //   None case: receives void, wraps as None
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
     rest: {
       kind: "Branch",
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      cases: unwrapBranchCases({
+          cases: unwrapBranchCases({
         Some: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } } } },
         None: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } } },
       }),
@@ -484,14 +472,12 @@ function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
   // Desugars to: self.then(branch({ Ok: tag("Ok"), Err: pipe(action, tag("Err")) }))
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
     rest: {
       kind: "Branch",
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      cases: unwrapBranchCases({
+          cases: unwrapBranchCases({
         Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
         Err: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
       }),
@@ -501,14 +487,12 @@ function mapErrMethod(this: TypedAction, action: Action): TypedAction {
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   // Desugars to: self.then(branch({ Ok: identity(), Err: defaultAction }))
-  // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
     kind: "Chain",
     first: this,
     rest: {
       kind: "Branch",
-      // eslint-disable-next-line @typescript-eslint/no-use-before-define
-      cases: unwrapBranchCases({
+          cases: unwrapBranchCases({
         Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
         Err: defaultAction,
       }),
