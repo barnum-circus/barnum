@@ -65,7 +65,7 @@ console.error("=== Running identify-and-address-refactors workflow ===\n");
 // The full context type inside the worktree action. withResource merges
 // the resource (createWorktree output) with the input (Refactor), giving
 // all five fields.
-type Ctx = Refactor & { worktreePath: string; branch: string };
+type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
 
 await workflowBuilder()
   .registerSteps(({ stepRef }) => ({
@@ -83,34 +83,34 @@ await workflowBuilder()
 
     // The action that runs inside each worktree.
     //
-    // bindInput captures the full Ctx as a VarRef (env). Each side
+    // bindInput captures the full ImplementAndReviewParams as a VarRef (env). Each side
     // effect accesses the fields it needs through env, then .drop()
     // discards its output. No tap/augment needed — the VarRef provides
     // context independently of the pipeline flow.
     //
     // pick() still narrows to exactly the fields each handler expects —
     // invariance prevents passing extra fields across serialization boundaries.
-    ImplementAndReview: bindInput<Ctx>((env) => pipe(
+    ImplementAndReview: bindInput<ImplementAndReviewParams>((env) => pipe(
       // Side effects: implement refactor and commit changes.
-      pipe(env, pick("worktreePath", "description"), implement).drop(),
-      pipe(env, pick("worktreePath"), commit).drop(),
+      pipe(env, pick<ImplementAndReviewParams, ["worktreePath", "description"]>("worktreePath", "description"), implement).drop(),
+      pipe(env, pick<ImplementAndReviewParams, ["worktreePath"]>("worktreePath"), commit).drop(),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      pipe(env, pick("worktreePath"), stepRef("TypeCheck")).drop(),
+      pipe(env, pick<ImplementAndReviewParams, ["worktreePath"]>("worktreePath"), stepRef("TypeCheck")).drop(),
 
       // Judge/revise loop: review the refactor, revise if needed.
       // drop() discards the pipeline value — judgeRefactor takes no input.
       loop(
         pipe(drop(), judgeRefactor, classifyJudgment).branch({
           NeedsWork: pipe(
-            applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>(),
+            applyFeedback.drop(), stepRef("TypeCheck"), recur(),
           ),
-          Approved: done<any, any>(),
+          Approved: done(),
         }),
       ).drop(),
 
       // Create PR — env VarRef provides context independently.
-      pipe(env, pick("branch", "description"), preparePRInput, createPR),
+      pipe(env, pick<ImplementAndReviewParams, ["branch", "description"]>("branch", "description"), preparePRInput, createPR),
     )),
   }))
   .workflow(({ steps }) =>
@@ -124,7 +124,7 @@ await workflowBuilder()
       // Filter: assess each refactor's worthiness.
       // assessWorthiness returns Option<Refactor> — Some if worth doing, None if not.
       // Option.collect() drops Nones and unwraps Somes into a flat Refactor[].
-      forEach(assessWorthiness).then(Option.collect<Refactor>()),
+      forEach(assessWorthiness).then(Option.collect()),
 
       // For each refactor: create worktree → work → create PR → cleanup
       //

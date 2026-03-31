@@ -68,12 +68,12 @@ export function tag<
 // Loop signals
 //
 // Both recur and done produce the full LoopResult<TContinue, TBreak> output
-// type so the __def phantom field carries the complete variant map. Both type
-// parameters are required — this ensures the branch output is a proper
-// TaggedUnion with consistent __def across all cases.
+// type so the __def phantom field carries the complete variant map.
+// Defaults to `any` so callers can omit type params — the loop body
+// context provides the actual types.
 // ---------------------------------------------------------------------------
 
-export function recur<TContinue, TBreak>(): TypedAction<
+export function recur<TContinue = any, TBreak = any>(): TypedAction<
   TContinue,
   LoopResult<TContinue, TBreak>
 > {
@@ -83,7 +83,7 @@ export function recur<TContinue, TBreak>(): TypedAction<
   });
 }
 
-export function done<TContinue, TBreak>(): TypedAction<
+export function done<TContinue = any, TBreak = any>(): TypedAction<
   TBreak,
   LoopResult<TContinue, TBreak>
 > {
@@ -485,7 +485,7 @@ export const Option = {
    * as a composition of existing AST nodes because it requires
    * array-level filtering logic.
    */
-  collect<T>(): TypedAction<OptionT<T>[], T[]> {
+  collect<T = any>(): TypedAction<OptionT<T>[], T[]> {
     return typedAction({
       kind: "Invoke",
       handler: { kind: "Builtin", builtin: { kind: "CollectSome" } },

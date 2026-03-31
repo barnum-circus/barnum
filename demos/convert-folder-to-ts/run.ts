@@ -26,7 +26,6 @@ import {
 } from "@barnum/barnum/src/ast.js";
 import {
   extractField,
-  identity,
   merge,
   pick,
   recur,
@@ -48,15 +47,19 @@ await workflowBuilder()
       listFiles,
 
       // Phase 2: For each file, migrate and write.
-      // bindInput captures the FileEntry as a VarRef. The pipeline
-      // extracts "file", runs migrate to get { content }, then
-      // combines it with { outputPath } from the original entry.
+      // bindInput captures the FileEntry as a VarRef. The pipeline extracts
+      // "file", runs migrate, then a nested bindInput captures the result.
+      // Inside, all() collects both VarRef values and merge() combines them.
       forEach(
         bindInput<FileEntry>((entry) => pipe(
-          pipe(entry, extractField("file"), migrate({ to: "Typescript" })),
-          all(identity(), pipe(entry, pick("outputPath"))),
-          merge(),
-          writeFile,
+          entry,
+          extractField<FileEntry, "file">("file"),
+          migrate({ to: "Typescript" }),
+          bindInput<{ content: string }>((migrateResult) => pipe(
+            all(migrateResult, entry.then(pick<FileEntry, ["outputPath"]>("outputPath"))),
+            merge<[{ content: string }, { outputPath: string }]>(),
+            writeFile,
+          )),
         )),
       ).drop(),
 
@@ -65,9 +68,9 @@ await workflowBuilder()
         pipe(typeCheck, classifyErrors).branch({
           HasErrors: pipe(
             forEach(fix).drop(),
-            recur<any, any>(),
+            recur(),
           ),
-          Clean: done<any, any>(),
+          Clean: done(),
         }),
       ),
     ),

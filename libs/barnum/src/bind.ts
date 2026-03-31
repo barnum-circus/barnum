@@ -18,9 +18,11 @@ export function resetEffectIdCounter(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * A VarRef is a Perform node wrapped with phantom types. Input is `never`
- * because VarRefs don't consume pipeline input — they raise an effect.
- * Output is `TValue`, the concrete type of the bound value.
+ * A typed reference to a bound value. Output is `TValue`.
+ *
+ * Use `.then()` (not `pipe()`) when chaining a VarRef into a generic
+ * action like `pick` or `extractField` — pipe overloads can't infer
+ * the generic's type parameter from the VarRef's output.
  */
 export type VarRef<TValue> = TypedAction<never, TValue>;
 
@@ -157,8 +159,11 @@ export function bind<TBindings extends Action[], TOut>(
  * is dropped, so the body must access it through the VarRef.
  *
  * Sugar for: `bind([identity()], ([input]) => pipe(drop(), body(input)))`
+ *
+ * TOut defaults to `any` so callers can specify just TIn:
+ *   bindInput<FileEntry>((entry) => ...)
  */
-export function bindInput<TIn, TOut>(
+export function bindInput<TIn, TOut = any>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
   return bind([identity<TIn>()], ([input]) =>
