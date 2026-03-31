@@ -68,7 +68,7 @@ await workflowBuilder()
     TypeCheckFix: loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     ),
   })
@@ -82,7 +82,7 @@ await workflowBuilder()
       loop((recur) =>
         pipe(judgeRefactor, classifyJudgment).branch({
           NeedsWork: pipe(applyFeedback, steps.TypeCheckFix).drop().then(recur),
-          Approved: drop(),
+          Approved: drop,
         }),
       ).drop(),
 

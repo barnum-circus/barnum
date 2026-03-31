@@ -148,7 +148,7 @@ export function bind<TBindings extends Action[], TOut>(
  * input as a VarRef. The body's pipeline input is `never` — the input
  * is dropped, so the body must access it through the VarRef.
  *
- * Sugar for: `bind([identity()], ([input]) => pipe(drop(), body(input)))`
+ * Sugar for: `bind([identity()], ([input]) => pipe(drop, body(input)))`
  *
  * TOut defaults to `any` so callers can specify just TIn:
  *   bindInput<FileEntry>((entry) => ...)
@@ -157,6 +157,6 @@ export function bindInput<TIn, TOut = any>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
   return bind([identity<TIn>()], ([input]) =>
-    pipe(drop(), body(input)),
+    pipe(drop, body(input)),
   );
 }

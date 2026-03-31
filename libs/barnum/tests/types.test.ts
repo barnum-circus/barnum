@@ -203,11 +203,10 @@ describe("builtin types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("drop: T -> never", () => {
-    const action = drop<string>();
-    assertExact<IsExact<ExtractInput<typeof action>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
-    expect(action.kind).toBe("Invoke");
+  it("drop: any -> never", () => {
+    assertExact<IsExact<ExtractInput<typeof drop>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof drop>, never>>();
+    expect(drop.kind).toBe("Invoke");
   });
 
   it("range: any -> number[]", () => {
@@ -310,7 +309,7 @@ describe("combinator types", () => {
         classifyErrors,
       ).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     );
     // Loop output: never (TBreak defaults to never, done not used)
@@ -332,7 +331,7 @@ describe("combinator types", () => {
         classifyErrors,
       ).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     ));
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
@@ -352,7 +351,7 @@ describe("postfix operator types", () => {
   it(".branch(): input preserved, output is union of case outputs", () => {
     const action = classifyErrors.branch({
       HasErrors: forEach(fix),
-      Clean: drop(),
+      Clean: drop,
     });
     assertExact<IsExact<ExtractInput<typeof action>, TypeError[]>>();
     // Output is union: fix[]'s output | never (from drop)
@@ -419,7 +418,7 @@ describe("postfix operator types", () => {
       classifyErrors,
     ).branch({
       HasErrors: forEach(fix),
-      Clean: drop(),
+      Clean: drop,
     });
     expect(action.kind).toBe("Chain");
   });
@@ -437,7 +436,7 @@ describe("{ kind, value } convention", () => {
   it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
     classifyErrors.branch({
       HasErrors: forEach(fix),
-      Clean: drop(),
+      Clean: drop,
     });
   });
 });
@@ -466,24 +465,24 @@ describe("phantom __def on tagged unions", () => {
 describe("postfix .branch() type safety", () => {
   it("rejects non-exhaustive postfix branch", () => {
     // @ts-expect-error — non-exhaustive: missing "Clean" case
-    classifyErrors.branch({ HasErrors: drop() });
+    classifyErrors.branch({ HasErrors: drop });
   });
 
   it("rejects wrong handler type in postfix branch", () => {
     // @ts-expect-error — deploy expects { verified: boolean }, not HasErrors variant
-    classifyErrors.branch({ HasErrors: deploy, Clean: drop() });
+    classifyErrors.branch({ HasErrors: deploy, Clean: drop });
   });
 
-  it("accepts exhaustive postfix branch with bare drop()", () => {
+  it("accepts exhaustive postfix branch with bare drop", () => {
     classifyErrors.branch({
-      HasErrors: drop(),
-      Clean: drop(),
+      HasErrors: drop,
+      Clean: drop,
     });
   });
 
   it("rejects .branch() on non-discriminated output", () => {
     // @ts-expect-error — Out has no kind, .branch() should reject
-    deploy.branch({ A: drop() });
+    deploy.branch({ A: drop });
   });
 
   it("accepts case handlers with step refs (non-never Refs)", () => {
@@ -495,7 +494,7 @@ describe("postfix .branch() type safety", () => {
       .registerSteps(({ stepRef }) => ({
         TypeCheck: classifyErrors.branch({
           HasErrors: stepRef("Fix"),
-          Clean: drop(),
+          Clean: drop,
         }),
         Fix: pipe(forEach(fix).drop(), stepRef("TypeCheck")),
       }));
@@ -506,8 +505,8 @@ describe("postfix .branch() type safety", () => {
   it("branch collects refs from case handlers", () => {
     // Branch return type should union refs from all case handlers.
     const branched = classifyErrors.branch({
-      HasErrors: drop(),
-      Clean: drop(),
+      HasErrors: drop,
+      Clean: drop,
     });
     // With no step refs, Refs should be never
     assertExact<IsExact<ExtractRefs<typeof branched>, never>>();
@@ -524,8 +523,8 @@ describe("postfix .branch() type safety", () => {
         // Refs should be "Fix" | "Other"
         assertExact<IsExact<ExtractRefs<typeof branched>, "Fix" | "Other">>();
         return {
-          Fix: drop() as TypedAction<any, any>,
-          Other: drop() as TypedAction<any, any>,
+          Fix: drop as TypedAction<any, any>,
+          Other: drop as TypedAction<any, any>,
           Root: branched,
         };
       });
@@ -561,13 +560,13 @@ describe("pipe type safety", () => {
     // branch with only HasErrors case produces { kind: "HasErrors" } input
     // pipe rejects because { kind: "Clean" } is not assignable to { kind: "HasErrors" }
     // @ts-expect-error — non-exhaustive: missing "Clean" case
-    pipe(classifyErrors, branch({ HasErrors: drop() }));
+    pipe(classifyErrors, branch({ HasErrors: drop }));
   });
 
   it("accepts exhaustive branch", () => {
     const action = pipe(
       classifyErrors,
-      branch({ HasErrors: drop<TypeError[]>(), Clean: drop<void>() }),
+      branch({ HasErrors: drop, Clean: drop }),
     );
     expect(action.kind).toBe("Chain");
   });
@@ -882,7 +881,7 @@ describe("bind types", () => {
       assertExact<IsExact<typeof name, VarRef<string>>>();
       assertExact<IsExact<ExtractInput<typeof name>, never>>();
       assertExact<IsExact<ExtractOutput<typeof name>, string>>();
-      return drop();
+      return drop;
     });
   });
 
@@ -910,7 +909,7 @@ describe("bind types", () => {
     bind([stringAction, numberAction], ([s, n]) => {
       assertExact<IsExact<ExtractOutput<typeof s>, string>>();
       assertExact<IsExact<ExtractOutput<typeof n>, number>>();
-      return drop();
+      return drop;
     });
   });
 
@@ -1089,7 +1088,7 @@ describe("tryCatch types", () => {
       (_throwError) => pipe(setup, build),
       // Recovery receives TError, must produce same output as body.
       // TError is unconstrained here (throwError unused), so drop + constant.
-      pipe(drop(), constant({ artifact: "fallback" })),
+      pipe(drop, constant({ artifact: "fallback" })),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { artifact: string }>>();
@@ -1108,7 +1107,7 @@ describe("tryCatch types", () => {
   it("recovery input type matches throwError payload type", () => {
     const action = tryCatch(
       (throwError: TypedAction<{ code: number; msg: string }, never>) =>
-        pipe(drop<never>(), constant("ok")),
+        pipe(drop, constant("ok")),
       // Recovery receives { code: number; msg: string }, extracts msg
       extractField<{ code: number; msg: string }, "msg">("msg"),
     );
@@ -1122,9 +1121,9 @@ describe("tryCatch types", () => {
         return tryCatch(
           (throwInner) => {
             assertExact<IsExact<typeof throwInner, TypedAction<number, never>>>();
-            return pipe(drop<never>(), constant("ok"));
+            return pipe(drop, constant("ok"));
           },
-          pipe(drop<number>(), constant("recovered from inner")),
+          pipe(drop, constant("recovered from inner")),
         );
       },
       identity<string>(),
@@ -1133,7 +1132,7 @@ describe("tryCatch types", () => {
 
   it("tryCatch produces Handle AST node", () => {
     const action = tryCatch(
-      (_throwError) => pipe(drop<never>(), constant("ok")),
+      (_throwError) => pipe(drop, constant("ok")),
       identity<string>(),
     );
     expect(action.kind).toBe("Handle");
@@ -1171,7 +1170,7 @@ describe("Result.unwrapOr with throw tokens", () => {
     >;
     const action = tryCatch(
       (throwError) => handler.unwrapOr(throwError),
-      pipe(drop<{ code: number }>(), constant({ data: "fallback" })),
+      pipe(drop, constant({ data: "fallback" })),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { data: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { data: string }>>();
@@ -1187,7 +1186,7 @@ describe("Result.unwrapOr with throw tokens", () => {
         handler.unwrapOr(throwError),
         deploy,
       ),
-      pipe(drop<string>(), constant({ deployed: false })),
+      pipe(drop, constant({ deployed: false })),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
@@ -1203,7 +1202,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   it("rejects .unwrapOr() on non-Result output", () => {
     // deploy outputs { deployed: boolean } — not a Result
     // @ts-expect-error — unwrapOr requires Out to be Result<TValue, TError>
-    deploy.unwrapOr(drop());
+    deploy.unwrapOr(drop);
   });
 });
 
@@ -1272,7 +1271,7 @@ describe("withTimeout types", () => {
 //
 // loop<TBreak, TIn> — both default to never.
 //
-// For "terminate" loops (type-check-fix pattern), use drop() in the
+// For "terminate" loops (type-check-fix pattern), use drop in the
 // termination case instead of done. The loop body completes without
 // Perform, and the Handle exits normally. No type params needed.
 //
@@ -1289,11 +1288,11 @@ describe("loop type parameter constraints", () => {
 
   // -- Pattern 1: terminate loop (type-check-fix) ----------------------------
 
-  it("loop with drop() in Clean case: zero type params", () => {
+  it("loop with drop in Clean case: zero type params", () => {
     const action = loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
@@ -1307,8 +1306,8 @@ describe("loop type parameter constraints", () => {
 
     loop((_recur, done) => {
       // unwrapOr(done) works because done's input is never,
-      // and mapErr(drop()) erases the error type to never — exact match.
-      const unwrapped = stepC.mapErr(drop()).unwrapOr(done);
+      // and mapErr(drop) erases the error type to never — exact match.
+      const unwrapped = stepC.mapErr(drop).unwrapOr(done);
       assertExact<IsExact<ExtractOutput<typeof unwrapped>, string>>();
       return done;
     });
@@ -1338,7 +1337,7 @@ describe("loop type parameter constraints", () => {
   it("without explicit TBreak, done has input=never (rejects objects)", () => {
     loop((_recur, done) => {
       // @ts-expect-error — done: TypedAction<never, never> can't accept { deployed: boolean }
-      healthCheck.branch({ Continue: drop(), Break: done });
+      healthCheck.branch({ Continue: drop, Break: done });
       return done;
     });
   });
@@ -1373,7 +1372,7 @@ describe("loop type parameter constraints", () => {
     const action = loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
@@ -1392,7 +1391,7 @@ describe("loop type parameter constraints", () => {
     loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop(),
+        Clean: drop,
       }),
     );
   });

@@ -189,7 +189,7 @@ describe("loop", () => {
           classifyErrors,
         ).branch({
           HasErrors: pipe(forEach(fix).drop(), recur),
-          Clean: drop(),
+          Clean: drop,
         }),
       )),
     );
@@ -204,8 +204,8 @@ describe("loop", () => {
 describe("postfix operators", () => {
   it(".branch() produces Chain → Branch AST", () => {
     const action = classifyErrors.branch({
-      HasErrors: drop(),
-      Clean: drop(),
+      HasErrors: drop,
+      Clean: drop,
     });
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
@@ -263,7 +263,7 @@ describe("postfix operators", () => {
     // Chain nesting differs (left vs right associative) but semantically equivalent
     const action = pipe(typeCheck, classifyErrors).branch({
       HasErrors: forEach(fix),
-      Clean: drop(),
+      Clean: drop,
     });
     expect(action.kind).toBe("Chain");
     // The rest should be a Branch node
@@ -570,7 +570,7 @@ describe("bindInput", () => {
     resetEffectIdCounter();
   });
 
-  it("compiles to bind([identity()], ([input]) => pipe(drop(), body(input)))", () => {
+  it("compiles to bind([identity()], ([input]) => pipe(drop, body(input)))", () => {
     const bodyAction = constant("result");
     const result = bindInput<string, string>((_input) => bodyAction);
 

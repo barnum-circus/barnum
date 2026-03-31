@@ -85,7 +85,7 @@ describe("named steps", () => {
         FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: drop(),
+            Clean: drop,
           }),
         ),
       })
@@ -111,7 +111,7 @@ describe("named steps", () => {
         FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: drop(),
+            Clean: drop,
           }),
         ),
       })
@@ -128,15 +128,15 @@ describe("named steps", () => {
 // -----------------------------------------------------------------------
 
 describe("workflow self-reference", () => {
-  it("self serializes as Root step and works in branches via drop()", () => {
+  it("self serializes as Root step and works in branches via drop", () => {
     const cfg = workflowBuilder()
       .workflow(({ self }) =>
         pipe(
           constant([{ file: "a.ts", message: "err" }]),
           classifyErrors,
           branch({
-            HasErrors: pipe(forEach(fix), drop<any>(), self),
-            Clean: pipe(drop<void>(), constant({ done: true })),
+            HasErrors: pipe(forEach(fix), drop, self),
+            Clean: pipe(drop, constant({ done: true })),
           }),
         ),
       );
@@ -249,7 +249,7 @@ describe("showcase: type-check ↔ fix cycle", () => {
           classifyErrors,
           branch({
             HasErrors: stepRef("FixAll"),
-            Clean: drop<void>(),
+            Clean: drop,
           }),
         ),
         FixAll: pipe(
@@ -308,7 +308,7 @@ describe("kitchen sink", () => {
         FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: drop(),
+            Clean: drop,
           }),
         ),
       }))
@@ -319,8 +319,8 @@ describe("kitchen sink", () => {
           steps.MigrateAll,
           classifyErrors,
         ).branch({
-          HasErrors: pipe(drop<TypeError[]>(), self),  // restart the entire workflow
-          Clean: pipe(drop<void>(), constant({ migrated: true })),
+          HasErrors: pipe(drop, self),  // restart the entire workflow
+          Clean: pipe(drop, constant({ migrated: true })),
         }),
       );
 

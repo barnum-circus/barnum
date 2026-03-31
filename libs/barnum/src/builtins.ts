@@ -34,12 +34,10 @@ export function identity<TValue>(): TypedAction<TValue, TValue> {
 // Drop — discard pipeline value
 // ---------------------------------------------------------------------------
 
-export function drop<TValue = any>(): TypedAction<TValue, never> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Drop" } },
-  });
-}
+export const drop: TypedAction<any, never> = typedAction({
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Drop" } },
+});
 
 // ---------------------------------------------------------------------------
 // Tag — wrap input as a tagged union variant
@@ -150,7 +148,7 @@ export function pick<
 export function dropResult<TInput, TOutput, TRefs extends string = never>(
   action: Pipeable<TInput, TOutput, TRefs>,
 ): TypedAction<TInput, never, TRefs> {
-  // Build AST directly — chain inference fails when drop()'s generic TValue
+  // Build AST directly — chain inference fails when drop's TValue
   // isn't constrained by context (resolves to unknown ≠ TOutput).
   return typedAction({
     kind: "Chain",

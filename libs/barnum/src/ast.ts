@@ -188,7 +188,7 @@ export type TypedAction<
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
   flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
-  /** Discard output. `a.drop()` ≡ `pipe(a, drop())`. */
+  /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, never, Refs>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
   tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
@@ -288,7 +288,7 @@ export type Pipeable<
  *   In:  contravariant only (via __phantom_in)
  *   Out: covariant only (via __phantom_out)
  *
- * Why contravariant input: a handler that accepts `unknown` (like drop())
+ * Why contravariant input: a handler that accepts `unknown` (like drop)
  * can handle any variant. (input: unknown) => void is assignable to
  * (input: HasErrors) => void because HasErrors extends unknown.
  *
@@ -1037,7 +1037,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
    *   is eliminated from unions, so branches with `self` don't pollute
    *   the output type).
    *
-   *   Use `pipe(drop(), self)` to place `self` in a branch case.
+   *   Use `pipe(drop, self)` to place `self` in a branch case.
    *
    *   Note: ideally `self` would be `TypedAction<never, Out>` so it
    *   carries the workflow's output type, but TypeScript can't infer

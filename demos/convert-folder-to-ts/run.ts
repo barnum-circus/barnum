@@ -54,7 +54,7 @@ await workflowBuilder()
       loop((recur) =>
         pipe(typeCheck, classifyErrors).branch({
           HasErrors: pipe(forEach(fix).drop(), recur),
-          Clean: drop(),
+          Clean: drop,
         }),
       ),
     ),

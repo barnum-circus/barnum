@@ -26,7 +26,7 @@ await workflowBuilder()
         (throwError) =>
           pipe(
             // stepA may fail catastrophically — exit the loop immediately
-            stepA.mapErr(drop()).unwrapOr(done).drop(),
+            stepA.mapErr(drop).unwrapOr(done).drop(),
 
             // stepB may fail and may take unreasonably long
             withTimeout(constant(2_000), stepB.unwrapOr(throwError))
