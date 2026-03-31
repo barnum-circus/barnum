@@ -1,119 +1,152 @@
-# Phase 4: Loop Migration and Early Return
+# Phase 4: Loop → Handle/Perform and Early Return
 
 ## Goal
 
-Migrate LoopAction from a dedicated frame kind to Handle/Perform sugar. Remove LoopAction from both the tree AST and the Rust scheduler. Expose `scope`/`jump` as the underlying primitive.
+Remove `LoopAction` from both the tree AST and Rust engine. `loop` becomes sugar over Handle/Perform/Branch — the same effect substrate used by tryCatch, race, and withTimeout. Add `scope` as a user-facing early-return primitive.
 
-## Prerequisites
+## Design
 
-Phase 1 (Effect Substrate) complete.
+### Shared compilation pattern
 
-## scope + jump
+Both `scope` and `loop` compile to the same structure:
 
-`scope` establishes a restart boundary. `jump` sends a value back to the beginning.
-
-```ts
-scope<TIn, TJump, TOut>(
-  body: (jump: () => TypedAction<TJump, never>) => Pipeable<TIn, TOut>,
-): TypedAction<TIn, TJump | TOut>
 ```
-
-- **`scope(jump => body)`** — runs the body. If it completes normally, the scope produces the body's output. If `jump(v)` fires, execution restarts at the scope boundary and the scope produces `v`.
-- **`jump()`** — Perform that restarts the scope body. The jumped value becomes the scope's output.
-
-`jump` is passed as a single argument, not destructured from an object.
-
-### How scope compiles
-
-```ts
-// User writes:
-scope(jump =>
-  pipe(step1, branch({ Bad: jump(), Good: identity() }), step2)
-)
-
-// jump(v) = pipe(tag<LoopResultDef, "Break">("Break"), Perform(jumpEffect))
-
-// Compiles to:
-Handle(jumpEffect, RestartBody,
-  Branch({
-    Continue: pipe(step1, branch({ Bad: Perform(jumpEffect), Good: identity() }), step2),
-    Break: identity(),
-  })
+Chain(
+  Tag("Continue"),                          // wrap input as LoopResult::Continue
+  Handle(effectId, RestartBodyHandler,
+    Branch({
+      Continue: <user body>,                // auto-unwraps value
+      Break: identity(),                    // auto-unwraps, exits Handle
+    })
+  )
 )
 ```
 
-The internal branch dispatches on `LoopResult` — the same control flow enum used by `loop`. `Continue` = run the body, `Break` = exit with the jumped value. Initial input tagged as `LoopResult::Continue`. When `jump(v)` fires, the handler restarts the body with `LoopResult::Break(v)`. The Break branch produces `v` via `identity()`, exiting the scope through normal completion.
-
-One effect. One handler. No Discard mechanism. Same control flow enum as loop — scope and loop share `LoopResult` as their dispatch type.
-
-## How loop compiles
-
-Both `recur` and `done` are jumps — they both fire Performs targeting the same EffectId. The difference is the variant tag they carry. The branch at the top of the compiled scope dispatches on `LoopResult<TContinue, TBreak>` — the existing control flow enum (same pattern as `Option` and `Result`, already defined in `ast.ts`).
+The handler receives `{ payload, state }` from the engine, extracts payload, and tags as `RestartBody`:
 
 ```ts
-// User writes:
-loop(({ recur, done }) =>
-  pipe(body, branch({ HasErrors: pipe(fix, recur()), Clean: done() }))
-)
+const RESTART_BODY_HANDLER: Action = Chain(ExtractField("payload"), Tag("RestartBody"));
+```
 
-// recur(v) = pipe(tag<LoopResultDef, "Continue">("Continue"), Perform(jumpEffect))
-// done(v)  = pipe(tag<LoopResultDef, "Break">("Break"), Perform(jumpEffect))
+Effects (recur/done/jump) are `Chain(Tag(<variant>), Perform(effectId))`. They tag the value as a LoopResult variant, then Perform sends it to the handler. The handler RestartBody's it back to the Branch, which dispatches Continue (rerun body) or Break (exit via identity).
 
-// Compiles to:
-Handle(jumpEffect, RestartBody,
-  Branch({
-    Continue: pipe(body, branch({ ... })),  // initial entry + recur
-    Break: identity(),                       // done: exit
-  })
+### `loop` API change
+
+```ts
+// Before:
+loop(pipe(body, branch({ HasErrors: pipe(fix, recur<any, void>()), Clean: done<any, void>() })))
+
+// After:
+loop((recur, done) =>
+  pipe(body, branch({ HasErrors: pipe(fix, recur), Clean: done }))
 )
 ```
 
-Initial input tagged as `LoopResult` with `{ kind: "Continue", value: input }`. Recur produces `LoopResult::Continue`, done produces `LoopResult::Break`. The handler always responds with RestartBody. The branch dispatches on the `LoopResult` variants: Continue runs the body, Break exits.
-
-The `LoopResult` type carries `__def` so the branch gets exhaustiveness checking and type-safe payload extraction — same as branching on `Result<Ok, Err>` or `Option<T>`.
-
-### Why both recur and done are effects
-
-If `done` were just normal completion (`identity()`), it would only exit the innermost loop. An outer loop's `done` couldn't skip past an inner loop — there's no mechanism for normal values to unwind frames. Making `done` a Perform means it bubbles through Handle frames until it finds its matching EffectId, enabling labeled breaks for free.
-
-## Early return: the `?` operator
+`recur` and `done` are `TypedAction` values (not functions), consistent with `throwError` in tryCatch. They capture the effectId from the enclosing loop.
 
 ```ts
-scope(jump =>
-  pipe(
-    tryAction(step1),
-    branch({ Ok: identity(), Err: jump() }),  // ? operator
-    tryAction(step2),
-    branch({ Ok: identity(), Err: jump() }),
-  ),
-)
-// output type: TStep2Output | TErr
+loop<TIn, TBreak, TRefs extends string = never>(
+  bodyFn: (
+    recur: TypedAction<TIn, never>,
+    done: TypedAction<TBreak, never>,
+  ) => Pipeable<TIn, never, TRefs>,
+): TypedAction<TIn, TBreak, TRefs>
 ```
 
-Sugar:
+### `scope` — early return
 
 ```ts
-function propagate<TValue, TError>(
-  jump: () => TypedAction<TError, never>,
-): TypedAction<Result<TValue, TError>, TValue> {
-  return branch({ Ok: identity(), Err: jump() });
-}
+scope<TIn, TJump, TOut, TRefs extends string = never>(
+  bodyFn: (jump: TypedAction<TJump, never>) => Pipeable<TIn, TOut, TRefs>,
+): TypedAction<TIn, TJump | TOut, TRefs>
 ```
 
-## Migration strategy
+`jump` is `Chain(Tag("Break"), Perform(effectId))`. If the body completes normally → output is TOut. If jump fires → output is TJump. The union `TJump | TOut` captures both paths.
 
-1. **Implement scope + jump** — Handle with RestartBody + LoopResult branch (Continue = run body, Break = exit).
-2. **Compile loop to scope** — Both recur and done are Performs producing LoopResult variants. Branch dispatches on LoopResult.
-3. **Verify test parity** — All existing loop tests pass.
-4. **Remove LoopAction** — From tree AST, Rust scheduler, and flattener.
-5. **Add early return to kitchen-sink demo** — scope + jump for catastrophic error bailout.
+### Why recur and done are both Performs
 
-## Files to change
+If `done` were normal completion, it would only exit the innermost loop. Making `done` a Perform means it bubbles through Handle frames until it finds its matching effectId — enabling labeled breaks across nested scopes for free.
 
-| File | What changes |
-|------|-------------|
-| `libs/barnum/src/builtins.ts` | Add `scope()`, rewrite `loop()` to desugar to scope |
-| `libs/barnum/src/ast.ts` | Remove `LoopAction` from `Action` union |
-| `libs/barnum/tests/patterns.test.ts` | Verify AST shapes for new compilation |
-| `libs/barnum/tests/types.test.ts` | Type tests for scope + jump |
-| Rust engine | Remove `FrameKind::Loop`. Handle frames already support RestartBody. |
+## Tasks
+
+### 1. Change `loop()` to callback form with Handle/Perform compilation
+
+**File:** `libs/barnum/src/ast.ts`
+
+- Change `loop()` signature to take `(recur, done) => body` callback
+- Compile to `Chain(Tag("Continue"), Handle(effectId, RestartBodyHandler, Branch({Continue: body, Break: identity()})))`
+- `recur` = `Chain(Tag("Continue"), Perform(effectId))`
+- `done` = `Chain(Tag("Break"), Perform(effectId))`
+- Remove `LoopAction` interface and `LoopAction` from `Action` union
+- Keep `LoopResult`, `LoopResultDef`, `ExtractBreakValue` types (still used by engine result shape, and by `LoopResult` as a user-facing type)
+
+### 2. Remove standalone `recur()` and `done()` from builtins
+
+**File:** `libs/barnum/src/builtins.ts`
+
+Remove the `recur()` and `done()` functions. They're replaced by callback parameters in loop().
+
+### 3. Add `scope()` for early return
+
+**File:** `libs/barnum/src/ast.ts` (or new `scope.ts`)
+
+Same compilation as loop but exposes a single `jump` instead of recur/done. `jump` = `Chain(Tag("Break"), Perform(effectId))`.
+
+### 4. Update TypeScript tests
+
+- **patterns.test.ts**: Update loop AST shape assertions (now Handle/Branch instead of `{ kind: "Loop" }`)
+- **types.test.ts**: Update loop type tests to callback form; add scope type tests
+- **steps.test.ts**: Update all loop usages to callback form
+- **round-trip.test.ts**: Update loop round-trip test (now produces Handle/Branch JSON)
+
+### 5. Remove LoopAction from Rust AST
+
+**File:** `crates/barnum_ast/src/lib.rs`
+
+- Remove `Action::Loop(LoopAction)` variant
+- Remove `LoopAction` struct
+
+**File:** `crates/barnum_ast/src/flat.rs`
+
+- Remove `FlatAction::Loop` variant
+- Remove flattening code for `Action::Loop`
+- Update tests that use `FlatAction::Loop`
+
+### 6. Remove FrameKind::Loop from Rust engine
+
+**File:** `crates/barnum_engine/src/frame.rs`
+
+- Remove `ParentRef::Loop` variant
+- Remove `FrameKind::Loop` variant
+
+**File:** `crates/barnum_engine/src/lib.rs`
+
+- Remove `CompleteError::InvalidLoopResult`
+- Remove `ParentRef::Loop` handling in `deliver()`
+- Remove `FlatAction::Loop` handling in `advance()`
+- Update tests (loop tests now exercise Handle/Branch path instead)
+
+### 7. Update demos
+
+All demos mechanically change from `recur()` / `done()` imports to callback form. No behavioral changes.
+
+### 8. Add step D + early return to retry-on-error demo
+
+Add a `stepD` handler and use `scope(jump => ...)` to wrap the tryCatch loop. stepD.unwrapOr(jump) exits the entire workflow on catastrophic failure instead of retrying.
+
+## Files changed
+
+| File | Change |
+|------|--------|
+| `libs/barnum/src/ast.ts` | Remove LoopAction, change loop() to callback+Handle/Perform, add scope() |
+| `libs/barnum/src/builtins.ts` | Remove recur(), done() |
+| `libs/barnum/tests/patterns.test.ts` | Loop AST shape → Handle/Branch |
+| `libs/barnum/tests/types.test.ts` | Callback loop, scope types |
+| `libs/barnum/tests/steps.test.ts` | Callback loop syntax |
+| `libs/barnum/tests/round-trip.test.ts` | Loop → Handle/Branch JSON |
+| `crates/barnum_ast/src/lib.rs` | Remove Action::Loop, LoopAction |
+| `crates/barnum_ast/src/flat.rs` | Remove FlatAction::Loop |
+| `crates/barnum_engine/src/frame.rs` | Remove ParentRef::Loop, FrameKind::Loop |
+| `crates/barnum_engine/src/lib.rs` | Remove Loop handling, InvalidLoopResult |
+| `demos/*/run.ts` | Callback loop syntax |
+| `demos/retry-on-error/` | Add stepD + scope early return |
