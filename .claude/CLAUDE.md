@@ -70,6 +70,10 @@ Demos are first-class artifacts. They demonstrate both the framework's capabilit
 
 Don't care. No one is using this. Break freely. No dead code.
 
+## Typechecking
+
+Run `pnpm run typecheck` from the repo root. This typechecks the library and all demos. Run this after any code change to catch type errors early.
+
 ## Tests
 
 See claude.local.md. Always run the full suite — isolated test runs are unreliable.
