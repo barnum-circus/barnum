@@ -7,15 +7,15 @@
  *   3. Flatten into a single refactor list
  *   4. Assess each refactor's worthiness (Option.collect filters out Nones)
  *   5. For each worthwhile refactor, within an RAII worktree:
- *      a. Implement the refactor (tap: side effect, preserves context)
- *      b. Commit changes (tap: side effect, preserves context)
- *      c. Type-check/fix cycle (tap: side effect, preserves context)
- *      d. Judge/revise loop (tap: side effect, preserves context)
- *      e. Create PR (augment: enriches context with prUrl)
+ *      a. Implement the refactor (env VarRef provides context, .drop() discards output)
+ *      b. Commit changes (env VarRef provides context, .drop() discards output)
+ *      c. Type-check/fix cycle (env VarRef provides context, .drop() discards output)
+ *      d. Judge/revise loop (.drop() discards output)
+ *      e. Create PR (env VarRef provides branch + description)
  *   6. Delete worktree (RAII dispose — receives the resource directly)
  *
  * Demonstrates: registerSteps, stepRef (mutual recursion), withResource
- * (RAII), loop, forEach, constant, pipe, augment, tap, Option.collect,
+ * (RAII), loop, forEach, constant, pipe, bindInput, Option.collect,
  * and postfix operators (.branch, .flatten, .drop, .then).
  *
  * Usage: pnpm exec tsx run.ts
@@ -29,13 +29,12 @@ import {
   pipe,
   forEach,
   loop,
+  bindInput,
 } from "@barnum/barnum/src/ast.js";
 import {
-  augment,
   constant,
   drop,
   pick,
-  tap,
   withResource,
   recur,
   done,
@@ -65,10 +64,7 @@ console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 // The full context type inside the worktree action. withResource merges
 // the resource (createWorktree output) with the input (Refactor), giving
-// all five fields. Explicit type annotations on tap<Ctx>() are needed
-// because tap infers TInput from its action argument, which may only
-// declare a subset of the context fields. Without annotation, each tap
-// narrows the pipe's flow type to its handler's input type.
+// all five fields.
 type Ctx = Refactor & { worktreePath: string; branch: string };
 
 await workflowBuilder()
@@ -87,43 +83,35 @@ await workflowBuilder()
 
     // The action that runs inside each worktree.
     //
-    // withResource merges the resource with the original input into a
-    // flat context object so downstream handlers can access both resource
-    // fields (worktreePath, branch) and input fields (file, description,
-    // scope).
+    // bindInput captures the full Ctx as a VarRef (env). Each side
+    // effect accesses the fields it needs through env, then .drop()
+    // discards its output. No tap/augment needed — the VarRef provides
+    // context independently of the pipeline flow.
     //
-    // Side-effectful steps use tap() to preserve this context through
-    // operations that don't produce meaningful output.
-    ImplementAndReview: pipe(
+    // pick() still narrows to exactly the fields each handler expects —
+    // invariance prevents passing extra fields across serialization boundaries.
+    ImplementAndReview: bindInput<Ctx>((env) => pipe(
       // Side effects: implement refactor and commit changes.
-      // pick() narrows to exactly the fields each handler expects —
-      // invariance prevents passing extra fields across serialization boundaries.
-      tap(pipe(pick<Ctx, ["worktreePath", "description"]>("worktreePath", "description"), implement)),
-      tap(pipe(pick<Ctx, ["worktreePath"]>("worktreePath"), commit)),
+      pipe(env, pick("worktreePath", "description"), implement).drop(),
+      pipe(env, pick("worktreePath"), commit).drop(),
 
       // Type-check/fix cycle (mutual recursion: TypeCheck ↔ Fix)
-      tap<Ctx, "TypeCheck">(stepRef("TypeCheck")),
+      pipe(env, pick("worktreePath"), stepRef("TypeCheck")).drop(),
 
       // Judge/revise loop: review the refactor, revise if needed.
-      // drop() discards the tap context — judgeRefactor takes no input.
-      tap<Ctx, "TypeCheck">(
-        loop(
-          pipe(drop(), judgeRefactor, classifyJudgment).branch({
-            NeedsWork: pipe(
-              applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>(),
-            ),
-            Approved: done<any, any>(),
-          }),
-        ),
-      ),
+      // drop() discards the pipeline value — judgeRefactor takes no input.
+      loop(
+        pipe(drop(), judgeRefactor, classifyJudgment).branch({
+          NeedsWork: pipe(
+            applyFeedback.drop(), stepRef("TypeCheck"), recur<any, any>(),
+          ),
+          Approved: done<any, any>(),
+        }),
+      ).drop(),
 
-      // Create PR: pick the fields preparePRInput needs, augment merges { prUrl } back.
-      augment<Ctx, { prUrl: string }>(pipe(
-        pick<Ctx, ["branch", "description"]>("branch", "description"),
-        preparePRInput,
-        createPR,
-      )),
-    ),
+      // Create PR — env VarRef provides context independently.
+      pipe(env, pick("branch", "description"), preparePRInput, createPR),
+    )),
   }))
   .workflow(({ steps }) =>
     pipe(

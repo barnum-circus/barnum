@@ -5,12 +5,13 @@
  *   1. Setup — clean output directory
  *   2. List JS files in src/ (returns { file, outputPath }[])
  *   3. For each file:
- *      a. Extract "file", run migrate, .augment() merges { content } back
- *      b. writeFile receives { content, file, outputPath }
+ *      a. bindInput captures the FileEntry, extracts "file", runs migrate
+ *      b. all(identity, pick("outputPath")) + merge combines { content, outputPath }
+ *      c. writeFile receives { content, outputPath }
  *   4. Type-check/fix loop — run tsc, classify errors, fix or finish
  *
- * Demonstrates: pipe, forEach, loop, createHandlerWithConfig,
- * and postfix operators (.branch, .drop, .augment).
+ * Demonstrates: pipe, forEach, loop, bindInput, all, merge,
+ * createHandlerWithConfig, and postfix operators (.branch, .drop).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -20,9 +21,14 @@ import {
   pipe,
   forEach,
   loop,
+  all,
+  bindInput,
 } from "@barnum/barnum/src/ast.js";
 import {
   extractField,
+  identity,
+  merge,
+  pick,
   recur,
   done,
 } from "@barnum/barnum/src/builtins.js";
@@ -42,16 +48,16 @@ await workflowBuilder()
       listFiles,
 
       // Phase 2: For each file, migrate and write.
-      // extractField("file") pulls the path string, migrate converts it,
-      // .augment() merges { content } back into { file, outputPath }.
+      // bindInput captures the FileEntry as a VarRef. The pipeline
+      // extracts "file", runs migrate to get { content }, then
+      // combines it with { outputPath } from the original entry.
       forEach(
-        pipe(
-          pipe(
-            extractField<FileEntry, "file">("file"),
-            migrate({ to: "Typescript" }),
-          ).augment().pick("content", "outputPath"),
+        bindInput<FileEntry>((entry) => pipe(
+          pipe(entry, extractField("file"), migrate({ to: "Typescript" })),
+          all(identity(), pipe(entry, pick("outputPath"))),
+          merge(),
           writeFile,
-        ),
+        )),
       ).drop(),
 
       // Phase 3: Type-check / fix loop
