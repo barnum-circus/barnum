@@ -115,19 +115,23 @@ bind: { value: function(bindings, body) {
 
 ### Option C: Don't add postfix methods
 
-The postfix form is just `.then(bindInput(...))`:
+~~The postfix form is just `.then(bindInput(...))`.~~
+
+**This doesn't work for inference.** TypeScript resolves `bindInput`'s type parameters independently before checking against `.then()`'s expected type. The explicit type annotation is still required:
 
 ```ts
-// No new method needed
+// Explicit type param required — TS can't infer TIn from .then() context
 listFiles().then(bindInput<FileEntry[]>((files) =>
   files.then(forEach(processFile()))
 ))
 ```
 
-This already works today. The ergonomic gain from a dedicated postfix method is one fewer `.then()` call.
+This is the same root cause as `pipe(varRef, pick("field"))` — generic arguments are resolved per-call-site, not propagated backwards from the receiving context.
 
-**Pros:** Zero implementation cost. No circular dependency. No new patterns.
-**Cons:** Slightly less ergonomic. `.bind()` is arguably the most important combinator to have as postfix since it's the primary way to capture values.
+So "just use `.then(bindInput(...))`" is not a substitute for a real postfix method. A postfix `.bindInput()` on TypedAction would have `Out` available directly in the method signature, avoiding the inference gap entirely.
+
+**Pros:** Zero implementation cost.
+**Cons:** Requires explicit type params, defeating the ergonomic purpose. Not a real alternative.
 
 ### Option D: Move effectId counter to ast.ts
 
@@ -147,9 +151,9 @@ bind.ts imports `allocEffectId` from ast.ts. The postfix methods in `typedAction
 
 ## Recommendation
 
-Option A (late registration) is the cleanest separation. It introduces one new pattern (registration) but keeps bind logic in bind.ts where it belongs. The registration happens at module load time, so the ordering concern is theoretical — any file that uses TypedAction methods has already imported the barrel.
+Option C is eliminated — `.then(bindInput(...))` doesn't infer, so postfix methods are genuinely needed.
 
-Option C (no postfix) is the pragmatic choice if the ergonomic gain doesn't justify the complexity. The standalone `bindInput` already works well and `.then(bindInput(...))` is only slightly more verbose.
+Option A (late registration) is the cleanest separation. It introduces one new pattern (registration) but keeps bind logic in bind.ts where it belongs. The registration happens at module load time, so the ordering concern is theoretical — any file that uses TypedAction methods has already imported the barrel.
 
 Option D is worth considering if we want to avoid the registration pattern. Moving the effectId counter is a small layering violation.
 
@@ -177,9 +181,9 @@ TypeScript allows circular type imports. The value imports (typedAction, identit
 
 ## Summary
 
-| Option | Circular dep? | Code duplication? | New patterns? | Ergonomic gain? |
+| Option | Circular dep? | Code duplication? | New patterns? | Inference works? |
 |--------|:---:|:---:|:---:|:---:|
-| A: Late registration | No | No | Yes (registration) | Full postfix |
-| B: Inline AST | No | Yes (~30 lines) | No | Full postfix |
-| C: No postfix | No | No | No | None (use .then()) |
-| D: Move effectId | No | Minimal | No | Full postfix |
+| A: Late registration | No | No | Yes (registration) | Yes |
+| B: Inline AST | No | Yes (~30 lines) | No | Yes |
+| ~~C: No postfix~~ | — | — | — | **No** (.then() can't propagate type context) |
+| D: Move effectId | No | Minimal | No | Yes |
