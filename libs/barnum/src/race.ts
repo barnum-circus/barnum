@@ -84,72 +84,40 @@ export function race<TIn, TOut>(
 // sleep — TypeScript handler that resolves after N milliseconds
 // ---------------------------------------------------------------------------
 
+/** The raw Invoke node for the sleep handler. */
+const SLEEP_INVOKE: Action = {
+  kind: "Invoke",
+  handler: {
+    kind: "TypeScript",
+    module: import.meta.url,
+    func: "sleep",
+  },
+};
+
 /**
- * Delay for a specified duration. Returns `void` after the timer fires.
+ * Delay for a specified duration. Takes the number of milliseconds as
+ * pipeline input and returns `void` after the timer fires.
  *
- * Input is `any` — the timer ignores pipeline data. The duration
- * is baked into the AST at build time via handler config.
+ * `number → void`
  *
  * When the engine cancels the sleep during race teardown, the worker
  * subprocess is killed. The sleep never resolves. Standard cancellation.
  *
- * This is defined inline rather than via `createHandlerWithConfig` to avoid
+ * This is defined inline rather than via `createHandler` to avoid
  * a circular dependency (handler.ts → ast.ts → builtins.ts → handler.ts).
  * The handler definition is attached for the worker to find at runtime.
  */
-export function sleep(config: { ms: number }): TypedAction<any, void> {
-  // We can't use createHandlerWithConfig due to circular deps and because
-  // it uses getCallerFilePath (stack trace) which would point to this file.
-  // Instead, build the AST directly and attach __definition manually.
-
-  // The Invoke node points to this module's "sleep" export.
-  // The worker will import this file and call sleep.__definition.handle().
-  const invokeAction: Action = {
-    kind: "Invoke",
-    handler: {
-      kind: "TypeScript",
-      module: import.meta.url,
-      func: "sleep",
-    },
-  };
-
-  // createHandlerWithConfig wraps as: All(Identity, Constant(config)) → Invoke
-  // We replicate that structure here.
-  const action = typedAction<any, void>({
-    kind: "Chain",
-    first: {
-      kind: "All",
-      actions: [
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
-      ],
-    },
-    rest: invokeAction,
-  });
-
-  // Attach __definition for the worker (non-enumerable, invisible to JSON).
-  const definition = {
-    handle: ({ value }: { value: unknown }) => {
-      const [, stepConfig] = value as [unknown, { ms: number }];
-      return new Promise<void>((resolve) => setTimeout(resolve, stepConfig.ms));
-    },
-  };
-
-  Object.defineProperty(action, "__definition", {
-    value: definition,
-    enumerable: false,
-  });
-
-  return action;
+export function sleep(): TypedAction<number, void> {
+  return typedAction<number, void>(SLEEP_INVOKE);
 }
 
-// Also attach __definition on the sleep function itself, since the worker
-// imports the module export and accesses __definition from it.
+// Attach __definition on the sleep function for the worker to find at runtime.
+// The handler receives the ms value as input and returns a Promise that
+// resolves after that duration.
 Object.defineProperty(sleep, "__definition", {
   value: {
-    handle: ({ value }: { value: unknown }) => {
-      const [, stepConfig] = value as [unknown, { ms: number }];
-      return new Promise<void>((resolve) => setTimeout(resolve, stepConfig.ms));
+    handle: ({ value }: { value: number }) => {
+      return new Promise<void>((resolve) => setTimeout(resolve, value));
     },
   },
   enumerable: false,
@@ -164,6 +132,10 @@ Object.defineProperty(sleep, "__definition", {
  * - Ok(value) if the body completed first
  * - Err(void) if the timeout fired first
  *
+ * The `ms` parameter is an AST node that evaluates to the timeout duration
+ * in milliseconds. Use `constant(5000)` for a fixed timeout, or any action
+ * that computes a duration from the pipeline input.
+ *
  * Built as raw AST rather than through `race()` because each branch wraps
  * its result differently (Ok vs Err) before Perform. `race()` requires
  * homogeneous output types, but withTimeout needs heterogeneous tagging.
@@ -172,7 +144,7 @@ Object.defineProperty(sleep, "__definition", {
  * branch wrapping its result as Ok or Err before Perform.
  */
 export function withTimeout<TIn, TOut>(
-  ms: number,
+  ms: Pipeable<TIn, number>,
   body: Pipeable<TIn, TOut>,
 ): TypedAction<TIn, Result<TOut, void>> {
   const effectId = allocateEffectId();
@@ -186,10 +158,14 @@ export function withTimeout<TIn, TOut>(
     rest: perform,
   };
 
-  // Branch 2: sleep → Tag("Err") → Perform
+  // Branch 2: ms → sleep() → Tag("Err") → Perform
   const sleepBranch: Action = {
     kind: "Chain",
-    first: { kind: "Chain", first: sleep({ ms }) as Action, rest: TAG_ERR },
+    first: {
+      kind: "Chain",
+      first: { kind: "Chain", first: ms as Action, rest: SLEEP_INVOKE },
+      rest: TAG_ERR,
+    },
     rest: perform,
   };
 
@@ -209,6 +185,9 @@ export function withTimeout<TIn, TOut>(
  * Run a fallible handler with a timeout. On timeout or handler error, throw.
  * Combines `withTimeout` + `invokeWithThrow`.
  *
+ * The `ms` parameter is an AST node that evaluates to the timeout duration
+ * in milliseconds.
+ *
  * The handler returns `Result<TOut, TError>`. After withTimeout, we have
  * `Result<Result<TOut, TError>, void>`:
  * - Ok(Result<TOut, TError>): handler completed → invokeWithThrow to unwrap
@@ -219,7 +198,7 @@ export function withTimeout<TIn, TOut>(
  */
 export function invokeWithTimeout<TIn, TOut, TError>(
   handler: Pipeable<TIn, Result<TOut, TError>>,
-  ms: number,
+  ms: Pipeable<TIn, number>,
   throwError: Pipeable<TError | void, never>,
 ): TypedAction<TIn, TOut> {
   // withTimeout(ms, handler) → Result<Result<TOut, TError>, void>

@@ -1248,15 +1248,15 @@ describe("race types", () => {
     expect(action.kind).toBe("Handle");
   });
 
-  it("sleep: any → void", () => {
-    const action = sleep({ ms: 1000 });
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+  it("sleep: number → void", () => {
+    const action = sleep();
+    assertExact<IsExact<ExtractInput<typeof action>, number>>();
     assertExact<IsExact<ExtractOutput<typeof action>, void>>();
   });
 
-  it("sleep produces Chain AST (All + Invoke)", () => {
-    const action = sleep({ ms: 500 });
-    expect(action.kind).toBe("Chain");
+  it("sleep produces Invoke AST", () => {
+    const action = sleep();
+    expect(action.kind).toBe("Invoke");
   });
 });
 
@@ -1270,19 +1270,19 @@ describe("withTimeout types", () => {
   });
 
   it("withTimeout: preserves input, wraps output in Result<TOut, void>", () => {
-    const action = withTimeout(5000, verify);
+    const action = withTimeout(constant(5000), verify);
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>>();
   });
 
   it("withTimeout produces Handle AST node", () => {
-    const action = withTimeout(1000, verify);
+    const action = withTimeout(constant(1000), verify);
     expect(action.kind).toBe("Handle");
   });
 
-  it("withTimeout with never-input body", () => {
-    const action = withTimeout(3000, pipe(drop<never>(), constant("result")));
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+  it("withTimeout with any-input body", () => {
+    const action = withTimeout(constant(3000), constant("result"));
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<string, void>>>();
   });
 });
@@ -1301,7 +1301,7 @@ describe("invokeWithTimeout types", () => {
       (throwError) =>
         invokeWithTimeout(
           identity<{ data: string }>() as TypedAction<{ data: string }, Result<string, number>>,
-          5000,
+          constant(5000),
           throwError,
         ),
       pipe(drop<number | void>(), constant("fallback")),
@@ -1312,7 +1312,7 @@ describe("invokeWithTimeout types", () => {
   it("invokeWithTimeout produces Chain AST node", () => {
     const throwToken = typedAction<string | void, never>({ kind: "Perform", effect_id: 0 });
     const handler = identity<void>() as TypedAction<void, Result<string, string>>;
-    const action = invokeWithTimeout(handler, 1000, throwToken);
+    const action = invokeWithTimeout(handler, constant(1000), throwToken);
     expect(action.kind).toBe("Chain");
   });
 });
