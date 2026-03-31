@@ -108,16 +108,18 @@ export const fix = createHandler({
     message: z.string(),
   }),
   handle: async ({ value: error }) => {
-    console.error(`[fix] Asking Claude to fix: ${error.file} — ${error.message}`);
+    const absolutePath = path.resolve(baseDir, error.file);
+    console.error(`[fix] Asking Claude to fix: ${absolutePath} — ${error.message}`);
 
     callClaude({
       prompt: [
         `Fix this TypeScript type error:`,
-        `File: ${error.file}`,
+        `File: ${absolutePath}`,
         `Error: ${error.message}`,
         "",
         "Read the file, understand the issue, and edit it to fix the error.",
         "Make the minimal change needed. Do not change behavior.",
+        "Do NOT create new files. Only edit the existing file at the exact path above.",
       ].join("\n"),
       allowedTools: ["Read", "Edit"],
       cwd: baseDir,
