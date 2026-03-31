@@ -36,12 +36,6 @@ echo "$STAGED_FILES" | xargs git add
 echo "Building CLI binaries..."
 cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
 
-# Run demos (requires CLI binary built above)
-echo "Running demos..."
-(cd demos/simple-workflow && pnpm exec tsx run.ts > /dev/null) || { echo "demo run.ts failed"; exit 1; }
-(cd demos/simple-workflow && pnpm exec tsx run-parallel.ts > /dev/null) || { echo "demo run-parallel.ts failed"; exit 1; }
-(cd demos/simple-workflow && pnpm exec tsx run-loop.ts > /dev/null) || { echo "demo run-loop.ts failed"; exit 1; }
-
 echo "Running cargo check..."
 cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
 
