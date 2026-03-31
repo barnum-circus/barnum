@@ -16,8 +16,6 @@ import {
   constant,
   recur,
   done,
-  drop,
-  Result as R,
 } from "@barnum/barnum/src/builtins.js";
 import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
 
@@ -29,11 +27,9 @@ await workflowBuilder()
       tryCatch(
         (throwError) => pipe(
           stepA.unwrapOr(throwError).drop(),
-          withTimeout(constant(2_000), stepB)
-            .branch({
-              Ok: R.unwrapOr<string, string>(throwError),
-              Err: pipe(drop<void>(), constant("stepB: timed out"), throwError),
-            })
+          withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+            .mapErr(constant("stepB: timed out"))
+            .unwrapOr(throwError)
             .drop(),
           stepC.unwrapOr(throwError),
           done<never, string>(),

@@ -220,6 +220,16 @@ export type TypedAction<
     action: Pipeable<T, U>,
   ): TypedAction<TIn, Option<U>, TRefs>;
   /**
+   * Transform the Err value of a Result output.
+   * `Result<TValue, TError> → Result<TValue, TErrorOut>`
+   *
+   * Only callable when Out is Result<TValue, TError>.
+   */
+  mapErr<TIn, TValue, TError, TErrorOut>(
+    this: TypedAction<TIn, Result<TValue, TError>, any>,
+    action: Pipeable<TError, TErrorOut>,
+  ): TypedAction<TIn, Result<TValue, TErrorOut>, Refs>;
+  /**
    * Unwrap a Result output. If Ok, pass through the value. If Err, apply
    * the default action. Only callable when Out is Result<TValue, TError>.
    *
@@ -472,6 +482,23 @@ function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
   });
 }
 
+function mapErrMethod(this: TypedAction, action: Action): TypedAction {
+  // Desugars to: self.then(branch({ Ok: tag("Ok"), Err: pipe(action, tag("Err")) }))
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Branch",
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      cases: unwrapBranchCases({
+        Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
+        Err: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
+      }),
+    },
+  });
+}
+
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   // Desugars to: self.then(branch({ Ok: identity(), Err: defaultAction }))
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
@@ -509,6 +536,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },
+      mapErr: { value: mapErrMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },
     });
   }
