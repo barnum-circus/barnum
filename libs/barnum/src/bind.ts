@@ -1,4 +1,4 @@
-import { type Action, type ExtractOutput, type Pipeable, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type ExtractInput, type ExtractOutput, type TypedAction, typedAction } from "./ast.js";
 import { identity, drop } from "./builtins.js";
 import { pipe } from "./pipe.js";
 
@@ -35,9 +35,15 @@ function createVarRef<TValue>(effectId: number): VarRef<TValue> {
 /**
  * Maps each binding's output type to a VarRef. TypeScript resolves
  * ExtractOutput from each binding expression.
+ *
+ * Constraint is `Action[]` (not `Pipeable<any, any>[]`) because
+ * `TypedAction<never, X>` (e.g. from `constant()`) fails the invariant
+ * `__phantom_in` check against `Pipeable<any, any>` on the 9-variant
+ * Action union. Using raw `Action[]` avoids the phantom field
+ * assignability issue while `ExtractOutput` still extracts the correct
+ * output type from the phantom fields on the concrete types.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type InferVarRefs<TBindings extends Pipeable<any, any>[]> = {
+export type InferVarRefs<TBindings extends Action[]> = {
   [K in keyof TBindings]: VarRef<ExtractOutput<TBindings[K]>>;
 };
 
@@ -87,12 +93,25 @@ function readVar(n: number): Action {
  *     )
  *   )
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function bind<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
+/**
+ * Constraint for the body callback return type. Only requires the output
+ * phantom fields — omits `__phantom_in` and `__in` so that body actions
+ * with `In = never` (e.g. pipelines starting from a VarRef) are assignable.
+ *
+ * This is necessary because `TypedAction<never, X>` is not assignable to
+ * `Pipeable<any, X>`: the contravariant `__phantom_in` field check fails
+ * since `(input: never) => void` is not assignable to `(input: any) => void`
+ * when distributed across the 9-variant Action union.
+ */
+type BodyResult<TOut> = Action & {
+  __phantom_out?: () => TOut;
+  __phantom_out_check?: (output: TOut) => void;
+};
+
+export function bind<TBindings extends Action[], TOut>(
   bindings: [...TBindings],
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  body: (vars: InferVarRefs<TBindings>) => Pipeable<any, TOut>,
-): TypedAction<TIn, TOut> {
+  body: (vars: InferVarRefs<TBindings>) => BodyResult<TOut>,
+): TypedAction<ExtractInput<TBindings[number]>, TOut> {
   // 1. Gensym one effectId per binding.
   const effectIds = bindings.map(() => nextEffectId++);
 
@@ -140,7 +159,7 @@ export function bind<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
  * Sugar for: `bind([identity()], ([input]) => pipe(drop(), body(input)))`
  */
 export function bindInput<TIn, TOut>(
-  body: (input: VarRef<TIn>) => Pipeable<never, TOut>,
+  body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
   return bind([identity<TIn>()], ([input]) =>
     pipe(drop(), body(input)),
