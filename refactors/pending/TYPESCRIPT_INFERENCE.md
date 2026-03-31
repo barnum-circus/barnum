@@ -111,7 +111,7 @@ Current signatures:
 
 | Combinator    | Required (token types)  | Defaulted (body types)           | Escape hatch                     |
 |---------------|------------------------|----------------------------------|----------------------------------|
-| `loop`        | `TBreak` (first param) | `TIn = never`, `TRefs = never`   | none — must annotate TBreak      |
+| `loop`        | `TBreak` (first param) | `TIn = never`, `TRefs = never`   | none — use `drop()` instead of done to avoid needing TBreak |
 | `earlyReturn` | —                      | `TEarlyReturn = never`, `TIn = any`, `TOut = any` | none, but defaults work          |
 | `recur`       | `TIn`                  | `TOut = any`                     | none — must annotate             |
 | `tryCatch`    | —                      | all inferred                     | `recovery` arg provides `TError` |
@@ -122,12 +122,14 @@ type-check-fix pattern be `loop<void>(...)` instead of `loop<never, void>(...)`.
 
 ### Three loop usage patterns
 
-1. **Both never** (retry-on-error): `loop((recur, done) => ...)` — zero
-   type params, both default to never.
-2. **Break with value** (type-check-fix): `loop<void>((recur, done) => ...)`
-   — TBreak=void because done receives void from Clean case. One type param.
+1. **Terminate via drop()** (type-check-fix): `loop((recur) => ... Clean: drop())`
+   — zero type params. Body completes without Perform on the clean path,
+   and the loop's Handle exits with the body result. No `done` needed.
+2. **Both never** (retry-on-error): `loop((recur, done) => ...)` — zero
+   type params. `done` only used to exit early (catastrophic failure) with
+   `mapErr(drop()).unwrapOr(done)`, which feeds `never` into done.
 3. **Stateful** (healthCheck): `loop<{stable: true}, {deployed: boolean}>(...)`
-   — both types carry meaningful data. Two type params.
+   — both types carry meaningful data. Two explicit type params.
 
 ## No partial type argument inference
 
@@ -340,3 +342,26 @@ We tried overloads where a `Pipeable<never, ...>` body maps to
    loop body.
 3. All-or-nothing: overloads don't fix the fundamental issue that TS
    can't infer HOAS token types from callback body usage.
+
+## `void` → `never` in createHandler
+
+Handlers returning `Promise<void>` (fire-and-forget side effects like
+logging) produce `Handler<T, never>` instead of `Handler<T, void>`.
+
+```typescript
+type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
+```
+
+Applied in both `createHandler` and `createHandlerWithConfig` return types.
+
+**Why not overloads:** `() => string` is assignable to `() => void` in
+TypeScript (return type covariance). An overload matching `Promise<void>`
+return types would also match `Promise<string>`, stealing resolution from
+the general overload. The conditional type on the inferred TOutput avoids
+this — TOutput is inferred as `void` only when the handle function's
+return type annotation is literally `Promise<void>`.
+
+**Effect:** `logError` becomes `Handler<string, never>` instead of
+`Handler<string, void>`. This means `logError.then(recur)` works directly
+— no `.drop()` bridge needed — because `never` is assignable to `recur`'s
+input type.
