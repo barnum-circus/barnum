@@ -752,11 +752,6 @@ const TAG_RESTART_BODY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "RestartBody" } },
 };
 
-const TAG_DISCARD: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Discard" } },
-};
-
 const TAG_CONTINUE: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
@@ -772,18 +767,11 @@ const IDENTITY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Identity" } },
 };
 
-/** Handler: extract payload, tag as RestartBody. Used by recur and loop. */
+/** Handler: extract payload, tag as RestartBody. */
 const RESTART_BODY_HANDLER: Action = {
   kind: "Chain",
   first: EXTRACT_PAYLOAD,
   rest: TAG_RESTART_BODY,
-};
-
-/** Handler: extract payload, tag as Discard. Used by earlyReturn. */
-const DISCARD_HANDLER: Action = {
-  kind: "Chain",
-  first: EXTRACT_PAYLOAD,
-  rest: TAG_DISCARD,
 };
 
 // ---------------------------------------------------------------------------
@@ -820,7 +808,7 @@ export function recur<TIn, TOut, TRefs extends string = never>(
 }
 
 // ---------------------------------------------------------------------------
-// earlyReturn — exit scope primitive
+// earlyReturn — exit scope primitive (built on restart + Branch)
 // ---------------------------------------------------------------------------
 
 /**
@@ -831,7 +819,9 @@ export function recur<TIn, TOut, TRefs extends string = never>(
  * If earlyReturn fires → output is TEarlyReturn.
  * Combined output: TEarlyReturn | TOut.
  *
- * Compiled form: Handle(effectId, body, DiscardHandler)
+ * Built on the restart mechanism: input is tagged Continue, body runs inside
+ * a Branch. earlyReturn tags with Break and performs — the handler restarts
+ * the body, Branch takes the Break path, and the value exits.
  */
 export function earlyReturn<TIn, TEarlyReturn, TOut, TRefs extends string = never>(
   bodyFn: (earlyReturn: TypedAction<TEarlyReturn, never>) => Pipeable<TIn, TOut, TRefs>,
@@ -839,30 +829,26 @@ export function earlyReturn<TIn, TEarlyReturn, TOut, TRefs extends string = neve
   const effectId = allocateEffectId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>({
-    kind: "Perform",
-    effect_id: effectId,
+    kind: "Chain",
+    first: TAG_BREAK,
+    rest: { kind: "Perform", effect_id: effectId },
   });
 
   const body = bodyFn(earlyReturnAction) as Action;
 
-  return typedAction({
-    kind: "Handle",
-    effect_id: effectId,
-    body,
-    handler: DISCARD_HANDLER,
-  });
+  return typedAction(buildLoopAction(effectId, body));
 }
 
 // ---------------------------------------------------------------------------
-// loop — fixed-point iteration (built on recur + earlyReturn mechanics)
+// loop — iterative restart with break
 // ---------------------------------------------------------------------------
 
 /**
- * Build the loop compiled form:
+ * Build the restart+branch compiled form used by earlyReturn and loop:
  * Chain(Tag("Continue"), Handle(effectId, Branch({ Continue: body, Break: identity() }), RestartBodyHandler))
  *
- * Multiplexes recur (Continue tag → restart → re-enters body) and done
- * (Break tag → restart → exits via Branch) through a single effectId.
+ * Input is tagged Continue so the Branch enters the body on first execution.
+ * Continue tag → restart → re-enters body. Break tag → restart → exits via Branch.
  */
 function buildLoopAction(effectId: number, body: Action): Action {
   return {
@@ -884,7 +870,7 @@ function buildLoopAction(effectId: number, body: Action): Action {
 }
 
 /**
- * Fixed-point iteration. The body callback receives `recur` and `done`:
+ * Iterative loop. The body callback receives `recur` and `done`:
  * - `recur`: restart the loop with a new input
  * - `done`: exit the loop with the break value
  *

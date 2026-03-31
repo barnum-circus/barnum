@@ -36,6 +36,7 @@ await workflowBuilder()
               stepD.unwrapOr(earlyReturn),
               done,
             ),
+            // An error occurred — log it and retry the loop
             logError.drop().then(recur),
           ),
         ),
