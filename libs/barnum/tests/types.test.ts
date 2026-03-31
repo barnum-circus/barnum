@@ -27,6 +27,10 @@ import {
   resetEffectIdCounter,
   tryCatch,
   invokeWithThrow,
+  race,
+  sleep,
+  withTimeout,
+  invokeWithTimeout,
 } from "../src/ast.js";
 import {
   constant,
@@ -1221,5 +1225,94 @@ describe("invokeWithThrow types", () => {
     );
     assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// race types
+// ---------------------------------------------------------------------------
+
+describe("race types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("race: all branches same input/output, result matches", () => {
+    const action = race(verify, verify);
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
+  });
+
+  it("race produces Handle AST node", () => {
+    const action = race(verify, verify);
+    expect(action.kind).toBe("Handle");
+  });
+
+  it("sleep: never → void", () => {
+    const action = sleep({ ms: 1000 });
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, void>>();
+  });
+
+  it("sleep produces Chain AST (All + Invoke)", () => {
+    const action = sleep({ ms: 500 });
+    expect(action.kind).toBe("Chain");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// withTimeout types
+// ---------------------------------------------------------------------------
+
+describe("withTimeout types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("withTimeout: preserves input, wraps output in Result<TOut, void>", () => {
+    const action = withTimeout(5000, verify);
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>>();
+  });
+
+  it("withTimeout produces Handle AST node", () => {
+    const action = withTimeout(1000, verify);
+    expect(action.kind).toBe("Handle");
+  });
+
+  it("withTimeout with never-input body", () => {
+    const action = withTimeout(3000, pipe(drop<never>(), constant("result")));
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, void>>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invokeWithTimeout types
+// ---------------------------------------------------------------------------
+
+describe("invokeWithTimeout types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("extracts TOut from Result, throwError receives TError | void", () => {
+    const action = tryCatch(
+      (throwError) =>
+        invokeWithTimeout(
+          identity<{ data: string }>() as TypedAction<{ data: string }, Result<string, number>>,
+          5000,
+          throwError,
+        ),
+      pipe(drop<number | void>(), constant("fallback")),
+    );
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("invokeWithTimeout produces Chain AST node", () => {
+    const throwToken = typedAction<string | void, never>({ kind: "Perform", effect_id: 0 });
+    const handler = identity<void>() as TypedAction<void, Result<string, string>>;
+    const action = invokeWithTimeout(handler, 1000, throwToken);
+    expect(action.kind).toBe("Chain");
   });
 });
