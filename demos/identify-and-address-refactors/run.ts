@@ -69,8 +69,8 @@ await workflowBuilder()
   .registerSteps({
     TypeCheckFix: loop(
       pipe(drop(), typeCheck, classifyErrors).branch({
-        HasErrors: forEach(fix).drop().then(recur()),
-        Clean: done(),
+        HasErrors: forEach(fix).drop().then(recur<any, void>()),
+        Clean: done<any, void>(),
       }),
     ),
   })
@@ -83,8 +83,8 @@ await workflowBuilder()
       // Judge quality; revise and re-check if needed.
       loop(
         judgeRefactor.then(classifyJudgment).branch({
-          NeedsWork: applyFeedback.then(steps.TypeCheckFix).drop().then(recur()),
-          Approved: done(),
+          NeedsWork: applyFeedback.then(steps.TypeCheckFix).drop().then(recur<never, void>()),
+          Approved: done<never, void>(),
         }),
       ).drop(),
 
