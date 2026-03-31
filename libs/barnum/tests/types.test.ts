@@ -193,9 +193,9 @@ describe("handler types", () => {
 // ---------------------------------------------------------------------------
 
 describe("builtin types", () => {
-  it("constant: never -> T", () => {
+  it("constant: any -> T", () => {
     const action = constant({ x: 1 });
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { x: number }>>();
     expect(action.kind).toBe("Invoke");
   });
@@ -214,9 +214,9 @@ describe("builtin types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("range: never -> number[]", () => {
+  it("range: any -> number[]", () => {
     const action = range(0, 10);
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
     expect(action.kind).toBe("Invoke");
   });
@@ -366,7 +366,7 @@ describe("combinator types", () => {
         ),
       ),
     );
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<
       IsExact<ExtractOutput<typeof action>, void>
     >();
@@ -431,7 +431,7 @@ describe("postfix operator types", () => {
     const action = pipe(
       constant({ name: "test", age: 42 }),
     ).get("name");
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
     expect(action.kind).toBe("Chain");
   });
@@ -779,7 +779,7 @@ describe("postfix .mapOption() type safety", () => {
       tag<OptionDef<{ verified: boolean }>, "Some">("Some"),
     );
     const mapped = optionAction.mapOption(deploy);
-    assertExact<IsExact<ExtractInput<typeof mapped>, never>>();
+    assertExact<IsExact<ExtractInput<typeof mapped>, any>>();
     assertExact<IsExact<ExtractOutput<typeof mapped>, Option<{ deployed: boolean }>>>();
   });
 });
@@ -1248,9 +1248,9 @@ describe("race types", () => {
     expect(action.kind).toBe("Handle");
   });
 
-  it("sleep: never → void", () => {
+  it("sleep: any → void", () => {
     const action = sleep({ ms: 1000 });
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, void>>();
   });
 

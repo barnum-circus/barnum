@@ -93,12 +93,38 @@ export type BuiltinKind =
   | { kind: "CollectSome" };
 
 // ---------------------------------------------------------------------------
+// WorkflowAction — loosened input constraint for workflow entry points
+// ---------------------------------------------------------------------------
+
+/**
+ * A TypedAction suitable as a workflow entry point. Workflows start with
+ * no input data, so the action must not require specific input.
+ *
+ * Uses `__in?: void` to accept both:
+ *   - `TypedAction<any, Out>` — combinators that ignore input (constant, sleep)
+ *   - `TypedAction<never, Out>` — handlers that genuinely take no params
+ *
+ * Rejects `TypedAction<{ artifact: string }, Out>` etc. because
+ * `{ artifact: string }` is not assignable to `void`.
+ *
+ * Only `__in` is checked (no `__phantom_in`) — the contravariant phantom
+ * field would accept anything due to `void`'s permissiveness, so omitting
+ * it is harmless and avoids deep method signature comparison.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type WorkflowAction<Out = any> = Action & {
+  __in?: void;
+  __phantom_out?: () => Out;
+  __phantom_out_check?: (output: Out) => void;
+};
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface Config<Out = any> {
-  workflow: TypedAction<never, Out>;
+  workflow: WorkflowAction<Out>;
   steps?: Record<string, Action>;
 }
 
@@ -726,7 +752,7 @@ type StripRefs<TSteps> = {
 };
 
 /** Simple config with no named steps. */
-export function config<Out>(workflow: TypedAction<never, Out>): Config<Out> {
+export function config<Out>(workflow: WorkflowAction<Out>): Config<Out> {
   return { workflow };
 }
 
@@ -824,7 +850,7 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
     build: (ctx: {
       steps: StripRefs<TSteps>;
       self: TypedAction<never, never>;
-    }) => TypedAction<never, Out>,
+    }) => WorkflowAction<Out>,
   ): RunnableConfig<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
@@ -848,10 +874,10 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class RunnableConfig<Out = any> {
-  readonly workflow: TypedAction<never, Out>;
+  readonly workflow: WorkflowAction<Out>;
   readonly steps?: Record<string, Action>;
 
-  constructor(workflow: TypedAction<never, Out>, steps?: Record<string, Action>) {
+  constructor(workflow: WorkflowAction<Out>, steps?: Record<string, Action>) {
     this.workflow = workflow;
     this.steps = steps;
   }

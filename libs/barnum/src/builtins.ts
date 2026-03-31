@@ -12,7 +12,7 @@ import { chain } from "./chain.js";
 // Constant — produce a fixed value (takes no pipeline input)
 // ---------------------------------------------------------------------------
 
-export function constant<TValue>(value: TValue): TypedAction<never, TValue> {
+export function constant<TValue>(value: TValue): TypedAction<any, TValue> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Constant", value } },
@@ -340,7 +340,7 @@ export function tap<TInput extends Record<string, unknown>, TRefs extends string
 export function range(
   start: number,
   end: number,
-): TypedAction<never, number[]> {
+): TypedAction<any, number[]> {
   const result: number[] = [];
   for (let i = start; i < end; i++) {
     result.push(i);

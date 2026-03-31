@@ -97,7 +97,7 @@ export function race<TIn, TOut>(
  * a circular dependency (handler.ts → ast.ts → builtins.ts → handler.ts).
  * The handler definition is attached for the worker to find at runtime.
  */
-export function sleep(config: { ms: number }): TypedAction<never, void> {
+export function sleep(config: { ms: number }): TypedAction<any, void> {
   // We can't use createHandlerWithConfig due to circular deps and because
   // it uses getCallerFilePath (stack trace) which would point to this file.
   // Instead, build the AST directly and attach __definition manually.
@@ -115,7 +115,7 @@ export function sleep(config: { ms: number }): TypedAction<never, void> {
 
   // createHandlerWithConfig wraps as: All(Identity, Constant(config)) → Invoke
   // We replicate that structure here.
-  const action = typedAction<never, void>({
+  const action = typedAction<any, void>({
     kind: "Chain",
     first: {
       kind: "All",
