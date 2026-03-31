@@ -3,9 +3,14 @@
   "version": "0.2.4",
   "description": "Barnum workflow engine",
   "type": "module",
-  "main": "src/index.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./dist/*": "./dist/*",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -13,6 +18,7 @@
     "barnum": "cli.cjs"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint src/"
@@ -28,6 +34,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "files": [
+    "dist/**/*",
     "src/**/*.ts",
     "cli.cjs",
     "artifacts/**/*"

@@ -77,7 +77,7 @@ function resolveBinary(): BinaryResolution {
 
 /** Resolve worker.ts relative to this package. */
 function resolveWorker(): string {
-  return path.resolve(__dirname, "worker.ts");
+  return path.resolve(__dirname, "../src/worker.ts");
 }
 
 /** Build the barnum binary if using the local dev path. */
