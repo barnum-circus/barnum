@@ -1,8 +1,5 @@
-import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type PipeIn, type Pipeable, type TypedAction, typedAction } from "./ast.js";
 import { identity } from "./builtins.js";
-
-/** When the first pipe element has `never` input (ignores input), the pipe accepts any input. */
-type PipeIn<T> = [T] extends [never] ? any : T;
 
 export function pipe<T1, T2, R1 extends string>(
   a1: Pipeable<T1, T2, R1>,

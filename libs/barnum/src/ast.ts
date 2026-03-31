@@ -112,6 +112,12 @@ export type WorkflowAction<Out = any> = Action & {
   __phantom_out_check?: (output: Out) => void;
 };
 
+/**
+ * When TIn is `never` (handler ignores input), produce `any` so the
+ * combinator/pipe can sit in any pipeline position.
+ */
+export type PipeIn<T> = [T] extends [never] ? any : T;
+
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
@@ -787,9 +793,9 @@ const RESTART_BODY_HANDLER: Action = {
  *
  * Compiled form: Handle(effectId, body, RestartBodyHandler)
  */
-export function recur<TIn, TOut = any, TRefs extends string = never>(
+export function recur<TIn = never, TOut = any, TRefs extends string = never>(
   bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut, TRefs>,
-): TypedAction<TIn, TOut, TRefs> {
+): TypedAction<PipeIn<TIn>, TOut, TRefs> {
   const effectId = allocateEffectId();
 
   const restartAction = typedAction<TIn, never>({
@@ -878,12 +884,12 @@ function buildLoopAction(effectId: number, body: Action): Action {
  *
  * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TIn, TBreak, TRefs extends string = never>(
+export function loop<TIn = never, TBreak = never, TRefs extends string = never>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
     done: TypedAction<TBreak, never>,
   ) => Pipeable<TIn, never, TRefs>,
-): TypedAction<TIn, TBreak, TRefs> {
+): TypedAction<PipeIn<TIn>, TBreak, TRefs> {
   const effectId = allocateEffectId();
 
   const perform: Action = { kind: "Perform", effect_id: effectId };

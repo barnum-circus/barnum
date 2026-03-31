@@ -304,12 +304,12 @@ describe("combinator types", () => {
   });
 
   it("loop with branch/recur/done: output is Break value type", () => {
-    const action = loop<any, void>((recur, done) =>
+    const action = loop<never, void>((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
       ).branch({
-        HasErrors: pipe(forEach(fix), recur),
+        HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
       }),
     );
@@ -326,12 +326,12 @@ describe("combinator types", () => {
       setup,
       listFiles,
       forEach(migrate),
-    ).then(loop<any, void>((recur, done) =>
+    ).then(loop<never, void>((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
       ).branch({
-        HasErrors: pipe(forEach(fix), recur),
+        HasErrors: pipe(forEach(fix).drop(), recur),
         Clean: done,
       }),
     ));

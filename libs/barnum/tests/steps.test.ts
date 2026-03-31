@@ -71,7 +71,7 @@ describe("named steps", () => {
         pipe(
           constant({ verified: true }),
           steps.Deploy,
-        ).then(loop<any, any>((recur, done) =>
+        ).then(loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
           steps.HealthCheck.branch({ Continue: recur, Break: done }),
         )),
       );
@@ -82,9 +82,9 @@ describe("named steps", () => {
   it("uses named steps for a fix cycle", () => {
     const cfg = workflowBuilder()
       .registerSteps({
-        FixCycle: loop<any, void>((recur, done) =>
+        FixCycle: loop<never, void>((recur, done) =>
           pipe(typeCheck, classifyErrors).branch({
-            HasErrors: pipe(forEach(fix), recur),
+            HasErrors: pipe(forEach(fix).drop(), recur),
             Clean: done,
           }),
         ),
@@ -108,9 +108,9 @@ describe("named steps", () => {
         Migrate: pipe(listFiles, forEach(migrate)),
       })
       .registerSteps({
-        FixCycle: loop<any, void>((recur, done) =>
+        FixCycle: loop<never, void>((recur, done) =>
           pipe(typeCheck, classifyErrors).branch({
-            HasErrors: pipe(forEach(fix), recur),
+            HasErrors: pipe(forEach(fix).drop(), recur),
             Clean: done,
           }),
         ),
@@ -305,9 +305,9 @@ describe("kitchen sink", () => {
           stepRef("FixCycle"), // jump to the fix cycle defined below
         ),
         // FixCycle: type-check, classify errors, fix or finish
-        FixCycle: loop<any, void>((recur, done) =>
+        FixCycle: loop<never, void>((recur, done) =>
           pipe(typeCheck, classifyErrors).branch({
-            HasErrors: pipe(forEach(fix), recur),
+            HasErrors: pipe(forEach(fix).drop(), recur),
             Clean: done,
           }),
         ),
