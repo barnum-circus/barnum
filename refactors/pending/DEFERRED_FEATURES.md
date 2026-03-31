@@ -635,3 +635,45 @@ A more advanced feature: the engine itself could enforce input filtering at hand
 This provides defense-in-depth: even if a type-level `pick` is accidentally omitted, the engine never sends undeclared fields to a handler. It also enables polyglot handlers — a Rust or Python handler that strict-deserializes its input would never see unexpected fields.
 
 **Why deferred**: The type system should be the primary enforcement mechanism. Engine-level filtering is a safety net, not a substitute. It also adds per-dispatch overhead (schema introspection) and requires all handlers to have schemas (currently `inputValidator` is optional). Worth revisiting once the invariant type system is stable and handler schemas are mandatory.
+
+## Boolean-to-Enum Builtin
+
+Branch dispatches on tagged unions (`{ kind, value }`). Booleans can't be branched on directly — you need to convert `true`/`false` to `{ kind: "True", value: void }` / `{ kind: "False", value: void }` first.
+
+A `boolToEnum` builtin would do this conversion inline in Rust:
+
+```ts
+type BoolDef = { True: void; False: void };
+type Bool = TaggedUnion<BoolDef>;
+
+function boolToEnum(): TypedAction<boolean, Bool>
+```
+
+Desugars to a Builtin handler that reads the boolean and produces the tagged union:
+
+```rust
+BuiltinKind::BoolToEnum => {
+    let kind = if value.as_bool().unwrap() { "True" } else { "False" };
+    json!({ "kind": kind, "value": null, "__def": null })
+}
+```
+
+This enables `ifElse` as a surface combinator:
+
+```ts
+function ifElse<TIn, TOut>(
+  condition: Pipeable<TIn, boolean>,
+  thenAction: Pipeable<void, TOut>,
+  elseAction: Pipeable<void, TOut>,
+): TypedAction<TIn, TOut> {
+  return pipe(
+    condition,
+    boolToEnum(),
+    branch({ True: thenAction, False: elseAction }),
+  );
+}
+```
+
+The `Bool` type would be a proper TaggedUnion with `__def`, so `.branch()` works on it with exhaustiveness checking. The `True`/`False` cases receive `void` (the boolean carries no data beyond the discriminant).
+
+This is a small addition — one Builtin variant, one combinator, one type alias. No engine changes.
