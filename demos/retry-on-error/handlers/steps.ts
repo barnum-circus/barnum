@@ -73,6 +73,20 @@ export const stepC = createHandler({
   },
 }, "stepC");
 
+/** Step D: deploy. Succeeds ~80%, catastrophic failure ~20%.
+ *  Catastrophic failures should abort the workflow, not retry. */
+export const stepD = createHandler({
+  handle: async (): Promise<StepResult> => {
+    const succeed = Math.random() < 0.8;
+    if (succeed) {
+      console.error("[stepD] Deployed");
+      return ok("deployed");
+    }
+    console.error("[stepD] CATASTROPHIC deploy failure");
+    return err("stepD: catastrophic failure — do not retry");
+  },
+}, "stepD");
+
 /** Log an error and prepare for retry. Receives the error string. */
 export const logError = createHandler({
   inputValidator: z.string(),
