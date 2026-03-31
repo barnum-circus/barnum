@@ -8,13 +8,13 @@ export const listFiles = createHandler({
   },
 }, "listFiles");
 
-export const refactor = createHandler({
+export const implementRefactor = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    console.error(`[refactor] Refactoring ${file}`);
+    console.error(`[implementRefactor] Refactoring ${file}`);
     return file;
   },
-}, "refactor");
+}, "implementRefactor");
 
 export const typeCheck = createHandler({
   inputValidator: z.string(),
@@ -24,17 +24,17 @@ export const typeCheck = createHandler({
   },
 }, "typeCheck");
 
-export const fix = createHandler({
+export const fixTypeErrors = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    console.error(`[fix] Fixing ${file}`);
+    console.error(`[fixTypeErrors] Fixing ${file}`);
     return file;
   },
-}, "fix");
+}, "fixTypeErrors");
 
-export const commit = createHandler({
+export const commitChanges = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }): Promise<void> => {
-    console.error(`[commit] Committing ${file}`);
+    console.error(`[commitChanges] Committing ${file}`);
   },
-}, "commit");
+}, "commitChanges");
