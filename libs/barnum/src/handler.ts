@@ -77,6 +77,17 @@ function getCallerFilePath(): string {
 }
 
 // ---------------------------------------------------------------------------
+// HandlerOutput — maps void → never so fire-and-forget handlers compose
+// ---------------------------------------------------------------------------
+
+/**
+ * Handlers that return `Promise<void>` produce `never` output. This means
+ * they naturally compose in pipes without needing `.drop()` — a handler
+ * that returns nothing produces a value no one can observe.
+ */
+type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
+
+// ---------------------------------------------------------------------------
 // createHandler — handlers with no config, returns TypedAction directly
 // ---------------------------------------------------------------------------
 
@@ -87,7 +98,7 @@ export function createHandler<TValue, TOutput>(
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
-): Handler<TValue, TOutput>;
+): Handler<TValue, HandlerOutput<TOutput>>;
 
 // Without inputValidator: handler takes no pipeline input.
 export function createHandler<TOutput>(
@@ -95,7 +106,7 @@ export function createHandler<TOutput>(
     handle: () => Promise<TOutput>;
   },
   exportName?: string,
-): Handler<never, TOutput>;
+): Handler<never, HandlerOutput<TOutput>>;
 
 // Implementation
 export function createHandler(
@@ -136,7 +147,7 @@ export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
     handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, TOutput>;
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
 
 // Without inputValidator: handler takes no pipeline input, has config.
 export function createHandlerWithConfig<TOutput, TStepConfig>(
@@ -145,7 +156,7 @@ export function createHandlerWithConfig<TOutput, TStepConfig>(
     handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
-): (config: TStepConfig) => TypedAction<never, TOutput>;
+): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
 
 // Implementation
 export function createHandlerWithConfig(

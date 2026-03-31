@@ -1,7 +1,8 @@
 /**
  * Retry-on-error demo: fallible pipeline with tryCatch, withTimeout,
- * and loop. Catches handler errors and timeouts in the same catch block,
- * but exits immediately on catastrophic failures via done.
+ * and loop. Catches handler errors and timeouts in the same catch block
+ * for retry. Catastrophic failures (stepA) exit the loop immediately
+ * via done; successful completion falls through naturally.
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -24,8 +25,8 @@ await workflowBuilder()
       tryCatch(
         (throwError) =>
           pipe(
-            // stepA may fail — unwrapOr surfaces the error as a Result
-            stepA.unwrapOr(throwError).drop(),
+            // stepA may fail catastrophically — exit the loop immediately
+            stepA.mapErr(drop()).unwrapOr(done).drop(),
 
             // stepB may fail and may take unreasonably long
             withTimeout(constant(2_000), stepB.unwrapOr(throwError))
@@ -33,13 +34,12 @@ await workflowBuilder()
               .unwrapOr(throwError)
               .drop(),
 
-            // If stepC errors, it's catastrophic — exit immediately
-            stepC.mapErr(drop()).unwrapOr(done).drop(),
-            done,
+            // stepC may fail — retry via catch
+            stepC.unwrapOr(throwError).drop(),
           ),
 
         // An error occurred — log it and retry the loop
-        logError.drop().then(recur),
+        logError.then(recur),
       ),
     ),
   )

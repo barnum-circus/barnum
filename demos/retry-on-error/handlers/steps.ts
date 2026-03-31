@@ -28,7 +28,7 @@ function err(message: string): StepResult {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/** Step A: validate input. Succeeds ~70% of the time. */
+/** Step A: validate input. Succeeds ~70%. Failures are catastrophic — the workflow exits. */
 export const stepA = createHandler({
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.7;
@@ -36,8 +36,8 @@ export const stepA = createHandler({
       console.error("[stepA] Validation passed");
       return ok("validated");
     }
-    console.error("[stepA] Validation failed");
-    return err("stepA: validation failed");
+    console.error("[stepA] CATASTROPHIC validation failure");
+    return err("stepA: catastrophic validation failure — do not retry");
   },
 }, "stepA");
 
@@ -60,8 +60,7 @@ export const stepB = createHandler({
   },
 }, "stepB");
 
-/** Step C: finalize. Succeeds ~80%, catastrophic failure ~20%.
- *  Errors from stepC are catastrophic — the workflow exits immediately. */
+/** Step C: finalize. Succeeds ~80%, fails ~20%. Failures are retried. */
 export const stepC = createHandler({
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.8;
@@ -69,8 +68,8 @@ export const stepC = createHandler({
       console.error("[stepC] Finalized");
       return ok("finalized");
     }
-    console.error("[stepC] CATASTROPHIC finalization failure");
-    return err("stepC: catastrophic failure — do not retry");
+    console.error("[stepC] Finalization failed");
+    return err("stepC: finalization failed");
   },
 }, "stepC");
 
