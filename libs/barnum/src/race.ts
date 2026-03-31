@@ -1,7 +1,5 @@
 import { type Action, type Pipeable, type Result, type TypedAction, typedAction } from "./ast.js";
 import { allocateEffectId } from "./effect-id.js";
-import { identity } from "./builtins.js";
-import { invokeWithThrow } from "./try-catch.js";
 
 // ---------------------------------------------------------------------------
 // Shared AST fragments
@@ -25,11 +23,6 @@ const TAG_OK: Action = {
 const TAG_ERR: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
-};
-
-const EXTRACT_VALUE: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } },
 };
 
 /** Handler DAG shared by race and withTimeout: extract payload, tag Discard. */
@@ -177,51 +170,3 @@ export function withTimeout<TIn, TOut>(
   });
 }
 
-// ---------------------------------------------------------------------------
-// invokeWithTimeout — withTimeout + invokeWithThrow
-// ---------------------------------------------------------------------------
-
-/**
- * Run a fallible handler with a timeout. On timeout or handler error, throw.
- * Combines `withTimeout` + `invokeWithThrow`.
- *
- * The `ms` parameter is an AST node that evaluates to the timeout duration
- * in milliseconds.
- *
- * The handler returns `Result<TOut, TError>`. After withTimeout, we have
- * `Result<Result<TOut, TError>, void>`:
- * - Ok(Result<TOut, TError>): handler completed → invokeWithThrow to unwrap
- * - Err(void): timeout fired → throw void
- *
- * The throwError token must accept `TError | void` since either the handler
- * error or the timeout can trigger the throw.
- */
-export function invokeWithTimeout<TIn, TOut, TError>(
-  handler: Pipeable<TIn, Result<TOut, TError>>,
-  ms: Pipeable<TIn, number>,
-  throwError: Pipeable<TError | void, never>,
-): TypedAction<TIn, TOut> {
-  // withTimeout(ms, handler) → Result<Result<TOut, TError>, void>
-  // Branch on outer Result:
-  //   Ok: receives Result<TOut, TError> → invokeWithThrow → TOut or throw TError
-  //   Err: receives void → throwError
-  return typedAction({
-    kind: "Chain",
-    first: withTimeout(ms, handler) as Action,
-    rest: {
-      kind: "Branch",
-      cases: {
-        Ok: {
-          kind: "Chain",
-          first: EXTRACT_VALUE,
-          rest: invokeWithThrow(identity() as Pipeable<Result<TOut, TError>, Result<TOut, TError>>, throwError as Pipeable<TError, never>) as Action,
-        },
-        Err: {
-          kind: "Chain",
-          first: EXTRACT_VALUE,
-          rest: throwError as Action,
-        },
-      },
-    },
-  });
-}

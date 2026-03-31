@@ -640,11 +640,19 @@ export const Result = {
    * Extract Ok or compute default from Err. `Result<TValue, TError> → TValue`
    *
    * Takes an action that receives the Err payload and produces a fallback.
+   * Uses covariant output checking so throw tokens (Out=never) are assignable
+   * when TValue is provided explicitly: `Result.unwrapOr<string, string>(throwError)`.
+   *
+   * For inference-free usage with throw tokens, prefer the postfix method:
+   * `handler.unwrapOr(throwError)` — the `this` constraint provides TValue.
    *
    * Desugars to: `branch({ Ok: identity(), Err: defaultAction })`
    */
   unwrapOr<TValue, TError>(
-    defaultAction: Pipeable<TError, TValue>,
+    defaultAction: Action & {
+      __phantom_in?: (input: TError) => void;
+      __phantom_out?: () => TValue;
+    },
   ): TypedAction<ResultT<TValue, TError>, TValue> {
     return typedAction(resultBranch(
       IDENTITY,

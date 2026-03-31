@@ -73,12 +73,11 @@ export const stepC = createHandler({
   },
 }, "stepC");
 
-/** Log an error and prepare for retry. Receives the error (string or void for timeouts). */
+/** Log an error and prepare for retry. Receives the error string. */
 export const logError = createHandler({
-  inputValidator: z.union([z.string(), z.void()]),
+  inputValidator: z.string(),
   handle: async ({ value: error }): Promise<void> => {
-    const message = error ?? "operation timed out";
-    console.error(`[logError] Error: ${message}`);
+    console.error(`[logError] Error: ${error}`);
     console.error("[logError] Retrying...\n");
   },
 }, "logError");

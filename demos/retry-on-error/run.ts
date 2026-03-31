@@ -1,5 +1,5 @@
 /**
- * Retry-on-error demo: fallible pipeline with tryCatch, invokeWithTimeout,
+ * Retry-on-error demo: fallible pipeline with tryCatch, withTimeout,
  * and loop. Catches both handler errors and timeouts in the same catch block.
  *
  * Usage: pnpm exec tsx run.ts
@@ -10,12 +10,14 @@ import {
   pipe,
   loop,
   tryCatch,
-  invokeWithTimeout,
+  withTimeout,
 } from "@barnum/barnum/src/ast.js";
 import {
   constant,
   recur,
   done,
+  drop,
+  Result as R,
 } from "@barnum/barnum/src/builtins.js";
 import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
 
@@ -26,9 +28,14 @@ await workflowBuilder()
     loop(
       tryCatch(
         (throwError) => pipe(
-          invokeWithTimeout(stepA, constant(10_000), throwError).drop(),
-          invokeWithTimeout(stepB, constant(2_000), throwError).drop(),
-          invokeWithTimeout(stepC, constant(10_000), throwError),
+          stepA.unwrapOr(throwError).drop(),
+          withTimeout(constant(2_000), stepB)
+            .branch({
+              Ok: R.unwrapOr<string, string>(throwError),
+              Err: pipe(drop<void>(), constant("stepB: timed out"), throwError),
+            })
+            .drop(),
+          stepC.unwrapOr(throwError),
           done<never, string>(),
         ),
         logError.drop().then(recur<never, string>()),

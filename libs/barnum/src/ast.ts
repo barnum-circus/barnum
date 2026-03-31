@@ -219,6 +219,25 @@ export type TypedAction<
     this: TypedAction<TIn, Option<T>, TRefs>,
     action: Pipeable<T, U>,
   ): TypedAction<TIn, Option<U>, TRefs>;
+  /**
+   * Unwrap a Result output. If Ok, pass through the value. If Err, apply
+   * the default action. Only callable when Out is Result<TValue, TError>.
+   *
+   * The `this` constraint provides TValue from context, so throw tokens
+   * (Out=never) work without explicit type parameters:
+   *   `handler.unwrapOr(throwError)`
+   *
+   * Uses CaseHandler for defaultAction (covariant output only) so that
+   * `TypedAction<TError, never>` is assignable to `CaseHandler<TError, TValue>`.
+   *
+   * Refs position uses `any` in the `this` constraint to avoid TS
+   * falling back to the constraint bound `string` when Refs = never.
+   * The return type uses the enclosing TypedAction's `Refs` directly.
+   */
+  unwrapOr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>, any>,
+    defaultAction: CaseHandler<TError, TValue>,
+  ): TypedAction<TIn, TValue, Refs>;
 };
 
 /**
@@ -453,6 +472,23 @@ function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
   });
 }
 
+function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
+  // Desugars to: self.then(branch({ Ok: identity(), Err: defaultAction }))
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Branch",
+      // eslint-disable-next-line @typescript-eslint/no-use-before-define
+      cases: unwrapBranchCases({
+        Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+        Err: defaultAction,
+      }),
+    },
+  });
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -473,6 +509,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },
+      unwrapOr: { value: unwrapOrMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out, Refs>;
@@ -633,8 +670,8 @@ export { chain } from "./chain.js";
 export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
 export { resetEffectIdCounter } from "./effect-id.js";
-export { tryCatch, invokeWithThrow } from "./try-catch.js";
-export { race, sleep, withTimeout, invokeWithTimeout } from "./race.js";
+export { tryCatch } from "./try-catch.js";
+export { race, sleep, withTimeout } from "./race.js";
 
 export function forEach<In, Out, R extends string = never>(
   action: Pipeable<In, Out, R>,
