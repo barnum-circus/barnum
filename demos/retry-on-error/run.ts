@@ -1,23 +1,6 @@
 /**
- * Retry-on-error demo: fallible pipeline with tryCatch + invokeWithThrow.
- *
- * Pipeline:
- *   loop(
- *     tryCatch(
- *       (throwError) => pipe(
- *         invokeWithThrow(stepA, throwError),
- *         drop(), invokeWithThrow(stepB, throwError),
- *         drop(), invokeWithThrow(stepC, throwError),
- *         done(),
- *       ),
- *       pipe(logError, recur()),
- *     ),
- *   )
- *
- * Each step randomly succeeds or fails. On any error, the catch handler
- * logs it and recurs. On success through all three steps, the loop breaks.
- *
- * Demonstrates: tryCatch, invokeWithThrow, loop, pipe, drop, done, recur.
+ * Retry-on-error demo: fallible pipeline with tryCatch, invokeWithTimeout,
+ * and loop. Catches both handler errors and timeouts in the same catch block.
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -27,10 +10,10 @@ import {
   pipe,
   loop,
   tryCatch,
-  invokeWithThrow,
+  invokeWithTimeout,
 } from "@barnum/barnum/src/ast.js";
 import {
-  drop,
+  constant,
   recur,
   done,
 } from "@barnum/barnum/src/builtins.js";
@@ -43,14 +26,12 @@ await workflowBuilder()
     loop(
       tryCatch(
         (throwError) => pipe(
-          invokeWithThrow(stepA, throwError),
-          drop(),
-          invokeWithThrow(stepB, throwError),
-          drop(),
-          invokeWithThrow(stepC, throwError),
+          invokeWithTimeout(stepA, constant(10_000), throwError).drop(),
+          invokeWithTimeout(stepB, constant(2_000), throwError).drop(),
+          invokeWithTimeout(stepC, constant(10_000), throwError),
           done<never, string>(),
         ),
-        pipe(logError, drop(), recur<never, string>()),
+        logError.drop().then(recur<never, string>()),
       ),
     ),
   )

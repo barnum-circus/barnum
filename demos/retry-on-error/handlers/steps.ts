@@ -3,6 +3,7 @@
  *
  * Each handler returns Result<string, string> — Ok on success, Err with a
  * message on failure. Outcomes are random to demonstrate retry behavior.
+ * Step B also occasionally takes a long time, demonstrating timeout handling.
  */
 
 import { createHandler } from "@barnum/barnum/src/handler.js";
@@ -40,16 +41,22 @@ export const stepA = createHandler({
   },
 }, "stepA");
 
-/** Step B: process data. Succeeds ~70% of the time. */
+/** Step B: process data. Succeeds ~60%, fails ~20%, hangs ~20%. */
 export const stepB = createHandler({
   handle: async (): Promise<StepResult> => {
-    const succeed = Math.random() < 0.7;
-    if (succeed) {
-      console.error("[stepB] Processing complete");
-      return ok("processed");
+    const roll = Math.random();
+    if (roll < 0.2) {
+      // Simulate a slow operation that will be killed by timeout
+      console.error("[stepB] Processing... (slow)");
+      await new Promise((resolve) => setTimeout(resolve, 30_000));
+      return ok("processed"); // unreachable if timeout fires
     }
-    console.error("[stepB] Processing error");
-    return err("stepB: processing error");
+    if (roll < 0.4) {
+      console.error("[stepB] Processing error");
+      return err("stepB: processing error");
+    }
+    console.error("[stepB] Processing complete");
+    return ok("processed");
   },
 }, "stepB");
 
@@ -66,11 +73,12 @@ export const stepC = createHandler({
   },
 }, "stepC");
 
-/** Log an error and prepare for retry. Receives the error message as input. */
+/** Log an error and prepare for retry. Receives the error (string or void for timeouts). */
 export const logError = createHandler({
-  inputValidator: z.string(),
-  handle: async ({ value: errorMessage }): Promise<void> => {
-    console.error(`[logError] Error: ${errorMessage}`);
+  inputValidator: z.union([z.string(), z.void()]),
+  handle: async ({ value: error }): Promise<void> => {
+    const message = error ?? "operation timed out";
+    console.error(`[logError] Error: ${message}`);
     console.error("[logError] Retrying...\n");
   },
 }, "logError");
