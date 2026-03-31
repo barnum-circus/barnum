@@ -65,7 +65,7 @@ type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: strin
 await workflowBuilder()
   // Type-check/fix: run tsc, fix errors, repeat until clean.
   .registerSteps({
-    TypeCheckFix: loop<any, void>((recur, done) =>
+    TypeCheckFix: loop((recur, done) =>
       pipe(drop<any>(), typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix), recur),
         Clean: done,
@@ -79,7 +79,7 @@ await workflowBuilder()
       implementAndReviewParams.pick("worktreePath").then(steps.TypeCheckFix).drop(),
 
       // Judge quality; revise and re-check if needed.
-      loop<any, void>((recur, done) =>
+      loop((recur, done) =>
         pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
           NeedsWork: pipe(applyFeedback, steps.TypeCheckFix, recur),
           Approved: done,

@@ -21,8 +21,8 @@ console.error("=== Retry-on-error demo ===\n");
 
 await workflowBuilder()
   .workflow(() =>
-    earlyReturn<any, never, any>((earlyReturn) =>
-      loop<any, any>((recur, done) =>
+    earlyReturn((earlyReturn) =>
+      loop((recur, done) =>
         pipe(
           drop<any>(),
           tryCatch(
@@ -30,15 +30,18 @@ await workflowBuilder()
               pipe(
                 // stepA may fail — unwrapOr surfaces the error as a Result
                 stepA.unwrapOr(throwError).drop(),
+
                 // stepB may fail and may take unreasonably long
                 withTimeout(constant(2_000), stepB.unwrapOr(throwError))
                   .mapErr(constant("stepB: timed out"))
                   .unwrapOr(throwError)
                   .drop(),
+
                 // If stepC errors, it's catastrophic — exit immediately
                 stepC.mapErr(drop()).unwrapOr(earlyReturn),
                 done,
               ),
+
             // An error occurred — log it and retry the loop
             logError.drop().then(recur),
           ),

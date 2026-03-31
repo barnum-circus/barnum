@@ -787,7 +787,7 @@ const RESTART_BODY_HANDLER: Action = {
  *
  * Compiled form: Handle(effectId, body, RestartBodyHandler)
  */
-export function recur<TIn, TOut, TRefs extends string = never>(
+export function recur<TIn = any, TOut = any, TRefs extends string = never>(
   bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut, TRefs>,
 ): TypedAction<TIn, TOut, TRefs> {
   const effectId = allocateEffectId();
@@ -823,7 +823,7 @@ export function recur<TIn, TOut, TRefs extends string = never>(
  * a Branch. earlyReturn tags with Break and performs — the handler restarts
  * the body, Branch takes the Break path, and the value exits.
  */
-export function earlyReturn<TIn, TEarlyReturn, TOut, TRefs extends string = never>(
+export function earlyReturn<TIn = any, TEarlyReturn = never, TOut = any, TRefs extends string = never>(
   bodyFn: (earlyReturn: TypedAction<TEarlyReturn, never>) => Pipeable<TIn, TOut, TRefs>,
 ): TypedAction<TIn, TEarlyReturn | TOut, TRefs> {
   const effectId = allocateEffectId();
@@ -878,7 +878,7 @@ function buildLoopAction(effectId: number, body: Action): Action {
  *
  * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TIn, TBreak, TRefs extends string = never>(
+export function loop<TIn = any, TBreak = any, TRefs extends string = never>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
     done: TypedAction<TBreak, never>,
