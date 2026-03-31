@@ -1,48 +1,99 @@
-# Phase 3: Error Handling (Throw Effect)
+# Phase 3: Error Handling (tryCatch + invokeWithThrow)
 
-## Goal
+## Scope
 
-Implement `tryCatch` as the first effect that discards its continuation. When a Throw effect fires, the handler drops the suspended subgraph and runs a recovery branch instead. This validates frame teardown and the discard path.
+TypeScript-only. The Rust engine already has Handle/Perform, bubble_effect, teardown_body, and the Discard continuation operation from Phase 1. This phase adds:
+
+1. `tryCatch()` — TypeScript combinator (HOAS callback provides `throwError` token)
+2. `invokeWithThrow()` — convenience combinator for handlers that return `Result<TOut, TError>`
+3. A demo workflow demonstrating the retry-on-error pattern
+
+No Rust changes. No changes to the engine's error propagation. This is purely for **type-level error handling** — handlers return `Result` values, the AST interprets them, and the effect system routes errors to recovery branches. If a handler panics or the runtime crashes, that's a separate mechanism handled by the existing error propagation path.
 
 ## Prerequisites
 
-Phase 1 (Effect Substrate) complete. Phase 2 (Declare) is not a prerequisite — Phases 2 and 3 can proceed in parallel.
+Phase 1 (Effect Substrate) complete. Phase 2 (Declare/bind) is not a prerequisite.
 
-## The effect
+## tryCatch
+
+### The effect
 
 ```
 Effect: Throw
-Payload: Value (the error data)
-Handler behavior: Discard the continuation (clean up suspended frames).
-                  Advance the recovery branch with the error payload.
-                  The Handle frame delivers the recovery branch's result, not the body's.
+Payload: TError (the error data)
+Handler behavior: Discard the continuation.
+                  Run recovery branch with the error payload.
+                  Handle frame exits with recovery's result.
 ```
 
-This is the first zero-shot continuation pattern. The handler never resumes. The continuation is orphaned and must be cleaned up.
+The handler never resumes. The continuation is orphaned and torn down by the existing `teardown_body` from Phase 1.
 
-## How tryCatch compiles
+### How it compiles
 
 ```ts
 // User writes:
 tryCatch(
-  (throwError) => body_using_throwError,
+  (throwError) => bodyUsingThrowError,
   recovery,
 )
 
-// TypeScript builder:
-// 1. Gensyms a fresh EffectId for this tryCatch instance
-// 2. Creates throwError = Perform(freshEffectId) wrapper
-// 3. Calls the callback to get the body AST
-// 4. Compiles to:
+// Compiles to:
 Handle(
-  { [freshEffectId]: recoveryHandler },   // handler DAG = the recovery branch
-  body                                     // contains Perform(freshEffectId) at throw sites
+  freshEffectId,
+  recoveryHandler,  // handler DAG
+  body,             // contains Perform(freshEffectId) at throw sites
 )
 ```
 
-The `throwError` token has type `Pipeable<TError, never>`. It takes the error payload and never returns — the continuation is discarded. TypeScript can enforce that code after `throwError` in a Chain is unreachable.
+The `throwError` token has type `TypedAction<TError, never>`. It takes the error payload and never returns — the continuation is discarded.
 
-Because each tryCatch mints its own EffectId, nested tryCatch gives precise targeting:
+### Handler DAG
+
+The handler DAG receives `{ payload, state }` from the engine. State is unused for tryCatch. The DAG extracts the error payload, runs recovery, and tags the result as Discard:
+
+```ts
+// Handler DAG (constructed by the tryCatch combinator, not user-written):
+Chain(
+  ExtractField("payload"),
+  Chain(recovery, Tag("Discard")),
+)
+```
+
+The Handle frame interprets `{ kind: "Discard", value }`: tears down the body subgraph and delivers `value` to its parent.
+
+### TypeScript implementation
+
+```ts
+export function tryCatch<TIn, TOut, TError>(
+  body: (throwError: TypedAction<TError, never>) => Pipeable<TIn, TOut>,
+  recovery: Pipeable<TError, TOut>,
+): TypedAction<TIn, TOut> {
+  const effectId = nextEffectId++;
+  const throwError = typedAction<TError, never>({ kind: "Perform", effect_id: effectId });
+  const bodyAction = body(throwError) as Action;
+
+  const handlerDag: Action = {
+    kind: "Chain",
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } } },
+    rest: {
+      kind: "Chain",
+      first: recovery as Action,
+      rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Discard" } } },
+    },
+  };
+
+  return typedAction({
+    kind: "Handle",
+    effect_id: effectId,
+    handler: handlerDag,
+    body: bodyAction,
+  });
+}
+```
+
+### Nested tryCatch
+
+Each tryCatch mints its own EffectId. Nested tryCatch gives precise targeting without re-throwing:
 
 ```ts
 tryCatch((throwOuter) =>
@@ -50,8 +101,8 @@ tryCatch((throwOuter) =>
     pipe(
       riskyAction,
       branch({
-        Recoverable: throwInner,   // caught by inner
-        Fatal: throwOuter,          // skips inner, caught by outer
+        Recoverable: throwInner,  // caught by inner
+        Fatal: throwOuter,        // skips inner, caught by outer
       }),
     ),
     innerRecovery,
@@ -60,114 +111,60 @@ tryCatch((throwOuter) =>
 )
 ```
 
-No re-throwing needed. `throwOuter` is `Perform(effectId_7)`, `throwInner` is `Perform(effectId_8)`. Each Handle matches its own ID.
+`throwOuter` is `Perform(effectId_7)`, `throwInner` is `Perform(effectId_8)`. Each Handle matches its own ID. Standard lexical scoping via `bubble_effect`.
 
-The handler DAG for Throw receives `{ payload: errorData, state: ... }` (state is unused for tryCatch) and runs the recovery action on the payload. The handler produces a Discard tagged output: the continuation is torn down and the Handle frame exits with the recovery result.
+## invokeWithThrow
+
+Convenience combinator for handlers that return `Result<TOut, TError>`. Branches on the result: Ok passes through, Err throws via the provided throw token.
+
+The handler remains oblivious to the effect system — it returns a `Result` value, and the AST translates it into control flow. This is the Free Monad / intent pattern.
+
+### How it works
+
+`Result<TOut, TError>` is a `TaggedUnion<{ Ok: TOut; Err: TError }>`. Branch auto-unwraps `value`, so the Ok case receives `TOut` directly and the Err case receives `TError` directly.
 
 ```ts
-// The handler DAG:
-pipe(
-  pick("payload"),    // extract the error data from { payload, state }
-  recovery,           // run the recovery branch
-  tag("Discard"),     // produces { kind: "Discard", value: recoveryResult }
-)
+export function invokeWithThrow<TIn, TOut, TError>(
+  handler: Pipeable<TIn, Result<TOut, TError>>,
+  throwError: Pipeable<TError, never>,
+): TypedAction<TIn, TOut> {
+  // handler → branch({ Ok: identity (pass through), Err: throwError })
+  return typedAction({
+    kind: "Chain",
+    first: handler as Action,
+    rest: {
+      kind: "Branch",
+      cases: unwrapBranchCases({
+        Ok: identity() as Action,
+        Err: throwError as Action,
+      }),
+    },
+  });
+}
 ```
 
-The Handle frame interprets `{ kind: "Discard", value }`: it tears down the body subgraph via `teardown_body` and delivers `value` to its parent. This is deterministic — see Phase 1's `discard_continuation` method.
-
-## Where Throw is performed
-
-Throw can come from two sources:
-
-### 1. Explicit throw via the intent pattern
-
-Handlers are opaque — they cannot emit effects directly. They return discriminated unions describing their intent. The AST interprets those unions and throws when appropriate.
+### Usage
 
 ```ts
-// Handler returns a result union:
-type HandlerResult =
-  | { kind: "Ok"; value: Output }
-  | { kind: "Err"; error: string };
-
-// AST interprets the intent:
 tryCatch(
   (throwError) => pipe(
-    invoke(riskyHandler),
-    branch({
-      Ok: pick("value"),
-      Err: pipe(pick("error"), throwError),
-    }),
+    invokeWithThrow(riskyHandler, throwError),
+    processResult,
   ),
   handleError,
 )
 ```
 
-A convenience combinator wraps the boilerplate. It takes the throw token as a parameter (explicit propagation):
+The throw token is always passed explicitly — same pattern as Rust's `Result` propagation. If a utility function needs to throw, its signature declares the throw token parameter.
+
+## Handler execution failure
+
+tryCatch handles **type-level errors only** — values returned by handlers via the `Result` type. If a handler panics, throws a JavaScript exception, or the runtime crashes, the existing error propagation path handles it. tryCatch does not catch those. This is analogous to Rust's `Result` vs `panic!` distinction.
+
+## tryCatch + bind interaction
 
 ```ts
-// invokeWithThrow: Invoke + branch on error union + throw
-function invokeWithThrow<TIn, TOut, TErr>(
-  handler: Pipeable<TIn, { kind: "Ok"; value: TOut } | { kind: "Err"; error: TErr }>,
-  throwError: Pipeable<TErr, never>,
-): TypedAction<TIn, TOut> {
-  return pipe(
-    handler,
-    branch({
-      Ok: pick("value"),
-      Err: pipe(pick("error"), throwError),
-    }),
-  );
-}
-
-// Usage:
-tryCatch(
-  (throwError) => pipe(invokeWithThrow(riskyHandler, throwError), processResult),
-  handleError,
-)
-```
-
-The handler remains oblivious to the effect system. It returns data. The AST translates data into control flow. This is the Free Monad / Control Plane / Data Plane separation (see EFFECTS_ROADMAP.md).
-
-The throw token is always passed explicitly. If a utility function needs to throw, its API surface declares it — same pattern as Rust's `Result` return types.
-
-### 2. Handler execution failure
-
-When an Invoke (external handler call) fails at runtime, the scheduler currently propagates the error up the frame tree. With Handle/Perform, a handler failure could instead emit a Throw effect, which bubble_effect routes to the nearest tryCatch Handle.
-
-This changes error propagation from a special-case mechanism to an effect. Whether to do this in Phase 3 or later is an open question. Options:
-
-**Option A: Error propagation remains separate.** Handler failures propagate via the existing error path. Throw is only for explicit user-initiated errors. TryCatch handles Throw effects; handler failures propagate past it.
-
-**Option B: Handler failures become Throw effects.** The scheduler converts handler failures to Perform(Throw). TryCatch catches both explicit throws and handler failures. The existing error propagation path is simplified (it only handles truly unrecoverable errors, like slab corruption).
-
-Option B is cleaner long-term but changes existing error semantics. Recommend Option A for Phase 3, migrate to Option B later if desired.
-
-## Frame teardown on discard
-
-When the handler produces Discard, `discard_continuation` (from Phase 1) calls `teardown_body` to clean up the body subgraph. See Phase 1's `teardown_body` and `is_descendant_of` for the implementation.
-
-The teardown scans the slab for all frames that are descendants of the Handle frame, removes them, and cancels their pending tasks via `task_to_parent.retain`. Nested Handle frames with their own suspended continuations are naturally cleaned up because their body frames are also descendants.
-
-## Nested tryCatch
-
-```ts
-tryCatch(
-  tryCatch(
-    riskyAction,
-    innerRecovery,
-  ),
-  outerRecovery,
-)
-```
-
-If riskyAction throws, the inner Handle catches it. If innerRecovery itself throws (or if the inner body throws an effect the inner Handle doesn't catch), the outer Handle catches it.
-
-This works naturally with bubble_effect: the Throw walks past the inner Handle (if it already handled its effect and exited) or is caught by the inner Handle (if it's still active). Standard lexical scoping.
-
-## tryCatch + declare interaction
-
-```ts
-declare([acquireResource], ([resource]) =>
+bind([acquireResource], ([resource]) =>
   tryCatch(
     (throwError) => pipe(resource, useResource, riskyStep(throwError)),
     pipe(resource, cleanupPartialWork, reportError),
@@ -175,41 +172,64 @@ declare([acquireResource], ([resource]) =>
 )
 ```
 
-The declare Handle is the outer scope. The tryCatch Handle is the inner scope. If riskyStep throws:
-1. bubble_effect walks up from the Perform(Throw) site.
-2. It finds the tryCatch Handle first (it's nearer).
-3. The tryCatch Handle discards the continuation and runs recovery.
-4. Recovery can reference `resource` via Perform(ReadVar) — the declare Handle is still active above.
-5. When recovery completes, the tryCatch Handle delivers the result.
-6. Eventually the declare Handle's body completes and scope cleanup runs.
+The bind Handle is the outer scope. The tryCatch Handle is inner. If riskyStep throws:
+1. `bubble_effect` walks up from the Perform site to the tryCatch Handle.
+2. The tryCatch Handle discards the continuation and runs recovery.
+3. Recovery can reference `resource` via the bind Handle (still active above).
+4. The ReadVar and Throw effects compose without interference — different Handle frames.
 
-The ReadVar and Throw effects compose without interference because they're routed to different Handle frames.
+## Demo: retry-on-error pipeline
+
+A workflow that runs multiple fallible steps inside a loop. Each step returns a `Result`. On any error, the catch handler logs the error and recurs. On success, done.
+
+```ts
+// Pipeline:
+//   loop(
+//     tryCatch(
+//       (throwError) => pipe(
+//         invokeWithThrow(stepA, throwError),
+//         invokeWithThrow(stepB, throwError),
+//         invokeWithThrow(stepC, throwError),
+//         done(),
+//       ),
+//       pipe(logError, recur()),
+//     ),
+//   )
+```
+
+The demo handlers are simple mocks: they randomly succeed or return an error. This isolates the tryCatch + invokeWithThrow pattern from domain-specific complexity.
 
 ## Test strategy
 
-### Rust scheduler tests
+### TypeScript type tests
 
-1. **Simple tryCatch**: Body throws, recovery runs, produces a value. Verify the value.
-2. **No throw**: Body completes normally. Recovery never runs. Verify body's output.
-3. **Throw discards continuation**: Body has work after the throw point. Verify it doesn't execute.
-4. **Throw inside Chain**: Throw is the first half of a Chain. Verify the rest doesn't execute.
-5. **Throw inside Parallel**: One parallel branch throws. Verify the other branch is cancelled during teardown.
-6. **Throw inside ForEach**: One iteration throws. Verify other iterations are cancelled.
-7. **Nested tryCatch**: Inner throw caught by inner handler. Outer handler doesn't fire.
-8. **Throw propagation**: Inner tryCatch doesn't match (e.g., catches a different effect type). Throw propagates to outer tryCatch.
-9. **Teardown cancels external tasks**: Body has a pending Invoke when throw happens. Verify the external task is cancelled.
-10. **tryCatch + declare**: Recovery branch references a variable from an outer declare. Verify it resolves correctly.
+1. `tryCatch(body, recovery)` — recovery input type matches the throw payload type.
+2. `tryCatch` output type matches both body and recovery output types.
+3. `invokeWithThrow(handler, throwToken)` — extracts `TOut` from `Result<TOut, TError>`.
+4. `throwError` token has type `TypedAction<TError, never>`.
+5. Nested tryCatch — each throwError token has independent TError.
 
 ### TypeScript compilation tests
 
 1. `tryCatch(body, recovery)` produces correct Handle/Perform AST.
-2. Recovery receives the error payload.
-3. Type checking: recovery input type matches the throw payload type.
+2. Handler DAG: `ExtractField("payload") → recovery → Tag("Discard")`.
+3. `invokeWithThrow` produces correct Chain/Branch AST.
+
+### Rust engine tests (using existing substrate)
+
+These are pre-existing from Phase 1. The tryCatch combinator produces Handle/Perform ASTs that the engine already handles. Specific patterns to validate:
+
+1. Body throws → recovery runs → produces a value.
+2. Body completes normally → recovery never runs.
+3. Throw inside Chain → rest doesn't execute.
+4. Throw inside All → other branches cancelled during teardown.
+5. Nested tryCatch → inner throw caught by inner handler.
 
 ## Deliverables
 
-1. `tryCatch()` TypeScript function (HOAS callback provides `throwError` token)
-2. Handler DAG: `pipe(pick("payload"), recovery, tag("Discard"))` — constructed by the `tryCatch` combinator
-3. Compilation: `Handle(freshEffectId, recoveryHandler, body)` where `throwError = Perform(freshEffectId)`
-4. Phase 1's `discard_continuation` / `teardown_body` handles frame cleanup (no new Rust work)
-5. Tests per above
+1. `tryCatch()` TypeScript function in `libs/barnum/src/try-catch.ts`
+2. `invokeWithThrow()` convenience combinator (same file)
+3. Export from `libs/barnum/src/ast.ts` barrel
+4. Type tests in `libs/barnum/tests/types.test.ts`
+5. Compilation tests (AST structure)
+6. Demo: `demos/retry-on-error/`
