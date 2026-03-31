@@ -159,26 +159,24 @@ loop(({ recur, done }) =>
 
 The closure is called at AST construction time. The AST shape is identical — `recur()` and `done()` produce the same Tag nodes. The difference is purely type-level.
 
-## scope / exit (proposed)
+## scope / jump
 
-`scope` is the generalization of `loop`. Where `loop` repeats on Continue and exits on Break, `scope` just exits on Exit and continues the pipeline otherwise.
+`scope` + `jump` is the general-purpose early return primitive. `done` in a loop is a jump — same mechanism, same Discard semantics. See EFFECTS_PHASE_4_LOOP.md for the full design.
 
-### ScopeResult
+- **`scope(body)`** — establishes a boundary. If `jump` fires inside the body, execution short-circuits to the scope boundary.
+- **`jump()`** — fires a Perform that bubbles up to the enclosing scope's Handle and discards the continuation.
 
-```ts
-type ScopeResultDef<TExit, TContinue> = { Exit: TExit; Continue: TContinue };
-type ScopeResult<TExit, TContinue> = TaggedUnion<ScopeResultDef<TExit, TContinue>>;
-```
+`loop` is built on top of this: `done` = `jump` out of the loop body's scope, `recur` = a separate RestartBody effect.
 
 ### The `?` operator
 
 ```ts
-scope(({ exit }) =>
+scope(({ jump }) =>
   pipe(
     tryAction(step1),
-    branch({ Ok: identity(), Err: exit() }),  // ? operator
+    branch({ Ok: identity(), Err: jump() }),  // ? operator
     tryAction(step2),
-    branch({ Ok: identity(), Err: exit() }),
+    branch({ Ok: identity(), Err: jump() }),
   ),
 )
 // output: last Ok value, or first Err value
@@ -187,72 +185,29 @@ scope(({ exit }) =>
 ### Scope semantics
 
 ```ts
-function scope<In, TExit, TOut>(
+function scope<In, TJump, TOut>(
   build: (ctx: {
-    exit: () => TypedAction<TExit, ScopeResult<TExit, never>>;
-  }) => TypedAction<In, TOut | ScopeResult<TExit, TOut>>,
-): TypedAction<In, TExit | TOut>
+    jump: () => TypedAction<TJump, never>;
+  }) => Pipeable<In, TOut>,
+): TypedAction<In, TJump | TOut>
 ```
-
-### Relationship between loop and scope
-
-`loop` = `scope` + implicit restart on Continue:
-
-```
-loop(body)  ≡  scope(({ exit }) =>
-                 pipe(
-                   body,
-                   branch({
-                     Continue: restart(),  // implicit in loop
-                     Break: exit(),
-                   }),
-                 ),
-               )
-```
-
-Whether to implement `loop` on top of `scope` or keep them as independent AST nodes is an implementation question.
-
-### Scope AST node
-
-```rust
-pub struct ScopeAction {
-    pub body: Box<Action>,
-    pub scope_id: ScopeId,
-}
-
-pub struct ExitAction {
-    pub scope_id: ScopeId,
-}
-```
-
-The `scope_id` connects `exit()` to its enclosing `scope`. The engine unwinds frames back to the Scope frame when it sees an Exit tag.
 
 ### Sugar: `propagate`
 
 ```ts
-// Without sugar:
-scope(({ exit }) =>
-  pipe(
-    tryAction(step1),
-    branch({ Ok: identity(), Err: exit() }),
-    tryAction(step2),
-    branch({ Ok: identity(), Err: exit() }),
-  ),
-)
-
 // With propagate sugar:
-scope(({ exit }) =>
+scope(({ jump }) =>
   pipe(
-    tryAction(step1), propagate(exit),
-    tryAction(step2), propagate(exit),
+    tryAction(step1), propagate(jump),
+    tryAction(step2), propagate(jump),
   ),
 )
 
 // Where:
-function propagate<T, E>(exit: () => TypedAction<E, ScopeResult<E, never>>)
+function propagate<T, E>(jump: () => TypedAction<E, never>)
   : TypedAction<Result<T, E>, T>
 {
-  return branch({ Ok: identity(), Err: exit() });
+  return branch({ Ok: identity(), Err: jump() });
 }
 ```
 
