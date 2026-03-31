@@ -15,27 +15,30 @@ import {
   withTimeout,
 } from "@barnum/barnum/src/ast.js";
 import { constant, drop } from "@barnum/barnum/src/builtins.js";
-import { stepA, stepB, stepC, stepD, logError } from "./handlers/steps.js";
+import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
 
 console.error("=== Retry-on-error demo ===\n");
 
 await workflowBuilder()
   .workflow(() =>
-    earlyReturn<any, string, any>((earlyReturn) =>
+    earlyReturn<any, never, any>((earlyReturn) =>
       loop<any, any>((recur, done) =>
         pipe(
           drop<any>(),
           tryCatch(
-            (throwError) => pipe(
-              stepA.unwrapOr(throwError).drop(),
-              withTimeout(constant(2_000), stepB.unwrapOr(throwError))
-                .mapErr(constant("stepB: timed out"))
-                .unwrapOr(throwError)
-                .drop(),
-              stepC.unwrapOr(throwError).drop(),
-              stepD.unwrapOr(earlyReturn),
-              done,
-            ),
+            (throwError) =>
+              pipe(
+                // stepA may fail — unwrapOr surfaces the error as a Result
+                stepA.unwrapOr(throwError).drop(),
+                // stepB may fail and may take unreasonably long
+                withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+                  .mapErr(constant("stepB: timed out"))
+                  .unwrapOr(throwError)
+                  .drop(),
+                // If stepC errors, it's catastrophic — exit immediately
+                stepC.mapErr(drop()).unwrapOr(earlyReturn),
+                done,
+              ),
             // An error occurred — log it and retry the loop
             logError.drop().then(recur),
           ),

@@ -60,32 +60,19 @@ export const stepB = createHandler({
   },
 }, "stepB");
 
-/** Step C: finalize. Succeeds ~70% of the time. */
+/** Step C: finalize. Succeeds ~80%, catastrophic failure ~20%.
+ *  Errors from stepC are catastrophic — the workflow exits immediately. */
 export const stepC = createHandler({
   handle: async (): Promise<StepResult> => {
-    const succeed = Math.random() < 0.7;
+    const succeed = Math.random() < 0.8;
     if (succeed) {
       console.error("[stepC] Finalized");
       return ok("finalized");
     }
-    console.error("[stepC] Finalization failed");
-    return err("stepC: finalization failed");
+    console.error("[stepC] CATASTROPHIC finalization failure");
+    return err("stepC: catastrophic failure — do not retry");
   },
 }, "stepC");
-
-/** Step D: deploy. Succeeds ~80%, catastrophic failure ~20%.
- *  Catastrophic failures should abort the workflow, not retry. */
-export const stepD = createHandler({
-  handle: async (): Promise<StepResult> => {
-    const succeed = Math.random() < 0.8;
-    if (succeed) {
-      console.error("[stepD] Deployed");
-      return ok("deployed");
-    }
-    console.error("[stepD] CATASTROPHIC deploy failure");
-    return err("stepD: catastrophic failure — do not retry");
-  },
-}, "stepD");
 
 /** Log an error and prepare for retry. Receives the error string. */
 export const logError = createHandler({
