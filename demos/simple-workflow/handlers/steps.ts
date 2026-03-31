@@ -10,7 +10,15 @@ export const listFiles = createHandler({
 
 export const refactor = createHandler({
   inputValidator: z.string(),
-  handle: async ({ value: file }): Promise<void> => {
+  handle: async ({ value: file }) => {
     console.error(`[refactor] Refactoring ${file}`);
+    return file;
   },
 }, "refactor");
+
+export const typeCheckFix = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }): Promise<void> => {
+    console.error(`[typeCheckFix] Type-checking ${file}`);
+  },
+}, "typeCheckFix");
