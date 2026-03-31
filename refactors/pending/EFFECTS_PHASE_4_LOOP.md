@@ -31,22 +31,24 @@ scope(jump =>
   pipe(step1, branch({ Bad: jump(), Good: identity() }), step2)
 )
 
+// jump(v) = pipe(tag<LoopResultDef, "Break">("Break"), Perform(jumpEffect))
+
 // Compiles to:
 Handle(jumpEffect, RestartBody,
   Branch({
-    Enter: pipe(step1, branch({ Bad: Perform(jumpEffect), Good: identity() }), step2),
-    Jumped: identity(),
+    Continue: pipe(step1, branch({ Bad: Perform(jumpEffect), Good: identity() }), step2),
+    Break: identity(),
   })
 )
 ```
 
-Initial input tagged as `{ kind: "Enter", value: input }`. When `jump(v)` fires, the handler restarts the body with `{ kind: "Jumped", value: v }`. The Jumped branch produces `v` via `identity()`, exiting the scope through normal completion.
+The internal branch dispatches on `LoopResult` — the same control flow enum used by `loop`. `Continue` = run the body, `Break` = exit with the jumped value. Initial input tagged as `LoopResult::Continue`. When `jump(v)` fires, the handler restarts the body with `LoopResult::Break(v)`. The Break branch produces `v` via `identity()`, exiting the scope through normal completion.
 
-One effect. One handler. No Discard mechanism.
+One effect. One handler. No Discard mechanism. Same control flow enum as loop — scope and loop share `LoopResult` as their dispatch type.
 
 ## How loop compiles
 
-Both `recur` and `done` are jumps — they both fire Performs targeting the same EffectId. The difference is the variant tag they carry. The branch at the top of the compiled scope dispatches on the variant.
+Both `recur` and `done` are jumps — they both fire Performs targeting the same EffectId. The difference is the variant tag they carry. The branch at the top of the compiled scope dispatches on `LoopResult<TContinue, TBreak>` — the existing control flow enum (same pattern as `Option` and `Result`, already defined in `ast.ts`).
 
 ```ts
 // User writes:
@@ -54,8 +56,8 @@ loop(({ recur, done }) =>
   pipe(body, branch({ HasErrors: pipe(fix, recur()), Clean: done() }))
 )
 
-// recur(v) = pipe(Tag("Continue"), Perform(jumpEffect))
-// done(v)  = pipe(Tag("Break"), Perform(jumpEffect))
+// recur(v) = pipe(tag<LoopResultDef, "Continue">("Continue"), Perform(jumpEffect))
+// done(v)  = pipe(tag<LoopResultDef, "Break">("Break"), Perform(jumpEffect))
 
 // Compiles to:
 Handle(jumpEffect, RestartBody,
@@ -66,7 +68,9 @@ Handle(jumpEffect, RestartBody,
 )
 ```
 
-Initial input tagged as `{ kind: "Continue", value: input }`. Recur tags as Continue, done tags as Break. The handler always responds with RestartBody. The branch dispatches: Continue runs the body, Break exits.
+Initial input tagged as `LoopResult` with `{ kind: "Continue", value: input }`. Recur produces `LoopResult::Continue`, done produces `LoopResult::Break`. The handler always responds with RestartBody. The branch dispatches on the `LoopResult` variants: Continue runs the body, Break exits.
+
+The `LoopResult` type carries `__def` so the branch gets exhaustiveness checking and type-safe payload extraction — same as branching on `Result<Ok, Err>` or `Option<T>`.
 
 ### Why both recur and done are effects
 
@@ -98,8 +102,8 @@ function propagate<TValue, TError>(
 
 ## Migration strategy
 
-1. **Implement scope + jump** — Handle with RestartBody + Enter/Jumped branch.
-2. **Compile loop to scope** — Both recur and done are Performs. Branch dispatches Continue vs Break.
+1. **Implement scope + jump** — Handle with RestartBody + LoopResult branch (Continue = run body, Break = exit).
+2. **Compile loop to scope** — Both recur and done are Performs producing LoopResult variants. Branch dispatches on LoopResult.
 3. **Verify test parity** — All existing loop tests pass.
 4. **Remove LoopAction** — From tree AST, Rust scheduler, and flattener.
 5. **Add early return to kitchen-sink demo** — scope + jump for catastrophic error bailout.
