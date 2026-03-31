@@ -33,9 +33,21 @@ function resolveWorker(): string {
   return path.resolve(__dirname, "worker.ts");
 }
 
+/** Build the barnum binary if using the local dev path. */
+function buildBinary(): void {
+  const repoRoot = path.resolve(__dirname, "../../..");
+  execFileSync("cargo", ["build", "-p", "barnum_cli"], {
+    cwd: repoRoot,
+    stdio: "ignore",
+  });
+}
+
 /** Run a workflow config to completion. Prints result to stdout. */
 export function run(config: Config): void {
   const binary = resolveBinary();
+  if (!process.env.BARNUM) {
+    buildBinary();
+  }
   const executor = resolveExecutor();
   const worker = resolveWorker();
   const configJson = JSON.stringify(config);
