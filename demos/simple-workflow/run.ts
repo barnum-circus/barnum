@@ -8,5 +8,5 @@ import { workflowBuilder } from "@barnum/barnum/src/ast.js";
 import { listFiles, refactor } from "./handlers/steps.js";
 
 await workflowBuilder()
-  .workflow(() => listFiles.then(refactor.forEach().drop()))
+  .workflow(() => listFiles.forEach(refactor).drop())
   .run();

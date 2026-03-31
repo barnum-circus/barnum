@@ -180,8 +180,11 @@ export type TypedAction<
   then<TNext, TRefs2 extends string = never>(
     next: Pipeable<Out, TNext, TRefs2>,
   ): TypedAction<In, TNext, Refs | TRefs2>;
-  /** Lift this action to operate on arrays. `a.forEach()` ≡ `forEach(a)`. */
-  forEach(): TypedAction<In[], Out[], Refs>;
+  /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
+  forEach<TIn, TElement, TNext, TRefs extends string, TRefs2 extends string = never>(
+    this: TypedAction<TIn, TElement[], TRefs>,
+    action: Pipeable<TElement, TNext, TRefs2>,
+  ): TypedAction<TIn, TNext[], TRefs | TRefs2>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
   branch<TCases extends { [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>, unknown, string> }>(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
@@ -374,10 +377,11 @@ function thenMethod<TIn, TOut, TRefs extends string, TNext, TRefs2 extends strin
   return typedAction({ kind: "Chain", first: this, rest: next as Action });
 }
 
-function forEachMethod<TIn, TOut, TRefs extends string>(
-  this: TypedAction<TIn, TOut, TRefs>,
-): TypedAction<TIn[], TOut[], TRefs> {
-  return typedAction({ kind: "ForEach", action: this });
+function forEachMethod(
+  this: TypedAction,
+  action: Action,
+): TypedAction {
+  return typedAction({ kind: "Chain", first: this, rest: { kind: "ForEach", action } });
 }
 
 function branchMethod(
