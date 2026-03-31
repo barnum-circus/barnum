@@ -1,4 +1,4 @@
-import { type Action, type LoopResult, type Option as OptionT, type OptionDef, type Pipeable, type Result as ResultT, type ResultDef, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type LoopResult, type Option as OptionT, type Pipeable, type Result as ResultT, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**

@@ -109,9 +109,8 @@ export function sleep(): TypedAction<number, void> {
 // resolves after that duration.
 Object.defineProperty(sleep, "__definition", {
   value: {
-    handle: ({ value }: { value: number }) => {
-      return new Promise<void>((resolve) => setTimeout(resolve, value));
-    },
+    handle: ({ value }: { value: number }) =>
+      new Promise<void>((resolve) => setTimeout(resolve, value)),
   },
   enumerable: false,
 });

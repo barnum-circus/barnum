@@ -42,6 +42,11 @@
     "typescript/no-explicit-any": "off",
     "typescript/ban-types": "off",
     "typescript/no-empty-object-type": "off",
-    "typescript/no-use-before-define": "off"
+    "typescript/no-use-before-define": "off",
+    "typescript/no-invalid-void-type": "off",
+    "typescript/consistent-type-definitions": "off",
+
+    "eslint/max-lines-per-function": "off",
+    "eslint/no-promise-executor-return": "off"
   }
 }

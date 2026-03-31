@@ -182,7 +182,7 @@ export function createHandlerWithConfig(
   // The factory function is the module export, so it must also carry
   // __definition for the worker to find (the worker imports the module
   // and accesses the named export, which is this function).
-  const factory = (config: unknown) =>
+  const factory = (config: unknown): TypedAction =>
     typedAction({
       kind: "Chain",
       first: {
