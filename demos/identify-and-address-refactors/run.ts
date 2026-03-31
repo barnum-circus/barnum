@@ -31,6 +31,7 @@ import {
 } from "@barnum/barnum/src/ast.js";
 import {
   constant,
+  drop,
   pick,
   withResource,
   Option,
@@ -64,10 +65,10 @@ type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: strin
 await workflowBuilder()
   // Type-check/fix: run tsc, fix errors, repeat until clean.
   .registerSteps({
-    TypeCheckFix: loop<void>((recur, done) =>
+    TypeCheckFix: loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
+        Clean: drop(),
       }),
     ),
   })
@@ -78,10 +79,10 @@ await workflowBuilder()
       implementAndReviewParams.pick("worktreePath").then(steps.TypeCheckFix).drop(),
 
       // Judge quality; revise and re-check if needed.
-      loop<void>((recur, done) =>
+      loop((recur) =>
         pipe(judgeRefactor, classifyJudgment).branch({
           NeedsWork: pipe(applyFeedback, steps.TypeCheckFix).drop().then(recur),
-          Approved: done,
+          Approved: drop(),
         }),
       ).drop(),
 

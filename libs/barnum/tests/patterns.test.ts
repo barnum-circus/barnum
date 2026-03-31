@@ -183,13 +183,13 @@ describe("loop", () => {
         setup,
         listFiles,
         forEach(migrate),
-      ).then(loop<void>((recur, done) =>
+      ).then(loop((recur) =>
         pipe(
           typeCheck,
           classifyErrors,
         ).branch({
           HasErrors: pipe(forEach(fix).drop(), recur),
-          Clean: done,
+          Clean: drop(),
         }),
       )),
     );

@@ -82,10 +82,10 @@ describe("named steps", () => {
   it("uses named steps for a fix cycle", () => {
     const cfg = workflowBuilder()
       .registerSteps({
-        FixCycle: loop<void>((recur, done) =>
+        FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: done,
+            Clean: drop(),
           }),
         ),
       })
@@ -108,10 +108,10 @@ describe("named steps", () => {
         Migrate: pipe(listFiles, forEach(migrate)),
       })
       .registerSteps({
-        FixCycle: loop<void>((recur, done) =>
+        FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: done,
+            Clean: drop(),
           }),
         ),
       })
@@ -305,10 +305,10 @@ describe("kitchen sink", () => {
           stepRef("FixCycle"), // jump to the fix cycle defined below
         ),
         // FixCycle: type-check, classify errors, fix or finish
-        FixCycle: loop<void>((recur, done) =>
+        FixCycle: loop((recur) =>
           pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix).drop(), recur),
-            Clean: done,
+            Clean: drop(),
           }),
         ),
       }))

@@ -303,19 +303,19 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it("loop with branch/recur/done: output is Break value type", () => {
-    const action = loop<void>((recur, done) =>
+  it("loop with branch/recur/drop: output is never when done unused", () => {
+    const action = loop((recur) =>
       pipe(
         typeCheck,
         classifyErrors,
       ).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
+        Clean: drop(),
       }),
     );
-    // Loop output: the Break value from done in the Clean case (void after auto-unwrap)
+    // Loop output: never (TBreak defaults to never, done not used)
     assertExact<
-      IsExact<ExtractOutput<typeof action>, void>
+      IsExact<ExtractOutput<typeof action>, never>
     >();
     expect(action.kind).toBe("Chain");
   });
@@ -326,18 +326,18 @@ describe("combinator types", () => {
       setup,
       listFiles,
       forEach(migrate),
-    ).then(loop<void>((recur, done) =>
+    ).then(loop((recur) =>
       pipe(
         typeCheck,
         classifyErrors,
       ).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
+        Clean: drop(),
       }),
     ));
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, void>
+      IsExact<ExtractOutput<typeof action>, never>
     >();
     expect(action.kind).toBe("Chain");
   });
@@ -1270,58 +1270,48 @@ describe("withTimeout types", () => {
 // Loop type parameter constraints
 // ---------------------------------------------------------------------------
 //
-// TBreak MUST be provided explicitly when done receives a non-never value.
-// TypeScript cannot infer TBreak from how the `done` token is used inside
-// the callback body. This section documents WHY and adds guardrail tests.
+// loop<TBreak, TIn> — both default to never.
 //
-// Three constraints interact:
+// For "terminate" loops (type-check-fix pattern), use drop() in the
+// termination case instead of done. The loop body completes without
+// Perform, and the Handle exits normally. No type params needed.
 //
-// 1. HOAS inference limitation: callback params are synthesized from defaults
-//    BEFORE the body is analyzed. TBreak only appears in `done`'s type (a
-//    callback param), which is NOT an inference site. Falls to default.
+// done is only needed for stateful loops where TBreak carries data
+// (e.g., healthCheck returning { stable: true }).
 //
-// 2. PipeIn on done's input breaks unwrapOr: if done were TypedAction<any, never>,
-//    then .unwrapOr(done) infers TError=any. The invariant __phantom_out_check
-//    rejects Result<V, never> vs Result<V, any>.
-//
-// 3. Making done output TBreak creates circular inference: TypeScript needs
-//    TBreak to type done → done's type to compute body return → body return
-//    to infer TBreak. Falls back to unknown.
-//
-// Given these constraints, TBreak is listed first in loop<TBreak, TIn> so the
-// common "break with void" pattern is just loop<void>(...) instead of
-// loop<never, void>(...).
+// TBreak is listed first so stateful loops can write loop<BreakType>
+// when TIn=never.
 
 describe("loop type parameter constraints", () => {
   beforeEach(() => {
     resetEffectIdCounter();
   });
 
-  // -- Pattern 1: both default to never (retry-on-error style) ---------------
+  // -- Pattern 1: terminate loop (type-check-fix) ----------------------------
 
-  it("loop with no type params: TBreak=never, TIn=never", () => {
-    const action = loop((recur, done) =>
+  it("loop with drop() in Clean case: zero type params", () => {
+    const action = loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        // Clean passes void, but done expects never — use drop() first
-        Clean: pipe(drop<void>(), done),
+        Clean: drop(),
       }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, never>>();
   });
 
-  // -- Pattern 2: break with void (type-check-fix style) ---------------------
+  // -- Pattern 2: retry loop (retry-on-error) --------------------------------
 
-  it("loop<void>: done accepts void from Clean case", () => {
-    const action = loop<void>((recur, done) =>
-      pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
-      }),
-    );
-    assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, void>>();
+  it("loop with done in unwrapOr: zero type params", () => {
+    const stepC = R.ok<string, string>() as TypedAction<string, Result<string, string>>;
+
+    loop((_recur, done) => {
+      // unwrapOr(done) works because done's input is never,
+      // and mapErr(drop()) erases the error type to never — exact match.
+      const unwrapped = stepC.mapErr(drop()).unwrapOr(done);
+      assertExact<IsExact<ExtractOutput<typeof unwrapped>, string>>();
+      return done;
+    });
   });
 
   // -- Pattern 3: stateful loop (healthCheck style) --------------------------
@@ -1334,22 +1324,18 @@ describe("loop type parameter constraints", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
   });
 
-  // -- Constraint 1: TBreak defaults to never, not inferred from body --------
+  // -- done defaults to never, can't accept non-never values -----------------
 
   it("without explicit TBreak, done has input=never (rejects void)", () => {
     loop((_recur, done) => {
-      // done's input is never (= TBreak default), verified statically:
       assertExact<IsExact<ExtractInput<typeof done>, never>>();
-      // This means done can't be used directly in Clean (payload void).
       // @ts-expect-error — done: TypedAction<never, never> can't accept void from Clean
       classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
-      return done; // valid body return: Pipeable<never, never>
+      return done;
     });
   });
 
   it("without explicit TBreak, done has input=never (rejects objects)", () => {
-    // Even when the branch case clearly carries { deployed: boolean },
-    // TypeScript can't backward-infer TBreak from done's usage position.
     loop((_recur, done) => {
       // @ts-expect-error — done: TypedAction<never, never> can't accept { deployed: boolean }
       healthCheck.branch({ Continue: drop(), Break: done });
@@ -1357,38 +1343,15 @@ describe("loop type parameter constraints", () => {
     });
   });
 
-  // -- Constraint 2: done token works correctly in unwrapOr ------------------
+  // -- Token types -----------------------------------------------------------
 
-  it("done with TBreak=never works in unwrapOr (error type is never)", () => {
-    // This is the retry-on-error pattern: mapErr(drop()) erases the error
-    // type to never, matching done's input=never exactly.
-    const stepC = R.ok<string, string>() as TypedAction<string, Result<string, string>>;
-
-    loop((_recur, done) => {
-      // unwrapOr(done) works because done's input is never,
-      // and mapErr(drop()) erases the error type to never — exact match.
-      const unwrapped = stepC.mapErr(drop()).unwrapOr(done);
-      assertExact<IsExact<ExtractOutput<typeof unwrapped>, string>>();
-      // Return done directly — TypedAction<never, never> satisfies Pipeable<never, never>
+  it("done and recur both output never (they're terminal)", () => {
+    loop((recur, done) => {
+      assertExact<IsExact<ExtractOutput<typeof recur>, never>>();
+      assertExact<IsExact<ExtractOutput<typeof done>, never>>();
       return done;
     });
   });
-
-  // -- Constraint 3: done's output is never (terminal) -----------------------
-
-  it("done and recur both output never (they're terminal)", () => {
-    loop<void>((recur, done) => {
-      // Both tokens output never — using them ends the path
-      assertExact<IsExact<ExtractOutput<typeof recur>, never>>();
-      assertExact<IsExact<ExtractOutput<typeof done>, never>>();
-      return pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
-      });
-    });
-  });
-
-  // -- Token types match the type parameters ---------------------------------
 
   it("recur's input type is TIn", () => {
     loop<{ stable: true }, { deployed: boolean }>((recur, _done) => {
@@ -1404,16 +1367,15 @@ describe("loop type parameter constraints", () => {
     });
   });
 
-  // -- PipeIn: loop with TIn=never accepts any input in pipe -----------------
+  // -- PipeIn ----------------------------------------------------------------
 
   it("loop with TIn=never has PipeIn input (accepts any)", () => {
-    const action = loop<void>((recur, done) =>
+    const action = loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: done,
+        Clean: drop(),
       }),
     );
-    // PipeIn<never> = any — loop can sit anywhere in a pipe
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
   });
 
@@ -1421,20 +1383,16 @@ describe("loop type parameter constraints", () => {
     const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
       healthCheck.branch({ Continue: recur, Break: done }),
     );
-    // TIn is explicit, not PipeIn'd
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
   });
 
-  // -- .drop() before tokens in pipe positions -------------------------------
+  // -- .drop() before recur in mid-pipe positions ----------------------------
 
-  it(".drop() is required before recur/done in mid-pipe positions", () => {
-    // Tokens have input TIn/TBreak (both never by default). After a step
-    // that outputs a value, .drop() converts the output to never, matching
-    // the token's input type.
-    loop<void>((recur, done) =>
+  it(".drop() is required before recur in mid-pipe positions", () => {
+    loop((recur) =>
       pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop(), recur), // .drop() → never, matches recur's input
-        Clean: done, // done's input is void (= TBreak), matches Clean's payload
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: drop(),
       }),
     );
   });
