@@ -21,7 +21,7 @@ console.error("=== Retry-on-error demo ===\n");
 
 await workflowBuilder()
   .workflow(() =>
-    earlyReturn<any, string>((earlyReturn) =>
+    earlyReturn((earlyReturn) =>
       loop<any, string>((recur, done) =>
         pipe(
           drop<any>(),
