@@ -21,7 +21,7 @@ console.error("=== Retry-on-error demo ===\n");
 
 await workflowBuilder()
   .workflow(() =>
-    scope<any, string, any>((jump) =>
+    scope<any, string, any>((earlyReturn) =>
       loop<any, any>((recur, done) =>
         pipe(
           drop<any>(),
@@ -33,7 +33,7 @@ await workflowBuilder()
                 .unwrapOr(throwError)
                 .drop(),
               stepC.unwrapOr(throwError).drop(),
-              stepD.unwrapOr(jump),
+              stepD.unwrapOr(earlyReturn),
               done,
             ),
             logError.drop().then(recur),
