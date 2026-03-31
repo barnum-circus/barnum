@@ -306,7 +306,6 @@ describe("combinator types", () => {
   it("loop with branch/recur/done: output is Break value type", () => {
     const action = loop<any, void>((recur, done) =>
       pipe(
-        drop<any>(),
         typeCheck,
         classifyErrors,
       ).branch({
@@ -329,7 +328,6 @@ describe("combinator types", () => {
       forEach(migrate),
     ).then(loop<any, void>((recur, done) =>
       pipe(
-        drop<any>(),
         typeCheck,
         classifyErrors,
       ).branch({

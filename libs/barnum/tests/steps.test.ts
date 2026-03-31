@@ -83,7 +83,7 @@ describe("named steps", () => {
     const cfg = workflowBuilder()
       .registerSteps({
         FixCycle: loop<any, void>((recur, done) =>
-          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+          pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix), recur),
             Clean: done,
           }),
@@ -109,7 +109,7 @@ describe("named steps", () => {
       })
       .registerSteps({
         FixCycle: loop<any, void>((recur, done) =>
-          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+          pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix), recur),
             Clean: done,
           }),
@@ -245,7 +245,6 @@ describe("showcase: type-check ↔ fix cycle", () => {
     const cfg = workflowBuilder()
       .registerSteps(({ stepRef }) => ({
         TypeCheck: pipe(
-          drop<any>(),
           typeCheck,
           classifyErrors,
           branch({
@@ -255,7 +254,6 @@ describe("showcase: type-check ↔ fix cycle", () => {
         ),
         FixAll: pipe(
           forEach(fix),
-          drop<any>(),
           stepRef("TypeCheck"),
         ),
       }))
@@ -265,7 +263,6 @@ describe("showcase: type-check ↔ fix cycle", () => {
           setup,
           listFiles,
           forEach(migrate),
-          drop<any>(),
           steps.TypeCheck,
         ),
       );
@@ -309,7 +306,7 @@ describe("kitchen sink", () => {
         ),
         // FixCycle: type-check, classify errors, fix or finish
         FixCycle: loop<any, void>((recur, done) =>
-          pipe(drop<any>(), typeCheck, classifyErrors).branch({
+          pipe(typeCheck, classifyErrors).branch({
             HasErrors: pipe(forEach(fix), recur),
             Clean: done,
           }),

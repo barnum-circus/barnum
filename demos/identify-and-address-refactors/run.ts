@@ -31,7 +31,6 @@ import {
 } from "@barnum/barnum/src/ast.js";
 import {
   constant,
-  drop,
   pick,
   withResource,
   Option,
@@ -66,7 +65,7 @@ await workflowBuilder()
   // Type-check/fix: run tsc, fix errors, repeat until clean.
   .registerSteps({
     TypeCheckFix: loop<any, void>((recur, done) =>
-      pipe(drop<any>(), typeCheck, classifyErrors).branch({
+      pipe(typeCheck, classifyErrors).branch({
         HasErrors: pipe(forEach(fix), recur),
         Clean: done,
       }),
@@ -80,7 +79,7 @@ await workflowBuilder()
 
       // Judge quality; revise and re-check if needed.
       loop<any, void>((recur, done) =>
-        pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
+        pipe(judgeRefactor, classifyJudgment).branch({
           NeedsWork: pipe(applyFeedback, steps.TypeCheckFix, recur),
           Approved: done,
         }),

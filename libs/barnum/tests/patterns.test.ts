@@ -185,7 +185,6 @@ describe("loop", () => {
         forEach(migrate),
       ).then(loop<any, void>((recur, done) =>
         pipe(
-          drop<any>(),
           typeCheck,
           classifyErrors,
         ).branch({

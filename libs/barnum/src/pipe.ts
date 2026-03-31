@@ -1,13 +1,16 @@
 import { type Action, type Pipeable, type TypedAction, typedAction } from "./ast.js";
 import { identity } from "./builtins.js";
 
+/** When the first pipe element has `never` input (ignores input), the pipe accepts any input. */
+type PipeIn<T> = [T] extends [never] ? any : T;
+
 export function pipe<T1, T2, R1 extends string>(
   a1: Pipeable<T1, T2, R1>,
-): TypedAction<T1, T2, R1>;
+): TypedAction<PipeIn<T1>, T2, R1>;
 export function pipe<T1, T2, T3, R1 extends string, R2 extends string>(
   a1: Pipeable<T1, T2, R1>,
   a2: Pipeable<T2, T3, R2>,
-): TypedAction<T1, T3, R1 | R2>;
+): TypedAction<PipeIn<T1>, T3, R1 | R2>;
 export function pipe<
   T1, T2, T3, T4,
   R1 extends string, R2 extends string, R3 extends string,
@@ -15,7 +18,7 @@ export function pipe<
   a1: Pipeable<T1, T2, R1>,
   a2: Pipeable<T2, T3, R2>,
   a3: Pipeable<T3, T4, R3>,
-): TypedAction<T1, T4, R1 | R2 | R3>;
+): TypedAction<PipeIn<T1>, T4, R1 | R2 | R3>;
 export function pipe<
   T1, T2, T3, T4, T5,
   R1 extends string, R2 extends string, R3 extends string, R4 extends string,
@@ -24,7 +27,7 @@ export function pipe<
   a2: Pipeable<T2, T3, R2>,
   a3: Pipeable<T3, T4, R3>,
   a4: Pipeable<T4, T5, R4>,
-): TypedAction<T1, T5, R1 | R2 | R3 | R4>;
+): TypedAction<PipeIn<T1>, T5, R1 | R2 | R3 | R4>;
 export function pipe<
   T1, T2, T3, T4, T5, T6,
   R1 extends string, R2 extends string, R3 extends string,
@@ -35,7 +38,7 @@ export function pipe<
   a3: Pipeable<T3, T4, R3>,
   a4: Pipeable<T4, T5, R4>,
   a5: Pipeable<T5, T6, R5>,
-): TypedAction<T1, T6, R1 | R2 | R3 | R4 | R5>;
+): TypedAction<PipeIn<T1>, T6, R1 | R2 | R3 | R4 | R5>;
 export function pipe<
   T1, T2, T3, T4, T5, T6, T7,
   R1 extends string, R2 extends string, R3 extends string,
@@ -47,7 +50,7 @@ export function pipe<
   a4: Pipeable<T4, T5, R4>,
   a5: Pipeable<T5, T6, R5>,
   a6: Pipeable<T6, T7, R6>,
-): TypedAction<T1, T7, R1 | R2 | R3 | R4 | R5 | R6>;
+): TypedAction<PipeIn<T1>, T7, R1 | R2 | R3 | R4 | R5 | R6>;
 export function pipe<
   T1, T2, T3, T4, T5, T6, T7, T8,
   R1 extends string, R2 extends string, R3 extends string,
@@ -61,7 +64,7 @@ export function pipe<
   a5: Pipeable<T5, T6, R5>,
   a6: Pipeable<T6, T7, R6>,
   a7: Pipeable<T7, T8, R7>,
-): TypedAction<T1, T8, R1 | R2 | R3 | R4 | R5 | R6 | R7>;
+): TypedAction<PipeIn<T1>, T8, R1 | R2 | R3 | R4 | R5 | R6 | R7>;
 export function pipe<
   T1, T2, T3, T4, T5, T6, T7, T8, T9,
   R1 extends string, R2 extends string, R3 extends string,
@@ -76,7 +79,7 @@ export function pipe<
   a6: Pipeable<T6, T7, R6>,
   a7: Pipeable<T7, T8, R7>,
   a8: Pipeable<T8, T9, R8>,
-): TypedAction<T1, T9, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8>;
+): TypedAction<PipeIn<T1>, T9, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8>;
 export function pipe<
   T1, T2, T3, T4, T5, T6, T7, T8, T9, T10,
   R1 extends string, R2 extends string, R3 extends string,
@@ -92,7 +95,7 @@ export function pipe<
   a7: Pipeable<T7, T8, R7>,
   a8: Pipeable<T8, T9, R8>,
   a9: Pipeable<T9, T10, R9>,
-): TypedAction<T1, T10, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9>;
+): TypedAction<PipeIn<T1>, T10, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9>;
 export function pipe<
   T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11,
   R1 extends string, R2 extends string, R3 extends string,
@@ -110,7 +113,7 @@ export function pipe<
   a8: Pipeable<T8, T9, R8>,
   a9: Pipeable<T9, T10, R9>,
   a10: Pipeable<T10, T11, R10>,
-): TypedAction<T1, T11, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10>;
+): TypedAction<PipeIn<T1>, T11, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10>;
 export function pipe(...actions: Action[]): Action {
   if (actions.length === 0) {
     return identity();
