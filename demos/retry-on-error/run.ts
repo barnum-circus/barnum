@@ -43,7 +43,6 @@ await workflowBuilder()
     loop(
       tryCatch(
         (throwError) => pipe(
-          drop<never>(),
           invokeWithThrow(stepA, throwError),
           drop(),
           invokeWithThrow(stepB, throwError),
