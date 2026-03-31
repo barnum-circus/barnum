@@ -1,4 +1,5 @@
 import { execFileSync } from "child_process";
+import { existsSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +24,7 @@ import {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
+const HAS_BINARY = existsSync(BINARY);
 
 /** Pipe JSON through `barnum check --config` and parse the output. */
 function roundTrip(input: unknown): unknown {
@@ -33,7 +35,7 @@ function roundTrip(input: unknown): unknown {
   return JSON.parse(stdout);
 }
 
-describe("barnum round-trip", () => {
+describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   beforeEach(() => {
     resetEffectIdCounter();
   });
