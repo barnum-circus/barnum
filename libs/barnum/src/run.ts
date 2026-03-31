@@ -5,6 +5,8 @@
 
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Config } from "./ast.js";
@@ -18,14 +20,59 @@ function resolveExecutor(): string {
   return `node ${tsxPath}`;
 }
 
-/** Resolve the barnum binary. BARNUM env var overrides for local dev. */
-function resolveBinary(): string {
-  if (process.env.BARNUM) {
-    return process.env.BARNUM;
+/** Resolve the platform-specific binary from the @barnum/barnum package artifacts. */
+function resolveInstalledBinary(): string | undefined {
+  const platform = os.platform();
+  const arch = os.arch();
+
+  let artifactDir: string;
+  let binaryName = "barnum";
+
+  if (platform === "darwin" && arch === "arm64") artifactDir = "macos-arm64";
+  else if (platform === "darwin") artifactDir = "macos-x64";
+  else if (platform === "linux" && arch === "arm64") artifactDir = "linux-arm64";
+  else if (platform === "linux") artifactDir = "linux-x64";
+  else if (platform === "win32") { artifactDir = "win-x64"; binaryName = "barnum.exe"; }
+  else return undefined;
+
+  const callerRequire = createRequire(process.argv[1] || import.meta.url);
+  try {
+    const packageDir = path.dirname(callerRequire.resolve("@barnum/barnum/package.json"));
+    const binaryPath = path.join(packageDir, "artifacts", artifactDir, binaryName);
+    if (existsSync(binaryPath)) return binaryPath;
+  } catch {
+    // Package not installed
   }
-  // Default: target/debug/barnum relative to repo root
-  // (libs/barnum/src/run.ts → ../../.. → repo root)
-  return path.resolve(__dirname, "../../../target/debug/barnum");
+  return undefined;
+}
+
+type BinaryResolution =
+  | { kind: "Env"; path: string }
+  | { kind: "NodeModules"; path: string }
+  | { kind: "Local"; path: string };
+
+/** Resolve the barnum binary. Checks: BARNUM env var, local repo, node_modules. */
+function resolveBinary(): BinaryResolution {
+  if (process.env.BARNUM) {
+    return { kind: "Env", path: process.env.BARNUM };
+  }
+
+  const repoRoot = path.resolve(__dirname, "../../..");
+  if (existsSync(path.join(repoRoot, "Cargo.toml"))) {
+    return {
+      kind: "Local",
+      path: path.join(repoRoot, "target/debug/barnum"),
+    };
+  }
+
+  const installedBinaryPath = resolveInstalledBinary();
+  if (installedBinaryPath) {
+    return { kind: "NodeModules", path: installedBinaryPath };
+  }
+
+  throw new Error(
+    "Could not find barnum binary. Set BARNUM env var or install @barnum/barnum.",
+  );
 }
 
 /** Resolve worker.ts relative to this package. */
@@ -44,15 +91,15 @@ function buildBinary(): void {
 
 /** Run a workflow config to completion. Prints result to stdout. */
 export function run(config: Config): void {
-  const binary = resolveBinary();
-  if (!process.env.BARNUM) {
+  const binaryResolution = resolveBinary();
+  if (binaryResolution.kind === "Local") {
     buildBinary();
   }
   const executor = resolveExecutor();
   const worker = resolveWorker();
   const configJson = JSON.stringify(config);
 
-  execFileSync(binary, [
+  execFileSync(binaryResolution.path, [
     "run",
     "--config", configJson,
     "--executor", executor,
