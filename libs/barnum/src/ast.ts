@@ -605,7 +605,9 @@ export type ValidateStepRefs<
 export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
 export { all } from "./all.js";
-export { bind, bindInput, type VarRef, type InferVarRefs, resetEffectIdCounter } from "./bind.js";
+export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
+export { resetEffectIdCounter } from "./effect-id.js";
+export { tryCatch, invokeWithThrow } from "./try-catch.js";
 
 export function forEach<In, Out, R extends string = never>(
   action: Pipeable<In, Out, R>,

@@ -1,17 +1,7 @@
 import { type Action, type ExtractInput, type ExtractOutput, type TypedAction, typedAction } from "./ast.js";
 import { identity, drop } from "./builtins.js";
+import { allocateEffectId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
-
-// ---------------------------------------------------------------------------
-// Effect ID counter
-// ---------------------------------------------------------------------------
-
-let nextEffectId = 0;
-
-/** Reset the effect ID counter. For test isolation only. */
-export function resetEffectIdCounter(): void {
-  nextEffectId = 0;
-}
 
 // ---------------------------------------------------------------------------
 // VarRef — typed reference to a bound value
@@ -115,7 +105,7 @@ export function bind<TBindings extends Action[], TOut>(
   body: (vars: InferVarRefs<TBindings>) => BodyResult<TOut>,
 ): TypedAction<ExtractInput<TBindings[number]>, TOut> {
   // 1. Gensym one effectId per binding.
-  const effectIds = bindings.map(() => nextEffectId++);
+  const effectIds = bindings.map(() => allocateEffectId());
 
   // 2. Create VarRefs (Perform nodes) for each binding.
   const varRefs = effectIds.map((id) => createVarRef(id));
