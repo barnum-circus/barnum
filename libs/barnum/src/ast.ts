@@ -884,7 +884,7 @@ function buildLoopAction(effectId: number, body: Action): Action {
  *
  * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TIn = never, TBreak = never, TRefs extends string = never>(
+export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
     done: TypedAction<TBreak, never>,

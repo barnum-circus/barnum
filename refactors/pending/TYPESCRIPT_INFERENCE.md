@@ -111,10 +111,23 @@ Current signatures:
 
 | Combinator    | Required (token types)  | Defaulted (body types)           | Escape hatch                     |
 |---------------|------------------------|----------------------------------|----------------------------------|
-| `loop`        | `TIn`, `TBreak`        | `TRefs = never`                  | none — must annotate             |
+| `loop`        | `TBreak` (first param) | `TIn = never`, `TRefs = never`   | none — must annotate TBreak      |
 | `earlyReturn` | —                      | `TEarlyReturn = never`, `TIn = any`, `TOut = any` | none, but defaults work          |
 | `recur`       | `TIn`                  | `TOut = any`                     | none — must annotate             |
 | `tryCatch`    | —                      | all inferred                     | `recovery` arg provides `TError` |
+
+Note: `loop<TBreak, TIn>` puts TBreak first because TIn almost always
+defaults to `never` (loops that ignore input). This lets the common
+type-check-fix pattern be `loop<void>(...)` instead of `loop<never, void>(...)`.
+
+### Three loop usage patterns
+
+1. **Both never** (retry-on-error): `loop((recur, done) => ...)` — zero
+   type params, both default to never.
+2. **Break with value** (type-check-fix): `loop<void>((recur, done) => ...)`
+   — TBreak=void because done receives void from Clean case. One type param.
+3. **Stateful** (healthCheck): `loop<{stable: true}, {deployed: boolean}>(...)`
+   — both types carry meaningful data. Two type params.
 
 ## No partial type argument inference
 
@@ -229,18 +242,83 @@ accept everything, making the check vacuous.
 - For params that CANNOT be inferred (HOAS token types), `= any` is a
   bug factory.
 
-## `drop<any>()` as a type bridge
+## PipeIn: `never` input → `any` on return types
 
-When a loop body starts with `never`-input handlers but the loop's TIn
-is `any`, invariance rejects the mismatch: `Pipeable<never, X>` is not
-assignable to `Pipeable<any, X>`.
+`type PipeIn<T> = [T] extends [never] ? any : T`
 
-`drop<any>()` bridges this: it's `TypedAction<any, never>`, accepting
-`any` (matching the loop) and outputting `never` (matching the handlers).
+When a combinator's TIn defaults to `never`, its return type uses
+`PipeIn<TIn>` = `any` so the combinator can sit in any pipe position.
+This replaces the old `drop<any>()` bridge pattern.
 
-However, the correct fix is usually to set TIn to `never` when the loop
-genuinely receives no meaningful input. Then the body's `never` input
-matches directly and `drop<any>()` is unnecessary.
+Applied to:
+- **Pipe overloads**: first element uses `PipeIn<T1>` for the pipe's input
+- **loop return type**: `TypedAction<PipeIn<TIn>, TBreak>`
+- **recur return type**: `TypedAction<PipeIn<TIn>, TOut>`
+
+NOT applied to HOAS tokens (recur, done, throwError, earlyReturn).
+See "Token types must NOT use PipeIn" below.
+
+## Token types must NOT use PipeIn
+
+HOAS tokens (the callback parameters of loop, tryCatch, etc.) must keep
+their exact phantom types. PipeIn cannot be applied to token inputs.
+
+**Why:** If done were `TypedAction<PipeIn<TBreak>, never>` =
+`TypedAction<any, never>` (when TBreak=never), then `.unwrapOr(done)`
+infers `TError = any` from done's `__phantom_in`. The invariant
+`__phantom_out_check` then rejects the `this` binding:
+
+```
+stepC.mapErr(drop()).unwrapOr(done)
+// this: TypedAction<X, Result<V, never>>
+// expected: TypedAction<X, Result<V, any>>
+// __phantom_out_check: (output: Result<V, never>) => void
+//   vs (output: Result<V, any>) => void
+// Contravariance: need Result<V, any> extends Result<V, never> — FALSE
+```
+
+The invariant output check makes `Result<V, never>` NOT assignable to
+`Result<V, any>` because the `__phantom_out_check` contravariant field
+requires the REVERSE relationship.
+
+**Alternatives tried and failed:**
+
+1. **done outputs TBreak** (making body return `Pipeable<TIn, TBreak>`
+   as an inference site for TBreak): Creates circular inference.
+   TS needs TBreak to type done → done to compute body return →
+   body return to infer TBreak. Falls back to `unknown`.
+
+2. **PipeIn on done's input**: Breaks unwrapOr as described above.
+
+3. **Removing `__phantom_out_check`**: Would make outputs covariant
+   instead of invariant, allowing PipeIn on tokens. But invariant
+   outputs are critical for correctness — handler data crosses
+   serialization boundaries where extra/missing fields are runtime errors.
+
+**Rule:** PipeIn goes on combinator RETURN types only, never on token types.
+
+## `.drop()` postfix before tokens in pipe positions
+
+HOAS tokens have `never` input (when TIn/TBreak defaults to `never`).
+After a step that outputs a value, the token can't receive it.
+The `.drop()` postfix converts the output to `never`, bridging to the
+token:
+
+```typescript
+HasErrors: pipe(forEach(fix).drop(), recur)
+//                          ^^^^^^^
+//   forEach(fix) outputs { file: string, fixed: boolean }[]
+//   .drop() converts to never, matching recur's input
+```
+
+This replaces the old standalone `drop<any>()` pattern. The postfix
+form is cleaner and doesn't introduce `any` into the type system.
+
+## `drop<any>()` as a type bridge (SUPERSEDED)
+
+The `drop<any>()` bridge pattern is no longer needed. PipeIn on pipe
+overloads and combinator return types handles the `never → any` input
+bridging. The `.drop()` postfix handles the output-to-token bridging.
 
 ## Function param contravariance, return type covariance
 

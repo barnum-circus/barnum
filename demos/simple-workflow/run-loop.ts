@@ -15,7 +15,7 @@ import pollStatus from "./handlers/poll-status.js";
 console.error("=== Running polling loop workflow ===\n");
 
 await workflowBuilder()
-  .workflow(() => pipe(startPolling, loop<{ attempt: number }, { ready: boolean; attempts: number }>((recur, done) =>
+  .workflow(() => pipe(startPolling, loop<{ ready: boolean; attempts: number }, { attempt: number }>((recur, done) =>
     pollStatus.branch({ Continue: recur, Break: done }),
   )))
   .run();

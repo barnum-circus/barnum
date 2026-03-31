@@ -82,7 +82,7 @@ describe("barnum round-trip", () => {
   it("Loop", () => {
     const cfg = workflowBuilder().workflow(() =>
       constant({ deployed: true }).then(
-        loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+        loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
           healthCheck.branch({ Continue: recur, Break: done }),
         ),
       ),

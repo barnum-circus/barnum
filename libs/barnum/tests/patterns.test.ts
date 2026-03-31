@@ -156,7 +156,7 @@ describe("loop", () => {
   });
 
   it("produces Chain(Tag(Continue), Handle(...)) AST", () => {
-    const workflow = loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+    const workflow = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
       healthCheck.branch({ Continue: recur, Break: done }),
     );
     expect(workflow.kind).toBe("Chain");
@@ -183,7 +183,7 @@ describe("loop", () => {
         setup,
         listFiles,
         forEach(migrate),
-      ).then(loop<never, void>((recur, done) =>
+      ).then(loop<void>((recur, done) =>
         pipe(
           typeCheck,
           classifyErrors,

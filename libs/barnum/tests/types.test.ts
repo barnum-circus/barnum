@@ -295,7 +295,7 @@ describe("combinator types", () => {
   });
 
   it("loop: input matches Continue type, output is Break type", () => {
-    const action = loop<{ deployed: boolean }, { stable: true }>((recur, done) =>
+    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
       healthCheck.branch({ Continue: recur, Break: done }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
@@ -304,7 +304,7 @@ describe("combinator types", () => {
   });
 
   it("loop with branch/recur/done: output is Break value type", () => {
-    const action = loop<never, void>((recur, done) =>
+    const action = loop<void>((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
@@ -326,7 +326,7 @@ describe("combinator types", () => {
       setup,
       listFiles,
       forEach(migrate),
-    ).then(loop<never, void>((recur, done) =>
+    ).then(loop<void>((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
@@ -1263,6 +1263,180 @@ describe("withTimeout types", () => {
     const action = withTimeout(constant(3000), constant("result"));
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Result<string, void>>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loop type parameter constraints
+// ---------------------------------------------------------------------------
+//
+// TBreak MUST be provided explicitly when done receives a non-never value.
+// TypeScript cannot infer TBreak from how the `done` token is used inside
+// the callback body. This section documents WHY and adds guardrail tests.
+//
+// Three constraints interact:
+//
+// 1. HOAS inference limitation: callback params are synthesized from defaults
+//    BEFORE the body is analyzed. TBreak only appears in `done`'s type (a
+//    callback param), which is NOT an inference site. Falls to default.
+//
+// 2. PipeIn on done's input breaks unwrapOr: if done were TypedAction<any, never>,
+//    then .unwrapOr(done) infers TError=any. The invariant __phantom_out_check
+//    rejects Result<V, never> vs Result<V, any>.
+//
+// 3. Making done output TBreak creates circular inference: TypeScript needs
+//    TBreak to type done → done's type to compute body return → body return
+//    to infer TBreak. Falls back to unknown.
+//
+// Given these constraints, TBreak is listed first in loop<TBreak, TIn> so the
+// common "break with void" pattern is just loop<void>(...) instead of
+// loop<never, void>(...).
+
+describe("loop type parameter constraints", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  // -- Pattern 1: both default to never (retry-on-error style) ---------------
+
+  it("loop with no type params: TBreak=never, TIn=never", () => {
+    const action = loop((recur, done) =>
+      pipe(typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        // Clean passes void, but done expects never — use drop() first
+        Clean: pipe(drop<void>(), done),
+      }),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
+  });
+
+  // -- Pattern 2: break with void (type-check-fix style) ---------------------
+
+  it("loop<void>: done accepts void from Clean case", () => {
+    const action = loop<void>((recur, done) =>
+      pipe(typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, void>>();
+  });
+
+  // -- Pattern 3: stateful loop (healthCheck style) --------------------------
+
+  it("loop<TBreak, TIn>: both explicit for stateful loops", () => {
+    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
+      healthCheck.branch({ Continue: recur, Break: done }),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
+  });
+
+  // -- Constraint 1: TBreak defaults to never, not inferred from body --------
+
+  it("without explicit TBreak, done has input=never (rejects void)", () => {
+    loop((_recur, done) => {
+      // done's input is never (= TBreak default), verified statically:
+      assertExact<IsExact<ExtractInput<typeof done>, never>>();
+      // This means done can't be used directly in Clean (payload void).
+      // @ts-expect-error — done: TypedAction<never, never> can't accept void from Clean
+      classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
+      return done; // valid body return: Pipeable<never, never>
+    });
+  });
+
+  it("without explicit TBreak, done has input=never (rejects objects)", () => {
+    // Even when the branch case clearly carries { deployed: boolean },
+    // TypeScript can't backward-infer TBreak from done's usage position.
+    loop((_recur, done) => {
+      // @ts-expect-error — done: TypedAction<never, never> can't accept { deployed: boolean }
+      healthCheck.branch({ Continue: drop(), Break: done });
+      return done;
+    });
+  });
+
+  // -- Constraint 2: done token works correctly in unwrapOr ------------------
+
+  it("done with TBreak=never works in unwrapOr (error type is never)", () => {
+    // This is the retry-on-error pattern: mapErr(drop()) erases the error
+    // type to never, matching done's input=never exactly.
+    const stepC = R.ok<string, string>() as TypedAction<string, Result<string, string>>;
+
+    loop((_recur, done) => {
+      // unwrapOr(done) works because done's input is never,
+      // and mapErr(drop()) erases the error type to never — exact match.
+      const unwrapped = stepC.mapErr(drop()).unwrapOr(done);
+      assertExact<IsExact<ExtractOutput<typeof unwrapped>, string>>();
+      // Return done directly — TypedAction<never, never> satisfies Pipeable<never, never>
+      return done;
+    });
+  });
+
+  // -- Constraint 3: done's output is never (terminal) -----------------------
+
+  it("done and recur both output never (they're terminal)", () => {
+    loop<void>((recur, done) => {
+      // Both tokens output never — using them ends the path
+      assertExact<IsExact<ExtractOutput<typeof recur>, never>>();
+      assertExact<IsExact<ExtractOutput<typeof done>, never>>();
+      return pipe(typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      });
+    });
+  });
+
+  // -- Token types match the type parameters ---------------------------------
+
+  it("recur's input type is TIn", () => {
+    loop<{ stable: true }, { deployed: boolean }>((recur, _done) => {
+      assertExact<IsExact<ExtractInput<typeof recur>, { deployed: boolean }>>();
+      return healthCheck.branch({ Continue: recur, Break: _done });
+    });
+  });
+
+  it("done's input type is TBreak", () => {
+    loop<{ stable: true }, { deployed: boolean }>((_recur, done) => {
+      assertExact<IsExact<ExtractInput<typeof done>, { stable: true }>>();
+      return healthCheck.branch({ Continue: _recur, Break: done });
+    });
+  });
+
+  // -- PipeIn: loop with TIn=never accepts any input in pipe -----------------
+
+  it("loop with TIn=never has PipeIn input (accepts any)", () => {
+    const action = loop<void>((recur, done) =>
+      pipe(typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
+    );
+    // PipeIn<never> = any — loop can sit anywhere in a pipe
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+  });
+
+  it("loop with explicit TIn has exact input", () => {
+    const action = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
+      healthCheck.branch({ Continue: recur, Break: done }),
+    );
+    // TIn is explicit, not PipeIn'd
+    assertExact<IsExact<ExtractInput<typeof action>, { deployed: boolean }>>();
+  });
+
+  // -- .drop() before tokens in pipe positions -------------------------------
+
+  it(".drop() is required before recur/done in mid-pipe positions", () => {
+    // Tokens have input TIn/TBreak (both never by default). After a step
+    // that outputs a value, .drop() converts the output to never, matching
+    // the token's input type.
+    loop<void>((recur, done) =>
+      pipe(typeCheck, classifyErrors).branch({
+        HasErrors: pipe(forEach(fix).drop(), recur), // .drop() → never, matches recur's input
+        Clean: done, // done's input is void (= TBreak), matches Clean's payload
+      }),
+    );
   });
 });
 
