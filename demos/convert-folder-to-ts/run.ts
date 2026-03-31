@@ -34,22 +34,23 @@ await workflowBuilder()
   .workflow(() =>
     pipe(
       setup,
-      listFiles,
-
-      // For each file: extract the file path, migrate to TS, then combine
-      // the migrated content with the original output path for writing.
-      forEach(
-        bindInput<FileEntry>((entry) =>
-          pipe(
-            entry.get("file"),
-            migrate({ to: "Typescript" }),
-            bindInput<{ content: string }>((migrateResult) =>
-              all(migrateResult, entry.pick("outputPath")).merge().then(writeFile),
+      listFiles
+        // For each file: extract the file path, migrate to TS, then combine
+        // the migrated content with the original output path for writing.
+        .forEach(
+          bindInput<FileEntry>((entry) =>
+            pipe(
+              entry.get("file"),
+              migrate({ to: "Typescript" }),
+              bindInput<{ content: string }>((migrateResult) =>
+                all(migrateResult, entry.pick("outputPath"))
+                  .merge()
+                  .then(writeFile),
+              ),
             ),
           ),
-        ),
-      ).drop(),
-    ).then(
+        )
+        .drop(),
       // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
       loop((recur) =>
         pipe(typeCheck, classifyErrors).branch({
