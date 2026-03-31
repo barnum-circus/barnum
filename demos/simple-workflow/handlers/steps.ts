@@ -16,9 +16,25 @@ export const refactor = createHandler({
   },
 }, "refactor");
 
-export const typeCheckFix = createHandler({
+export const typeCheck = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    console.error(`[typeCheck] Type-checking ${file}`);
+    return file;
+  },
+}, "typeCheck");
+
+export const fix = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    console.error(`[fix] Fixing ${file}`);
+    return file;
+  },
+}, "fix");
+
+export const commit = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }): Promise<void> => {
-    console.error(`[typeCheckFix] Type-checking ${file}`);
+    console.error(`[commit] Committing ${file}`);
   },
-}, "typeCheckFix");
+}, "commit");
