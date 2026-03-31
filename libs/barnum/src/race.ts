@@ -87,7 +87,7 @@ export function race<TIn, TOut>(
 /**
  * Delay for a specified duration. Returns `void` after the timer fires.
  *
- * Input is `never` — the timer doesn't consume pipeline data. The duration
+ * Input is `any` — the timer ignores pipeline data. The duration
  * is baked into the AST at build time via handler config.
  *
  * When the engine cancels the sleep during race teardown, the worker
@@ -164,9 +164,9 @@ Object.defineProperty(sleep, "__definition", {
  * - Ok(value) if the body completed first
  * - Err(void) if the timeout fired first
  *
- * Built as raw AST rather than through `race()` because the sleep branch
- * has `In=never` while the body branch has `In=TIn` — invariant phantom
- * types prevent unification in the typed `race()` signature.
+ * Built as raw AST rather than through `race()` because each branch wraps
+ * its result differently (Ok vs Err) before Perform. `race()` requires
+ * homogeneous output types, but withTimeout needs heterogeneous tagging.
  *
  * Compiles to the same Handle/All/Perform structure as race, with each
  * branch wrapping its result as Ok or Err before Perform.
