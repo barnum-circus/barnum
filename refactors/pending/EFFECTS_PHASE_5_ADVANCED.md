@@ -1,12 +1,16 @@
-# Phase 5: Advanced Patterns (RAII, Race, Timeout)
+# Phase 5: Advanced Patterns (RAII, Timeout)
 
 ## Goal
 
-Three features that stress-test Handle/Perform in different ways. Each is TypeScript sugar over the existing substrate. No scheduler changes — only new handler DAGs and TS surface functions.
+Two features that stress-test Handle/Perform in different ways. Each is TypeScript sugar over the existing substrate. No scheduler changes — only new handler DAGs and TS surface functions.
 
 ## Prerequisites
 
 Phase 1 (Substrate), Phase 3 (TryCatch — for the discard path and teardown).
+
+## See also
+
+- [EFFECTS_RACE.md](./EFFECTS_RACE.md) — extracted to its own doc.
 
 ## RAII (Bracket effect)
 
@@ -56,84 +60,66 @@ Dispose is itself a handler Invoke (calls TypeScript). The scheduler pushes disp
 
 `withResource({ create, action, dispose })` is subsumed. The user doesn't specify dispose at the call site — it's declared on the handler.
 
-## Race
-
-### The problem
-
-Run multiple actions concurrently. The first to complete wins. The losers are cancelled.
-
-### The solution
-
-Race is Handle + Parallel + cancellation. Not a new AST node.
-
-```ts
-// User writes:
-race(actionA, actionB)
-
-// Builder gensyms a fresh EffectId: raceEffect.
-// Handler DAG: pipe(pick("payload"), tag("Discard"))
-// Compiles to:
-Handle(raceEffect, raceHandler,
-  Parallel(
-    Chain(actionA, Perform(raceEffect)),
-    Chain(actionB, Perform(raceEffect)),
-  )
-)
-```
-
-The handler receives `{ payload: firstResult, state: ... }`, extracts the payload, and produces Discard. The Handle frame tears down the body (including the un-completed Parallel branch) and exits with the first result.
-
-### Cancellation semantics
-
-When the Handle exits with a live Parallel frame below it, teardown must:
-1. Cancel pending external tasks in the losing branch.
-2. Run Bracket dispose for any resources the losing branch acquired.
-3. Remove all frames from the slab.
-
-This uses the same `teardown_body` from Phase 1. Race doesn't add new teardown logic — it exercises existing teardown under Parallel.
-
-### Type safety
-
-`race(a, b)` requires both branches to produce the same output type (since either could win). The TypeScript function enforces this:
-
-```ts
-function race<TIn, TOut>(
-  ...actions: Pipeable<TIn, TOut>[]
-): TypedAction<TIn, TOut>
-```
-
 ## Timeout
 
 ### The problem
 
-An action must complete within a duration. If it doesn't, it's cancelled and an error is produced.
+An action must complete within a duration. If it doesn't, the losers are cancelled and the caller must handle both outcomes.
 
 ### The solution
 
-Timeout combines Handle with an external timer.
+`withTimeout` returns `Result<TOut, void>` — a standard discriminated union. The `Err` variant is `void` because there's nothing meaningful to report beyond "it didn't finish."
+
+`Result<TValue, TError>` is a general-purpose type alongside `Option<T>` and `LoopResult<TContinue, TBreak>`:
 
 ```ts
-// User writes:
-withTimeout(duration, body)
+type ResultDef<TValue, TError> = { Ok: TValue; Err: TError };
+type Result<TValue, TError> = TaggedUnion<ResultDef<TValue, TError>>;
 
-// Compiles to race between body and timer:
-race(body, timer(duration))
-// Where timer(duration) is an Invoke resolved by the external driver.
+function withTimeout<TIn, TOut>(
+  duration: number,
+  body: Pipeable<TIn, TOut>,
+): TypedAction<TIn, Result<TOut, void>>
 ```
 
-Or more precisely, timeout is race between the body and a timer action. The timer action is an Invoke that the external driver resolves after the duration. If the timer wins, the body is cancelled (via Race's semantics). If the body wins, the timer is cancelled.
+### Usage
 
-Alternative: Timeout as a dedicated effect where the external driver sends a cancellation signal:
-
+```ts
+pipe(
+  withTimeout(5000, longRunningAction),
+).branch({
+  Ok: processResult,
+  Err: pipe(drop(), constant("timed out")),
+})
 ```
-Effect: RegisterTimeout(duration)
-Handler behavior:
-  On entry: emit timeout registration to external driver.
-  On body completion: cancel the timer.
-  On timer expiry: driver calls cancel_frame, forcing a Throw(TimeoutError).
+
+The caller branches on `Ok`/`Err`. No exceptions, no implicit error paths.
+
+### How it compiles
+
+`withTimeout` is sugar over `race`. Both branches tag their output into the `Result` union:
+
+```ts
+withTimeout(5000, body)
+
+// Compiles to:
+race(
+  pipe(body, tag<ResultDef<TOut, void>, "Ok">("Ok")),
+  pipe(timer(5000), tag<ResultDef<TOut, void>, "Err">("Err")),
+)
 ```
 
-The Race-based approach is simpler and doesn't require new driver protocol. Recommend Race-based.
+Both branches produce `Result<TOut, void>`, satisfying race's homogeneous output requirement. The first branch to complete wins; the loser is cancelled via race's teardown semantics.
+
+### Timer action
+
+`timer(duration)` is an Invoke that the external driver resolves after `duration` milliseconds. The handler produces `void` (no payload). The driver protocol needs a timer registration mechanism — the scheduler emits a timer request, the driver calls back when it fires.
+
+```ts
+function timer(duration: number): TypedAction<never, void>
+```
+
+Input is `never` — the timer doesn't consume pipeline data. It's a side-channel action resolved by the runtime.
 
 ## Test strategy
 
@@ -146,28 +132,18 @@ The Race-based approach is simpler and doesn't require new driver protocol. Reco
 5. Dispose failure: primary result still delivered, dispose error attached as suppressed.
 6. Bracket + ReadVar interaction: variable readable throughout body, disposed after body exits.
 
-### Race tests
-
-1. Two branches, first completes. Second is cancelled.
-2. Two branches, second completes. First is cancelled.
-3. Losing branch has pending external task. Task is cancelled.
-4. Losing branch has acquired resources. Resources are disposed during teardown.
-5. Race with 3+ branches.
-6. Nested race.
-
 ### Timeout tests
 
-1. Body completes before timeout. Timer cancelled. Body result delivered.
-2. Timeout fires before body completes. Body cancelled. Timeout error propagated.
-3. Timeout with tryCatch: timeout error caught by recovery branch.
-4. Timeout with RAII: body acquires resource, timeout fires, resource disposed.
+1. Body completes before timeout. Timer cancelled. Result is `{ kind: "Ok", value: bodyOutput }`.
+2. Timeout fires before body completes. Body cancelled. Result is `{ kind: "Err", value: undefined }`.
+3. Timeout result branched: `Ok` case processes output, `Err` case produces fallback.
+4. Timeout with RAII: body acquires resource, timeout fires, resource disposed, result is `Err`.
 
 ## Deliverables
 
 1. Bracket handler DAG (track resources in state, dispose on exit via `StateUpdate::Updated`)
 2. Bracket Handle frame logic (state-based resource tracking, dispose on scope exit)
-3. `race()` TypeScript function
-4. `withTimeout()` TypeScript function
-5. Timer action (Invoke that external driver resolves after duration)
-6. Tests per above
-7. Demo: add timeout and error handling to an existing demo workflow
+3. `withTimeout()` TypeScript function (depends on `race()` from EFFECTS_RACE.md)
+4. Timer action (Invoke that external driver resolves after duration)
+5. Tests per above
+6. Demo: add timeout and error handling to an existing demo workflow

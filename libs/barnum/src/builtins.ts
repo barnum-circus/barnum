@@ -1,4 +1,4 @@
-import { type Action, type LoopResult, type Option as OptionT, type OptionDef, type Pipeable, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
+import { type Action, type LoopResult, type Option as OptionT, type OptionDef, type Pipeable, type Result as ResultT, type ResultDef, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -519,6 +519,213 @@ export const Option = {
     const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
     const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
     return typedAction(optionBranch(
+      { kind: "Chain", first: DROP, rest: constFalse },
+      { kind: "Chain", first: DROP, rest: constTrue },
+    ));
+  },
+} as const;
+
+// ---------------------------------------------------------------------------
+// Result namespace — combinators for Result<TValue, TError> tagged unions
+// ---------------------------------------------------------------------------
+
+// Shared AST fragments for Result desugaring
+const TAG_OK: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } };
+const TAG_ERR: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } };
+
+/** Wrap branch cases with ExtractField("value") auto-unwrapping. */
+function resultBranch(okCaseBody: Action, errCaseBody: Action): Action {
+  return {
+    kind: "Branch",
+    cases: {
+      Ok: { kind: "Chain", first: EXTRACT_VALUE, rest: okCaseBody },
+      Err: { kind: "Chain", first: EXTRACT_VALUE, rest: errCaseBody },
+    },
+  };
+}
+
+/**
+ * Result namespace. All combinators produce TypedAction AST nodes that
+ * desugar to branch + existing builtins.
+ */
+export const Result = {
+  /**
+   * Wrap a value as Ok. `TValue → Result<TValue, TError>`
+   */
+  ok<TValue, TError>(): TypedAction<TValue, ResultT<TValue, TError>> {
+    return typedAction(TAG_OK);
+  },
+
+  /**
+   * Wrap a value as Err. `TError → Result<TValue, TError>`
+   */
+  err<TValue, TError>(): TypedAction<TError, ResultT<TValue, TError>> {
+    return typedAction(TAG_ERR);
+  },
+
+  /**
+   * Transform the Ok value. `Result<TValue, TError> → Result<TOut, TError>`
+   *
+   * Desugars to: `branch({ Ok: pipe(action, tag("Ok")), Err: tag("Err") })`
+   */
+  map<TValue, TOut, TError>(
+    action: Pipeable<TValue, TOut>,
+  ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
+    return typedAction(resultBranch(
+      { kind: "Chain", first: action as Action, rest: TAG_OK },
+      TAG_ERR,
+    ));
+  },
+
+  /**
+   * Transform the Err value. `Result<TValue, TError> → Result<TValue, TErrorOut>`
+   *
+   * Desugars to: `branch({ Ok: tag("Ok"), Err: pipe(action, tag("Err")) })`
+   */
+  mapErr<TValue, TError, TErrorOut>(
+    action: Pipeable<TError, TErrorOut>,
+  ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
+    return typedAction(resultBranch(
+      TAG_OK,
+      { kind: "Chain", first: action as Action, rest: TAG_ERR },
+    ));
+  },
+
+  /**
+   * Monadic bind (flatMap) for Ok. If Ok, pass value to action which
+   * returns Result<TOut, TError>. If Err, propagate.
+   *
+   * Desugars to: `branch({ Ok: action, Err: tag("Err") })`
+   */
+  andThen<TValue, TOut, TError>(
+    action: Pipeable<TValue, ResultT<TOut, TError>>,
+  ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
+    return typedAction(resultBranch(
+      action as Action,
+      TAG_ERR,
+    ));
+  },
+
+  /**
+   * Fallback on Err. If Ok, keep it. If Err, pass error to fallback
+   * which returns a new Result.
+   *
+   * Desugars to: `branch({ Ok: tag("Ok"), Err: fallback })`
+   */
+  or<TValue, TError, TErrorOut>(
+    fallback: Pipeable<TError, ResultT<TValue, TErrorOut>>,
+  ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
+    return typedAction(resultBranch(
+      TAG_OK,
+      fallback as Action,
+    ));
+  },
+
+  /**
+   * Replace Ok value with another Result. If Ok, discard value and
+   * return other. If Err, propagate.
+   *
+   * Desugars to: `branch({ Ok: pipe(drop(), other), Err: tag("Err") })`
+   */
+  and<TValue, TOut, TError>(
+    other: Pipeable<never, ResultT<TOut, TError>>,
+  ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
+    return typedAction(resultBranch(
+      { kind: "Chain", first: DROP, rest: other as Action },
+      TAG_ERR,
+    ));
+  },
+
+  /**
+   * Extract Ok or compute default from Err. `Result<TValue, TError> → TValue`
+   *
+   * Takes an action that receives the Err payload and produces a fallback.
+   *
+   * Desugars to: `branch({ Ok: identity(), Err: defaultAction })`
+   */
+  unwrapOr<TValue, TError>(
+    defaultAction: Pipeable<TError, TValue>,
+  ): TypedAction<ResultT<TValue, TError>, TValue> {
+    return typedAction(resultBranch(
+      IDENTITY,
+      defaultAction as Action,
+    ));
+  },
+
+  /**
+   * Unwrap nested Result. `Result<Result<TValue, TError>, TError> → Result<TValue, TError>`
+   *
+   * Desugars to: `branch({ Ok: identity(), Err: tag("Err") })`
+   */
+  flatten<TValue, TError>(): TypedAction<ResultT<ResultT<TValue, TError>, TError>, ResultT<TValue, TError>> {
+    return typedAction(resultBranch(
+      IDENTITY,
+      TAG_ERR,
+    ));
+  },
+
+  /**
+   * Convert Ok to Some, Err to None. `Result<TValue, TError> → Option<TValue>`
+   *
+   * Desugars to: `branch({ Ok: tag("Some"), Err: pipe(drop(), tag("None")) })`
+   */
+  toOption<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TValue>> {
+    return typedAction(resultBranch(
+      TAG_SOME,
+      { kind: "Chain", first: DROP, rest: TAG_NONE },
+    ));
+  },
+
+  /**
+   * Convert Err to Some, Ok to None. `Result<TValue, TError> → Option<TError>`
+   *
+   * Desugars to: `branch({ Ok: pipe(drop(), tag("None")), Err: tag("Some") })`
+   */
+  toOptionErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TError>> {
+    return typedAction(resultBranch(
+      { kind: "Chain", first: DROP, rest: TAG_NONE },
+      TAG_SOME,
+    ));
+  },
+
+  /**
+   * Swap Result/Option nesting.
+   * `Result<Option<TValue>, TError> → Option<Result<TValue, TError>>`
+   */
+  transpose<TValue, TError>(): TypedAction<ResultT<OptionT<TValue>, TError>, OptionT<ResultT<TValue, TError>>> {
+    return typedAction(resultBranch(
+      // Ok case: receives Option<TValue>, branch on Some/None
+      {
+        kind: "Branch",
+        cases: {
+          Some: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: TAG_OK, rest: TAG_SOME } },
+          None: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: DROP, rest: TAG_NONE } },
+        },
+      },
+      // Err case: receives TError, wrap as Result.err then Option.some
+      { kind: "Chain", first: TAG_ERR, rest: TAG_SOME },
+    ));
+  },
+
+  /**
+   * Test if the value is Ok. `Result<TValue, TError> → boolean`
+   */
+  isOk<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
+    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
+    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
+    return typedAction(resultBranch(
+      { kind: "Chain", first: DROP, rest: constTrue },
+      { kind: "Chain", first: DROP, rest: constFalse },
+    ));
+  },
+
+  /**
+   * Test if the value is Err. `Result<TValue, TError> → boolean`
+   */
+  isErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
+    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
+    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
+    return typedAction(resultBranch(
       { kind: "Chain", first: DROP, rest: constFalse },
       { kind: "Chain", first: DROP, rest: constTrue },
     ));

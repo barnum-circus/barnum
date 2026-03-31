@@ -260,6 +260,13 @@ export type ExtractDef<T> = T extends { __def?: infer D } ? D : never;
 export type OptionDef<T> = { Some: T; None: void };
 export type Option<T> = TaggedUnion<OptionDef<T>>;
 
+// ---------------------------------------------------------------------------
+// Result<TValue, TError> — standard success/error type
+// ---------------------------------------------------------------------------
+
+export type ResultDef<TValue, TError> = { Ok: TValue; Err: TError };
+export type Result<TValue, TError> = TaggedUnion<ResultDef<TValue, TError>>;
+
 /** Extract all `kind` string literals from a discriminated union. */
 type KindOf<T> = T extends { kind: infer K extends string } ? K : never;
 

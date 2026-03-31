@@ -20,6 +20,7 @@ import {
   recur,
   tag,
   Option as O,
+  Result as R,
 } from "../src/builtins.js";
 
 import {
@@ -597,5 +598,165 @@ describe("bindInput", () => {
 
     expect(capturedRef.kind).toBe("Perform");
     expect(typeof capturedRef.effect_id).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Result namespace — AST structure tests
+// ---------------------------------------------------------------------------
+
+describe("Result combinators", () => {
+  it("Result.ok() produces Tag('Ok')", () => {
+    const action = R.ok();
+    expect(action).toEqual({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
+    });
+  });
+
+  it("Result.err() produces Tag('Err')", () => {
+    const action = R.err();
+    expect(action).toEqual({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
+    });
+  });
+
+  it("Result.map(action) desugars to Branch(Ok: Chain(action, Tag(Ok)), Err: Tag(Err))", () => {
+    const action = R.map(setup);
+    expect(action).toEqual({
+      kind: "Branch",
+      cases: {
+        Ok: {
+          kind: "Chain",
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } } },
+        },
+        Err: {
+          kind: "Chain",
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } },
+        },
+      },
+    });
+  });
+
+  it("Result.mapErr(action) desugars to Branch(Ok: Tag(Ok), Err: Chain(action, Tag(Err)))", () => {
+    const action = R.mapErr(setup);
+    expect(action).toEqual({
+      kind: "Branch",
+      cases: {
+        Ok: {
+          kind: "Chain",
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
+        },
+        Err: {
+          kind: "Chain",
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
+        },
+      },
+    });
+  });
+
+  it("Result.andThen(action) desugars to Branch(Ok: action, Err: Tag(Err))", () => {
+    const inner = R.ok<string, string>();
+    const result = R.andThen(inner);
+    const branch = result as any;
+    expect(branch.kind).toBe("Branch");
+    // Ok case: ExtractValue → action
+    expect(branch.cases.Ok.rest).toBe(inner);
+    // Err case: ExtractValue → Tag(Err)
+    expect(branch.cases.Err.rest.handler.builtin.kind).toBe("Tag");
+    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Err");
+  });
+
+  it("Result.or(fallback) desugars to Branch(Ok: Tag(Ok), Err: fallback)", () => {
+    const fallback = R.ok<string, string>();
+    const result = R.or(fallback);
+    const branch = result as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.handler.builtin.value).toBe("Ok");
+    expect(branch.cases.Err.rest).toBe(fallback);
+  });
+
+  it("Result.and(other) desugars to Branch(Ok: Chain(Drop, other), Err: Tag(Err))", () => {
+    const other = pipe(constant("replacement"), R.ok<string, string>());
+    const result = R.and(other);
+    const branch = result as any;
+    expect(branch.kind).toBe("Branch");
+    // Ok case: ExtractValue → Chain(Drop, other)
+    const okBody = branch.cases.Ok.rest;
+    expect(okBody.kind).toBe("Chain");
+    expect(okBody.first.handler.builtin.kind).toBe("Drop");
+    expect(okBody.rest).toBe(other);
+  });
+
+  it("Result.unwrapOr(default) desugars to Branch(Ok: Identity, Err: default)", () => {
+    const fallback = constant("default");
+    const action = R.unwrapOr(fallback);
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
+    expect(branch.cases.Err.rest).toBe(fallback);
+  });
+
+  it("Result.flatten() desugars to Branch(Ok: Identity, Err: Tag(Err))", () => {
+    const action = R.flatten();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
+    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Err");
+  });
+
+  it("Result.toOption() desugars to Branch(Ok: Tag(Some), Err: Chain(Drop, Tag(None)))", () => {
+    const action = R.toOption();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.handler.builtin.value).toBe("Some");
+    expect(branch.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
+    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe("None");
+  });
+
+  it("Result.toOptionErr() desugars to Branch(Ok: Chain(Drop, Tag(None)), Err: Tag(Some))", () => {
+    const action = R.toOptionErr();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
+    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe("None");
+    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Some");
+  });
+
+  it("Result.isOk() desugars to Branch(Ok: Constant(true), Err: Constant(false))", () => {
+    const action = R.isOk();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe(true);
+    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe(false);
+  });
+
+  it("Result.isErr() desugars to Branch(Ok: Constant(false), Err: Constant(true))", () => {
+    const action = R.isErr();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe(false);
+    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe(true);
+  });
+
+  it("Result.transpose() desugars to nested branches", () => {
+    const action = R.transpose();
+    const branch = action as any;
+    expect(branch.kind).toBe("Branch");
+    // Ok case: receives Option, branches on Some/None
+    const okBody = branch.cases.Ok.rest;
+    expect(okBody.kind).toBe("Branch");
+    expect(okBody.cases.Some).toBeDefined();
+    expect(okBody.cases.None).toBeDefined();
+    // Err case: Tag(Err) → Tag(Some)
+    const errBody = branch.cases.Err.rest;
+    expect(errBody.kind).toBe("Chain");
+    expect(errBody.first.handler.builtin.value).toBe("Err");
+    expect(errBody.rest.handler.builtin.value).toBe("Some");
   });
 });

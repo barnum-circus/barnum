@@ -12,6 +12,8 @@ import {
   type LoopResult,
   type Option,
   type OptionDef,
+  type Result,
+  type ResultDef,
   type VarRef,
   pipe,
   all,
@@ -36,6 +38,7 @@ import {
   done,
   tag,
   Option as O,
+  Result as R,
 } from "../src/builtins.js";
 import {
   setup,
@@ -981,5 +984,117 @@ describe("bindInput types", () => {
       assertExact<IsExact<ExtractInput<typeof input>, never>>();
       return input;
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
+
+describe("Result types", () => {
+  it("Result.ok() input is TValue, output is Result<TValue, TError>", () => {
+    const action = R.ok<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, number>>>();
+  });
+
+  it("Result.err() input is TError, output is Result<TValue, TError>", () => {
+    const action = R.err<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, number>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, number>>>();
+  });
+
+  it("Result.map transforms Ok type, preserves Err type", () => {
+    const action = R.map<string, number, boolean>(
+      constant(42) as TypedAction<string, number>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
+  });
+
+  it("Result.mapErr transforms Err type, preserves Ok type", () => {
+    const action = R.mapErr<string, number, boolean>(
+      constant(true) as TypedAction<number, boolean>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
+  });
+
+  it("Result.andThen input is Result, output is Result with new Ok type", () => {
+    const action = R.andThen<string, number, boolean>(
+      constant({ kind: "Ok" as const, value: 42 }) as TypedAction<string, Result<number, boolean>>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
+  });
+
+  it("Result.or input is Result, output has new Err type", () => {
+    const action = R.or<string, number, boolean>(
+      constant({ kind: "Ok" as const, value: "x" }) as TypedAction<number, Result<string, boolean>>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, boolean>>>();
+  });
+
+  it("Result.and replaces Ok type, preserves Err type", () => {
+    const action = R.and<string, number, boolean>(
+      constant({ kind: "Ok" as const, value: 42 }) as TypedAction<never, Result<number, boolean>>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, boolean>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<number, boolean>>>();
+  });
+
+  it("Result.unwrapOr extracts TValue from Result", () => {
+    const action = R.unwrapOr<string, number>(
+      constant("fallback") as TypedAction<number, string>,
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("Result.flatten unwraps nested Result", () => {
+    const action = R.flatten<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<Result<string, number>, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Result<string, number>>>();
+  });
+
+  it("Result.toOption converts to Option<TValue>", () => {
+    const action = R.toOption<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
+  });
+
+  it("Result.toOptionErr converts to Option<TError>", () => {
+    const action = R.toOptionErr<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
+  });
+
+  it("Result.transpose swaps Result/Option nesting", () => {
+    const action = R.transpose<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<Option<string>, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, Option<Result<string, number>>>>();
+  });
+
+  it("Result.isOk returns boolean", () => {
+    const action = R.isOk<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+  });
+
+  it("Result.isErr returns boolean", () => {
+    const action = R.isErr<string, number>();
+    assertExact<IsExact<ExtractInput<typeof action>, Result<string, number>>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, boolean>>();
+  });
+
+  it("Result branches with Ok/Err cases", () => {
+    const action = pipe(
+      R.ok<string, number>(),
+      R.map<string, number, number>(constant(42) as TypedAction<string, number>),
+      R.unwrapOr<number, number>(identity<number>()),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
   });
 });

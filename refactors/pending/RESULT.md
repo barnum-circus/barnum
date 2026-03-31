@@ -1,471 +1,212 @@
-# Result types: comprehensive combinator library
-
-> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. This is not optional: **all union variants must carry `__def`**, no exceptions. All union constructors require the full variant map as a type parameter so the output type carries `__def`. Branch uses `ExtractDef` for inference and auto-unwraps `value` before each case handler.
-
-> **Status**: Design doc only. Not implementing yet — needs more thought on error handling strategy, interaction with scope/exit, and whether `tryAction` is the right primitive.
+# Result<TValue, TError>
 
 ## The type
 
 ```ts
-type ResultDef<T, E> = {
-  Ok: T;
-  Err: E;
-};
-
-type Result<T, E> = TaggedUnion<ResultDef<T, E>>;
-// = { kind: "Ok"; value: T; __def?: ResultDef<T, E> }
-// | { kind: "Err"; value: E; __def?: ResultDef<T, E> }
+type ResultDef<TValue, TError> = { Ok: TValue; Err: TError };
+type Result<TValue, TError> = TaggedUnion<ResultDef<TValue, TError>>;
 ```
 
-## Where Results come from
-
-In Rust, any function can return `Result`. In barnum, handlers cross a serialization boundary — the handler runs in a subprocess and its output is JSON. Two potential sources:
-
-### 1. Explicit handler return
-
-The handler explicitly returns `Result<T, E>`:
-
-```ts
-// Handler code:
-export default async function callApi(input: ApiRequest): Promise<Result<ApiResponse, ApiError>> {
-  try {
-    const response = await fetch(input.url);
-    return { kind: "Ok", value: await response.json() };
-  } catch (e) {
-    return { kind: "Err", value: { message: e.message } };
-  }
-}
-```
-
-This works today — it's just a tagged union. The handler returns `{ kind, value }` and `branch` dispatches on it.
-
-### 2. `tryAction` — catch handler failures
-
-A wrapper that catches handler runtime errors and wraps them as `Err`:
-
-```ts
-function tryAction<In, Out, E = unknown>(
-  action: TypedAction<In, Out>,
-): TypedAction<In, Result<Out, E>>
-```
-
-If the action succeeds, wraps output as `Ok`. If the handler throws/panics, wraps the error as `Err`.
-
-This is a runtime/engine concern — the Rust scheduler needs to catch handler failures and produce `Err` variants instead of propagating the error. Currently, handler failures are unrecoverable. `tryAction` makes them first-class.
-
-**Open question**: What type is `E`? In Rust, errors are typed. In barnum, a handler failure could be anything — a JSON parse error, a timeout, a panic. Probably `E = { message: string; [key: string]: unknown }` or similar. Or leave it generic and let the engine decide.
-
-## API surface: the `Result` namespace
-
-Same pattern as `Option`. All combinators live on `Result.`.
-
-```ts
-import { Result } from "@barnum/barnum";
-
-pipe(
-  callApi,
-  Result.map(extractData),
-  Result.unwrapOr(constant(fallbackData)),
-)
-```
-
-### Design principle: actions, not values
-
-Same as Option — Rust's eager/lazy pairs collapse:
-
-| Rust has two | Barnum has one | Why |
-|---|---|---|
-| `unwrap_or(val)` / `unwrap_or_else(f)` | `Result.unwrapOr(action)` | Actions are already lazy |
-| `or(res)` / `or_else(f)` | `Result.or(action)` | Actions are already lazy |
+Same pattern as `Option<T>` — a `TaggedUnion` carrying `__def` so `.branch()` works via `ExtractDef`.
 
 ## Constructors
 
-### `Result.ok` / `Result.err`
+### `Result.ok`
 
 ```ts
-Result.ok<T, E>(): TypedAction<T, Result<T, E>>
-// = tag<ResultDef<T, E>, "Ok">("Ok")
-
-Result.err<T, E>(): TypedAction<E, Result<T, E>>
-// = tag<ResultDef<T, E>, "Err">("Err")
+Result.ok<TValue, TError>(): TypedAction<TValue, Result<TValue, TError>>
+// = tag<ResultDef<TValue, TError>, "Ok">("Ok")
 ```
 
-Both carry the full `ResultDef<T, E>` so `__def` is populated.
+### `Result.err`
+
+```ts
+Result.err<TValue, TError>(): TypedAction<TError, Result<TValue, TError>>
+// = tag<ResultDef<TValue, TError>, "Err">("Err")
+```
 
 ## Transforming
 
 ### `Result.map` — transform the Ok value
 
 ```ts
-Result.map<T, U, E>(action: TypedAction<T, U>): TypedAction<Result<T, E>, Result<U, E>>
+Result.map<TValue, TOut, TError>(
+  action: Pipeable<TValue, TOut>,
+): TypedAction<Result<TValue, TError>, Result<TOut, TError>>
 ```
 
 Desugars to:
 ```ts
 branch({
-  Ok: pipe(action, Result.ok<U, E>()),
-  Err: Result.err<U, E>(),
+  Ok: pipe(action, Result.ok<TOut, TError>()),
+  Err: Result.err<TOut, TError>(),
 })
 ```
 
 ### `Result.mapErr` — transform the Err value
 
 ```ts
-Result.mapErr<T, E, F>(action: TypedAction<E, F>): TypedAction<Result<T, E>, Result<T, F>>
+Result.mapErr<TValue, TError, TErrorOut>(
+  action: Pipeable<TError, TErrorOut>,
+): TypedAction<Result<TValue, TError>, Result<TValue, TErrorOut>>
 ```
 
 Desugars to:
 ```ts
 branch({
-  Ok: Result.ok<T, F>(),
-  Err: pipe(action, Result.err<T, F>()),
+  Ok: Result.ok<TValue, TErrorOut>(),
+  Err: pipe(action, Result.err<TValue, TErrorOut>()),
 })
 ```
 
-### `Result.inspect` — side effect on Ok
+## Chaining
+
+### `Result.andThen` — monadic bind (flatMap) for Ok
 
 ```ts
-Result.inspect<T, E>(action: TypedAction<T, unknown>): TypedAction<Result<T, E>, Result<T, E>>
+Result.andThen<TValue, TOut, TError>(
+  action: Pipeable<TValue, Result<TOut, TError>>,
+): TypedAction<Result<TValue, TError>, Result<TOut, TError>>
 ```
+
+If Ok, pass value to `action` (which returns a new Result). If Err, propagate.
 
 Desugars to:
 ```ts
 branch({
-  Ok: pipe(tap(action), Result.ok<T, E>()),
-  Err: Result.err<T, E>(),
+  Ok: action,
+  Err: Result.err<TOut, TError>(),
 })
 ```
 
-### `Result.inspectErr` — side effect on Err
+### `Result.or` — fallback on Err
 
 ```ts
-Result.inspectErr<T, E>(action: TypedAction<E, unknown>): TypedAction<Result<T, E>, Result<T, E>>
+Result.or<TValue, TError, TErrorOut>(
+  fallback: Pipeable<TError, Result<TValue, TErrorOut>>,
+): TypedAction<Result<TValue, TError>, Result<TValue, TErrorOut>>
 ```
+
+If Ok, keep it. If Err, pass error to `fallback` (which returns a new Result).
 
 Desugars to:
 ```ts
 branch({
-  Ok: Result.ok<T, E>(),
-  Err: pipe(tap(action), Result.err<T, E>()),
+  Ok: Result.ok<TValue, TErrorOut>(),
+  Err: fallback,
 })
 ```
 
-## Boolean operations (and/or)
-
-### `Result.and` — return other if Ok, Err otherwise
+### `Result.and` — replace Ok value with another Result
 
 ```ts
-Result.and<T, U, E>(other: TypedAction<void, Result<U, E>>): TypedAction<Result<T, E>, Result<U, E>>
+Result.and<TValue, TOut, TError>(
+  other: Pipeable<never, Result<TOut, TError>>,
+): TypedAction<Result<TValue, TError>, Result<TOut, TError>>
 ```
+
+If Ok, discard value and return `other`. If Err, propagate.
 
 Desugars to:
 ```ts
 branch({
   Ok: pipe(drop(), other),
-  Err: Result.err<U, E>(),
+  Err: Result.err<TOut, TError>(),
 })
 ```
 
-### `Result.andThen` (flatMap) — chain result-producing actions
+## Extracting
+
+### `Result.unwrapOr` — extract Ok or compute default from Err
 
 ```ts
-Result.andThen<T, U, E>(action: TypedAction<T, Result<U, E>>): TypedAction<Result<T, E>, Result<U, E>>
+Result.unwrapOr<TValue, TError>(
+  defaultAction: Pipeable<TError, TValue>,
+): TypedAction<Result<TValue, TError>, TValue>
 ```
 
-The monadic bind for Result. If `Ok`, pass value to `action`. If `Err`, propagate.
-
-Desugars to:
-```ts
-branch({
-  Ok: action,       // receives T, produces Result<U, E>
-  Err: Result.err<U, E>(),  // propagate error
-})
-```
-
-### `Result.or` — fallback if Err
-
-```ts
-Result.or<T, E, F>(fallback: TypedAction<E, Result<T, F>>): TypedAction<Result<T, E>, Result<T, F>>
-```
-
-If `Ok`, keep it. If `Err`, try `fallback` (which receives the error payload).
-
-Desugars to:
-```ts
-branch({
-  Ok: Result.ok<T, F>(),
-  Err: fallback,  // receives E, produces Result<T, F>
-})
-```
-
-## Extracting values
-
-### `Result.unwrap` — extract Ok or panic
-
-```ts
-Result.unwrap<T, E>(): TypedAction<Result<T, E>, T>
-```
-
-Blocked on error handling primitives. Same as `Option.unwrap`.
-
-### `Result.unwrapErr` — extract Err or panic
-
-```ts
-Result.unwrapErr<T, E>(): TypedAction<Result<T, E>, E>
-```
-
-Also blocked on error handling.
-
-### `Result.expect` / `Result.expectErr` — extract or panic with message
-
-```ts
-Result.expect<T, E>(message: string): TypedAction<Result<T, E>, T>
-Result.expectErr<T, E>(message: string): TypedAction<Result<T, E>, E>
-```
-
-Blocked on error handling.
-
-### `Result.unwrapOr` — extract Ok or default from Err
-
-```ts
-Result.unwrapOr<T, E>(defaultAction: TypedAction<E, T>): TypedAction<Result<T, E>, T>
-```
-
-Takes an action that receives the `Err` payload. More powerful than Rust's `unwrap_or` (which ignores the error).
+Takes an action that receives the Err payload and produces a fallback value.
 
 Desugars to:
 ```ts
 branch({
   Ok: identity(),
-  Err: defaultAction,  // receives E, produces T
-})
-```
-
-## Querying
-
-### `Result.isOk` / `Result.isErr`
-
-```ts
-Result.isOk<T, E>(): TypedAction<Result<T, E>, boolean>
-Result.isErr<T, E>(): TypedAction<Result<T, E>, boolean>
-```
-
-Desugar to:
-```ts
-branch({ Ok: pipe(drop(), constant(true)), Err: pipe(drop(), constant(false)) })
-```
-
-Rarely useful — branch directly on `Ok`/`Err` instead. Present for completeness.
-
-### `Result.isOkAnd` / `Result.isErrAnd`
-
-```ts
-Result.isOkAnd<T, E>(predicate: TypedAction<T, boolean>): TypedAction<Result<T, E>, boolean>
-Result.isErrAnd<T, E>(predicate: TypedAction<E, boolean>): TypedAction<Result<T, E>, boolean>
-```
-
-Same caveat as Option — boolean output limits composability.
-
-## Conversions to Option
-
-### `Result.ok` (as converter) — Result<T, E> → Option<T>
-
-```ts
-Result.toOption<T, E>(): TypedAction<Result<T, E>, Option<T>>
-```
-
-Desugars to:
-```ts
-branch({
-  Ok: Option.some<T>(),
-  Err: pipe(drop(), Option.none<T>()),
-})
-```
-
-### `Result.err` (as converter) — Result<T, E> → Option<E>
-
-```ts
-Result.toOptionErr<T, E>(): TypedAction<Result<T, E>, Option<E>>
-```
-
-Desugars to:
-```ts
-branch({
-  Ok: pipe(drop(), Option.none<E>()),
-  Err: Option.some<E>(),
-})
-```
-
-### `Result.transpose` — Result<Option<T>, E> → Option<Result<T, E>>
-
-```ts
-Result.transpose<T, E>(): TypedAction<Result<Option<T>, E>, Option<Result<T, E>>>
-```
-
-Desugars to:
-```ts
-branch({
-  Ok: branch({                                   // receives Option<T>
-    Some: pipe(Result.ok<T, E>(), Option.some()), // T → Result<T, E> → Option<Result<T, E>>
-    None: pipe(drop(), Option.none()),             // void → Option<Result<T, E>>
-  }),
-  Err: pipe(Result.err<T, E>(), Option.some()),   // E → Result<T, E> → Option<Result<T, E>>
+  Err: defaultAction,
 })
 ```
 
 ## Flattening
 
-### `Result.flatten` — Result<Result<T, E>, E> → Result<T, E>
+### `Result.flatten` — unwrap nested Result
 
 ```ts
-Result.flatten<T, E>(): TypedAction<Result<Result<T, E>, E>, Result<T, E>>
+Result.flatten<TValue, TError>(): TypedAction<
+  Result<Result<TValue, TError>, TError>,
+  Result<TValue, TError>
+>
 ```
 
 Desugars to:
 ```ts
-Result.andThen<Result<T, E>, T, E>(identity())
-// = branch({ Ok: identity(), Err: Result.err() })
+branch({
+  Ok: identity(),
+  Err: Result.err<TValue, TError>(),
+})
 ```
 
-## The `?` operator — scope + exit
+## Postfix methods on TypedAction
 
-The most important Result pattern. See CONTROL_FLOW.md for `scope`/`exit` design.
+Gated by `this` parameter constraints (same pattern as `.mapOption()`). Names include `Result` where they'd collide with Option or existing methods.
+
+**Naming convention**: unique names (`.isOk()`, `.ok()`) stand alone. Shared names (`.map`, `.andThen`, `.unwrapOr`) get a `Result` suffix to avoid collision with Option postfix methods.
+
+| Postfix | Equivalent to |
+|---|---|
+| `.mapResult(action)` | `Result.map(action)` |
+| `.mapErrResult(action)` | `Result.mapErr(action)` |
+| `.andThenResult(action)` | `Result.andThen(action)` |
+| `.orResult(fallback)` | `Result.or(fallback)` |
+| `.andResult(other)` | `Result.and(other)` |
+| `.unwrapOrResult(action)` | `Result.unwrapOr(action)` |
+| `.ok()` | `Result.toOption()` — Ok → Some, Err → None |
+| `.err()` | `Result.toOptionErr()` — Err → Some, Ok → None |
+| `.transposeResult()` | `Result.transpose()` — Result\<Option\<T\>, E\> → Option\<Result\<T, E\>\> |
+| `.isOk()` | `Result.isOk()` |
+| `.isErr()` | `Result.isErr()` |
+
+**No postfix for `Result.flatten`** — `.flatten()` already exists on TypedAction for arrays and can't be overloaded with a `this` constraint (the method is defined unconditionally on all TypedActions). Use `Result.flatten()` as a namespace function only.
+
+## Missing Option postfix methods
+
+Same naming convention. Option already has `.mapOption()`. These are missing:
+
+| Postfix | Equivalent to |
+|---|---|
+| `.andThenOption(action)` | `Option.andThen(action)` |
+| `.unwrapOrOption(action)` | `Option.unwrapOr(action)` |
+| `.filterOption(predicate)` | `Option.filter(predicate)` |
+| `.isSome()` | `Option.isSome()` |
+| `.isNone()` | `Option.isNone()` |
+
+**No postfix for `Option.flatten`** — same reason as Result. Use `Option.flatten()` namespace function only.
+
+## Collection
+
+### `Result.collect` — short-circuit on first Err
 
 ```ts
-scope(({ exit }) =>
-  pipe(
-    tryAction(step1),
-    branch({ Ok: identity(), Err: exit() }),  // ?
-    tryAction(step2),
-    branch({ Ok: identity(), Err: exit() }),  // ?
-    tryAction(step3),
-    branch({ Ok: identity(), Err: exit() }),  // ?
-  ),
-)
+Result.collect<TValue, TError>(): TypedAction<Result<TValue, TError>[], Result<TValue[], TError>>
 ```
 
-Sugar: `propagate(exit)` = `branch({ Ok: identity(), Err: exit() })`.
+If all elements are Ok, collect values into `Ok(TValue[])`. On first Err, short-circuit with that error.
 
-Higher-level: `tryScope(pipe(step1, step2, step3))`.
+Implemented as a builtin handler (`CollectResult`) — same pattern as `CollectSome` for Option.
 
-## Collection combinators
-
-### `Result.collect` — Result<T, E>[] → Result<T[], E>
-
-```ts
-Result.collect<T, E>(): TypedAction<Result<T, E>[], Result<T[], E>>
-```
-
-If all elements are `Ok`, collect values into `Ok(T[])`. On first `Err`, short-circuit with that error.
-
-This is Rust's `Iterator::collect::<Result<Vec<T>, E>>()`. Implemented as a builtin handler (`CollectResult`) — same pattern as `CollectSome`.
-
-### `Result.partition` — Result<T, E>[] → { ok: T[]; err: E[] }
-
-```ts
-Result.partition<T, E>(): TypedAction<Result<T, E>[], { ok: T[]; err: E[] }>
-```
-
-Split into successes and failures. More useful than `collect` when you want to process both.
-
-### `Result.collectOk` — Result<T, E>[] → T[]
-
-```ts
-Result.collectOk<T, E>(): TypedAction<Result<T, E>[], T[]>
-```
-
-Drop errors, unwrap successes. Equivalent to `Option.collect` but for Results.
-
-## Combinators NOT ported from Rust
-
-### `unwrapOrDefault`
-
-No traits, no defaults. `Result.unwrapOr(constant(defaultValue))` is the equivalent.
-
-### Mutation: `as_ref`, `as_mut`, etc.
-
-Not applicable — immutable AST nodes.
-
-## Priority
-
-### Tier 1: core
-
-- `Result.ok()` / `Result.err()` — constructors
-- `Result.map(action)` — transform Ok value
-- `Result.mapErr(action)` — transform Err value
-- `Result.andThen(action)` — monadic bind / flatMap for Ok
-- `Result.unwrapOr(action)` — extract Ok with fallback
-
-### Tier 2: useful
-
-- `Result.or(fallback)` — fallback on Err
-- `Result.flatten()` — unwrap nested Result
-- `Result.toOption()` — convert to Option
-- `propagate(exit)` — sugar for ? operator
-
-### Tier 3: nice to have
-
-- `Result.and(other)` — discard Ok value, use other
-- `Result.inspect(action)` / `Result.inspectErr(action)` — side effects
-- `Result.collect()` / `Result.partition()` / `Result.collectOk()` — collection ops
-- `Result.transpose()` — swap Result/Option nesting
-- `Result.toOptionErr()` — convert error side to Option
-
-### Deferred / blocked
-
-- `Result.unwrap()` / `Result.expect(msg)` — needs error handling primitives
-- `Result.unwrapErr()` / `Result.expectErr(msg)` — same
-- `tryAction(handler)` — needs engine support for catching handler failures
-- `tryScope` — needs scope/exit from CONTROL_FLOW.md
-
-## Open questions
-
-### Error type for `tryAction`
-
-What type is `E` when a handler fails? Options:
-
-1. **Structured error**: `{ message: string; handler: string; module: string }` — typed, the engine constructs it
-2. **`unknown`** — punt on the type, let the user branch/inspect
-3. **Generic with engine config** — the engine's error format is configurable per deployment
-
-Leaning toward option 1 — a well-known error shape that the engine always produces.
-
-### `tryAction` vs explicit Result returns
-
-Both. They serve different failure modes (see RUNTIME_TYPE_CHECKING.md):
-
-- **Explicit `Result` returns**: For non-deterministic handlers (LLMs, APIs). The handler catches its own errors (Zod parse failures, network errors) and returns `{ kind: "Err", value: ... }`. The error payload is domain-specific — the handler decides what to include (raw LLM output, HTTP status, parse error message). The AST retries via `loop`/`branch`.
-
-- **`tryAction` wrapping**: For infrastructure failures that bypass the handler's own error handling — panics, timeouts, OOM. The engine catches the failure and produces a structured `Err`. This is distinct from deterministic handler contract violations (`ContractViolation`), which are Byzantine faults and kill the workflow immediately.
-
-Summary:
-| Failure type | Mechanism | Retryable? |
-|---|---|---|
-| Deterministic handler schema violation | `ContractViolation` IPC → `Failed(ByzantineFault)` | No |
-| Non-deterministic handler domain error | Handler returns `Result` `Err` variant | Yes, via AST |
-| Infrastructure failure (panic, timeout) | `tryAction` wrapping → `Err` variant | Yes, via AST |
-
-### Interaction with scope/exit
-
-The `?` operator (scope + exit) works on any tagged union, not just Result. But the ergonomic sugar (`propagate`, `tryScope`) is Result-specific. Should the sugar be generic?
-
-```ts
-// Generic:
-propagate(exit, "Ok", "Err")  // specify which variant continues and which exits
-
-// Result-specific:
-propagate(exit)  // hardcoded to Ok/Err
-```
-
-Result-specific is cleaner for the common case. Generic can be added later if needed.
-
-## Files to change (when implementing)
+## Files to change
 
 | File | What changes |
 |------|-------------|
-| `libs/barnum/src/ast.ts` | Add `ResultDef<T, E>`, `Result<T, E>` type aliases. |
-| `libs/barnum/src/builtins.ts` | Add `Result` namespace object with all combinators. |
-| Rust AST (when it exists) | If adding `tryAction`: new `Action::Try` variant. |
-| Rust engine (when it exists) | If adding `tryAction`: catch handler failures, produce Err variant. |
-| `libs/barnum/tests/types.test.ts` | Type-level tests. |
-| `libs/barnum/tests/patterns.test.ts` | Runtime AST shape tests. |
+| `libs/barnum/src/ast.ts` | Add `ResultDef<TValue, TError>`, `Result<TValue, TError>` type aliases |
+| `libs/barnum/src/builtins.ts` | Add `Result` namespace with all combinators |
+| `libs/barnum/tests/types.test.ts` | Type-level tests |
+| `libs/barnum/tests/patterns.test.ts` | AST shape tests |
