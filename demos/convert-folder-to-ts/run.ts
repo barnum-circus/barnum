@@ -51,7 +51,7 @@ await workflowBuilder()
       ).drop(),
     ).then(
       // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
-      loop((recur, done) =>
+      loop<any, void>((recur, done) =>
         pipe(drop<any>(), typeCheck, classifyErrors).branch({
           HasErrors: pipe(forEach(fix), recur),
           Clean: done,
