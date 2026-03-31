@@ -22,7 +22,7 @@ console.error("=== Retry-on-error demo ===\n");
 await workflowBuilder()
   .workflow(() =>
     earlyReturn((earlyReturn) =>
-      loop<any, string>((recur, done) =>
+      loop<any, never>((recur, done) =>
         pipe(
           drop<any>(),
           tryCatch(
@@ -38,7 +38,7 @@ await workflowBuilder()
                   .drop(),
 
                 // If stepC errors, it's catastrophic — exit immediately
-                stepC.mapErr(drop()).unwrapOr(earlyReturn),
+                stepC.mapErr(drop()).unwrapOr(earlyReturn).drop(),
                 done,
               ),
 
