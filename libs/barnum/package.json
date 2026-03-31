@@ -6,7 +6,8 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./src/*": "./src/*"
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
   },
   "bin": {
     "barnum": "cli.cjs"
