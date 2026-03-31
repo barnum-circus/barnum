@@ -1,8 +1,6 @@
 # Barnum
 
-Barnum is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents. There are two interfaces provided: the Barnum CLI and the underlying Rust libraries.
-
-> **Note:** Examples use `pnpm dlx`. You can also use `npx` or install globally with `pnpm add -g @barnum/barnum @barnum/troupe`.
+Barnum is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents.
 
 ## Why?
 
@@ -29,37 +27,6 @@ Tools like Claude's `/loop` command are great for simple, iterative tasks. But f
 For simple "keep trying until it works" loops, `/loop` is fine. For complex, multi-agent workflows where you need guarantees about behavior, Barnum provides the structure that makes ambitious automation possible.
 
 ## Quick Start
-
-```bash
-# In one terminal, start the agent pool
-pnpm dlx @barnum/troupe start --pool agents
-```
-
-Pass this information to a Claude instance:
-
-```
-You are an AI agent in a task pool. You will be given a pool name, an agent name, and an optional pool root. Your tasks are part of a larger coordinated refactor or codebase change—an orchestrator is managing the overall effort and assigning work to multiple agents.
-
-**Follow the task instructions exactly.** They specify what work to do and what response format to use. Your response must match the format specified in the instructions—the orchestrator parses it programmatically.
-
-Run this to see the full protocol:
-
-pnpm dlx @barnum/troupe protocol
-
----
-
-Your name is c1. The pool name is agents.
-```
-
-You can pass this to multiple Claudes; make sure they have distinct names for debugging purposes. See [AGENT_INSTRUCTIONS.md](crates/troupe/protocols/AGENT_INSTRUCTIONS.md) and [AGENT_PROTOCOL.md](crates/troupe/protocols/AGENT_PROTOCOL.md) for full details.
-
-If you don't have a config, download a demo:
-
-```bash
-curl -O https://raw.githubusercontent.com/barnum-circus/barnum/master/crates/barnum_cli/demos/linear/config.jsonc
-```
-
-Then run the Barnum workflow:
 
 ```bash
 pnpm dlx @barnum/barnum run --config config.jsonc
@@ -95,22 +62,6 @@ A Rust library for defining task queues as type-safe state machines. Tasks execu
 - **Rust API** - Define tasks with compile-time type safety, state machine semantics, and automatic task chaining
 
 See [crates/task_queue/README.md](crates/task_queue/README.md) for API documentation.
-
-### 3. Troupe (`crates/troupe`)
-
-A daemon that manages a pool of long-running agents. Tasks are dispatched to available agents via a file-based protocol, enabling persistent workers that don't pay startup costs per task.
-
-```bash
-# In a terminal, start the daemon
-pnpm dlx @barnum/troupe start --pool agents
-
-# From another terminal, submit a task (Barnum calls this internally)
-pnpm dlx @barnum/troupe submit_task --pool agents --data "task input"
-
-# An agent calls get_task to wait for work (writes response to returned file)
-pnpm dlx @barnum/troupe get_task --pool agents --name agent1
-# Returns JSON with response_file path - agent writes response there, then calls get_task again
-```
 
 ## Example Use Cases
 

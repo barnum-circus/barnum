@@ -7,7 +7,6 @@ Bump the version in all of these:
 1. **`Cargo.toml`** — `[workspace.package] version`
 2. **`crates/string_id/Cargo.toml`** — has its own `version` (not workspace)
 3. **`libs/barnum/package.json`** — `@barnum/barnum` npm package
-4. **`libs/troupe/package.json`** — `@barnum/troupe` npm package
 
 **Do NOT bump `docs-website/package.json`** — it stays at `0.0.0` (not published).
 
@@ -38,5 +37,4 @@ CI handles npm publishing when a tag is pushed (if configured), or publish manua
 
 ```bash
 cd libs/barnum && npm publish --access public
-cd libs/troupe && npm publish --access public
 ```
