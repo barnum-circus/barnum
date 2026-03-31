@@ -157,21 +157,31 @@ loop(({ recur, done }) =>
 )
 ```
 
-The closure is called at AST construction time. The AST shape is identical — `recur()` and `done()` produce the same Tag nodes. The difference is purely type-level.
+The closure is called at AST construction time. `recur()` and `done()` produce `pipe(Tag("Continue"), Perform(jumpEffect))` and `pipe(Tag("Break"), Perform(jumpEffect))` respectively. The closure scopes these to the loop's EffectId and type parameters.
 
 ## scope / jump
 
-`scope` + `jump` is the general-purpose early return primitive. `done` in a loop is a jump — same mechanism, same Discard semantics. See EFFECTS_PHASE_4_LOOP.md for the full design.
+`scope` + `jump` is the general-purpose control flow primitive. `loop` is built on top of it. See EFFECTS_PHASE_4_LOOP.md for the full design.
 
-- **`scope(body)`** — establishes a boundary. If `jump` fires inside the body, execution short-circuits to the scope boundary.
-- **`jump()`** — fires a Perform that bubbles up to the enclosing scope's Handle and discards the continuation.
+- **`scope(jump => body)`** — establishes a restart boundary. If the body completes normally, the scope produces the body's output. If `jump(v)` fires inside the body, execution restarts at the scope boundary and the jumped value is produced as output.
+- **`jump()`** — fires a Perform that bubbles up to the enclosing scope's Handle and restarts the scope body. The jumped value becomes the scope's output.
 
-`loop` is built on top of this: `done` = `jump` out of the loop body's scope, `recur` = a separate RestartBody effect.
+`jump` is passed directly as a single argument, not destructured from an object.
+
+`loop` is built on scope. Both `recur` and `done` are jumps targeting the same EffectId — the difference is the variant tag (Continue vs Break). The branch at the top of the compiled scope dispatches: Continue runs the body, Break exits. One effect.
+
+### Scope semantics
+
+```ts
+function scope<TIn, TJump, TOut>(
+  body: (jump: () => TypedAction<TJump, never>) => Pipeable<TIn, TOut>,
+): TypedAction<TIn, TJump | TOut>
+```
 
 ### The `?` operator
 
 ```ts
-scope(({ jump }) =>
+scope(jump =>
   pipe(
     tryAction(step1),
     branch({ Ok: identity(), Err: jump() }),  // ? operator
@@ -182,21 +192,11 @@ scope(({ jump }) =>
 // output: last Ok value, or first Err value
 ```
 
-### Scope semantics
-
-```ts
-function scope<In, TJump, TOut>(
-  build: (ctx: {
-    jump: () => TypedAction<TJump, never>;
-  }) => Pipeable<In, TOut>,
-): TypedAction<In, TJump | TOut>
-```
-
 ### Sugar: `propagate`
 
 ```ts
 // With propagate sugar:
-scope(({ jump }) =>
+scope(jump =>
   pipe(
     tryAction(step1), propagate(jump),
     tryAction(step2), propagate(jump),
@@ -204,9 +204,9 @@ scope(({ jump }) =>
 )
 
 // Where:
-function propagate<T, E>(jump: () => TypedAction<E, never>)
-  : TypedAction<Result<T, E>, T>
-{
+function propagate<TValue, TError>(
+  jump: () => TypedAction<TError, never>,
+): TypedAction<Result<TValue, TError>, TValue> {
   return branch({ Ok: identity(), Err: jump() });
 }
 ```
@@ -222,11 +222,10 @@ function propagate<T, E>(jump: () => TypedAction<E, never>)
 | `libs/barnum/tests/types.test.ts` | Type-level tests for namespace combinators and postfix methods. |
 | `libs/barnum/tests/patterns.test.ts` | AST shape tests for namespace combinators. |
 
-### For scope/exit (future)
+### For scope/jump
 
 | File | What changes |
 |------|-------------|
-| `libs/barnum/src/ast.ts` | Add `ScopeAction` to `Action` union. Add `scope()` combinator. |
-| `libs/barnum/src/builtins.ts` | Add `exit()` constructor (or provide via scope closure). |
-| Rust AST | Add `Action::Scope` variant. Add `ScopeId` newtype. |
-| Rust engine | Add `Frame::Scope` variant. Handle Exit tag unwinding. |
+| `libs/barnum/src/builtins.ts` | Add `scope()` function with HOAS callback providing `jump`. |
+| `libs/barnum/src/ast.ts` | No new AST nodes — scope compiles to Handle + Branch. |
+| Rust engine | Handle frames already support RestartBody. No engine changes needed. |
