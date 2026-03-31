@@ -22,29 +22,26 @@ console.error("=== Retry-on-error demo ===\n");
 await workflowBuilder()
   .workflow(() =>
     earlyReturn((earlyReturn) =>
-      loop<any, never>((recur, done) =>
-        pipe(
-          drop<any>(),
-          tryCatch(
-            (throwError) =>
-              pipe(
-                // stepA may fail — unwrapOr surfaces the error as a Result
-                stepA.unwrapOr(throwError).drop(),
+      loop<never, never>((recur, done) =>
+        tryCatch(
+          (throwError) =>
+            pipe(
+              // stepA may fail — unwrapOr surfaces the error as a Result
+              stepA.unwrapOr(throwError).drop(),
 
-                // stepB may fail and may take unreasonably long
-                withTimeout(constant(2_000), stepB.unwrapOr(throwError))
-                  .mapErr(constant("stepB: timed out"))
-                  .unwrapOr(throwError)
-                  .drop(),
+              // stepB may fail and may take unreasonably long
+              withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+                .mapErr(constant("stepB: timed out"))
+                .unwrapOr(throwError)
+                .drop(),
 
-                // If stepC errors, it's catastrophic — exit immediately
-                stepC.mapErr(drop()).unwrapOr(earlyReturn).drop(),
-                done,
-              ),
+              // If stepC errors, it's catastrophic — exit immediately
+              stepC.mapErr(drop()).unwrapOr(earlyReturn).drop(),
+              done,
+            ),
 
-            // An error occurred — log it and retry the loop
-            logError.drop().then(recur),
-          ),
+          // An error occurred — log it and retry the loop
+          logError.drop().then(recur),
         ),
       ),
     ),
