@@ -15,6 +15,7 @@ import {
   type Result,
   type ResultDef,
   type VarRef,
+  typedAction,
   pipe,
   all,
   forEach,
@@ -24,6 +25,8 @@ import {
   bind,
   bindInput,
   resetEffectIdCounter,
+  tryCatch,
+  invokeWithThrow,
 } from "../src/ast.js";
 import {
   constant,
@@ -1096,5 +1099,127 @@ describe("Result types", () => {
     );
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
     assertExact<IsExact<ExtractOutput<typeof action>, number>>();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// tryCatch types
+// ---------------------------------------------------------------------------
+
+describe("tryCatch types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("tryCatch: input from body, output matches body and recovery", () => {
+    const action = tryCatch(
+      (_throwError) => pipe(setup, build),
+      // Recovery receives TError, must produce same output as body.
+      // TError is unconstrained here (throwError unused), so drop + constant.
+      pipe(drop(), constant({ artifact: "fallback" })),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { artifact: string }>>();
+  });
+
+  it("throwError token is TypedAction<TError, never>", () => {
+    tryCatch(
+      (throwError) => {
+        assertExact<IsExact<typeof throwError, TypedAction<string, never>>>();
+        return identity<string>();
+      },
+      identity<string>(),
+    );
+  });
+
+  it("recovery input type matches throwError payload type", () => {
+    const action = tryCatch(
+      (throwError: TypedAction<{ code: number; msg: string }, never>) =>
+        pipe(drop<never>(), constant("ok")),
+      // Recovery receives { code: number; msg: string }, extracts msg
+      extractField<{ code: number; msg: string }, "msg">("msg"),
+    );
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("nested tryCatch: each throwError has independent TError", () => {
+    tryCatch(
+      (throwOuter) => {
+        assertExact<IsExact<typeof throwOuter, TypedAction<string, never>>>();
+        return tryCatch(
+          (throwInner) => {
+            assertExact<IsExact<typeof throwInner, TypedAction<number, never>>>();
+            return pipe(drop<never>(), constant("ok"));
+          },
+          pipe(drop<number>(), constant("recovered from inner")),
+        );
+      },
+      identity<string>(),
+    );
+  });
+
+  it("tryCatch produces Handle AST node", () => {
+    const action = tryCatch(
+      (_throwError) => pipe(drop<never>(), constant("ok")),
+      identity<string>(),
+    );
+    expect(action.kind).toBe("Handle");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// invokeWithThrow types
+// ---------------------------------------------------------------------------
+
+describe("invokeWithThrow types", () => {
+  beforeEach(() => {
+    resetEffectIdCounter();
+  });
+
+  it("extracts TOut from Result<TOut, TError>", () => {
+    const throwToken = typedAction<number, never>({ kind: "Perform", effect_id: 0 });
+    const handler = identity<string>() as TypedAction<string, Result<string, number>>;
+    const action = invokeWithThrow(handler, throwToken);
+    assertExact<IsExact<ExtractInput<typeof action>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, string>>();
+  });
+
+  it("invokeWithThrow composes in tryCatch with matching types", () => {
+    // Body: invokeWithThrow extracts { data: string } from Ok, throws { code: number } on Err
+    // Recovery: receives { code: number }, produces { data: string } (same as body output)
+    const action = tryCatch(
+      (throwError) => {
+        const handler = identity<{ data: string }>() as TypedAction<
+          { data: string },
+          Result<{ data: string }, { code: number }>
+        >;
+        return invokeWithThrow(handler, throwError);
+      },
+      pipe(drop<{ code: number }>(), constant({ data: "fallback" })),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { data: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { data: string }>>();
+  });
+
+  it("invokeWithThrow produces Chain AST node", () => {
+    const throwToken = typedAction<string, never>({ kind: "Perform", effect_id: 0 });
+    const handler = identity<void>() as TypedAction<void, Result<string, string>>;
+    const action = invokeWithThrow(handler, throwToken);
+    expect(action.kind).toBe("Chain");
+  });
+
+  it("invokeWithThrow chains into further pipeline steps", () => {
+    const action = tryCatch(
+      (throwError) => pipe(
+        invokeWithThrow(
+          identity<{ artifact: string }>() as TypedAction<{ artifact: string }, Result<{ verified: boolean }, string>>,
+          throwError,
+        ),
+        deploy,
+      ),
+      pipe(drop<string>(), constant({ deployed: false })),
+    );
+    assertExact<IsExact<ExtractInput<typeof action>, { artifact: string }>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, { deployed: boolean }>>();
   });
 });
