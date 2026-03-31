@@ -2150,6 +2150,354 @@ mod tests {
         assert_eq!(result, Some(json!("final")));
     }
 
+    // -- Bind-shaped AST tests --
+    //
+    // These verify the runtime behavior of the Handle/Perform substrate
+    // when driven by bind-shaped ASTs. The ASTs are constructed directly
+    // in Rust, matching what the TS `bind()` macro produces.
+
+    /// readVar(n): Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))
+    fn read_var(n: u64) -> Action {
+        chain(
+            invoke_builtin(BuiltinKind::ExtractField {
+                value: json!("state"),
+            }),
+            chain(
+                invoke_builtin(BuiltinKind::ExtractIndex { value: json!(n) }),
+                invoke_builtin(BuiltinKind::Tag {
+                    value: json!("Resume"),
+                }),
+            ),
+        )
+    }
+
+    /// Bind test 1: Single binding, single read.
+    /// Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo))))
+    /// Input: "input". All → [42, "input"]. Handle state = [42, "input"].
+    /// Perform fires, readVar(0) extracts 42, resumes. echo receives 42.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_single_binding_single_read() {
+        let e0 = 10;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant { value: json!(42) }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(0),
+                chain(perform(e0), invoke("./echo.ts", "echo")),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!(42)); // echo receives 42
+
+        let result = engine.complete(ts[0].task_id, json!("echo_done")).unwrap();
+        assert_eq!(result, Some(json!("echo_done")));
+    }
+
+    /// Bind test 2: Single binding, body ignores VarRef.
+    /// Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(ExtractIndex(1), Invoke(echo))))
+    /// Body extracts pipeline_input (index 1) and passes to echo. No Perform fires.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_single_binding_body_ignores_varref() {
+        let e0 = 10;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant { value: json!(42) }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(0),
+                chain(
+                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    invoke("./echo.ts", "echo"),
+                ),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("input")); // echo receives pipeline_input
+
+        let result = engine.complete(ts[0].task_id, json!("done")).unwrap();
+        assert_eq!(result, Some(json!("done")));
+    }
+
+    /// Bind test 3: Two bindings, two reads.
+    /// All(Constant("alice"), Constant(99), Identity) → ["alice", 99, "input"]
+    /// Nested Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(Perform(e0), Chain(Invoke(mid), Perform(e1)))))
+    /// First Perform → "alice", mid gets "alice", second Perform → 99.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_two_bindings_two_reads() {
+        let e0 = 10;
+        let e1 = 11;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("alice"),
+                }),
+                invoke_builtin(BuiltinKind::Constant { value: json!(99) }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(0),
+                handle(
+                    e1,
+                    read_var(1),
+                    chain(
+                        perform(e0),
+                        chain(invoke("./mid.ts", "mid"), perform(e1)),
+                    ),
+                ),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // First Perform(e0): bubbles past inner Handle(e1), caught by outer Handle(e0).
+        // readVar(0) extracts state[0] = "alice" from [alice, 99, input]. Resumes with "alice".
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        // Chain trampolines to mid with "alice".
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("alice"));
+
+        // Complete mid → second Perform(e1). Inner Handle catches.
+        // readVar(1) extracts state[1] = 99. Resumes with 99.
+        let (result, ts2) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("mid_out")).unwrap();
+        assert_eq!(result, Some(json!(99)));
+        assert!(ts2.is_empty());
+    }
+
+    /// Bind test 4: Two bindings, reads in reverse order.
+    /// Body: Chain(Perform(e1), Perform(e0)).
+    /// Perform(e1) caught by inner Handle. Perform(e0) bubbles to outer Handle.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_two_bindings_reverse_order() {
+        let e0 = 10;
+        let e1 = 11;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("alice"),
+                }),
+                invoke_builtin(BuiltinKind::Constant { value: json!(99) }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(0),
+                handle(e1, read_var(1), chain(perform(e1), perform(e0))),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform(e1) is caught by inner Handle(e1). readVar(1) → state[1] = 99. Resume with 99.
+        // Chain trampolines to Perform(e0). Bubbles past inner Handle, caught by outer Handle(e0).
+        // readVar(0) → state[0] = "alice". Resume.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, Some(json!("alice")));
+        assert!(ts.is_empty());
+    }
+
+    /// Bind test 5: Nested binds.
+    /// Outer bind: All("outer", Identity) → Handle(e_outer, readVar(0), ...)
+    /// Inner bind: All("inner", Identity) → Handle(e_inner, readVar(0), ...)
+    /// Body: Chain(Perform(e_outer), Perform(e_inner))
+    /// e_outer bubbles past inner Handle, caught by outer. e_inner caught by inner.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_nested() {
+        let e_outer = 10;
+        let e_inner = 11;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("outer"),
+                }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e_outer,
+                read_var(0),
+                chain(
+                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    // Inner bind operates on pipeline_input
+                    chain(
+                        parallel(vec![
+                            invoke_builtin(BuiltinKind::Constant {
+                                value: json!("inner"),
+                            }),
+                            invoke_builtin(BuiltinKind::Identity),
+                        ]),
+                        handle(
+                            e_inner,
+                            read_var(0),
+                            chain(
+                                invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                                chain(perform(e_outer), perform(e_inner)),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform(e_outer) bubbles past inner Handle(e_inner) and Handle(e_outer).
+        // Actually wait — Perform(e_outer) is inside inner Handle(e_inner) which is inside
+        // outer Handle(e_outer). The bubble order: inner body → inner Handle(e_inner, wrong eid) →
+        // outer Handle body → outer Handle(e_outer, matches!). readVar(0) on outer state
+        // = ["outer", "input"][0] = "outer". Resume with "outer".
+        // Chain to Perform(e_inner). Inner Handle catches. readVar(0) on inner state
+        // = ["inner", "input"][0] = "inner". Resume with "inner".
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, Some(json!("inner")));
+        assert!(ts.is_empty());
+    }
+
+    /// Bind test 6: Bind inside ForEach.
+    /// ForEach(Chain(All(Identity, Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo)))))
+    /// Input [10, 20]. Each iteration binds its own element.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_inside_foreach() {
+        let e0 = 10;
+        let mut engine = engine_from(for_each(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Identity),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(0),
+                chain(perform(e0), invoke("./echo.ts", "echo")),
+            ),
+        )));
+        let root = engine.workflow_root();
+        engine.advance(root, json!([10, 20]), None).unwrap();
+
+        // Both ForEach iterations run. Each binds its own element via Identity.
+        // For element 10: All(Identity, Identity) → [10, 10]. Handle state = [10, 10].
+        //   Perform → readVar(0) → 10. Resume → echo with 10.
+        // For element 20: same with 20.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 2); // Two echo dispatches
+
+        // Complete both echo invocations.
+        assert_eq!(
+            engine
+                .complete(ts[0].task_id, json!("r10"))
+                .unwrap(),
+            None,
+        );
+        assert_eq!(
+            engine
+                .complete(ts[1].task_id, json!("r20"))
+                .unwrap(),
+            Some(json!(["r10", "r20"])),
+        );
+    }
+
+    /// Bind test 7: Handler receives correct state shape.
+    /// Handle(e, TS_handler, Perform(e)). Advance with "input".
+    /// State = "input" (Handle initializes from pipeline value).
+    /// Handler dispatch value should be { "payload": null, "state": "input" }.
+    /// (Perform's input = null because Perform has no explicit input in bind usage.)
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_handler_receives_correct_state() {
+        // Use a TS handler so we can inspect the dispatch value.
+        let e0 = 10;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant { value: json!(42) }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                invoke("./handler.ts", "handler"),
+                chain(
+                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    perform(e0),
+                ),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1);
+        // Handler receives { payload: "input", state: [42, "input"] }
+        // (state is the All output tuple, which is the pipeline value entering the Handle)
+        assert_eq!(
+            ts[0].value,
+            json!({ "payload": "input", "state": [42, "input"] }),
+        );
+    }
+
+    /// Bind test 8: readVar(1) produces correct Resume value.
+    /// State = ["a", "b", "c"]. readVar(1) should produce { kind: "Resume", value: "b" }.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn bind_read_var_produces_correct_resume() {
+        let e0 = 10;
+        let mut engine = engine_from(chain(
+            parallel(vec![
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("a"),
+                }),
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("b"),
+                }),
+                invoke_builtin(BuiltinKind::Constant {
+                    value: json!("c"),
+                }),
+                invoke_builtin(BuiltinKind::Identity),
+            ]),
+            handle(
+                e0,
+                read_var(1), // Extract state[1] = "b"
+                chain(
+                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(3) }),
+                    chain(perform(e0), invoke("./echo.ts", "echo")),
+                ),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // Perform fires. readVar(1) extracts state[1] = "b". Resumes with "b".
+        // Chain trampolines to echo with "b".
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1);
+        assert_eq!(ts[0].value, json!("b"));
+
+        let result = engine.complete(ts[0].task_id, json!("done")).unwrap();
+        assert_eq!(result, Some(json!("done")));
+    }
+
     /// Test 23: Two effects targeting different Handles.
     /// Handle(e1, h1, Handle(e2, h2, All(Perform(e1), Perform(e2))))
     #[test]
