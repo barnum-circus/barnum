@@ -114,12 +114,6 @@ pub enum FlatAction<T> {
         count: Count,
     },
 
-    /// Loop: runs body, inspects result variant to break or continue.
-    Loop {
-        /// `ActionId` of the loop body.
-        body: ActionId,
-    },
-
     /// Redirect to another action (step reference or self-recursion).
     Step {
         /// Target action (unresolved or resolved depending on `T`).
@@ -160,7 +154,6 @@ impl<T> FlatAction<T> {
             FlatAction::All { count } => FlatAction::All { count },
             FlatAction::ForEach { body } => FlatAction::ForEach { body },
             FlatAction::Branch { count } => FlatAction::Branch { count },
-            FlatAction::Loop { body } => FlatAction::Loop { body },
             FlatAction::Handle { effect_id } => FlatAction::Handle { effect_id },
             FlatAction::Perform { effect_id } => FlatAction::Perform { effect_id },
         })
@@ -473,11 +466,6 @@ impl UnresolvedFlatConfig {
                 FlatAction::ForEach { body: body_id }
             }
 
-            Action::Loop(crate::LoopAction { body }) => {
-                let body_id = self.flatten_action(*body, workflow_root)?;
-                FlatAction::Loop { body: body_id }
-            }
-
             Action::Step(crate::StepAction {
                 step: StepRef::Named { name },
             }) => FlatAction::Step {
@@ -697,13 +685,6 @@ mod tests {
         })
     }
 
-    /// Helper: create a Loop action.
-    fn loop_action(body: Action) -> Action {
-        Action::Loop(crate::LoopAction {
-            body: Box::new(body),
-        })
-    }
-
     /// Helper: create a Step(Named) action.
     fn step_named(name: &str) -> Action {
         Action::Step(crate::StepAction {
@@ -855,19 +836,6 @@ mod tests {
         assert_eq!(cases[1].0, kind("Ok"));
     }
 
-    /// Loop: explicit body `ActionId`.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_loop() {
-        let flat = flatten(config(loop_action(invoke("./handler.ts", "run")))).unwrap();
-
-        assert_eq!(flat.entries.len(), 2);
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Loop { body: ActionId(1) }
-        );
-    }
-
     // -- Nesting --
 
     /// Chain with multi-entry first: first is All → `ChildRef`.
@@ -898,58 +866,6 @@ mod tests {
             flat.action(ActionId(3)),
             FlatAction::All { count: Count(2) }
         );
-    }
-
-    /// Single-child chain: Loop > `ForEach` with explicit `ActionId`s.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_single_child_chain() {
-        // Loop(ForEach(Invoke))
-        let action = loop_action(for_each(invoke("./handler.ts", "run")));
-        let flat = flatten(config(action)).unwrap();
-
-        // DFS: Loop allocates 0, then flatten_action for body:
-        //   ForEach allocates 1, then flatten_action for body:
-        //     Invoke allocates 2.
-        assert_eq!(flat.entries.len(), 3);
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Loop { body: ActionId(1) }
-        );
-        assert_eq!(
-            flat.action(ActionId(1)),
-            FlatAction::ForEach { body: ActionId(2) }
-        );
-        assert_eq!(
-            flat.action(ActionId(2)),
-            FlatAction::Invoke {
-                handler: HandlerId(0)
-            }
-        );
-    }
-
-    /// Chain inside All inside Loop.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_nested_combinators() {
-        let inner_chain = pipe(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]);
-        let par = parallel(vec![inner_chain, invoke("./c.ts", "c")]);
-        let action = loop_action(par);
-        let flat = flatten(config(action)).unwrap();
-
-        // Loop(0) -> All(1) -> [ChildRef(Chain(...)), Invoke(3)]
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Loop { body: ActionId(1) }
-        );
-        assert_eq!(
-            flat.action(ActionId(1)),
-            FlatAction::All { count: Count(2) }
-        );
-
-        // First child: Chain is multi-entry, gets ChildRef.
-        // Second child: Invoke is single-entry, inlined.
-        assert_eq!(flat.parallel_children(ActionId(1)).count(), 2);
     }
 
     /// Branch cases containing compound subtrees.
@@ -998,33 +914,6 @@ mod tests {
         for child in children {
             assert!(matches!(flat.action(child), FlatAction::All { .. }));
         }
-    }
-
-    /// Chain with Loop as rest: Loop is allocated as rest target.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_chain_with_loop_rest() {
-        // Chain(Invoke(a), Loop(Invoke(b)))
-        let action = pipe(vec![
-            invoke("./a.ts", "a"),
-            loop_action(invoke("./b.ts", "b")),
-        ]);
-        let flat = flatten(config(action)).unwrap();
-
-        // 0: Chain { rest: 2 }
-        // 1: Invoke(0)         ← first (child slot, inlined)
-        // 2: Loop { body: 3 }  ← rest (allocated by flatten_action)
-        // 3: Invoke(1)         ← loop body
-        assert_eq!(flat.entries.len(), 4);
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Chain { rest: ActionId(2) }
-        );
-        assert_eq!(flat.chain_first(ActionId(0)), ActionId(1));
-        assert_eq!(
-            flat.action(ActionId(2)),
-            FlatAction::Loop { body: ActionId(3) }
-        );
     }
 
     // -- Step resolution --
@@ -1160,7 +1049,7 @@ mod tests {
                     ("Ok", invoke("./ok.ts", "handle")),
                     ("Err", invoke("./err.ts", "handle")),
                 ]),
-                loop_action(invoke("./loop.ts", "body")),
+                for_each(invoke("./loop.ts", "body")),
             ]))
         };
         let flat1 = flatten(make_config()).unwrap();

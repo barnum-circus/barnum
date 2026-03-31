@@ -85,14 +85,7 @@ pub enum AdvanceError {
 /// Errors that can occur during [`WorkflowState::complete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CompleteError {
-    /// Loop body returned a value that is not `{ kind: "Continue" }` or
-    /// `{ kind: "Break" }`.
-    #[error("Loop body must return {{kind: \"Continue\"}} or {{kind: \"Break\"}}, got: {value}")]
-    InvalidLoopResult {
-        /// The invalid value returned by the loop body.
-        value: Value,
-    },
-    /// An advance error occurred during Chain trampoline or Loop re-entry.
+    /// An advance error occurred during Chain trampoline or Handle re-entry.
     #[error(transparent)]
     Advance(#[from] AdvanceError),
     /// A handler returned a value that doesn't deserialize as a valid
@@ -282,9 +275,8 @@ impl WorkflowState {
     ///
     /// # Errors
     ///
-    /// Returns [`CompleteError`] if the result value has an invalid shape
-    /// (e.g., a Loop body that doesn't return Continue/Break), or if an
-    /// advance error occurs during Chain trampoline or Loop re-entry.
+    /// Returns [`CompleteError`] if the result value has an invalid shape,
+    /// or if an advance error occurs during Chain trampoline or Handle re-entry.
     ///
     /// # Panics
     ///
@@ -733,7 +725,6 @@ impl WorkflowState {
     ///
     /// - **No parent:** workflow done — return the terminal value.
     /// - **Chain:** trampoline — advance the `rest` action with the value.
-    /// - **Loop:** inspect `Continue`/`Break` — re-enter or deliver to parent.
     /// - **All/ForEach:** store in results slot; if all slots filled,
     ///   collect into array and deliver to parent.
     #[allow(clippy::expect_used, clippy::unwrap_used)]
@@ -757,29 +748,6 @@ impl WorkflowState {
                 };
                 self.advance(rest, value, frame.parent)?;
                 Ok(None)
-            }
-
-            ParentRef::Loop { frame_id } => {
-                let frame = self.frames.remove(frame_id).expect("parent frame exists");
-                let FrameKind::Loop { body } = frame.kind else {
-                    unreachable!("Loop ParentRef points to non-Loop frame: {:?}", frame.kind)
-                };
-                match value["kind"].as_str() {
-                    Some("Continue") => {
-                        let frame_id = self.insert_frame(Frame {
-                            parent: frame.parent,
-                            kind: FrameKind::Loop { body },
-                        });
-                        self.advance(
-                            body,
-                            value["value"].clone(),
-                            Some(ParentRef::Loop { frame_id }),
-                        )?;
-                        Ok(None)
-                    }
-                    Some("Break") => self.deliver(frame.parent, value["value"].clone()),
-                    _ => Err(CompleteError::InvalidLoopResult { value }),
-                }
             }
 
             ParentRef::Handle { frame_id, side } => {
@@ -951,14 +919,6 @@ impl WorkflowState {
                 self.advance(case_action_id, value, parent)?;
             }
 
-            FlatAction::Loop { body } => {
-                let frame_id = self.insert_frame(Frame {
-                    parent,
-                    kind: FrameKind::Loop { body },
-                });
-                self.advance(body, value, Some(ParentRef::Loop { frame_id }))?;
-            }
-
             FlatAction::Step { target } => {
                 self.advance(target, value, parent)?;
             }
@@ -1052,12 +1012,6 @@ mod tests {
                 .into_iter()
                 .map(|(k, v)| (KindDiscriminator::from(k.intern()), v))
                 .collect(),
-        })
-    }
-
-    fn loop_action(body: Action) -> Action {
-        Action::Loop(LoopAction {
-            body: Box::new(body),
         })
     }
 
@@ -1172,19 +1126,6 @@ mod tests {
             engine.handler(dispatches[0].handler_id),
             &ts_handler("./ok.ts", "handle"),
         );
-    }
-
-    /// Loop: body is dispatched on advance.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn loop_dispatches_body() {
-        let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
-        let root = engine.workflow_root();
-        engine.advance(root, json!("init"), None).unwrap();
-
-        let dispatches = engine.take_pending_dispatches();
-        assert_eq!(dispatches.len(), 1);
-        assert_eq!(dispatches[0].value, json!("init"));
     }
 
     /// Step(Named): follows the step reference to the target action.
@@ -1368,45 +1309,6 @@ mod tests {
         );
     }
 
-    /// Loop: Continue re-dispatches, Break completes.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn loop_continue_and_break() {
-        let mut engine = engine_from(loop_action(invoke("./handler.ts", "run")));
-        let root = engine.workflow_root();
-        engine.advance(root, json!(0), None).unwrap();
-
-        // Iteration 1: Continue
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d[0].value, json!(0));
-        assert_eq!(
-            engine
-                .complete(d[0].task_id, json!({"kind": "Continue", "value": 1}))
-                .unwrap(),
-            None,
-        );
-
-        // Iteration 2: Continue
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d[0].value, json!(1));
-        assert_eq!(
-            engine
-                .complete(d[0].task_id, json!({"kind": "Continue", "value": 2}))
-                .unwrap(),
-            None,
-        );
-
-        // Iteration 3: Break
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d[0].value, json!(2));
-        assert_eq!(
-            engine
-                .complete(d[0].task_id, json!({"kind": "Break", "value": "done"}))
-                .unwrap(),
-            Some(json!("done")),
-        );
-    }
-
     // -- Arena / generational safety --
 
     /// Removing a frame and reusing its slot must not let the old `FrameId`
@@ -1425,7 +1327,7 @@ mod tests {
         // Insert a new frame — thunderdome may reuse the same slot.
         let _new_id = arena.insert(Frame {
             parent: None,
-            kind: FrameKind::Loop { body: ActionId(0) },
+            kind: FrameKind::Chain { rest: ActionId(0) },
         });
 
         // The old id must not resolve, even if the slot was reused.
@@ -2236,7 +2138,7 @@ mod tests {
     }
 
     /// Bind test 3: Two bindings, two reads.
-    /// All(Constant("alice"), Constant(99), Identity) → ["alice", 99, "input"]
+    /// `All(Constant("alice"), Constant(99), Identity)` → `["alice", 99, "input"]`
     /// Nested Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(Perform(e0), Chain(Invoke(mid), Perform(e1)))))
     /// First Perform → "alice", mid gets "alice", second Perform → 99.
     #[test]
@@ -2258,10 +2160,7 @@ mod tests {
                 handle(
                     e1,
                     read_var(1),
-                    chain(
-                        perform(e0),
-                        chain(invoke("./mid.ts", "mid"), perform(e1)),
-                    ),
+                    chain(perform(e0), chain(invoke("./mid.ts", "mid"), perform(e1))),
                 ),
             ),
         ));
@@ -2404,16 +2303,9 @@ mod tests {
         assert_eq!(ts.len(), 2); // Two echo dispatches
 
         // Complete both echo invocations.
+        assert_eq!(engine.complete(ts[0].task_id, json!("r10")).unwrap(), None,);
         assert_eq!(
-            engine
-                .complete(ts[0].task_id, json!("r10"))
-                .unwrap(),
-            None,
-        );
-        assert_eq!(
-            engine
-                .complete(ts[1].task_id, json!("r20"))
-                .unwrap(),
+            engine.complete(ts[1].task_id, json!("r20")).unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }
@@ -2457,22 +2349,16 @@ mod tests {
     }
 
     /// Bind test 8: readVar(1) produces correct Resume value.
-    /// State = ["a", "b", "c"]. readVar(1) should produce { kind: "Resume", value: "b" }.
+    /// State = `["a", "b", "c"]`. `readVar(1)` should produce `{ kind: "Resume", value: "b" }`.
     #[test]
     #[allow(clippy::unwrap_used)]
     fn bind_read_var_produces_correct_resume() {
         let e0 = 10;
         let mut engine = engine_from(chain(
             parallel(vec![
-                invoke_builtin(BuiltinKind::Constant {
-                    value: json!("a"),
-                }),
-                invoke_builtin(BuiltinKind::Constant {
-                    value: json!("b"),
-                }),
-                invoke_builtin(BuiltinKind::Constant {
-                    value: json!("c"),
-                }),
+                invoke_builtin(BuiltinKind::Constant { value: json!("a") }),
+                invoke_builtin(BuiltinKind::Constant { value: json!("b") }),
+                invoke_builtin(BuiltinKind::Constant { value: json!("c") }),
                 invoke_builtin(BuiltinKind::Identity),
             ]),
             handle(

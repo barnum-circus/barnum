@@ -76,10 +76,6 @@ pub enum Action {
     /// N-ary branch on the `kind` field of a discriminated union input.
     Branch(BranchAction),
 
-    /// Monadic fixed-point iteration. Repeats the body until it signals
-    /// `Break`.
-    Loop(LoopAction),
-
     /// Named step reference for mutual recursion and DAG topologies.
     Step(StepAction),
 
@@ -132,14 +128,6 @@ pub struct AllAction {
 pub struct BranchAction {
     /// Map from variant `kind` values to actions.
     pub cases: HashMap<KindDiscriminator, Action>,
-}
-
-/// Monadic fixed-point iteration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LoopAction {
-    /// The action to execute each iteration. Must produce a value with
-    /// `kind: "Continue"` or `kind: "Break"`.
-    pub body: Box<Action>,
 }
 
 /// Step reference — either a named step or the workflow root.

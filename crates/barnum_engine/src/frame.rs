@@ -19,11 +19,6 @@ pub enum ParentRef {
         /// The parent frame's ID.
         frame_id: FrameId,
     },
-    /// Parent is a Loop frame — single child, Continue/Break dispatch.
-    Loop {
-        /// The parent frame's ID.
-        frame_id: FrameId,
-    },
     /// Parent is an All frame — indexed child in fan-out.
     All {
         /// The parent frame's ID.
@@ -62,7 +57,6 @@ impl ParentRef {
     pub const fn frame_id(self) -> FrameId {
         match self {
             Self::Chain { frame_id }
-            | Self::Loop { frame_id }
             | Self::All { frame_id, .. }
             | Self::ForEach { frame_id, .. }
             | Self::Handle { frame_id, .. } => frame_id,
@@ -90,11 +84,6 @@ pub enum FrameKind {
     ForEach {
         /// Slot per element; `None` until the child completes.
         results: Vec<Option<Value>>,
-    },
-    /// Fixed-point: re-enter body on Continue, complete on Break.
-    Loop {
-        /// The body action to re-enter on each iteration.
-        body: ActionId,
     },
     /// Effect handler. Intercepts effects from the body; routes them
     /// to the handler DAG.
