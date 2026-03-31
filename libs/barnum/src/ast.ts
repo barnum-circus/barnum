@@ -103,6 +103,20 @@ export interface Config<Out = any> {
 }
 
 // ---------------------------------------------------------------------------
+// Type utilities
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type UnionToIntersection<TUnion> = (TUnion extends any ? (x: TUnion) => void : never) extends (
+  x: infer TIntersection,
+) => void
+  ? TIntersection
+  : never;
+
+/** Merge a tuple of objects into a single intersection type. */
+export type MergeTuple<TTuple> = TTuple extends unknown[] ? UnionToIntersection<TTuple[number]> : never;
+
+// ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking
 // ---------------------------------------------------------------------------
 
@@ -165,6 +179,8 @@ export type TypedAction<
    * to `In` so the intersection types correctly.
    */
   augment(): TypedAction<In, In & Out, Refs>;
+  /** Merge a tuple of objects into a single object. `a.merge()` ≡ `pipe(a, merge())`. */
+  merge(): TypedAction<In, MergeTuple<Out>, Refs>;
   /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
@@ -373,6 +389,15 @@ function augmentMethod(this: TypedAction): TypedAction {
   });
 }
 
+function mergeMethod(this: TypedAction): TypedAction {
+  // eslint-disable-next-line @typescript-eslint/no-use-before-define
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+  });
+}
+
 function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
   // eslint-disable-next-line @typescript-eslint/no-use-before-define
   return typedAction({
@@ -419,6 +444,7 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
       augment: { value: augmentMethod, configurable: true },
+      merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },
     });

@@ -2,16 +2,13 @@
  * Convert-folder-to-TS demo: JS → TypeScript migration workflow.
  *
  * Pipeline:
- *   1. Setup — clean output directory
- *   2. List JS files in src/ (returns { file, outputPath }[])
- *   3. For each file:
- *      a. bindInput captures the FileEntry, extracts "file", runs migrate
- *      b. all(identity, pick("outputPath")) + merge combines { content, outputPath }
- *      c. writeFile receives { content, outputPath }
- *   4. Type-check/fix loop — run tsc, classify errors, fix or finish
+ *   1. Clean the output directory
+ *   2. List JS files in src/
+ *   3. For each file: migrate to TS and write the output
+ *   4. Type-check/fix loop until clean
  *
- * Demonstrates: pipe, forEach, loop, bindInput, all, merge,
- * createHandlerWithConfig, and postfix operators (.branch, .drop).
+ * Demonstrates: pipe, forEach, loop, bindInput, all,
+ * createHandlerWithConfig, and postfix operators (.get, .pick, .merge, .drop, .then).
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -25,9 +22,6 @@ import {
   bindInput,
 } from "@barnum/barnum/src/ast.js";
 import {
-  extractField,
-  merge,
-  pick,
   recur,
   done,
 } from "@barnum/barnum/src/builtins.js";
@@ -42,34 +36,27 @@ console.error("=== Running JS → TypeScript migration workflow ===\n");
 await workflowBuilder()
   .workflow(() =>
     pipe(
-      // Phase 1: Setup and discover files
       setup,
       listFiles,
 
-      // Phase 2: For each file, migrate and write.
-      // bindInput captures the FileEntry as a VarRef. The pipeline extracts
-      // "file", runs migrate, then a nested bindInput captures the result.
-      // Inside, all() collects both VarRef values and merge() combines them.
+      // For each file: extract the file path, migrate to TS, then combine
+      // the migrated content with the original output path for writing.
       forEach(
-        bindInput<FileEntry>((entry) => pipe(
-          entry,
-          extractField<FileEntry, "file">("file"),
-          migrate({ to: "Typescript" }),
-          bindInput<{ content: string }>((migrateResult) => pipe(
-            all(migrateResult, entry.then(pick<FileEntry, ["outputPath"]>("outputPath"))),
-            merge<[{ content: string }, { outputPath: string }]>(),
-            writeFile,
-          )),
-        )),
+        bindInput<FileEntry>((entry) =>
+          pipe(
+            entry.get("file"),
+            migrate({ to: "Typescript" }),
+            bindInput<{ content: string }>((migrateResult) =>
+              all(migrateResult, entry.pick("outputPath")).merge().then(writeFile),
+            ),
+          ),
+        ),
       ).drop(),
 
-      // Phase 3: Type-check / fix loop
+      // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
       loop(
-        pipe(typeCheck, classifyErrors).branch({
-          HasErrors: pipe(
-            forEach(fix).drop(),
-            recur(),
-          ),
+        typeCheck.then(classifyErrors).branch({
+          HasErrors: forEach(fix).drop().then(recur()),
           Clean: done(),
         }),
       ),
