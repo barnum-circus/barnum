@@ -287,15 +287,15 @@ Full Rust-style `Option<T>` and `Result<TValue, TError>` namespaces with map, an
 
 ### Recursion and function calls
 
-Barnum has `Step` (goto) but no function calls. A step reference is a jump, not a call — there's no return address, no stack frame, no parameter passing. You can jump to a named step, but you can't "call" it and return to where you were.
+Step + Chain IS function calls. When you write `pipe(step("Validate"), processResult)`:
 
-**Does it matter?** Steps are used for mutual recursion (A jumps to B, B jumps to A) and for shared workflow fragments (multiple paths jump to the same cleanup step). Both work fine with goto semantics — the "return" is implicit in the workflow structure (the step's continuation is whatever comes after it in the chain).
+1. Step jumps to Validate's body (the function entry point)
+2. Validate runs and produces a value
+3. The Chain trampolines to `processResult` with the value (the return)
 
-True function calls would require a call stack: push a return address, jump to the function, execute, pop the return address, jump back. This would let you reuse the same step body from multiple call sites, each returning to a different point. Currently, if two different chains both need to call the same step and then do different things afterward, they each need their own copy of the chain-with-step — the step doesn't "return" to the caller.
+The Chain's `rest` field is the return address. Multiple call sites calling the same step each have their own Chain frame with a different `rest` — same function body, different return points. This is mechanically identical to a call stack: push return address (create Chain frame with rest), jump to function (Step to target ActionId), execute, pop return address (Chain trampolines to rest).
 
-The workaround: duplicate the step reference in each call site. `pipe(step("Validate"), A)` and `pipe(step("Validate"), B)` both jump to Validate, but Validate's continuation is A or B respectively because Chain's `rest` is different in each case. The step body runs the same code; the Chain frame provides the "return address." So Chain already provides function-call semantics for the common case.
-
-**Verdict:** Doesn't matter. Chain + Step gives you effective function calls. The lack of a formal call/return mechanism is a non-issue because the Chain trampoline serves as the return mechanism.
+The one thing missing is parameterized calls — you can't pass arguments to a step. The step receives whatever value was flowing through the pipeline. In practice this isn't a limitation because pipeline values ARE the arguments.
 
 ### Mutable shared state
 
