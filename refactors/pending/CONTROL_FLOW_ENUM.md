@@ -1,76 +1,35 @@
-# Control flow: LoopResult namespace and scope/exit
+# LoopResult<TContinue, TBreak>
 
-> **Convention**: All discriminated unions use `TaggedUnion<Def>` — every variant carries `{ kind: K; value: T; __def?: Def }`. This is not optional: **all union variants must carry `__def`**, no exceptions. Constructors like `recur()`, `done()`, `some()`, `none()`, and `tag()` all require the full variant map as a type parameter so the output type carries `__def`. Branch uses `ExtractDef` for inference and auto-unwraps `value` before each case handler.
-
-## The types
-
-### LoopResult
+## The type
 
 ```ts
-type LoopResultDef<TContinue, TBreak> = {
-  Continue: TContinue;
-  Break: TBreak;
-};
-
+type LoopResultDef<TContinue, TBreak> = { Continue: TContinue; Break: TBreak };
 type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue, TBreak>>;
-// = { kind: "Continue"; value: TContinue; __def?: LoopResultDef<TContinue, TBreak> }
-// | { kind: "Break"; value: TBreak; __def?: LoopResultDef<TContinue, TBreak> }
 ```
 
-Already exists in `ast.ts`. Used by `loop()` to drive iteration: `Continue` restarts the loop body with a new value, `Break` exits with a result.
+Same pattern as `Option<T>` and `Result<TValue, TError>` — a `TaggedUnion` carrying `__def` so `.branch()` works via `ExtractDef`. Already exists in `ast.ts`.
 
-### ScopeResult (proposed)
-
-```ts
-type ScopeResultDef<TExit, TContinue> = {
-  Exit: TExit;
-  Continue: TContinue;
-};
-
-type ScopeResult<TExit, TContinue> = TaggedUnion<ScopeResultDef<TExit, TContinue>>;
-```
-
-For early return from a `scope`. `Exit` short-circuits, `Continue` flows through to the next pipeline step. See "scope/exit" section below.
-
-## API surface: the `LoopResult` namespace
-
-Parallel to the `Option` namespace. All loop-related combinators live on `LoopResult.`.
-
-```ts
-import { LoopResult, loop } from "@barnum/barnum";
-
-loop(
-  pipe(
-    healthCheck,
-    branch({
-      Healthy: LoopResult.done(),   // receives healthy payload, breaks loop
-      Unhealthy: LoopResult.recur(), // receives unhealthy payload, continues loop
-    }),
-  ),
-)
-```
-
-### Design principle: actions, not values
-
-Same as Option — all arguments are actions. Rust doesn't have LoopResult (it uses `break`/`continue` keywords), but the principle applies to any combinator arguments.
+Rust equivalent: `ControlFlow<B, C>`. `Continue` restarts the loop body with a new value, `Break` exits with a result.
 
 ## Constructors
 
-### `LoopResult.recur` / `LoopResult.done`
-
-Already exist as top-level `recur()` and `done()` exports. The namespace form is the preferred API:
+### `LoopResult.recur`
 
 ```ts
 LoopResult.recur<TContinue, TBreak>(): TypedAction<TContinue, LoopResult<TContinue, TBreak>>
 // = tag<LoopResultDef<TContinue, TBreak>, "Continue">("Continue")
-// Input: TContinue (feeds back as loop input), Output: full LoopResult
-
-LoopResult.done<TContinue, TBreak>(): TypedAction<TBreak, LoopResult<TContinue, TBreak>>
-// = tag<LoopResultDef<TContinue, TBreak>, "Break">("Break")
-// Input: TBreak (the loop's output), Output: full LoopResult
 ```
 
-Both require both type parameters to ensure `__def` carries the full variant map.
+Already exists as top-level `recur()`. The namespace form is preferred.
+
+### `LoopResult.done`
+
+```ts
+LoopResult.done<TContinue, TBreak>(): TypedAction<TBreak, LoopResult<TContinue, TBreak>>
+// = tag<LoopResultDef<TContinue, TBreak>, "Break">("Break")
+```
+
+Already exists as top-level `done()`. The namespace form is preferred.
 
 ## Transforming
 
@@ -78,11 +37,11 @@ Both require both type parameters to ensure `__def` carries the full variant map
 
 ```ts
 LoopResult.mapBreak<TContinue, TBreak, U>(
-  action: TypedAction<TBreak, U>,
+  action: Pipeable<TBreak, U>,
 ): TypedAction<LoopResult<TContinue, TBreak>, LoopResult<TContinue, U>>
 ```
 
-Apply `action` to the `Break` value, rewrap. Pass `Continue` through unchanged.
+Apply `action` to the `Break` value, rewrap. Pass `Continue` through unchanged. Analogous to `Result.map`.
 
 Desugars to:
 ```ts
@@ -96,11 +55,11 @@ branch({
 
 ```ts
 LoopResult.mapContinue<TContinue, TBreak, U>(
-  action: TypedAction<TContinue, U>,
+  action: Pipeable<TContinue, U>,
 ): TypedAction<LoopResult<TContinue, TBreak>, LoopResult<U, TBreak>>
 ```
 
-Apply `action` to the `Continue` value, rewrap. Pass `Break` through unchanged.
+Apply `action` to the `Continue` value, rewrap. Pass `Break` through unchanged. Analogous to `Result.mapErr`.
 
 Desugars to:
 ```ts
@@ -110,18 +69,24 @@ branch({
 })
 ```
 
-### `LoopResult.inspect` / `LoopResult.inspectContinue`
+## Extracting
 
-Side effects on Break or Continue values without changing the result. Same pattern as `Option.inspect`.
+### `LoopResult.unwrapBreakOr` — extract Break or compute default from Continue
 
 ```ts
-LoopResult.inspect<TContinue, TBreak>(
-  action: TypedAction<TBreak, unknown>,
-): TypedAction<LoopResult<TContinue, TBreak>, LoopResult<TContinue, TBreak>>
+LoopResult.unwrapBreakOr<TContinue, TBreak>(
+  defaultAction: Pipeable<TContinue, TBreak>,
+): TypedAction<LoopResult<TContinue, TBreak>, TBreak>
+```
 
-LoopResult.inspectContinue<TContinue, TBreak>(
-  action: TypedAction<TContinue, unknown>,
-): TypedAction<LoopResult<TContinue, TBreak>, LoopResult<TContinue, TBreak>>
+Takes an action that receives the Continue payload and produces a fallback. Analogous to `Result.unwrapOr`.
+
+Desugars to:
+```ts
+branch({
+  Break: identity(),
+  Continue: defaultAction,
+})
 ```
 
 ## Querying
@@ -139,33 +104,31 @@ Desugar to:
 branch({ Break: pipe(drop(), constant(true)), Continue: pipe(drop(), constant(false)) })
 ```
 
-Rarely useful — you'd branch on `Break`/`Continue` directly. Present for completeness.
+Rarely useful — branch on `Break`/`Continue` directly instead.
 
-## Extracting
+## Postfix methods on TypedAction
 
-### `LoopResult.unwrapBreak`
+Gated by `this` parameter constraints (same pattern as `.mapOption()` and Result postfix methods).
 
-```ts
-LoopResult.unwrapBreak<TContinue, TBreak>(): TypedAction<LoopResult<TContinue, TBreak>, TBreak>
-```
+All LoopResult method names are unique — no collision with Option or Result postfix names. No suffix needed.
 
-Extract the Break value. Panics on Continue. Blocked on error handling primitives.
+| Postfix | Equivalent to |
+|---|---|
+| `.mapBreak(action)` | `LoopResult.mapBreak(action)` |
+| `.mapContinue(action)` | `LoopResult.mapContinue(action)` |
+| `.unwrapBreakOr(action)` | `LoopResult.unwrapBreakOr(action)` |
+| `.isBreak()` | `LoopResult.isBreak()` |
+| `.isContinue()` | `LoopResult.isContinue()` |
 
-### `LoopResult.unwrapBreakOr`
+**No postfix for `LoopResult.flatten`** — `.flatten()` already exists on TypedAction for arrays and can't be overloaded with a `this` constraint. Use `LoopResult.flatten()` namespace function only (if added).
 
-```ts
-LoopResult.unwrapBreakOr<TContinue, TBreak>(
-  defaultAction: TypedAction<TContinue, TBreak>,
-): TypedAction<LoopResult<TContinue, TBreak>, TBreak>
-```
+## Combinators NOT included
 
-Desugars to:
-```ts
-branch({
-  Break: identity(),
-  Continue: defaultAction,  // receives TContinue, produces TBreak
-})
-```
+- **`andThen`** — monadic bind on Break ("if breaking, run action that might continue instead") is unintuitive for loop control flow.
+- **`or`** / **`and`** — don't map to meaningful loop operations.
+- **`flatten`** — `LoopResult<LoopResult<TC, TB>, TB> → LoopResult<TC, TB>` is contrived. Skip unless a use case emerges.
+- **`inspect`** — rejected for Option and Result. Same here.
+- **`collect`** — collecting LoopResults isn't a pattern. Unlike Option.collect (filter Nones) and Result.collect (short-circuit on Err), there's no natural array-level semantics for LoopResult.
 
 ## The `loop` function
 
@@ -179,7 +142,7 @@ function loop<In, TOut extends LoopResult<any, any>, R extends string = never>(
 
 ### Closure form (from LOOP_WITH_CLOSURE.md)
 
-The closure form provides scoped `recur`/`done` that are pre-bound to the loop's type parameters, avoiding the inference problem where `TContinue` must be specified manually:
+The closure form provides scoped `recur`/`done` pre-bound to the loop's type parameters, avoiding the inference problem where `TContinue` must be specified manually:
 
 ```ts
 loop(({ recur, done }) =>
@@ -187,24 +150,27 @@ loop(({ recur, done }) =>
     typeCheck,
     classifyErrors,
     branch({
-      HasErrors: pipe(forEach(fix), drop(), recur()),  // receives TypeError[]
-      Clean: done(),  // receives void
+      HasErrors: pipe(forEach(fix), drop(), recur()),
+      Clean: done(),
     }),
   ),
 )
 ```
 
-The closure is called at AST construction time. The AST shape is identical — `recur()` and `done()` produce the same Tag nodes. The difference is purely type-level: the closure can infer `TContinue` and `TBreak` from context.
-
-See LOOP_WITH_CLOSURE.md for full design.
+The closure is called at AST construction time. The AST shape is identical — `recur()` and `done()` produce the same Tag nodes. The difference is purely type-level.
 
 ## scope / exit (proposed)
 
 `scope` is the generalization of `loop`. Where `loop` repeats on Continue and exits on Break, `scope` just exits on Exit and continues the pipeline otherwise.
 
-### The `?` operator
+### ScopeResult
 
-This is the killer use case. In Rust, `?` propagates errors up to the enclosing function. In barnum, `scope` + `exit` does the same:
+```ts
+type ScopeResultDef<TExit, TContinue> = { Exit: TExit; Continue: TContinue };
+type ScopeResult<TExit, TContinue> = TaggedUnion<ScopeResultDef<TExit, TContinue>>;
+```
+
+### The `?` operator
 
 ```ts
 scope(({ exit }) =>
@@ -212,8 +178,6 @@ scope(({ exit }) =>
     tryAction(step1),
     branch({ Ok: identity(), Err: exit() }),  // ? operator
     tryAction(step2),
-    branch({ Ok: identity(), Err: exit() }),
-    tryAction(step3),
     branch({ Ok: identity(), Err: exit() }),
   ),
 )
@@ -229,10 +193,6 @@ function scope<In, TExit, TOut>(
   }) => TypedAction<In, TOut | ScopeResult<TExit, TOut>>,
 ): TypedAction<In, TExit | TOut>
 ```
-
-- `exit()` tags a value as `Exit`, short-circuiting the rest of the pipeline
-- Any value that reaches the end of the scope without hitting `exit()` is the normal result
-- Output is `TExit | TOut` — the early-exit type unioned with the normal completion type
 
 ### Relationship between loop and scope
 
@@ -250,28 +210,24 @@ loop(body)  ≡  scope(({ exit }) =>
                )
 ```
 
-Whether to actually implement `loop` on top of `scope` or keep them as independent AST nodes is an implementation question. Independent nodes are simpler for the Rust engine. Building `loop` on `scope` is cleaner conceptually.
+Whether to implement `loop` on top of `scope` or keep them as independent AST nodes is an implementation question.
 
-### Scope as an AST node
+### Scope AST node
 
 ```rust
-// Rust AST
 pub struct ScopeAction {
     pub body: Box<Action>,
     pub scope_id: ScopeId,
 }
 
-// Exit is a special Tag that the engine recognizes
 pub struct ExitAction {
     pub scope_id: ScopeId,
 }
 ```
 
-The `scope_id` connects `exit()` to its enclosing `scope`. Same mechanism as loop's `Continue`/`Break` but with only one signal (Exit). The engine unwinds frames back to the Scope frame when it sees an Exit tag.
+The `scope_id` connects `exit()` to its enclosing `scope`. The engine unwinds frames back to the Scope frame when it sees an Exit tag.
 
-## Sugar: `propagate`
-
-A common pattern with scope/exit and Result:
+### Sugar: `propagate`
 
 ```ts
 // Without sugar:
@@ -300,70 +256,22 @@ function propagate<T, E>(exit: () => TypedAction<E, ScopeResult<E, never>>)
 }
 ```
 
-Or even higher-level: `tryScope` that automatically wraps each step:
-
-```ts
-tryScope(pipe(step1, step2, step3))
-// Each step can "throw" by producing Err. Err propagates automatically.
-```
-
-## Priority
-
-### Tier 1: already implemented
-
-- `LoopResult` type (exists in `ast.ts`)
-- `recur()` / `done()` constructors (exist in `builtins.ts`)
-- `loop()` combinator (exists in `ast.ts`)
-
-### Tier 2: namespace + closure
-
-- `LoopResult` namespace object — mirrors existing top-level `recur`/`done`
-- `loop` closure form — LOOP_WITH_CLOSURE.md
-- `LoopResult.mapBreak`, `LoopResult.mapContinue` — transform variants
-
-### Tier 3: scope/exit
-
-- `scope` AST node + engine support
-- `exit()` scoped constructor
-- `propagate()` sugar for Result + scope
-- `tryScope` high-level sugar
-
-### Tier 4: nice to have
-
-- `LoopResult.inspect` / `LoopResult.inspectContinue`
-- `LoopResult.isBreak` / `LoopResult.isContinue`
-- `LoopResult.unwrapBreak` / `LoopResult.unwrapBreakOr`
-
 ## Files to change
 
-### For LoopResult namespace (tier 2)
+### For LoopResult namespace
 
 | File | What changes |
 |------|-------------|
-| `libs/barnum/src/builtins.ts` | Add `LoopResult` namespace object. `recur()`/`done()` stay as top-level exports for backward compat; namespace is preferred API. |
-| `libs/barnum/tests/types.test.ts` | Type-level tests for namespace combinators. |
-| `libs/barnum/tests/patterns.test.ts` | Runtime tests for namespace AST shapes. |
+| `libs/barnum/src/builtins.ts` | Add `LoopResult` namespace object with recur, done, mapBreak, mapContinue, unwrapBreakOr, isBreak, isContinue. Top-level `recur()`/`done()` stay as exports. |
+| `libs/barnum/src/ast.ts` | Add postfix method signatures to TypedAction interface. Add method implementations in `typedAction()`. |
+| `libs/barnum/tests/types.test.ts` | Type-level tests for namespace combinators and postfix methods. |
+| `libs/barnum/tests/patterns.test.ts` | AST shape tests for namespace combinators. |
 
-### For loop closure form (tier 2)
-
-| File | What changes |
-|------|-------------|
-| `libs/barnum/src/ast.ts` | Add overload to `loop()` accepting a builder function. |
-| `libs/barnum/tests/types.test.ts` | Type inference tests for closure-based loop. |
-
-### For scope/exit (tier 3)
+### For scope/exit (future)
 
 | File | What changes |
 |------|-------------|
 | `libs/barnum/src/ast.ts` | Add `ScopeAction` to `Action` union. Add `scope()` combinator. |
 | `libs/barnum/src/builtins.ts` | Add `exit()` constructor (or provide via scope closure). |
-| Rust AST (when it exists) | Add `Action::Scope` variant. Add `ScopeId` newtype. |
-| Rust engine (when it exists) | Add `Frame::Scope` variant. Handle Exit tag unwinding. |
-| `libs/barnum/tests/` | Tests for scope/exit behavior. |
-
-### Existing functions that don't change
-
-- **`recur()` / `done()`** — Stay as top-level exports. `LoopResult.recur()` / `LoopResult.done()` are aliases on the namespace.
-- **`loop()`** — Existing overload stays. Closure form is an additional overload.
-- **`branch()`** — Already handles LoopResult via TaggedUnion/ExtractDef.
-- **`tag()`** — `recur`/`done` build AST directly (don't call `tag()`). No change.
+| Rust AST | Add `Action::Scope` variant. Add `ScopeId` newtype. |
+| Rust engine | Add `Frame::Scope` variant. Handle Exit tag unwinding. |
