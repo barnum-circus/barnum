@@ -34,11 +34,13 @@ It passes both covariant and contravariant checks simultaneously.
 - Corollary: `= any` defaults on type params that can't be inferred
   silently erase all type checking downstream.
 
-## HOAS callback param types cannot be inferred
+## HOAS callback param types cannot be inferred from usage
 
-TypeScript infers generic params from argument types. For callbacks, it
-infers from the callback's RETURN type, not from how callback PARAMETERS
-are used inside the body.
+TypeScript infers generic params from **concrete argument types** — values
+the caller passes in. It matches the argument's type against the expected
+parameter type and extracts generics. For callbacks, it infers from the
+callback's RETURN type (which is a concrete expression TS can synthesize
+a type for), not from how callback PARAMETERS are used inside the body.
 
 ```typescript
 loop((recur, done) => body)
@@ -47,27 +49,72 @@ loop((recur, done) => body)
 TS cannot infer `TIn` or `TBreak` from how `recur` and `done` are used
 inside `body`. It can only infer from `body`'s return type.
 
+The reason is about **inference sites**. TS needs a concrete type to
+match against a generic parameter. Direct arguments and callback return
+expressions provide inference sites — they're values TS synthesizes
+types for. Callback parameters don't — they're values TS *constructs*
+(to pass to the callback), not values TS *analyzes*. `TBreak` in
+`done: TypedAction<TBreak, never>` has zero inference sites in `loop`'s
+signature, so TS falls back to the default or `unknown`.
+
+Inferring from usage would require TS to observe that `done` is used in
+a pipeline position expecting `TypedAction<number, never>`, then
+propagate `number` back to `TBreak`. This is checking-direction
+inference (type flows inward from usage site to declaration). TS only
+does synthesis-direction inference (type flows outward from expression
+to consumer). Flow had a more aggressive algorithm that could handle
+the checking direction, which is why `useState` inference worked
+differently in Flow vs TypeScript.
+
 **Callback return type inference DOES work reliably.** For example,
 `earlyReturn((ret) => loop<X, Y>(...))` correctly infers TIn and TOut
-from the loop's return type.
+from the loop's return type, because the return expression is a
+concrete value TS can synthesize a type for.
+
+### Why tryCatch doesn't have this problem
+
+```typescript
+function tryCatch<TIn, TOut, TError>(
+  body: (throwError: TypedAction<TError, never>) => Pipeable<TIn, TOut>,
+  recovery: Pipeable<TError, TOut>,
+): TypedAction<TIn, TOut>
+```
+
+`recovery` is a **direct argument** — a concrete value the caller
+passes. TS synthesizes its type, matches it against
+`Pipeable<TError, TOut>`, and extracts `TError` and `TOut`. Then it
+uses `TError` to type `throwError` inside the callback.
+
+The inference flow: concrete argument `recovery` provides `TError` →
+TS constructs `throwError: TypedAction<TError, never>` → callback
+body is type-checked with `throwError` fully typed.
+
+This is the escape hatch for HOAS inference: if the generic appears
+in both a callback parameter AND a direct argument, TS infers it from
+the direct argument. The callback parameter gets it for free.
+
+`loop` has no equivalent escape hatch — there's no second argument
+from which to infer `TIn` or `TBreak`.
 
 ### Design rule
 
 HOAS combinator type params split into two categories:
 
-1. **Token types** (callback parameter types): cannot be inferred. Must
-   either be explicitly annotated or have semantically correct defaults.
-2. **Body types** (callback return types): CAN be inferred. Safe to give
-   `= any` defaults as a fallback.
+1. **Token types** (callback parameter types): cannot be inferred from
+   usage. Require either an explicit annotation, a direct-argument
+   inference site (like tryCatch's `recovery`), or a semantically
+   correct default.
+2. **Body types** (callback return types): CAN be inferred (synthesis
+   direction). Safe to give `= any` defaults as a fallback.
 
 Current signatures:
 
-| Combinator    | Required (token types)  | Defaulted (body types)           |
-|---------------|------------------------|----------------------------------|
-| `loop`        | `TIn`, `TBreak`        | `TRefs = never`                  |
-| `earlyReturn` | —                      | `TEarlyReturn = never`, `TIn = any`, `TOut = any` |
-| `recur`       | `TIn`                  | `TOut = any`                     |
-| `tryCatch`    | —                      | all inferred from `recovery` arg |
+| Combinator    | Required (token types)  | Defaulted (body types)           | Escape hatch                     |
+|---------------|------------------------|----------------------------------|----------------------------------|
+| `loop`        | `TIn`, `TBreak`        | `TRefs = never`                  | none — must annotate             |
+| `earlyReturn` | —                      | `TEarlyReturn = never`, `TIn = any`, `TOut = any` | none, but defaults work          |
+| `recur`       | `TIn`                  | `TOut = any`                     | none — must annotate             |
+| `tryCatch`    | —                      | all inferred                     | `recovery` arg provides `TError` |
 
 ## No partial type argument inference
 
