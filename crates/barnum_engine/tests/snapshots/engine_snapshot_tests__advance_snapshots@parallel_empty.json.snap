@@ -24,7 +24,7 @@ WorkflowState {
         len: 0,
         first_free: None,
     },
-    task_to_parent: {},
+    task_to_frame: {},
     pending_dispatches: [],
     stashed_items: [],
     next_task_id: 0,

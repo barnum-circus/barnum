@@ -227,7 +227,7 @@ enum SweepResult {
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
-    task_to_parent: BTreeMap<TaskId, Option<ParentRef>>,
+    task_to_frame: BTreeMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
     stashed_items: VecDeque<StashedItem>,
     next_task_id: u32,
@@ -241,7 +241,7 @@ impl WorkflowState {
         Self {
             flat_config,
             frames: Arena::new(),
-            task_to_parent: BTreeMap::new(),
+            task_to_frame: BTreeMap::new(),
             pending_dispatches: Vec::new(),
             stashed_items: VecDeque::new(),
             next_task_id: 0,
@@ -287,8 +287,14 @@ impl WorkflowState {
         task_id: TaskId,
         value: Value,
     ) -> Result<Option<Value>, CompleteError> {
-        let parent = self.task_to_parent.remove(&task_id).expect("unknown task");
-        let result = match parent {
+        let frame_id = self.task_to_frame.remove(&task_id).expect("unknown task");
+        let frame = self.frames.remove(frame_id).expect("invoke frame exists");
+        debug_assert!(
+            matches!(frame.kind, FrameKind::Invoke { .. }),
+            "task_to_frame pointed at non-Invoke frame: {:?}",
+            frame.kind,
+        );
+        let result = match frame.parent {
             Some(parent_ref) => match self.try_deliver(parent_ref, value)? {
                 TryDeliverResult::Delivered(result) => result,
                 TryDeliverResult::Blocked(value) => {
@@ -634,9 +640,9 @@ impl WorkflowState {
             self.frames.remove(*frame_id);
         }
 
-        // Remove task_to_parent entries pointing into the torn-down subtree.
-        self.task_to_parent
-            .retain(|_, parent| parent.is_none_or(|p| !to_remove.contains(&p.frame_id())));
+        // Remove task_to_frame entries whose Invoke frame was torn down.
+        self.task_to_frame
+            .retain(|_, frame_id| !to_remove.contains(frame_id));
     }
 
     /// Is `frame_id` a descendant of the given Handle's body side?
@@ -795,11 +801,8 @@ impl WorkflowState {
     }
 
     /// Expand an `ActionId` into frames. Creates frames for structural
-    /// combinators and bottoms out at Invoke leaves with pending dispatches.
-    ///
-    /// Invoke actions do not create frames — they produce a [`Dispatch`] and
-    /// record the parent reference for later delivery via
-    /// [`complete`](WorkflowState::complete).
+    /// combinators and Invoke leaves. Invoke frames hold the parent pointer
+    /// and handler ID; they're removed when the task completes.
     ///
     /// Pass `parent: None` for the top-level action (i.e., starting a
     /// workflow). Internal recursion provides `Some(parent_ref)` to attach
@@ -824,7 +827,11 @@ impl WorkflowState {
         match self.flat_config.action(action_id) {
             FlatAction::Invoke { handler } => {
                 let task_id = self.next_task_id();
-                self.task_to_parent.insert(task_id, parent);
+                let frame_id = self.insert_frame(Frame {
+                    parent,
+                    kind: FrameKind::Invoke { handler },
+                });
+                self.task_to_frame.insert(task_id, frame_id);
                 self.pending_dispatches.push(Dispatch {
                     task_id,
                     handler_id: handler,
@@ -1615,7 +1622,7 @@ mod tests {
 
         // Verify frames are empty — Handle frame was removed, Chain consumed during trampoline.
         assert_eq!(engine.frames.len(), 0);
-        assert!(engine.task_to_parent.is_empty());
+        assert!(engine.task_to_frame.is_empty());
     }
 
     /// Test 9: Body Performs twice in a Chain. First resumed, then second fires.

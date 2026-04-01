@@ -54,33 +54,65 @@ WorkflowState {
                     },
                 },
             ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            ForEach {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                child_index: 0,
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                0,
+                            ),
+                        },
+                    },
+                },
+            ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            ForEach {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                child_index: 1,
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                0,
+                            ),
+                        },
+                    },
+                },
+            ),
         ],
-        len: 1,
+        len: 3,
         first_free: None,
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             0,
-        ): Some(
-            ForEach {
-                frame_id: Index {
-                    slot: 0,
-                    generation: Generation(1),
-                },
-                child_index: 0,
-            },
-        ),
+        ): Index {
+            slot: 1,
+            generation: Generation(1),
+        },
         TaskId(
             1,
-        ): Some(
-            ForEach {
-                frame_id: Index {
-                    slot: 0,
-                    generation: Generation(1),
-                },
-                child_index: 1,
-            },
-        ),
+        ): Index {
+            slot: 2,
+            generation: Generation(1),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -161,22 +193,46 @@ WorkflowState {
                     },
                 },
             ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
+                    next_free: None,
+                },
+            ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            ForEach {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                child_index: 1,
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                0,
+                            ),
+                        },
+                    },
+                },
+            ),
         ],
-        len: 1,
-        first_free: None,
+        len: 2,
+        first_free: Some(
+            FreePointer(1),
+        ),
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             1,
-        ): Some(
-            ForEach {
-                frame_id: Index {
-                    slot: 0,
-                    generation: Generation(1),
-                },
-                child_index: 1,
-            },
-        ),
+        ): Index {
+            slot: 2,
+            generation: Generation(1),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -225,7 +281,23 @@ WorkflowState {
             Empty(
                 EmptyEntry {
                     generation: Generation(1),
+                    next_free: Some(
+                        FreePointer(2),
+                    ),
+                },
+            ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
                     next_free: None,
+                },
+            ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
+                    next_free: Some(
+                        FreePointer(1),
+                    ),
                 },
             ),
         ],
@@ -234,7 +306,7 @@ WorkflowState {
             FreePointer(0),
         ),
     },
-    task_to_parent: {},
+    task_to_frame: {},
     pending_dispatches: [],
     stashed_items: [],
     next_task_id: 2,

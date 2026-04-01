@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
-assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/chain_left_nested.json
 ---
@@ -115,21 +114,37 @@ WorkflowState {
                     },
                 },
             ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            Chain {
+                                frame_id: Index {
+                                    slot: 1,
+                                    generation: Generation(1),
+                                },
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                0,
+                            ),
+                        },
+                    },
+                },
+            ),
         ],
-        len: 2,
+        len: 3,
         first_free: None,
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             0,
-        ): Some(
-            Chain {
-                frame_id: Index {
-                    slot: 1,
-                    generation: Generation(1),
-                },
-            },
-        ),
+        ): Index {
+            slot: 2,
+            generation: Generation(1),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -239,6 +254,26 @@ WorkflowState {
                     },
                 },
             ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(2),
+                    value: Frame {
+                        parent: Some(
+                            Chain {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            ),
             Empty(
                 EmptyEntry {
                     generation: Generation(1),
@@ -246,22 +281,18 @@ WorkflowState {
                 },
             ),
         ],
-        len: 1,
+        len: 2,
         first_free: Some(
-            FreePointer(1),
+            FreePointer(2),
         ),
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             1,
-        ): Some(
-            Chain {
-                frame_id: Index {
-                    slot: 0,
-                    generation: Generation(1),
-                },
-            },
-        ),
+        ): Index {
+            slot: 1,
+            generation: Generation(2),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -358,11 +389,24 @@ WorkflowState {
     },
     frames: Arena {
         storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(2),
+                    value: Frame {
+                        parent: None,
+                        kind: Invoke {
+                            handler: HandlerId(
+                                2,
+                            ),
+                        },
+                    },
+                },
+            ),
             Empty(
                 EmptyEntry {
-                    generation: Generation(1),
+                    generation: Generation(2),
                     next_free: Some(
-                        FreePointer(1),
+                        FreePointer(2),
                     ),
                 },
             ),
@@ -373,15 +417,18 @@ WorkflowState {
                 },
             ),
         ],
-        len: 0,
+        len: 1,
         first_free: Some(
-            FreePointer(0),
+            FreePointer(1),
         ),
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             2,
-        ): None,
+        ): Index {
+            slot: 0,
+            generation: Generation(2),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -480,9 +527,17 @@ WorkflowState {
         storage: [
             Empty(
                 EmptyEntry {
-                    generation: Generation(1),
+                    generation: Generation(2),
                     next_free: Some(
                         FreePointer(1),
+                    ),
+                },
+            ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(2),
+                    next_free: Some(
+                        FreePointer(2),
                     ),
                 },
             ),
@@ -498,7 +553,7 @@ WorkflowState {
             FreePointer(0),
         ),
     },
-    task_to_parent: {},
+    task_to_frame: {},
     pending_dispatches: [],
     stashed_items: [],
     next_task_id: 3,

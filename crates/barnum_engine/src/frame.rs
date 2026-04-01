@@ -1,7 +1,7 @@
 //! Frame types for the engine's frame tree.
 
 use barnum_ast::EffectId;
-use barnum_ast::flat::ActionId;
+use barnum_ast::flat::{ActionId, HandlerId};
 use serde_json::Value;
 
 /// Key into the engine's frame arena. Carries a generational index —
@@ -65,9 +65,6 @@ impl ParentRef {
 }
 
 /// The kind-specific state stored in each frame.
-///
-/// Only structural combinators have frames. Invoke actions are leaf
-/// dispatches — they don't create frames.
 #[derive(Debug)]
 pub enum FrameKind {
     /// Sequential: first child active, then trampoline to `rest`.
@@ -88,6 +85,13 @@ pub enum FrameKind {
     /// Effect handler. Intercepts effects from the body; routes them
     /// to the handler DAG.
     Handle(HandleFrame),
+    /// Leaf dispatch: a handler invocation in flight. The `handler`
+    /// field duplicates `Dispatch::handler_id` — it's stored here so
+    /// the frame tree is self-describing for observability.
+    Invoke {
+        /// Which handler this task is running.
+        handler: HandlerId,
+    },
 }
 
 /// Whether a Handle frame is free or suspended waiting for a handler.

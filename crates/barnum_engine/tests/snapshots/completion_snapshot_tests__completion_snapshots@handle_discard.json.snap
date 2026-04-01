@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
-assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/handle_discard.json
 ---
@@ -130,22 +129,38 @@ WorkflowState {
                     },
                 },
             ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            Handle {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                side: Handler,
+                            },
+                        ),
+                        kind: Invoke {
+                            handler: HandlerId(
+                                1,
+                            ),
+                        },
+                    },
+                },
+            ),
         ],
-        len: 2,
+        len: 3,
         first_free: None,
     },
-    task_to_parent: {
+    task_to_frame: {
         TaskId(
             0,
-        ): Some(
-            Handle {
-                frame_id: Index {
-                    slot: 0,
-                    generation: Generation(1),
-                },
-                side: Handler,
-            },
-        ),
+        ): Index {
+            slot: 2,
+            generation: Generation(1),
+        },
     },
     pending_dispatches: [],
     stashed_items: [],
@@ -251,6 +266,14 @@ WorkflowState {
             Empty(
                 EmptyEntry {
                     generation: Generation(1),
+                    next_free: Some(
+                        FreePointer(2),
+                    ),
+                },
+            ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
                     next_free: None,
                 },
             ),
@@ -260,7 +283,7 @@ WorkflowState {
             FreePointer(0),
         ),
     },
-    task_to_parent: {},
+    task_to_frame: {},
     pending_dispatches: [],
     stashed_items: [],
     next_task_id: 1,
