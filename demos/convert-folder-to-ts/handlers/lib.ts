@@ -14,8 +14,10 @@ export function callClaude(args: {
   cwd?: string;
 }): string {
   const cliArgs = [
-    "-p", args.prompt,
-    "--output-format", "text",
+    "-p",
+    args.prompt,
+    "--output-format",
+    "text",
     "--dangerously-skip-permissions",
   ];
   if (args.allowedTools && args.allowedTools.length > 0) {
@@ -38,7 +40,9 @@ export function callClaude(args: {
     throw new Error(`Claude CLI failed: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new Error(`Claude CLI exited with code ${result.status}: ${result.stderr}`);
+    throw new Error(
+      `Claude CLI exited with code ${result.status}: ${result.stderr}`,
+    );
   }
 
   return result.stdout;
