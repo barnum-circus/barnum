@@ -113,7 +113,7 @@ export function pipe<
 ): TypedAction<PipeIn<T1>, T11, R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10>;
 export function pipe(...actions: Action[]): Action {
   if (actions.length === 0) {
-    return identity();
+    return identity;
   }
   if (actions.length === 1) {
     return actions[0];

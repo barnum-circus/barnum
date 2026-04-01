@@ -23,12 +23,10 @@ export function constant<TValue>(value: TValue): TypedAction<any, TValue> {
 // Identity — pass input through unchanged
 // ---------------------------------------------------------------------------
 
-export function identity<TValue>(): TypedAction<TValue, TValue> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-  });
-}
+export const identity: TypedAction<any, any> = typedAction({
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+});
 
 // ---------------------------------------------------------------------------
 // Drop — discard pipeline value
@@ -200,7 +198,7 @@ export function withResource<
   const acquireAndMerge = chain(
     typedAction<TIn, [TResource, TIn]>({
       kind: "All",
-      actions: [create as Action, identity() as Action],
+      actions: [create as Action, identity as Action],
     }),
     typedAction<[TResource, TIn], TResource & TIn>(mergeBuiltin),
   );
@@ -209,7 +207,7 @@ export function withResource<
   // Keep merged object so dispose can access resource fields.
   const actionAndKeepMerged = typedAction<TResource & TIn, [TOut, TResource & TIn]>({
     kind: "All",
-    actions: [action as Action, identity() as Action],
+    actions: [action as Action, identity as Action],
   });
 
   // Step 3: all(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
@@ -257,7 +255,7 @@ export function augment<
     kind: "Chain",
     first: {
       kind: "All",
-      actions: [action as Action, identity() as Action],
+      actions: [action as Action, identity as Action],
     },
     rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
   });

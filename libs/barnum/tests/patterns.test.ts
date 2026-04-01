@@ -407,7 +407,7 @@ describe("Option namespace", () => {
 // -----------------------------------------------------------------------
 // Reader monad pattern
 //
-// all(identity(), handler) → merge()
+// all(identity, handler) → merge()
 // Preserves the original input alongside the handler's output.
 // -----------------------------------------------------------------------
 
@@ -416,7 +416,7 @@ describe("reader monad pattern", () => {
     const cfg = config(
       pipe(
         constant({ initialized: true, project: "test" }),
-        all(identity<{ initialized: boolean; project: string }>(), build),
+        all(identity, build),
         merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
       ),
     );
@@ -435,7 +435,7 @@ describe("bind", () => {
 
   it("single binding produces Chain(All(..., Identity), Handle(readVar, Chain(ExtractIndex, body)))", () => {
     const exprA = constant(42);
-    const bodyAction = identity<number>();
+    const bodyAction = identity;
     const result = bind([exprA], ([_a]) => bodyAction);
 
     // Outer: Chain
@@ -471,7 +471,7 @@ describe("bind", () => {
   it("two bindings produce two nested Handles with distinct effectIds", () => {
     const exprA = constant("alice");
     const exprB = constant(99);
-    const bodyAction = identity<string>();
+    const bodyAction = identity;
     const result = bind([exprA, exprB], ([_a, _b]) => bodyAction);
 
     const outer = result as { kind: "Chain"; first: any; rest: any };
@@ -506,7 +506,7 @@ describe("bind", () => {
     let capturedVarRef: any;
     bind([exprA], ([a]) => {
       capturedVarRef = a;
-      return identity();
+      return identity;
     });
 
     expect(capturedVarRef.kind).toBe("Perform");
@@ -516,7 +516,7 @@ describe("bind", () => {
   it("effectIds are unique across separate bind calls", () => {
     const effectIds: number[] = [];
     bind([constant(1), constant(2)], ([_a, _b]) => {
-      return identity();
+      return identity;
     });
     // First bind uses effectIds 0, 1
 
@@ -524,7 +524,7 @@ describe("bind", () => {
     bind([constant(3), constant(4)], ([a, b]) => {
       ref1 = a;
       ref2 = b;
-      return identity();
+      return identity;
     });
     // Second bind uses effectIds 2, 3
     effectIds.push(ref1.effect_id, ref2.effect_id);
@@ -541,7 +541,7 @@ describe("bind", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
-      ([_a, _b, _c]) => identity(),
+      ([_a, _b, _c]) => identity,
     );
 
     const outer = result as { kind: "Chain"; first: any; rest: any };
@@ -570,7 +570,7 @@ describe("bindInput", () => {
     resetEffectIdCounter();
   });
 
-  it("compiles to bind([identity()], ([input]) => pipe(drop, body(input)))", () => {
+  it("compiles to bind([identity], ([input]) => pipe(drop, body(input)))", () => {
     const bodyAction = constant("result");
     const result = bindInput<string, string>((_input) => bodyAction);
 
@@ -578,7 +578,7 @@ describe("bindInput", () => {
     const outer = result as { kind: "Chain"; first: any; rest: any };
     expect(outer.first.kind).toBe("All");
     expect(outer.first.actions).toHaveLength(2);
-    // First action is identity (from bind([identity()], ...))
+    // First action is identity (from bind([identity], ...))
     expect(outer.first.actions[0].handler.builtin.kind).toBe("Identity");
     // Second action is identity (pipeline input preservation)
     expect(outer.first.actions[1].handler.builtin.kind).toBe("Identity");
