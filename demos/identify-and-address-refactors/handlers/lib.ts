@@ -22,6 +22,8 @@ export async function callClaude(args: {
     cliArgs.push("--allowedTools", ...args.allowedTools);
   }
 
+  console.error(`[callClaude] $ claude ${cliArgs.map(a => a.includes(" ") ? JSON.stringify(a) : a).join(" ")}`);
+
   return new Promise<string>((resolve, reject) => {
     const child = spawn("claude", cliArgs, {
       cwd: args.cwd ?? baseDir,
