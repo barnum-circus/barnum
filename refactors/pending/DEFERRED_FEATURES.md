@@ -2,6 +2,12 @@
 
 Features removed from the initial implementation to keep the surface area minimal. To be added incrementally as needed.
 
+## Language-Aware Coalescing and Builtin Placement
+
+When consecutive actions in a pipe share the same execution language, they can be coalesced into a single dispatch — eliminating per-step overhead of crossing the Rust/TypeScript boundary. Builtins (identity, merge, extractField, etc.) can execute in any language; the compiler should place them to minimize boundary crossings.
+
+See `past/COMPILATION.md` for full details.
+
 ## Trivial Combinator Elimination
 
 Compile-time simplifications during flattening (or a validation/normalization pass):
