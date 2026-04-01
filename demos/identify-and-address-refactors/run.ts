@@ -28,14 +28,12 @@ import {
   forEach,
   loop,
   bindInput,
-} from "@barnum/barnum/src/ast.js";
-import {
   constant,
   drop,
   pick,
   withResource,
   Option,
-} from "@barnum/barnum/src/builtins.js";
+} from "@barnum/barnum";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(__dirname, "src");

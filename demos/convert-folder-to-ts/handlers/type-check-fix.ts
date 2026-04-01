@@ -4,7 +4,7 @@
 // classifyErrors: split into HasErrors / Clean discriminated union for branch
 // fix: invoke Claude to fix a single type error
 
-import { createHandler } from "@barnum/barnum/src/handler.js";
+import { createHandler } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -18,7 +18,7 @@ export type TypeError = {
   message: string;
 };
 
-import type { TaggedUnion } from "@barnum/barnum/src/ast.js";
+import type { TaggedUnion } from "@barnum/barnum";
 
 type ClassifyResultDef = {
   HasErrors: TypeError[];

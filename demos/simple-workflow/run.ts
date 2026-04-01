@@ -4,7 +4,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { workflowBuilder, pipe } from "@barnum/barnum/src/ast.js";
+import { workflowBuilder, pipe } from "@barnum/barnum";
 import {
   listFiles,
   implementRefactor,

@@ -13,8 +13,9 @@ import {
   loop,
   tryCatch,
   withTimeout,
-} from "@barnum/barnum/src/ast.js";
-import { constant, drop } from "@barnum/barnum/src/builtins.js";
+  constant,
+  drop,
+} from "@barnum/barnum";
 import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
 
 console.error("=== Retry-on-error demo ===\n");

@@ -20,9 +20,8 @@ import {
   loop,
   all,
   bindInput,
-} from "@barnum/barnum/src/ast.js";
-
-import { drop } from "@barnum/barnum/src/builtins.js";
+  drop,
+} from "@barnum/barnum";
 import { setup, listFiles, migrate, writeFile } from "./handlers/convert.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 

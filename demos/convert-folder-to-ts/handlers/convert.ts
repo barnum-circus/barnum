@@ -5,7 +5,7 @@
 // migrate: invoke Claude to convert a JS file to TypeScript
 // writeFile: write converted content to disk
 
-import { createHandler, createHandlerWithConfig } from "@barnum/barnum/src/handler.js";
+import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";

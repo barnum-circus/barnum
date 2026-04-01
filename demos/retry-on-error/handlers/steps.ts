@@ -6,8 +6,8 @@
  * Step B also occasionally takes a long time, demonstrating timeout handling.
  */
 
-import { createHandler } from "@barnum/barnum/src/handler.js";
-import type { Result } from "@barnum/barnum/src/ast.js";
+import { createHandler } from "@barnum/barnum";
+import type { Result } from "@barnum/barnum";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------

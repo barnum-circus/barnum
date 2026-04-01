@@ -5,7 +5,7 @@
 // Implementation: implement, commit
 // Review loop: judgeRefactor, classifyJudgment, applyFeedback
 
-import { createHandler } from "@barnum/barnum/src/handler.js";
+import { createHandler } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -24,7 +24,7 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-import type { TaggedUnion, Option } from "@barnum/barnum/src/ast.js";
+import type { TaggedUnion, Option } from "@barnum/barnum";
 
 type ClassifyJudgmentResultDef = {
   Approved: void;

@@ -1,4 +1,4 @@
-import { createHandler } from "@barnum/barnum/src/handler.js";
+import { createHandler } from "@barnum/barnum";
 import { z } from "zod";
 
 const randomDelay = () =>
