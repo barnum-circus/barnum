@@ -125,20 +125,6 @@ This could go further: flatten steps on-demand during execution, not just during
 
 The current eager approach is simpler and correct. Lazy/incremental flattening is an optimization for when config sizes grow.
 
-## Handler Error Type
-
-Handlers currently return `Promise<TOutput>` and errors are untyped (caught as `unknown` by `attempt`). A typed error channel would let handlers declare their failure modes:
-
-```ts
-createHandler({
-  inputValidator: z.object({ ... }),
-  errorType: z.object({ code: z.string(), message: z.string() }),
-  handle: async ({ value }) => { ... },
-})
-```
-
-The error type defaults to `unknown` in TypeScript. The `attempt` combinator would then produce `AttemptResult<TOutput, TError>` instead of `AttemptResult<TOutput>` with `error: unknown`.
-
 ## Workflow Stack Traces
 
 When a handler panics, fails, or the engine hits an unexpected state, the error message should include a meaningful stack trace showing the workflow path that led to the failure — not a Rust call stack, but a Barnum frame trace.
