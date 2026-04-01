@@ -302,6 +302,12 @@ This is the Err payload of the Result returned by Validate. It's a tagged union 
 | `barnum_builtins` | Add `jsonschema` dependency, implement validation |
 | `barnum_engine` | No changes — engine routes opaque values, builtins handle validation |
 
+## Builtins don't need type-safety validation
+
+Builtins (Identity, Tag, Merge, ExtractField, Flatten, Validate itself, etc.) are implemented in Rust by us. Their input/output types are fully known at construction time and enforced by TypeScript generics — the type signatures in the DSL guarantee correct wiring. There is no untrusted boundary: no user-written code runs, no IPC crosses, no external process returns opaque data. A builtin that receives the wrong type is a bug in the framework, not in user code, and would be caught by TypeScript long before it reaches Rust.
+
+Runtime validation is for handler outputs (user-written code that crosses the worker boundary) and step inputs (control flow jumps that bypass TypeScript's pipeline type checking). Builtins are neither.
+
 ## Open questions
 
 1. **Schema caching.** Should the Rust side compile JSON Schema validators once and cache them, or validate fresh each time? For workflows with loops that re-validate on each iteration, caching matters. The `jsonschema` crate supports compiled validators — we should use them. The flat config could pre-compile all Validate schemas at workflow init time.
