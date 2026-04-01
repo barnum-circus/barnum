@@ -1,0 +1,268 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
+expression: trace
+input_file: crates/barnum_engine/tests/completion/handle_discard.json
+---
+--- After advance ---
+WorkflowState {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Handle {
+                    effect_id: EffectId(
+                        0,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Perform {
+                    effect_id: EffectId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "handler",
+                    ),
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: Arena {
+        storage: [
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: None,
+                        kind: Handle(
+                            HandleFrame {
+                                effect_id: EffectId(
+                                    0,
+                                ),
+                                body: ActionId(
+                                    3,
+                                ),
+                                handler: ActionId(
+                                    2,
+                                ),
+                                state: Some(
+                                    String("input"),
+                                ),
+                                status: Suspended(
+                                    Chain {
+                                        frame_id: Index {
+                                            slot: 1,
+                                            generation: Generation(1),
+                                        },
+                                    },
+                                ),
+                            },
+                        ),
+                    },
+                },
+            ),
+            Occupied(
+                OccupiedEntry {
+                    generation: Generation(1),
+                    value: Frame {
+                        parent: Some(
+                            Handle {
+                                frame_id: Index {
+                                    slot: 0,
+                                    generation: Generation(1),
+                                },
+                                side: Body,
+                            },
+                        ),
+                        kind: Chain {
+                            rest: ActionId(
+                                5,
+                            ),
+                        },
+                    },
+                },
+            ),
+        ],
+        len: 2,
+        first_free: None,
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): Some(
+            Handle {
+                frame_id: Index {
+                    slot: 0,
+                    generation: Generation(1),
+                },
+                side: Handler,
+            },
+        ),
+    },
+    pending_dispatches: [],
+    stashed_items: [],
+    next_task_id: 1,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            1,
+        ),
+        value: Object {
+            "payload": String("input"),
+            "state": String("input"),
+        },
+    },
+]
+
+--- Completion: task_id=0, value={"kind":"Discard","value":"discarded"} ---
+Result: Some(String("discarded"))
+WorkflowState {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Handle {
+                    effect_id: EffectId(
+                        0,
+                    ),
+                },
+            ),
+            ChildRef {
+                action: ActionId(
+                    3,
+                ),
+            },
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Perform {
+                    effect_id: EffectId(
+                        0,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./b.ts",
+                    ),
+                    func: FuncName(
+                        "b",
+                    ),
+                },
+            ),
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./handler.ts",
+                    ),
+                    func: FuncName(
+                        "handler",
+                    ),
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: Arena {
+        storage: [
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
+                    next_free: Some(
+                        FreePointer(1),
+                    ),
+                },
+            ),
+            Empty(
+                EmptyEntry {
+                    generation: Generation(1),
+                    next_free: None,
+                },
+            ),
+        ],
+        len: 0,
+        first_free: Some(
+            FreePointer(0),
+        ),
+    },
+    task_to_parent: {},
+    pending_dispatches: [],
+    stashed_items: [],
+    next_task_id: 1,
+}
+Pending: []

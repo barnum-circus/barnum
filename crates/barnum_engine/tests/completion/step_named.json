@@ -1,0 +1,18 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Step",
+      "step": { "kind": "Named", "name": "myStep" }
+    },
+    "steps": {
+      "myStep": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./a.ts", "func": "a" }
+      }
+    }
+  },
+  "input": "input",
+  "completions": [
+    { "task_id": 0, "value": "result" }
+  ]
+}

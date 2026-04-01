@@ -1,0 +1,24 @@
+{
+  "config": {
+    "workflow": {
+      "kind": "Handle",
+      "effect_id": 0,
+      "handler": {
+        "kind": "Invoke",
+        "handler": { "kind": "TypeScript", "module": "./handler.ts", "func": "handler" }
+      },
+      "body": {
+        "kind": "Chain",
+        "first": { "kind": "Perform", "effect_id": 0 },
+        "rest": {
+          "kind": "Invoke",
+          "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" }
+        }
+      }
+    }
+  },
+  "input": "input",
+  "completions": [
+    { "task_id": 0, "value": { "kind": "Discard", "value": "discarded" } }
+  ]
+}

@@ -1,0 +1,114 @@
+---
+source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
+expression: trace
+input_file: crates/barnum_engine/tests/completion/step_named.json
+---
+--- After advance ---
+WorkflowState {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Step {
+                    target: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: Arena {
+        storage: [],
+        len: 0,
+        first_free: None,
+    },
+    task_to_parent: {
+        TaskId(
+            0,
+        ): None,
+    },
+    pending_dispatches: [],
+    stashed_items: [],
+    next_task_id: 1,
+}
+Pending: [
+    Dispatch {
+        task_id: TaskId(
+            0,
+        ),
+        handler_id: HandlerId(
+            0,
+        ),
+        value: String("input"),
+    },
+]
+
+--- Completion: task_id=0, value="result" ---
+Result: Some(String("result"))
+WorkflowState {
+    flat_config: FlatConfig {
+        entries: [
+            Action(
+                Step {
+                    target: ActionId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
+        ],
+        handlers: [
+            TypeScript(
+                TypeScriptHandler {
+                    module: ModulePath(
+                        "./a.ts",
+                    ),
+                    func: FuncName(
+                        "a",
+                    ),
+                },
+            ),
+        ],
+        workflow_root: ActionId(
+            0,
+        ),
+    },
+    frames: Arena {
+        storage: [],
+        len: 0,
+        first_free: None,
+    },
+    task_to_parent: {},
+    pending_dispatches: [],
+    stashed_items: [],
+    next_task_id: 1,
+}
+Pending: []
