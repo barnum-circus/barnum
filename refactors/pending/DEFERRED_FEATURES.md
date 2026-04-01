@@ -249,9 +249,142 @@ When a value enters the engine (from `start()` or `on_task_completed()`), it's l
 
 ## Streams
 
-Support for streaming data through the pipeline — actions that produce or consume async iterables rather than single values. Relevant for large datasets, real-time feeds, or incremental processing where buffering the full result is impractical.
+Processing a sequence of events one at a time as they arrive: poll for the next item, process it, repeat until the source is exhausted or a condition is met.
 
-Open question: is this a new primitive (e.g., `StreamForEach`) or a modifier on existing primitives? Could also be a handler-level concern (handlers that yield multiple values) rather than an AST-level feature.
+### Core pattern: loop + invoke
+
+This doesn't require new engine primitives. A stream consumer is a `loop` that invokes a "next item" handler on each iteration:
+
+```ts
+// waitForPrEvent: TypedAction<PrUrl, PrEvent>
+// PrEvent = { kind: "CiCompleted"; value: ... } | { kind: "ReviewSubmitted"; value: ... } | ...
+
+const babysitPr = loop<PrResult, PrUrl>((recur, done) =>
+  pipe(
+    waitForPrEvent,
+    branch({
+      CiCompleted: pipe(handleCiResult, recur),
+      ReviewSubmitted: pipe(handleReview, recur),
+      Closed: done,
+    }),
+  ),
+);
+```
+
+The engine suspends at `waitForPrEvent` (an Invoke). The runtime resolves it when an event arrives (webhook, polling, whatever). The engine processes the event, recurs, and suspends again. No new AST nodes, no new engine code.
+
+### `forEachStream` combinator
+
+Sugar for the common case where every item is processed the same way and the stream has an explicit end signal. The source handler returns `Option<TElement>` — `Some` with the next item, or `None` when exhausted:
+
+```ts
+function forEachStream<TIn, TElement, TOut, TRefs extends string = never>(
+  source: Pipeable<TIn, Option<TElement>>,
+  body: Pipeable<TElement, unknown, TRefs>,
+): TypedAction<TIn, TOut[], TRefs>
+```
+
+Desugars to:
+
+```ts
+function forEachStream(source, body) {
+  return recur<{ items: unknown[]; input: TIn }>((restart) =>
+    pipe(
+      bindInput(({ items, input }) =>
+        pipe(
+          input,
+          source,
+          O.match({
+            Some: pipe(body, /* append to items, */ restart),
+            None: pipe(drop, items, done),
+          }),
+        ),
+      ),
+    ),
+  );
+}
+```
+
+Actually, this is awkward because we need to accumulate results across iterations. `loop` handles this naturally — `recur` carries state:
+
+```ts
+function forEachStream(source, body) {
+  return loop<TOut[], { items: TOut[]; input: TIn }>((recur, done) =>
+    bindInput<{ items: TOut[]; input: TIn }>((state) =>
+      pipe(
+        state.get("input"),
+        source,
+        branch({
+          Some: pipe(body, /* build new state with appended item, */ recur),
+          None: pipe(drop, state.get("items"), done),
+        }),
+      ),
+    ),
+  );
+}
+```
+
+This is a derived combinator — no engine changes. The engine sees loop/branch/invoke, same as any other workflow.
+
+### Postfix `.forEachStream(source, body)`
+
+Following the existing pattern of postfix methods (`.then()`, `.forEach()`, `.branch()`):
+
+```ts
+// On TypedAction:
+forEachStream<TIn, TElement, TOut, TRefs extends string, TRefs2 extends string = never>(
+  this: TypedAction<TIn, Option<TElement>, TRefs>,
+  body: Pipeable<TElement, TOut, TRefs2>,
+): TypedAction<TIn, TOut[], TRefs | TRefs2>;
+```
+
+Usage:
+
+```ts
+const processAllEvents = getEventSource
+  .forEachStream(processEvent);
+```
+
+This reads as: "get the event source, then for each stream element, process it."
+
+Alternative: the source and body are separate arguments to a standalone function, not a postfix. The postfix only makes sense if the receiver IS the source.
+
+### Finite vs infinite streams
+
+The `Option<TElement>` convention gives finite streams: `None` terminates. For infinite streams (event loops that run until an external condition), use `loop` directly with `done` as the exit signal:
+
+```ts
+// Infinite: runs until Closed event
+const babysitPr = loop<PrResult, PrUrl>((recur, done) =>
+  pipe(waitForPrEvent, branch({
+    CiCompleted: pipe(handleCi, recur),
+    Closed: done,
+  })),
+);
+
+// Finite: processes items until source returns None
+const processAll = forEachStream(fetchNextItem, processItem);
+```
+
+### What the runtime needs
+
+The "next item" handler (`waitForPrEvent`, `fetchNextItem`) is an ordinary Invoke handler. The runtime resolves it however it wants:
+
+- **Polling**: handler calls an API, returns the result or `None` if empty
+- **Webhook/push**: handler blocks (async) until an event arrives, returns it
+- **Buffered**: handler pulls from an internal queue, returns `None` when drained
+
+The engine doesn't know or care about the delivery mechanism. It dispatches the handler, waits for `complete()`, processes the result.
+
+### Backpressure
+
+Backpressure is automatic. The engine won't dispatch the next `waitForPrEvent` until the current iteration's body completes (all its Invokes resolve). If processing is slow, the source handler simply isn't called — no events pile up in the engine. Events may queue in the runtime/external system, but that's outside the engine's scope.
+
+### No new engine primitives needed
+
+Streams are a pattern, not a primitive. The engine already has everything: `loop` for iteration, `branch` for dispatch, `Invoke` for blocking on external data, `recur`/`done` for continue/break. The `forEachStream` combinator is pure sugar that compiles to these existing building blocks.
+
+See also: `refactors/pending/EVENT_LOOP_PATTERN.md` for the concrete PR babysitter use case.
 
 ## Fluent API (`.then()`, `.attempt()`, etc.)
 
