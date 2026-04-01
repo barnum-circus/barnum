@@ -82,12 +82,12 @@ pub enum FlatAction<T> {
         handler: HandlerId,
     },
 
-    /// Binary sequential composition: run the child at `action_id + 1`,
+    /// Binary sequential composition: run `first` (at `action_id + 1`),
     /// then advance to `rest`.
     ///
-    /// 2-entry action: the Chain entry itself, followed by one child slot
-    /// for `first`. The child slot is either an inlined single-entry action
-    /// or a [`FlatEntry::ChildRef`] to a multi-entry subtree elsewhere.
+    /// 1-entry action: the `first` subtree is flattened directly after this
+    /// entry (starting at `action_id + 1`), so no child slot or
+    /// [`FlatEntry::ChildRef`] is needed.
     Chain {
         /// `ActionId` of the continuation (the action to run after `first`).
         rest: ActionId,
@@ -301,13 +301,14 @@ impl FlatConfig {
         }
     }
 
-    /// Returns the `first` child `ActionId` for a Chain (resolves the child
-    /// slot at `action_id + 1`). The `rest` `ActionId` is stored in the
+    /// Returns the `first` child `ActionId` for a Chain. The `first` subtree
+    /// is always flattened immediately after the Chain entry, so `first` is
+    /// at `action_id + 1`. The `rest` `ActionId` is stored in the
     /// [`FlatAction::Chain`] variant itself.
     #[must_use]
     pub fn chain_first(&self, id: ActionId) -> ActionId {
         debug_assert!(matches!(self.action(id), FlatAction::Chain { .. }));
-        self.resolve_child_slot(id + 1)
+        ActionId(id.0 + 1)
     }
 
     /// Returns the child `ActionId`s for a All.
@@ -433,9 +434,9 @@ impl UnresolvedFlatConfig {
             }
 
             Action::Chain(ChainAction { first, rest }) => {
-                self.alloc(); // child slot for first
+                let first_action_id = self.flatten_action(*first, workflow_root)?;
+                debug_assert_eq!(first_action_id, ActionId(action_id.0 + 1));
                 let rest_action_id = self.flatten_action(*rest, workflow_root)?;
-                self.fill_child_slot(*first, action_id + 1, workflow_root)?;
                 FlatAction::Chain {
                     rest: rest_action_id,
                 }
@@ -753,10 +754,11 @@ mod tests {
         ])))
         .unwrap();
 
+        // first subtree is flattened directly after Chain (no child slot):
         // 0: Chain { rest: 2 }
-        // 1: Invoke(0)         ← A (child slot, inlined)
-        // 2: Chain { rest: 4 } ← inner Chain (rest of outer)
-        // 3: Invoke(1)         ← B (child slot, inlined)
+        // 1: Invoke(0)         ← A (first, flattened inline)
+        // 2: Chain { rest: 4 } ← rest of outer Chain
+        // 3: Invoke(1)         ← B (first of inner Chain)
         // 4: Invoke(2)         ← C (rest of inner Chain)
         assert_eq!(flat.entries.len(), 5);
         assert_eq!(
@@ -838,32 +840,30 @@ mod tests {
 
     // -- Nesting --
 
-    /// Chain with multi-entry first: first is All → `ChildRef`.
+    /// Chain with multi-entry first: first is All, flattened inline (no `ChildRef`).
     #[test]
     #[allow(clippy::unwrap_used)]
     fn flatten_chain_with_multi_entry_first() {
-        // Chain(All(X, Y), B) — first is multi-entry, gets ChildRef.
+        // Chain(All(X, Y), B) — first is multi-entry All, flattened directly.
         let action = pipe(vec![
             parallel(vec![invoke("./x.ts", "x"), invoke("./y.ts", "y")]),
             invoke("./b.ts", "b"),
         ]);
         let flat = flatten(config(action)).unwrap();
 
-        // 0: Chain { rest: 2 }
-        // 1: ChildRef { action: 3 }   ← first is multi-entry All
-        // 2: Invoke(handler_b)         ← rest
-        // 3: All { count: 2 }
-        // 4: Invoke(handler_x)
-        // 5: Invoke(handler_y)
-        assert_eq!(flat.entries.len(), 6);
+        // 0: Chain { rest: 4 }
+        // 1: All { count: 2 }          ← first (flattened inline)
+        // 2: Invoke(handler_x)
+        // 3: Invoke(handler_y)
+        // 4: Invoke(handler_b)          ← rest
+        assert_eq!(flat.entries.len(), 5);
         assert_eq!(
             flat.action(ActionId(0)),
-            FlatAction::Chain { rest: ActionId(2) }
+            FlatAction::Chain { rest: ActionId(4) }
         );
-        // first is via ChildRef → All at ActionId(3).
-        assert_eq!(flat.chain_first(ActionId(0)), ActionId(3));
+        assert_eq!(flat.chain_first(ActionId(0)), ActionId(1));
         assert_eq!(
-            flat.action(ActionId(3)),
+            flat.action(ActionId(1)),
             FlatAction::All { count: Count(2) }
         );
     }
@@ -927,7 +927,7 @@ mod tests {
         let flat = flatten(config(action)).unwrap();
 
         // 0: Chain { rest: 2 }
-        // 1: Invoke(0)                ← first (child slot, inlined)
+        // 1: Invoke(0)                ← first (flattened inline)
         // 2: Step { target: 0 }       ← rest, points back to workflow root
         assert_eq!(
             flat.action(ActionId(0)),
@@ -1062,12 +1062,14 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn flatten_handler_interning() {
         // pipe(A, A, B) → Chain(A, Chain(A, B))
-        // rest is flattened before first, so B is interned first.
+        // first is flattened before rest. For the outer Chain, first=A is
+        // interned first. For the inner Chain, first=A is interned (same
+        // handler, reused), then rest=B is interned second.
         // 0: Chain { rest: 2 }
-        // 1: Invoke(1)         ← first A (handler interned second)
+        // 1: Invoke(0)         ← first A (handler interned first)
         // 2: Chain { rest: 4 }
-        // 3: Invoke(1)         ← second A (same handler, interned)
-        // 4: Invoke(0)         ← B (handler interned first — deepest rest)
+        // 3: Invoke(0)         ← second A (same handler, interned)
+        // 4: Invoke(1)         ← B (handler interned second)
         let flat = flatten(config(pipe(vec![
             invoke("./handler.ts", "run"),
             invoke("./handler.ts", "run"), // same handler

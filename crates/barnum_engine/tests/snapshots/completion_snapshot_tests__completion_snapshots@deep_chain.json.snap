@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/deep_chain.json
 ---
@@ -17,7 +18,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        2,
+                        0,
                     ),
                 },
             ),
@@ -38,7 +39,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        2,
                     ),
                 },
             ),
@@ -47,10 +48,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./c.ts",
+                        "./a.ts",
                     ),
                     func: FuncName(
-                        "c",
+                        "a",
                     ),
                 },
             ),
@@ -67,10 +68,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./a.ts",
+                        "./c.ts",
                     ),
                     func: FuncName(
-                        "a",
+                        "c",
                     ),
                 },
             ),
@@ -120,7 +121,7 @@ Pending: [
             0,
         ),
         handler_id: HandlerId(
-            2,
+            0,
         ),
         value: String("input"),
     },
@@ -141,7 +142,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        2,
+                        0,
                     ),
                 },
             ),
@@ -162,7 +163,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        2,
                     ),
                 },
             ),
@@ -171,10 +172,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./c.ts",
+                        "./a.ts",
                     ),
                     func: FuncName(
-                        "c",
+                        "a",
                     ),
                 },
             ),
@@ -191,10 +192,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./a.ts",
+                        "./c.ts",
                     ),
                     func: FuncName(
-                        "a",
+                        "c",
                     ),
                 },
             ),
@@ -265,7 +266,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        2,
+                        0,
                     ),
                 },
             ),
@@ -286,7 +287,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        2,
                     ),
                 },
             ),
@@ -295,10 +296,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./c.ts",
+                        "./a.ts",
                     ),
                     func: FuncName(
-                        "c",
+                        "a",
                     ),
                 },
             ),
@@ -315,10 +316,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./a.ts",
+                        "./c.ts",
                     ),
                     func: FuncName(
-                        "a",
+                        "c",
                     ),
                 },
             ),
@@ -356,7 +357,7 @@ Pending: [
             2,
         ),
         handler_id: HandlerId(
-            0,
+            2,
         ),
         value: String("b_out"),
     },
@@ -377,7 +378,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        2,
+                        0,
                     ),
                 },
             ),
@@ -398,7 +399,7 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        2,
                     ),
                 },
             ),
@@ -407,10 +408,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./c.ts",
+                        "./a.ts",
                     ),
                     func: FuncName(
-                        "c",
+                        "a",
                     ),
                 },
             ),
@@ -427,10 +428,10 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./a.ts",
+                        "./c.ts",
                     ),
                     func: FuncName(
-                        "a",
+                        "c",
                     ),
                 },
             ),

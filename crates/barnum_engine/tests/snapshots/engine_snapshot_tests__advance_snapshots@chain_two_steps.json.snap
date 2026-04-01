@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 32
 expression: engine
 input_file: crates/barnum_engine/tests/advance/chain_two_steps.json
 ---
@@ -16,14 +17,14 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        1,
+                        0,
                     ),
                 },
             ),
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        1,
                     ),
                 },
             ),
@@ -32,20 +33,20 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./b.ts",
+                        "./a.ts",
                     ),
                     func: FuncName(
-                        "b",
+                        "a",
                     ),
                 },
             ),
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./a.ts",
+                        "./b.ts",
                     ),
                     func: FuncName(
-                        "a",
+                        "b",
                     ),
                 },
             ),
@@ -91,7 +92,7 @@ WorkflowState {
                 0,
             ),
             handler_id: HandlerId(
-                1,
+                0,
             ),
             value: String("start"),
         },

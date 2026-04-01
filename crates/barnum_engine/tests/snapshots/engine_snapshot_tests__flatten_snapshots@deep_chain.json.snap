@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/deep_chain.json
 ---
@@ -15,7 +16,7 @@ FlatConfig {
         Action(
             Invoke {
                 handler: HandlerId(
-                    2,
+                    0,
                 ),
             },
         ),
@@ -36,7 +37,7 @@ FlatConfig {
         Action(
             Invoke {
                 handler: HandlerId(
-                    0,
+                    2,
                 ),
             },
         ),
@@ -45,10 +46,10 @@ FlatConfig {
         TypeScript(
             TypeScriptHandler {
                 module: ModulePath(
-                    "./c.ts",
+                    "./a.ts",
                 ),
                 func: FuncName(
-                    "c",
+                    "a",
                 ),
             },
         ),
@@ -65,10 +66,10 @@ FlatConfig {
         TypeScript(
             TypeScriptHandler {
                 module: ModulePath(
-                    "./a.ts",
+                    "./c.ts",
                 ),
                 func: FuncName(
-                    "a",
+                    "c",
                 ),
             },
         ),

@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 42
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/chain_two_steps.json
 ---
@@ -15,14 +16,14 @@ FlatConfig {
         Action(
             Invoke {
                 handler: HandlerId(
-                    1,
+                    0,
                 ),
             },
         ),
         Action(
             Invoke {
                 handler: HandlerId(
-                    0,
+                    1,
                 ),
             },
         ),
@@ -31,20 +32,20 @@ FlatConfig {
         TypeScript(
             TypeScriptHandler {
                 module: ModulePath(
-                    "./b.ts",
+                    "./a.ts",
                 ),
                 func: FuncName(
-                    "b",
+                    "a",
                 ),
             },
         ),
         TypeScript(
             TypeScriptHandler {
                 module: ModulePath(
-                    "./a.ts",
+                    "./b.ts",
                 ),
                 func: FuncName(
-                    "a",
+                    "b",
                 ),
             },
         ),

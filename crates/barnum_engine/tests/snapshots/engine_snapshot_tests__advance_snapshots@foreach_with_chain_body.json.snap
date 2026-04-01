@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 32
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
 ---
@@ -23,14 +24,14 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        1,
+                        0,
                     ),
                 },
             ),
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        1,
                     ),
                 },
             ),
@@ -39,20 +40,20 @@ WorkflowState {
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./process.ts",
+                        "./validate.ts",
                     ),
                     func: FuncName(
-                        "process",
+                        "validate",
                     ),
                 },
             ),
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
-                        "./validate.ts",
+                        "./process.ts",
                     ),
                     func: FuncName(
-                        "validate",
+                        "process",
                     ),
                 },
             ),
@@ -151,7 +152,7 @@ WorkflowState {
                 0,
             ),
             handler_id: HandlerId(
-                1,
+                0,
             ),
             value: String("item1"),
         },
@@ -160,7 +161,7 @@ WorkflowState {
                 1,
             ),
             handler_id: HandlerId(
-                1,
+                0,
             ),
             value: String("item2"),
         },
