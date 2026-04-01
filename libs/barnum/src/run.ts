@@ -3,7 +3,7 @@
  * script, then spawns the workflow as a subprocess.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn as nodeSpawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import os from "node:os";
@@ -90,7 +90,7 @@ function buildBinary(): void {
 }
 
 /** Run a workflow config to completion. Prints result to stdout. */
-export function run(config: Config): void {
+export async function run(config: Config): Promise<void> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinary();
@@ -99,10 +99,37 @@ export function run(config: Config): void {
   const worker = resolveWorker();
   const configJson = JSON.stringify(config);
 
-  execFileSync(binaryResolution.path, [
-    "run",
-    "--config", configJson,
-    "--executor", executor,
-    "--worker", worker,
-  ], { stdio: "inherit" });
+  return new Promise<void>((resolve, reject) => {
+    const child = nodeSpawn(binaryResolution.path, [
+      "run",
+      "--config", configJson,
+      "--executor", executor,
+      "--worker", worker,
+    ], {
+      stdio: ["inherit", "inherit", "pipe"],
+    });
+
+    const stderrChunks: Buffer[] = [];
+
+    child.stderr!.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+      process.stderr.write(chunk);
+    });
+
+    child.on("error", (error) => {
+      reject(new Error(`Failed to spawn barnum: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+        const message = stderr
+          ? `barnum exited with code ${code}:\n${stderr}`
+          : `barnum exited with code ${code} (no stderr output)`;
+        reject(new Error(message));
+        return;
+      }
+      resolve();
+    });
+  });
 }

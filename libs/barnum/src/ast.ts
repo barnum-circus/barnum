@@ -1089,7 +1089,7 @@ export class RunnableConfig<Out = any> {
     // Dynamic import to avoid pulling in Node.js APIs at module load time
     // (keeps ast.ts importable in non-Node environments for type checking).
     const { run } = await import("./run.js");
-    run(this.toJSON());
+    await run(this.toJSON());
   }
 
   /** Serialize to the same shape as Config. */
