@@ -67,7 +67,7 @@ export const migrate = createHandlerWithConfig({
 
     console.error(`[migrate] Converting ${fileName} to ${stepConfig.to} via Claude...`);
 
-    const response = callClaude({
+    const response = await callClaude({
       prompt: [
         `Convert this JavaScript file to ${stepConfig.to}.`,
         "Add proper type annotations to all function parameters and return types.",

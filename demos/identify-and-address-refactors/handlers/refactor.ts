@@ -56,7 +56,7 @@ export const analyze = createHandler({
   handle: async ({ value }): Promise<Refactor[]> => {
     console.error(`[analyze] Analyzing ${value.file} for refactoring opportunities...`);
 
-    const response = callClaude({
+    const response = await callClaude({
       prompt: [
         `Analyze the file ${value.file} for refactoring opportunities.`,
         "Identify 1-2 specific, independent refactoring opportunities.",
@@ -89,7 +89,7 @@ export const assessWorthiness = createHandler({
   handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
     console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
 
-    const response = callClaude({
+    const response = await callClaude({
       prompt: [
         `Evaluate whether this refactoring opportunity is worth implementing:`,
         `  File: ${refactor.file}`,
@@ -157,7 +157,7 @@ export const implement = createHandler({
   handle: async ({ value }) => {
     console.error(`[implement] Applying refactor in ${value.worktreePath}: ${value.description}`);
 
-    callClaude({
+    await callClaude({
       prompt: [
         `Implement the following refactor in the codebase:`,
         `${value.description}`,
@@ -205,7 +205,7 @@ export const judgeRefactor = createHandler({
   handle: async (): Promise<JudgmentResult> => {
     console.error("[judge-refactor] Reviewing changes...");
 
-    const response = callClaude({
+    const response = await callClaude({
       prompt: [
         "Review the recent changes (git diff HEAD~1) in this repository.",
         "Evaluate whether the refactor is correct, complete, and follows best practices.",
@@ -251,7 +251,7 @@ export const applyFeedback = createHandler({
   handle: async ({ value: instructions }) => {
     console.error(`[apply-feedback] Applying feedback: ${instructions}`);
 
-    callClaude({
+    await callClaude({
       prompt: [
         "The reviewer provided feedback on the refactor:",
         instructions,

@@ -110,7 +110,7 @@ export const fix = createHandler({
   handle: async ({ value: error }) => {
     console.error(`[fix] Asking Claude to fix: ${error.file} — ${error.message}`);
 
-    callClaude({
+    await callClaude({
       prompt: [
         `Fix this TypeScript type error:`,
         `File: ${error.file}`,

@@ -111,7 +111,7 @@ export const fix = createHandler({
     const absolutePath = path.resolve(baseDir, error.file);
     console.error(`[fix] Asking Claude to fix: ${absolutePath} — ${error.message}`);
 
-    callClaude({
+    await callClaude({
       prompt: [
         `Fix this TypeScript type error:`,
         `File: ${absolutePath}`,

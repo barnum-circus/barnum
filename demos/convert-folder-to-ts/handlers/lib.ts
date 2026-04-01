@@ -1,18 +1,18 @@
 // Shared utilities for demo handlers.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const baseDir = path.resolve(__dirname, "..");
 
-/** Spawn Claude CLI in non-interactive mode. Returns stdout. */
-export function callClaude(args: {
+/** Spawn Claude CLI in non-interactive mode. Streams output to stderr, returns full stdout. */
+export async function callClaude(args: {
   prompt: string;
   allowedTools?: string[];
   cwd?: string;
-}): string {
+}): Promise<string> {
   const cliArgs = [
     "-p",
     args.prompt,
@@ -24,28 +24,41 @@ export function callClaude(args: {
     cliArgs.push("--allowedTools", ...args.allowedTools);
   }
 
-  const result = spawnSync("claude", cliArgs, {
-    encoding: "utf-8",
-    cwd: args.cwd ?? baseDir,
-    timeout: 300_000,
-    env: {
-      ...process.env,
-      // Prevent "nested session" error if run from within Claude Code
-      CLAUDECODE: undefined,
-      CLAUDE_CODE_ENTRYPOINT: undefined,
-    },
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn("claude", cliArgs, {
+      cwd: args.cwd ?? baseDir,
+      env: {
+        ...process.env,
+        // Prevent "nested session" error if run from within Claude Code
+        CLAUDECODE: undefined,
+        CLAUDE_CODE_ENTRYPOINT: undefined,
+      },
+    });
+
+    const stdoutChunks: Buffer[] = [];
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      process.stderr.write(chunk);
+    });
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      process.stderr.write(chunk);
+    });
+
+    child.on("error", (error) => {
+      reject(new Error(`Claude CLI failed: ${error.message}`));
+    });
+
+    child.on("close", (code) => {
+      const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+      if (code !== 0) {
+        reject(new Error(`Claude CLI exited with code ${code}`));
+        return;
+      }
+      resolve(stdout);
+    });
   });
-
-  if (result.error) {
-    throw new Error(`Claude CLI failed: ${result.error.message}`);
-  }
-  if (result.status !== 0) {
-    throw new Error(
-      `Claude CLI exited with code ${result.status}: ${result.stderr}`,
-    );
-  }
-
-  return result.stdout;
 }
 
 /** Strip markdown code fences if present. */
