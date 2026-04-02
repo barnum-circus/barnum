@@ -14,6 +14,7 @@ export async function callClaude(args: {
   cwd?: string;
 }): Promise<string> {
   const cliArgs = [
+    "claude",
     "-p",
     args.prompt,
     "--output-format",
@@ -24,11 +25,20 @@ export async function callClaude(args: {
     cliArgs.push("--allowedTools", ...args.allowedTools);
   }
 
-  console.error(`[callClaude] $ claude ${cliArgs.map(a => a.includes(" ") ? JSON.stringify(a) : a).join(" ")}`);
+  function shellQuote(arg: string): string {
+    if (/[^a-zA-Z0-9_\-=/:.,@]/.test(arg)) {
+      return `'${arg.replace(/'/g, "'\\''")}'`;
+    }
+    return arg;
+  }
+  console.error(
+    `[callClaude] $ ai-sandbox ${cliArgs.map(shellQuote).join(" ")}`,
+  );
 
   return new Promise<string>((resolve, reject) => {
-    const child = spawn("claude", cliArgs, {
+    const child = spawn("ai-sandbox", cliArgs, {
       cwd: args.cwd ?? baseDir,
+      stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
         // Prevent "nested session" error if run from within Claude Code
@@ -52,12 +62,21 @@ export async function callClaude(args: {
       reject(new Error(`Claude CLI failed: ${error.message}`));
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
+      if (signal) {
+        console.error(`[callClaude] killed by signal ${signal}`);
+        reject(new Error(`Claude CLI killed by ${signal}`));
+        return;
+      }
       if (code !== 0) {
+        console.error(`[callClaude] exited with code ${code}`);
         reject(new Error(`Claude CLI exited with code ${code}`));
         return;
       }
+      console.error(
+        `[callClaude] completed successfully (${stdout.length} chars)`,
+      );
       resolve(stdout);
     });
   });
