@@ -13,8 +13,11 @@ import type { Config } from "./ast.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/** Resolve the tsx executor from the caller's node_modules. */
+/** Resolve the TypeScript executor. Uses bun if the workflow was launched with bun, otherwise tsx. */
 function resolveExecutor(): string {
+  if (process.versions.bun) {
+    return "bun";
+  }
   const callerRequire = createRequire(process.argv[1] || import.meta.url);
   const tsxPath = callerRequire.resolve("tsx/cli");
   return `node ${tsxPath}`;
