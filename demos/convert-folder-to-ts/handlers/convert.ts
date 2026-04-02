@@ -2,14 +2,13 @@
 //
 // setup: clean output dir, return project config with absolute paths
 // listFiles: scan input dir for JS source files
-// migrate: invoke Claude to convert a JS file to TypeScript
-// writeFile: write converted content to disk
+// migrate: invoke Claude to convert a JS file to TypeScript (reads source, writes output)
 
 import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { baseDir, callClaude, stripCodeFences } from "./lib.js";
+import { baseDir, callClaude } from "./lib.js";
 
 // --- Types ---
 
@@ -59,48 +58,30 @@ export const listFiles = createHandler({
 }, "listFiles");
 
 export const migrate = createHandlerWithConfig({
-  inputValidator: z.string(),
+  inputValidator: z.object({
+    file: z.string(),
+    outputPath: z.string(),
+  }),
   stepConfigValidator: z.object({ to: z.string() }),
-  handle: async ({ value: filePath, stepConfig }) => {
-    const source = readFileSync(filePath, "utf-8");
-    const fileName = path.basename(filePath);
+  handle: async ({ value, stepConfig }) => {
+    const fileName = path.basename(value.file);
 
     console.error(`[migrate] Converting ${fileName} to ${stepConfig.to} via Claude...`);
 
-    const response = await callClaude({
+    await callClaude({
       prompt: [
-        `Convert this JavaScript file to ${stepConfig.to}.`,
+        `Convert the JavaScript file at ${value.file} to ${stepConfig.to}.`,
         "Add proper type annotations to all function parameters and return types.",
         "Use ES module syntax (export/import) instead of CommonJS (module.exports/require).",
-        "Preserve all behavior exactly. Return ONLY the converted code, no markdown fences, no explanations.",
+        "Preserve all behavior exactly.",
         "",
-        `File: ${fileName}`,
-        "```",
-        source,
-        "```",
+        `Read the source file at: ${value.file}`,
+        `Write the converted ${stepConfig.to} to: ${value.outputPath}`,
       ].join("\n"),
-      allowedTools: [],
+      allowedTools: [`Read(//${value.file})`, `Write(//${value.outputPath})`],
     });
 
-    const content = stripCodeFences(response);
-    console.error(`[migrate] ${fileName}: ${content.split("\n").length} lines of ${stepConfig.to}`);
-    return { content };
+    console.error(`[migrate] Wrote ${value.outputPath}`);
   },
 }, "migrate");
 
-export const writeFile = createHandler({
-  inputValidator: z.object({
-    content: z.string(),
-    outputPath: z.string(),
-  }),
-  handle: async ({ value }) => {
-    console.error(`[write-file] Writing ${value.outputPath}...`);
-    const dir = path.dirname(value.outputPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    writeFileSync(value.outputPath, value.content, "utf-8");
-    console.error(`[write-file] Wrote ${value.outputPath} (${value.content.length} chars)`);
-    return { writtenPath: value.outputPath };
-  },
-}, "writeFile");

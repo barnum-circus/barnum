@@ -18,14 +18,10 @@ import {
   pipe,
   forEach,
   loop,
-  all,
-  bindInput,
   drop,
 } from "@barnum/barnum";
-import { setup, listFiles, migrate, writeFile } from "./handlers/convert.js";
+import { setup, listFiles, migrate } from "./handlers/convert.js";
 import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
-
-type FileEntry = { file: string; outputPath: string };
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
@@ -34,21 +30,7 @@ await workflowBuilder()
     pipe(
       setup,
       listFiles
-        // For each file: extract the file path, migrate to TS, then combine
-        // the migrated content with the original output path for writing.
-        .forEach(
-          bindInput<FileEntry>((entry) =>
-            pipe(
-              entry.get("file"),
-              migrate({ to: "Typescript" }),
-              bindInput<{ content: string }>((migrateResult) =>
-                all(migrateResult, entry.pick("outputPath"))
-                  .merge()
-                  .then(writeFile),
-              ),
-            ),
-          ),
-        )
+        .forEach(migrate({ to: "Typescript" }))
         .drop(),
       // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
       loop((recur) =>

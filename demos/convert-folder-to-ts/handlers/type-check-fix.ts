@@ -108,6 +108,7 @@ export const fix = createHandler({
     message: z.string(),
   }),
   handle: async ({ value: error }) => {
+    const outputDir = path.join(baseDir, "out");
     const absolutePath = path.resolve(baseDir, error.file);
     console.error(`[fix] Asking Claude to fix: ${absolutePath} — ${error.message}`);
 
@@ -121,8 +122,8 @@ export const fix = createHandler({
         "Make the minimal change needed. Do not change behavior.",
         "Do NOT create new files. Only edit the existing file at the exact path above.",
       ].join("\n"),
-      allowedTools: ["Read", "Edit"],
-      cwd: baseDir,
+      allowedTools: [`Read(//${outputDir}/**)`, `Edit(//${outputDir}/**)`],
+      cwd: outputDir,
     });
 
     console.error(`[fix] Applied fix to ${error.file}`);
