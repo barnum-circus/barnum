@@ -42,6 +42,9 @@ jobs:
       - name: Run tests (barnum)
         run: pnpm exec vitest run
         working-directory: libs/barnum
+      - name: Build barnum (emit .d.ts for demo type-checking)
+        run: pnpm exec tsc
+        working-directory: libs/barnum
       - name: Install and type-check demos
         run: |
           for demo in demos/*/; do
