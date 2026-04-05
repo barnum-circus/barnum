@@ -186,6 +186,8 @@ fn is_descendant_of_body(
 #[cfg(test)]
 #[allow(clippy::doc_markdown, clippy::unwrap_used)]
 mod tests {
+    use crate::advance::advance;
+    use crate::complete::complete;
     use crate::test_helpers::*;
     use barnum_ast::*;
     use serde_json::json;
@@ -202,7 +204,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, Some(json!("input")));
@@ -225,7 +227,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Body dispatches invoke.
         let (_, ts) = drive_builtins(&mut engine).unwrap();
@@ -252,7 +254,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         // A dispatched.
         let (_, ts) = drive_builtins(&mut engine).unwrap();
@@ -277,7 +279,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("init"), None).unwrap();
+        advance(&mut engine, root, json!("init"), None).unwrap();
 
         let (_, mut body_dispatches) = drive_builtins(&mut engine).unwrap();
         assert_eq!(body_dispatches.len(), 1);
@@ -326,14 +328,12 @@ mod tests {
             invoke("./body.ts", "run"),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1); // body invoke dispatched
 
-        let result = engine
-            .complete(ts[0].task_id, json!("body_result"))
-            .unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("body_result")).unwrap();
         // Body done, no RestartPerform, RestartHandle exits with body result.
         assert_eq!(result, Some(json!("body_result")));
     }
@@ -351,7 +351,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2);
@@ -378,7 +378,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2);
@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(result, Some(json!("a_out")));
 
         // B's handler completes after teardown. Should be Ok(None).
-        let result = engine.complete(b_task_id, json!("b_out")).unwrap();
+        let result = complete(&mut engine, b_task_id, json!("b_out")).unwrap();
         assert_eq!(result, None);
     }
 
@@ -406,7 +406,7 @@ mod tests {
             parallel(vec![restart_perform(1), invoke("./b.ts", "b")]),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2);
@@ -416,7 +416,7 @@ mod tests {
         let _ = complete_and_drive(&mut engine, ts[0].task_id, json!("restarted")).unwrap();
 
         // B's task was torn down. Completing it panics with "unknown task".
-        engine.complete(b_task_id, json!("b_out")).unwrap();
+        complete(&mut engine, b_task_id, json!("b_out")).unwrap();
     }
 
     /// Effect shadowing — inner RestartHandle intercepts same restart_handler_id.
@@ -435,7 +435,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         // RestartPerform(1) fires during advance. Inner catches.
         // Payload = "input". Handler = ExtractIndex(0) on [payload, state] = ["input", "input"].
@@ -458,21 +458,21 @@ mod tests {
             chain(invoke("./body.ts", "body"), restart_perform(1)),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Body dispatches body.ts. No RestartPerform yet.
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1);
 
         // Complete body → Chain trampolines to RestartPerform → handler Chain starts → step1 dispatched.
-        let result = engine.complete(ts[0].task_id, json!("body_out")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("body_out")).unwrap();
         assert_eq!(result, None);
 
         let ts = engine.take_pending_dispatches();
         assert_eq!(ts.len(), 1);
 
         // Complete step1 → Chain trampolines to step2.
-        let result = engine.complete(ts[0].task_id, json!("s1_out")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("s1_out")).unwrap();
         assert_eq!(result, None);
 
         let ts = engine.take_pending_dispatches();
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(ts[0].value, json!("s1_out"));
 
         // Complete step2 → handler done → body re-advances with step2 output.
-        let result = engine.complete(ts[0].task_id, json!("s2_out")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("s2_out")).unwrap();
         assert_eq!(result, None);
 
         // Body re-advanced with "s2_out". body.ts dispatched again.
@@ -504,7 +504,7 @@ mod tests {
             ]),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2); // A and B
@@ -516,7 +516,7 @@ mod tests {
         assert_eq!(handler_ts.len(), 1);
 
         // Complete B while handler is in flight — NOT blocked.
-        let result = engine.complete(ts[1].task_id, json!("b_out")).unwrap();
+        let result = complete(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
         assert_eq!(result, None);
     }
 
@@ -530,7 +530,7 @@ mod tests {
             parallel(vec![resume_perform(1), resume_perform(1)]),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Both Performs dispatch their handlers, no blocking.
         let ts = engine.take_pending_dispatches();
@@ -559,7 +559,7 @@ mod tests {
             identity_action(),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2); // A and B
@@ -600,14 +600,14 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!(42)); // echo receives 42
 
-        let result = engine.complete(ts[0].task_id, json!("echo_done")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("echo_done")).unwrap();
         assert_eq!(result, Some(json!("echo_done")));
     }
 
@@ -630,14 +630,14 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("input")); // echo receives pipeline_input
 
-        let result = engine.complete(ts[0].task_id, json!("done")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("done")).unwrap();
         assert_eq!(result, Some(json!("done")));
     }
 
@@ -668,7 +668,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
@@ -705,7 +705,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, Some(json!("alice")));
@@ -749,7 +749,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, Some(json!("inner")));
@@ -772,15 +772,18 @@ mod tests {
             ),
         )));
         let root = engine.workflow_root();
-        engine.advance(root, json!([10, 20]), None).unwrap();
+        advance(&mut engine, root, json!([10, 20]), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 2);
 
-        assert_eq!(engine.complete(ts[0].task_id, json!("r10")).unwrap(), None);
         assert_eq!(
-            engine.complete(ts[1].task_id, json!("r20")).unwrap(),
+            complete(&mut engine, ts[0].task_id, json!("r10")).unwrap(),
+            None
+        );
+        assert_eq!(
+            complete(&mut engine, ts[1].task_id, json!("r20")).unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }
@@ -804,7 +807,7 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
@@ -834,14 +837,14 @@ mod tests {
             ),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        advance(&mut engine, root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("b"));
 
-        let result = engine.complete(ts[0].task_id, json!("done")).unwrap();
+        let result = complete(&mut engine, ts[0].task_id, json!("done")).unwrap();
         assert_eq!(result, Some(json!("done")));
     }
 }

@@ -7,6 +7,8 @@
 
 use barnum_ast::HandlerKind;
 use barnum_builtins::{BuiltinError, execute_builtin};
+use barnum_engine::advance::advance;
+use barnum_engine::complete::complete;
 use barnum_engine::{CompleteError, Dispatch, TaskId, WorkflowState};
 use barnum_typescript_handler::{TypeScriptHandlerError, execute_typescript};
 use intern::Lookup;
@@ -143,9 +145,7 @@ pub async fn run_workflow(
     scheduler: &mut Scheduler,
 ) -> Result<Value, RunWorkflowError> {
     let root = workflow_state.workflow_root();
-    workflow_state
-        .advance(root, Value::Null, None)
-        .expect("initial advance failed");
+    advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
 
     loop {
         let dispatches = workflow_state.take_pending_dispatches();
@@ -161,7 +161,7 @@ pub async fn run_workflow(
 
         let value = result?;
 
-        if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+        if let Some(terminal_value) = complete(workflow_state, task_id, value)? {
             return Ok(terminal_value);
         }
     }

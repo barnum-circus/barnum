@@ -216,7 +216,7 @@ mod tests {
     fn single_invoke() {
         let mut engine = engine_from(invoke("./handler.ts", "run"));
         let root = engine.workflow_root();
-        engine.advance(root, json!({"x": 1}), None).unwrap();
+        super::advance(&mut engine, root, json!({"x": 1}), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -232,7 +232,7 @@ mod tests {
     fn chain_dispatches_first_only() {
         let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        super::advance(&mut engine, root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -252,7 +252,7 @@ mod tests {
             invoke("./c.ts", "c"),
         ]));
         let root = engine.workflow_root();
-        engine.advance(root, json!({"shared": true}), None).unwrap();
+        super::advance(&mut engine, root, json!({"shared": true}), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 3);
@@ -266,7 +266,7 @@ mod tests {
     fn foreach_dispatches_per_element() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
         let root = engine.workflow_root();
-        engine.advance(root, json!([10, 20, 30]), None).unwrap();
+        super::advance(&mut engine, root, json!([10, 20, 30]), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 3);
@@ -283,9 +283,7 @@ mod tests {
             ("Err", invoke("./err.ts", "handle")),
         ]));
         let root = engine.workflow_root();
-        engine
-            .advance(root, json!({"kind": "Ok", "value": 42}), None)
-            .unwrap();
+        super::advance(&mut engine, root, json!({"kind": "Ok", "value": 42}), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -304,7 +302,7 @@ mod tests {
             invoke("./c.ts", "c"),
         ]));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        super::advance(&mut engine, root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 2);
@@ -326,7 +324,7 @@ mod tests {
             chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        super::advance(&mut engine, root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 1);
@@ -341,7 +339,7 @@ mod tests {
     fn foreach_empty_array() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
         let root = engine.workflow_root();
-        engine.advance(root, json!([]), None).unwrap();
+        super::advance(&mut engine, root, json!([]), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 0);
@@ -352,7 +350,7 @@ mod tests {
     fn parallel_empty() {
         let mut engine = engine_from(parallel(vec![]));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        super::advance(&mut engine, root, json!(null), None).unwrap();
 
         let dispatches = engine.take_pending_dispatches();
         assert_eq!(dispatches.len(), 0);
@@ -363,7 +361,7 @@ mod tests {
     fn restart_perform_without_handle_errors() {
         let mut engine = engine_from(restart_perform(1));
         let root = engine.workflow_root();
-        let err = engine.advance(root, json!(null), None).unwrap_err();
+        let err = super::advance(&mut engine, root, json!(null), None).unwrap_err();
         assert!(
             matches!(err, crate::AdvanceError::UnhandledRestartEffect { restart_handler_id } if restart_handler_id == RestartHandlerId(1)),
             "expected UnhandledRestartEffect, got: {err:?}",
@@ -375,7 +373,7 @@ mod tests {
     fn resume_perform_without_handle_errors() {
         let mut engine = engine_from(resume_perform(1));
         let root = engine.workflow_root();
-        let err = engine.advance(root, json!(null), None).unwrap_err();
+        let err = super::advance(&mut engine, root, json!(null), None).unwrap_err();
         assert!(
             matches!(err, crate::AdvanceError::UnhandledResumeEffect { resume_handler_id } if resume_handler_id == ResumeHandlerId(1)),
             "expected UnhandledResumeEffect, got: {err:?}",

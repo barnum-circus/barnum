@@ -53,7 +53,7 @@ pub fn complete(
 /// - **`ResumePerform`:** destructure `[value, new_state]`, write state back.
 /// - **`RestartHandle`:** body completed or handler completed (re-advance body).
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::too_many_lines)]
-pub fn deliver(
+pub(crate) fn deliver(
     workflow_state: &mut WorkflowState,
     parent: Option<ParentRef>,
     value: Value,
@@ -191,19 +191,19 @@ mod tests {
     fn chain_trampolines_on_completion() {
         let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
         let d1 = engine.take_pending_dispatches();
         assert_eq!(d1.len(), 1);
 
-        let result = engine.complete(d1[0].task_id, json!("a_result")).unwrap();
+        let result = super::complete(&mut engine, d1[0].task_id, json!("a_result")).unwrap();
         assert_eq!(result, None);
 
         let d2 = engine.take_pending_dispatches();
         assert_eq!(d2.len(), 1);
         assert_eq!(d2[0].value, json!("a_result"));
 
-        let result = engine.complete(d2[0].task_id, json!("b_result")).unwrap();
+        let result = super::complete(&mut engine, d2[0].task_id, json!("b_result")).unwrap();
         assert_eq!(result, Some(json!("b_result")));
     }
 
@@ -215,20 +215,26 @@ mod tests {
             chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
         ));
         let root = engine.workflow_root();
-        engine.advance(root, json!("input"), None).unwrap();
+        crate::advance::advance(&mut engine, root, json!("input"), None).unwrap();
 
         // A
         let d = engine.take_pending_dispatches();
-        assert_eq!(engine.complete(d[0].task_id, json!("a_out")).unwrap(), None);
+        assert_eq!(
+            super::complete(&mut engine, d[0].task_id, json!("a_out")).unwrap(),
+            None
+        );
         // B
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!("a_out"));
-        assert_eq!(engine.complete(d[0].task_id, json!("b_out")).unwrap(), None);
+        assert_eq!(
+            super::complete(&mut engine, d[0].task_id, json!("b_out")).unwrap(),
+            None
+        );
         // C
         let d = engine.take_pending_dispatches();
         assert_eq!(d[0].value, json!("b_out"));
         assert_eq!(
-            engine.complete(d[0].task_id, json!("c_out")).unwrap(),
+            super::complete(&mut engine, d[0].task_id, json!("c_out")).unwrap(),
             Some(json!("c_out")),
         );
     }
@@ -238,18 +244,18 @@ mod tests {
     fn parallel_collects_results() {
         let mut engine = engine_from(parallel(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]));
         let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
+        crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
         let d = engine.take_pending_dispatches();
         assert_eq!(d.len(), 2);
 
         // Complete in reverse order to verify index-based collection.
         assert_eq!(
-            engine.complete(d[1].task_id, json!("b_result")).unwrap(),
+            super::complete(&mut engine, d[1].task_id, json!("b_result")).unwrap(),
             None,
         );
         assert_eq!(
-            engine.complete(d[0].task_id, json!("a_result")).unwrap(),
+            super::complete(&mut engine, d[0].task_id, json!("a_result")).unwrap(),
             Some(json!(["a_result", "b_result"])),
         );
     }
@@ -259,14 +265,17 @@ mod tests {
     fn foreach_collects_results() {
         let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
         let root = engine.workflow_root();
-        engine.advance(root, json!([10, 20]), None).unwrap();
+        crate::advance::advance(&mut engine, root, json!([10, 20]), None).unwrap();
 
         let d = engine.take_pending_dispatches();
         assert_eq!(d.len(), 2);
 
-        assert_eq!(engine.complete(d[0].task_id, json!("r10")).unwrap(), None);
         assert_eq!(
-            engine.complete(d[1].task_id, json!("r20")).unwrap(),
+            super::complete(&mut engine, d[0].task_id, json!("r10")).unwrap(),
+            None
+        );
+        assert_eq!(
+            super::complete(&mut engine, d[1].task_id, json!("r20")).unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }

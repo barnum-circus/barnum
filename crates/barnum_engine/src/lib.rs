@@ -4,9 +4,11 @@
 //! and no concurrency. External code drives it by calling [`WorkflowState::advance`]
 //! and draining dispatches via [`WorkflowState::take_pending_dispatches`].
 
-mod advance;
+/// Advance (expand) an action into frames.
+pub mod advance;
 mod ancestors;
-mod complete;
+/// Deliver a completed task result back to the workflow.
+pub mod complete;
 mod effects;
 pub mod frame;
 #[cfg(test)]
@@ -18,7 +20,7 @@ use barnum_ast::HandlerKind;
 use barnum_ast::RestartHandlerId;
 use barnum_ast::ResumeHandlerId;
 use barnum_ast::flat::{ActionId, FlatConfig, HandlerId};
-use frame::{Frame, FrameId, ParentRef};
+use frame::{Frame, FrameId};
 use serde_json::Value;
 use thunderdome::Arena;
 use u32_newtype::u32_newtype;
@@ -161,49 +163,6 @@ impl WorkflowState {
     #[must_use]
     pub fn handler(&self, id: HandlerId) -> &HandlerKind {
         self.flat_config.handler(id)
-    }
-
-    /// Expand an `ActionId` into frames. Creates frames for structural
-    /// combinators and Invoke leaves.
-    ///
-    /// Pass `parent: None` for the top-level action (i.e., starting a
-    /// workflow). Internal recursion provides `Some(parent_ref)` to attach
-    /// child frames to their parent.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AdvanceError`] if the workflow encounters a structural error
-    /// during expansion (e.g., `ForEach` on a non-array, `Branch` with no
-    /// matching case).
-    pub fn advance(
-        &mut self,
-        action_id: ActionId,
-        value: Value,
-        parent: Option<ParentRef>,
-    ) -> Result<(), AdvanceError> {
-        advance::advance(self, action_id, value, parent)
-    }
-
-    /// Deliver a task result. The caller invokes this when a dispatched
-    /// handler finishes.
-    ///
-    /// Returns `Ok(Some(value))` when the workflow terminates, `Ok(None)`
-    /// when it's still running.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CompleteError`] if the result value has an invalid shape,
-    /// or if an advance error occurs during Chain trampoline or Handle re-entry.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `task_id` is not a known pending task.
-    pub fn complete(
-        &mut self,
-        task_id: TaskId,
-        value: Value,
-    ) -> Result<Option<Value>, CompleteError> {
-        complete::complete(self, task_id, value)
     }
 
     // -- Private helpers --

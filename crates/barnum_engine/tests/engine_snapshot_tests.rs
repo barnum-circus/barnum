@@ -10,6 +10,7 @@
 use barnum_ast::Config;
 use barnum_ast::flat::flatten;
 use barnum_engine::WorkflowState;
+use barnum_engine::advance::advance;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -28,7 +29,7 @@ fn advance_snapshots() {
         let flat_config = flatten(test_case.config).unwrap();
         let mut engine = WorkflowState::new(flat_config);
         let root = engine.workflow_root();
-        engine.advance(root, test_case.input, None).unwrap();
+        advance(&mut engine, root, test_case.input, None).unwrap();
         insta::assert_debug_snapshot!(engine);
     });
 }

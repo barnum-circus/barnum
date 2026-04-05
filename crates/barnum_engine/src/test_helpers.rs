@@ -3,6 +3,7 @@
 //! Provides AST construction helpers and engine driving utilities used
 //! across test modules in advance, complete, effects, and frame.
 
+use crate::complete::complete;
 use crate::{CompleteError, Dispatch, TaskId, WorkflowState};
 
 use barnum_ast::flat::flatten;
@@ -190,7 +191,7 @@ pub fn drive_builtins(
                     let result =
                         barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
                             .unwrap();
-                    if let Some(value) = engine.complete(dispatch.task_id, result)? {
+                    if let Some(value) = complete(engine, dispatch.task_id, result)? {
                         return Ok((Some(value), ts_dispatches));
                     }
                     had_builtin = true;
@@ -214,7 +215,7 @@ pub fn complete_and_drive(
     task_id: TaskId,
     value: Value,
 ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
-    let result = engine.complete(task_id, value)?;
+    let result = complete(engine, task_id, value)?;
     if result.is_some() {
         let ts = engine.take_pending_dispatches();
         return Ok((result, ts));

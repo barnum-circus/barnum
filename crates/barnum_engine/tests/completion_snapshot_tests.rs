@@ -8,6 +8,8 @@
 
 use barnum_ast::Config;
 use barnum_ast::flat::flatten;
+use barnum_engine::advance::advance;
+use barnum_engine::complete::complete;
 use barnum_engine::{TaskId, WorkflowState};
 use serde::Deserialize;
 use serde_json::Value;
@@ -41,7 +43,7 @@ fn completion_snapshots() {
         let mut trace = String::new();
 
         // Initial advance
-        engine.advance(root, test_case.input, None).unwrap();
+        advance(&mut engine, root, test_case.input, None).unwrap();
         let dispatches = engine.take_pending_dispatches();
         writeln!(trace, "--- After advance ---").unwrap();
         writeln!(trace, "{engine:#?}").unwrap();
@@ -50,7 +52,7 @@ fn completion_snapshots() {
         // Replay completions
         for completion in &test_case.completions {
             let task_id = TaskId(completion.task_id);
-            let result = engine.complete(task_id, completion.value.clone()).unwrap();
+            let result = complete(&mut engine, task_id, completion.value.clone()).unwrap();
             let dispatches = engine.take_pending_dispatches();
 
             writeln!(trace).unwrap();
