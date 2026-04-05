@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { z } from "zod";
 import { type TypedAction, typedAction } from "./ast.js";
+import { zodToCheckedJsonSchema } from "./schema.js";
 
 // ---------------------------------------------------------------------------
 // HandlerDefinition — the user's handle function + optional validators
@@ -114,9 +115,28 @@ export function createHandler(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
+  const inputSchema = definition.inputValidator
+    ? zodToCheckedJsonSchema(
+        definition.inputValidator,
+        `${filePath}:${funcName} input`,
+      )
+    : undefined;
+  const outputSchema = definition.outputValidator
+    ? zodToCheckedJsonSchema(
+        definition.outputValidator,
+        `${filePath}:${funcName} output`,
+      )
+    : undefined;
+
   const action = typedAction({
     kind: "Invoke",
-    handler: { kind: "TypeScript", module: filePath, func: funcName },
+    handler: {
+      kind: "TypeScript",
+      module: filePath,
+      func: funcName,
+      ...(inputSchema && { input_schema: inputSchema }),
+      ...(outputSchema && { output_schema: outputSchema }),
+    },
   });
 
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
@@ -162,6 +182,19 @@ export function createHandlerWithConfig(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
+  const inputSchema = definition.inputValidator
+    ? zodToCheckedJsonSchema(
+        definition.inputValidator,
+        `${filePath}:${funcName} input`,
+      )
+    : undefined;
+  const outputSchema = definition.outputValidator
+    ? zodToCheckedJsonSchema(
+        definition.outputValidator,
+        `${filePath}:${funcName} output`,
+      )
+    : undefined;
+
   // Internal handle that unpacks the [value, config] tuple from All
   const internalDefinition: UntypedHandlerDefinition = {
     handle: ({ value }: { value: unknown }) => {
@@ -172,7 +205,13 @@ export function createHandlerWithConfig(
 
   const invokeAction = typedAction({
     kind: "Invoke",
-    handler: { kind: "TypeScript", module: filePath, func: funcName },
+    handler: {
+      kind: "TypeScript",
+      module: filePath,
+      func: funcName,
+      ...(inputSchema && { input_schema: inputSchema }),
+      ...(outputSchema && { output_schema: outputSchema }),
+    },
   });
 
   // Non-enumerable: invisible to JSON.stringify, visible to the worker
