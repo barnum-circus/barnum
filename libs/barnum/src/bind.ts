@@ -46,16 +46,16 @@ export type InferVarRefs<TBindings extends Action[]> = {
 /**
  * Returns an action that extracts the nth value from the Handle's state
  * tuple and resumes with it. When a Perform fires, the engine calls the
- * handler with `{ payload, state }`. For bind, `state` is the full All
- * output tuple. The handler extracts `state[n]` and wraps it as
+ * handler with `[payload, state]`. For bind, `state` (index 1) is the
+ * full All output tuple. The handler extracts `state[n]` and wraps it as
  * `{ kind: "Resume", value: state[n] }`.
  *
- * Expanded AST: Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))
+ * Expanded AST: Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))
  */
 function readVar(n: number): Action {
   return {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "state" } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
     rest: {
       kind: "Chain",
       first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },

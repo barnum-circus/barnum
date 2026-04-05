@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/handle_state_update.json
 ---
@@ -186,10 +187,10 @@ Pending: [
         handler_id: HandlerId(
             1,
         ),
-        value: Object {
-            "payload": String("input"),
-            "state": String("input"),
-        },
+        value: Array [
+            String("input"),
+            String("input"),
+        ],
     },
 ]
 
@@ -377,10 +378,10 @@ Pending: [
         handler_id: HandlerId(
             1,
         ),
-        value: Object {
-            "payload": String("first_resumed"),
-            "state": String("new_state"),
-        },
+        value: Array [
+            String("first_resumed"),
+            String("new_state"),
+        ],
     },
 ]
 

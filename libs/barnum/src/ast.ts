@@ -754,7 +754,7 @@ export type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue,
 
 const EXTRACT_PAYLOAD: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } },
+  handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
 };
 
 const TAG_RESTART_BODY: Action = {

@@ -496,11 +496,8 @@ impl WorkflowState {
         };
         handle.status = HandleStatus::Suspended(perform_parent);
 
-        // Build the handler input: { payload, state }.
-        let handler_input = serde_json::json!({
-            "payload": payload,
-            "state": state,
-        });
+        // Build the handler input: [payload, state].
+        let handler_input = serde_json::json!([payload, state]);
 
         // Advance the handler DAG.
         self.advance(
@@ -1384,13 +1381,19 @@ mod tests {
         })
     }
 
+    fn extract_index(index: u64) -> Action {
+        invoke_builtin(BuiltinKind::ExtractIndex {
+            value: json!(index),
+        })
+    }
+
     fn identity_action() -> Action {
         invoke_builtin(BuiltinKind::Identity)
     }
 
-    /// Handler for restart+Branch: extract payload, tag RestartBody.
+    /// Handler for restart+Branch: extract payload (index 0), tag RestartBody.
     fn restart_body_handler() -> Action {
-        chain(extract_field("payload"), tag_builtin("RestartBody"))
+        chain(extract_index(0), tag_builtin("RestartBody"))
     }
 
     /// Chain(Tag("Break"), Perform(effect_id)) — triggers restart with Break routing.
@@ -1419,9 +1422,7 @@ mod tests {
 
     fn echo_resume_handler() -> Action {
         chain(
-            invoke_builtin(BuiltinKind::ExtractField {
-                value: json!("payload"),
-            }),
+            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(0) }),
             invoke_builtin(BuiltinKind::Tag {
                 value: json!("Resume"),
             }),
@@ -1954,12 +1955,10 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn resume_with_state() {
-        // Handler DAG: ExtractField("state") -> Tag("Resume")
-        // This means the handler echoes the Handle's state back as the resume value.
+        // Handler DAG: ExtractIndex(1) -> Tag("Resume")
+        // This means the handler echoes the Handle's state (index 1) back as the resume value.
         let resume_with_state = chain(
-            invoke_builtin(BuiltinKind::ExtractField {
-                value: json!("state"),
-            }),
+            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
             invoke_builtin(BuiltinKind::Tag {
                 value: json!("Resume"),
             }),
@@ -1976,8 +1975,8 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1); // step dispatched
 
-        // Complete step -> Perform fires -> handler gets { payload: "step_out", state: "input" }
-        // Handler extracts state ("input") and resumes with it.
+        // Complete step -> Perform fires -> handler gets ["step_out", "input"]
+        // Handler extracts state (index 1 = "input") and resumes with it.
         let (result, _) =
             complete_and_drive(&mut engine, ts[0].task_id, json!("step_out")).unwrap();
         // Resume with "input" -> deliver to Chain -> body done -> Handle exits.
@@ -2026,11 +2025,8 @@ mod tests {
         assert_eq!(handler_ts.len(), 1);
 
         // Second handler receives state = "new_state" (persisted from first handler).
-        // We verify by checking the dispatch value.
-        assert_eq!(
-            handler_ts[0].value,
-            json!({ "payload": "mid_out", "state": "new_state" }),
-        );
+        // We verify by checking the dispatch value: [payload, state].
+        assert_eq!(handler_ts[0].value, json!(["mid_out", "new_state"]),);
 
         // Complete second handler with Resume.
         let (result, _) = complete_and_drive(
@@ -2083,12 +2079,10 @@ mod tests {
     // when driven by bind-shaped ASTs. The ASTs are constructed directly
     // in Rust, matching what the TS `bind()` macro produces.
 
-    /// readVar(n): Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))
+    /// readVar(n): Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))
     fn read_var(n: u64) -> Action {
         chain(
-            invoke_builtin(BuiltinKind::ExtractField {
-                value: json!("state"),
-            }),
+            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
             chain(
                 invoke_builtin(BuiltinKind::ExtractIndex { value: json!(n) }),
                 invoke_builtin(BuiltinKind::Tag {
@@ -2338,8 +2332,8 @@ mod tests {
     /// Bind test 7: Handler receives correct state shape.
     /// Handle(e, TS_handler, Perform(e)). Advance with "input".
     /// State = "input" (Handle initializes from pipeline value).
-    /// Handler dispatch value should be { "payload": null, "state": "input" }.
-    /// (Perform's input = null because Perform has no explicit input in bind usage.)
+    /// Handler dispatch value should be ["input", [42, "input"]].
+    /// (Perform's input = "input" because body extracts index 1 from the All tuple.)
     #[test]
     #[allow(clippy::unwrap_used)]
     fn bind_handler_receives_correct_state() {
@@ -2365,12 +2359,9 @@ mod tests {
         let (result, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
-        // Handler receives { payload: "input", state: [42, "input"] }
+        // Handler receives [payload, state] = ["input", [42, "input"]]
         // (state is the All output tuple, which is the pipeline value entering the Handle)
-        assert_eq!(
-            ts[0].value,
-            json!({ "payload": "input", "state": [42, "input"] }),
-        );
+        assert_eq!(ts[0].value, json!(["input", [42, "input"]]),);
     }
 
     /// Bind test 8: readVar(1) produces correct Resume value.
