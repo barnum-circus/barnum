@@ -165,9 +165,9 @@ The maximally reduced AST:
 
 ```
 FlatAction =
-  | ResumeHandle { effect_id, body: HandleBody, handler: HandlerDag }
-  | RestartHandle { effect_id, body: HandleBody, handler: HandlerDag }
-  | Perform { effect_id }
+  | ResumeHandle { resume_handler_id, body: HandleBody, handler: HandlerDag }
+  | RestartHandle { restart_handler_id, body: HandleBody, handler: HandlerDag }
+  | Perform { handler_id }
   | Chain { rest: ActionId }
 ```
 

@@ -13,7 +13,23 @@ The engine currently treats all handlers as restart: it suspends the body, runs 
 
 ## What changes
 
-### 1. Split HandleFrame into two frame kinds
+### 1. Rename EffectId to HandlerId
+
+**Before** (`barnum_ast/src/lib.rs:45`):
+
+```rust
+pub struct EffectId(pub u16);
+```
+
+**After:**
+
+```rust
+pub struct HandlerId(pub u16);
+```
+
+One shared namespace for both resume and restart handlers. A `Perform` targets a `HandlerId`; the engine walks up to find the matching Handle regardless of kind.
+
+### 2. Split HandleFrame into two frame kinds
 
 **Before** (`frame.rs:110`):
 
@@ -32,7 +48,7 @@ pub struct HandleFrame {
 ```rust
 /// Function-call semantics. Always resumes. Never suspends.
 pub struct ResumeHandleFrame {
-    pub effect_id: EffectId,
+    pub resume_handler_id: HandlerId,
     pub body: ActionId,
     pub handler: ActionId,
     pub state: Option<Value>,
@@ -41,7 +57,7 @@ pub struct ResumeHandleFrame {
 
 /// Control-flow semantics. Tears down body, then Continue or Break.
 pub struct RestartHandleFrame {
-    pub effect_id: EffectId,
+    pub restart_handler_id: HandlerId,
     pub body: ActionId,
     pub handler: ActionId,
     pub state: Option<Value>,
@@ -49,9 +65,9 @@ pub struct RestartHandleFrame {
 }
 ```
 
-Two frame kinds, not a mode flag. `ResumeHandleFrame` has no `status` because it never suspends.
+Two frame kinds, not a mode flag. `ResumeHandleFrame` has no `status` because it never suspends. The field names (`resume_handler_id` vs `restart_handler_id`) make the kind visible at every use site.
 
-### 2. Split the AST node
+### 3. Split the AST node
 
 **Before** (`ast.ts:46`):
 
@@ -69,16 +85,25 @@ export interface HandleAction {
 ```ts
 export interface ResumeHandleAction {
   kind: "ResumeHandle";
-  effect_id: number;
+  resume_handler_id: number;
   body: Action;
   handler: Action;
 }
 
 export interface RestartHandleAction {
   kind: "RestartHandle";
-  effect_id: number;
+  restart_handler_id: number;
   body: Action;
   handler: Action;
+}
+```
+
+Perform keeps a neutral name since it doesn't know which kind it's targeting:
+
+```ts
+export interface PerformAction {
+  kind: "Perform";
+  handler_id: number;  // was effect_id
 }
 ```
 
