@@ -36,7 +36,7 @@ The type parameter `TFunctions extends [unknown, unknown][]` is a single array. 
 
 The call tokens are the same values in both callbacks. They're `Chain(Tag("Call0"), ResumePerform(resumeHandlerId))` — tagged ResumePerforms. The first callback uses them for recursion inside function bodies. The second uses them for initial calls in the workflow body. Both execute inside the ResumeHandle's scope.
 
-`self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. Single-function self-recursion uses `defineRecursiveFunctions` with one entry.
+`self` (`Step(Root)`) is gone — the scope handler is the restart mechanism. It's just a value.
 
 ## Desugaring
 
