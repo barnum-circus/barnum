@@ -105,13 +105,14 @@ pub enum FrameKind {
 **ResumePerformFrame:**
 
 ```rust
-/// Trampoline frame at the Perform site. Runs the handler DAG inline
-/// (the ResumeHandle frame is uninvolved). When the handler completes,
-/// the frame removes itself and delivers to its parent — same semantics
-/// as Chain.
+/// Trampoline frame at the Perform site. The handler DAG runs as a
+/// child of this frame. When the handler completes, the frame removes
+/// itself and delivers the result to its parent (the Perform site's
+/// parent in the body) — same trampoline semantics as Chain.
+///
+/// The ResumeHandle frame is uninvolved: no suspension, no side enum.
 pub struct ResumePerformFrame {
     /// Which resume handler this Perform targets.
-    /// Stored for observability (mirrors Invoke's handler field).
     pub resume_handler_id: ResumeHandlerId,
 }
 ```
@@ -273,7 +274,10 @@ When the engine walks up and finds a matching `ResumeHandle`:
 3. Advance the handler DAG as a child of the ResumePerform frame.
 
 ```rust
-// Create ResumePerform frame for observability (like Invoke).
+// Create ResumePerform trampoline frame. The handler DAG's completion
+// delivers here, then the frame forwards to perform_parent (the
+// Perform site's parent in the body). Without this frame, the handler
+// result has no delivery target.
 let perform_frame_id = self.frames.insert(Frame {
     parent: Some(perform_parent),
     kind: FrameKind::ResumePerform(ResumePerformFrame {
@@ -292,7 +296,7 @@ self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
 }))?;
 ```
 
-When the handler completes, it delivers to the ResumePerform frame. The frame removes itself and delivers the value to `perform_parent` (trampoline, same as Chain). The body continues. The ResumeHandle frame is uninvolved — no suspension, no Handler side, no `handle_handler_completion` path.
+When the handler completes, it delivers to the ResumePerform frame. The frame removes itself and delivers the value to `perform_parent` (trampoline, same as Chain). The body continues from where the Perform was. The ResumeHandle frame is uninvolved — no suspension, no Handler side, no `handle_handler_completion` path.
 
 The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
 
@@ -462,6 +466,8 @@ These don't require the full refactor. They simplify the current code and reduce
 2. **Extract `restart_body` as a standalone method.** Currently `handle_handler_completion` handles Resume and RestartBody. Extracting the RestartBody path into its own method prepares for the split where it becomes the sole `RestartHandle { side: Handler }` deliver path.
 
 3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
+
+4. **Extract an ancestor frame iterator.** `find_and_dispatch_handler` walks from a `ParentRef` up the frame tree looking for a matching Handle. After the split, this walk exists in two places: one for ResumePerform (looking for `ResumeHandle`) and one for RestartPerform (looking for `RestartHandle`). Extract an `ancestors(starting_parent)` iterator that yields `(FrameId, &Frame)` pairs. Both find methods call `.find()` on it with their respective predicate.
 
 ## Open questions
 
