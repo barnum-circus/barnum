@@ -355,9 +355,11 @@ type CaseHandler<
  */
 type VoidToNull<T> = 0 extends 1 & T
   ? T // any — preserve as-is
-  : [T] extends [void]
-    ? null
-    : T;
+  : [T] extends [never]
+    ? never
+    : [T] extends [void]
+      ? null
+      : T;
 
 export type TaggedUnion<TDef extends Record<string, unknown>> = {
   [K in keyof TDef & string]: {
