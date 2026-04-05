@@ -11,9 +11,9 @@ Every Handle/Perform usage falls into one of two categories:
 
 Each kind is unconditional. The handler produces a raw value. The engine knows what to do based on the Handle kind. There is no enum, no tag dispatch, no envelope.
 
-The "exit the Handle" path (currently `Discard`) is not a handler behavior — it's a body behavior. The handler always restarts. The body has a Branch at the top that routes the restarted value. One arm runs the body; the other arm completes normally, which exits the Handle. This is how `loop`, `earlyReturn`, `tryCatch`, and `race` already work (or can work with trivial recompilation for `tryCatch`/`race`).
+The "exit the Handle" path is a body behavior, not a handler behavior. The handler always restarts. The body has a Branch at the top that routes the restarted value: one arm runs the body; the other completes normally, exiting the Handle. This is how `loop`, `earlyReturn`, `tryCatch`, and `race` work.
 
-The engine currently treats all handlers identically: suspend body, run handler DAG, deserialize a three-variant `HandlerOutput` (Resume/Discard/RestartBody), dispatch. The RestartBody and Discard paths do the same first step (tear down body) and differ only in what follows (re-enter vs exit). But the "exit" path is redundant — restarting into a Branch that takes the exit arm achieves the same result.
+The engine currently treats all handlers identically: suspend body, run handler DAG, deserialize a two-variant `HandlerOutput` (Resume/RestartBody), dispatch. Separating Resume and Restart into distinct Handle/Perform types lets the engine handle each directly — no deserialization, no tag dispatch.
 
 ## What changes
 
@@ -99,6 +99,20 @@ pub enum FrameKind {
     RestartHandle(RestartHandleFrame),
     ResumePerform(ResumePerformFrame),
     Invoke { handler: HandlerId },
+}
+```
+
+**ResumePerformFrame:**
+
+```rust
+/// Trampoline frame at the Perform site. Runs the handler DAG inline
+/// (the ResumeHandle frame is uninvolved). When the handler completes,
+/// the frame removes itself and delivers to its parent — same semantics
+/// as Chain.
+pub struct ResumePerformFrame {
+    /// Which resume handler this Perform targets.
+    /// Stored for observability (mirrors Invoke's handler field).
+    pub resume_handler_id: ResumeHandlerId,
 }
 ```
 
@@ -235,7 +249,6 @@ Same split in the Rust AST (`barnum_ast`).
 ```rust
 enum HandlerOutput {
     Resume { value, state_update },
-    Discard { value },
     RestartBody { value, state_update },
 }
 ```
@@ -323,7 +336,7 @@ This is a significant simplification. The stash was the most complex part of the
 
 ### 8. Delete handle_handler_completion
 
-**Before** (`lib.rs:495`): Deserializes `HandlerOutput`, matches on Resume/Discard/RestartBody.
+**Before** (`lib.rs:495`): Deserializes `HandlerOutput`, matches on Resume/RestartBody.
 
 **After:** Deleted. The two handler kinds don't share a completion path:
 
@@ -337,24 +350,28 @@ All handler DAGs drop their `Tag(...)` wrapping.
 | Combinator | Before | After |
 |-----------|--------|-------|
 | `bind` | `Tag("Resume")` wrapper | Raw value |
-| `tryCatch` | `Tag("Discard")` wrapper | Raw value (handler just extracts payload; recovery moves to body Branch) |
-| `race` | `Tag("Discard")` wrapper | Raw value (handler just extracts payload) |
-| `loop` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
-| `scope`/`jump` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
+| `tryCatch` | `Chain(ExtractField("payload"), Tag("RestartBody"))` | Raw value (just `ExtractField("payload")`) |
+| `race` | `Chain(ExtractField("payload"), Tag("RestartBody"))` | Raw value (just `ExtractField("payload")`) |
+| `loop` | `Tag("RestartBody")` wrapper | Raw value (just `ExtractField("payload")`) |
+| `scope`/`jump` | `Tag("RestartBody")` wrapper | Raw value (just `ExtractField("payload")`) |
 
-### 10. Recompile tryCatch and race as restart+Branch
+### 10. Rename Handle/Perform to RestartHandle/RestartPerform in tryCatch and race
 
-`tryCatch` and `race` currently use `Tag("Discard")` in the handler to exit the Handle directly. With only Resume and Restart, they use the same restart+Branch pattern as loop.
-
-Note: Branch passes the full tagged value `{ kind, value }` to the matching arm. Arms that need the inner value must extract it with `ExtractField("value")`.
+`tryCatch` and `race` already use the restart+Branch pattern (Discard was eliminated as a pre-refactor). The remaining change is replacing `Handle`/`Perform` with `RestartHandle`/`RestartPerform`, and dropping `Tag("RestartBody")` from the handler DAG since the engine knows RestartHandle always restarts.
 
 **tryCatch — before:**
 
 ```ts
-Handle(effectId,
-  body,
-  Chain(ExtractField("payload"), Chain(recovery, Tag("Discard")))
+Chain(Tag("Continue"),
+  Handle(effectId,
+    Branch({
+      Continue: Chain(ExtractField("value"), body),
+      Break: Chain(ExtractField("value"), recovery),
+    }),
+    Chain(ExtractField("payload"), Tag("RestartBody"))
+  )
 )
+// throwError = Chain(Tag("Break"), Perform(effectId))
 ```
 
 **tryCatch — after:**
@@ -369,18 +386,25 @@ Chain(Tag("Continue"),
     ExtractPayloadHandler
   )
 )
+// throwError = Chain(Tag("Break"), RestartPerform(restartHandlerId))
 ```
-
-`throwError` = `Chain(Tag("Break"), RestartPerform(restartHandlerId))`. Tags the error as Break, Performs. Handler extracts payload (`{ kind: "Break", value: error }`), engine restarts. Branch sees `kind: "Break"`, takes the Break arm. `ExtractField("value")` unwraps the error. Recovery runs. Body completes normally. Handle exits.
-
-Initial entry: input is tagged Continue. Branch takes Continue arm. `ExtractField("value")` unwraps the input. Body runs.
 
 **race — before:**
 
 ```ts
-Handle(effectId,
-  All(Chain(a, Perform(effectId)), Chain(b, Perform(effectId))),
-  Chain(ExtractField("payload"), Tag("Discard"))
+Chain(Tag("Continue"),
+  Handle(effectId,
+    Branch({
+      Continue: Chain(ExtractField("value"),
+        All(
+          Chain(a, Chain(Tag("Break"), Perform(effectId))),
+          Chain(b, Chain(Tag("Break"), Perform(effectId))),
+        )
+      ),
+      Break: Chain(ExtractField("value"), identity()),
+    }),
+    Chain(ExtractField("payload"), Tag("RestartBody"))
+  )
 )
 ```
 
@@ -403,7 +427,7 @@ Chain(Tag("Continue"),
 )
 ```
 
-First branch to complete tags Break, Performs. Handler extracts payload, engine restarts (tearing down the All and its remaining branches). Branch takes Break arm, `ExtractField("value")` unwraps the winner's value, identity completes, Handle exits.
+Structurally identical. The only differences: `Handle` → `RestartHandle`, `Perform` → `RestartPerform`, `Chain(ExtractField("payload"), Tag("RestartBody"))` → `ExtractPayloadHandler`.
 
 ### 11. All restart handlers share the same handler DAG
 
@@ -435,7 +459,7 @@ These don't require the full refactor. They simplify the current code and reduce
 
 1. **~~`HandleFrame::state: Option<Value>` → `Value`.~~** Done (already landed).
 
-2. **Extract `restart_body` as a standalone method.** Currently `handle_handler_completion` handles Resume, Discard, and RestartBody. Extracting the RestartBody path into its own method prepares for the split where it becomes the sole `RestartHandle { side: Handler }` deliver path.
+2. **Extract `restart_body` as a standalone method.** Currently `handle_handler_completion` handles Resume and RestartBody. Extracting the RestartBody path into its own method prepares for the split where it becomes the sole `RestartHandle { side: Handler }` deliver path.
 
 3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
 
