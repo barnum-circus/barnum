@@ -4,7 +4,7 @@
 
 Steps exist to give pipelines names for reuse and recursion. This requires: `StepAction`/`StepRef` in both ASTs, `Config.steps`, `ConfigBuilder.registerSteps()` (two overloads), `stepRef()`, `ValidateStepRefs<R>`, flattening passes 1 and 2, `FlatAction::Step`, `StepName`, `StepTarget`, and associated error variants.
 
-Naming is already solved — pipelines are values (`const x = pipe(...)`). The only thing steps provide beyond that is recursion (self-reference and mutual reference). That can be expressed with resumptive handlers.
+Naming is already solved — pipelines are values (`const x = pipe(...)`). Non-recursive function calls are just inlining: `pipe(setup, myPipeline, deploy)`. No registration, no indirection. The only thing steps provide beyond raw values is recursion (self-reference and mutual reference). That can be expressed with resumptive handlers.
 
 ## Core mechanism
 
@@ -35,7 +35,7 @@ const withSelf = defineRecursiveFunction((self) =>
 withSelf((fn) => pipe(setup, fn, deploy))
 ```
 
-This subsumes `Step(Root)` / `self`. No separate mechanism needed.
+`self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. `defineRecursiveFunction` covers the general self-recursion case where you need the result back.
 
 ## Desugaring
 
@@ -73,7 +73,7 @@ Purely additive. Implement in `libs/barnum/src/`. Desugars to Handle/Perform wit
 
 ### Phase 2: Migrate consumers
 
-Non-recursive steps become `const` declarations. `self`/`stepRef` usage migrates to `defineRecursiveFunction(s)`.
+Non-recursive steps become `const` declarations (just inline the pipeline). `self`/`stepRef` mutual recursion migrates to `defineRecursiveFunction(s)`.
 
 ### Phase 3: Remove Step
 
