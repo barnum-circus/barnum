@@ -21,13 +21,7 @@ A resumptive handler (ResumeHandle/ResumePerform, or the current Handle/Perform 
 
 ## The idea
 
-A "defined function" is a pipeline wrapped in a ResumeHandle. Calling the function is a ResumePerform. The handler receives `[payload, captured_pipeline]` — but unlike bind (which returns the captured value directly), the handler *runs* the captured pipeline on the payload.
-
-Wait — that doesn't work directly, because the handler DAG is a static action tree. It can't dynamically "run" an arbitrary pipeline stored as a value. The captured value in bind is a *runtime* JSON value, not an Action.
-
-But Step doesn't work that way either. Step is resolved at flatten time — it's a static reference. The pipeline being called is known at compile time. So the "function" is really just: a named action tree that multiple call sites can jump to.
-
-The question is: can we express that jump without a dedicated AST node?
+A group of mutually recursive functions is a ResumeHandle whose handler contains a Branch — one arm per function, each arm containing that function's full pipeline body. Calling a function is a tagged ResumePerform. The handler DAG is a static action tree, but the JavaScript builder (higher-order abstract syntax) constructs it at AST-build time with all function bodies embedded directly in the handler's Branch. Recursive calls work because ResumePerform can fire recursively within handler execution — each call creates a ResumePerformFrame, forming a call stack. The caller's pipeline is preserved across the call (ResumeHandle semantics).
 
 ## How Step works today
 
@@ -134,36 +128,45 @@ defineRecursiveFunctions(
 
 The first callback receives call tokens (one per function). It returns an array of pipeline bodies, each of which can use any of the call tokens. The second callback receives the bound functions and builds the rest of the pipeline.
 
-### Desugaring: Branch + RestartHandle
+### Desugaring: ResumeHandle with Branch in the handler
 
-A group of N mutually recursive functions desugars to a single RestartHandle with a Branch at the top. Each function is a branch case. "Calling" a function is a RestartPerform that wraps the payload in the appropriate tag.
+The handler DAG is a static action tree, but the JavaScript builder constructs it at AST-build time with all function bodies embedded. Since the function bodies are known when the combinator runs, they go directly into the handler's Branch. Recursive calls work because ResumePerform can fire recursively within handler execution — each call creates a ResumePerformFrame, forming a call stack.
+
+A group of N mutually recursive functions desugars to a single ResumeHandle. The handler contains a Branch with one arm per function. "Calling" a function is a ResumePerform that tags the payload with which function to call.
 
 For two mutually recursive functions A and B:
 
 ```
-RestartHandle(restartHandlerId,
-  Branch({
-    CallA: Chain(ExtractField("value"), bodyA),
-    CallB: Chain(ExtractField("value"), bodyB),
-  }),
-  ExtractPayloadHandler  // [payload, state] → payload
+ResumeHandle(resumeHandlerId,
+  body: <continuation — the code that uses the functions>,
+  handler: Chain(
+    ExtractIndex(0),                      // extract payload from [payload, state]
+    All(
+      Branch({
+        CallA: Chain(ExtractField("value"), bodyA),
+        CallB: Chain(ExtractField("value"), bodyB),
+      }),
+      Constant(null),                     // state passthrough (unused)
+    )
+  )
 )
 ```
 
 Where:
-- `callA(x)` desugars to `Chain(Tag("CallA"), RestartPerform(restartHandlerId))`
-- `callB(x)` desugars to `Chain(Tag("CallB"), RestartPerform(restartHandlerId))`
+- `callA` desugars to `Chain(Tag("CallA"), ResumePerform(resumeHandlerId))`
+- `callB` desugars to `Chain(Tag("CallB"), ResumePerform(resumeHandlerId))`
 
-When `callA` fires:
-1. Body is torn down (RestartPerform semantics)
-2. Handler extracts payload: `{ kind: "CallA", value: x }`
-3. Body restarts with `{ kind: "CallA", value: x }`
-4. Branch routes to A's body with input `x`
-5. A runs. If A calls B, same cycle — tear down, restart, Branch routes to B.
+When the continuation calls `callA(x)`:
+1. ResumePerform fires with payload `{ kind: "CallA", value: x }`
+2. Engine creates a ResumePerformFrame (body is NOT torn down)
+3. Handler receives `[{ kind: "CallA", value: x }, null]`
+4. Handler extracts payload, branches on "CallA", runs bodyA with `x`
+5. If bodyA calls `callB(y)` mid-pipeline — another ResumePerform, another ResumePerformFrame. bodyA is preserved.
+6. bodyB runs with `y`, completes with result `z`
+7. `z` flows back to bodyA's perform site. bodyA continues with `z`.
+8. bodyA completes with its result, which flows back to the continuation's perform site.
 
-When a function body completes without calling another function, the value flows up through the Branch, out of the RestartHandle, and into the continuation.
-
-This is exactly the `loop`/`tryCatch` pattern. The "functions" are branch arms. "Calling" a function is a tagged restart.
+This is general recursion with a proper call stack. Non-tail calls work — the caller's pipeline is preserved across the call because ResumeHandle doesn't tear down the body.
 
 ### Self-recursion
 
@@ -171,26 +174,29 @@ Self-recursion is the degenerate case with one function:
 
 ```ts
 defineRecursiveFunction(
-  (recur) => pipe(process, branch({
-    Continue: recur,
-    Done: identity,
-  })),
+  (self) => pipe(
+    process,
+    branch({
+      Retry: self,
+      Done: identity,
+    }),
+  ),
   (fn) => pipe(setup, fn, deploy),
 )
 ```
 
-This is `loop` with an explicit exit. In fact, `loop` can be reimplemented in terms of `defineRecursiveFunction` — loop's `recur` is a restart, and `done` exits the branch.
+Each recursive call creates a ResumePerformFrame. For tail recursion (like the branch above), this accumulates frames — O(n) frames for n iterations. `loop` (RestartHandle-based) is O(1) frames for tail recursion because it tears down the body each iteration. So `loop` remains the right tool for iteration; `defineRecursiveFunction` is for general recursion where calls can be non-tail.
 
 ### What replaces `self`?
 
-Today, `self` (`Step(Root)`) lets the workflow restart from the top. With `defineRecursiveFunction`, the workflow itself can be wrapped:
+Today, `self` (`Step(Root)`) lets the workflow call itself. With `defineRecursiveFunction`, the workflow wraps itself:
 
 ```ts
 defineRecursiveFunction(
   (self) => pipe(
     process,
     branch({
-      Retry: pipe(drop, self),
+      Retry: self,
       Success: identity,
     }),
   ),
@@ -198,7 +204,7 @@ defineRecursiveFunction(
 )
 ```
 
-Or more precisely, `self` is just a RestartPerform that restarts the outermost RestartHandle. The identity continuation `(workflow) => workflow` means the function IS the workflow.
+The identity continuation `(workflow) => workflow` means the defined function IS the workflow.
 
 ## What disappears
 
@@ -234,24 +240,22 @@ From the engine:
 - `bind`/`bindInput` — unchanged (resumptive handlers, orthogonal)
 - Non-recursive named pipelines — just use `const x = pipe(...)`. No registration.
 
+## Relationship to bind
+
+The mechanism is a generalization of bind. In bind, the handler returns a captured runtime value (a JSON value stored in the ResumeHandle's state). Here, the handler *executes a pipeline* — the function body is embedded directly in the handler DAG as a static action tree.
+
+Another way to see it: bind captures a value and the handler returns it. `defineRecursiveFunctions` captures nothing (state is unused) and the handler *is* the function — the pipeline that would otherwise have been a registered step. The "lazy execution" is the ResumePerform/handler mechanism: the function body doesn't run until it's called, because it lives in the handler, and the handler only runs when a ResumePerform fires.
+
+This means the function body has the same expressive power as any other pipeline. It can contain Invoke nodes (external handlers), other ResumePerforms (recursive calls), nested Handles, All/ForEach, everything. The handler DAG isn't limited to builtins — it's a full action tree.
+
 ## Open questions
 
 1. **`defineRecursiveFunctions` type safety.** The current `stepRef` is `TypedAction<any, any, N>` — untyped. Can the new API do better? The call tokens need types (input/output of the function they call). But with mutual recursion, function A's output might depend on function B's output and vice versa. TypeScript can't infer circular types from a callback. We might need explicit type parameters: `defineRecursiveFunctions<[In1, Out1], [In2, Out2]>(...)`. Worse ergonomics than `stepRef` but more type-safe.
 
-2. **Interaction with RESUME_VS_RESTART_HANDLERS.** The desugaring uses RestartHandle/RestartPerform. This refactor depends on RESUME_VS_RESTART_HANDLERS landing first (or uses the current Handle/Perform with RestartBody output, which works today but is less clean).
+2. **Interaction with RESUME_VS_RESTART_HANDLERS.** The desugaring uses ResumeHandle/ResumePerform. This refactor depends on RESUME_VS_RESTART_HANDLERS landing first (or uses the current Handle/Perform with Resume output, which works today but is less clean).
 
-3. **Performance of restart-based function calls.** Every function call tears down the body and restarts. For deeply nested call stacks (A calls B calls C calls D...), each call tears down all frames since the last RestartHandle. This is O(frames) per call. Step was O(1) — a pure goto. For shallow recursion (loop iterations, retry) this is fine. For deep mutual recursion with many live frames, it's worse. Is deep mutual recursion a real use case?
+3. **Stack depth for tail recursion.** Each function call accumulates a ResumePerformFrame. For tail-recursive patterns (loop iterations), this means O(n) frames. `loop` (RestartHandle-based) is O(1) because it tears down the body. So `loop` should remain the preferred tool for iteration. `defineRecursiveFunction` is for general recursion where non-tail calls need the caller's continuation preserved.
 
 4. **Single-function convenience.** `defineRecursiveFunction` (singular) for self-recursion is common enough to warrant its own combinator. It's a thin wrapper around the general form.
 
-5. **Exit semantics.** When a function body completes without calling another function, the value exits the RestartHandle. This means the "last function called" determines the output. Is that always what the user wants? With steps, the call site controlled flow after the step returned. With restart-based calls, there's no "return" — the body is torn down. The continuation in the second callback handles what happens after. Functions that want to "return" a value to a caller would need a different mechanism (a resumptive handler, not a restart handler). This is worth thinking about carefully. The restart pattern works for control flow (loop/retry/tryCatch) but might not work for "call this function and use its result."
-
-    Actually, this is a significant limitation. Steps are gotos — they jump, and whatever happens after the step becomes the new execution context. Restart handlers tear down everything. If function A calls function B midway through a pipeline, A's remaining pipeline is destroyed. With Step, B would execute and its result would flow into A's continuation.
-
-    This means restart-based "functions" only work for tail calls — the call must be the last thing in the pipeline. Non-tail calls (call B, then do more work with B's result) require a different mechanism. bind could work: capture a pipeline as a value, then use it. But bind doesn't support recursion.
-
-    This is the core tension. Steps are unrestricted gotos (tail and non-tail). Restart handlers are tail-call-only. Resumptive handlers preserve the call site but can't handle recursion (the handler DAG is static).
-
-6. **Hybrid approach?** Maybe Step stays in the flattener as an internal representation (a goto in the flat config) but disappears from the user-facing API. The `defineRecursiveFunctions` combinator desugars into whatever internal AST nodes are needed (which might still include Step at the flat level for non-tail calls). The user never sees Step — they see `defineRecursiveFunctions` and raw pipeline values.
-
-    Or: the flattener inlines step references (eliminating `FlatAction::Step`) as described in the "What replaces it" section. The user-facing API uses `defineRecursiveFunctions` for recursion and raw pipeline values for everything else. `FlatAction::Step` disappears from the flat config regardless.
+5. **State field.** The ResumeHandle carries a `captured_value`/state. For function dispatch, there's no state to maintain — the state is unused (null). This works but wastes a field. Minor.
