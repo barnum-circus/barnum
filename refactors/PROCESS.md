@@ -103,6 +103,8 @@ After finishing a draft, do a full verification pass. This is not optional and n
 
 6. **Every type and function referenced must be defined.** If a code block calls `interpret_response`, the document must either define it or state that it's existing code with a file reference. If a struct uses `NonZeroU16`, the import context must be clear. Undefined references are bugs.
 
+7. **Every call site must be shown, not just the callee.** If the document defines a new function `process_restart`, it must also show the code that calls `process_restart` — with before/after diffs of the call site. Saying "called by the event loop" without showing the event loop code is insufficient. The reader must be able to see both the definition and every place it's invoked. If a function is called from two places, both call sites must appear in the document.
+
 ### Simplification pass
 
 After verifying consistency, re-read the entire document and ask whether the architecture is as simple as it could be. This pass is about reducing the design, not checking it.
