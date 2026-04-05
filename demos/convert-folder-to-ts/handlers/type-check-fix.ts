@@ -49,9 +49,14 @@ function parseTscErrors(output: string): TypeError[] {
   return errors;
 }
 
+// --- Validators ---
+
+const TypeErrorValidator = z.object({ file: z.string(), message: z.string() });
+
 // --- Handlers ---
 
 export const typeCheck = createHandler({
+  outputValidator: z.array(TypeErrorValidator),
   handle: async (): Promise<TypeError[]> => {
     const outDir = path.join(baseDir, "out");
     console.error(`[type-check] Running tsc --noEmit on ${outDir}...`);
@@ -94,9 +99,11 @@ export const typeCheck = createHandler({
 }, "typeCheck");
 
 export const classifyErrors = createHandler({
-  inputValidator: z.array(
-    z.object({ file: z.string(), message: z.string() }),
-  ),
+  inputValidator: z.array(TypeErrorValidator),
+  outputValidator: z.union([
+    z.object({ kind: z.literal("HasErrors"), value: z.array(TypeErrorValidator) }),
+    z.object({ kind: z.literal("Clean") }),
+  ]),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
     console.error(`[classify-errors] Called with ${errors.length} error(s)`);
     if (errors.length > 0) {
@@ -109,10 +116,8 @@ export const classifyErrors = createHandler({
 }, "classifyErrors");
 
 export const fix = createHandler({
-  inputValidator: z.object({
-    file: z.string(),
-    message: z.string(),
-  }),
+  inputValidator: TypeErrorValidator,
+  outputValidator: z.object({ file: z.string(), fixed: z.literal(true) }),
   handle: async ({ value: error }) => {
     const outputDir = path.join(baseDir, "out");
     const absolutePath = path.resolve(baseDir, error.file);

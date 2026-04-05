@@ -20,6 +20,7 @@ export type ProjectConfig = {
 // --- Handlers ---
 
 export const setup = createHandler({
+  outputValidator: z.object({ inputDir: z.string(), outputDir: z.string() }),
   handle: async (): Promise<ProjectConfig> => {
     const inputDir = path.join(baseDir, "src");
     const outputDir = path.join(baseDir, "out");
@@ -41,6 +42,7 @@ export const listFiles = createHandler({
     inputDir: z.string(),
     outputDir: z.string(),
   }),
+  outputValidator: z.array(z.object({ file: z.string(), outputPath: z.string() })),
   handle: async ({ value }) => {
     console.error(`[list-files] Scanning ${value.inputDir}/ for JS files...`);
     const files = readdirSync(value.inputDir)

@@ -40,10 +40,24 @@ type ClassifyJudgmentResultDef = {
 };
 export type ClassifyJudgmentResult = TaggedUnion<ClassifyJudgmentResultDef>;
 
+// --- Validators ---
+
+const RefactorValidator = z.object({
+  file: z.string(),
+  description: z.string(),
+  scope: z.enum(["function", "module", "cross-file"]),
+});
+
+const JudgmentResultValidator = z.union([
+  z.object({ approved: z.literal(true) }),
+  z.object({ approved: z.literal(false), instructions: z.string() }),
+]);
+
 // --- Discovery ---
 
 export const listTargetFiles = createHandler({
   inputValidator: z.object({ folder: z.string() }),
+  outputValidator: z.array(z.object({ file: z.string() })),
   handle: async ({ value }) => {
     console.error(`[list-target-files] Scanning ${value.folder}/ ...`);
     const files = readdirSync(value.folder)
@@ -61,6 +75,7 @@ export const listTargetFiles = createHandler({
 
 export const analyze = createHandler({
   inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.array(RefactorValidator),
   handle: async ({ value }): Promise<Refactor[]> => {
     console.error(`[analyze] Analyzing ${value.file} for refactoring opportunities...`);
 
@@ -89,11 +104,11 @@ export const analyze = createHandler({
 }, "analyze");
 
 export const assessWorthiness = createHandler({
-  inputValidator: z.object({
-    file: z.string(),
-    description: z.string(),
-    scope: z.enum(["function", "module", "cross-file"]),
-  }),
+  inputValidator: RefactorValidator,
+  outputValidator: z.union([
+    z.object({ kind: z.literal("Some"), value: RefactorValidator }),
+    z.object({ kind: z.literal("None") }),
+  ]),
   handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
     console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
 
@@ -132,6 +147,7 @@ export const assessWorthiness = createHandler({
 
 export const deriveBranch = createHandler({
   inputValidator: z.object({ description: z.string() }),
+  outputValidator: z.object({ branch: z.string() }),
   handle: async ({ value }) => {
     console.error(`[derive-branch] Deriving branch name from: ${value.description.slice(0, 60)}`);
     return {
@@ -145,6 +161,7 @@ export const preparePRInput = createHandler({
     branch: z.string(),
     description: z.string(),
   }),
+  outputValidator: z.object({ branch: z.string(), title: z.string(), body: z.string() }),
   handle: async ({ value }) => {
     console.error(`[prepare-pr-input] Preparing PR for branch ${value.branch}`);
     return {
@@ -210,6 +227,7 @@ export const commit = createHandler({
 // --- Review loop ---
 
 export const judgeRefactor = createHandler({
+  outputValidator: JudgmentResultValidator,
   handle: async (): Promise<JudgmentResult> => {
     console.error("[judge-refactor] Reviewing changes...");
 
@@ -239,9 +257,10 @@ export const judgeRefactor = createHandler({
 }, "judgeRefactor");
 
 export const classifyJudgment = createHandler({
-  inputValidator: z.union([
-    z.object({ approved: z.literal(true) }),
-    z.object({ approved: z.literal(false), instructions: z.string() }),
+  inputValidator: JudgmentResultValidator,
+  outputValidator: z.union([
+    z.object({ kind: z.literal("Approved") }),
+    z.object({ kind: z.literal("NeedsWork"), value: z.string() }),
   ]),
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
     console.error(`[classify-judgment] Classifying judgment (approved=${judgment.approved})`);

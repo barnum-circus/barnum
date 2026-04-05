@@ -26,6 +26,7 @@ function git(args: string[], cwd?: string): string {
 
 export const createWorktree = createHandler({
   inputValidator: z.object({ branch: z.string() }),
+  outputValidator: z.object({ worktreePath: z.string(), branch: z.string() }),
   handle: async ({ value }) => {
     const worktreePath = `/tmp/barnum-demo-worktrees/${value.branch.replace(/\//g, "-")}`;
     console.error(`[create-worktree] Creating worktree: ${value.branch} at ${worktreePath}`);
@@ -80,6 +81,7 @@ export const createPR = createHandler({
     title: z.string(),
     body: z.string(),
   }),
+  outputValidator: z.object({ prUrl: z.string() }),
   handle: async ({ value }) => {
     console.error(`[create-pr] Would create PR for ${value.branch}: ${value.title}`);
     console.error(`[create-pr] Body: ${value.body.slice(0, 100)}...`);

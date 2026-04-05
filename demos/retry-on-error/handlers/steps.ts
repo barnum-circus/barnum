@@ -16,6 +16,11 @@ import { z } from "zod";
 
 type StepResult = Result<string, string>;
 
+const StepResultValidator = z.union([
+  z.object({ kind: z.literal("Ok"), value: z.string() }),
+  z.object({ kind: z.literal("Err"), value: z.string() }),
+]);
+
 function ok(value: string): StepResult {
   return { kind: "Ok", value };
 }
@@ -30,6 +35,7 @@ function err(message: string): StepResult {
 
 /** Step A: validate input. Succeeds ~70%. Failures are catastrophic — the workflow exits. */
 export const stepA = createHandler({
+  outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.7;
     if (succeed) {
@@ -43,6 +49,7 @@ export const stepA = createHandler({
 
 /** Step B: process data. Succeeds ~60%, fails ~20%, hangs ~20%. */
 export const stepB = createHandler({
+  outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const roll = Math.random();
     if (roll < 0.2) {
@@ -62,6 +69,7 @@ export const stepB = createHandler({
 
 /** Step C: finalize. Succeeds ~80%, fails ~20%. Failures are retried. */
 export const stepC = createHandler({
+  outputValidator: StepResultValidator,
   handle: async (): Promise<StepResult> => {
     const succeed = Math.random() < 0.8;
     if (succeed) {

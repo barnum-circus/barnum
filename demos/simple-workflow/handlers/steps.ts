@@ -8,6 +8,7 @@ const randomDelay = () =>
 
 export const listFiles = createHandler(
   {
+    outputValidator: z.array(z.string()),
     handle: async () => {
       await randomDelay();
       console.error("[listFiles] Listing files...");
@@ -20,6 +21,7 @@ export const listFiles = createHandler(
 export const implementRefactor = createHandler(
   {
     inputValidator: z.string(),
+    outputValidator: z.string(),
     handle: async ({ value: file }) => {
       await randomDelay();
       console.error(`[implementRefactor] Refactoring ${file}`);
@@ -32,6 +34,7 @@ export const implementRefactor = createHandler(
 export const typeCheckFiles = createHandler(
   {
     inputValidator: z.string(),
+    outputValidator: z.string(),
     handle: async ({ value: file }) => {
       await randomDelay();
       console.error(`[typeCheckFiles] Type-checking ${file}`);
@@ -44,6 +47,7 @@ export const typeCheckFiles = createHandler(
 export const fixTypeErrors = createHandler(
   {
     inputValidator: z.string(),
+    outputValidator: z.string(),
     handle: async ({ value: file }) => {
       await randomDelay();
       console.error(`[fixTypeErrors] Fixing ${file}`);
@@ -56,6 +60,7 @@ export const fixTypeErrors = createHandler(
 export const createPullRequest = createHandler(
   {
     inputValidator: z.string(),
+    outputValidator: z.string(),
     handle: async ({ value: file }) => {
       await randomDelay();
       console.error(`[createPullRequest] Creating PR for ${file}`);
@@ -68,6 +73,7 @@ export const createPullRequest = createHandler(
 export const commitChanges = createHandler(
   {
     inputValidator: z.string(),
+    outputValidator: z.string(),
     handle: async ({ value: file }) => {
       await randomDelay();
       console.error(`[commitChanges] Committing ${file}`);
