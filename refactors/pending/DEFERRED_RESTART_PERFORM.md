@@ -26,24 +26,24 @@ Current combinators happen to avoid this because `RestartPerform` is always behi
 
 ### Structural problem: advance has destructive side effects
 
-`advance` both creates frames (additive) and tears them down (destructive). When a RestartPerform fires inside an All child that contains a RestartHandle, the All loop must reason about which sibling frames survived the teardown and which didn't. A contained throw (targeting a handler inside the same All child) leaves the All frame alive and siblings should continue advancing. An escaping throw (targeting a handler above the All) destroys the All frame and siblings should stop. Getting this reasoning right for all cases is error-prone.
+`advance` both creates frames (additive) and tears them down (destructive). When a RestartPerform fires inside an All child that contains a RestartHandle, the All loop must reason about which sibling frames survived the teardown and which didn't. Getting this reasoning right for all cases is error-prone.
 
-The fix: make `advance` purely additive. `RestartPerform` enqueues a pending effect instead of executing it. Teardown and handler execution happen after `advance` returns.
+The fix: make `advance` purely additive. `RestartPerform` enqueues a pending effect instead of executing it. The event loop handles teardown and dispatch uniformly.
 
 ## Design
 
 ### Invariant: every advance completes entirely
 
-After this change, every call to `advance()` runs to completion. Every child of an All advances. Every element of a ForEach advances. No early breaks, no frame-existence checks, no partial iteration.
+After this change, every call to `advance()` runs to completion. Every child of an All advances. Every element of a ForEach advances. `advance` only creates frames and pushes effects to a queue. It never tears down frames or processes restarts.
 
 ### One effect queue
 
-Advance produces two kinds of effects: dispatches (send work to a worker) and restarts (tear down a body and advance a handler). Both go into a single queue.
+Advance produces effects: dispatches and restarts. Both go into a single queue. The engine exposes the raw queue. The event loop processes it.
 
 ```rust
 // lib.rs
 
-/// An effect produced during advance. Processed after advance returns.
+/// An effect produced during advance.
 #[derive(Debug)]
 pub enum PendingEffect {
     /// A handler invocation ready to be dispatched to a worker.
@@ -79,6 +79,42 @@ pub struct WorkflowState {
     task_to_frame: BTreeMap<TaskId, FrameId>,
     pending_effects: Vec<PendingEffect>,
     next_task_id: u32,
+}
+```
+
+### Engine API
+
+The engine produces effects and lets the event loop consume them:
+
+```rust
+// lib.rs — WorkflowState impl (before)
+
+pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
+    std::mem::take(&mut self.pending_dispatches)
+}
+
+// lib.rs — WorkflowState impl (after)
+
+/// Take all pending effects. The event loop processes these in order.
+pub fn take_pending_effects(&mut self) -> Vec<PendingEffect> {
+    std::mem::take(&mut self.pending_effects)
+}
+
+/// Check whether a task is still part of a live tree.
+pub fn is_task_pending(&self, task_id: TaskId) -> bool {
+    self.task_to_frame.contains_key(&task_id)
+}
+
+/// Process a single restart: tear down the body, advance the handler.
+/// The handler advance may push more effects to `pending_effects`.
+///
+/// If the `RestartHandle` frame was already torn down by a previous
+/// restart, this is a no-op.
+pub fn process_restart(
+    &mut self,
+    pending_restart: PendingRestart,
+) -> Result<(), AdvanceError> {
+    effects::process_restart(self, pending_restart)
 }
 ```
 
@@ -159,56 +195,12 @@ FlatAction::RestartPerform { restart_handler_id } => {
 }
 ```
 
-### Draining the effect queue
-
-A single public method on `WorkflowState` processes all pending effects and returns the dispatches that survived:
-
-```rust
-// lib.rs — WorkflowState impl
-
-/// Drain all pending effects. Restarts are processed internally (teardown +
-/// handler advance, which may produce more effects). Dispatches are collected
-/// and returned, skipping any whose task was torn down by a restart.
-///
-/// Call this after `advance` or `complete` to get the dispatches to send
-/// to workers.
-pub fn drain_pending_effects(&mut self) -> Result<Vec<Dispatch>, AdvanceError> {
-    effects::drain_pending_effects(self)
-}
-```
+### Processing restarts (called by event loop, not engine)
 
 ```rust
 // effects.rs
 
-pub fn drain_pending_effects(
-    workflow_state: &mut WorkflowState,
-) -> Result<Vec<Dispatch>, AdvanceError> {
-    let mut dispatches = Vec::new();
-
-    while !workflow_state.pending_effects.is_empty() {
-        let effects = std::mem::take(&mut workflow_state.pending_effects);
-        for effect in effects {
-            match effect {
-                PendingEffect::Dispatch(dispatch) => {
-                    // Skip dispatches whose frame was torn down by a restart
-                    // earlier in this batch.
-                    if workflow_state.task_to_frame.contains_key(&dispatch.task_id) {
-                        dispatches.push(dispatch);
-                    }
-                }
-                PendingEffect::Restart(pending_restart) => {
-                    process_restart(workflow_state, pending_restart)?;
-                    // process_restart may have pushed more effects via advance.
-                    // The outer while loop will pick them up.
-                }
-            }
-        }
-    }
-
-    Ok(dispatches)
-}
-
-fn process_restart(
+pub fn process_restart(
     workflow_state: &mut WorkflowState,
     pending_restart: PendingRestart,
 ) -> Result<(), AdvanceError> {
@@ -217,8 +209,7 @@ fn process_restart(
         payload,
     } = pending_restart;
 
-    // The RestartHandle may have been torn down by a previous restart
-    // in this batch. Skip it.
+    // The RestartHandle may have been torn down by a previous restart.
     let Some(restart_handle_frame) =
         workflow_state.frames.get(restart_handle_frame_id)
     else {
@@ -238,7 +229,7 @@ fn process_restart(
         restart_handle_frame_id,
     );
 
-    // Advance handler. This may push more effects to pending_effects.
+    // Advance handler. This pushes more effects to pending_effects.
     let handler_input = serde_json::json!([payload, state]);
     super::advance::advance(
         workflow_state,
@@ -254,11 +245,7 @@ fn process_restart(
 }
 ```
 
-The drain processes effects in FIFO order. Each restart tears down frames and advances a handler (which pushes more effects to the queue). Each dispatch is checked against `task_to_frame` — if the task was torn down by an earlier restart, it's skipped. The outer `while` loop repeats until no more effects remain.
-
 ### Graceful stale task completion
-
-Already-dispatched tasks (sent to workers in a previous event loop iteration) can complete after their frame was torn down. `complete()` handles this:
 
 ```rust
 // complete.rs (before)
@@ -288,6 +275,8 @@ pub fn complete(
 ```
 
 ### Event loop
+
+The event loop processes effects in FIFO order. Dispatches are sent to workers (with a liveness check). Restarts are processed by calling back into the engine. Processing a restart pushes more effects, which are picked up on the next pass.
 
 ```rust
 // barnum_event_loop/src/lib.rs — run_workflow (before)
@@ -331,10 +320,26 @@ pub async fn run_workflow(
         .expect("initial advance failed");
 
     loop {
-        let dispatches = workflow_state.drain_pending_effects()?;
-        for dispatch in &dispatches {
-            let handler = workflow_state.handler(dispatch.handler_id);
-            scheduler.dispatch(dispatch, handler);
+        // Drain all effects. Processing a restart may produce more effects,
+        // so loop until the queue is empty.
+        loop {
+            let effects = workflow_state.take_pending_effects();
+            if effects.is_empty() {
+                break;
+            }
+            for effect in effects {
+                match effect {
+                    PendingEffect::Dispatch(dispatch) => {
+                        if workflow_state.is_task_pending(dispatch.task_id) {
+                            let handler = workflow_state.handler(dispatch.handler_id);
+                            scheduler.dispatch(&dispatch, handler);
+                        }
+                    }
+                    PendingEffect::Restart(pending_restart) => {
+                        workflow_state.process_restart(pending_restart)?;
+                    }
+                }
+            }
         }
 
         let (task_id, result) = scheduler
@@ -351,21 +356,36 @@ pub async fn run_workflow(
 }
 ```
 
-The event loop calls `drain_pending_effects` instead of `take_pending_dispatches`. The drain handles restarts internally and returns only the live dispatches. The `complete` → deliver → Chain trampoline → advance path can also push effects (when a task completion triggers a throw). These are drained on the next loop iteration.
+### Walkthrough: `All(invoke_A, throw, invoke_B)`
+
+1. `advance` processes All's three children in order:
+   - invoke_A: pushes `Dispatch(A)` to `pending_effects`
+   - throw (RestartPerform): walks ancestors, pushes `Restart(...)` to `pending_effects`
+   - invoke_B: pushes `Dispatch(B)` to `pending_effects`
+   - advance completes. Queue: `[Dispatch(A), Restart(...), Dispatch(B)]`
+
+2. Event loop processes effects in FIFO order:
+   - `Dispatch(A)`: `is_task_pending(A)` → true → sent to worker
+   - `Restart(...)`: `process_restart` → teardown removes A's and B's frames → handler advance pushes new effects
+   - `Dispatch(B)`: `is_task_pending(B)` → false (torn down) → skipped
+
+3. Event loop processes new effects from handler advance (next pass of inner loop).
+
+4. Eventually, A's worker completes → `complete(A)` → `task_to_frame` has no entry → `Ok(None)`.
+
+Dispatch(A) was sent to a worker before the restart tore it down. That's wasted work, and that's fine. Dispatch(B) came after the restart in the queue, so it was skipped cheaply.
 
 ### What gets deleted
 
 - `bubble_restart_effect` in effects.rs — replaced by the `RestartPerform` advance arm (ancestor walk + enqueue) and `process_restart` (teardown + handler advance).
 - `pending_dispatches` field on `WorkflowState` — replaced by `pending_effects`.
-- `take_pending_dispatches` method — replaced by `drain_pending_effects`.
-- `filter_stale_dispatches` — folded into `drain_pending_effects`.
-- `process_pending_restarts` — folded into `drain_pending_effects`.
+- `take_pending_dispatches` method — replaced by `take_pending_effects`.
 
 `bubble_resume_effect` is unchanged (ResumePerform is purely additive, no teardown).
 
 ### What happens to `RestartHandleSide::Handler` in deliver
 
-The handler-completion deliver path is unchanged. When a restart handler's TypeScript handler completes via `complete`, the handler result is delivered to `RestartHandleSide::Handler`, which re-advances the body. That body advance may push more effects (dispatches and restarts), which are drained on the next event loop iteration.
+The handler-completion deliver path is unchanged. When a restart handler's TypeScript handler completes via `complete`, the handler result is delivered to `RestartHandleSide::Handler`, which re-advances the body. That body advance pushes more effects (dispatches and restarts), which the event loop processes on the next iteration.
 
 ```rust
 // complete.rs — deliver (unchanged)
@@ -408,19 +428,20 @@ ParentRef::RestartHandle { frame_id, side } => match side {
 | `advance` for `RestartPerform` | Calls `bubble_restart_effect` (teardown + handler advance) | Walks ancestors, pushes `PendingEffect::Restart` to `pending_effects` |
 | `bubble_restart_effect` | Exists in effects.rs | Deleted |
 | `WorkflowState` fields | `pending_dispatches: Vec<Dispatch>` | `pending_effects: Vec<PendingEffect>` |
-| `take_pending_dispatches` | Returns `Vec<Dispatch>` | Deleted, replaced by `drain_pending_effects` |
-| `drain_pending_effects` | Does not exist | New: drains effects, processes restarts, returns live dispatches |
+| `take_pending_dispatches` | Returns `Vec<Dispatch>` | Deleted, replaced by `take_pending_effects` returning `Vec<PendingEffect>` |
+| `is_task_pending` | Does not exist | New: checks `task_to_frame` for liveness |
+| `process_restart` | Does not exist | New: teardown + handler advance, called by event loop |
 | `complete()` | Panics on unknown task_id | Returns `Ok(None)` |
-| Event loop | `take_pending_dispatches` → dispatch → recv → complete | `drain_pending_effects` → dispatch → recv → complete |
-| `teardown_body` | Called from `bubble_restart_effect` during advance | Called from `process_restart` inside `drain_pending_effects` |
+| Event loop | `take_pending_dispatches` → dispatch all → recv → complete | `take_pending_effects` → process each (dispatch or restart) → recv → complete |
+| `teardown_body` | Called from `bubble_restart_effect` during advance | Called from `process_restart`, invoked by event loop |
 
 ## Tests
 
 Both `#[should_panic]` tests become passing tests:
 
 - `completing_torn_down_task_is_noop`: `complete()` returns `Ok(None)` instead of panicking.
-- `restart_perform_non_terminal_in_all`: All advance loop completes entirely. Both children advance (RestartPerform pushes Restart effect, invoke pushes Dispatch effect). `drain_pending_effects` processes the Restart (teardown removes invoke's frame), then skips the stale Dispatch.
+- `restart_perform_non_terminal_in_all`: All advance loop completes entirely. Both children advance. Event loop processes the restart (teardown), then skips the stale dispatch.
 
-The `drive_builtins` test helper needs updating: instead of calling `take_pending_dispatches`, it calls `drain_pending_effects`, which handles restarts and filtering internally. This simplifies the helper — it no longer needs separate restart processing.
+The `drive_builtins` test helper needs to process effects instead of dispatches. It takes all effects, processes restarts, checks dispatch liveness, and executes builtins. This mirrors the event loop's behavior in a synchronous test context.
 
 All existing restart tests (`restart_branch_*`, `teardown_cleans_up_*`, `multi_step_restart_handler_chain`, etc.) should continue to pass with the updated helper.
