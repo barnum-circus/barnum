@@ -2,8 +2,7 @@
 //!
 //! This crate defines the core data model: the [`Action`] enum (a workflow
 //! program expressed as a tree of compositional nodes) and the [`Config`]
-//! struct (the top-level container that pairs a workflow entry point with
-//! named steps for mutual recursion).
+//! struct (the top-level container wrapping a workflow entry point).
 //!
 //! TypeScript builds these structures via builder functions and serializes
 //! them to JSON. Rust deserializes and interprets them.
@@ -20,10 +19,6 @@ use string_key_newtype::string_key_newtype;
 // Interned string newtypes
 // ---------------------------------------------------------------------------
 
-string_key_newtype!(
-    /// Named step identifier, referenced by [`StepAction`] and [`Config::steps`].
-    StepName
-);
 string_key_newtype!(
     /// Absolute module path to a handler file.
     ModulePath
@@ -76,9 +71,6 @@ pub enum Action {
     /// N-ary branch on the `kind` field of a discriminated union input.
     Branch(BranchAction),
 
-    /// Named step reference for mutual recursion and DAG topologies.
-    Step(StepAction),
-
     /// Effect handler. Intercepts effects of type `effect_id` raised by
     /// [`Perform`](Action::Perform) nodes in the body.
     Handle(HandleAction),
@@ -130,13 +122,6 @@ pub struct BranchAction {
     pub cases: HashMap<KindDiscriminator, Action>,
 }
 
-/// Step reference — either a named step or the workflow root.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StepAction {
-    /// Which step to jump to.
-    pub step: StepRef,
-}
-
 /// Effect handler.
 ///
 /// Runs `body`; when a [`Perform`](Action::Perform) with matching
@@ -160,19 +145,6 @@ pub struct HandleAction {
 pub struct PerformAction {
     /// Which effect type to raise.
     pub effect_id: EffectId,
-}
-
-/// Target of a step reference.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum StepRef {
-    /// Reference to a named step in [`Config::steps`].
-    Named {
-        /// The step name.
-        name: StepName,
-    },
-    /// Reference to the workflow entry point (self-recursion).
-    Root,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,14 +232,8 @@ pub enum BuiltinKind {
 // ---------------------------------------------------------------------------
 
 /// Top-level workflow configuration.
-///
-/// Pairs a workflow entry point with an optional map of named steps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     /// The workflow entry point.
     pub workflow: Action,
-
-    /// Named steps, referenced by [`Action::Step`] nodes.
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub steps: HashMap<StepName, Action>,
 }

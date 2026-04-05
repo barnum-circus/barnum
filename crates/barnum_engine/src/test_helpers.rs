@@ -9,7 +9,6 @@ use barnum_ast::flat::flatten;
 use barnum_ast::*;
 use intern::string_key::Intern;
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // AST construction helpers
@@ -56,10 +55,7 @@ pub fn branch(cases: Vec<(&str, Action)>) -> Action {
 
 #[allow(clippy::unwrap_used)]
 pub fn engine_from(workflow: Action) -> WorkflowState {
-    let config = Config {
-        workflow,
-        steps: HashMap::new(),
-    };
+    let config = Config { workflow };
     WorkflowState::new(flatten(config).unwrap())
 }
 

@@ -8,14 +8,13 @@
 // The module name `flat` is intentionally short.
 #![allow(clippy::module_name_repetitions)]
 
-use std::collections::HashMap;
 use std::ops::Add;
 
 use u32_newtype::u32_newtype;
 
 use crate::{
     Action, BranchAction, ChainAction, Config, EffectId, HandleAction, HandlerKind, InvokeAction,
-    KindDiscriminator, PerformAction, StepName, StepRef,
+    KindDiscriminator, PerformAction,
 };
 
 u32_newtype!(
@@ -67,15 +66,9 @@ impl Add<u32> for FlatConfigEntryId {
 /// matches on — [`FlatEntry::ChildRef`] and [`FlatEntry::BranchKey`] never
 /// appear here.
 ///
-/// Generic over `T`: the Step target type. During pass 1, `T = StepTarget`
-/// (may contain unresolved step names). After pass 2, `T = ActionId`
-/// (fully resolved). The generic applies only to [`FlatAction::Step`].
-///
-/// `FlatAction<ActionId>` is `Copy` (all fields are `u32` newtypes).
-/// `FlatAction<StepTarget>` is `Clone` but not `Copy` (`StepTarget::Named`
-/// holds a `StepName`).
+/// All fields are `u32` newtypes, so `FlatAction` is `Copy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlatAction<T> {
+pub enum FlatAction {
     /// Leaf: invoke a handler. `handler` indexes [`FlatConfig::handlers`].
     Invoke {
         /// Index into the handler pool.
@@ -114,12 +107,6 @@ pub enum FlatAction<T> {
         count: Count,
     },
 
-    /// Redirect to another action (step reference or self-recursion).
-    Step {
-        /// Target action (unresolved or resolved depending on `T`).
-        target: T,
-    },
-
     /// Effect handler. 3-entry action: this entry, then a child slot for
     /// the body (at `action_id + 1`), then a child slot for the handler
     /// (at `action_id + 2`).
@@ -136,30 +123,6 @@ pub enum FlatAction<T> {
     },
 }
 
-impl<T> FlatAction<T> {
-    /// Map the Step target through a fallible function. All other variants
-    /// pass through unchanged.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if `f` returns `Err` for the Step target.
-    pub fn try_map_target<U, E>(
-        self,
-        f: impl FnOnce(T) -> Result<U, E>,
-    ) -> Result<FlatAction<U>, E> {
-        Ok(match self {
-            FlatAction::Step { target } => FlatAction::Step { target: f(target)? },
-            FlatAction::Invoke { handler } => FlatAction::Invoke { handler },
-            FlatAction::Chain { rest } => FlatAction::Chain { rest },
-            FlatAction::All { count } => FlatAction::All { count },
-            FlatAction::ForEach { body } => FlatAction::ForEach { body },
-            FlatAction::Branch { count } => FlatAction::Branch { count },
-            FlatAction::Handle { effect_id } => FlatAction::Handle { effect_id },
-            FlatAction::Perform { effect_id } => FlatAction::Perform { effect_id },
-        })
-    }
-}
-
 /// A slot in the entry array. Either an action or inline data
 /// (ChildRef/BranchKey).
 ///
@@ -170,12 +133,12 @@ impl<T> FlatAction<T> {
 /// `BranchKey` entries appear in even positions after a Branch; odd positions
 /// are child slots.
 ///
-/// Niche optimization: `FlatAction` uses 8 of 256 discriminant values.
-/// `ChildRef` and `BranchKey` use 2 more. `FlatEntry<ActionId>` fits in 8 bytes.
+/// Niche optimization: `FlatAction` uses 7 of 256 discriminant values.
+/// `ChildRef` and `BranchKey` use 2 more. `FlatEntry` fits in 8 bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlatEntry<T> {
+pub enum FlatEntry {
     /// An executable action.
-    Action(FlatAction<T>),
+    Action(FlatAction),
 
     /// Child pointer for multi-entry children (Chain/All/Branch).
     /// Points to the root `ActionId` of a child subtree.
@@ -191,50 +154,13 @@ pub enum FlatEntry<T> {
     },
 }
 
-impl<T> FlatEntry<T> {
-    /// Map the Step target through a fallible function. `ChildRef` and
-    /// `BranchKey` pass through unchanged.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err` if `f` returns `Err` for the Step target.
-    pub fn try_map_target<U, E>(
-        self,
-        f: impl FnOnce(T) -> Result<U, E>,
-    ) -> Result<FlatEntry<U>, E> {
-        Ok(match self {
-            FlatEntry::Action(action) => FlatEntry::Action(action.try_map_target(f)?),
-            FlatEntry::ChildRef { action } => FlatEntry::ChildRef { action },
-            FlatEntry::BranchKey { key } => FlatEntry::BranchKey { key },
-        })
-    }
-}
-
 // ---------------------------------------------------------------------------
-// StepTarget / FlattenError
+// FlattenError
 // ---------------------------------------------------------------------------
-
-/// Step target during flattening. Named steps are unresolved until pass 2.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StepTarget {
-    /// Unresolved reference to a named step.
-    Named(StepName),
-    /// Already resolved (e.g. Step(Root) resolved in pass 1).
-    Resolved(ActionId),
-}
 
 /// Errors that can occur during flattening.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FlattenError {
-    /// `Step(Root)` appeared in a step body (only valid in the workflow tree).
-    #[error("Step(Root) is only valid in the workflow tree, not in step bodies")]
-    StepRootInStepBody,
-    /// A named step reference that doesn't exist in `Config::steps`.
-    #[error("unknown step: {name}")]
-    UnknownStep {
-        /// The unresolved step name.
-        name: StepName,
-    },
     /// A pre-allocated slot was never filled (bug in the flattener).
     #[error("uninitialized entry at index {index}")]
     UninitializedEntry {
@@ -252,7 +178,7 @@ pub enum FlattenError {
 pub struct FlatConfig {
     /// The entry array. Contains actions (indexed by `ActionId`) and inline
     /// data (`ChildRef`, `BranchKey`) indexed by `FlatConfigEntryId`.
-    entries: Vec<FlatEntry<ActionId>>,
+    entries: Vec<FlatEntry>,
 
     /// Handler pool. `HandlerId`s are indices into this vec.
     /// Handlers are interned: identical handlers share a `HandlerId`.
@@ -275,7 +201,7 @@ impl FlatConfig {
     /// Look up an action by `ActionId`. Panics if the position holds
     /// `ChildRef` or `BranchKey`.
     #[must_use]
-    pub fn action(&self, id: ActionId) -> FlatAction<ActionId> {
+    pub fn action(&self, id: ActionId) -> FlatAction {
         match self.entries[id.0 as usize] {
             FlatEntry::Action(action) => action,
             ref other => panic!("ActionId {id:?} does not point to an action: {other:?}"),
@@ -361,11 +287,10 @@ impl FlatConfig {
 // UnresolvedFlatConfig (builder)
 // ---------------------------------------------------------------------------
 
-/// The builder — the unresolved version of [`FlatConfig`]. Holds the entry
-/// array with `Option` placeholders for pre-allocated slots and the handler
-/// interning state.
+/// The builder for [`FlatConfig`]. Holds the entry array with `Option`
+/// placeholders for pre-allocated slots and the handler interning state.
 struct UnresolvedFlatConfig {
-    entries: Vec<Option<FlatEntry<StepTarget>>>,
+    entries: Vec<Option<FlatEntry>>,
     handlers: Vec<HandlerKind>,
 }
 
@@ -403,13 +328,9 @@ impl UnresolvedFlatConfig {
     }
 
     /// Allocate a slot, flatten an action into it, return its `ActionId`.
-    fn flatten_action(
-        &mut self,
-        action: Action,
-        workflow_root: Option<ActionId>,
-    ) -> Result<ActionId, FlattenError> {
+    fn flatten_action(&mut self, action: Action) -> Result<ActionId, FlattenError> {
         let action_id = self.alloc();
-        self.flatten_action_at(action, action_id, workflow_root)?;
+        self.flatten_action_at(action, action_id)?;
         Ok(action_id)
     }
 
@@ -423,7 +344,6 @@ impl UnresolvedFlatConfig {
         &mut self,
         action: Action,
         action_id: ActionId,
-        workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         let entry = match action {
             Action::Invoke(InvokeAction { handler }) => {
@@ -434,9 +354,9 @@ impl UnresolvedFlatConfig {
             }
 
             Action::Chain(ChainAction { first, rest }) => {
-                let first_action_id = self.flatten_action(*first, workflow_root)?;
+                let first_action_id = self.flatten_action(*first)?;
                 debug_assert_eq!(first_action_id, ActionId(action_id.0 + 1));
-                let rest_action_id = self.flatten_action(*rest, workflow_root)?;
+                let rest_action_id = self.flatten_action(*rest)?;
                 FlatAction::Chain {
                     rest: rest_action_id,
                 }
@@ -445,7 +365,7 @@ impl UnresolvedFlatConfig {
             Action::All(crate::AllAction { actions }) => {
                 let count = Count(actions.len() as u32);
                 self.alloc_many(count);
-                self.fill_child_slots(actions, action_id + 1, workflow_root)?;
+                self.fill_child_slots(actions, action_id + 1)?;
                 FlatAction::All { count }
             }
 
@@ -457,29 +377,14 @@ impl UnresolvedFlatConfig {
                 for (i, (key, child)) in cases.into_iter().enumerate() {
                     let key_slot = action_id + 1 + 2 * i as u32;
                     self.entries[key_slot.0 as usize] = Some(FlatEntry::BranchKey { key });
-                    self.fill_child_slot(child, key_slot + 1, workflow_root)?;
+                    self.fill_child_slot(child, key_slot + 1)?;
                 }
                 FlatAction::Branch { count }
             }
 
             Action::ForEach(crate::ForEachAction { action }) => {
-                let body_id = self.flatten_action(*action, workflow_root)?;
+                let body_id = self.flatten_action(*action)?;
                 FlatAction::ForEach { body: body_id }
-            }
-
-            Action::Step(crate::StepAction {
-                step: StepRef::Named { name },
-            }) => FlatAction::Step {
-                target: StepTarget::Named(name),
-            },
-
-            Action::Step(crate::StepAction {
-                step: StepRef::Root,
-            }) => {
-                let root = workflow_root.ok_or(FlattenError::StepRootInStepBody)?;
-                FlatAction::Step {
-                    target: StepTarget::Resolved(root),
-                }
             }
 
             Action::Handle(HandleAction {
@@ -489,8 +394,8 @@ impl UnresolvedFlatConfig {
             }) => {
                 self.alloc(); // child slot for body (at action_id + 1)
                 self.alloc(); // child slot for handler (at action_id + 2)
-                self.fill_child_slot(*body, action_id + 1, workflow_root)?;
-                self.fill_child_slot(*handler, action_id + 2, workflow_root)?;
+                self.fill_child_slot(*body, action_id + 1)?;
+                self.fill_child_slot(*handler, action_id + 2)?;
                 FlatAction::Handle { effect_id }
             }
 
@@ -508,19 +413,18 @@ impl UnresolvedFlatConfig {
         &mut self,
         action: Action,
         slot: FlatConfigEntryId,
-        workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         match action {
             Action::Chain { .. }
             | Action::All { .. }
             | Action::Branch { .. }
             | Action::Handle { .. } => {
-                let action_id = self.flatten_action(action, workflow_root)?;
+                let action_id = self.flatten_action(action)?;
                 self.entries[slot.0 as usize] = Some(FlatEntry::ChildRef { action: action_id });
             }
             single_entry => {
                 // Inline: this child slot IS the action. Convert to ActionId.
-                self.flatten_action_at(single_entry, ActionId(slot.0), workflow_root)?;
+                self.flatten_action_at(single_entry, ActionId(slot.0))?;
             }
         }
         Ok(())
@@ -531,34 +435,22 @@ impl UnresolvedFlatConfig {
         &mut self,
         actions: Vec<Action>,
         start: FlatConfigEntryId,
-        workflow_root: Option<ActionId>,
     ) -> Result<(), FlattenError> {
         for (i, action) in actions.into_iter().enumerate() {
-            self.fill_child_slot(action, start + i as u32, workflow_root)?;
+            self.fill_child_slot(action, start + i as u32)?;
         }
         Ok(())
     }
 
-    /// Resolve step names and produce the final [`FlatConfig`].
-    fn resolve(
-        self,
-        workflow_root: ActionId,
-        step_roots: &HashMap<StepName, ActionId>,
-    ) -> Result<FlatConfig, FlattenError> {
+    /// Check all slots are filled and produce the final [`FlatConfig`].
+    fn finalize(self, workflow_root: ActionId) -> Result<FlatConfig, FlattenError> {
         let entries = self
             .entries
             .into_iter()
             .enumerate()
             .map(|(i, slot)| {
-                let entry = slot.ok_or(FlattenError::UninitializedEntry {
+                slot.ok_or(FlattenError::UninitializedEntry {
                     index: FlatConfigEntryId(i as u32),
-                })?;
-                entry.try_map_target(|target| match target {
-                    StepTarget::Named(name) => step_roots
-                        .get(&name)
-                        .copied()
-                        .ok_or(FlattenError::UnknownStep { name }),
-                    StepTarget::Resolved(id) => Ok(id),
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -577,42 +469,23 @@ impl UnresolvedFlatConfig {
 
 /// Flatten a [`Config`] into a [`FlatConfig`].
 ///
-/// All errors from pass 1 (DFS flattening) and pass 2 (step resolution) are
-/// returned. In practice, config validation catches these issues before
-/// flattening, so errors here indicate a bug.
-///
 /// # Errors
 ///
-/// Returns [`FlattenError::StepRootInStepBody`] if `Step(Root)` appears in
-/// a step body. Returns [`FlattenError::UnknownStep`] if a named step
-/// reference doesn't exist. Returns [`FlattenError::UninitializedEntry`]
-/// if a pre-allocated slot was never filled (flattener bug).
+/// Returns [`FlattenError::UninitializedEntry`] if a pre-allocated slot was
+/// never filled (flattener bug).
 #[allow(clippy::cast_possible_truncation)]
 pub fn flatten(config: Config) -> Result<FlatConfig, FlattenError> {
     let mut unresolved_flat_config = UnresolvedFlatConfig::new();
-
-    // The workflow root will be at the next alloc position.
     let workflow_root = ActionId(unresolved_flat_config.entries.len() as u32);
-    unresolved_flat_config.flatten_action(config.workflow, Some(workflow_root))?;
-
-    // Sort steps by name for deterministic ActionId assignment.
-    let mut steps: Vec<_> = config.steps.into_iter().collect();
-    steps.sort_by_key(|(name, _)| *name);
-
-    let mut step_roots = HashMap::new();
-    for (name, step_action) in steps {
-        let step_root = unresolved_flat_config.flatten_action(step_action, None)?;
-        step_roots.insert(name, step_root);
-    }
-
-    unresolved_flat_config.resolve(workflow_root, &step_roots)
+    unresolved_flat_config.flatten_action(config.workflow)?;
+    unresolved_flat_config.finalize(workflow_root)
 }
 
 // ---------------------------------------------------------------------------
 // Static assertions
 // ---------------------------------------------------------------------------
 
-const _: () = assert!(std::mem::size_of::<FlatEntry<ActionId>>() <= 8);
+const _: () = assert!(std::mem::size_of::<FlatEntry>() <= 8);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -622,11 +495,6 @@ const _: () = assert!(std::mem::size_of::<FlatEntry<ActionId>>() <= 8);
 mod tests {
     use super::*;
     use intern::string_key::Intern;
-
-    /// Helper: create a `StepName` from a string literal.
-    fn step_name(s: &str) -> StepName {
-        StepName::from(s.intern())
-    }
 
     /// Helper: create a `KindDiscriminator` from a string literal.
     fn kind(s: &str) -> KindDiscriminator {
@@ -686,39 +554,9 @@ mod tests {
         })
     }
 
-    /// Helper: create a Step(Named) action.
-    fn step_named(name: &str) -> Action {
-        Action::Step(crate::StepAction {
-            step: StepRef::Named {
-                name: step_name(name),
-            },
-        })
-    }
-
-    /// Helper: create a Step(Root) action.
-    fn step_root() -> Action {
-        Action::Step(crate::StepAction {
-            step: StepRef::Root,
-        })
-    }
-
-    /// Helper: create a Config with no steps.
+    /// Helper: create a Config.
     fn config(workflow: Action) -> Config {
-        Config {
-            workflow,
-            steps: HashMap::new(),
-        }
-    }
-
-    /// Helper: create a Config with steps.
-    fn config_with_steps(workflow: Action, steps: Vec<(&str, Action)>) -> Config {
-        Config {
-            workflow,
-            steps: steps
-                .into_iter()
-                .map(|(name, action)| (step_name(name), action))
-                .collect(),
-        }
+        Config { workflow }
     }
 
     // -- Basic structure --
@@ -916,107 +754,6 @@ mod tests {
         }
     }
 
-    // -- Step resolution --
-
-    /// `Step(Root)` resolved immediately to workflow root `ActionId`.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_step_root() {
-        // Chain(Invoke, Step(Root)) — the Step(Root) points back to the Chain.
-        let action = pipe(vec![invoke("./a.ts", "a"), step_root()]);
-        let flat = flatten(config(action)).unwrap();
-
-        // 0: Chain { rest: 2 }
-        // 1: Invoke(0)                ← first (flattened inline)
-        // 2: Step { target: 0 }       ← rest, points back to workflow root
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Chain { rest: ActionId(2) }
-        );
-        assert_eq!(
-            flat.action(ActionId(2)),
-            FlatAction::Step {
-                target: ActionId(0)
-            }
-        );
-    }
-
-    /// Named step resolved in pass 2.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_step_named() {
-        let action = step_named("Cleanup");
-        let cleanup = invoke("./cleanup.ts", "run");
-        let flat = flatten(config_with_steps(action, vec![("Cleanup", cleanup)])).unwrap();
-
-        // Workflow: Step(Named("Cleanup")) at 0.
-        // Step body: Invoke at 1.
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Step {
-                target: ActionId(1)
-            }
-        );
-        assert_eq!(
-            flat.action(ActionId(1)),
-            FlatAction::Invoke {
-                handler: HandlerId(0)
-            }
-        );
-    }
-
-    /// Mutual recursion: A -> B -> A, no infinite loop in flattening.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_mutual_recursion() {
-        let flat = flatten(config_with_steps(
-            step_named("A"),
-            vec![("A", step_named("B")), ("B", step_named("A"))],
-        ))
-        .unwrap();
-
-        // Workflow: Step(A) at 0.
-        // Step A body: Step(B) at 1.
-        // Step B body: Step(A) at 2.
-        // After resolution, all targets are ActionIds.
-        assert_eq!(
-            flat.action(ActionId(0)),
-            FlatAction::Step {
-                target: ActionId(1)
-            }
-        );
-        assert_eq!(
-            flat.action(ActionId(1)),
-            FlatAction::Step {
-                target: ActionId(2)
-            }
-        );
-        assert_eq!(
-            flat.action(ActionId(2)),
-            FlatAction::Step {
-                target: ActionId(1)
-            }
-        );
-    }
-
-    /// Chain of steps: A -> B -> C -> Invoke.
-    #[test]
-    #[allow(clippy::unwrap_used)]
-    fn flatten_chain_of_steps() {
-        let flat = flatten(config_with_steps(
-            step_named("A"),
-            vec![
-                ("A", step_named("B")),
-                ("B", step_named("C")),
-                ("C", invoke("./handler.ts", "run")),
-            ],
-        ))
-        .unwrap();
-
-        // All Step targets should resolve.
-        assert!(matches!(flat.action(ActionId(0)), FlatAction::Step { .. }));
-    }
-
     // -- Edge cases --
 
     /// Single-case branch: `BranchKey` + inlined child.
@@ -1029,13 +766,6 @@ mod tests {
         let cases: Vec<_> = flat.branch_cases(ActionId(0)).collect();
         assert_eq!(cases.len(), 1);
         assert_eq!(cases[0].0, kind("Ok"));
-    }
-
-    /// Unknown step name returns Err(UnknownStep).
-    #[test]
-    fn flatten_unknown_step_errors() {
-        let result = flatten(config(step_named("DoesNotExist")));
-        assert!(matches!(result, Err(FlattenError::UnknownStep { .. })));
     }
 
     /// Deterministic: flatten twice, assert identical.
@@ -1087,10 +817,10 @@ mod tests {
         assert_ne!(a1, b);
     }
 
-    /// Static assert: `FlatEntry<ActionId>` fits in 8 bytes.
+    /// Static assert: `FlatEntry` fits in 8 bytes.
     #[test]
     fn flat_entry_size() {
-        assert!(std::mem::size_of::<FlatEntry<ActionId>>() <= 8);
+        assert!(std::mem::size_of::<FlatEntry>() <= 8);
     }
 
     // -- Structural invariants --
@@ -1131,15 +861,5 @@ mod tests {
             workflow_root: ActionId(0),
         };
         let _ = flat.resolve_child_slot(FlatConfigEntryId(0));
-    }
-
-    /// Step(Root) in a step body returns Err(StepRootInStepBody).
-    #[test]
-    fn step_root_in_step_body_errors() {
-        let result = flatten(config_with_steps(
-            invoke("./handler.ts", "run"),
-            vec![("Bad", step_root())],
-        ));
-        assert!(matches!(result, Err(FlattenError::StepRootInStepBody)));
     }
 }

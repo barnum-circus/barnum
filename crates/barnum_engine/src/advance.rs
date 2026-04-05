@@ -140,10 +140,6 @@ pub fn advance(
             advance(workflow_state, case_action_id, value, parent)?;
         }
 
-        FlatAction::Step { target } => {
-            advance(workflow_state, target, value, parent)?;
-        }
-
         FlatAction::Handle { effect_id } => {
             let body = workflow_state.flat_config.handle_body(action_id);
             let handler = workflow_state.flat_config.handle_handler(action_id);

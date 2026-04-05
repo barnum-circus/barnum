@@ -177,7 +177,6 @@ mod tests {
     use super::*;
     use barnum_ast::flat::flatten;
     use barnum_ast::{Action, BuiltinHandler, BuiltinKind, Config};
-    use std::collections::HashMap;
 
     fn constant(value: Value) -> Action {
         Action::Invoke(barnum_ast::InvokeAction {
@@ -188,10 +187,7 @@ mod tests {
     }
 
     fn config(workflow: Action) -> Config {
-        Config {
-            workflow,
-            steps: HashMap::default(),
-        }
+        Config { workflow }
     }
 
     /// Scheduler with dummy executor/worker paths — only builtin handlers
