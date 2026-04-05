@@ -11,7 +11,7 @@ Every Handle/Perform usage falls into one of two categories:
 
 Each kind is unconditional. The engine knows what to do based on the Handle kind. There is no `Resume`/`RestartBody` tag dispatch. Both handler kinds receive `[payload, state]` as input. RestartHandle handlers produce a raw value. ResumeHandle handlers produce a `[value, state]` tuple (via `All`) — the engine destructures it, delivers `value` to the perform site, and writes `state` to `captured_value`.
 
-The "exit the Handle" path is a body behavior, not a handler behavior. The handler always restarts. The body has a Branch at the top that routes the restarted value: one arm runs the body; the other completes normally, exiting the Handle. This is how `loop`, `earlyReturn`, `tryCatch`, and `race` work.
+For RestartHandle, the "exit the Handle" path is a body behavior, not a handler behavior. The restart handler always restarts. The body has a Branch at the top that routes the restarted value: one arm runs the body; the other completes normally, exiting the Handle. This is how `loop`, `earlyReturn`, `tryCatch`, and `race` work.
 
 The engine currently treats all handlers identically: suspend body, run handler DAG, deserialize a two-variant `HandlerOutput` (Resume/RestartBody), dispatch. Separating Resume and Restart into distinct Handle/Perform types lets the engine handle each directly — no deserialization, no tag dispatch.
 
@@ -70,11 +70,10 @@ pub struct RestartHandleFrame {
     pub body: ActionId,
     pub handler: ActionId,
     pub state: Value,
-    pub status: HandleStatus,
 }
 ```
 
-`ResumeHandleFrame` has no `status` — it never suspends.
+Neither frame kind has `status` — neither suspends. `HandleStatus` is deleted.
 
 ### 3. Split FrameKind, ParentRef, and HandleSide
 
@@ -146,7 +145,7 @@ pub enum ParentRef {
 
 Key differences:
 - `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6).
-- `ResumePerform` intercepts handler results to apply state updates to the ResumeHandle's `captured_value`, then forwards the value to the body.
+- `ResumePerform` intercepts handler results to apply state updates to the ResumeHandle's `captured_value`, then delivers the value to its parent.
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -179,15 +178,13 @@ ParentRef::Handle { frame_id, side } => match side {
 
 ```rust
 ParentRef::ResumeHandle { frame_id } => {
-    // Body completed normally. Remove the ResumeHandle frame,
-    // deliver to its parent.
+    // Body delivered. Remove the ResumeHandle frame, deliver to parent.
     let frame = self.frames.remove(frame_id).expect("frame exists");
     self.deliver(frame.parent, value)
 }
 ParentRef::RestartHandle { frame_id, side } => match side {
     RestartHandleSide::Body => {
-        // Body completed normally. Remove RestartHandle frame,
-        // deliver to its parent.
+        // Body delivered. Remove RestartHandle frame, deliver to parent.
         let frame = self.frames.remove(frame_id).expect("frame exists");
         self.deliver(frame.parent, value)
     }
@@ -264,7 +261,7 @@ enum HandlerOutput {
 
 ```rust
 // Handler result is a 2-element array [value, state].
-let (value, state): (Value, Value) = serde_json::from_value(handler_result)?;
+let (value, state): (Value, Value) = serde_json::from_value(value)?;
 ```
 
 ### 6. ResumeHandle and ResumePerform: inline handler execution at the Perform site
@@ -360,7 +357,7 @@ ParentRef::ResumePerform { frame_id } => {
 
     // Deserialize handler result as [value, state] tuple.
     let (value, state): (Value, Value) =
-        serde_json::from_value(handler_result)?;
+        serde_json::from_value(value)?;
 
     // Always write state to captured_value. Handlers that don't mutate
     // state pass the current state through unchanged (idempotent write).
@@ -371,7 +368,7 @@ ParentRef::ResumePerform { frame_id } => {
     };
     resume_handle.captured_value = state;
 
-    // Forward the value to the body at the original Perform site.
+    // Deliver the value to parent.
     self.deliver(parent, value)
 }
 ```
@@ -396,7 +393,7 @@ self.teardown_children(handle_frame_id);
 // Look up handler ActionId and state.
 let handler_action_id = restart_handle.handler;
 let state = restart_handle.state.clone();
-let handler_input = json!([payload, state]);
+let handler_input = json!([value, state]);
 
 // Advance handler DAG as child of the RestartHandle frame (Handler side).
 self.advance(handler_action_id, handler_input, Some(ParentRef::RestartHandle {
@@ -426,7 +423,7 @@ This is a significant simplification. The stash was the most complex part of the
 
 **After:** Deleted. The two handler kinds don't share a completion path:
 
-- **ResumeHandle**: no handler completion — the handler DAG delivers directly to the ResumePerform frame's parent via normal `deliver`. The Handle frame is uninvolved.
+- **ResumeHandle**: no handler completion at the Handle frame. The handler DAG delivers to the ResumePerformFrame, which applies state updates and delivers the value to its parent. The ResumeHandle frame is uninvolved.
 - **RestartHandle**: handler completion is a single call to `restart_body` in the `deliver` match arm for `ParentRef::RestartHandle { side: Handler }`. No function needed.
 
 ### 9. Update handler DAGs
@@ -650,6 +647,95 @@ Engine execution:
 
 **Concurrency note:** If multiple iterations hit `nextId` concurrently (e.g., inside forEach which advances children in parallel), the handler invocations interleave through the dispatch → complete cycle. Two handlers could read the same `captured_value` before either writes back — a lost-update race. This is a known limitation. A future mutex combinator built from async TypeScript handlers (a lock-acquire Invoke that suspends until no other handler is in flight) would solve this in user land. The engine substrate supports it — the handler DAG can contain arbitrary async Invoke nodes that delay handler completion. We don't have the primitives yet, but the model doesn't preclude them.
 
+### tryCatch — restart handler (type-level error recovery)
+
+User writes:
+```ts
+tryCatch(
+  (throwError) => pipe(
+    validateInput,
+    processData,              // may pipe into throwError on bad data
+  ),
+  pipe(logError, fallbackValue),  // recovery
+)
+```
+
+Compiled form:
+```
+Chain(Tag("Continue"),
+  RestartHandle(restartHandlerId,
+    Branch({
+      Continue: Chain(ExtractField("value"), body),
+      Break: Chain(ExtractField("value"), recovery),
+    }),
+    ExtractPayloadHandler                  ← ExtractIndex(0) from [payload, state]
+  )
+)
+
+throwError = Chain(Tag("Break"), RestartPerform(restartHandlerId))
+```
+
+Engine execution:
+1. Input is tagged `{ kind: "Continue", value: pipelineInput }`.
+2. RestartHandle receives it. State = null (unused). Body = Branch.
+3. Branch routes on "Continue" → `Chain(ExtractField("value"), body)` → extracts `pipelineInput` → body runs.
+4. Body hits `throwError` with error value:
+   - `Tag("Break")` wraps it → `{ kind: "Break", value: errorVal }`
+   - `RestartPerform(restartHandlerId)` fires with payload = `{ kind: "Break", value: errorVal }`
+   - Engine tears down the body immediately (all body frames removed)
+   - Handler receives `[{ kind: "Break", value: errorVal }, null]` → `ExtractIndex(0)` → `{ kind: "Break", value: errorVal }`
+   - Handler completes → engine restarts body with `{ kind: "Break", value: errorVal }`
+5. Branch routes on "Break" → `Chain(ExtractField("value"), recovery)` → extracts `errorVal` → recovery runs.
+6. Recovery delivers → body delivers → RestartHandle delivers to parent.
+
+If the body delivers without hitting throwError, the value flows up to the RestartHandle → delivers to parent. The handler never runs.
+
+### loop — restart handler (iteration)
+
+User writes:
+```ts
+loop<number, string>((recur, done) =>
+  pipe(
+    checkCondition,
+    branch({
+      Continue: pipe(transform, recur),   // restart with new input
+      Done: pipe(formatResult, done),      // exit loop
+    }),
+  ),
+)
+```
+
+Compiled form:
+```
+Chain(Tag("Continue"),
+  RestartHandle(restartHandlerId,
+    Branch({
+      Continue: Chain(ExtractField("value"), body),
+      Break: Chain(ExtractField("value"), Identity),
+    }),
+    ExtractPayloadHandler                  ← ExtractIndex(0) from [payload, state]
+  )
+)
+
+recur = Chain(Tag("Continue"), RestartPerform(restartHandlerId))
+done  = Chain(Tag("Break"),    RestartPerform(restartHandlerId))
+```
+
+Engine execution:
+1. Input tagged `{ kind: "Continue", value: initialInput }`.
+2. Branch → Continue arm → body runs with `initialInput`.
+3. Body hits `recur` with `nextInput`:
+   - `Tag("Continue")` → `{ kind: "Continue", value: nextInput }`
+   - `RestartPerform` fires → body torn down → handler extracts payload → `{ kind: "Continue", value: nextInput }`
+   - Engine restarts body → Branch routes "Continue" → body runs with `nextInput`
+4. Repeats until body hits `done` with `result`:
+   - `Tag("Break")` → `{ kind: "Break", value: result }`
+   - `RestartPerform` fires → body torn down → handler extracts payload → `{ kind: "Break", value: result }`
+   - Engine restarts body → Branch routes "Break" → `Identity` → `result`
+5. Body delivers `result` → RestartHandle delivers to parent.
+
+The key mechanism: both `recur` and `done` go through the same `RestartPerform`. The tag (`Continue` vs `Break`) determines which Branch arm runs after the restart. The handler is the same in both cases — just extract the payload.
+
 ## Changes that can land independently on master
 
 These don't require the full refactor. They simplify the current code and reduce the diff when the refactor lands.
@@ -664,7 +750,7 @@ These don't require the full refactor. They simplify the current code and reduce
 
 ## Open questions
 
-1. **State updates for RestartHandle.** Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `{ value, state }` (like ResumeHandle) and the engine destructures, or state is always overwritten with the handler's raw value. Currently restart handlers receive `{ payload, state }` and the `StateUpdate` enum handles this; we need to decide what replaces it.
+1. **State updates for RestartHandle.** Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `[value, state]` (like ResumeHandle) and the engine destructures, or state is always overwritten with the handler's raw value. Currently restart handlers receive `[payload, state]` and the `StateUpdate` enum handles this; we need to decide what replaces it.
 
 2. **Resume handler error semantics.** If a resume handler's DAG fails, the error propagates through the ResumePerform frame to `perform_parent`. The error flows through the body's frame tree to the ResumeHandle frame's parent. Same behavior as if the body itself failed.
 
