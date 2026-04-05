@@ -545,9 +545,9 @@ These don't require the full refactor. They simplify the current code and reduce
 
 1. **~~`HandleFrame::state: Option<Value>` → `Value`.~~** Done (already landed).
 
-2. **Extract `restart_body` as a standalone method.** Currently `handle_handler_completion` handles Resume and RestartBody. Extracting the RestartBody path into its own method prepares for the split where it becomes the sole `RestartHandle { side: Handler }` deliver path.
+2. **~~Extract `restart_body` as a standalone function.~~** Done (landed in lib.rs split). `restart_body` is a free function in `effects.rs`.
 
-3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
+3. **~~Extract `teardown_body` as a standalone function.~~** Done (landed in lib.rs split). `teardown_body` is a free function in `effects.rs`.
 
 4. **~~Extract an ancestor frame iterator.~~** Done (already landed). `Ancestors` iterator yields `(ParentRef, &Frame)` pairs. `find_blocking_ancestor` and `find_and_dispatch_handler` both use it.
 
