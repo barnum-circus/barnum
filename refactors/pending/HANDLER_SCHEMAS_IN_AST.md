@@ -1,22 +1,13 @@
 # Handler Schemas in AST
 
+**Blocked by:** `OPTIONAL_HANDLER_TYPES.md` (which adds `outputValidator` and makes all validators optional)
 **Blocks:** `HANDLER_VALIDATION.md` (which adds Rust-side runtime validation using these schemas)
 
 ## TL;DR
 
-Handlers define Zod validators (`inputValidator`, `stepConfigValidator`) that drive compile-time types but are completely ignored at runtime. Add `outputValidator`, convert all validators to JSON Schema at `createHandler` call time, and embed the schemas in the serialized AST so the Rust side can see them.
+Convert Zod validators to JSON Schema at `createHandler` call time and embed the schemas in the serialized AST so the Rust side can see them. `OPTIONAL_HANDLER_TYPES.md` has already added `outputValidator` and made all validators optional — this doc wires the Zod-to-JSON-Schema conversion and adds schema fields to the AST.
 
-## Current state
-
-`HandlerDefinition` in `libs/barnum/src/handler.ts:9-20`:
-
-```ts
-export interface HandlerDefinition<TValue, TOutput, TStepConfig> {
-  inputValidator?: z.ZodType<TValue>;
-  stepConfigValidator?: z.ZodType<TStepConfig>;
-  handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-}
-```
+## Current state (after OPTIONAL_HANDLER_TYPES)
 
 `TypeScriptHandler` AST node in `libs/barnum/src/ast.ts`:
 
@@ -28,7 +19,7 @@ export interface TypeScriptHandler {
 }
 ```
 
-Rust `TypeScriptHandler` in `crates/barnum_ast/src/lib.rs:193-199`:
+Rust `TypeScriptHandler` in `crates/barnum_ast/src/lib.rs`:
 
 ```rust
 pub struct TypeScriptHandler {
@@ -37,120 +28,11 @@ pub struct TypeScriptHandler {
 }
 ```
 
-No schema information flows from TypeScript to Rust.
+No schema information flows from TypeScript to Rust. Validators exist on the TS side but are invisible to the Rust event loop.
 
 ---
 
-## 1. Add `outputValidator` to `HandlerDefinition`
-
-**File:** `libs/barnum/src/handler.ts`
-
-```ts
-// Before
-export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepConfig = unknown> {
-  inputValidator?: z.ZodType<TValue>;
-  stepConfigValidator?: z.ZodType<TStepConfig>;
-  handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-}
-
-// After
-export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepConfig = unknown> {
-  inputValidator?: z.ZodType<TValue>;
-  outputValidator?: z.ZodType<TOutput>;
-  stepConfigValidator?: z.ZodType<TStepConfig>;
-  handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-}
-```
-
-## 2. Add `outputValidator` to `createHandler` overloads
-
-**File:** `libs/barnum/src/handler.ts`
-
-```ts
-// Before — with inputValidator
-export function createHandler<TValue, TOutput>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// Before — without inputValidator
-export function createHandler<TOutput>(
-  definition: {
-    handle: () => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<never, HandlerOutput<TOutput>>;
-
-// After — with inputValidator
-export function createHandler<TValue, TOutput>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// After — without inputValidator
-export function createHandler<TOutput>(
-  definition: {
-    outputValidator?: z.ZodType<TOutput>;
-    handle: () => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<never, HandlerOutput<TOutput>>;
-```
-
-## 3. Add `outputValidator` to `createHandlerWithConfig` overloads
-
-**File:** `libs/barnum/src/handler.ts`
-
-```ts
-// Before — with inputValidator
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// Before — without inputValidator
-export function createHandlerWithConfig<TOutput, TStepConfig>(
-  definition: {
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
-
-// After — with inputValidator
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// After — without inputValidator
-export function createHandlerWithConfig<TOutput, TStepConfig>(
-  definition: {
-    outputValidator?: z.ZodType<TOutput>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
-```
-
-## 4. Add schema fields to `TypeScriptHandler` AST node
+## 1. Add schema fields to `TypeScriptHandler` AST node
 
 **File:** `libs/barnum/src/ast.ts`
 
@@ -196,7 +78,7 @@ pub struct TypeScriptHandler {
 
 Note: `PartialEq` and `Eq` may need to be dropped or manually implemented since `serde_json::Value` doesn't impl `Eq`. Alternatively, wrap in a newtype.
 
-## 5. Zod-to-JSON-Schema conversion with allowlist
+## 2. Zod-to-JSON-Schema conversion with allowlist
 
 **File:** new `libs/barnum/src/schema.ts`
 
@@ -237,7 +119,7 @@ function assertJsonSchemaCompatible(schema: z.ZodType, label: string): void {
 }
 ```
 
-## 6. Wire conversion into `createHandler` / `createHandlerWithConfig`
+## 3. Wire conversion into `createHandler` / `createHandlerWithConfig`
 
 **File:** `libs/barnum/src/handler.ts`
 
@@ -264,13 +146,13 @@ const action = typedAction({
 
 Same pattern in `createHandlerWithConfig`.
 
-## 7. Add `zod-to-json-schema` dependency
+## 4. Add `zod-to-json-schema` dependency
 
 ```
 pnpm -C libs/barnum add zod-to-json-schema
 ```
 
-## 8. Add output validators to all demos
+## 5. Add output validators to all demos
 
 ### simple-workflow/handlers/steps.ts
 
