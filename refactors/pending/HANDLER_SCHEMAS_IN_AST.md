@@ -5,7 +5,7 @@
 
 ## TL;DR
 
-Embed JSON Schema in the serialized AST so the Rust side can see handler input/output schemas. Use `JSONSchema7` from `@types/json-schema` on the TS side, a `JsonSchema` newtype on the Rust side. The Zod-to-JSON-Schema conversion itself is handled by `ZOD_TO_JSON_SCHEMA.md`.
+Embed JSON Schema in the serialized AST so the Rust side can see handler input/output schemas. Use `JSONSchema7` from `@types/json-schema` on the TS side, a `JsonSchema` newtype over `serde_json::Value` on the Rust side. The Zod-to-JSON-Schema conversion itself (`zodToCheckedJsonSchema`, wrapping Zod v4's native `toJSONSchema()`) is handled by `ZOD_TO_JSON_SCHEMA.md`.
 
 ---
 
