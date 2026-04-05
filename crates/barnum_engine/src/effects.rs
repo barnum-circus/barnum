@@ -1251,7 +1251,6 @@ mod tests {
     /// Resume handler with async handler DAG should not block sibling
     /// completions.
     #[test]
-    #[should_panic(expected = "resume handler should not cause stashing")]
     fn resume_handler_does_not_block_sibling_completion() {
         let mut engine = engine_from(handle(
             1,
@@ -1287,7 +1286,6 @@ mod tests {
     /// Two concurrent resume Performs should both dispatch their handlers
     /// without serialization.
     #[test]
-    #[should_panic(expected = "both handlers should dispatch concurrently")]
     fn concurrent_resume_performs_not_serialized() {
         let mut engine = engine_from(handle(
             1,
@@ -1310,7 +1308,6 @@ mod tests {
     /// A throw (to an outer restart+Branch) should proceed even while a resume
     /// handler is in flight in a sibling branch.
     #[test]
-    #[should_panic(expected = "throw should reach outer handler immediately")]
     fn throw_proceeds_while_resume_handler_in_flight() {
         let inner_e = 1; // resume-style
         let outer_e = 2; // restart-style (tryCatch)
