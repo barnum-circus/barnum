@@ -767,12 +767,12 @@ const TAG_CONTINUE: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
 };
 
-const TAG_BREAK: Action = {
+export const TAG_BREAK: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } },
 };
 
-const IDENTITY: Action = {
+export const IDENTITY: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Identity" } },
 };
@@ -846,7 +846,7 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any, TRefs e
 
   const body = bodyFn(earlyReturnAction) as Action;
 
-  return typedAction(buildLoopAction(effectId, body));
+  return typedAction(buildRestartBranchAction(effectId, body, IDENTITY));
 }
 
 // ---------------------------------------------------------------------------
@@ -854,13 +854,15 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any, TRefs e
 // ---------------------------------------------------------------------------
 
 /**
- * Build the restart+branch compiled form used by earlyReturn and loop:
- * Chain(Tag("Continue"), Handle(effectId, Branch({ Continue: body, Break: identity() }), RestartBodyHandler))
+ * Build the restart+branch compiled form:
+ * Chain(Tag("Continue"), Handle(effectId, Branch({ Continue: continueArm, Break: breakArm }), RestartBodyHandler))
  *
- * Input is tagged Continue so the Branch enters the body on first execution.
- * Continue tag → restart → re-enters body. Break tag → restart → exits via Branch.
+ * Input is tagged Continue so the Branch enters the continueArm on first execution.
+ * Continue tag → restart → re-enters continueArm. Break tag → restart → runs breakArm, exits Handle.
+ *
+ * Used by earlyReturn, loop, tryCatch, and race.
  */
-function buildLoopAction(effectId: number, body: Action): Action {
+export function buildRestartBranchAction(effectId: number, continueArm: Action, breakArm: Action): Action {
   return {
     kind: "Chain",
     first: TAG_CONTINUE,
@@ -870,8 +872,8 @@ function buildLoopAction(effectId: number, body: Action): Action {
       body: {
         kind: "Branch",
         cases: unwrapBranchCases({
-          Continue: body,
-          Break: IDENTITY,
+          Continue: continueArm,
+          Break: breakArm,
         }),
       },
       handler: RESTART_BODY_HANDLER,
@@ -912,7 +914,7 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
 
   const body = bodyFn(recurAction, doneAction) as Action;
 
-  return typedAction(buildLoopAction(effectId, body));
+  return typedAction(buildRestartBranchAction(effectId, body, IDENTITY));
 }
 
 /**
