@@ -8,55 +8,11 @@ Add `outputValidator`. Make `stepConfigValidator` optional. Enable typed input w
 
 ---
 
-## Current state
+## Problems with current state
 
-`createHandler` has two overloads discriminated by the **presence of `inputValidator`**:
-
-```ts
-// With inputValidator → typed input
-export function createHandler<TValue, TOutput>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// Without inputValidator → source handler, input is never
-export function createHandler<TOutput>(
-  definition: {
-    handle: () => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<never, HandlerOutput<TOutput>>;
-```
-
-`createHandlerWithConfig` has two overloads, both **requiring `stepConfigValidator`**:
-
-```ts
-// With inputValidator
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// Without inputValidator
-export function createHandlerWithConfig<TOutput, TStepConfig>(
-  definition: {
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
-```
-
-### Problems
-
-1. **No `outputValidator`.** Can't validate handler output at all.
-2. **`stepConfigValidator` is required.** Can't have config-based handlers without writing a Zod schema.
-3. **No way to type input without a validator.** Want `Handler<MyType, ...>` but don't want to write `z.object(...)` — forced to choose between a validator or `never`.
+1. **No `outputValidator`.** Can't validate handler output.
+2. **`stepConfigValidator` is required** on `createHandlerWithConfig`.
+3. **No way to type input without a validator.** Forced to choose between providing a Zod schema or getting `never`.
 
 ---
 
