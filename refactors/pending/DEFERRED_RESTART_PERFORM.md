@@ -285,7 +285,7 @@ impl From<PendingEffect> for Event {
 }
 ```
 
-Each iteration sources the next event — pending effects first, blocking for a scheduler completion only when the effect queue is empty — then processes it in a three-branch match:
+Each iteration pops from the effect queue if non-empty (synchronous, instant), otherwise awaits `scheduler.recv()` for the next completion (async, blocks). The event is then processed in a three-branch match:
 
 1. **Dispatch** — check `is_task_live`; if stale, skip. Otherwise send to worker.
 2. **Restart** — call `process_restart`. Liveness check is internal (checks if RestartHandle frame still exists). If stale, no-op.
