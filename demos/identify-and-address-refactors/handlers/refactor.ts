@@ -107,7 +107,7 @@ export const assessWorthiness = createHandler({
   inputValidator: RefactorValidator,
   outputValidator: z.union([
     z.object({ kind: z.literal("Some"), value: RefactorValidator }),
-    z.object({ kind: z.literal("None") }),
+    z.object({ kind: z.literal("None"), value: z.null() }),
   ]),
   handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
     console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
@@ -134,7 +134,7 @@ export const assessWorthiness = createHandler({
         return { kind: "Some", value: refactor };
       }
       console.error(`[assess-worthiness] Skipping: ${result.reason ?? "not worth it"}`);
-      return { kind: "None", value: undefined };
+      return { kind: "None", value: null };
     } catch {
       // If we can't parse, include it (demo safety)
       console.error("[assess-worthiness] Could not parse response, including by default");
@@ -259,14 +259,14 @@ export const judgeRefactor = createHandler({
 export const classifyJudgment = createHandler({
   inputValidator: JudgmentResultValidator,
   outputValidator: z.union([
-    z.object({ kind: z.literal("Approved") }),
+    z.object({ kind: z.literal("Approved"), value: z.null() }),
     z.object({ kind: z.literal("NeedsWork"), value: z.string() }),
   ]),
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
     console.error(`[classify-judgment] Classifying judgment (approved=${judgment.approved})`);
     if (judgment.approved) {
       console.error("[classify-judgment] Approved");
-      return { kind: "Approved", value: undefined };
+      return { kind: "Approved", value: null };
     }
     console.error(`[classify-judgment] Needs work: ${judgment.instructions}`);
     return { kind: "NeedsWork", value: judgment.instructions };

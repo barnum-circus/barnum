@@ -353,8 +353,18 @@ type CaseHandler<
  * (`keyof ExtractDef<Out>` and `ExtractDef<Out>[K]`) instead of
  * conditional types (`KindOf<Out>` and `Extract<Out, { kind: K }>`).
  */
+type VoidToNull<T> = 0 extends 1 & T
+  ? T // any — preserve as-is
+  : [T] extends [void]
+    ? null
+    : T;
+
 export type TaggedUnion<TDef extends Record<string, unknown>> = {
-  [K in keyof TDef & string]: { kind: K; value: TDef[K]; __def?: TDef };
+  [K in keyof TDef & string]: {
+    kind: K;
+    value: VoidToNull<TDef[K]>;
+    __def?: TDef;
+  };
 }[keyof TDef & string];
 
 /** Extract the variant map definition from a tagged union's phantom __def. */
@@ -396,7 +406,7 @@ type BranchKeys<Out> = [ExtractDef<Out>] extends [never]
 type BranchPayload<Out, K extends string> = [ExtractDef<Out>] extends [never]
   ? UnwrapVariant<Extract<Out, { kind: K }>>
   : K extends keyof ExtractDef<Out>
-    ? ExtractDef<Out>[K]
+    ? VoidToNull<ExtractDef<Out>[K]>
     : never;
 
 // ---------------------------------------------------------------------------
@@ -890,9 +900,9 @@ export function buildRestartBranchAction(
 export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
-    done: TypedAction<TBreak, never>,
+    done: TypedAction<VoidToNull<TBreak>, never>,
   ) => Pipeable<TIn, never, TRefs>,
-): TypedAction<PipeIn<TIn>, TBreak, TRefs> {
+): TypedAction<PipeIn<TIn>, VoidToNull<TBreak>, TRefs> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const perform: Action = {
@@ -906,7 +916,7 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
     rest: perform,
   });
 
-  const doneAction = typedAction<TBreak, never>({
+  const doneAction = typedAction<VoidToNull<TBreak>, never>({
     kind: "Chain",
     first: TAG_BREAK,
     rest: perform,

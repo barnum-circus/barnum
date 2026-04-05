@@ -121,7 +121,7 @@ export const classifyErrors = createHandler(
     handle: async ({ value }): Promise<ClassifyResult> =>
       value.length > 0
         ? { kind: "HasErrors", value }
-        : { kind: "Clean", value: undefined },
+        : { kind: "Clean", value: null },
   },
   "classifyErrors",
 );

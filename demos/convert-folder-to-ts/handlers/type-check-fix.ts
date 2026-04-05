@@ -102,7 +102,7 @@ export const classifyErrors = createHandler({
   inputValidator: z.array(TypeErrorValidator),
   outputValidator: z.union([
     z.object({ kind: z.literal("HasErrors"), value: z.array(TypeErrorValidator) }),
-    z.object({ kind: z.literal("Clean") }),
+    z.object({ kind: z.literal("Clean"), value: z.null() }),
   ]),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
     console.error(`[classify-errors] Called with ${errors.length} error(s)`);
@@ -111,7 +111,7 @@ export const classifyErrors = createHandler({
       return { kind: "HasErrors", value: errors };
     }
     console.error("[classify-errors] Clean — no type errors");
-    return { kind: "Clean", value: undefined };
+    return { kind: "Clean", value: null };
   },
 }, "classifyErrors");
 
