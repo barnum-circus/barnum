@@ -43,24 +43,25 @@ The call tokens are the same values in both callbacks. They're `Chain(Tag("Call0
 `withFns((fnA, fnB) => body)` produces:
 
 ```
-ResumeHandle(resumeHandlerId,
-  body: body,                               // the workflow body using fnA, fnB
-  handler: Chain(
-    ExtractIndex(0),                        // payload from [payload, state]
-    All(
-      Branch({
-        Call0: Chain(ExtractField("value"), bodyA),
-        Call1: Chain(ExtractField("value"), bodyB),
-      }),
-      Constant(null),                       // state passthrough (unused)
+Chain(
+  All(Identity, Constant(null)),            // [value, null] — state is unused
+  ResumeHandle(resumeHandlerId,
+    body: Chain(ExtractIndex(0), body),     // extract value, run workflow body
+    handler: All(                           // return [result, null]
+      Chain(
+        ExtractIndex(0),                    // payload from [payload, state]
+        Branch({
+          Call0: Chain(ExtractField("value"), bodyA),
+          Call1: Chain(ExtractField("value"), bodyB),
+        })
+      ),
+      Constant(null)                        // state passthrough (unused)
     )
   )
 )
 ```
 
-One ResumeHandle wrapping the body. The handler dispatches to function bodies by tag. Handler returns `[result, null]` — engine delivers `result` to the perform site and writes `null` to state (no-op). No duplication — the handler appears once.
-
-For the single-function case, no Branch needed. The handler runs the body directly.
+Outer `All(Identity, Constant(null))` creates the `[value, null]` tuple that the ResumeHandle expects — same pattern as `bind`'s `All(...bindings, Identity)`. State is null (unused). Body extracts the original value with `ExtractIndex(0)`. Handler dispatches to function bodies by tag, returns `[result, null]` — engine delivers `result` to the perform site and writes `null` to state.
 
 ### Recursive calls
 
