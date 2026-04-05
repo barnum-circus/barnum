@@ -6,10 +6,10 @@ Every Handle/Perform usage falls into one of two categories:
 
 | Kind | What happens | Handler input | Handler output | Examples |
 |------|-------------|--------------|---------------|----------|
-| **Resume** | Value delivered to Perform site. Body continues. | `[payload, state]` tuple | `[value, state]` tuple — value for perform site, state overwrites `captured_value` | `bind`, future `allocateId` |
+| **Resume** | Value delivered to Perform site. Body continues. | `[payload, state]` tuple | `[value, state]` tuple — value for perform site, state written back to ResumeHandle | `bind`, `counter` |
 | **Restart** | Body torn down, re-entered with new input. | `[payload, state]` tuple | Raw value (new body input) | `loop`, `scope`/`jump`, `tryCatch`, `race` |
 
-Each kind is unconditional. The engine knows what to do based on the Handle kind. There is no `Resume`/`RestartBody` tag dispatch. Both handler kinds receive `[payload, state]` as input. RestartHandle handlers produce a raw value. ResumeHandle handlers produce a `[value, state]` tuple (via `All`) — the engine destructures it, delivers `value` to the perform site, and writes `state` to `captured_value`.
+Each kind is unconditional. The engine knows what to do based on the Handle kind. There is no `Resume`/`RestartBody` tag dispatch. Both handler kinds receive `[payload, state]` as input. RestartHandle handlers produce a raw value. ResumeHandle handlers produce a `[value, state]` tuple (via `All`) — the engine destructures it, delivers `value` to the perform site, and writes `state` back to the ResumeHandle.
 
 For RestartHandle, the "exit the Handle" path is a body behavior, not a handler behavior. The restart handler always restarts. The body has a Branch at the top that routes the restarted value: one arm runs the body; the other completes normally, exiting the Handle. This is how `loop`, `earlyReturn`, `tryCatch`, and `race` work.
 
@@ -59,9 +59,8 @@ pub struct ResumeHandleFrame {
     pub handler: ActionId,
     /// Mutable state available to the handler. Set from the input tuple
     /// when the Handle advances; updated by each handler invocation's
-    /// returned `state` field. Cannot be baked into the handler DAG
-    /// because it's a runtime value.
-    pub captured_value: Value,
+    /// returned state value.
+    pub state: Value,
 }
 
 /// Restart semantics. Body torn down, re-entered with handler value.
@@ -110,11 +109,11 @@ pub enum FrameKind {
 ```rust
 /// Frame at the Perform site for a ResumeHandle. Runs the handler DAG
 /// as a child. When the handler completes, intercepts the result to
-/// apply state updates to the ResumeHandle's captured_value, then
-/// forwards the value to perform_parent.
+/// apply state updates to the ResumeHandle's state, then delivers the
+/// value to its parent.
 pub struct ResumePerformFrame {
     /// The ResumeHandle frame this Perform targets.
-    /// Used to apply state updates back to the ResumeHandle's captured_value.
+    /// Used to apply state updates back to the ResumeHandle's state.
     pub handle_frame_id: FrameId,
 }
 ```
@@ -145,7 +144,7 @@ pub enum ParentRef {
 
 Key differences:
 - `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6).
-- `ResumePerform` intercepts handler results to apply state updates to the ResumeHandle's `captured_value`, then delivers the value to its parent.
+- `ResumePerform` intercepts handler results to apply state updates to the ResumeHandle's `state`, then delivers the value to its parent.
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -257,7 +256,7 @@ enum HandlerOutput {
 **After:** The tagged enum is deleted. No `Resume`/`RestartBody` tag dispatch.
 
 - **RestartHandle** handlers produce a raw value. No deserialization. The engine uses it directly as the new body input.
-- **ResumeHandle** handlers produce a 2-tuple `[value, state]` via `All`. The engine destructures it: index 0 is delivered to the perform site, index 1 overwrites `captured_value`. This is simpler than the old `HandlerOutput` (positional tuple vs tagged enum with optional `StateUpdate` sub-enum) but is still deserialized.
+- **ResumeHandle** handlers produce a 2-tuple `[value, state]` via `All`. The engine destructures it: index 0 is delivered to the perform site, index 1 overwrites the ResumeHandle's `state`. This is simpler than the old `HandlerOutput` (positional tuple vs tagged enum with optional `StateUpdate` sub-enum) but is still deserialized.
 
 ```rust
 // Handler result is a 2-element array [value, state].
@@ -279,9 +278,9 @@ FlatAction::ResumeHandle { resume_handler_id } => {
     let body = self.flat_config.resume_handle_body(action_id);
     let handler = self.flat_config.resume_handle_handler(action_id);
 
-    // Input is a 2-tuple [captured_value, body_input].
+    // Input is a 2-tuple [state, body_input].
     // Combinators construct this via All(state_expr, body_input_expr).
-    let (captured_value, body_input): (Value, Value) =
+    let (state, body_input): (Value, Value) =
         serde_json::from_value(value)?;
 
     let frame_id = self.insert_frame(Frame {
@@ -290,7 +289,7 @@ FlatAction::ResumeHandle { resume_handler_id } => {
             resume_handler_id,
             body,
             handler,
-            captured_value,
+            state,
         }),
     });
 
@@ -301,7 +300,7 @@ FlatAction::ResumeHandle { resume_handler_id } => {
 
 #### 6b. `advance` match arm for `FlatAction::ResumePerform`
 
-When the body hits a `ResumePerform`, the engine creates a `ResumePerformFrame` and advances the handler as its child. Analogous to Invoke — run work, deliver result to parent — except the work is an internal handler DAG (not an external dispatch) and there's a side effect (state update on the ResumeHandle). No trampoline.
+When the body hits a `ResumePerform`, the engine creates a `ResumePerformFrame` and advances the handler as its child.
 
 ```rust
 FlatAction::ResumePerform { resume_handler_id } => {
@@ -323,12 +322,11 @@ FlatAction::ResumePerform { resume_handler_id } => {
         .ok_or(AdvanceError::UnhandledEffect { ... })?;
 
     let handler_action_id = resume_handle.handler;
-    let captured_value = resume_handle.captured_value.clone();
-    let handler_input = json!([value, captured_value]);
+    let state = resume_handle.state.clone();
+    let handler_input = json!([value, state]);
 
     // ResumePerformFrame intercepts the handler's result to apply
-    // state updates, then delivers the value to parent. No trampoline —
-    // like Invoke, but with an internal child instead of an external dispatch.
+    // state updates, then delivers the value to its parent.
     let perform_frame_id = self.frames.insert(Frame {
         parent: Some(perform_parent),
         kind: FrameKind::ResumePerform(ResumePerformFrame {
@@ -359,25 +357,19 @@ ParentRef::ResumePerform { frame_id } => {
     let (value, state): (Value, Value) =
         serde_json::from_value(value)?;
 
-    // Always write state to captured_value. Handlers that don't mutate
-    // state pass the current state through unchanged (idempotent write).
+    // Always write state back. Handlers that don't mutate state pass
+    // the current value through unchanged (idempotent write).
     let handle_frame = self.frames.get_mut(perform.handle_frame_id)
         .expect("ResumeHandle still alive");
     let FrameKind::ResumeHandle(ref mut resume_handle) = handle_frame.kind else {
         unreachable!()
     };
-    resume_handle.captured_value = state;
+    resume_handle.state = state;
 
     // Deliver the value to parent.
     self.deliver(parent, value)
 }
 ```
-
-#### 6d. Concurrent state updates
-
-Multiple ResumePerforms can be in flight for the same ResumeHandle. Each reads `captured_value` at advance time (when constructing `[payload, state]` handler input) and writes it back at deliver time (from the handler's returned `[value, state]` tuple). The engine is single-threaded and synchronous — `deliver` runs to completion before the next `complete` call. So there are no data races. But the ordering of state updates depends on the order handler completions arrive, which is determined by the external caller's `complete` call order. This is inherent to the model — the same ordering concern exists today with `state_update` on the current Handle.
-
-For read-only handlers (like bind), the handler returns the current state unchanged, so concurrent invocations are trivially safe.
 
 ### 7. RestartPerform: tear down body immediately, run handler, re-enter
 
@@ -444,7 +436,7 @@ All handler DAGs drop their `Tag("Resume")`/`Tag("RestartBody")` wrapping.
 | Combinator | Before | After |
 |-----------|--------|-------|
 | `bind` (readVar) | `ExtractField("state") → ExtractIndex(n) → Tag("Resume")` | `All(ExtractIndex(1), ExtractIndex(1))` — payload (index 0) unused; value = state, new_state = state (pass-through) |
-| `allocateId` | N/A | TypeScript Invoke: `([payload, state]) => [state, state + 1]` — value = current count, state = incremented |
+| `counter` | N/A | TypeScript Invoke: `([payload, state]) => [state, state + 1]` — value = current count, new_state = incremented. Concurrent calls may race on state (lost update). |
 
 The `All` node constructs the `[value, state]` tuple that the engine destructures (by convention, index 0 = value, index 1 = new state).
 
@@ -540,201 +532,12 @@ One handler DAG for all restart combinators.
 | Combinator | Handle kind | Perform kind |
 |-----------|-------------|-------------|
 | `bind` / `bindInput` | ResumeHandle | ResumePerform |
-| `allocateId` (hypothetical) | ResumeHandle | ResumePerform |
+| `counter` | ResumeHandle | ResumePerform |
 | `tryCatch` | RestartHandle | RestartPerform |
 | `race` | RestartHandle | RestartPerform |
 | `withTimeout` | RestartHandle (built on race) | RestartPerform |
 | `loop` | RestartHandle | RestartPerform |
 | `scope` / `jump` | RestartHandle | RestartPerform |
-
-## Concrete examples
-
-### bind — read-only captured_value
-
-User writes:
-```ts
-bind([fetchUser, fetchPosts], ([user, posts]) =>
-  pipe(renderPage(user, posts), deployToS3)
-)
-```
-
-Compiled form (single binding for clarity):
-```
-bind([fetchUser], ([user]) => body)
-
-→ Chain(
-    All(fetchUser, Identity),             ← [userVal, pipelineInput] = input tuple
-    ResumeHandle(e0,
-      body,                               ← body receives pipelineInput (index 1)
-      readVarHandler                      ← returns [state, state] (pass-through)
-    )
-  )
-```
-
-Engine execution:
-1. `All(fetchUser, Identity)` runs concurrently → `[userVal, pipelineInput]`
-2. ResumeHandle(e0) receives `[userVal, pipelineInput]`. Engine splits: `captured_value = userVal`, body input = `pipelineInput`.
-3. Body runs with `pipelineInput`. When it hits VarRef `user` (= `ResumePerform(e0)`):
-   - Engine walks ancestors, finds ResumeHandle(e0)
-   - Creates ResumePerformFrame (like Invoke — run handler, deliver to parent)
-   - Runs handler with `[<body value>, userVal]` (`[payload, state]` tuple)
-   - Handler: `All(ExtractIndex(1), ExtractIndex(1))` → `[userVal, userVal]`
-   - Engine destructures: value = `userVal`, writes state = `userVal` (unchanged)
-   - Delivers `userVal` to perform site
-4. Body continues with `userVal`
-
-For N bindings, the outer `All(...bindings, Identity)` produces a flat N+1 tuple. bind restructures this into nested pairs so each ResumeHandle peels off one binding:
-
-```
-All(b0, b1, Identity)                      → [v0, v1, input]
-All(ExtractIndex(0), All(ExtractIndex(1), ExtractIndex(2)))
-                                           → [v0, [v1, input]]
-ResumeHandle(e0,                           ← captured_value = v0, body gets [v1, input]
-  ResumeHandle(e1,                         ← captured_value = v1, body gets input
-    body,                                  ← receives pipelineInput directly
-    handler1: All(ExtractIndex(1), ExtractIndex(1))
-  ),
-  handler0: All(ExtractIndex(1), ExtractIndex(1))
-)
-```
-
-Each handler receives `[payload, state]` where state is its own `captured_value` (a single binding value). `All(ExtractIndex(1), ExtractIndex(1))` extracts state (index 1) for both value and new_state — unchanged pass-through.
-
-### allocateId — mutable captured_value (hypothetical)
-
-A counter that returns an increasing number each time it's called. Each invocation is a single ResumePerform — the handler reads the current count and increments the state.
-
-User writes:
-```ts
-allocateId((nextId) =>
-  pipe(
-    fetchItems,
-    forEach(
-      pipe(
-        nextId,             // → 0, 1, 2, ... (each call gets the next number)
-        processWithId,
-      ),
-    ),
-  ),
-)
-```
-
-Compiled form:
-```
-Chain(
-  All(Constant(0), Identity),             ← [0, pipelineInput] = input tuple
-  ResumeHandle(counterEffectId,
-    body,                                  ← body receives pipelineInput
-    incrementHandler                       ← TypeScript Invoke: returns [state, state + 1]
-  )
-)
-```
-
-`nextId` compiles to `ResumePerform(counterEffectId)` — a leaf action, like a VarRef.
-
-The handler is a TypeScript Invoke that receives `[payload, state]` and returns `[state, state + 1]`.
-
-Engine execution:
-1. `All(Constant(0), Identity)` → `[0, pipelineInput]`
-2. ResumeHandle splits: `captured_value = 0`, body gets `pipelineInput`
-3. Body runs. First iteration hits `nextId` (= `ResumePerform(counterEffectId)`):
-   - Engine finds ResumeHandle, reads `captured_value = 0`
-   - Creates ResumePerformFrame, runs handler with `[<body value>, 0]`
-   - Handler returns `[0, 1]` — value = 0 (delivered to body), state = 1 (written to captured_value)
-4. Second iteration hits `nextId`:
-   - `captured_value = 1` → handler returns `[1, 2]` → body gets 1, state becomes 2
-5. And so on.
-
-**Concurrency note:** If multiple iterations hit `nextId` concurrently (e.g., inside forEach which advances children in parallel), the handler invocations interleave through the dispatch → complete cycle. Two handlers could read the same `captured_value` before either writes back — a lost-update race. This is a known limitation. A future mutex combinator built from async TypeScript handlers (a lock-acquire Invoke that suspends until no other handler is in flight) would solve this in user land. The engine substrate supports it — the handler DAG can contain arbitrary async Invoke nodes that delay handler completion. We don't have the primitives yet, but the model doesn't preclude them.
-
-### tryCatch — restart handler (type-level error recovery)
-
-User writes:
-```ts
-tryCatch(
-  (throwError) => pipe(
-    validateInput,
-    processData,              // may pipe into throwError on bad data
-  ),
-  pipe(logError, fallbackValue),  // recovery
-)
-```
-
-Compiled form:
-```
-Chain(Tag("Continue"),
-  RestartHandle(restartHandlerId,
-    Branch({
-      Continue: Chain(ExtractField("value"), body),
-      Break: Chain(ExtractField("value"), recovery),
-    }),
-    ExtractPayloadHandler                  ← ExtractIndex(0) from [payload, state]
-  )
-)
-
-throwError = Chain(Tag("Break"), RestartPerform(restartHandlerId))
-```
-
-Engine execution:
-1. Input is tagged `{ kind: "Continue", value: pipelineInput }`.
-2. RestartHandle receives it. State = null (unused). Body = Branch.
-3. Branch routes on "Continue" → `Chain(ExtractField("value"), body)` → extracts `pipelineInput` → body runs.
-4. Body hits `throwError` with error value:
-   - `Tag("Break")` wraps it → `{ kind: "Break", value: errorVal }`
-   - `RestartPerform(restartHandlerId)` fires with payload = `{ kind: "Break", value: errorVal }`
-   - Engine tears down the body immediately (all body frames removed)
-   - Handler receives `[{ kind: "Break", value: errorVal }, null]` → `ExtractIndex(0)` → `{ kind: "Break", value: errorVal }`
-   - Handler completes → engine restarts body with `{ kind: "Break", value: errorVal }`
-5. Branch routes on "Break" → `Chain(ExtractField("value"), recovery)` → extracts `errorVal` → recovery runs.
-6. Recovery delivers → body delivers → RestartHandle delivers to parent.
-
-If the body delivers without hitting throwError, the value flows up to the RestartHandle → delivers to parent. The handler never runs.
-
-### loop — restart handler (iteration)
-
-User writes:
-```ts
-loop<number, string>((recur, done) =>
-  pipe(
-    checkCondition,
-    branch({
-      Continue: pipe(transform, recur),   // restart with new input
-      Done: pipe(formatResult, done),      // exit loop
-    }),
-  ),
-)
-```
-
-Compiled form:
-```
-Chain(Tag("Continue"),
-  RestartHandle(restartHandlerId,
-    Branch({
-      Continue: Chain(ExtractField("value"), body),
-      Break: Chain(ExtractField("value"), Identity),
-    }),
-    ExtractPayloadHandler                  ← ExtractIndex(0) from [payload, state]
-  )
-)
-
-recur = Chain(Tag("Continue"), RestartPerform(restartHandlerId))
-done  = Chain(Tag("Break"),    RestartPerform(restartHandlerId))
-```
-
-Engine execution:
-1. Input tagged `{ kind: "Continue", value: initialInput }`.
-2. Branch → Continue arm → body runs with `initialInput`.
-3. Body hits `recur` with `nextInput`:
-   - `Tag("Continue")` → `{ kind: "Continue", value: nextInput }`
-   - `RestartPerform` fires → body torn down → handler extracts payload → `{ kind: "Continue", value: nextInput }`
-   - Engine restarts body → Branch routes "Continue" → body runs with `nextInput`
-4. Repeats until body hits `done` with `result`:
-   - `Tag("Break")` → `{ kind: "Break", value: result }`
-   - `RestartPerform` fires → body torn down → handler extracts payload → `{ kind: "Break", value: result }`
-   - Engine restarts body → Branch routes "Break" → `Identity` → `result`
-5. Body delivers `result` → RestartHandle delivers to parent.
-
-The key mechanism: both `recur` and `done` go through the same `RestartPerform`. The tag (`Continue` vs `Break`) determines which Branch arm runs after the restart. The handler is the same in both cases — just extract the payload.
 
 ## Changes that can land independently on master
 
@@ -748,14 +551,16 @@ These don't require the full refactor. They simplify the current code and reduce
 
 4. **~~Extract an ancestor frame iterator.~~** Done (already landed). `Ancestors` iterator yields `(ParentRef, &Frame)` pairs. `find_blocking_ancestor` and `find_and_dispatch_handler` both use it.
 
-## Open questions
+## Implementation order
 
-1. **State updates for RestartHandle.** Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `[value, state]` (like ResumeHandle) and the engine destructures, or state is always overwritten with the handler's raw value. Currently restart handlers receive `[payload, state]` and the `StateUpdate` enum handles this; we need to decide what replaces it.
+1. **Remove `#[should_panic]` from target-behavior tests.** Three tests in `barnum_engine/src/lib.rs` already describe the target behavior:
+   - `resume_handler_does_not_block_sibling_completion`
+   - `concurrent_resume_performs_not_serialized`
+   - `throw_proceeds_while_resume_handler_in_flight`
 
-2. **Resume handler error semantics.** If a resume handler's DAG fails, the error propagates through the ResumePerform frame to `perform_parent`. The error flows through the body's frame tree to the ResumeHandle frame's parent. Same behavior as if the body itself failed.
+   Remove `#[should_panic]`. These become failing tests that define acceptance criteria.
 
-3. **Stash deletion sequencing.** The stash can be deleted only after both handler kinds stop suspending. If RestartPerform's immediate teardown lands first (before ResumePerform's inline execution), the stash is still needed for resume handlers. Both changes should land together or RestartPerform's teardown should land second.
-
-4. **ResumeHandle handler output convention.** The handler returns a 2-tuple `[value, state]` constructed via `All` (for builtin handlers) or directly (for TypeScript handlers). The engine destructures by index (0 = value for perform site, 1 = new captured_value). This is a convention, not enforced by the type system at the AST level.
-
-5. **Mutable-state concurrency control.** Concurrent ResumePerforms on the same ResumeHandle can race on `captured_value` — both read the same state before either writes back. This is solvable in user land: a future mutex combinator would include an async TypeScript Invoke in the handler DAG that suspends (returns a pending Promise) until no other handler is in flight for that ResumeHandle. The engine substrate supports this — handler DAGs can contain arbitrary async Invoke nodes. Not needed now; bind (the only current resume handler) is read-only.
+2. Implement the ResumeHandle/ResumePerform changes (sections 1-6).
+3. Implement the RestartHandle/RestartPerform changes (sections 7-10).
+4. Delete stash infrastructure.
+5. All three tests pass.
