@@ -8,15 +8,11 @@ LLMs are incredibly powerful tools. They are being asked to perform increasingly
 
 Barnum is an attempt to enable LLMs to perform dramatically more complicated, ambitious tasks. With Barnum, you define an asynchronous workflow, which is effectively a state machine. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and small.
 
-Each step in a workflow receives only the context it needs. If an agent is asked to list files in a folder and then analyze each file, the analyzing agent only sees the instructions for analysis — not the listing step. This progressive disclosure of context means agents can more reliably handle tasks of increasing complexity.
+With Barnum, it's easy to have each agentic step receive only the context it needs. If an agent is asked to both analyze a file for refactoring opportunities *and* implement the refactors, you're forcing it to hold both tasks in context at once. With Barnum, analysis and implementation are separate steps. The implementing agent only sees the refactor description — not the analysis instructions. This progressive disclosure of context means agents can more reliably handle tasks of increasing complexity.
 
-## How it works
+## A simple example
 
-You write workflows in TypeScript using Barnum's combinator library. Handlers are async functions that do the actual work (call an LLM, run a shell command, transform data). Combinators like `pipe`, `forEach`, `loop`, and `branch` compose handlers into workflows.
-
-The TypeScript DSL compiles to a serializable AST. A Rust engine executes the workflow, managing the state machine, dispatching handlers, and enforcing structure. Input and output schemas (defined via Zod) are validated at runtime at every handler boundary.
-
-### Example: simple workflow
+Handlers are the building blocks of a Barnum workflow. Today, handlers are either built-in primitives or exported TypeScript async functions. (Support for other languages is planned.)
 
 ```ts
 // handlers/steps.ts
@@ -25,16 +21,25 @@ import { z } from "zod";
 
 export const listFiles = createHandler({
   outputValidator: z.array(z.string()),
-  handle: async () => ["auth.ts", "database.ts", "routes.ts"],
+  handle: async () => {
+    return readdirSync("src/").filter(f => f.endsWith(".ts"));
+  },
 }, "listFiles");
 
 export const refactor = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
-    await callClaude({ prompt: `Refactor ${file}` });
+    await callAgent({
+      prompt: `Refactor ${file} to replace all class-based React components with functional components using hooks.`,
+      allowedTools: ["Read", "Edit"],
+    });
   },
 }, "refactor");
+
+// ... typeCheck, fix, commit, createPR
 ```
+
+You compose handlers into a workflow using combinators like `pipe` (sequential) and `forEach` (fan-out):
 
 ```ts
 // run.ts
@@ -50,41 +55,44 @@ await workflowBuilder()
   .run();
 ```
 
-`listFiles` runs once, returns an array of filenames. `forEach` fans out — each filename flows through the pipeline of `refactor → typeCheck → fix → commit → createPR` in parallel.
+> See the full working version: [`demos/simple-workflow`](https://github.com/barnum-circus/barnum/tree/master/demos/simple-workflow)
 
-### Combinators
+`listFiles` runs once and returns an array of filenames. `forEach` fans out — each filename flows through `refactor → typeCheck → fix → commit → createPR`, with each file processed in parallel.
 
-| Combinator | What it does |
-|---|---|
-| `pipe(a, b, c)` | Sequential composition — output of `a` feeds into `b`, then `c` |
-| `handler.forEach(action)` | Fan out — runs `action` once per element of the array |
-| `loop((recur, done) => ...)` | Repeat until `done` is called |
-| `.branch({ A: ..., B: ... })` | Discriminated union dispatch — route by `kind` field |
-| `tryCatch((throw) => body, catch)` | Error handling with typed error channel |
-| `withTimeout(duration, action)` | Race an action against a timer |
-| `all(a, b, c)` | Run actions in parallel, collect results as a tuple |
-| `bindInput(params => ...)` | Capture the input value for use later in the pipeline |
-| `augment(action)` | Run a side computation and merge the result into the input |
+Each handler executes in its own isolated Node.js subprocess. The Rust runtime manages the state machine: it tracks which handlers are pending, dispatches them, collects results, and advances the workflow. No handler sees another handler's context. The agent performing the refactor has no idea that a type-check step follows — it just receives a filename and a prompt.
 
-### Handlers
+## Why not just write this in JavaScript?
 
-Handlers are created with `createHandler`. They can declare Zod validators for their input and output:
+This example is simple. You could probably ask your favorite LLM to one-shot the orchestration script, and it would do a decent job.
 
-```ts
-export const analyze = createHandler({
-  inputValidator: z.object({ file: z.string() }),
-  outputValidator: z.array(z.object({
-    description: z.string(),
-    scope: z.enum(["function", "module", "cross-file"]),
-  })),
-  handle: async ({ value }) => {
-    // value is typed as { file: string }
-    return await callClaude({ prompt: `Analyze ${value.file}` });
-  },
-}, "analyze");
+When the workflow grows in complexity, you might reach for plan mode or write a markdown file describing the steps. That works for a while. But what happens when the plan has 40 steps across 15 files with conditional branches, retries on failure, parallel fan-out, and a review loop? Good luck getting an agent to faithfully and reliably execute that plan.
+
+And in practice, you *do* want the complicated version. You don't want `listFiles` done by an agent — it's deterministic, just read the filesystem. You don't want a single `refactor` step — you want the agent to refactor, then evaluate the result, then type-check, then fix errors in a loop until it's clean:
+
+```diff
+  await workflowBuilder()
+    .workflow(() =>
+      listFiles
+-       .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
++       .forEach(pipe(
++         refactor,
++         loop((recur) =>
++           pipe(typeCheck, classifyErrors).branch({
++             HasErrors: pipe(forEach(fix).drop(), recur),
++             Clean: drop,
++           })
++         ),
++         commit,
++         createPR,
++       ))
+        .drop()
+    )
+    .run();
 ```
 
-Schemas are compiled into JSON Schema validators at workflow init. If a handler receives input or produces output that violates its schema, the workflow terminates with a validation error.
+Now type errors are fixed in a loop — the agent keeps fixing until the code is clean. And this is still a simplified version. A real workflow might add review steps, worktree isolation, retry-on-timeout, or error escalation.
+
+The problem isn't that any individual piece is hard. The problem is that expressing a precise, complicated asynchronous workflow in prose or ad-hoc scripts is fragile. A programming language geared towards orchestration is what you actually want — one where `loop`, `branch`, `tryCatch`, `forEach`, and `pipe` are first-class constructs with type-safe composition.
 
 ## Demos
 
@@ -92,10 +100,8 @@ Schemas are compiled into JSON Schema validators at workflow init. If a handler 
 |---|---|
 | [`simple-workflow`](demos/simple-workflow) | List files, then refactor/typecheck/fix/commit/PR each one in parallel |
 | [`retry-on-error`](demos/retry-on-error) | Fallible pipeline with `tryCatch`, `withTimeout`, and `loop` for retry |
-| [`convert-folder-to-ts`](demos/convert-folder-to-ts) | Convert JS files to TypeScript with Claude, iterating on type errors |
-| [`identify-and-address-refactors`](demos/identify-and-address-refactors) | Discover refactoring opportunities, implement them in worktrees, review with Claude |
-
-Run a demo:
+| [`convert-folder-to-ts`](demos/convert-folder-to-ts) | Convert JS files to TypeScript with an LLM, iterating on type errors |
+| [`identify-and-address-refactors`](demos/identify-and-address-refactors) | Discover refactoring opportunities, implement them in worktrees, review with an LLM |
 
 ```bash
 cd demos/simple-workflow
@@ -113,4 +119,4 @@ TypeScript DSL (libs/barnum)
         → Handler subprocess execution (crates/barnum_typescript_handler)
 ```
 
-The TypeScript library defines the workflow. `workflowBuilder().run()` serializes the AST to JSON and spawns the Rust binary, which flattens the AST into a `FlatConfig`, manages frames and task dispatch, and executes handlers as subprocesses.
+The TypeScript library defines the workflow. `workflowBuilder().run()` serializes the AST to JSON and spawns the Rust binary, which flattens the AST into a `FlatConfig`, manages frames and task dispatch, and executes each handler as an isolated subprocess. Input and output schemas (defined via Zod) are compiled into JSON Schema validators at init and enforced at every handler boundary.
