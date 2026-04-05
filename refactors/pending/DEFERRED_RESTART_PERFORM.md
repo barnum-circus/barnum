@@ -320,13 +320,11 @@ pub async fn run_workflow(
         .expect("initial advance failed");
 
     loop {
-        // Drain all effects. Processing a restart may produce more effects,
-        // so loop until the queue is empty.
-        loop {
-            let effects = workflow_state.take_pending_effects();
-            if effects.is_empty() {
-                break;
-            }
+        // Process all pending effects before blocking on recv.
+        // Processing a restart may push more effects (via handler advance),
+        // so loop back to check until the queue is empty.
+        let effects = workflow_state.take_pending_effects();
+        if !effects.is_empty() {
             for effect in effects {
                 match effect {
                     PendingEffect::Dispatch(dispatch) => {
@@ -340,6 +338,7 @@ pub async fn run_workflow(
                     }
                 }
             }
+            continue;
         }
 
         let (task_id, result) = scheduler
