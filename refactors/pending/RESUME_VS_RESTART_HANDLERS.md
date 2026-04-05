@@ -193,22 +193,29 @@ All handler DAGs drop their `Tag(...)` wrapping.
 | `loop` | `Tag("RestartBody")` wrapper | Raw value |
 | `scope`/`jump` | `Tag("RestartBody")` wrapper | Raw value |
 
-### 8. Loop body: break via normal completion
+### 8. Loop compilation unchanged — Branch is in the body, not the handler
 
-With RestartHandle being unconditional, a loop's "break" path is the body completing normally (not via Perform):
+The current compiled form already matches RestartHandle semantics. The handler always restarts. The body-level Branch handles the Continue/Break routing:
 
 ```ts
-// loop body compiles to:
-pipe(
-  actualBody,   // produces LoopResult<TContinue, TBreak>
-  branch({
-    Continue: restartPerform(loopHandlerId),  // → handler restarts body
-    Break: identity(),                         // → body completes, Handle exits
-  })
+// Current compiled form (from buildLoopAction in ast.ts:863):
+Chain(
+  Tag("Continue"),                    // tag initial input as Continue
+  Handle(effectId,
+    Branch({                          // body is a Branch
+      Continue: actualBody,           // Continue → run the body
+      Break: identity(),              // Break → body completes, Handle exits
+    }),
+    RestartBodyHandler,               // handler always restarts
+  )
 )
 ```
 
-The Continue branch Performs to the RestartHandle, which re-enters. The Break branch falls through to normal body completion, and the Handle delivers the value to its parent.
+- `recur(value)` tags the value as Continue and Performs. Handler restarts. Branch takes Continue, runs body again.
+- `done(value)` tags the value as Break and Performs. Handler restarts. Branch takes Break, identity completes, Handle exits with value.
+- `earlyReturn(value)` tags as Break and Performs. Same exit path.
+
+The handler is unconditionally `Chain(ExtractField("payload"), Tag("RestartBody"))`. With RestartHandle, the Tag wrapper is dropped — the handler just extracts the payload, and the engine restarts unconditionally.
 
 ## Combinator-to-handle-kind mapping
 
