@@ -178,32 +178,18 @@ For examples, see `TRANSPORT_ABSTRACTION.md` and `DAEMON_REFACTOR.md` in `refact
 
 ## Branching strategy
 
-**One branch per logical change. Keep branches small.** Each branch should do one thing, squash merge to master, and produce one clean commit. If a refactor has three independent steps, that's three branches — not three commits on one branch.
+**All work happens on master.** Git push is currently broken, so we cannot push branches or run CI. Until push is restored, there is no point in using feature branches — we can't validate them remotely.
 
-When implementing a refactor:
+### Commit directly to master
 
-1. **Break the work into the smallest independent units** — each unit gets its own branch
-2. **Each branch should be a single logical change** that passes CI
-3. **Squash merge each branch to master** as soon as it's green — don't wait for later branches
-4. **Later branches rebase on master** after earlier ones merge
+Every change goes directly on master as a small, focused commit. Each commit should:
 
-The goal: master gets a stream of small, focused commits. Each one is easy to review, easy to bisect, and easy to revert. Large branches with many commits are a sign that the work wasn't decomposed enough.
+- Be a self-contained change that compiles and passes tests locally
+- Do one logical thing (add a type, update a function, remove dead code)
+- Have a commit message that explains the "why"
+- Be revertable independently if needed
 
-### Example: a 3-step refactor
-
-Instead of one branch with 3 commits:
-1. `refactor/extract-types` — extract types into lib.rs, merge to master
-2. `refactor/add-derives` — add serde/schemars derives, merge to master
-3. `refactor/generate-schema` — add schema generator binary, merge to master
-
-Each branch is created from the latest master after the previous one merges. Each produces one squash commit on master.
-
-### What makes a good atomic commit
-
-- Self-contained change that compiles and passes tests
-- Does one logical thing (add a type, update a function, remove dead code)
-- Commit message explains the "why"
-- Can be reverted independently if needed
+Run `cargo test` (and `pnpm test` if TS changed) locally before committing. Use `--no-verify` to skip the pre-commit hook when it's too slow, but run `cargo fmt` and `cargo clippy` manually first.
 
 ### Test-first pattern for bug fixes
 
@@ -233,57 +219,13 @@ fn test_hook_ordering() {
 }
 ```
 
-This approach:
-- Documents the bug exists (test demonstrates it)
-- Proves the fix works (test passes after fix)
-- CI passes on every commit
-- Creates a clear commit history showing bug -> fix -> verification
+### When push is restored
 
-### What to avoid
-
-- Commits that break CI (even temporarily)
-- "WIP" or "fixup" commits in the final history
-- Large commits that do multiple unrelated things
-
-### While working on the branch
-
-While actively developing on the branch, feel free to:
-- Make messy commits
-- Squash things together
-- Experiment and revert
-- Push work-in-progress
-- **Break CI** - it's fine, you'll fix it
-- **Use `--no-verify`** to skip the pre-commit hook and let CI validate instead. The pre-commit hook is slow (fmt, schema regen, clippy, tests, udeps). Committing with `--no-verify` and pushing keeps you working while CI runs in the background. Fix forward if CI fails.
-
-The branch is your workspace for experimentation. Push wild changes, figure out what works, debug why CI is breaking. Don't worry about commit cleanliness until you're ready to merge.
-
-### Before merging to master
-
-Do a final pass to make sure the branch is ready:
-
-1. Review the full diff from master
-2. Clean up commits if needed (rebase -i to reorganize)
-3. Each commit on the branch should pass CI independently
-4. Push the cleaned-up branch and verify CI passes
-5. Only then squash merge to master
-
-### Merging to master
-
-**Every commit on master must pass CI. Squash merge feature branches.**
-
-The workflow:
-1. Every commit on your branch passes CI independently
-2. The branch as a whole passes CI
-3. Squash merge to master → one commit per branch
-
-```bash
-git checkout master
-git merge --squash feature-branch
-git commit -m "Description of the change"
-git push
-```
-
-Atomic commits live on the branch for development and debugging. Master gets a clean, linear history where each commit is a complete, self-contained change that passes CI.
+Once git push works again, switch back to the branch-per-change model:
+- One branch per logical change
+- Push branch, let CI validate
+- Squash merge to master when green
+- Each branch produces one clean commit on master
 
 ## Extract sub-refactors
 
