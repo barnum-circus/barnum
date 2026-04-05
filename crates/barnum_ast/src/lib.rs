@@ -214,6 +214,12 @@ pub struct TypeScriptHandler {
     pub module: ModulePath,
     /// Exported function name.
     pub func: FuncName,
+    /// JSON Schema for the handler's input type, if declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_schema: Option<JsonSchema>,
+    /// JSON Schema for the handler's output type, if declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<JsonSchema>,
 }
 
 /// A builtin handler: wraps a [`BuiltinKind`].

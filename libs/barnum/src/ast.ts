@@ -1,3 +1,5 @@
+import type { JSONSchema7 } from "json-schema";
+
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
 // ---------------------------------------------------------------------------
@@ -73,6 +75,8 @@ export interface TypeScriptHandler {
   kind: "TypeScript";
   module: string;
   func: string;
+  input_schema?: JSONSchema7;
+  output_schema?: JSONSchema7;
 }
 
 export interface BuiltinHandler {
