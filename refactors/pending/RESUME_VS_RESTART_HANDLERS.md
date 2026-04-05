@@ -605,7 +605,7 @@ Each handler reads from its own `captured_value` (a single binding value, not th
 
 ### allocateId — mutable captured_value (hypothetical)
 
-A counter that returns an increasing number each time it's called. Each invocation is a single ResumePerform — the handler atomically reads the current count and increments the state.
+A counter that returns an increasing number each time it's called. Each invocation is a single ResumePerform — the handler reads the current count and increments the state.
 
 User writes:
 ```ts
@@ -635,7 +635,7 @@ Chain(
 
 `nextId` compiles to `ResumePerform(counterEffectId)` — a leaf action, like a VarRef.
 
-The handler is a TypeScript Invoke that receives `{ payload, state }` and returns `[state, state + 1]`. This is atomic — one Perform, one handler invocation, one state write. No window for interleaving.
+The handler is a TypeScript Invoke that receives `{ payload, state }` and returns `[state, state + 1]`.
 
 Engine execution:
 1. `All(Constant(0), Identity)` → `[0, pipelineInput]`
