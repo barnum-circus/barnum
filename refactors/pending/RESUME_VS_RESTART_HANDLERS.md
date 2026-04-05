@@ -57,7 +57,10 @@ pub struct ResumeHandleFrame {
     pub resume_handler_id: ResumeHandlerId,
     pub body: ActionId,
     pub handler: ActionId,
-    pub state: Value,
+    /// Write-once value captured when the Handle advances. Read by every
+    /// handler invocation, never updated. Cannot be baked into the handler
+    /// DAG because it's a runtime value (the Handle's input).
+    pub captured_value: Value,
 }
 
 /// Restart semantics. Body torn down, re-entered with handler value.
@@ -97,25 +100,11 @@ pub enum FrameKind {
     ForEach { results: Vec<Option<Value>> },
     ResumeHandle(ResumeHandleFrame),
     RestartHandle(RestartHandleFrame),
-    ResumePerform(ResumePerformFrame),
     Invoke { handler: HandlerId },
 }
 ```
 
-**ResumePerformFrame:**
-
-```rust
-/// Trampoline frame at the Perform site. The handler DAG runs as a
-/// child of this frame. When the handler completes, the frame removes
-/// itself and delivers the result to its parent (the Perform site's
-/// parent in the body) — same trampoline semantics as Chain.
-///
-/// The ResumeHandle frame is uninvolved: no suspension, no side enum.
-pub struct ResumePerformFrame {
-    /// Which resume handler this Perform targets.
-    pub resume_handler_id: ResumeHandlerId,
-}
-```
+No `ResumePerformFrame`. ResumePerform is transparent — the handler DAG runs at the Perform site with `parent = perform_parent`. The handler's own frames (Invoke, Chain, etc.) provide in-flight tracking. No intermediate frame needed.
 
 **ParentRef — before** (`frame.rs:16`):
 
@@ -137,13 +126,10 @@ pub enum ParentRef {
     ForEach { frame_id: FrameId, child_index: usize },
     ResumeHandle { frame_id: FrameId },
     RestartHandle { frame_id: FrameId, side: RestartHandleSide },
-    ResumePerform { frame_id: FrameId },
 }
 ```
 
-Key differences:
-- `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6).
-- `ResumePerform` is a trampoline frame (like Chain). When its child completes, it removes itself and delivers to its parent.
+Key difference: `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6). No `ResumePerform` variant — ResumePerform is transparent (no frame created).
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -267,89 +253,44 @@ No deserialization. No tag matching.
 
 **After for ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never modified — no suspension, no side enum.
 
-#### 6a. `advance` match arm for `FlatAction::ResumePerform`
+ResumePerform is transparent — no frame created. The handler DAG runs at the Perform site with `parent = perform_parent`. The handler's own frames (Invoke, Chain, etc.) provide in-flight tracking. When the handler completes, its result delivers directly to `perform_parent`.
 
-When the engine encounters a `ResumePerform` action during `advance`:
+In practice, ResumePerform is almost always the first child of a Chain (e.g., `Chain(Perform(id), next_step)`). The handler runs as the Chain's effective "first" child. When it completes, the Chain trampolines to `rest` — the continuation after the Perform. ResumePerform becomes a Chain at execution time.
 
 ```rust
 FlatAction::ResumePerform { resume_handler_id } => {
-    let Some(parent) = parent else {
+    let Some(perform_parent) = parent else {
         return Err(AdvanceError::UnhandledEffect { ... });
     };
+
     // Walk up the frame tree to find the matching ResumeHandle.
-    let (handle_frame_id, resume_handle) = self
-        .ancestors(parent)
-        .find_map(|(frame_id, frame)| match &frame.kind {
+    let (_, resume_handle) = self
+        .ancestors(perform_parent)
+        .find_map(|(edge, frame)| match &frame.kind {
             FrameKind::ResumeHandle(handle)
                 if handle.resume_handler_id == resume_handler_id =>
             {
-                Some((frame_id, handle))
+                Some((edge.frame_id(), handle))
             }
             _ => None,
         })
         .ok_or(AdvanceError::UnhandledEffect { ... })?;
 
-    self.dispatch_resume_handler(
-        handle_frame_id,
-        resume_handle,
-        parent, // perform_parent — where the result goes back to
-        payload,
-    )?;
-}
-```
-
-The `payload` is the value passed into the Perform (the argument to the effect). `parent` is the Perform site's parent in the body — the handler result will be delivered back here.
-
-#### 6b. `dispatch_resume_handler`
-
-```rust
-fn dispatch_resume_handler(
-    &mut self,
-    handle_frame_id: FrameId,
-    resume_handle: &ResumeHandleFrame,
-    perform_parent: ParentRef,
-    payload: Value,
-) -> Result<(), AdvanceError> {
-    // Look up handler ActionId and state from the ResumeHandle frame.
+    // Look up handler and captured value from the ResumeHandle.
     let handler_action_id = resume_handle.handler;
-    let state = resume_handle.state.clone();
-    let handler_input = json!({ "payload": payload, "state": state });
+    let captured_value = resume_handle.captured_value.clone();
+    let handler_input = json!({ "payload": value, "state": captured_value });
 
-    // Create ResumePerform trampoline frame. The handler DAG's completion
-    // delivers here, then the frame forwards to perform_parent. Without
-    // this frame, the handler result has no delivery target.
-    let perform_frame_id = self.frames.insert(Frame {
-        parent: Some(perform_parent),
-        kind: FrameKind::ResumePerform(ResumePerformFrame {
-            resume_handler_id: resume_handle.resume_handler_id,
-        }),
-    });
-
-    // Handler DAG runs as child of the ResumePerform frame.
-    self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
-        frame_id: perform_frame_id,
-    }))
+    // Handler DAG runs directly at the Perform site. No intermediate frame.
+    // Result delivers to perform_parent (typically a Chain that trampolines
+    // to the continuation after the Perform).
+    self.advance(handler_action_id, handler_input, Some(perform_parent))?;
 }
 ```
 
-The ResumeHandle frame is not touched. No suspension, no status change. Multiple concurrent ResumePerforms can be in flight for the same ResumeHandle — each creates its own trampoline frame with its own `perform_parent`.
+The ResumeHandle frame is not touched. No suspension, no status change. Multiple concurrent ResumePerforms can be in flight for the same ResumeHandle — each advances the handler DAG with its own `perform_parent`.
 
-#### 6c. `deliver` match arm for `ParentRef::ResumePerform`
-
-When the handler DAG completes, it delivers up to the ResumePerform frame:
-
-```rust
-ParentRef::ResumePerform { frame_id } => {
-    // Trampoline: remove self, forward result to parent.
-    let frame = self.frames.remove(frame_id).expect("frame exists");
-    let parent = frame.parent.expect("ResumePerform always has a parent");
-    self.deliver(parent, value)
-}
-```
-
-Same pattern as Chain's deliver. The value flows back to the body at the original Perform site. The body continues as if the Perform returned synchronously (modulo any async handler invocations that produced dispatches).
-
-The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
+The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and captured value, but execution stays in the body's frame subtree.
 
 ### 7. RestartPerform: tear down body immediately, run handler, re-enter
 
@@ -522,8 +463,8 @@ These don't require the full refactor. They simplify the current code and reduce
 
 ## Open questions
 
-1. **State updates.** bind's state is set once and never updated (read-only). Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `{ value, state_update }` and the engine destructures, or state is always overwritten with the handler's raw value.
+1. **State updates for RestartHandle.** Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `{ value, state_update }` and the engine destructures, or state is always overwritten with the handler's raw value. ResumeHandle doesn't have this problem — `captured_value` is write-once-read-many.
 
-2. **Resume handler error semantics.** If a resume handler's DAG fails, the body is NOT suspended (the ResumePerform frame propagates the error to its parent in the body). The error flows through the body's frame tree to the Handle frame's parent. Same behavior as if the body itself failed.
+2. **Resume handler error semantics.** If a resume handler's DAG fails, the error propagates through the handler's frames directly to `perform_parent` (since ResumePerform is transparent — no intermediate frame). The error flows through the body's frame tree to the Handle frame's parent. Same behavior as if the body itself failed.
 
 3. **Stash deletion sequencing.** The stash can be deleted only after both handler kinds stop suspending. If RestartPerform's immediate teardown lands first (before ResumePerform's inline execution), the stash is still needed for resume handlers. Both changes should land together or RestartPerform's teardown should land second.
