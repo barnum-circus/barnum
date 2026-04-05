@@ -252,13 +252,19 @@ The event loop processes one event at a time. There are three kinds of events, r
 ```rust
 // barnum_event_loop/src/lib.rs
 
+/// A completed task result from the scheduler.
+struct Completion {
+    task_id: TaskId,
+    value: Value,
+}
+
 enum Event {
     /// A handler invocation ready to be sent to a worker.
     Dispatch(Dispatch),
     /// A deferred restart to process.
     Restart(PendingRestart),
     /// A worker completed a task.
-    Completion { task_id: TaskId, value: Value },
+    Completion(Completion),
 }
 ```
 
@@ -321,7 +327,7 @@ pub async fn run_workflow(
                     .recv()
                     .await
                     .expect("scheduler channel closed unexpectedly");
-                Event::Completion { task_id, value: result? }
+                Event::Completion(Completion { task_id, value: result? })
             }
         };
 
@@ -336,7 +342,7 @@ pub async fn run_workflow(
             Event::Restart(pending_restart) => {
                 workflow_state.process_restart(pending_restart)?;
             }
-            Event::Completion { task_id, value } => {
+            Event::Completion(Completion { task_id, value }) => {
                 if !workflow_state.is_task_pending(task_id) {
                     continue;
                 }
