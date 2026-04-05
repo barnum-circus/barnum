@@ -439,8 +439,6 @@ These don't require the full refactor. They simplify the current code and reduce
 
 3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
 
-4. **Delete `Discard` handler output from tryCatch/race.** Recompile them to use the same restart+Branch pattern as loop (section 10). This can land without splitting Handle/Perform — just change `Tag("Discard")` to `Tag("RestartBody")` and restructure the body to use Branch. The engine's existing `RestartBody` path handles it.
-
 ## Open questions
 
 1. **State updates.** bind's state is set once and never updated (read-only). Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `{ value, state_update }` and the engine destructures, or state is always overwritten with the handler's raw value.
