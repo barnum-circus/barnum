@@ -41,20 +41,36 @@ After this change, every call to `advance()` runs to completion. Every child of 
 Advance produces effects: dispatches and restarts. Both go into a single FIFO queue. The engine exposes one-at-a-time access. The event loop processes them.
 
 ```rust
+// lib.rs — Dispatch rename (before)
+pub struct Dispatch {
+    pub task_id: TaskId,
+    pub handler_id: HandlerId,
+    pub value: Value,
+}
+
+// lib.rs — Dispatch rename (after)
+pub struct DispatchEvent {
+    pub task_id: TaskId,
+    pub handler_id: HandlerId,
+    pub value: Value,
+}
+```
+
+```rust
 // lib.rs
 
 /// An effect produced during advance.
 #[derive(Debug)]
 pub enum PendingEffect {
     /// A handler invocation ready to be dispatched to a worker.
-    Dispatch(Dispatch),
+    Dispatch(DispatchEvent),
     /// A deferred restart. The body will be torn down and the handler advanced.
-    Restart(PendingRestart),
+    Restart(PendingRestartEvent),
 }
 
 /// A deferred restart effect.
 #[derive(Debug)]
-pub struct PendingRestart {
+pub struct PendingRestartEvent {
     /// The `RestartHandle` frame that will process this restart.
     pub restart_handle_frame_id: FrameId,
     /// The payload value passed to the handler.
@@ -112,7 +128,7 @@ pub fn is_task_pending(&self, task_id: TaskId) -> bool {
 /// restart, this is a no-op.
 pub fn process_restart(
     &mut self,
-    pending_restart: PendingRestart,
+    pending_restart: PendingRestartEvent,
 ) -> Result<(), AdvanceError> {
     effects::process_restart(self, pending_restart)
 }
@@ -146,7 +162,7 @@ FlatAction::Invoke { handler } => {
         kind: FrameKind::Invoke { handler },
     });
     workflow_state.task_to_frame.insert(task_id, frame_id);
-    workflow_state.pending_effects.push_back(PendingEffect::Dispatch(Dispatch {
+    workflow_state.pending_effects.push_back(PendingEffect::Dispatch(DispatchEvent {
         task_id,
         handler_id: handler,
         value,
@@ -188,7 +204,7 @@ FlatAction::RestartPerform { restart_handler_id } => {
             })
             .ok_or(AdvanceError::UnhandledRestartEffect { restart_handler_id })?;
 
-    workflow_state.pending_effects.push_back(PendingEffect::Restart(PendingRestart {
+    workflow_state.pending_effects.push_back(PendingEffect::Restart(PendingRestartEvent {
         restart_handle_frame_id,
         payload: value,
     }));
@@ -202,9 +218,9 @@ FlatAction::RestartPerform { restart_handler_id } => {
 
 pub fn process_restart(
     workflow_state: &mut WorkflowState,
-    pending_restart: PendingRestart,
+    pending_restart: PendingRestartEvent,
 ) -> Result<(), AdvanceError> {
-    let PendingRestart {
+    let PendingRestartEvent {
         restart_handle_frame_id,
         payload,
     } = pending_restart;
@@ -253,18 +269,18 @@ The event loop processes one event at a time. There are three kinds of events, r
 // barnum_event_loop/src/lib.rs
 
 /// A completed task result from the scheduler.
-struct Completion {
+struct CompletionEvent {
     task_id: TaskId,
     value: Value,
 }
 
 enum Event {
     /// A handler invocation ready to be sent to a worker.
-    Dispatch(Dispatch),
+    Dispatch(DispatchEvent),
     /// A deferred restart to process.
-    Restart(PendingRestart),
+    Restart(PendingRestartEvent),
     /// A worker completed a task.
-    Completion(Completion),
+    Completion(CompletionEvent),
 }
 ```
 
@@ -320,29 +336,29 @@ pub async fn run_workflow(
     loop {
         // Source the next event: pending effects first, then block for completion.
         let event = match workflow_state.pop_pending_effect() {
-            Some(PendingEffect::Dispatch(dispatch)) => Event::Dispatch(dispatch),
-            Some(PendingEffect::Restart(pending_restart)) => Event::Restart(pending_restart),
+            Some(PendingEffect::Dispatch(dispatch_event)) => Event::Dispatch(dispatch_event),
+            Some(PendingEffect::Restart(pending_restart_event)) => Event::Restart(pending_restart_event),
             None => {
                 let (task_id, result) = scheduler
                     .recv()
                     .await
                     .expect("scheduler channel closed unexpectedly");
-                Event::Completion(Completion { task_id, value: result? })
+                Event::Completion(CompletionEvent { task_id, value: result? })
             }
         };
 
         // Process the event.
         match event {
-            Event::Dispatch(dispatch) => {
-                if workflow_state.is_task_pending(dispatch.task_id) {
-                    let handler = workflow_state.handler(dispatch.handler_id);
-                    scheduler.dispatch(&dispatch, handler);
+            Event::Dispatch(dispatch_event) => {
+                if workflow_state.is_task_pending(dispatch_event.task_id) {
+                    let handler = workflow_state.handler(dispatch_event.handler_id);
+                    scheduler.dispatch(&dispatch_event, handler);
                 }
             }
-            Event::Restart(pending_restart) => {
-                workflow_state.process_restart(pending_restart)?;
+            Event::Restart(pending_restart_event) => {
+                workflow_state.process_restart(pending_restart_event)?;
             }
-            Event::Completion(Completion { task_id, value }) => {
+            Event::Completion(CompletionEvent { task_id, value }) => {
                 if !workflow_state.is_task_pending(task_id) {
                     continue;
                 }
@@ -422,6 +438,7 @@ ParentRef::RestartHandle { frame_id, side } => match side {
 
 | Component | Before | After |
 |-----------|--------|-------|
+| `Dispatch` struct | Named `Dispatch` | Renamed to `DispatchEvent` |
 | `advance` for `Invoke` | Pushes to `pending_dispatches` | Pushes `PendingEffect::Dispatch` to `pending_effects` |
 | `advance` for `RestartPerform` | Calls `bubble_restart_effect` (teardown + handler advance) | Walks ancestors, pushes `PendingEffect::Restart` to `pending_effects` |
 | `bubble_restart_effect` | Exists in effects.rs | Deleted |
