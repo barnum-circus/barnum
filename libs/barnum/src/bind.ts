@@ -6,7 +6,7 @@ import {
   typedAction,
 } from "./ast.js";
 import { identity, drop } from "./builtins.js";
-import { allocateEffectId, type EffectId } from "./effect-id.js";
+import { allocateResumeHandlerId, type ResumeHandlerId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
 
 // ---------------------------------------------------------------------------
@@ -22,8 +22,8 @@ import { pipe } from "./pipe.js";
  */
 export type VarRef<TValue> = TypedAction<never, TValue>;
 
-function createVarRef<TValue>(effectId: EffectId): VarRef<TValue> {
-  return typedAction({ kind: "Perform", effect_id: effectId });
+function createVarRef<TValue>(resumeHandlerId: ResumeHandlerId): VarRef<TValue> {
+  return typedAction({ kind: "ResumePerform", resume_handler_id: resumeHandlerId });
 }
 
 // ---------------------------------------------------------------------------
@@ -50,35 +50,37 @@ export type InferVarRefs<TBindings extends Action[]> = {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns an action that extracts the nth value from the Handle's state
- * tuple and resumes with it. When a Perform fires, the engine calls the
- * handler with `[payload, state]`. For bind, `state` (index 1) is the
- * full All output tuple. The handler extracts `state[n]` and wraps it as
- * `{ kind: "Resume", value: state[n] }`.
+ * Returns an action that extracts the nth value from the ResumeHandle's
+ * state tuple and passes state through unchanged. When a ResumePerform
+ * fires, the engine calls the handler with `[payload, state]`. For bind,
+ * `state` (index 1) is the full All output tuple. The handler produces
+ * `[state[n], state]` — value is state[n], new_state is state (unchanged).
  *
- * Expanded AST: Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))
+ * Expanded AST: All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))
  */
 function readVar(n: number): Action {
   return {
-    kind: "Chain",
-    first: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
-    },
-    rest: {
-      kind: "Chain",
-      first: {
-        kind: "Invoke",
-        handler: {
-          kind: "Builtin",
-          builtin: { kind: "ExtractIndex", value: n },
+    kind: "All",
+    actions: [
+      {
+        kind: "Chain",
+        first: {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
+        },
+        rest: {
+          kind: "Invoke",
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "ExtractIndex", value: n },
+          },
         },
       },
-      rest: {
+      {
         kind: "Invoke",
-        handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } },
+        handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
       },
-    },
+    ],
   };
 }
 
@@ -96,8 +98,8 @@ function readVar(n: number): Action {
  * Compiles to:
  *   Chain(
  *     All(...bindings, Identity),
- *     Handle(e0, readVar(0),
- *       Handle(e1, readVar(1),
+ *     ResumeHandle(r0, readVar(0),
+ *       ResumeHandle(r1, readVar(1),
  *         Chain(ExtractIndex(N), body)
  *       )
  *     )
@@ -122,11 +124,11 @@ export function bind<TBindings extends Action[], TOut>(
   bindings: [...TBindings],
   body: (vars: InferVarRefs<TBindings>) => BodyResult<TOut>,
 ): TypedAction<ExtractInput<TBindings[number]>, TOut> {
-  // 1. Gensym one effectId per binding.
-  const effectIds = bindings.map(() => allocateEffectId());
+  // 1. Gensym one resumeHandlerId per binding.
+  const resumeHandlerIds = bindings.map(() => allocateResumeHandlerId());
 
-  // 2. Create VarRefs (Perform nodes) for each binding.
-  const varRefs = effectIds.map((id) => createVarRef(id));
+  // 2. Create VarRefs (ResumePerform nodes) for each binding.
+  const varRefs = resumeHandlerIds.map((id) => createVarRef(id));
 
   // 3. Invoke the body callback with the VarRefs.
   const bodyAction = body(varRefs as InferVarRefs<TBindings>) as Action;
@@ -145,10 +147,10 @@ export function bind<TBindings extends Action[], TOut>(
     },
     rest: bodyAction,
   };
-  for (let i = effectIds.length - 1; i >= 0; i--) {
+  for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
     inner = {
-      kind: "Handle",
-      effect_id: effectIds[i],
+      kind: "ResumeHandle",
+      resume_handler_id: resumeHandlerIds[i],
       handler: readVar(i),
       body: inner,
     };

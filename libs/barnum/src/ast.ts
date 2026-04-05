@@ -9,7 +9,9 @@ export type Action =
   | AllAction
   | BranchAction
   | HandleAction
-  | PerformAction;
+  | PerformAction
+  | ResumeHandleAction
+  | ResumePerformAction;
 
 export interface InvokeAction {
   kind: "Invoke";
@@ -47,6 +49,18 @@ export interface HandleAction {
 export interface PerformAction {
   kind: "Perform";
   effect_id: EffectId;
+}
+
+export interface ResumeHandleAction {
+  kind: "ResumeHandle";
+  resume_handler_id: ResumeHandlerId;
+  body: Action;
+  handler: Action;
+}
+
+export interface ResumePerformAction {
+  kind: "ResumePerform";
+  resume_handler_id: ResumeHandlerId;
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +665,7 @@ export { chain } from "./chain.js";
 export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
 export { resetEffectIdCounter } from "./effect-id.js";
-import { allocateEffectId, type EffectId } from "./effect-id.js";
+import { allocateEffectId, type EffectId, type ResumeHandlerId } from "./effect-id.js";
 export { tryCatch } from "./try-catch.js";
 export { race, sleep, withTimeout } from "./race.js";
 
