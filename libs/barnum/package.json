@@ -42,6 +42,7 @@
   "sideEffects": false,
   "devDependencies": {
     "@oxlint/binding-darwin-arm64": "^1.57.0",
+    "@types/json-schema": "^7.0.15",
     "@types/node": "^25.5.0",
     "oxlint": "^1.57.0",
     "prettier": "^3.8.1",
