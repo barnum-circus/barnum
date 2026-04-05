@@ -72,7 +72,106 @@ pub struct RestartHandleFrame {
 
 `ResumeHandleFrame` has no `status` — it never suspends.
 
-### 3. Split the AST nodes (Handle and Perform)
+### 3. Split FrameKind, ParentRef, and HandleSide
+
+The frame tree infrastructure mirrors the split. These are the enums that the engine dispatches on at every `deliver` and `advance`.
+
+**FrameKind — before** (`frame.rs:69`):
+
+```rust
+pub enum FrameKind {
+    Chain { rest: ActionId },
+    All { results: Vec<Option<Value>> },
+    ForEach { results: Vec<Option<Value>> },
+    Handle(HandleFrame),
+    Invoke { handler: HandlerId },
+}
+```
+
+**FrameKind — after:**
+
+```rust
+pub enum FrameKind {
+    Chain { rest: ActionId },
+    All { results: Vec<Option<Value>> },
+    ForEach { results: Vec<Option<Value>> },
+    ResumeHandle(ResumeHandleFrame),
+    RestartHandle(RestartHandleFrame),
+    Invoke { handler: HandlerId },
+}
+```
+
+**ParentRef — before** (`frame.rs:16`):
+
+```rust
+pub enum ParentRef {
+    Chain { frame_id: FrameId },
+    All { frame_id: FrameId, child_index: usize },
+    ForEach { frame_id: FrameId, child_index: usize },
+    Handle { frame_id: FrameId, side: HandleSide },
+}
+```
+
+**ParentRef — after:**
+
+```rust
+pub enum ParentRef {
+    Chain { frame_id: FrameId },
+    All { frame_id: FrameId, child_index: usize },
+    ForEach { frame_id: FrameId, child_index: usize },
+    ResumeHandle { frame_id: FrameId, side: ResumeHandleSide },
+    RestartHandle { frame_id: FrameId, side: RestartHandleSide },
+}
+```
+
+**HandleSide — before** (`frame.rs:46`):
+
+```rust
+pub enum HandleSide {
+    Body,
+    Handler,
+}
+```
+
+**HandleSide — after:** Two separate enums. `ResumeHandleSide` may not need a Handler variant at all if the resume handler DAG is inlined into `dispatch_to_handler` rather than spawned as a child frame. But if the handler DAG runs as a child:
+
+```rust
+pub enum ResumeHandleSide {
+    Body,
+    Handler,
+}
+
+pub enum RestartHandleSide {
+    Body,
+    Handler,
+}
+```
+
+**deliver — before** (`lib.rs:759`):
+
+```rust
+ParentRef::Handle { frame_id, side } => match side {
+    HandleSide::Body => { /* body completed, deliver to Handle's parent */ }
+    HandleSide::Handler => { /* handler completed, deserialize HandlerOutput, dispatch */ }
+}
+```
+
+**deliver — after:**
+
+```rust
+ParentRef::ResumeHandle { frame_id, side } => match side {
+    ResumeHandleSide::Body => { /* body completed, deliver to Handle's parent */ }
+    ResumeHandleSide::Handler => { /* handler completed, deliver raw value to perform_parent */ }
+}
+ParentRef::RestartHandle { frame_id, side } => match side {
+    RestartHandleSide::Body => { /* body completed, deliver to Handle's parent */ }
+    RestartHandleSide::Handler => { /* handler completed, teardown body, re-enter with raw value */ }
+}
+```
+
+No `HandlerOutput` deserialization in either arm. The `deliver` match determines behavior from the `ParentRef` variant, not from the handler's return value.
+
+### 4. Split the AST nodes (Handle and Perform)
 
 **Before** (`ast.ts:46`):
 
@@ -120,7 +219,7 @@ export interface RestartPerformAction {
 
 Same split in the Rust AST (`barnum_ast`).
 
-### 4. Delete HandlerOutput
+### 5. Delete HandlerOutput
 
 **Before** (`lib.rs:108`):
 
@@ -139,7 +238,7 @@ enum HandlerOutput {
 
 No deserialization. No tag matching.
 
-### 5. Change dispatch_to_handler
+### 6. Change dispatch_to_handler
 
 **Before** (`lib.rs:440`): Always suspends, always runs handler as child of the Handle frame on the Handler side.
 
@@ -148,7 +247,7 @@ No deserialization. No tag matching.
 - **ResumeHandleFrame**: Skip suspension. Run handler DAG. When handler completes, deliver value to `perform_parent`.
 - **RestartHandleFrame**: Suspend body. Run handler DAG. When handler completes, tear down body, re-enter with value.
 
-### 6. Change handle_handler_completion
+### 7. Change handle_handler_completion
 
 **Before** (`lib.rs:495`): Deserializes `HandlerOutput`, matches on Resume/Discard/RestartBody.
 
@@ -157,7 +256,7 @@ No deserialization. No tag matching.
 - **ResumeHandleFrame**: deliver to `perform_parent`. Apply state update if applicable.
 - **RestartHandleFrame**: `teardown_body` + `restart_body` with value. Apply state update.
 
-### 7. Update handler DAGs to produce raw values
+### 8. Update handler DAGs to produce raw values
 
 All handler DAGs drop their `Tag(...)` wrapping.
 
@@ -169,7 +268,7 @@ All handler DAGs drop their `Tag(...)` wrapping.
 | `loop` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
 | `scope`/`jump` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
 
-### 8. Recompile tryCatch and race as restart+Branch
+### 9. Recompile tryCatch and race as restart+Branch
 
 `tryCatch` and `race` currently use `Tag("Discard")` in the handler to exit the Handle directly. With only Resume and Restart, they use the same restart+Branch pattern as loop.
 
@@ -226,7 +325,7 @@ Chain(Tag("Continue"),
 
 First branch to complete tags Break, Performs. Handler extracts payload, engine restarts (tearing down the All and its remaining branches). Branch sees Break, identity completes, Handle exits with winner's value.
 
-### 9. All restart handlers share the same handler DAG
+### 10. All restart handlers share the same handler DAG
 
 Every restart handler's DAG is now: extract the payload from `{ payload, state }`. That's it. The handler doesn't decide what to do — the engine always restarts, and the body's Branch routes the value.
 
