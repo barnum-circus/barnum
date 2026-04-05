@@ -30,7 +30,9 @@ These validators drive TypeScript's compile-time types but are completely ignore
 
 ---
 
-## Phase 1: TypeScript changes
+## Task 1: Embed schemas in the AST
+
+Add `inputSchema` and `outputSchema` fields to the TypeScript handler AST node (both TS and Rust sides). Convert Zod validators to JSON Schema at `createHandler` / `createHandlerWithConfig` call time. Validate that the Zod schemas use only JSON-Schema-expressible types (reject `.transform()`, `.refine()`, `.pipe()`, `.preprocess()`, `z.map()`, `z.set()`, `z.promise()`, `z.function()`, `z.lazy()`, etc. at conversion time with a clear error).
 
 ### 1.1 Add `outputValidator` to `HandlerDefinition`
 
@@ -163,21 +165,58 @@ export interface TypeScriptHandler {
 }
 ```
 
-### 1.5 Convert Zod to JSON Schema in `createHandler` implementation
+### 1.5 Zod-to-JSON-Schema conversion with allowlist
 
-**File:** `libs/barnum/src/handler.ts`
+**File:** `libs/barnum/src/handler.ts` (or a new `libs/barnum/src/schema.ts`)
 
-In the implementation body of `createHandler`, convert validators to JSON Schema and embed them in the Invoke action:
+Convert Zod validators to JSON Schema using `zod-to-json-schema`. Before conversion, walk the Zod schema tree and reject types that can't be expressed as JSON Schema. This throws at handler definition time (module load), not at runtime.
+
+**Allowed Zod types** (the structural subset that maps cleanly to JSON Schema):
+- `z.string()`, `z.number()`, `z.boolean()`, `z.null()`, `z.undefined()`
+- `z.literal()`
+- `z.object()`, `z.array()`, `z.tuple()`, `z.record()`
+- `z.union()`, `z.discriminatedUnion()`, `z.intersection()`
+- `z.enum()`, `z.nativeEnum()`
+- `z.optional()`, `z.nullable()`
+- `z.unknown()`, `z.any()`
+- Modifiers: `.min()`, `.max()`, `.length()`, `.regex()`, `.email()`, `.url()`, etc.
+
+**Rejected Zod types** (no JSON Schema equivalent — throw at definition time):
+- `z.function()`, `z.promise()`, `z.void()` (as validator — void handlers just have no outputValidator)
+- `z.map()`, `z.set()`
+- `z.lazy()` (circular references)
+- `.transform()`, `.refine()`, `.superRefine()`, `.preprocess()`, `.pipe()`
 
 ```ts
 import { zodToJsonSchema } from "zod-to-json-schema";
 
+function zodToCheckedJsonSchema(schema: z.ZodType, label: string): unknown {
+  assertJsonSchemaCompatible(schema, label);
+  return zodToJsonSchema(schema);
+}
+
+function assertJsonSchemaCompatible(schema: z.ZodType, label: string): void {
+  // Walk the Zod schema's internal _def structure.
+  // Each Zod type has a _def.typeName (e.g., "ZodString", "ZodObject", etc.).
+  // Reject any typeName not in the allowlist.
+  // For compound types (ZodObject, ZodArray, ZodUnion, etc.), recurse into children.
+  //
+  // Throws: `Error: Handler "${label}": Zod type "${typeName}" cannot be
+  //          expressed as JSON Schema. Use only structural types.`
+}
+```
+
+### 1.6 Wire conversion into `createHandler` / `createHandlerWithConfig` implementations
+
+**File:** `libs/barnum/src/handler.ts`
+
+```ts
 // In createHandler implementation:
 const inputSchema = definition.inputValidator
-  ? zodToJsonSchema(definition.inputValidator)
+  ? zodToCheckedJsonSchema(definition.inputValidator, `${filePath}:${funcName} input`)
   : undefined;
 const outputSchema = definition.outputValidator
-  ? zodToJsonSchema(definition.outputValidator)
+  ? zodToCheckedJsonSchema(definition.outputValidator, `${filePath}:${funcName} output`)
   : undefined;
 
 const action = typedAction({
@@ -194,17 +233,7 @@ const action = typedAction({
 
 Same pattern in `createHandlerWithConfig`.
 
-### 1.6 Add `zod-to-json-schema` dependency
-
-```
-pnpm -C libs/barnum add zod-to-json-schema
-```
-
----
-
-## Phase 2: Rust changes
-
-### 2.1 Add schema fields to `TypeScriptHandler`
+### 1.7 Rust: add schema fields to `TypeScriptHandler`
 
 **File:** `crates/barnum_ast/src/lib.rs`
 
@@ -230,7 +259,23 @@ pub struct TypeScriptHandler {
 
 Note: `PartialEq` and `Eq` may need to be dropped or manually implemented since `serde_json::Value` doesn't impl `Eq`. Alternatively, wrap in a newtype.
 
-### 2.2 Add `jsonschema` crate dependency
+### 1.8 Add `zod-to-json-schema` dependency
+
+```
+pnpm -C libs/barnum add zod-to-json-schema
+```
+
+### 1.9 Add output validators to all demos
+
+See [Appendix: Demo output validators](#appendix-demo-output-validators) for the full list.
+
+---
+
+## Task 2: Compile and validate schemas on Rust side
+
+When the Rust binary deserializes the config, compile all JSON Schema documents into validators using the `jsonschema` crate. This serves two purposes: (a) validates that the schemas themselves are valid JSON Schema (catching malformed schemas at init, not at first handler invocation), and (b) caches compiled validators for use in Task 3.
+
+### 2.1 Add `jsonschema` crate dependency
 
 **File:** `crates/barnum_event_loop/Cargo.toml`
 
@@ -239,11 +284,9 @@ Note: `PartialEq` and `Eq` may need to be dropped or manually implemented since 
 jsonschema = "0.28"  # or latest
 ```
 
-### 2.3 Compile schemas at workflow init
+### 2.2 Compile schemas at workflow init, panic on invalid schema
 
 **File:** `crates/barnum_event_loop/src/lib.rs`
-
-At the start of `run_workflow`, iterate all handlers in the flat config, compile any JSON Schema documents into validators, and store them in a map keyed by handler ID. This avoids recompiling schemas on every dispatch.
 
 ```rust
 use jsonschema::Validator;
@@ -260,13 +303,21 @@ fn compile_schemas(workflow_state: &WorkflowState) -> CompiledSchemas {
     for (handler_id, handler) in workflow_state.handlers() {
         if let HandlerKind::TypeScript(ts) = handler {
             if let Some(ref schema) = ts.input_schema {
-                let validator = Validator::new(schema)
-                    .expect("invalid input JSON Schema for {ts.module}:{ts.func}");
+                let validator = Validator::new(schema).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid input JSON Schema for {}:{}: {err}",
+                        ts.module.lookup(), ts.func.lookup(),
+                    )
+                });
                 input.insert(handler_id, validator);
             }
             if let Some(ref schema) = ts.output_schema {
-                let validator = Validator::new(schema)
-                    .expect("invalid output JSON Schema for {ts.module}:{ts.func}");
+                let validator = Validator::new(schema).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid output JSON Schema for {}:{}: {err}",
+                        ts.module.lookup(), ts.func.lookup(),
+                    )
+                });
                 output.insert(handler_id, validator);
             }
         }
@@ -275,49 +326,87 @@ fn compile_schemas(workflow_state: &WorkflowState) -> CompiledSchemas {
 }
 ```
 
-### 2.4 Validate at dispatch and completion
+Call `compile_schemas` at the top of `run_workflow`, before the main loop. Any invalid schema panics immediately with a clear message identifying the handler.
+
+---
+
+## Task 3: Validate handler inputs and outputs at runtime
+
+Use the compiled schemas from Task 2 to validate values at the handler boundary. Panic on failure.
+
+### 3.1 Validate input before dispatch
 
 **File:** `crates/barnum_event_loop/src/lib.rs`
 
-In the `run_workflow` loop:
+In the `run_workflow` dispatch loop:
 
 ```rust
-// Before dispatch:
 for dispatch in &dispatches {
     let handler = workflow_state.handler(dispatch.handler_id);
     // TODO: elide redundant validation when adjacent schemas match
     if let Some(validator) = compiled_schemas.input.get(&dispatch.handler_id) {
-        let result = validator.validate(&dispatch.value);
-        if let Err(errors) = result {
+        let errors: Vec<_> = validator.iter_errors(&dispatch.value).collect();
+        if !errors.is_empty() {
             panic!(
-                "input validation failed for {}:{}: {}",
-                handler.module(), handler.func(),
-                format_validation_errors(errors),
+                "input validation failed for {}:{}:\n{}",
+                ts.module.lookup(), ts.func.lookup(),
+                format_validation_errors(&errors),
             );
         }
     }
     scheduler.dispatch(dispatch, handler);
 }
+```
 
-// After completion:
+### 3.2 Validate output after completion
+
+**File:** `crates/barnum_event_loop/src/lib.rs`
+
+After receiving a handler result, before passing to `complete()`:
+
+```rust
 let value = result?;
+
+// Look up which handler produced this task.
+// task_to_frame maps TaskId → FrameId, frame has handler_id.
+// We need to read handler_id BEFORE complete() removes the frame.
+let handler_id = workflow_state.handler_id_for_task(task_id);
+
 // TODO: elide redundant validation when adjacent schemas match
-if let Some(validator) = compiled_schemas.output.get(&handler_id_for_task) {
-    let result = validator.validate(&value);
-    if let Err(errors) = result {
+if let Some(validator) = compiled_schemas.output.get(&handler_id) {
+    let errors: Vec<_> = validator.iter_errors(&value).collect();
+    if !errors.is_empty() {
+        let handler = workflow_state.handler(handler_id);
         panic!(
-            "output validation failed for handler: {}",
-            format_validation_errors(errors),
+            "output validation failed for {}:{}:\n{}",
+            handler.module(), handler.func(),
+            format_validation_errors(&errors),
         );
     }
 }
+
+if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+    return Ok(terminal_value);
+}
 ```
 
-Note: output validation needs to look up which handler produced the task. The `task_to_frame` map connects TaskId → FrameId → HandlerId. We'll need to capture the handler_id before calling `complete()` (which removes the frame). Store the mapping in the scheduler or track it separately.
+Note: `handler_id_for_task` is a new method on `WorkflowState` that reads from `task_to_frame` without removing the entry. Currently `complete()` does `task_to_frame.remove()`. We need to read the handler_id first (via `task_to_frame.get()` → frame → handler_id) before `complete()` consumes it.
+
+### 3.3 `format_validation_errors` helper
+
+```rust
+fn format_validation_errors(errors: &[jsonschema::ValidationError]) -> String {
+    errors
+        .iter()
+        .map(|e| format!("  - {}: {}", e.instance_path, e))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+```
 
 ---
 
-## Phase 3: Add output validators to all demos
+## Appendix: Demo output validators
 
 ### simple-workflow/handlers/steps.ts
 
@@ -350,7 +439,7 @@ All 6 handlers in this demo return `string` or `string[]`. Add:
 
 ### retry-on-error/handlers/steps.ts
 
-Uses `Result<string, string>` return type. The `StepResult` type:
+Uses `Result<string, string>` return type. Extract a shared validator:
 
 ```ts
 const StepResultValidator = z.union([
