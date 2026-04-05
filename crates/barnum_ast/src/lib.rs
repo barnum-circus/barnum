@@ -8,6 +8,9 @@
 //! them to JSON. Rust deserializes and interprets them.
 
 pub mod flat;
+mod json_schema;
+
+pub use json_schema::JsonSchema;
 
 use std::collections::HashMap;
 
