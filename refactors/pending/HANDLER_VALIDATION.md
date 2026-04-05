@@ -123,6 +123,12 @@ This can happen at workflow init time: iterate all handlers in the flat config, 
 | `zod-to-json-schema` (npm) | `@barnum/barnum` | Convert Zod schemas to JSON Schema at construction time |
 | `jsonschema` (crate) | `barnum_event_loop` | Validate values against JSON Schema at runtime |
 
+## Future optimization: eliding redundant validation
+
+When two handlers are adjacent in a chain and the first handler's output schema is identical to the second handler's input schema, the output validation of the first and input validation of the second are redundant — one of them can be skipped. More generally, if a value flows through builtins (which are trusted) between two handlers with matching schemas, the intermediate validation can be elided.
+
+This is a pure optimization and not part of this refactor. Implement naive validate-everything first, then add schema equality checks to skip redundant passes. Leave `// TODO: elide redundant validation when adjacent schemas match` comments at the validation call sites.
+
 ## What this does NOT include
 
 - **No `Validate` builtin.** Validation is not a user-composable action in the pipeline. It's automatic enforcement at the handler boundary.
