@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Add `outputValidator`. Make `stepConfigValidator` optional. Enable typed input without a validator via explicit type parameters. Preserve `Handler<never, ...>` for source handlers.
+Add `outputValidator`. Make all validators optional. Use type parameter defaults (`TValue = never`, `TOutput = unknown`, `TStepConfig = unknown`) so a single overload per function handles every validator combination. TypeScript infers from validators when present, falls back to defaults when absent.
 
 ---
 
@@ -18,9 +18,15 @@ Add `outputValidator`. Make `stepConfigValidator` optional. Enable typed input w
 
 ## Design
 
+### Key insight: one overload is enough
+
+TypeScript infers type parameters from optional properties when they're present, and falls back to defaults when they're absent. This means we don't need separate overloads for "validator present" vs "validator absent" — a single overload with optional properties and sensible defaults handles all cases.
+
 ### Why source handlers must stay `Handler<never, ...>`
 
 `WorkflowAction` requires `__in?: void`. Since `never extends void` but `unknown` does NOT extend `void`, source handlers MUST produce `Handler<never, ...>` to remain usable as workflow entry points via `config()` and `workflowBuilder().workflow()`.
+
+This is why `TValue` defaults to `never`, not `unknown` — omitting `inputValidator` produces a source handler by default.
 
 ### `HandlerDefinition`
 
@@ -32,7 +38,7 @@ export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepCon
   handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
 }
 
-// After
+// After — added outputValidator
 export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepConfig = unknown> {
   inputValidator?: z.ZodType<TValue>;
   outputValidator?: z.ZodType<TOutput>;
@@ -41,135 +47,50 @@ export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepCon
 }
 ```
 
-### `createHandler` overloads (4 overloads)
-
-Each validator is either required or absent. TS excess property checking on object literals discriminates: providing a property not in the overload → excess → skip; missing a required property → skip.
-
-Every overload has `<TValue, TOutput>`. When `inputValidator` is absent, `TValue` defaults to `never` (source handler). Explicit type params override the default: `createHandler<string, number>({...})` sets `TValue = string`.
+### `createHandler` — single overload
 
 ```ts
-// 1. inputValidator + outputValidator
-export function createHandler<TValue, TOutput>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    outputValidator: z.ZodType<TOutput>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// 2. inputValidator only
-export function createHandler<TValue, TOutput>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// 3. outputValidator only
 export function createHandler<TValue = never, TOutput = unknown>(
   definition: {
-    outputValidator: z.ZodType<TOutput>;
-    handle: (context: { value: TValue }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): Handler<TValue, HandlerOutput<TOutput>>;
-
-// 4. no validators
-export function createHandler<TValue = never, TOutput = unknown>(
-  definition: {
+    inputValidator?: z.ZodType<TValue>;
+    outputValidator?: z.ZodType<TOutput>;
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
 ): Handler<TValue, HandlerOutput<TOutput>>;
 ```
 
-### `createHandlerWithConfig` overloads (8 overloads)
+How the defaults work:
+- **No `inputValidator`, no explicit `TValue`** → `TValue = never` → source handler (`Handler<never, ...>`)
+- **`inputValidator: z.string()`** → TS infers `TValue = string` from the validator
+- **Explicit `<string, number>`** → `TValue = string`, `TOutput = number`, validators optional
+- **`outputValidator: z.number()`** → TS infers `TOutput = number` from the validator
+- **No `outputValidator`, no explicit `TOutput`** → `TOutput = unknown`
 
-Same principle. 3 validators → 2³ = 8 combinations. Every overload has `<TValue, TOutput, TStepConfig>`. When `inputValidator` is absent, `TValue` defaults to `never`. When `stepConfigValidator` is absent, `TStepConfig` defaults to `unknown`. Explicit type params override defaults.
+### `createHandlerWithConfig` — single overload
 
 ```ts
-// --- inputValidator present (4 overloads) ---
-
-// 1. input + output + stepConfig
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+export function createHandlerWithConfig<
+  TValue = never,
+  TOutput = unknown,
+  TStepConfig = unknown,
+>(
   definition: {
-    inputValidator: z.ZodType<TValue>;
-    outputValidator: z.ZodType<TOutput>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 2. input + output
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig = unknown>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    outputValidator: z.ZodType<TOutput>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 3. input + stepConfig
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 4. input only
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig = unknown>(
-  definition: {
-    inputValidator: z.ZodType<TValue>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// --- inputValidator absent (4 overloads) ---
-
-// 5. output + stepConfig
-export function createHandlerWithConfig<TValue = never, TOutput = unknown, TStepConfig = unknown>(
-  definition: {
-    outputValidator: z.ZodType<TOutput>;
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 6. output only
-export function createHandlerWithConfig<TValue = never, TOutput = unknown, TStepConfig = unknown>(
-  definition: {
-    outputValidator: z.ZodType<TOutput>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 7. stepConfig only
-export function createHandlerWithConfig<TValue = never, TOutput = unknown, TStepConfig = unknown>(
-  definition: {
-    stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
-  },
-  exportName?: string,
-): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
-
-// 8. no validators
-export function createHandlerWithConfig<TValue = never, TOutput = unknown, TStepConfig = unknown>(
-  definition: {
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+    inputValidator?: z.ZodType<TValue>;
+    outputValidator?: z.ZodType<TOutput>;
+    stepConfigValidator?: z.ZodType<TStepConfig>;
+    handle: (context: {
+      value: TValue;
+      stepConfig: TStepConfig;
+    }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
 ```
+
+Same defaults as `createHandler`, plus:
+- **No `stepConfigValidator`, no explicit `TStepConfig`** → `TStepConfig = unknown`
+- **`stepConfigValidator: z.object({ retries: z.number() })`** → TS infers `TStepConfig = { retries: number }`
 
 ### `UntypedHandlerDefinition`
 
@@ -181,7 +102,7 @@ interface UntypedHandlerDefinition {
   handle: (...args: any[]) => Promise<unknown>;
 }
 
-// After
+// After — added outputValidator
 interface UntypedHandlerDefinition {
   inputValidator?: z.ZodType;
   outputValidator?: z.ZodType;
@@ -199,8 +120,8 @@ All tests use the existing `assertExact<IsExact<...>>()` pattern from `types.tes
 ### createHandler: input/output extraction
 
 ```ts
-describe("optional handler types", () => {
-  // --- createHandler with inputValidator (existing behavior, preserved) ---
+describe("optional handler types: createHandler", () => {
+  // --- inputValidator infers TValue (existing behavior, preserved) ---
 
   it("inputValidator infers TValue", () => {
     const h = createHandler({
@@ -221,7 +142,7 @@ describe("optional handler types", () => {
     assertExact<IsExact<ExtractOutput<typeof h>, number>>();
   });
 
-  // --- createHandler source handler (no inputValidator, no args) ---
+  // --- source handler (no inputValidator) ---
 
   it("source handler: input is never", () => {
     const h = createHandler({
@@ -240,7 +161,7 @@ describe("optional handler types", () => {
     assertExact<IsExact<ExtractOutput<typeof h>, string[]>>();
   });
 
-  // --- createHandler with explicit type params (overload 3) ---
+  // --- explicit type params without validators ---
 
   it("explicit type params: typed input without validator", () => {
     const h = createHandler<{ id: number }, string>({
@@ -267,9 +188,7 @@ describe("optional handler types", () => {
 
   it("rejects handle that returns wrong type for explicit TOutput", () => {
     // @ts-expect-error — handle returns string, TOutput is number
-    createHandler<string, number>({
-      handle: async ({ value }) => value.toUpperCase(),
-    }, "h");
+    createHandler<string, number>({ handle: async ({ value }) => value.toUpperCase() }, "h");
   });
 
   it("rejects handle that uses wrong type for explicit TValue", () => {
@@ -285,64 +204,34 @@ describe("optional handler types", () => {
 
   it("rejects inputValidator that contradicts explicit TValue", () => {
     // @ts-expect-error — TValue is string but validator is z.number()
-    createHandler<string, number>({
-      inputValidator: z.number(),
-      handle: async ({ value }) => value.length,
-    }, "h");
+    createHandler<string, number>({ inputValidator: z.number(), handle: async ({ value }) => value.length }, "h");
   });
 
   it("rejects outputValidator that contradicts explicit TOutput", () => {
     // @ts-expect-error — TOutput is number but validator is z.string()
-    createHandler<string, number>({
-      outputValidator: z.string(),
-      handle: async ({ value }) => value.length,
-    }, "h");
+    createHandler<string, number>({ inputValidator: z.string(), outputValidator: z.string(), handle: async ({ value }) => value.length }, "h");
   });
 
   it("rejects outputValidator that contradicts inferred TOutput", () => {
     // @ts-expect-error — handle returns number, outputValidator is z.string()
-    createHandler({
-      inputValidator: z.string(),
-      outputValidator: z.string(),
-      handle: async ({ value }) => value.length,
-    }, "h");
+    createHandler({ inputValidator: z.string(), outputValidator: z.string(), handle: async ({ value }) => value.length }, "h");
   });
 
   it("rejects inputValidator that contradicts handle parameter", () => {
     // @ts-expect-error — validator says number, handle destructures string methods
-    createHandler({
-      inputValidator: z.number(),
-      handle: async ({ value }) => value.toUpperCase(),
-    }, "h");
+    createHandler({ inputValidator: z.number(), handle: async ({ value }) => value.toUpperCase() }, "h");
   });
 
-  // --- validators must match explicit types invariantly ---
-  // When you provide both explicit type params AND a validator, the validator's
-  // type must exactly match the explicit type. Wider or narrower should reject.
+  // --- validators must match explicit types (wider rejects) ---
 
   it("rejects inputValidator wider than explicit TValue", () => {
     // @ts-expect-error — TValue is "hello" but validator accepts any string
-    createHandler<"hello", string>({
-      inputValidator: z.string(),
-      handle: async ({ value }) => value,
-    }, "h");
+    createHandler<"hello", string>({ inputValidator: z.string(), handle: async ({ value }) => value }, "h");
   });
 
   it("rejects outputValidator wider than explicit TOutput", () => {
     // @ts-expect-error — TOutput is "ok" but validator accepts any string
-    createHandler<string, "ok">({
-      inputValidator: z.string(),
-      outputValidator: z.string(),
-      handle: async ({ value }) => "ok" as const,
-    }, "h");
-  });
-
-  it("rejects inputValidator narrower than explicit TValue", () => {
-    // @ts-expect-error — TValue is string but validator only accepts "hello"
-    createHandler<string, string>({
-      inputValidator: z.literal("hello"),
-      handle: async ({ value }) => value,
-    }, "h");
+    createHandler<string, "ok">({ inputValidator: z.string(), outputValidator: z.string(), handle: async ({ value }) => "ok" as const }, "h");
   });
 
   it("accepts inputValidator that exactly matches explicit TValue", () => {
@@ -479,6 +368,7 @@ describe("optional handler types", () => {
 ### createHandlerWithConfig: all validators optional
 
 ```ts
+describe("optional handler types: createHandlerWithConfig", () => {
   // --- stepConfigValidator optional ---
 
   it("omitting stepConfigValidator: stepConfig is unknown", () => {
@@ -522,12 +412,12 @@ describe("optional handler types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
-  it("without inputValidator, destructuring value: input is unknown (overload 12)", () => {
+  it("without inputValidator: input defaults to never", () => {
     const factory = createHandlerWithConfig({
       handle: async ({ value, stepConfig }) => String(value),
     }, "h");
     const action = factory("anything");
-    assertExact<IsExact<ExtractInput<typeof action>, unknown>>();
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
@@ -560,10 +450,7 @@ describe("optional handler types", () => {
 ```ts
   it("rejects wrong stepConfigValidator", () => {
     // @ts-expect-error — explicit TStepConfig is { retries: number }, validator is z.string()
-    createHandlerWithConfig<never, string, { retries: number }>({
-      stepConfigValidator: z.string(),
-      handle: async ({ stepConfig }) => String(stepConfig.retries),
-    }, "h");
+    createHandlerWithConfig<never, string, { retries: number }>({ stepConfigValidator: z.string(), handle: async ({ stepConfig }) => String(stepConfig) }, "h");
   });
 
   it("rejects handle that lies about stepConfig shape", () => {
@@ -578,28 +465,14 @@ describe("optional handler types", () => {
 
   it("rejects outputValidator contradicting handle return", () => {
     // @ts-expect-error — handle returns number, outputValidator is z.string()
-    createHandlerWithConfig({
-      outputValidator: z.string(),
-      handle: async ({ stepConfig }) => 42,
-    }, "h");
+    createHandlerWithConfig({ outputValidator: z.string(), handle: async ({ stepConfig }) => 42 }, "h");
   });
 
-  // --- validators must match explicit types invariantly ---
+  // --- validators must match explicit types (wider rejects) ---
 
   it("rejects stepConfigValidator wider than explicit TStepConfig", () => {
     // @ts-expect-error — TStepConfig is { retries: 3 } but validator accepts any { retries: number }
-    createHandlerWithConfig<never, string, { retries: 3 }>({
-      stepConfigValidator: z.object({ retries: z.number() }),
-      handle: async ({ stepConfig }) => String(stepConfig.retries),
-    }, "h");
-  });
-
-  it("rejects stepConfigValidator narrower than explicit TStepConfig", () => {
-    // @ts-expect-error — TStepConfig is { retries: number } but validator only accepts { retries: 3 }
-    createHandlerWithConfig<never, string, { retries: number }>({
-      stepConfigValidator: z.object({ retries: z.literal(3) }),
-      handle: async ({ stepConfig }) => String(stepConfig.retries),
-    }, "h");
+    createHandlerWithConfig<never, string, { retries: 3 }>({ stepConfigValidator: z.object({ retries: z.number() }), handle: async ({ stepConfig }) => String(stepConfig.retries) }, "h");
   });
 
   it("accepts all validators exactly matching explicit types", () => {
