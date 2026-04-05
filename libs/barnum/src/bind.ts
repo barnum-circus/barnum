@@ -1,4 +1,10 @@
-import { type Action, type ExtractInput, type ExtractOutput, type TypedAction, typedAction } from "./ast.js";
+import {
+  type Action,
+  type ExtractInput,
+  type ExtractOutput,
+  type TypedAction,
+  typedAction,
+} from "./ast.js";
 import { identity, drop } from "./builtins.js";
 import { allocateEffectId, type EffectId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
@@ -55,11 +61,23 @@ export type InferVarRefs<TBindings extends Action[]> = {
 function readVar(n: number): Action {
   return {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
+    first: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
+    },
     rest: {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
-      rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
+      first: {
+        kind: "Invoke",
+        handler: {
+          kind: "Builtin",
+          builtin: { kind: "ExtractIndex", value: n },
+        },
+      },
+      rest: {
+        kind: "Invoke",
+        handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } },
+      },
     },
   };
 }
@@ -118,7 +136,13 @@ export function bind<TBindings extends Action[], TOut>(
   const pipelineInputIndex = bindings.length;
   let inner: Action = {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: pipelineInputIndex } } },
+    first: {
+      kind: "Invoke",
+      handler: {
+        kind: "Builtin",
+        builtin: { kind: "ExtractIndex", value: pipelineInputIndex },
+      },
+    },
     rest: bodyAction,
   };
   for (let i = effectIds.length - 1; i >= 0; i--) {
@@ -156,7 +180,5 @@ export function bind<TBindings extends Action[], TOut>(
 export function bindInput<TIn, TOut = any>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
-  return bind([identity], ([input]) =>
-    pipe(drop, body(input)),
-  );
+  return bind([identity], ([input]) => pipe(drop, body(input)));
 }

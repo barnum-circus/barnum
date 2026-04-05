@@ -170,9 +170,9 @@ describe("loop", () => {
     // Handle body: Branch with Continue/Break cases
     expect(chain.rest.body.kind).toBe("Branch");
     expect(Object.keys(chain.rest.body.cases).sort()).toEqual(["Break", "Continue"]);
-    // Handle handler: Chain(ExtractField("payload"), Tag("RestartBody"))
+    // Handle handler: Chain(ExtractIndex(0), Tag("RestartBody"))
     expect(chain.rest.handler.kind).toBe("Chain");
-    expect(chain.rest.handler.first.handler.builtin.value).toBe("payload");
+    expect(chain.rest.handler.first.handler.builtin.value).toBe(0);
     expect(chain.rest.handler.rest.handler.builtin.value).toBe("RestartBody");
   });
 
@@ -453,10 +453,10 @@ describe("bind", () => {
     const handle = outer.rest as { kind: "Handle"; effect_id: number; handler: any; body: any };
     expect(typeof handle.effect_id).toBe("number");
 
-    // Handle handler: readVar(0) = Chain(ExtractField("state"), Chain(ExtractIndex(0), Tag("Resume")))
+    // Handle handler: readVar(0) = Chain(ExtractIndex(1), Chain(ExtractIndex(0), Tag("Resume")))
     expect(handle.handler.kind).toBe("Chain");
-    expect(handle.handler.first.handler.builtin.kind).toBe("ExtractField");
-    expect(handle.handler.first.handler.builtin.value).toBe("state");
+    expect(handle.handler.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.first.handler.builtin.value).toBe(1);
     expect(handle.handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
     expect(handle.handler.rest.first.handler.builtin.value).toBe(0);
     expect(handle.handler.rest.rest.handler.builtin.kind).toBe("Tag");
@@ -537,7 +537,7 @@ describe("bind", () => {
     expect(ref1.effect_id).not.toBe(ref2.effect_id);
   });
 
-  it("readVar(n) structure is Chain(ExtractField('state'), Chain(ExtractIndex(n), Tag('Resume')))", () => {
+  it("readVar(n) structure is Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag('Resume')))", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
@@ -552,9 +552,9 @@ describe("bind", () => {
     for (const [handle, expectedIndex] of [[handle0, 0], [handle1, 1], [handle2, 2]] as const) {
       const handler = handle.handler;
       expect(handler.kind).toBe("Chain");
-      // ExtractField("state")
-      expect(handler.first.handler.builtin.kind).toBe("ExtractField");
-      expect(handler.first.handler.builtin.value).toBe("state");
+      // ExtractIndex(1) — extract state from [payload, state] tuple
+      expect(handler.first.handler.builtin.kind).toBe("ExtractIndex");
+      expect(handler.first.handler.builtin.value).toBe(1);
       // ExtractIndex(n)
       expect(handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
       expect(handler.rest.first.handler.builtin.value).toBe(expectedIndex);

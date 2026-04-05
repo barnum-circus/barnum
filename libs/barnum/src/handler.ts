@@ -37,7 +37,10 @@ const HANDLER_BRAND = Symbol.for("barnum:handler");
  * Opaque handler reference with typed metadata. The `__definition` property
  * is non-enumerable — invisible to `JSON.stringify`, visible to the worker.
  */
-export type Handler<TValue = unknown, TOutput = unknown> = TypedAction<TValue, TOutput> & {
+export type Handler<TValue = unknown, TOutput = unknown> = TypedAction<
+  TValue,
+  TOutput
+> & {
   readonly [HANDLER_BRAND]: true;
   readonly __definition: UntypedHandlerDefinition;
 };
@@ -144,7 +147,10 @@ export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
   definition: {
     inputValidator: z.ZodType<TValue>;
     stepConfigValidator: z.ZodType<TStepConfig>;
-    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+    handle: (context: {
+      value: TValue;
+      stepConfig: TStepConfig;
+    }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
@@ -199,8 +205,17 @@ export function createHandlerWithConfig(
       first: {
         kind: "All",
         actions: [
-          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
-          { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: config } } },
+          {
+            kind: "Invoke",
+            handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+          },
+          {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: config },
+            },
+          },
         ],
       },
       rest: invokeAction,

@@ -222,3 +222,95 @@ pub fn deliver(
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use crate::test_helpers::*;
+    use serde_json::json;
+
+    /// Chain(A, B): complete A -> dispatches B. Complete B -> workflow done.
+    #[test]
+    fn chain_trampolines_on_completion() {
+        let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let d1 = engine.take_pending_dispatches();
+        assert_eq!(d1.len(), 1);
+
+        let result = engine.complete(d1[0].task_id, json!("a_result")).unwrap();
+        assert_eq!(result, None);
+
+        let d2 = engine.take_pending_dispatches();
+        assert_eq!(d2.len(), 1);
+        assert_eq!(d2[0].value, json!("a_result"));
+
+        let result = engine.complete(d2[0].task_id, json!("b_result")).unwrap();
+        assert_eq!(result, Some(json!("b_result")));
+    }
+
+    /// Deep chain: Chain(A, Chain(B, C)) -> A -> B -> C -> done.
+    #[test]
+    fn nested_chain_completes() {
+        let mut engine = engine_from(chain(
+            invoke("./a.ts", "a"),
+            chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // A
+        let d = engine.take_pending_dispatches();
+        assert_eq!(engine.complete(d[0].task_id, json!("a_out")).unwrap(), None);
+        // B
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!("a_out"));
+        assert_eq!(engine.complete(d[0].task_id, json!("b_out")).unwrap(), None);
+        // C
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d[0].value, json!("b_out"));
+        assert_eq!(
+            engine.complete(d[0].task_id, json!("c_out")).unwrap(),
+            Some(json!("c_out")),
+        );
+    }
+
+    /// `All(A, B)`: complete both -> workflow done with collected results.
+    #[test]
+    fn parallel_collects_results() {
+        let mut engine = engine_from(parallel(vec![invoke("./a.ts", "a"), invoke("./b.ts", "b")]));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d.len(), 2);
+
+        // Complete in reverse order to verify index-based collection.
+        assert_eq!(
+            engine.complete(d[1].task_id, json!("b_result")).unwrap(),
+            None,
+        );
+        assert_eq!(
+            engine.complete(d[0].task_id, json!("a_result")).unwrap(),
+            Some(json!(["a_result", "b_result"])),
+        );
+    }
+
+    /// `ForEach` over array: complete both -> collected results.
+    #[test]
+    fn foreach_collects_results() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!([10, 20]), None).unwrap();
+
+        let d = engine.take_pending_dispatches();
+        assert_eq!(d.len(), 2);
+
+        assert_eq!(engine.complete(d[0].task_id, json!("r10")).unwrap(), None);
+        assert_eq!(
+            engine.complete(d[1].task_id, json!("r20")).unwrap(),
+            Some(json!(["r10", "r20"])),
+        );
+    }
+}

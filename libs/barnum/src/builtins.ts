@@ -1,4 +1,12 @@
-import { type Action, type Option as OptionT, type Pipeable, type Result as ResultT, type TaggedUnion, type TypedAction, typedAction } from "./ast.js";
+import {
+  type Action,
+  type Option as OptionT,
+  type Pipeable,
+  type Result as ResultT,
+  type TaggedUnion,
+  type TypedAction,
+  typedAction,
+} from "./ast.js";
 import { chain } from "./chain.js";
 
 /**
@@ -51,9 +59,7 @@ export const drop: TypedAction<any, never> = typedAction({
 export function tag<
   TDef extends Record<string, unknown>,
   TKind extends keyof TDef & string,
->(
-  kind: TKind,
-): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
+>(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
@@ -112,10 +118,9 @@ export function extractField<
 // ExtractIndex — extract a single element from an array by index
 // ---------------------------------------------------------------------------
 
-export function extractIndex<
-  TTuple extends unknown[],
-  TIndex extends number,
->(index: TIndex): TypedAction<TTuple, TTuple[TIndex]> {
+export function extractIndex<TTuple extends unknown[], TIndex extends number>(
+  index: TIndex,
+): TypedAction<TTuple, TTuple[TIndex]> {
   return typedAction({
     kind: "Invoke",
     handler: {
@@ -151,7 +156,10 @@ export function dropResult<TInput, TOutput, TRefs extends string = never>(
   return typedAction({
     kind: "Chain",
     first: action as Action,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Drop" } },
+    },
   });
 }
 
@@ -205,13 +213,19 @@ export function withResource<
 
   // Step 2: all(action, identity) → [TOut, TResource & TIn]
   // Keep merged object so dispose can access resource fields.
-  const actionAndKeepMerged = typedAction<TResource & TIn, [TOut, TResource & TIn]>({
+  const actionAndKeepMerged = typedAction<
+    TResource & TIn,
+    [TOut, TResource & TIn]
+  >({
     kind: "All",
     actions: [action as Action, identity as Action],
   });
 
   // Step 3: all(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
-  const disposeAndKeepResult = typedAction<[TOut, TResource & TIn], [TOut, unknown]>({
+  const disposeAndKeepResult = typedAction<
+    [TOut, TResource & TIn],
+    [TOut, unknown]
+  >({
     kind: "All",
     actions: [
       extractIndex<[TOut, TResource & TIn], 0>(0) as Action,
@@ -257,7 +271,10 @@ export function augment<
       kind: "All",
       actions: [action as Action, identity as Action],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   });
 }
 
@@ -277,9 +294,10 @@ export function augment<
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
-export function tap<TInput extends Record<string, unknown>, TRefs extends string = never>(
-  action: Pipeable<TInput, any, TRefs>,
-): TypedAction<TInput, TInput, TRefs> {
+export function tap<
+  TInput extends Record<string, unknown>,
+  TRefs extends string = never,
+>(action: Pipeable<TInput, any, TRefs>): TypedAction<TInput, TInput, TRefs> {
   // Build AST directly — internal plumbing (action → constant → augment)
   // can't go through typed chain/augment with invariant phantom fields.
   // tap: all(chain(action, constant({})), identity()) → merge
@@ -291,12 +309,24 @@ export function tap<TInput extends Record<string, unknown>, TRefs extends string
         {
           kind: "Chain",
           first: action as Action,
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: {} } } },
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Constant", value: {} },
+            },
+          },
         },
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+        {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   });
 }
 
@@ -304,10 +334,7 @@ export function tap<TInput extends Record<string, unknown>, TRefs extends string
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 
-export function range(
-  start: number,
-  end: number,
-): TypedAction<any, number[]> {
+export function range(start: number, end: number): TypedAction<any, number[]> {
   const result: number[] = [];
   for (let i = start; i < end; i++) {
     result.push(i);
@@ -323,11 +350,29 @@ export function range(
 // ---------------------------------------------------------------------------
 
 // Shared AST fragments for Option desugaring
-const TAG_SOME: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } } };
-const TAG_NONE: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } } };
-const EXTRACT_VALUE: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } };
-const DROP: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } };
-const IDENTITY: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } };
+const TAG_SOME: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } },
+};
+const TAG_NONE: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } },
+};
+const EXTRACT_VALUE: Action = {
+  kind: "Invoke",
+  handler: {
+    kind: "Builtin",
+    builtin: { kind: "ExtractField", value: "value" },
+  },
+};
+const DROP: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Drop" } },
+};
+const IDENTITY: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+};
 
 /** Wrap branch cases with ExtractField("value") auto-unwrapping. */
 function optionBranch(someCaseBody: Action, noneCaseBody: Action): Action {
@@ -370,10 +415,12 @@ export const Option = {
    * Desugars to: `branch({ Some: pipe(action, tag("Some")), None: tag("None") })`
    */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
-    return typedAction(optionBranch(
-      { kind: "Chain", first: action as Action, rest: TAG_SOME },
-      TAG_NONE,
-    ));
+    return typedAction(
+      optionBranch(
+        { kind: "Chain", first: action as Action, rest: TAG_SOME },
+        TAG_NONE,
+      ),
+    );
   },
 
   /**
@@ -385,11 +432,10 @@ export const Option = {
    *
    * Desugars to: `branch({ Some: action, None: tag("None") })`
    */
-  andThen<T, U>(action: Pipeable<T, OptionT<U>>): TypedAction<OptionT<T>, OptionT<U>> {
-    return typedAction(optionBranch(
-      action as Action,
-      TAG_NONE,
-    ));
+  andThen<T, U>(
+    action: Pipeable<T, OptionT<U>>,
+  ): TypedAction<OptionT<T>, OptionT<U>> {
+    return typedAction(optionBranch(action as Action, TAG_NONE));
   },
 
   /**
@@ -410,7 +456,11 @@ export const Option = {
       kind: "Branch",
       cases: {
         Some: { kind: "Chain", first: EXTRACT_VALUE, rest: IDENTITY },
-        None: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: DROP, rest: defaultAction as Action } },
+        None: {
+          kind: "Chain",
+          first: EXTRACT_VALUE,
+          rest: { kind: "Chain", first: DROP, rest: defaultAction as Action },
+        },
       },
     });
   },
@@ -421,10 +471,7 @@ export const Option = {
    * Desugars to: `branch({ Some: identity(), None: tag("None") })`
    */
   flatten<T>(): TypedAction<OptionT<OptionT<T>>, OptionT<T>> {
-    return typedAction(optionBranch(
-      IDENTITY,
-      TAG_NONE,
-    ));
+    return typedAction(optionBranch(IDENTITY, TAG_NONE));
   },
 
   /**
@@ -437,11 +484,10 @@ export const Option = {
    *
    * Desugars to: `branch({ Some: predicate, None: tag("None") })`
    */
-  filter<T>(predicate: Pipeable<T, OptionT<T>>): TypedAction<OptionT<T>, OptionT<T>> {
-    return typedAction(optionBranch(
-      predicate as Action,
-      TAG_NONE,
-    ));
+  filter<T>(
+    predicate: Pipeable<T, OptionT<T>>,
+  ): TypedAction<OptionT<T>, OptionT<T>> {
+    return typedAction(optionBranch(predicate as Action, TAG_NONE));
   },
 
   /**
@@ -467,12 +513,20 @@ export const Option = {
    * Desugars to: `branch({ Some: pipe(drop(), constant(true)), None: pipe(drop(), constant(false)) })`
    */
   isSome<T>(): TypedAction<OptionT<T>, boolean> {
-    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
-    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
-    return typedAction(optionBranch(
-      { kind: "Chain", first: DROP, rest: constTrue },
-      { kind: "Chain", first: DROP, rest: constFalse },
-    ));
+    const constTrue: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } },
+    };
+    const constFalse: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } },
+    };
+    return typedAction(
+      optionBranch(
+        { kind: "Chain", first: DROP, rest: constTrue },
+        { kind: "Chain", first: DROP, rest: constFalse },
+      ),
+    );
   },
 
   /**
@@ -483,12 +537,20 @@ export const Option = {
    * Desugars to: `branch({ Some: pipe(drop(), constant(false)), None: pipe(drop(), constant(true)) })`
    */
   isNone<T>(): TypedAction<OptionT<T>, boolean> {
-    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
-    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
-    return typedAction(optionBranch(
-      { kind: "Chain", first: DROP, rest: constFalse },
-      { kind: "Chain", first: DROP, rest: constTrue },
-    ));
+    const constTrue: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } },
+    };
+    const constFalse: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } },
+    };
+    return typedAction(
+      optionBranch(
+        { kind: "Chain", first: DROP, rest: constFalse },
+        { kind: "Chain", first: DROP, rest: constTrue },
+      ),
+    );
   },
 } as const;
 
@@ -497,8 +559,14 @@ export const Option = {
 // ---------------------------------------------------------------------------
 
 // Shared AST fragments for Result desugaring
-const TAG_OK: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } };
-const TAG_ERR: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } };
+const TAG_OK: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
+};
+const TAG_ERR: Action = {
+  kind: "Invoke",
+  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
+};
 
 /** Wrap branch cases with ExtractField("value") auto-unwrapping. */
 function resultBranch(okCaseBody: Action, errCaseBody: Action): Action {
@@ -538,10 +606,12 @@ export const Result = {
   map<TValue, TOut, TError>(
     action: Pipeable<TValue, TOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
-    return typedAction(resultBranch(
-      { kind: "Chain", first: action as Action, rest: TAG_OK },
-      TAG_ERR,
-    ));
+    return typedAction(
+      resultBranch(
+        { kind: "Chain", first: action as Action, rest: TAG_OK },
+        TAG_ERR,
+      ),
+    );
   },
 
   /**
@@ -552,10 +622,13 @@ export const Result = {
   mapErr<TValue, TError, TErrorOut>(
     action: Pipeable<TError, TErrorOut>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
-    return typedAction(resultBranch(
-      TAG_OK,
-      { kind: "Chain", first: action as Action, rest: TAG_ERR },
-    ));
+    return typedAction(
+      resultBranch(TAG_OK, {
+        kind: "Chain",
+        first: action as Action,
+        rest: TAG_ERR,
+      }),
+    );
   },
 
   /**
@@ -567,10 +640,7 @@ export const Result = {
   andThen<TValue, TOut, TError>(
     action: Pipeable<TValue, ResultT<TOut, TError>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
-    return typedAction(resultBranch(
-      action as Action,
-      TAG_ERR,
-    ));
+    return typedAction(resultBranch(action as Action, TAG_ERR));
   },
 
   /**
@@ -582,10 +652,7 @@ export const Result = {
   or<TValue, TError, TErrorOut>(
     fallback: Pipeable<TError, ResultT<TValue, TErrorOut>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>> {
-    return typedAction(resultBranch(
-      TAG_OK,
-      fallback as Action,
-    ));
+    return typedAction(resultBranch(TAG_OK, fallback as Action));
   },
 
   /**
@@ -597,10 +664,12 @@ export const Result = {
   and<TValue, TOut, TError>(
     other: Pipeable<never, ResultT<TOut, TError>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
-    return typedAction(resultBranch(
-      { kind: "Chain", first: DROP, rest: other as Action },
-      TAG_ERR,
-    ));
+    return typedAction(
+      resultBranch(
+        { kind: "Chain", first: DROP, rest: other as Action },
+        TAG_ERR,
+      ),
+    );
   },
 
   /**
@@ -621,10 +690,7 @@ export const Result = {
       __phantom_out?: () => TValue;
     },
   ): TypedAction<ResultT<TValue, TError>, TValue> {
-    return typedAction(resultBranch(
-      IDENTITY,
-      defaultAction as Action,
-    ));
+    return typedAction(resultBranch(IDENTITY, defaultAction as Action));
   },
 
   /**
@@ -632,11 +698,11 @@ export const Result = {
    *
    * Desugars to: `branch({ Ok: identity(), Err: tag("Err") })`
    */
-  flatten<TValue, TError>(): TypedAction<ResultT<ResultT<TValue, TError>, TError>, ResultT<TValue, TError>> {
-    return typedAction(resultBranch(
-      IDENTITY,
-      TAG_ERR,
-    ));
+  flatten<TValue, TError>(): TypedAction<
+    ResultT<ResultT<TValue, TError>, TError>,
+    ResultT<TValue, TError>
+  > {
+    return typedAction(resultBranch(IDENTITY, TAG_ERR));
   },
 
   /**
@@ -644,11 +710,13 @@ export const Result = {
    *
    * Desugars to: `branch({ Ok: tag("Some"), Err: pipe(drop(), tag("None")) })`
    */
-  toOption<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TValue>> {
-    return typedAction(resultBranch(
-      TAG_SOME,
-      { kind: "Chain", first: DROP, rest: TAG_NONE },
-    ));
+  toOption<TValue, TError>(): TypedAction<
+    ResultT<TValue, TError>,
+    OptionT<TValue>
+  > {
+    return typedAction(
+      resultBranch(TAG_SOME, { kind: "Chain", first: DROP, rest: TAG_NONE }),
+    );
   },
 
   /**
@@ -656,53 +724,84 @@ export const Result = {
    *
    * Desugars to: `branch({ Ok: pipe(drop(), tag("None")), Err: tag("Some") })`
    */
-  toOptionErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TError>> {
-    return typedAction(resultBranch(
-      { kind: "Chain", first: DROP, rest: TAG_NONE },
-      TAG_SOME,
-    ));
+  toOptionErr<TValue, TError>(): TypedAction<
+    ResultT<TValue, TError>,
+    OptionT<TError>
+  > {
+    return typedAction(
+      resultBranch({ kind: "Chain", first: DROP, rest: TAG_NONE }, TAG_SOME),
+    );
   },
 
   /**
    * Swap Result/Option nesting.
    * `Result<Option<TValue>, TError> → Option<Result<TValue, TError>>`
    */
-  transpose<TValue, TError>(): TypedAction<ResultT<OptionT<TValue>, TError>, OptionT<ResultT<TValue, TError>>> {
-    return typedAction(resultBranch(
-      // Ok case: receives Option<TValue>, branch on Some/None
-      {
-        kind: "Branch",
-        cases: {
-          Some: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: TAG_OK, rest: TAG_SOME } },
-          None: { kind: "Chain", first: EXTRACT_VALUE, rest: { kind: "Chain", first: DROP, rest: TAG_NONE } },
+  transpose<TValue, TError>(): TypedAction<
+    ResultT<OptionT<TValue>, TError>,
+    OptionT<ResultT<TValue, TError>>
+  > {
+    return typedAction(
+      resultBranch(
+        // Ok case: receives Option<TValue>, branch on Some/None
+        {
+          kind: "Branch",
+          cases: {
+            Some: {
+              kind: "Chain",
+              first: EXTRACT_VALUE,
+              rest: { kind: "Chain", first: TAG_OK, rest: TAG_SOME },
+            },
+            None: {
+              kind: "Chain",
+              first: EXTRACT_VALUE,
+              rest: { kind: "Chain", first: DROP, rest: TAG_NONE },
+            },
+          },
         },
-      },
-      // Err case: receives TError, wrap as Result.err then Option.some
-      { kind: "Chain", first: TAG_ERR, rest: TAG_SOME },
-    ));
+        // Err case: receives TError, wrap as Result.err then Option.some
+        { kind: "Chain", first: TAG_ERR, rest: TAG_SOME },
+      ),
+    );
   },
 
   /**
    * Test if the value is Ok. `Result<TValue, TError> → boolean`
    */
   isOk<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
-    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
-    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
-    return typedAction(resultBranch(
-      { kind: "Chain", first: DROP, rest: constTrue },
-      { kind: "Chain", first: DROP, rest: constFalse },
-    ));
+    const constTrue: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } },
+    };
+    const constFalse: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } },
+    };
+    return typedAction(
+      resultBranch(
+        { kind: "Chain", first: DROP, rest: constTrue },
+        { kind: "Chain", first: DROP, rest: constFalse },
+      ),
+    );
   },
 
   /**
    * Test if the value is Err. `Result<TValue, TError> → boolean`
    */
   isErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
-    const constTrue: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } } };
-    const constFalse: Action = { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } } };
-    return typedAction(resultBranch(
-      { kind: "Chain", first: DROP, rest: constFalse },
-      { kind: "Chain", first: DROP, rest: constTrue },
-    ));
+    const constTrue: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: true } },
+    };
+    const constFalse: Action = {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Constant", value: false } },
+    };
+    return typedAction(
+      resultBranch(
+        { kind: "Chain", first: DROP, rest: constFalse },
+        { kind: "Chain", first: DROP, rest: constTrue },
+      ),
+    );
   },
 } as const;

@@ -133,14 +133,16 @@ export interface Config<Out = any> {
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type UnionToIntersection<TUnion> = (TUnion extends any ? (x: TUnion) => void : never) extends (
-  x: infer TIntersection,
-) => void
+type UnionToIntersection<TUnion> = (
+  TUnion extends any ? (x: TUnion) => void : never
+) extends (x: infer TIntersection) => void
   ? TIntersection
   : never;
 
 /** Merge a tuple of objects into a single intersection type. */
-export type MergeTuple<TTuple> = TTuple extends unknown[] ? UnionToIntersection<TTuple[number]> : never;
+export type MergeTuple<TTuple> = TTuple extends unknown[]
+  ? UnionToIntersection<TTuple[number]>
+  : never;
 
 // ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking
@@ -181,16 +183,38 @@ export type TypedAction<
     next: Pipeable<Out, TNext, TRefs2>,
   ): TypedAction<In, TNext, Refs | TRefs2>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
-  forEach<TIn, TElement, TNext, TRefs extends string, TRefs2 extends string = never>(
+  forEach<
+    TIn,
+    TElement,
+    TNext,
+    TRefs extends string,
+    TRefs2 extends string = never,
+  >(
     this: TypedAction<TIn, TElement[], TRefs>,
     action: Pipeable<TElement, TNext, TRefs2>,
   ): TypedAction<TIn, TNext[], TRefs | TRefs2>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
-  branch<TCases extends { [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>, unknown, string> }>(
+  branch<
+    TCases extends {
+      [K in BranchKeys<Out>]: CaseHandler<
+        BranchPayload<Out, K>,
+        unknown,
+        string
+      >;
+    },
+  >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
-  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs | ExtractRefs<TCases[keyof TCases & string]>>;
+  ): TypedAction<
+    In,
+    ExtractOutput<TCases[keyof TCases & string]>,
+    Refs | ExtractRefs<TCases[keyof TCases & string]>
+  >;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
-  flatten(): TypedAction<In, Out extends (infer TElement)[][] ? TElement[] : Out, Refs>;
+  flatten(): TypedAction<
+    In,
+    Out extends (infer TElement)[][] ? TElement[] : Out,
+    Refs
+  >;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, never, Refs>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
@@ -198,7 +222,9 @@ export type TypedAction<
     kind: TKind,
   ): TypedAction<In, TaggedUnion<TDef>, Refs>;
   /** Extract a field from the output object. `a.get("name")` ≡ `pipe(a, extractField("name"))`. */
-  get<TField extends keyof Out & string>(field: TField): TypedAction<In, Out[TField], Refs>;
+  get<TField extends keyof Out & string>(
+    field: TField,
+  ): TypedAction<In, Out[TField], Refs>;
   /**
    * Run this sub-pipeline, then merge its output back into the original input.
    * `pipe(extractField("x"), transform).augment()` takes `In`, runs the
@@ -303,7 +329,11 @@ export type Pipeable<
  * TypedAction is assignable to CaseHandler because CaseHandler only
  * requires a subset of TypedAction's phantom fields.
  */
-type CaseHandler<TIn = unknown, TOut = unknown, TRefs extends string = never> = Action & {
+type CaseHandler<
+  TIn = unknown,
+  TOut = unknown,
+  TRefs extends string = never,
+> = Action & {
   __phantom_in?: (input: TIn) => void;
   __phantom_out?: () => TOut;
   __refs?: { _brand: TRefs };
@@ -352,50 +382,65 @@ type UnwrapVariant<T> = T extends { value: infer V } ? V : T;
  * output carries __def. Falls back to KindOf (conditional type) for
  * outputs without __def.
  */
-type BranchKeys<Out> =
-  [ExtractDef<Out>] extends [never] ? KindOf<Out> : keyof ExtractDef<Out> & string;
+type BranchKeys<Out> = [ExtractDef<Out>] extends [never]
+  ? KindOf<Out>
+  : keyof ExtractDef<Out> & string;
 
 /**
  * Branch case payload: prefer ExtractDef[K] (simple indexing) when available.
  * Falls back to UnwrapVariant<Extract<Out, { kind: K }>> for outputs without __def.
  */
-type BranchPayload<Out, K extends string> =
-  [ExtractDef<Out>] extends [never]
-    ? UnwrapVariant<Extract<Out, { kind: K }>>
-    : K extends keyof ExtractDef<Out> ? ExtractDef<Out>[K] : never;
-
+type BranchPayload<Out, K extends string> = [ExtractDef<Out>] extends [never]
+  ? UnwrapVariant<Extract<Out, { kind: K }>>
+  : K extends keyof ExtractDef<Out>
+    ? ExtractDef<Out>[K]
+    : never;
 
 // ---------------------------------------------------------------------------
 // typedAction — attach .then() and .forEach() as non-enumerable methods
 // ---------------------------------------------------------------------------
 
 // Shared implementations (one closure, not per-instance)
-function thenMethod<TIn, TOut, TRefs extends string, TNext, TRefs2 extends string>(
+function thenMethod<
+  TIn,
+  TOut,
+  TRefs extends string,
+  TNext,
+  TRefs2 extends string,
+>(
   this: TypedAction<TIn, TOut, TRefs>,
   next: Pipeable<TOut, TNext, TRefs2>,
 ): TypedAction<TIn, TNext, TRefs | TRefs2> {
   return typedAction({ kind: "Chain", first: this, rest: next as Action });
 }
 
-function forEachMethod(
-  this: TypedAction,
-  action: Action,
-): TypedAction {
-  return typedAction({ kind: "Chain", first: this, rest: { kind: "ForEach", action } });
+function forEachMethod(this: TypedAction, action: Action): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "ForEach", action },
+  });
 }
 
 function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
 ): TypedAction {
-  return typedAction({ kind: "Chain", first: this, rest: { kind: "Branch", cases: unwrapBranchCases(cases) } });
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: { kind: "Branch", cases: unwrapBranchCases(cases) },
+  });
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Flatten" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
+    },
   });
 }
 
@@ -403,7 +448,10 @@ function dropMethod(this: TypedAction): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Drop" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Drop" } },
+    },
   });
 }
 
@@ -411,7 +459,10 @@ function tagMethod(this: TypedAction, kind: string): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
+    },
   });
 }
 
@@ -419,7 +470,13 @@ function getMethod(this: TypedAction, field: string): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } } },
+    rest: {
+      kind: "Invoke",
+      handler: {
+        kind: "Builtin",
+        builtin: { kind: "ExtractField", value: field },
+      },
+    },
   });
 }
 
@@ -433,10 +490,16 @@ function augmentMethod(this: TypedAction): TypedAction {
       kind: "All",
       actions: [
         this as Action,
-        { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+        {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+        },
       ],
     },
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   });
 }
 
@@ -444,7 +507,10 @@ function mergeMethod(this: TypedAction): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Merge" } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
+    },
   });
 }
 
@@ -452,7 +518,10 @@ function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
-    rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } } },
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } },
+    },
   });
 }
 
@@ -466,9 +535,22 @@ function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
     first: this,
     rest: {
       kind: "Branch",
-          cases: unwrapBranchCases({
-        Some: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Some" } } } },
-        None: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } } },
+      cases: unwrapBranchCases({
+        Some: {
+          kind: "Chain",
+          first: action,
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Tag", value: "Some" },
+            },
+          },
+        },
+        None: {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } },
+        },
       }),
     },
   });
@@ -481,9 +563,22 @@ function mapErrMethod(this: TypedAction, action: Action): TypedAction {
     first: this,
     rest: {
       kind: "Branch",
-          cases: unwrapBranchCases({
-        Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
-        Err: { kind: "Chain", first: action, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
+      cases: unwrapBranchCases({
+        Ok: {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
+        },
+        Err: {
+          kind: "Chain",
+          first: action,
+          rest: {
+            kind: "Invoke",
+            handler: {
+              kind: "Builtin",
+              builtin: { kind: "Tag", value: "Err" },
+            },
+          },
+        },
       }),
     },
   });
@@ -496,8 +591,11 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
     first: this,
     rest: {
       kind: "Branch",
-          cases: unwrapBranchCases({
-        Ok: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Identity" } } },
+      cases: unwrapBranchCases({
+        Ok: {
+          kind: "Invoke",
+          handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+        },
         Err: defaultAction,
       }),
     },
@@ -508,9 +606,11 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
  */
-export function typedAction<In = unknown, Out = unknown, Refs extends string = never>(
-  action: Action,
-): TypedAction<In, Out, Refs> {
+export function typedAction<
+  In = unknown,
+  Out = unknown,
+  Refs extends string = never,
+>(action: Action): TypedAction<In, Out, Refs> {
   if (!("then" in action)) {
     Object.defineProperties(action, {
       then: { value: thenMethod, configurable: true },
@@ -542,16 +642,20 @@ export function typedAction<In = unknown, Out = unknown, Refs extends string = n
  * avoid the `TypedAction<any, any, any>` constraint which fails for In=never
  * due to __phantom_in contravariance.
  */
-export type ExtractInput<T> =
-  T extends { __phantom_in?: (input: infer In) => void } ? In : never;
+export type ExtractInput<T> = T extends {
+  __phantom_in?: (input: infer In) => void;
+}
+  ? In
+  : never;
 
 /**
  * Extract the output type from a TypedAction.
  *
  * Uses direct phantom field extraction to avoid constraint issues.
  */
-export type ExtractOutput<T> =
-  T extends { __phantom_out?: () => infer Out } ? Out : never;
+export type ExtractOutput<T> = T extends { __phantom_out?: () => infer Out }
+  ? Out
+  : never;
 
 /**
  * Extract step reference names tracked in a TypedAction's Refs parameter.
@@ -559,12 +663,11 @@ export type ExtractOutput<T> =
  * Uses direct __refs extraction (not full TypedAction matching) to avoid
  * variance issues with contravariant __phantom_in when In = never.
  */
-export type ExtractRefs<T> =
-  T extends { __refs?: { _brand: infer R } }
-    ? R extends string
-      ? R
-      : never
-    : never;
+export type ExtractRefs<T> = T extends { __refs?: { _brand: infer R } }
+  ? R extends string
+    ? R
+    : never
+  : never;
 
 /**
  * Validates that all step references in R resolve to known step names
@@ -574,9 +677,9 @@ export type ExtractRefs<T> =
  * When valid: resolves to {} (transparent intersection).
  * When invalid: resolves to a type with __error that causes a compile error.
  */
-export type ValidateStepRefs<
-  R extends Record<string, Action>,
-> = [ExtractRefs<R[keyof R]>] extends [keyof R]
+export type ValidateStepRefs<R extends Record<string, Action>> = [
+  ExtractRefs<R[keyof R]>,
+] extends [keyof R]
   ? // eslint-disable-next-line @typescript-eslint/no-empty-object-type
     {}
   : {
@@ -702,12 +805,20 @@ export function forEach<In, Out, R extends string = never>(
  * extracts `value` before passing to the handler. Case handlers receive
  * the payload directly, not the full `{ kind, value }` variant.
  */
-function unwrapBranchCases(cases: Record<string, Action>): Record<string, Action> {
+function unwrapBranchCases(
+  cases: Record<string, Action>,
+): Record<string, Action> {
   const unwrapped: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
     unwrapped[key] = {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+      first: {
+        kind: "Invoke",
+        handler: {
+          kind: "Builtin",
+          builtin: { kind: "ExtractField", value: "value" },
+        },
+      },
       rest: cases[key],
     };
   }
@@ -746,7 +857,9 @@ type LoopResultDef<TContinue, TBreak> = {
   Break: TBreak;
 };
 
-export type LoopResult<TContinue, TBreak> = TaggedUnion<LoopResultDef<TContinue, TBreak>>;
+export type LoopResult<TContinue, TBreak> = TaggedUnion<
+  LoopResultDef<TContinue, TBreak>
+>;
 
 // ---------------------------------------------------------------------------
 // Shared AST constants for control flow compilation
@@ -833,8 +946,15 @@ export function recur<TIn = never, TOut = any, TRefs extends string = never>(
  * a Branch. earlyReturn tags with Break and performs — the handler restarts
  * the body, Branch takes the Break path, and the value exits.
  */
-export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any, TRefs extends string = never>(
-  bodyFn: (earlyReturn: TypedAction<TEarlyReturn, never>) => Pipeable<TIn, TOut, TRefs>,
+export function earlyReturn<
+  TEarlyReturn = never,
+  TIn = any,
+  TOut = any,
+  TRefs extends string = never,
+>(
+  bodyFn: (
+    earlyReturn: TypedAction<TEarlyReturn, never>,
+  ) => Pipeable<TIn, TOut, TRefs>,
 ): TypedAction<TIn, TEarlyReturn | TOut, TRefs> {
   const effectId = allocateEffectId();
 
@@ -862,7 +982,11 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any, TRefs e
  *
  * Used by earlyReturn, loop, tryCatch, and race.
  */
-export function buildRestartBranchAction(effectId: EffectId, continueArm: Action, breakArm: Action): Action {
+export function buildRestartBranchAction(
+  effectId: EffectId,
+  continueArm: Action,
+  breakArm: Action,
+): Action {
   return {
     kind: "Chain",
     first: TAG_CONTINUE,
@@ -952,7 +1076,10 @@ type AnyAction = TypedAction<any, any, any>;
  * they shouldn't propagate into the workflow callback's return type.
  */
 type StripRefs<TSteps> = {
-  [K in keyof TSteps]: TypedAction<ExtractInput<TSteps[K]>, ExtractOutput<TSteps[K]>>;
+  [K in keyof TSteps]: TypedAction<
+    ExtractInput<TSteps[K]>,
+    ExtractOutput<TSteps[K]>
+  >;
 };
 
 /** Simple config with no named steps. */
@@ -1016,7 +1143,10 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   ): ConfigBuilder<TSteps & R> {
     const resolved =
       typeof stepsOrBuild === "function"
-        ? stepsOrBuild({ steps: this._buildStepRefs() as StripRefs<TSteps>, stepRef })
+        ? stepsOrBuild({
+            steps: this._buildStepRefs() as StripRefs<TSteps>,
+            stepRef,
+          })
         : stepsOrBuild;
     return new ConfigBuilder({
       ...this._steps,
@@ -1058,13 +1188,19 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
   ): RunnableConfig<Out> {
     const stepRefs: Record<string, Action> = {};
     for (const name of Object.keys(this._steps)) {
-      stepRefs[name] = typedAction({ kind: "Step", step: { kind: "Named", name } });
+      stepRefs[name] = typedAction({
+        kind: "Step",
+        step: { kind: "Named", name },
+      });
     }
     const self = typedAction<never, never>({
       kind: "Step",
       step: { kind: "Root" },
     });
-    const workflowAction = build({ steps: stepRefs as StripRefs<TSteps>, self });
+    const workflowAction = build({
+      steps: stepRefs as StripRefs<TSteps>,
+      self,
+    });
     const steps = Object.keys(this._steps).length > 0 ? this._steps : undefined;
     return new RunnableConfig(workflowAction, steps);
   }

@@ -31,18 +31,35 @@ function resolveInstalledBinary(): string | undefined {
   let artifactDir: string;
   let binaryName = "barnum";
 
-  if (platform === "darwin" && arch === "arm64") artifactDir = "macos-arm64";
-  else if (platform === "darwin") artifactDir = "macos-x64";
-  else if (platform === "linux" && arch === "arm64") artifactDir = "linux-arm64";
-  else if (platform === "linux") artifactDir = "linux-x64";
-  else if (platform === "win32") { artifactDir = "win-x64"; binaryName = "barnum.exe"; }
-  else return undefined;
+  if (platform === "darwin" && arch === "arm64") {
+    artifactDir = "macos-arm64";
+  } else if (platform === "darwin") {
+    artifactDir = "macos-x64";
+  } else if (platform === "linux" && arch === "arm64") {
+    artifactDir = "linux-arm64";
+  } else if (platform === "linux") {
+    artifactDir = "linux-x64";
+  } else if (platform === "win32") {
+    artifactDir = "win-x64";
+    binaryName = "barnum.exe";
+  } else {
+    return undefined;
+  }
 
   const callerRequire = createRequire(process.argv[1] || import.meta.url);
   try {
-    const packageDir = path.dirname(callerRequire.resolve("@barnum/barnum/package.json"));
-    const binaryPath = path.join(packageDir, "artifacts", artifactDir, binaryName);
-    if (existsSync(binaryPath)) return binaryPath;
+    const packageDir = path.dirname(
+      callerRequire.resolve("@barnum/barnum/package.json"),
+    );
+    const binaryPath = path.join(
+      packageDir,
+      "artifacts",
+      artifactDir,
+      binaryName,
+    );
+    if (existsSync(binaryPath)) {
+      return binaryPath;
+    }
   } catch {
     // Package not installed
   }
@@ -93,7 +110,7 @@ function buildBinary(): void {
 }
 
 /** Run a workflow config to completion. Prints result to stdout. */
-export async function run(config: Config): Promise<void> {
+export function run(config: Config): Promise<void> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinary();
@@ -103,18 +120,25 @@ export async function run(config: Config): Promise<void> {
   const configJson = JSON.stringify(config);
 
   return new Promise<void>((resolve, reject) => {
-    const child = nodeSpawn(binaryResolution.path, [
-      "run",
-      "--config", configJson,
-      "--executor", executor,
-      "--worker", worker,
-    ], {
-      stdio: ["inherit", "inherit", "pipe"],
-    });
+    const child = nodeSpawn(
+      binaryResolution.path,
+      [
+        "run",
+        "--config",
+        configJson,
+        "--executor",
+        executor,
+        "--worker",
+        worker,
+      ],
+      {
+        stdio: ["inherit", "inherit", "pipe"],
+      },
+    );
 
     const stderrChunks: Buffer[] = [];
 
-    child.stderr!.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       stderrChunks.push(chunk);
       process.stderr.write(chunk);
     });
@@ -125,7 +149,7 @@ export async function run(config: Config): Promise<void> {
 
     child.on("close", (code) => {
       if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf-8").trim();
+        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
         const message = stderr
           ? `barnum exited with code ${code}:\n${stderr}`
           : `barnum exited with code ${code} (no stderr output)`;

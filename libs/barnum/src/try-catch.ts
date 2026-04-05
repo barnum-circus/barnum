@@ -1,4 +1,11 @@
-import { type Action, type Pipeable, type TypedAction, typedAction, buildRestartBranchAction, TAG_BREAK } from "./ast.js";
+import {
+  type Action,
+  type Pipeable,
+  type TypedAction,
+  typedAction,
+  buildRestartBranchAction,
+  TAG_BREAK,
+} from "./ast.js";
 import { allocateEffectId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
@@ -41,5 +48,7 @@ export function tryCatch<TIn, TOut, TError>(
 
   const bodyAction = body(throwError) as Action;
 
-  return typedAction(buildRestartBranchAction(effectId, bodyAction, recovery as Action));
+  return typedAction(
+    buildRestartBranchAction(effectId, bodyAction, recovery as Action),
+  );
 }

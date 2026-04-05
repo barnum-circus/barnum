@@ -129,3 +129,36 @@ pub struct Frame {
     /// Kind-specific state.
     pub kind: FrameKind,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use barnum_ast::flat::ActionId;
+    use thunderdome::Arena;
+
+    /// Removing a frame and reusing its slot must not let the old `FrameId`
+    /// resolve — the generational index rejects stale references.
+    #[test]
+    fn stale_frame_id_returns_none() {
+        let mut arena = Arena::<Frame>::new();
+
+        let old_id = arena.insert(Frame {
+            parent: None,
+            kind: FrameKind::Chain { rest: ActionId(0) },
+        });
+
+        arena.remove(old_id);
+
+        // Insert a new frame — thunderdome may reuse the same slot.
+        let _new_id = arena.insert(Frame {
+            parent: None,
+            kind: FrameKind::Chain { rest: ActionId(0) },
+        });
+
+        // The old id must not resolve, even if the slot was reused.
+        assert!(
+            arena.get(old_id).is_none(),
+            "stale FrameId must not match a reused slot"
+        );
+    }
+}

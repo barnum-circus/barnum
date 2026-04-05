@@ -184,3 +184,194 @@ pub fn advance(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::doc_markdown, clippy::unwrap_used)]
+mod tests {
+    use crate::test_helpers::*;
+    use barnum_ast::*;
+    use intern::string_key::Intern;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    /// Single invoke: advance -> 1 dispatch.
+    #[test]
+    fn single_invoke() {
+        let mut engine = engine_from(invoke("./handler.ts", "run"));
+        let root = engine.workflow_root();
+        engine.advance(root, json!({"x": 1}), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(dispatches[0].value, json!({"x": 1}));
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./handler.ts", "run"),
+        );
+    }
+
+    /// Chain(A, B): only A is dispatched on advance.
+    #[test]
+    fn chain_dispatches_first_only() {
+        let mut engine = engine_from(chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./a.ts", "a"),
+        );
+    }
+
+    /// All(A, B, C): all 3 dispatched on advance, all receive the same
+    /// input.
+    #[test]
+    fn parallel_dispatches_all() {
+        let mut engine = engine_from(parallel(vec![
+            invoke("./a.ts", "a"),
+            invoke("./b.ts", "b"),
+            invoke("./c.ts", "c"),
+        ]));
+        let root = engine.workflow_root();
+        engine.advance(root, json!({"shared": true}), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 3);
+        for d in &dispatches {
+            assert_eq!(d.value, json!({"shared": true}));
+        }
+    }
+
+    /// `ForEach` over 3-element array: 3 dispatches, one per element.
+    #[test]
+    fn foreach_dispatches_per_element() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!([10, 20, 30]), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 3);
+        assert_eq!(dispatches[0].value, json!(10));
+        assert_eq!(dispatches[1].value, json!(20));
+        assert_eq!(dispatches[2].value, json!(30));
+    }
+
+    /// Branch: only the matching case is dispatched.
+    #[test]
+    fn branch_dispatches_matching_case() {
+        let mut engine = engine_from(branch(vec![
+            ("Ok", invoke("./ok.ts", "handle")),
+            ("Err", invoke("./err.ts", "handle")),
+        ]));
+        let root = engine.workflow_root();
+        engine
+            .advance(root, json!({"kind": "Ok", "value": 42}), None)
+            .unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./ok.ts", "handle"),
+        );
+    }
+
+    /// Step(Named): follows the step reference to the target action.
+    #[test]
+    fn step_follows_named() {
+        let config = Config {
+            workflow: step_named("setup"),
+            steps: HashMap::from([(
+                StepName::from("setup".intern()),
+                invoke("./setup.ts", "run"),
+            )]),
+        };
+        let mut engine = engine_from_config(config);
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./setup.ts", "run"),
+        );
+    }
+
+    /// Nested: Chain inside All. All(Chain(A, B), C) -> dispatches A
+    /// and C.
+    #[test]
+    fn nested_chain_in_parallel() {
+        let mut engine = engine_from(parallel(vec![
+            chain(invoke("./a.ts", "a"), invoke("./b.ts", "b")),
+            invoke("./c.ts", "c"),
+        ]));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 2);
+        let handlers: Vec<_> = dispatches
+            .iter()
+            .map(|d| engine.handler(d.handler_id).clone())
+            .collect();
+        assert!(handlers.contains(&ts_handler("./a.ts", "a")));
+        assert!(handlers.contains(&ts_handler("./c.ts", "c")));
+        // B is not dispatched yet (behind Chain).
+        assert!(!handlers.contains(&ts_handler("./b.ts", "b")));
+    }
+
+    /// Deep chain: Chain(A, Chain(B, C)) -> only A dispatched.
+    #[test]
+    fn deep_chain_dispatches_first_only() {
+        let mut engine = engine_from(chain(
+            invoke("./a.ts", "a"),
+            chain(invoke("./b.ts", "b"), invoke("./c.ts", "c")),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 1);
+        assert_eq!(
+            engine.handler(dispatches[0].handler_id),
+            &ts_handler("./a.ts", "a"),
+        );
+    }
+
+    /// `ForEach` with empty array: no dispatches, immediate completion.
+    #[test]
+    fn foreach_empty_array() {
+        let mut engine = engine_from(for_each(invoke("./handler.ts", "run")));
+        let root = engine.workflow_root();
+        engine.advance(root, json!([]), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 0);
+    }
+
+    /// All with empty children: no dispatches, immediate completion.
+    #[test]
+    fn parallel_empty() {
+        let mut engine = engine_from(parallel(vec![]));
+        let root = engine.workflow_root();
+        engine.advance(root, json!(null), None).unwrap();
+
+        let dispatches = engine.take_pending_dispatches();
+        assert_eq!(dispatches.len(), 0);
+    }
+
+    // Test 1: Bare Perform with no enclosing Handle → UnhandledEffect.
+    #[test]
+    fn perform_without_handle_errors() {
+        let mut engine = engine_from(perform(1));
+        let root = engine.workflow_root();
+        let err = engine.advance(root, json!(null), None).unwrap_err();
+        assert!(
+            matches!(err, crate::AdvanceError::UnhandledEffect { effect_id } if effect_id == EffectId(1)),
+            "expected UnhandledEffect, got: {err:?}",
+        );
+    }
+}
