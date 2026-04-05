@@ -394,6 +394,14 @@ self.advance(handler_action_id, handler_input, Some(ParentRef::RestartHandle {
 
 When the handler completes, `deliver` hits `ParentRef::RestartHandle { side: Handler }`, which calls `restart_body(frame_id, value)` — re-enter the body with the raw value. No teardown at this point (body was already torn down when the RestartPerform fired).
 
+#### Invariant: RestartPerform must not fire as a non-terminal child of All/ForEach during advance
+
+`teardown_body` runs during `advance` when a RestartPerform fires. If RestartPerform is a non-terminal child of All (e.g., `All(RestartPerform(e), Invoke(B))`), `teardown_body` removes the All frame while we're inside All's advance loop. Subsequent children would create frames with dangling parents.
+
+Current combinators never produce this pattern. RestartPerform is always behind `Chain(Tag(...), RestartPerform(...))`, where the Tag is a builtin Invoke that must complete before RestartPerform fires. RestartPerform always fires from `complete` → `deliver` → Chain trampoline → `advance`, never from the initial `advance` of a multi-child combinator.
+
+The `advance` arm for `FlatAction::RestartPerform` should include a `debug_assert` validating this invariant. The test `restart_perform_non_terminal_in_all` documents the scenario.
+
 ### Stash elimination
 
 Neither handler kind suspends the Handle frame:
@@ -403,7 +411,7 @@ Neither handler kind suspends the Handle frame:
 
 `HandleStatus::Suspended` is deleted. `is_blocked_by_handle` is deleted. The stash (`stashed_items`, `sweep_stash`, `sweep_stash_once`, `StashedItem`, `SweepResult`, `StashOutcome`, `TryDeliverResult::Blocked`, `find_blocking_ancestor`, `AncestorCheck::Blocked`) is deleted entirely.
 
-Completions for tasks that belonged to the torn-down body arrive at the engine with a stale `FrameId` (the generational index rejects them). The existing `FrameGone` handling covers this — no new code needed.
+Completions for tasks that belonged to the torn-down body arrive at the engine with a stale `TaskId` — `task_to_frame.remove(&task_id)` returns `None` because `teardown_body` already removed the entry. `complete()` must handle this gracefully by returning `Ok(None)` instead of panicking (see STALE_TASK_COMPLETION.md).
 
 This is a significant simplification. The stash was the most complex part of the engine (the sweep loop, blocked ancestor detection, re-entrant stash processing). Removing it cuts a substantial amount of code and eliminates an entire class of ordering bugs.
 

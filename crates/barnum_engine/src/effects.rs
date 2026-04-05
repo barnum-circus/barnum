@@ -635,6 +635,41 @@ mod tests {
         assert_eq!(result, None);
     }
 
+    /// Perform fires during advance as a non-terminal child of All, with
+    /// a restart handler. After the Resume/Restart split, RestartPerform
+    /// in this position would tear down the All frame while inside All's
+    /// advance loop. Subsequent children create frames with dangling parents.
+    ///
+    /// Currently panics with "unknown task" because the handler restarts
+    /// the body (tearing down B's frame) and B's stale task completes
+    /// later. After the refactor, this should be detected during advance.
+    #[test]
+    #[should_panic(expected = "unknown task")]
+    fn restart_perform_non_terminal_in_all() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![perform(1), invoke("./b.ts", "b")]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2);
+        let b_task_id = ts[1].task_id;
+
+        // Complete handler with RestartBody → teardown → B's task removed.
+        let _ = complete_and_drive(
+            &mut engine,
+            ts[0].task_id,
+            json!({"kind": "RestartBody", "value": "restarted"}),
+        )
+        .unwrap();
+
+        // B's task was torn down. Completing it panics with "unknown task".
+        engine.complete(b_task_id, json!("b_out")).unwrap();
+    }
+
     /// Test 22: All(Perform(e), Perform(e)) — concurrent Performs.
     /// First dispatches handler, second stashed. After resume, sweep retries.
     #[test]
