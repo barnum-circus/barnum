@@ -46,7 +46,7 @@ use serde_json::Value;
 
 /// A JSON Schema document embedded in the AST.
 ///
-/// Newtype over `Value` — the TS side produces it via `zod-to-json-schema`,
+/// Newtype over `Value` — the TS side produces it via `zodToCheckedJsonSchema`,
 /// and `HANDLER_VALIDATION.md` will compile it with the `jsonschema` crate
 /// at workflow init time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,6 +54,13 @@ pub struct JsonSchema(pub Value);
 ```
 
 No new crate dependencies — `serde_json` is already in `barnum_ast`'s deps.
+
+**File:** `crates/barnum_ast/src/lib.rs` — add module declaration
+
+```rust
+mod json_schema;
+pub use json_schema::JsonSchema;
+```
 
 ### Add schema fields to `TypeScriptHandler`
 
@@ -74,10 +81,12 @@ export interface TypeScriptHandler {
   kind: "TypeScript";
   module: string;
   func: string;
-  inputSchema?: JSONSchema7;
-  outputSchema?: JSONSchema7;
+  input_schema?: JSONSchema7;
+  output_schema?: JSONSchema7;
 }
 ```
+
+Field names are snake_case to match Rust's serialization convention — the codebase has no `#[serde(rename_all)]`, so Rust fields serialize as-is. All multi-word TS fields already use snake_case (e.g., `resume_handler_id`, `restart_handler_id`).
 
 **File:** `crates/barnum_ast/src/lib.rs`
 
@@ -124,8 +133,8 @@ const action = typedAction({
     kind: "TypeScript",
     module: filePath,
     func: funcName,
-    ...(inputSchema && { inputSchema }),
-    ...(outputSchema && { outputSchema }),
+    ...(inputSchema && { input_schema: inputSchema }),
+    ...(outputSchema && { output_schema: outputSchema }),
   },
 });
 ```
