@@ -142,7 +142,7 @@ pub struct StepAction {
 /// Runs `body`; when a [`Perform`](Action::Perform) with matching
 /// `effect_id` is encountered, the body suspends and `handler` executes.
 /// The handler's output determines the continuation operation
-/// (Resume, Discard, or `RestartBody`).
+/// (Resume or `RestartBody`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HandleAction {
     /// Which effect type this handler intercepts.
@@ -251,8 +251,6 @@ pub enum BuiltinKind {
     TagBreak,
     /// Wrap input as `{ kind: "Resume", value: <input> }`.
     TagResume,
-    /// Wrap input as `{ kind: "Discard", value: <input> }`.
-    TagDiscard,
     /// Wrap input as `{ kind: "RestartBody", value: <input> }`.
     TagRestartBody,
 }

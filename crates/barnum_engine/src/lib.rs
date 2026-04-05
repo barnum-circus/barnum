@@ -114,12 +114,6 @@ enum HandlerOutput {
         #[serde(default)]
         state_update: StateUpdate,
     },
-    /// Discard the continuation. Tear down the body and deliver the value
-    /// to the Handle's parent.
-    Discard {
-        /// The value to deliver to the Handle's parent.
-        value: Value,
-    },
     /// Tear down the body and re-advance from the Handle's body action.
     RestartBody {
         /// The input value for the re-advanced body.
@@ -507,7 +501,6 @@ impl WorkflowState {
                 self.apply_state_update(handle_frame_id, state_update);
                 self.resume_continuation(handle_frame_id, value)
             }
-            HandlerOutput::Discard { value } => self.discard_continuation(handle_frame_id, value),
             HandlerOutput::RestartBody {
                 value,
                 state_update,
@@ -562,34 +555,6 @@ impl WorkflowState {
                 Ok(None)
             }
             TryDeliverResult::FrameGone => Ok(None),
-        }
-    }
-
-    /// Discard the continuation. Tear down the body, deliver to Handle's parent.
-    #[allow(clippy::expect_used)]
-    fn discard_continuation(
-        &mut self,
-        handle_frame_id: FrameId,
-        value: Value,
-    ) -> Result<Option<Value>, CompleteError> {
-        self.teardown_body(handle_frame_id);
-        let frame = self
-            .frames
-            .remove(handle_frame_id)
-            .expect("Handle frame exists");
-        let parent = frame.parent;
-
-        match parent {
-            Some(parent_ref) => match self.try_deliver(parent_ref, value)? {
-                TryDeliverResult::Delivered(result) => Ok(result),
-                TryDeliverResult::Blocked(value) => {
-                    self.stashed_items
-                        .push_back(StashedItem::Delivery { parent_ref, value });
-                    Ok(None)
-                }
-                TryDeliverResult::FrameGone => Ok(None),
-            },
-            None => Ok(Some(value)),
         }
     }
 
@@ -1378,12 +1343,47 @@ mod tests {
         }))
     }
 
-    #[allow(clippy::needless_pass_by_value)]
-    fn always_discard_handler(value: Value) -> Action {
-        constant_handler(json!({
-            "kind": "Discard",
-            "value": value,
-        }))
+    fn tag_builtin(kind: &str) -> Action {
+        invoke_builtin(BuiltinKind::Tag { value: json!(kind) })
+    }
+
+    fn extract_field(field: &str) -> Action {
+        invoke_builtin(BuiltinKind::ExtractField {
+            value: json!(field),
+        })
+    }
+
+    fn identity_action() -> Action {
+        invoke_builtin(BuiltinKind::Identity)
+    }
+
+    /// Handler for restart+Branch: extract payload, tag RestartBody.
+    fn restart_body_handler() -> Action {
+        chain(extract_field("payload"), tag_builtin("RestartBody"))
+    }
+
+    /// Chain(Tag("Break"), Perform(effect_id)) — triggers restart with Break routing.
+    fn break_perform(effect_id: u16) -> Action {
+        chain(tag_builtin("Break"), perform(effect_id))
+    }
+
+    /// Build restart+Branch compiled form:
+    /// Chain(Tag("Continue"), Handle(effectId, Branch({
+    ///   Continue: Chain(ExtractField("value"), continueArm),
+    ///   Break: Chain(ExtractField("value"), breakArm),
+    /// }), RestartBodyHandler))
+    fn restart_branch(effect_id: u16, continue_arm: Action, break_arm: Action) -> Action {
+        chain(
+            tag_builtin("Continue"),
+            handle(
+                effect_id,
+                restart_body_handler(),
+                branch(vec![
+                    ("Continue", chain(extract_field("value"), continue_arm)),
+                    ("Break", chain(extract_field("value"), break_arm)),
+                ]),
+            ),
+        )
     }
 
     fn echo_resume_handler() -> Action {
@@ -1501,21 +1501,21 @@ mod tests {
         assert_eq!(result, Some(json!("echo_result")));
     }
 
-    /// Test 3: Handle(e, always_discard("error"), Chain(Perform(e), Invoke(unreachable))).
-    /// Handler discards, body torn down, Handle exits with "error". Invoke never runs.
+    /// Test 3: restart+Branch where Break+Perform fires before Invoke(unreachable).
+    /// Handler restarts body, Branch takes Break arm, Invoke never runs.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn handle_discard_skips_rest_of_chain() {
-        let mut engine = engine_from(handle(
+    fn restart_branch_break_skips_rest_of_chain() {
+        let mut engine = engine_from(restart_branch(
             1,
-            always_discard_handler(json!("error")),
-            chain(perform(1), invoke("./unreachable.ts", "nope")),
+            chain(break_perform(1), invoke("./unreachable.ts", "nope")),
+            identity_action(),
         ));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
 
         let (result, ts) = drive_builtins(&mut engine).unwrap();
-        assert_eq!(result, Some(json!("error")));
+        assert_eq!(result, Some(json!("input")));
         // No TypeScript dispatches — unreachable invoke never ran.
         assert!(ts.is_empty());
     }
@@ -1599,15 +1599,15 @@ mod tests {
         assert_eq!(result, Some(json!(["a_out", "b_out"])));
     }
 
-    /// Test 8: After Discard, body frames removed from arena, task_to_parent entries removed.
+    /// Test 8: After restart+Branch Break, body frames removed from arena, task_to_parent
+    /// entries removed. Chain(Invoke(A), break_perform) in Continue arm.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn discard_cleans_up_frames_and_tasks() {
-        // Handle(e, always_discard("done"), Chain(Invoke(A), Perform(e)))
-        let mut engine = engine_from(handle(
+    fn restart_branch_break_cleans_up_frames_and_tasks() {
+        let mut engine = engine_from(restart_branch(
             1,
-            always_discard_handler(json!("done")),
-            chain(invoke("./a.ts", "a"), perform(1)),
+            chain(invoke("./a.ts", "a"), break_perform(1)),
+            identity_action(),
         ));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
@@ -1616,11 +1616,11 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1);
 
-        // Complete A -> Perform -> handler -> Discard.
+        // Complete A → break_perform → handler restarts → Branch(Break) → identity → exits.
         let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
-        assert_eq!(result, Some(json!("done")));
+        assert_eq!(result, Some(json!("a_out")));
 
-        // Verify frames are empty — Handle frame was removed, Chain consumed during trampoline.
+        // Verify frames are empty.
         assert_eq!(engine.frames.len(), 0);
         assert!(engine.task_to_frame.is_empty());
     }
@@ -1653,41 +1653,43 @@ mod tests {
         assert!(ts2.is_empty());
     }
 
-    /// Test 10: RestartBody multiple times then Discard.
+    /// Test 10: RestartBody multiple times via Continue, then exit via Break.
+    /// Uses restart+Branch pattern. Body step returns pre-tagged Continue or Break values.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn restart_body_multiple_then_discard() {
-        let mut engine = engine_from(handle(
+    fn restart_branch_multiple_then_break() {
+        // Continue arm: Invoke(step) → Perform(1).
+        // Step returns { kind: "Continue", value: ... } or { kind: "Break", value: ... }.
+        // The Perform payload is the pre-tagged value; handler extracts and restarts.
+        // Branch dispatches on the tag.
+        let mut engine = engine_from(restart_branch(
             1,
-            invoke("./handler.ts", "handler"),
             chain(invoke("./body.ts", "step"), perform(1)),
+            identity_action(),
         ));
         let root = engine.workflow_root();
         engine.advance(root, json!("init"), None).unwrap();
 
-        let mut body_dispatches = engine.take_pending_dispatches();
+        // drive_builtins processes the Tag("Continue"), Branch dispatch builtins,
+        // and returns the TypeScript step Invoke dispatch.
+        let (_, mut body_dispatches) = drive_builtins(&mut engine).unwrap();
         assert_eq!(body_dispatches.len(), 1);
 
         let frame_count_before = engine.frames.len();
 
         for _ in 0..3 {
-            // Complete body step -> Perform fires -> handler dispatched.
-            let (_, handler_dispatches) =
-                complete_and_drive(&mut engine, body_dispatches[0].task_id, json!("body_out"))
-                    .unwrap();
-            assert_eq!(handler_dispatches.len(), 1);
-
-            // Complete handler with RestartBody.
-            let result = engine
-                .complete(
-                    handler_dispatches[0].task_id,
-                    json!({"kind": "RestartBody", "value": "restarted"}),
-                )
-                .unwrap();
+            // Complete step with Continue-tagged value → Perform → handler restarts →
+            // Branch(Continue) → re-enter body. complete_and_drive drives all builtins
+            // and returns the new TypeScript step dispatch.
+            let (result, new_dispatches) = complete_and_drive(
+                &mut engine,
+                body_dispatches[0].task_id,
+                json!({"kind": "Continue", "value": "restarted"}),
+            )
+            .unwrap();
             assert_eq!(result, None);
 
-            // New body step dispatched after restart.
-            body_dispatches = engine.take_pending_dispatches();
+            body_dispatches = new_dispatches;
             assert_eq!(body_dispatches.len(), 1);
             assert_eq!(body_dispatches[0].value, json!("restarted"));
         }
@@ -1700,15 +1702,13 @@ mod tests {
             engine.frames.len(),
         );
 
-        // Final iteration: Discard instead of RestartBody.
-        let (_, handler_dispatches) =
-            complete_and_drive(&mut engine, body_dispatches[0].task_id, json!("body_out")).unwrap();
-        let result = engine
-            .complete(
-                handler_dispatches[0].task_id,
-                json!({"kind": "Discard", "value": "gave_up"}),
-            )
-            .unwrap();
+        // Final iteration: Break instead of Continue.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            body_dispatches[0].task_id,
+            json!({"kind": "Break", "value": "gave_up"}),
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("gave_up")));
         assert_eq!(engine.frames.len(), 0);
     }
@@ -1778,17 +1778,18 @@ mod tests {
         assert!(engine.stashed_items.is_empty());
     }
 
-    /// Test 16: Same as test 15 but handler Discards. B stashed, teardown, sweep drops B.
+    /// Test 16: restart+Branch with concurrent tasks. A completes → break_perform → restart →
+    /// Branch(Break) → exits. B's in-flight task is torn down with the body.
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn stash_dropped_after_discard() {
-        let mut engine = engine_from(handle(
+    fn teardown_cleans_up_concurrent_tasks() {
+        let mut engine = engine_from(restart_branch(
             1,
-            invoke("./handler.ts", "handler"),
             parallel(vec![
-                chain(invoke("./a.ts", "a"), perform(1)),
+                chain(invoke("./a.ts", "a"), break_perform(1)),
                 invoke("./b.ts", "b"),
             ]),
+            identity_action(),
         ));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
@@ -1796,26 +1797,12 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2);
 
-        // Complete A -> Perform -> handler dispatched.
-        let (_, handler_ts) =
-            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
-
-        // Complete B -> stashed.
-        engine.complete(ts[1].task_id, json!("b_out")).unwrap();
-        assert_eq!(engine.stashed_items.len(), 1);
-
-        // Handler Discards.
-        let (result, _) = complete_and_drive(
-            &mut engine,
-            handler_ts[0].task_id,
-            json!({"kind": "Discard", "value": "discarded"}),
-        )
-        .unwrap();
-        // Teardown removes All frame, Handle frame removed, body torn down.
-        assert_eq!(result, Some(json!("discarded")));
+        // Complete A → break_perform → handler (builtin) → RestartBody → Branch(Break) → exits.
+        // B's task_to_frame entry is cleaned up during body teardown.
+        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, Some(json!("a_out")));
         assert_eq!(engine.frames.len(), 0);
-        // Stashed B remains (orphaned) — sweep_stash is not called when
-        // workflow terminates. This is correct: orphaned items are irrelevant.
+        assert!(engine.task_to_frame.is_empty());
     }
 
     /// Test 22: All(Perform(e), Perform(e)) — concurrent Performs.
@@ -2457,7 +2444,7 @@ mod tests {
     /// Currently: B's completion is stashed because Handle is suspended.
     /// After refactor: Handle is never suspended for resume, B delivers.
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "resume handler should not cause stashing")]
     #[allow(clippy::unwrap_used)]
     fn resume_handler_does_not_block_sibling_completion() {
         let mut engine = engine_from(handle(
@@ -2500,7 +2487,7 @@ mod tests {
     /// Currently: first Perform suspends Handle, second is stashed.
     /// After refactor: both dispatch concurrently (two handler dispatches).
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "both handlers should dispatch concurrently")]
     #[allow(clippy::unwrap_used)]
     fn concurrent_resume_performs_not_serialized() {
         let mut engine = engine_from(handle(
@@ -2521,45 +2508,45 @@ mod tests {
         );
     }
 
-    /// A throw (to an outer tryCatch) should proceed even while a resume
+    /// A throw (to an outer restart+Branch) should proceed even while a resume
     /// handler is in flight in a sibling branch.
     ///
     /// Setup:
-    ///   Handle(outer_e, discard_handler,         // tryCatch-like
-    ///     Handle(inner_e, ts_handler,             // resume-like (bind)
+    ///   restart_branch(outer_e,
+    ///     Handle(inner_e, ts_handler,             // resume-style (bind)
     ///       All(
     ///         Chain(Invoke(A), Perform(inner_e)), // branch 0: reads var
-    ///         Chain(Invoke(B), Perform(outer_e)), // branch 1: throws
+    ///         Chain(Invoke(B), break_perform(outer_e)), // branch 1: throws
     ///       )
-    ///     )
+    ///     ),
+    ///     identity_action()
     ///   )
     ///
     /// Branch 0: A completes → Perform(inner_e) → resume handler in flight.
-    /// Branch 1: B completes → Perform(outer_e) → should bubble up past
-    ///   inner Handle and reach outer Handle, discarding the body.
+    /// Branch 1: B completes → break_perform(outer_e) → should bubble up past
+    ///   inner Handle and reach outer Handle. Handler restarts, Branch takes
+    ///   Break arm, Handle exits.
     ///
     /// Currently: Perform(outer_e) is stashed because inner Handle is
     ///   suspended. After refactor: inner Handle is not suspended (resume
     ///   handler), so the throw proceeds immediately.
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "throw should reach outer handler immediately")]
     #[allow(clippy::unwrap_used)]
     fn throw_proceeds_while_resume_handler_in_flight() {
         let inner_e = 1; // resume-style
-        let outer_e = 2; // discard-style (tryCatch)
+        let outer_e = 2; // restart-style (tryCatch)
 
-        let mut engine = engine_from(handle(
-            outer_e,
-            always_discard_handler(json!("caught")),
-            handle(
-                inner_e,
-                invoke("./handler.ts", "handler"), // async resume handler
-                parallel(vec![
-                    chain(invoke("./a.ts", "a"), perform(inner_e)),
-                    chain(invoke("./b.ts", "b"), perform(outer_e)),
-                ]),
-            ),
-        ));
+        let inner_handle = handle(
+            inner_e,
+            invoke("./handler.ts", "handler"), // async resume handler
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), perform(inner_e)),
+                chain(invoke("./b.ts", "b"), break_perform(outer_e)),
+            ]),
+        );
+
+        let mut engine = engine_from(restart_branch(outer_e, inner_handle, identity_action()));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
 
@@ -2572,15 +2559,14 @@ mod tests {
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
 
-        // Complete B → Perform(outer_e). Should bubble up past inner Handle
+        // Complete B → break_perform(outer_e). Should bubble up past inner Handle
         // (which is NOT suspended for a resume handler) and reach outer Handle.
-        let (result, _) =
-            complete_and_drive(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
+        let (result, _) = complete_and_drive(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
 
-        // Outer handle discards with "caught". The entire body is torn down.
+        // Outer handler restarts body, Branch takes Break arm, Handle exits.
         assert_eq!(
             result,
-            Some(json!("caught")),
+            Some(json!("b_out")),
             "throw should reach outer handler immediately"
         );
     }

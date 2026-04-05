@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 68
 expression: trace
 input_file: crates/barnum_engine/tests/completion/handle_discard.json
 ---
@@ -7,6 +8,20 @@ input_file: crates/barnum_engine/tests/completion/handle_discard.json
 WorkflowState {
     flat_config: FlatConfig {
         entries: [
+            Action(
+                Chain {
+                    rest: ActionId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        0,
+                    ),
+                },
+            ),
             Action(
                 Handle {
                     effect_id: EffectId(
@@ -16,9 +31,69 @@ WorkflowState {
             ),
             ChildRef {
                 action: ActionId(
-                    3,
+                    5,
                 ),
             },
+            ChildRef {
+                action: ActionId(
+                    20,
+                ),
+            },
+            Action(
+                Branch {
+                    count: Count(
+                        2,
+                    ),
+                },
+            ),
+            BranchKey {
+                key: KindDiscriminator(
+                    "Break",
+                ),
+            },
+            ChildRef {
+                action: ActionId(
+                    10,
+                ),
+            },
+            BranchKey {
+                key: KindDiscriminator(
+                    "Continue",
+                ),
+            },
+            ChildRef {
+                action: ActionId(
+                    13,
+                ),
+            },
+            Action(
+                Chain {
+                    rest: ActionId(
+                        12,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        1,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        2,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        15,
+                    ),
+                },
+            ),
             Action(
                 Invoke {
                     handler: HandlerId(
@@ -29,7 +104,21 @@ WorkflowState {
             Action(
                 Chain {
                     rest: ActionId(
-                        5,
+                        19,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        18,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        3,
                     ),
                 },
             ),
@@ -43,12 +132,59 @@ WorkflowState {
             Action(
                 Invoke {
                     handler: HandlerId(
-                        0,
+                        4,
+                    ),
+                },
+            ),
+            Action(
+                Chain {
+                    rest: ActionId(
+                        22,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        5,
+                    ),
+                },
+            ),
+            Action(
+                Invoke {
+                    handler: HandlerId(
+                        6,
                     ),
                 },
             ),
         ],
         handlers: [
+            Builtin(
+                BuiltinHandler {
+                    builtin: Tag {
+                        value: String("Continue"),
+                    },
+                },
+            ),
+            Builtin(
+                BuiltinHandler {
+                    builtin: ExtractField {
+                        value: String("value"),
+                    },
+                },
+            ),
+            Builtin(
+                BuiltinHandler {
+                    builtin: Identity,
+                },
+            ),
+            Builtin(
+                BuiltinHandler {
+                    builtin: Tag {
+                        value: String("Break"),
+                    },
+                },
+            ),
             TypeScript(
                 TypeScriptHandler {
                     module: ModulePath(
@@ -59,14 +195,18 @@ WorkflowState {
                     ),
                 },
             ),
-            TypeScript(
-                TypeScriptHandler {
-                    module: ModulePath(
-                        "./handler.ts",
-                    ),
-                    func: FuncName(
-                        "handler",
-                    ),
+            Builtin(
+                BuiltinHandler {
+                    builtin: ExtractField {
+                        value: String("payload"),
+                    },
+                },
+            ),
+            Builtin(
+                BuiltinHandler {
+                    builtin: Tag {
+                        value: String("RestartBody"),
+                    },
                 },
             ),
         ],
@@ -81,47 +221,9 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: None,
-                        kind: Handle(
-                            HandleFrame {
-                                effect_id: EffectId(
-                                    0,
-                                ),
-                                body: ActionId(
-                                    3,
-                                ),
-                                handler: ActionId(
-                                    2,
-                                ),
-                                state: String("input"),
-                                status: Suspended(
-                                    Chain {
-                                        frame_id: Index {
-                                            slot: 1,
-                                            generation: Generation(1),
-                                        },
-                                    },
-                                ),
-                            },
-                        ),
-                    },
-                },
-            ),
-            Occupied(
-                OccupiedEntry {
-                    generation: Generation(1),
-                    value: Frame {
-                        parent: Some(
-                            Handle {
-                                frame_id: Index {
-                                    slot: 0,
-                                    generation: Generation(1),
-                                },
-                                side: Body,
-                            },
-                        ),
                         kind: Chain {
                             rest: ActionId(
-                                5,
+                                2,
                             ),
                         },
                     },
@@ -132,31 +234,30 @@ WorkflowState {
                     generation: Generation(1),
                     value: Frame {
                         parent: Some(
-                            Handle {
+                            Chain {
                                 frame_id: Index {
                                     slot: 0,
                                     generation: Generation(1),
                                 },
-                                side: Handler,
                             },
                         ),
                         kind: Invoke {
                             handler: HandlerId(
-                                1,
+                                0,
                             ),
                         },
                     },
                 },
             ),
         ],
-        len: 3,
+        len: 2,
         first_free: None,
     },
     task_to_frame: {
         TaskId(
             0,
         ): Index {
-            slot: 2,
+            slot: 1,
             generation: Generation(1),
         },
     },
@@ -170,120 +271,8 @@ Pending: [
             0,
         ),
         handler_id: HandlerId(
-            1,
-        ),
-        value: Object {
-            "payload": String("input"),
-            "state": String("input"),
-        },
-    },
-]
-
---- Completion: task_id=0, value={"kind":"Discard","value":"discarded"} ---
-Result: Some(String("discarded"))
-WorkflowState {
-    flat_config: FlatConfig {
-        entries: [
-            Action(
-                Handle {
-                    effect_id: EffectId(
-                        0,
-                    ),
-                },
-            ),
-            ChildRef {
-                action: ActionId(
-                    3,
-                ),
-            },
-            Action(
-                Invoke {
-                    handler: HandlerId(
-                        1,
-                    ),
-                },
-            ),
-            Action(
-                Chain {
-                    rest: ActionId(
-                        5,
-                    ),
-                },
-            ),
-            Action(
-                Perform {
-                    effect_id: EffectId(
-                        0,
-                    ),
-                },
-            ),
-            Action(
-                Invoke {
-                    handler: HandlerId(
-                        0,
-                    ),
-                },
-            ),
-        ],
-        handlers: [
-            TypeScript(
-                TypeScriptHandler {
-                    module: ModulePath(
-                        "./b.ts",
-                    ),
-                    func: FuncName(
-                        "b",
-                    ),
-                },
-            ),
-            TypeScript(
-                TypeScriptHandler {
-                    module: ModulePath(
-                        "./handler.ts",
-                    ),
-                    func: FuncName(
-                        "handler",
-                    ),
-                },
-            ),
-        ],
-        workflow_root: ActionId(
             0,
         ),
+        value: String("input"),
     },
-    frames: Arena {
-        storage: [
-            Empty(
-                EmptyEntry {
-                    generation: Generation(1),
-                    next_free: Some(
-                        FreePointer(1),
-                    ),
-                },
-            ),
-            Empty(
-                EmptyEntry {
-                    generation: Generation(1),
-                    next_free: Some(
-                        FreePointer(2),
-                    ),
-                },
-            ),
-            Empty(
-                EmptyEntry {
-                    generation: Generation(1),
-                    next_free: None,
-                },
-            ),
-        ],
-        len: 0,
-        first_free: Some(
-            FreePointer(0),
-        ),
-    },
-    task_to_frame: {},
-    pending_dispatches: [],
-    stashed_items: [],
-    next_task_id: 1,
-}
-Pending: []
+]

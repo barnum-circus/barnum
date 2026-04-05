@@ -1,24 +1,42 @@
 {
   "config": {
     "workflow": {
-      "kind": "Handle",
-      "effect_id": 0,
-      "handler": {
-        "kind": "Invoke",
-        "handler": { "kind": "TypeScript", "module": "./handler.ts", "func": "handler" }
-      },
-      "body": {
-        "kind": "Chain",
-        "first": { "kind": "Perform", "effect_id": 0 },
-        "rest": {
-          "kind": "Invoke",
-          "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" }
+      "kind": "Chain",
+      "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Tag", "value": "Continue" } } },
+      "rest": {
+        "kind": "Handle",
+        "effect_id": 0,
+        "handler": {
+          "kind": "Chain",
+          "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "ExtractField", "value": "payload" } } },
+          "rest": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Tag", "value": "RestartBody" } } }
+        },
+        "body": {
+          "kind": "Branch",
+          "cases": {
+            "Continue": {
+              "kind": "Chain",
+              "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "ExtractField", "value": "value" } } },
+              "rest": {
+                "kind": "Chain",
+                "first": {
+                  "kind": "Chain",
+                  "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Tag", "value": "Break" } } },
+                  "rest": { "kind": "Perform", "effect_id": 0 }
+                },
+                "rest": { "kind": "Invoke", "handler": { "kind": "TypeScript", "module": "./b.ts", "func": "b" } }
+              }
+            },
+            "Break": {
+              "kind": "Chain",
+              "first": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "ExtractField", "value": "value" } } },
+              "rest": { "kind": "Invoke", "handler": { "kind": "Builtin", "builtin": { "kind": "Identity" } } }
+            }
+          }
         }
       }
     }
   },
   "input": "input",
-  "completions": [
-    { "task_id": 0, "value": { "kind": "Discard", "value": "discarded" } }
-  ]
+  "completions": []
 }
