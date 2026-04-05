@@ -30,27 +30,6 @@ Current combinators happen to avoid this because `RestartPerform` is always behi
 
 The fix: make `advance` purely additive. `RestartPerform` enqueues a pending effect instead of executing it. The event loop handles teardown and dispatch uniformly.
 
-## Pre-factor (can land on master independently)
-
-### Graceful stale task completion
-
-`complete()` currently panics on unknown task IDs. This is incorrect even on master: an `All(Chain(invoke_A, break_restart_perform), invoke_B)` where A completes first will tear down B's frame during the synchronous restart. When B later completes, the panic fires. Changing this to `Ok(None)` is independently correct and fixes the `completing_torn_down_task_is_noop` test.
-
-```rust
-// complete.rs (before)
-let frame_id = workflow_state
-    .task_to_frame
-    .remove(&task_id)
-    .expect("unknown task");
-
-// complete.rs (after)
-let Some(frame_id) = workflow_state.task_to_frame.remove(&task_id) else {
-    return Ok(None);
-};
-```
-
-This should land as a separate commit before the main refactor.
-
 ## Design
 
 ### Invariant: every advance completes entirely
@@ -270,9 +249,11 @@ pub fn process_restart(
 
 The event loop processes one event at a time. There are three kinds of events:
 
-1. **Dispatch** — check liveness, send to worker if still active.
-2. **Restart** — teardown body, advance handler (may produce more effects).
-3. **Completion** — deliver result upward (may produce more effects or terminate).
+1. **Dispatch** — check `is_task_pending`; if stale, skip. Otherwise send to worker.
+2. **Restart** — check if RestartHandle frame still exists; if stale, skip. Otherwise teardown body, advance handler (may produce more effects).
+3. **Completion** — check `is_task_pending`; if stale, skip. Otherwise call `complete()` (may produce more effects or terminate).
+
+Every event type checks liveness first. `complete()` keeps its `expect("unknown task")` — if the event loop calls it with a stale task, that's a bug in the event loop.
 
 Pending effects (dispatches and restarts) are always drained before blocking for completions. This is a simple if/else: if there's a pending effect, process it; otherwise block for the next completion.
 
@@ -338,6 +319,10 @@ pub async fn run_workflow(
 
             let value = result?;
 
+            if !workflow_state.is_task_pending(task_id) {
+                continue;
+            }
+
             if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
                 return Ok(terminal_value);
             }
@@ -360,7 +345,7 @@ pub async fn run_workflow(
    - `Dispatch(B)`: `is_task_pending(B)` → false (torn down) → skipped
    - New effects from handler advance are processed next
 
-3. Eventually, A's worker completes → `complete(A)` → `task_to_frame` has no entry → `Ok(None)`.
+3. Eventually, A's worker completes → event loop receives `(A, value)` → `is_task_pending(A)` → false → skipped. `complete()` is never called.
 
 Dispatch(A) was sent to a worker before the restart tore it down. That's wasted work, and that's fine. Dispatch(B) came after the restart in the queue, so it was skipped cheaply.
 
@@ -420,15 +405,15 @@ ParentRef::RestartHandle { frame_id, side } => match side {
 | `take_pending_dispatches` | Returns `Vec<Dispatch>` | Deleted, replaced by `pop_pending_effect` returning `Option<PendingEffect>` |
 | `is_task_pending` | Does not exist | New: checks `task_to_frame` for liveness |
 | `process_restart` | Does not exist | New: teardown + handler advance, called by event loop |
-| `complete()` | Panics on unknown task_id | Returns `Ok(None)` (pre-factor, lands first) |
-| Event loop | `take_pending_dispatches` → dispatch all → recv → complete | `pop_pending_effect` one at a time → recv when empty → complete |
+| `complete()` | Unchanged | Unchanged — `expect("unknown task")` stays; event loop checks liveness before calling |
+| Event loop | `take_pending_dispatches` → dispatch all → recv → complete | `pop_pending_effect` one at a time → liveness check on each event → recv when empty |
 | `teardown_body` | Called from `bubble_restart_effect` during advance | Called from `process_restart`, invoked by event loop |
 
 ## Tests
 
 Both `#[should_panic]` tests become passing tests:
 
-- `completing_torn_down_task_is_noop`: `complete()` returns `Ok(None)` instead of panicking. (Fixed by pre-factor.)
+- `completing_torn_down_task_is_noop`: The event loop checks `is_task_pending` before calling `complete()`. Stale completions are skipped. `complete()` is never called with an unknown task.
 - `restart_perform_non_terminal_in_all`: All advance loop completes entirely. Both children advance. Event loop processes the restart (teardown), then skips the stale dispatch.
 
 The `drive_builtins` test helper needs to process effects instead of dispatches. It takes effects one at a time, processes restarts, checks dispatch liveness, and executes builtins. This mirrors the event loop's behavior in a synchronous test context.
