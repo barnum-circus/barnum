@@ -2,27 +2,29 @@
 // Shared effect ID counter for gensym'd effect identifiers
 // ---------------------------------------------------------------------------
 
-/** Branded numeric ID preventing accidental interchange with other number types. */
-export type EffectId = number & { readonly __brand: unique symbol };
-
 /** Branded ID for resume-style effect handlers. */
 export type ResumeHandlerId = number & {
   readonly __resumeHandlerBrand: unique symbol;
 };
 
-let nextEffectId = 0;
+/** Branded ID for restart-style effect handlers. */
+export type RestartHandlerId = number & {
+  readonly __restartHandlerBrand: unique symbol;
+};
 
-/** Allocate a fresh, unique effect ID. */
-export function allocateEffectId(): EffectId {
-  return nextEffectId++ as EffectId;
-}
+let nextId = 0;
 
-/** Allocate a fresh, unique resume handler ID. Shares the global counter. */
+/** Allocate a fresh, unique resume handler ID. */
 export function allocateResumeHandlerId(): ResumeHandlerId {
-  return nextEffectId++ as ResumeHandlerId;
+  return nextId++ as ResumeHandlerId;
 }
 
-/** Reset the effect ID counter. For test isolation only. */
+/** Allocate a fresh, unique restart handler ID. */
+export function allocateRestartHandlerId(): RestartHandlerId {
+  return nextId++ as RestartHandlerId;
+}
+
+/** Reset the ID counter. For test isolation only. */
 export function resetEffectIdCounter(): void {
-  nextEffectId = 0;
+  nextId = 0;
 }

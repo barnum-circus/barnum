@@ -6,7 +6,7 @@ import {
   buildRestartBranchAction,
   TAG_BREAK,
 } from "./ast.js";
-import { allocateEffectId } from "./effect-id.js";
+import { allocateRestartHandlerId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
 // tryCatch — type-level error handling via restart+Branch
@@ -24,31 +24,30 @@ import { allocateEffectId } from "./effect-id.js";
  * tryCatch does not catch those. Analogous to Rust's `Result` vs `panic!`.
  *
  * Compiled form (restart+Branch, same substrate as loop/earlyReturn):
- *   Chain(Tag("Continue"),
- *     Handle(effectId,
- *       Branch({ Continue: body, Break: recovery }),
- *       RestartBodyHandler))
+ *   `Chain(Tag("Continue"),`
+ *     `RestartHandle(id, ExtractIndex(0),`
+ *       `Branch({ Continue: body, Break: recovery })))`
  *
- * throwError = Chain(Tag("Break"), Perform(effectId))
+ * throwError = `Chain(Tag("Break"), RestartPerform(id))`
  *
- * When throwError fires: error tagged Break → Perform → handler extracts
- * payload → RestartBody → Branch takes Break arm → recovery receives error.
+ * When throwError fires: error tagged Break → `RestartPerform` → handler extracts
+ * payload → body restarts → Branch takes Break arm → recovery receives error.
  */
 export function tryCatch<TIn, TOut, TError>(
   body: (throwError: TypedAction<TError, never>) => Pipeable<TIn, TOut>,
   recovery: Pipeable<TError, TOut>,
 ): TypedAction<TIn, TOut> {
-  const effectId = allocateEffectId();
+  const restartHandlerId = allocateRestartHandlerId();
 
   const throwError = typedAction<TError, never>({
     kind: "Chain",
     first: TAG_BREAK,
-    rest: { kind: "Perform", effect_id: effectId },
+    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
   });
 
   const bodyAction = body(throwError) as Action;
 
   return typedAction(
-    buildRestartBranchAction(effectId, bodyAction, recovery as Action),
+    buildRestartBranchAction(restartHandlerId, bodyAction, recovery as Action),
   );
 }
