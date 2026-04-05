@@ -54,6 +54,32 @@ jobs:
             fi
           done
 
+  demo-tests:
+    needs: typescript
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: dtolnay/rust-toolchain@1.93.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Install library dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: libs/barnum
+      - name: Build barnum binary
+        run: cargo build --locked -p barnum_cli
+      - name: Run simple-workflow demo
+        run: pnpm install --frozen-lockfile && pnpm run demo
+        working-directory: demos/simple-workflow
+      - name: Run retry-on-error demo
+        run: pnpm install --frozen-lockfile && pnpm run demo
+        working-directory: demos/retry-on-error
+
   # Gate for Rust jobs - skips if no changes to crates/, libs/, etc.
   gate-rust:
     runs-on: ubuntu-latest
