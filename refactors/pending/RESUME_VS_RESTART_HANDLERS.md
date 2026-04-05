@@ -13,7 +13,7 @@ The engine currently treats all handlers as restart: it suspends the body, runs 
 
 ## What changes
 
-### 1. Rename EffectId to HandlerId
+### 1. Replace EffectId with two separate ID types
 
 **Before** (`barnum_ast/src/lib.rs:45`):
 
@@ -24,10 +24,11 @@ pub struct EffectId(pub u16);
 **After:**
 
 ```rust
-pub struct HandlerId(pub u16);
+pub struct ResumeHandlerId(pub u16);
+pub struct RestartHandlerId(pub u16);
 ```
 
-One shared namespace for both resume and restart handlers. A `Perform` targets a `HandlerId`; the engine walks up to find the matching Handle regardless of kind.
+Separate types, separate namespaces. A `ResumePerform` can only target a `ResumeHandlerId`. A `RestartPerform` can only target a `RestartHandlerId`. Cross-matching is a compile error.
 
 ### 2. Split HandleFrame into two frame kinds
 
@@ -38,7 +39,7 @@ pub struct HandleFrame {
     pub effect_id: EffectId,
     pub body: ActionId,
     pub handler: ActionId,
-    pub state: Option<Value>,
+    pub state: Value,
     pub status: HandleStatus,  // Free | Suspended(ParentRef)
 }
 ```
@@ -48,26 +49,26 @@ pub struct HandleFrame {
 ```rust
 /// Function-call semantics. Always resumes. Never suspends.
 pub struct ResumeHandleFrame {
-    pub resume_handler_id: HandlerId,
+    pub resume_handler_id: ResumeHandlerId,
     pub body: ActionId,
     pub handler: ActionId,
-    pub state: Option<Value>,
+    pub state: Value,
     // No status field -- always Free by construction.
 }
 
 /// Control-flow semantics. Tears down body, then Continue or Break.
 pub struct RestartHandleFrame {
-    pub restart_handler_id: HandlerId,
+    pub restart_handler_id: RestartHandlerId,
     pub body: ActionId,
     pub handler: ActionId,
-    pub state: Option<Value>,
+    pub state: Value,
     pub status: HandleStatus,
 }
 ```
 
-Two frame kinds, not a mode flag. `ResumeHandleFrame` has no `status` because it never suspends. The field names (`resume_handler_id` vs `restart_handler_id`) make the kind visible at every use site.
+Two frame kinds, not a mode flag. `ResumeHandleFrame` has no `status` because it never suspends.
 
-### 3. Split the AST node
+### 3. Split the AST nodes (Handle and Perform)
 
 **Before** (`ast.ts:46`):
 
@@ -77,6 +78,11 @@ export interface HandleAction {
   effect_id: number;
   body: Action;
   handler: Action;
+}
+
+export interface PerformAction {
+  kind: "Perform";
+  effect_id: number;
 }
 ```
 
@@ -96,20 +102,21 @@ export interface RestartHandleAction {
   body: Action;
   handler: Action;
 }
-```
 
-Perform keeps a neutral name since it doesn't know which kind it's targeting:
+export interface ResumePerformAction {
+  kind: "ResumePerform";
+  resume_handler_id: number;
+}
 
-```ts
-export interface PerformAction {
-  kind: "Perform";
-  handler_id: number;  // was effect_id
+export interface RestartPerformAction {
+  kind: "RestartPerform";
+  restart_handler_id: number;
 }
 ```
 
-Same split in the Rust AST (`barnum_ast`).
+Same split in the Rust AST (`barnum_ast`). A `ResumePerform` can only match a `ResumeHandle`. A `RestartPerform` can only match a `RestartHandle`. The engine's frame-tree walk checks only the matching frame kind.
 
-### 3. Collapse HandlerOutput from three variants to two paths
+### 4. Collapse HandlerOutput from three variants to two paths
 
 **Before** (`lib.rs:108`):
 
@@ -138,7 +145,7 @@ enum RestartHandlerOutput {
 
 Resume = direct delivery. Discard = Break. RestartBody = Continue. The three-variant `HandlerOutput` is deleted.
 
-### 4. Change dispatch_to_handler
+### 5. Change dispatch_to_handler
 
 **Before** (`lib.rs:440`): Always suspends, always runs handler as child of the Handle frame on the Handler side.
 
@@ -147,7 +154,7 @@ Resume = direct delivery. Discard = Break. RestartBody = Continue. The three-var
 - **ResumeHandleFrame**: Skip suspension. Run handler DAG as a child of the Handle frame. When handler completes, deliver value directly to `perform_parent`. No `HandlerOutput` deserialization.
 - **RestartHandleFrame**: Current behavior (suspend, run handler DAG, deserialize `RestartHandlerOutput`, dispatch Continue/Break).
 
-### 5. Change handle_handler_completion
+### 6. Change handle_handler_completion
 
 **Before** (`lib.rs:495`): Deserializes `HandlerOutput`, matches on Resume/Discard/RestartBody.
 
@@ -156,13 +163,13 @@ Resume = direct delivery. Discard = Break. RestartBody = Continue. The three-var
 - **ResumeHandleFrame**: Value is raw. Deliver to `perform_parent` (stored on the handler-side `ParentRef` or alongside the handler child). Apply state update if applicable.
 - **RestartHandleFrame**: Deserialize `RestartHandlerOutput`. Continue = `restart_body`. Break = `discard_continuation`.
 
-### 6. Update bind's handler DAG
+### 7. Update bind's handler DAG
 
 **Before** (`bind.ts`): Handler DAG wraps output in `Tag("Resume")` to produce `{ kind: "Resume", value, state_update: { kind: "Unchanged" } }`.
 
 **After:** Handler DAG produces a raw value. `ExtractField("state") -> ExtractIndex(n)`. No Tag wrapping.
 
-### 7. Update restart combinator handler DAGs
+### 8. Update restart combinator handler DAGs
 
 `tryCatch`, `race`, `loop`, `scope` change their Tag from `"Discard"`/`"RestartBody"` to `"Break"`/`"Continue"` respectively.
 
