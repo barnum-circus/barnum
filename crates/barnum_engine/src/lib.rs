@@ -208,6 +208,38 @@ enum SweepResult {
 }
 
 // ---------------------------------------------------------------------------
+// Ancestors iterator
+// ---------------------------------------------------------------------------
+
+/// Walks up the frame tree from a starting [`ParentRef`].
+///
+/// Yields `(ParentRef, &Frame)` for each ancestor. The [`ParentRef`] is
+/// the edge from the child to this frame — the same value that was used to
+/// look up the frame. [`FrameId`] is extractable via
+/// [`ParentRef::frame_id()`].
+///
+/// Iteration stops when:
+/// - A frame's `parent` is `None` (reached the root). The root frame
+///   itself IS yielded; iteration stops after it.
+/// - A [`FrameId`] resolves to `None` in the arena (frame was removed).
+///   The gone frame is NOT yielded.
+struct Ancestors<'a> {
+    frames: &'a Arena<Frame>,
+    next: Option<ParentRef>,
+}
+
+impl<'a> Iterator for Ancestors<'a> {
+    type Item = (ParentRef, &'a Frame);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let parent_ref = self.next.take()?;
+        let frame = self.frames.get(parent_ref.frame_id())?;
+        self.next = frame.parent;
+        Some((parent_ref, frame))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
@@ -259,6 +291,16 @@ impl WorkflowState {
     #[must_use]
     pub fn handler(&self, id: HandlerId) -> &HandlerKind {
         self.flat_config.handler(id)
+    }
+
+    /// Walk ancestors starting from `parent_ref`.
+    ///
+    /// See [`Ancestors`] for iteration semantics.
+    const fn ancestors(&self, parent_ref: ParentRef) -> Ancestors<'_> {
+        Ancestors {
+            frames: &self.frames,
+            next: Some(parent_ref),
+        }
     }
 
     /// Deliver a task result. The caller invokes this when a dispatched
@@ -327,24 +369,18 @@ impl WorkflowState {
     /// Walks from `parent_ref` up the parent chain. At each edge, checks
     /// whether the edge crosses from a body child into a suspended Handle.
     fn find_blocking_ancestor(&self, parent_ref: ParentRef) -> AncestorCheck {
-        // Check each edge starting from the initial parent_ref.
-        let mut current_ref = parent_ref;
-        loop {
-            let Some(frame) = self.frames.get(current_ref.frame_id()) else {
-                return AncestorCheck::FrameGone;
-            };
-
-            // Does this edge cross into a suspended Handle body?
-            if Self::is_blocked_by_handle(&current_ref, &frame.kind) {
+        // If the immediate parent is gone, short-circuit. Once a frame is
+        // present, the entire ancestor chain up to root is guaranteed present
+        // (teardown removes descendants before parents).
+        if self.frames.get(parent_ref.frame_id()).is_none() {
+            return AncestorCheck::FrameGone;
+        }
+        for (edge, frame) in self.ancestors(parent_ref) {
+            if Self::is_blocked_by_handle(&edge, &frame.kind) {
                 return AncestorCheck::Blocked;
             }
-
-            // Move up to the next edge.
-            let Some(next_ref) = frame.parent else {
-                return AncestorCheck::Clear;
-            };
-            current_ref = next_ref;
         }
+        AncestorCheck::Clear
     }
 
     /// Does this parent edge cross from a body child into a suspended Handle?
@@ -400,32 +436,27 @@ impl WorkflowState {
 
     /// Walk from `starting_parent` upward. All ancestors are guaranteed
     /// present and unblocked (caller checked via `find_blocking_ancestor`).
-    #[allow(clippy::expect_used)]
     fn find_and_dispatch_handler(
         &mut self,
         starting_parent: ParentRef,
         effect_id: EffectId,
         payload: Value,
     ) -> Result<StashOutcome, AdvanceError> {
-        let mut current_frame_id = starting_parent.frame_id();
-        loop {
-            let frame = self
-                .frames
-                .get(current_frame_id)
-                .expect("ancestor guaranteed present by find_blocking_ancestor");
-            if let FrameKind::Handle(handle_frame) = &frame.kind
-                && handle_frame.effect_id == effect_id
-            {
-                // Found the matching Handle. Dispatch to it.
-                let perform_parent = starting_parent;
-                self.dispatch_to_handler(current_frame_id, perform_parent, payload)?;
-                return Ok(StashOutcome::Consumed);
-            }
-            let Some(next_parent) = frame.parent else {
-                return Err(AdvanceError::UnhandledEffect { effect_id });
-            };
-            current_frame_id = next_parent.frame_id();
-        }
+        let handle_frame_id = self
+            .ancestors(starting_parent)
+            .find_map(|(edge, frame)| {
+                if let FrameKind::Handle(handle_frame) = &frame.kind
+                    && handle_frame.effect_id == effect_id
+                {
+                    Some(edge.frame_id())
+                } else {
+                    None
+                }
+            })
+            .ok_or(AdvanceError::UnhandledEffect { effect_id })?;
+
+        self.dispatch_to_handler(handle_frame_id, starting_parent, payload)?;
+        Ok(StashOutcome::Consumed)
     }
 
     /// Dispatch a handler for a matched effect. Suspends the Handle and
