@@ -268,6 +268,16 @@ The handler DAG creates whatever frames it needs, all parented within the body's
 
 This is a synchronous inline call. The Perform resolves to "run this handler DAG, deliver the result back here." The ResumeHandle is a passive interceptor — the body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
 
+The engine creates a `ResumePerform` frame at the Perform site for observability (same rationale as the Invoke frame — it's functionally a no-op but makes the frame tree self-describing):
+
+```rust
+pub struct ResumePerformFrame {
+    pub resume_handler_id: ResumeHandlerId,
+}
+```
+
+The frame's parent is `perform_parent`. The handler DAG runs as a child of this frame. When the handler completes, the ResumePerform frame removes itself and delivers the value to its parent (trampoline, same as Chain).
+
 ### 7. RestartPerform: suspend and restart (current behavior, simplified)
 
 **Before** (`lib.rs:440`): Same as ResumePerform — suspends, runs handler as child of Handle frame.
