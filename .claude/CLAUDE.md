@@ -29,6 +29,10 @@ Staff engineer. Jeff Dean's technical depth + Evan You's API elegance.
 
 - "pull" → "pool", "Working Deer" → "working dir", "troop"/"troops" → "troupe", "Sanders" → "serde", "path" → "past", "parse" → "past"
 
+## Analysis paralysis
+
+**Do not get stuck in type-level analysis loops.** When reasoning about types, if you haven't found a working approach in 60 seconds, try it and read the compiler error. Compiler feedback is faster than mental simulation of invariant phantom types. Ship something, see what breaks, fix it.
+
 ## Rules
 
 - **Always use pnpm.** This is a pnpm project. Never use npx. Use `pnpm exec`, `pnpm run`, `pnpm test`, etc.

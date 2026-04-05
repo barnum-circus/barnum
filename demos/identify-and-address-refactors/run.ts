@@ -61,11 +61,14 @@ console.error("=== Running identify-and-address-refactors workflow ===\n");
 type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
 
 // Type-check/fix: run tsc, fix errors, repeat until clean.
-const typeCheckFix = loop((recur) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(forEach(fix).drop(), recur),
-    Clean: drop,
-  }),
+// bindInput captures { worktreePath } so the loop body can re-inject it each iteration.
+const typeCheckFix = bindInput<{ worktreePath: string }>((typeCheckFixParams) =>
+  loop<void>((recur, done) =>
+    typeCheckFixParams.then(pipe(typeCheck, classifyErrors)).branch({
+      HasErrors: forEach(fix).drop().then(recur),
+      Clean: done,
+    }),
+  ),
 );
 
 // Implement a refactor, get it passing, and open a PR.
@@ -76,7 +79,10 @@ const implementAndReview = bindInput<ImplementAndReviewParams>((implementAndRevi
   // Judge quality; revise and re-check if needed.
   loop((recur) =>
     pipe(judgeRefactor, classifyJudgment).branch({
-      NeedsWork: pipe(applyFeedback, typeCheckFix).drop().then(recur),
+      NeedsWork: pipe(
+        applyFeedback.drop(),
+        implementAndReviewParams.pick("worktreePath").then(typeCheckFix),
+      ).drop().then(recur),
       Approved: drop,
     }),
   ).drop(),
