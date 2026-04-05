@@ -1,93 +1,116 @@
 # Barnum
 
-Barnum is a set of tools for defining task queues as type-safe state machines whose tasks are executed by long-lived agents.
+Barnum is a programming language for asynchronous programming that is geared towards making it easy to precisely orchestrate agents.
 
 ## Why?
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions.
 
-Barnum is an attempt to provide structure and protect context, and thus enable LLMs to perform dramatically more complicated and ambitious tasks.
+Barnum is an attempt to enable LLMs to perform dramatically more complicated, ambitious tasks. With Barnum, you define an asynchronous workflow, which is effectively a state machine. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and small.
 
-With Barnum, you define a state machine via JSON config. Transitions between states are validated. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and smaller. The CLI provides just the needed context for an individual task, meaning that if agents are given small atomic tasks, they can more reliably perform them correctly (this has been referred to as progressive disclosure).
+Each step in a workflow receives only the context it needs. If an agent is asked to list files in a folder and then analyze each file, the analyzing agent only sees the instructions for analysis — not the listing step. This progressive disclosure of context means agents can more reliably handle tasks of increasing complexity.
 
-For example, if an agent is asked to list all the files in a folder and analyze each file, by default you would provide instructions for both tasks to the agent at the same time. With Barnum, there is no need to provide both sets of instructions at once. Those instructions can be split into two steps. The agent that works on an individual task will only see exactly the instructions that it needs. With this added structure, agents can more reliably and rigorously handle tasks of increasing complexity.
+## How it works
 
-See [crates/barnum_cli/demos](crates/barnum_cli/demos) for example workflows.
+You write workflows in TypeScript using Barnum's combinator library. Handlers are async functions that do the actual work (call an LLM, run a shell command, transform data). Combinators like `pipe`, `forEach`, `loop`, and `branch` compose handlers into workflows.
 
-### Why isn't /loop sufficient?
+The TypeScript DSL compiles to a serializable AST. A Rust engine executes the workflow, managing the state machine, dispatching handlers, and enforcing structure. Input and output schemas (defined via Zod) are validated at runtime at every handler boundary.
 
-Tools like Claude's `/loop` command are great for simple, iterative tasks. But for complex refactors and multi-step workflows, they fall short:
+### Example: simple workflow
 
-- **Predictability**: With Barnum, you know exactly what states your workflow can be in and what transitions are valid. You can reason about the decision tree before running it.
-- **Guaranteed Structure**: The state machine enforces that agents follow the defined workflow. Invalid transitions are rejected and retried.
-- **Separation of Concerns**: Each step has its own instructions, schema, and retry policy. Agents don't need to remember the entire workflow—they just handle their current task.
-- **Parallelism**: Barnum naturally supports fan-out patterns where multiple tasks run concurrently, then aggregate results.
-- **Auditability**: Every state transition is explicit and logged. You can trace exactly how the workflow progressed.
+```ts
+// handlers/steps.ts
+import { createHandler } from "@barnum/barnum";
+import { z } from "zod";
 
-For simple "keep trying until it works" loops, `/loop` is fine. For complex, multi-agent workflows where you need guarantees about behavior, Barnum provides the structure that makes ambitious automation possible.
+export const listFiles = createHandler({
+  outputValidator: z.array(z.string()),
+  handle: async () => ["auth.ts", "database.ts", "routes.ts"],
+}, "listFiles");
 
-## Quick Start
-
-```bash
-pnpm dlx @barnum/barnum run --config config.jsonc
+export const refactor = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    await callClaude({ prompt: `Refactor ${file}` });
+  },
+}, "refactor");
 ```
 
-## Creating Config Files
+```ts
+// run.ts
+import { workflowBuilder, pipe } from "@barnum/barnum";
+import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
-To get the Zod TypeScript schema for config files:
-
-```bash
-pnpm dlx @barnum/barnum config schema
+await workflowBuilder()
+  .workflow(() =>
+    listFiles
+      .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
+      .drop()
+  )
+  .run();
 ```
 
-**Tip for AI agents:** When asking an AI to create a Barnum config, tell it to run `barnum config schema` first. This outputs a Zod schema with all available fields, their types, defaults, and descriptions.
+`listFiles` runs once, returns an array of filenames. `forEach` fans out — each filename flows through the pipeline of `refactor → typeCheck → fix → commit → createPR` in parallel.
 
-## Components
+### Combinators
 
-### 1. Barnum (`crates/barnum`)
+| Combinator | What it does |
+|---|---|
+| `pipe(a, b, c)` | Sequential composition — output of `a` feeds into `b`, then `c` |
+| `handler.forEach(action)` | Fan out — runs `action` once per element of the array |
+| `loop((recur, done) => ...)` | Repeat until `done` is called |
+| `.branch({ A: ..., B: ... })` | Discriminated union dispatch — route by `kind` field |
+| `tryCatch((throw) => body, catch)` | Error handling with typed error channel |
+| `withTimeout(duration, action)` | Race an action against a timer |
+| `all(a, b, c)` | Run actions in parallel, collect results as a tuple |
+| `bindInput(params => ...)` | Capture the input value for use later in the pipeline |
+| `augment(action)` | Run a side computation and merge the result into the input |
 
-A CLI tool for running a task queue defined in a configuration file, using long-lived agents operating in a worker pool.
+### Handlers
 
-```bash
-pnpm dlx @barnum/barnum run --config config.jsonc
+Handlers are created with `createHandler`. They can declare Zod validators for their input and output:
+
+```ts
+export const analyze = createHandler({
+  inputValidator: z.object({ file: z.string() }),
+  outputValidator: z.array(z.object({
+    description: z.string(),
+    scope: z.enum(["function", "module", "cross-file"]),
+  })),
+  handle: async ({ value }) => {
+    // value is typed as { file: string }
+    return await callClaude({ prompt: `Analyze ${value.file}` });
+  },
+}, "analyze");
 ```
 
-See below for detailed instructions, or [crates/barnum/DESIGN.md](crates/barnum/DESIGN.md) for the config format and protocol.
+Schemas are compiled into JSON Schema validators at workflow init. If a handler receives input or produces output that violates its schema, the workflow terminates with a validation error.
 
-### 2. Task Queue (`crates/task_queue`)
+## Demos
 
-A Rust library for defining task queues as type-safe state machines. Tasks execute arbitrary shell scripts and deserialize their stdout.
+| Demo | Description |
+|---|---|
+| [`simple-workflow`](demos/simple-workflow) | List files, then refactor/typecheck/fix/commit/PR each one in parallel |
+| [`retry-on-error`](demos/retry-on-error) | Fallible pipeline with `tryCatch`, `withTimeout`, and `loop` for retry |
+| [`convert-folder-to-ts`](demos/convert-folder-to-ts) | Convert JS files to TypeScript with Claude, iterating on type errors |
+| [`identify-and-address-refactors`](demos/identify-and-address-refactors) | Discover refactoring opportunities, implement them in worktrees, review with Claude |
 
-**Interfaces:**
-- **Rust API** - Define tasks with compile-time type safety, state machine semantics, and automatic task chaining
+Run a demo:
 
-See [crates/task_queue/README.md](crates/task_queue/README.md) for API documentation.
+```bash
+cd demos/simple-workflow
+pnpm install
+pnpm run demo
+```
 
-## Example Use Cases
+## Architecture
 
-### Code Analysis and Refactoring Pipeline
+```
+TypeScript DSL (libs/barnum)
+  → Serializable AST (JSON)
+    → Rust engine (crates/barnum_engine)
+      → Event loop + scheduler (crates/barnum_event_loop)
+        → Handler subprocess execution (crates/barnum_typescript_handler)
+```
 
-A queue with two task types that form a pipeline:
-
-1. **AnalyzeFile** - An agent analyzes a source file, identifying potential refactors
-2. **PerformRefactor** - An agent executes a specific refactor
-
-The workflow:
-- Seed the queue with `AnalyzeFile` tasks for each source file
-- Analysis agents process files and emit `PerformRefactor` tasks back to the queue
-- Refactor agents pick up those tasks and apply changes
-- The queue drains when all analysis is complete and all refactors are applied
-
-### Invariant Enforcement
-
-A self-healing linter that finds and fixes violations:
-
-1. **FindInvariants** - Find all `invariant.md` files in a codebase. Each describes (in English) invariants that must hold for that folder.
-2. **CreateValidateInvariantTasks** - Create a task for each file within a folder for a given invariant.
-3. **ValidateInvariantForFile** - An agent checks if a file satisfies its invariants. On violation, it emits `QuickFix` tasks.
-4. **QuickFix** - An agent applies a fix.
-
-## Documentation
-
-- [Repertoire](docs-website/docs/repertoire/index.md) - Common patterns and workflows
-- [TODOs and Future Work](refactors/pending/todos.md) - Planned improvements and ideas
+The TypeScript library defines the workflow. `workflowBuilder().run()` serializes the AST to JSON and spawns the Rust binary, which flattens the AST into a `FlatConfig`, manages frames and task dispatch, and executes handlers as subprocesses.
