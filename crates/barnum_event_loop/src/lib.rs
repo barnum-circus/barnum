@@ -137,6 +137,15 @@ impl Scheduler {
     pub async fn recv(&mut self) -> Option<(TaskId, Result<Value, HandlerError>)> {
         self.result_rx.recv().await
     }
+
+    /// Inject a fake handler result into the channel (test-only).
+    ///
+    /// The injected result is buffered immediately and will be received
+    /// before any results from actual handler execution.
+    #[cfg(test)]
+    pub fn inject_completion(&self, task_id: TaskId, value: Value) {
+        let _ = self.result_tx.send((task_id, Ok(value)));
+    }
 }
 
 // =============================================================================
@@ -676,5 +685,73 @@ mod tests {
         // Only the TypeScript handler has an output validator.
         assert!(compiled.input.is_empty());
         assert_eq!(compiled.output.len(), 1);
+    }
+
+    // =========================================================================
+    // Integration tests: validation through run_workflow
+    // =========================================================================
+
+    /// Input validation failure terminates run_workflow with SchemaValidation.
+    ///
+    /// Chain(Constant("bad"), TS_handler_with_input_schema({type: integer})):
+    /// the constant produces a string, the TS handler expects an integer.
+    /// Validation catches the mismatch before the handler is dispatched.
+    #[tokio::test]
+    async fn run_workflow_rejects_bad_input() {
+        let flat_config = flatten(config(Action::Chain(barnum_ast::ChainAction {
+            first: Box::new(constant(serde_json::json!("not-an-integer"))),
+            rest: Box::new(ts_invoke_with_schemas(
+                "./handler.ts",
+                "run",
+                Some(serde_json::json!({ "type": "integer" })),
+                None,
+            )),
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = test_scheduler();
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler).await;
+        match result {
+            Err(RunWorkflowError::SchemaValidation {
+                direction: SchemaDirection::Input,
+                ..
+            }) => {} // expected
+            Err(other) => panic!("expected SchemaValidation(Input), got: {other:?}"),
+            Ok(value) => panic!("expected SchemaValidation error, got Ok({value})"),
+        }
+    }
+
+    /// Output validation failure terminates run_workflow with SchemaValidation.
+    ///
+    /// Single TS handler with output_schema({type: integer}). A fake
+    /// completion with a string value is injected into the scheduler channel.
+    /// Validation catches the mismatch after the handler "completes".
+    #[tokio::test]
+    async fn run_workflow_rejects_bad_output() {
+        let flat_config = flatten(config(ts_invoke_with_schemas(
+            "./handler.ts",
+            "run",
+            None,
+            Some(serde_json::json!({ "type": "integer" })),
+        )))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = test_scheduler();
+
+        // Pre-inject a fake completion for TaskId(0) with a value that
+        // violates the output schema. This arrives before any real handler
+        // result because it's already buffered in the channel.
+        scheduler.inject_completion(TaskId(0), serde_json::json!("not-an-integer"));
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler).await;
+        match result {
+            Err(RunWorkflowError::SchemaValidation {
+                direction: SchemaDirection::Output,
+                ..
+            }) => {} // expected
+            Err(other) => panic!("expected SchemaValidation(Output), got: {other:?}"),
+            Ok(value) => panic!("expected SchemaValidation error, got Ok({value})"),
+        }
     }
 }
