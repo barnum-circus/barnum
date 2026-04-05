@@ -104,7 +104,31 @@ pub enum FrameKind {
 }
 ```
 
-No `ResumePerformFrame`. ResumePerform is transparent — the handler DAG runs at the Perform site with `parent = perform_parent`. The handler's own frames (Invoke, Chain, etc.) provide in-flight tracking. No intermediate frame needed.
+```rust
+pub enum FrameKind {
+    Chain { rest: ActionId },
+    All { results: Vec<Option<Value>> },
+    ForEach { results: Vec<Option<Value>> },
+    ResumeHandle(ResumeHandleFrame),
+    RestartHandle(RestartHandleFrame),
+    ResumePerform(ResumePerformFrame),
+    Invoke { handler: HandlerId },
+}
+```
+
+**ResumePerformFrame:**
+
+```rust
+/// Frame at the Perform site for a ResumeHandle. Runs the handler DAG
+/// as a child. When the handler completes, intercepts the result to
+/// apply state updates to the ResumeHandle's captured_value, then
+/// forwards the value to perform_parent.
+pub struct ResumePerformFrame {
+    /// The ResumeHandle frame this Perform targets.
+    /// Used to apply state updates back to the ResumeHandle's captured_value.
+    pub handle_frame_id: FrameId,
+}
+```
 
 **ParentRef — before** (`frame.rs:16`):
 
@@ -126,10 +150,13 @@ pub enum ParentRef {
     ForEach { frame_id: FrameId, child_index: usize },
     ResumeHandle { frame_id: FrameId },
     RestartHandle { frame_id: FrameId, side: RestartHandleSide },
+    ResumePerform { frame_id: FrameId },
 }
 ```
 
-Key difference: `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6). No `ResumePerform` variant — ResumePerform is transparent (no frame created).
+Key differences:
+- `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6).
+- `ResumePerform` intercepts handler results to apply state updates to the ResumeHandle's `captured_value`, then forwards the value to the body.
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -253,9 +280,9 @@ No deserialization. No tag matching.
 
 **After for ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never modified — no suspension, no side enum.
 
-ResumePerform is transparent — no frame created. The handler DAG runs at the Perform site with `parent = perform_parent`. The handler's own frames (Invoke, Chain, etc.) provide in-flight tracking. When the handler completes, its result delivers directly to `perform_parent`.
+#### 6a. `advance` match arm for `FlatAction::ResumePerform`
 
-In practice, ResumePerform is almost always the first child of a Chain (e.g., `Chain(Perform(id), next_step)`). The handler runs as the Chain's effective "first" child. When it completes, the Chain trampolines to `rest` — the continuation after the Perform. ResumePerform becomes a Chain at execution time.
+When the engine encounters a `ResumePerform` action during `advance`:
 
 ```rust
 FlatAction::ResumePerform { resume_handler_id } => {
@@ -264,7 +291,7 @@ FlatAction::ResumePerform { resume_handler_id } => {
     };
 
     // Walk up the frame tree to find the matching ResumeHandle.
-    let (_, resume_handle) = self
+    let (handle_frame_id, resume_handle) = self
         .ancestors(perform_parent)
         .find_map(|(edge, frame)| match &frame.kind {
             FrameKind::ResumeHandle(handle)
@@ -281,16 +308,56 @@ FlatAction::ResumePerform { resume_handler_id } => {
     let captured_value = resume_handle.captured_value.clone();
     let handler_input = json!({ "payload": value, "state": captured_value });
 
-    // Handler DAG runs directly at the Perform site. No intermediate frame.
-    // Result delivers to perform_parent (typically a Chain that trampolines
-    // to the continuation after the Perform).
-    self.advance(handler_action_id, handler_input, Some(perform_parent))?;
+    // Create ResumePerform frame. Intercepts handler result to apply
+    // state updates back to the ResumeHandle's captured_value.
+    let perform_frame_id = self.frames.insert(Frame {
+        parent: Some(perform_parent),
+        kind: FrameKind::ResumePerform(ResumePerformFrame {
+            handle_frame_id,
+        }),
+    });
+
+    // Handler DAG runs as child of the ResumePerform frame.
+    self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
+        frame_id: perform_frame_id,
+    }))?;
 }
 ```
 
-The ResumeHandle frame is not touched. No suspension, no status change. Multiple concurrent ResumePerforms can be in flight for the same ResumeHandle — each advances the handler DAG with its own `perform_parent`.
+Multiple concurrent ResumePerforms can be in flight for the same ResumeHandle — each creates its own frame with its own `perform_parent`. The ResumeHandle frame is not suspended.
 
-The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and captured value, but execution stays in the body's frame subtree.
+#### 6b. `deliver` match arm for `ParentRef::ResumePerform`
+
+When the handler completes, its result is `{ value, state_update }`:
+
+```rust
+ParentRef::ResumePerform { frame_id } => {
+    let frame = self.frames.remove(frame_id).expect("frame exists");
+    let FrameKind::ResumePerform(perform) = frame.kind else { unreachable!() };
+    let parent = frame.parent.expect("ResumePerform always has a parent");
+
+    // Deserialize handler result.
+    let ResumeHandlerOutput { value, state_update } =
+        serde_json::from_value(handler_result)?;
+
+    // Apply state update to the ResumeHandle's captured_value.
+    if let Some(new_value) = state_update {
+        let handle = self.frames.get_mut(perform.handle_frame_id)
+            .expect("ResumeHandle still alive");
+        let FrameKind::ResumeHandle(ref mut handle) = handle.kind else {
+            unreachable!()
+        };
+        handle.captured_value = new_value;
+    }
+
+    // Forward the value to the body at the original Perform site.
+    self.deliver(parent, value)
+}
+```
+
+#### 6c. Concurrent state updates
+
+Multiple ResumePerforms can be in flight for the same ResumeHandle. Each reads `captured_value` at advance time and writes it back at deliver time. The engine is single-threaded and synchronous — `deliver` runs to completion before the next `complete` call. So there are no data races. But the ordering of state updates depends on the order handler completions arrive, which is determined by the external caller's `complete` call order. This is inherent to the model — the same ordering concern exists today with `state_update` on the current Handle.
 
 ### 7. RestartPerform: tear down body immediately, run handler, re-enter
 
