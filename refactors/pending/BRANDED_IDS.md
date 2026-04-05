@@ -98,17 +98,16 @@ function buildLoopAction(effectId: number, body: Action): Action {
 function buildLoopAction(effectId: EffectId, body: Action): Action {
 ```
 
-## When Handle/Perform splits into three kinds
+## When Handle/Perform splits into two kinds
 
-When RESUME_VS_RESTART_HANDLERS.md is implemented, the single `EffectId` becomes three types:
+When RESUME_VS_RESTART_HANDLERS.md is implemented, the single `EffectId` becomes two types:
 
 ```ts
 type ResumeHandlerId = number & { readonly __brand: unique symbol };
 type RestartHandlerId = number & { readonly __brand: unique symbol };
-type BreakHandlerId = number & { readonly __brand: unique symbol };
 ```
 
-Each gets its own allocator (or one allocator with three return-type overloads). The AST interfaces use the matching type:
+Each gets its own allocator. The AST interfaces use the matching type:
 
 ```ts
 export interface ResumeHandleAction {
