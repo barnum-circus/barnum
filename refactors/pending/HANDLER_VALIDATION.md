@@ -1,18 +1,22 @@
 # Handler Validation
 
-**Blocked by:** `HANDLER_SCHEMAS_IN_AST.md` (which embeds JSON Schema in the AST)
+**Blocked by:** `HANDLER_SCHEMAS_IN_AST.md` (done)
 
 ## TL;DR
 
-Once handler schemas are embedded in the AST (see `HANDLER_SCHEMAS_IN_AST.md`), compile them into validators on the Rust side and enforce them at runtime. Panic on validation failure.
+Compile embedded JSON Schemas into validators at workflow init using the `jsonschema` crate. Validate handler inputs before dispatch and outputs after completion. Validation failures are `RunWorkflowError` variants propagated with `?` — no panics at the validation site.
 
 ---
 
-## Task 1: Compile and validate schemas on Rust side
+## Design notes
 
-When the Rust binary deserializes the config, compile all JSON Schema documents into validators using the `jsonschema` crate. This serves two purposes: (a) validates that the schemas themselves are valid JSON Schema (catching malformed schemas at init, not at first handler invocation), and (b) caches compiled validators for use in Task 2.
+**Why `JsonSchema(Value)` stays as-is.** The `jsonschema` crate takes `&Value` for both schema compilation and value validation. A typed Rust enum for JSON Schema would require converting back to `Value` for the actual validation — a round-trip for no runtime benefit. `Validator::new()` already validates that the schema is well-formed JSON Schema during compilation, so malformed schemas are caught at init time regardless.
 
-### 1.1 Add `jsonschema` crate dependency
+**Error handling.** All validation failures propagate as `Result::Err` via `?`. The caller of `run_workflow` decides whether to panic, log, or handle otherwise. Inside the event loop, validation errors are just another `RunWorkflowError` variant.
+
+---
+
+## Step 1: Add `jsonschema` dependency
 
 **File:** `crates/barnum_event_loop/Cargo.toml`
 
@@ -21,144 +25,194 @@ When the Rust binary deserializes the config, compile all JSON Schema documents 
 jsonschema = "0.28"  # or latest
 ```
 
-### 1.2 Compile schemas at workflow init, panic on invalid schema
+---
+
+## Step 2: Add validation error variants to `RunWorkflowError`
 
 **File:** `crates/barnum_event_loop/src/lib.rs`
 
 ```rust
-use jsonschema::Validator;
-use std::collections::HashMap;
+pub enum RunWorkflowError {
+    Handler(HandlerError),
+    Complete(CompleteError),
 
-struct CompiledSchemas {
-    input: HashMap<HandlerId, Validator>,
-    output: HashMap<HandlerId, Validator>,
+    /// A handler's embedded JSON Schema is not valid JSON Schema.
+    /// Caught at workflow init during schema compilation.
+    InvalidSchema {
+        module: String,
+        func: String,
+        direction: SchemaDirection,
+        error: String,
+    },
+
+    /// A handler's input or output value failed schema validation.
+    SchemaValidation {
+        module: String,
+        func: String,
+        direction: SchemaDirection,
+        errors: Vec<String>,
+    },
 }
 
-fn compile_schemas(workflow_state: &WorkflowState) -> CompiledSchemas {
-    let mut input = HashMap::new();
-    let mut output = HashMap::new();
-    for (handler_id, handler) in workflow_state.handlers() {
-        if let HandlerKind::TypeScript(ts) = handler {
-            if let Some(ref schema) = ts.input_schema {
-                let validator = Validator::new(schema).unwrap_or_else(|err| {
-                    panic!(
-                        "invalid input JSON Schema for {}:{}: {err}",
-                        ts.module.lookup(), ts.func.lookup(),
-                    )
-                });
-                input.insert(handler_id, validator);
-            }
-            if let Some(ref schema) = ts.output_schema {
-                let validator = Validator::new(schema).unwrap_or_else(|err| {
-                    panic!(
-                        "invalid output JSON Schema for {}:{}: {err}",
-                        ts.module.lookup(), ts.func.lookup(),
-                    )
-                });
-                output.insert(handler_id, validator);
-            }
-        }
-    }
-    CompiledSchemas { input, output }
+/// Whether a schema/validation error is about the handler's input or output.
+pub enum SchemaDirection {
+    Input,
+    Output,
 }
 ```
 
-Call `compile_schemas` at the top of `run_workflow`, before the main loop. Any invalid schema panics immediately with a clear message identifying the handler.
+Implement `Display` for `SchemaDirection` (`"input"` / `"output"`) so error messages read naturally: `"input validation failed for /path/to/module:funcName"`.
 
 ---
 
-## Task 2: Validate handler inputs and outputs at runtime
-
-Use the compiled schemas from Task 1 to validate values at the handler boundary. Panic on failure.
-
-### 2.1 Validate input before dispatch
+## Step 3: Compile schemas at workflow init
 
 **File:** `crates/barnum_event_loop/src/lib.rs`
 
-In the `run_workflow` dispatch loop:
+At the top of `run_workflow`, before the main loop, iterate all handlers and compile their schemas. Invalid schemas return `Err(RunWorkflowError::InvalidSchema(...))`.
 
 ```rust
-for dispatch in &dispatches {
-    let handler = workflow_state.handler(dispatch.handler_id);
-    // TODO: elide redundant validation when adjacent schemas match
-    if let Some(validator) = compiled_schemas.input.get(&dispatch.handler_id) {
-        let errors: Vec<_> = validator.iter_errors(&dispatch.value).collect();
-        if !errors.is_empty() {
-            panic!(
-                "input validation failed for {}:{}:\n{}",
-                ts.module.lookup(), ts.func.lookup(),
-                format_validation_errors(&errors),
-            );
+use jsonschema::Validator;
+
+/// Compiled input/output validators, keyed by flat action index.
+/// Only TypeScript handlers with schemas have entries.
+struct CompiledSchemas {
+    /// flat action index → compiled input validator
+    input: HashMap<usize, Validator>,
+    /// flat action index → compiled output validator
+    output: HashMap<usize, Validator>,
+}
+
+fn compile_schemas(
+    workflow_state: &WorkflowState,
+) -> Result<CompiledSchemas, RunWorkflowError> {
+    let mut input = HashMap::new();
+    let mut output = HashMap::new();
+
+    for (index, flat_entry) in workflow_state.flat_entries().iter().enumerate() {
+        if let FlatAction::Invoke { handler } = &flat_entry.action {
+            if let HandlerKind::TypeScript(ts_handler) = handler {
+                if let Some(ref schema) = ts_handler.input_schema {
+                    let validator = Validator::new(&schema.0).map_err(|err| {
+                        RunWorkflowError::InvalidSchema {
+                            module: ts_handler.module.to_string(),
+                            func: ts_handler.func.to_string(),
+                            direction: SchemaDirection::Input,
+                            error: err.to_string(),
+                        }
+                    })?;
+                    input.insert(index, validator);
+                }
+                if let Some(ref schema) = ts_handler.output_schema {
+                    let validator = Validator::new(&schema.0).map_err(|err| {
+                        RunWorkflowError::InvalidSchema {
+                            module: ts_handler.module.to_string(),
+                            func: ts_handler.func.to_string(),
+                            direction: SchemaDirection::Output,
+                            error: err.to_string(),
+                        }
+                    })?;
+                    output.insert(index, validator);
+                }
+            }
         }
     }
-    scheduler.dispatch(dispatch, handler);
+
+    Ok(CompiledSchemas { input, output })
 }
 ```
 
-### 2.2 Validate output after completion
+The exact iteration API depends on how `WorkflowState` exposes flat entries. The key is: iterate all `Invoke` actions with `TypeScript` handlers, compile their schemas, key by whatever identifier the dispatch/completion paths use to look up the handler.
 
-**File:** `crates/barnum_event_loop/src/lib.rs`
+Call at the top of `run_workflow`:
+
+```rust
+let compiled_schemas = compile_schemas(workflow_state)?;
+```
+
+---
+
+## Step 4: Validate at handler boundaries
+
+### 4.1 Validate input before dispatch
+
+In `run_workflow`, before dispatching to the scheduler:
+
+```rust
+// Before scheduler.dispatch(...)
+if let HandlerKind::TypeScript(ts_handler) = handler {
+    if let Some(validator) = compiled_schemas.input.get(&dispatch_index) {
+        let errors: Vec<_> = validator.iter_errors(&dispatch_event.value).collect();
+        if !errors.is_empty() {
+            return Err(RunWorkflowError::SchemaValidation {
+                module: ts_handler.module.to_string(),
+                func: ts_handler.func.to_string(),
+                direction: SchemaDirection::Input,
+                errors: format_validation_errors(&errors),
+            });
+        }
+    }
+}
+// TODO: elide redundant validation when adjacent schemas match
+```
+
+### 4.2 Validate output after handler completion
 
 After receiving a handler result, before passing to `complete()`:
 
 ```rust
-let value = result?;
+let value = result.map_err(RunWorkflowError::Handler)?;
 
-// Look up which handler produced this task.
-// task_to_frame maps TaskId → FrameId, frame has handler_id.
-// We need to read handler_id BEFORE complete() removes the frame.
-let handler_id = workflow_state.handler_id_for_task(task_id);
+// Look up which handler produced this result BEFORE complete() removes the frame.
+// Need the handler info + flat action index for the validator lookup.
+let (handler_kind, action_index) = workflow_state.handler_for_task(task_id);
 
-// TODO: elide redundant validation when adjacent schemas match
-if let Some(validator) = compiled_schemas.output.get(&handler_id) {
-    let errors: Vec<_> = validator.iter_errors(&value).collect();
-    if !errors.is_empty() {
-        let handler = workflow_state.handler(handler_id);
-        panic!(
-            "output validation failed for {}:{}:\n{}",
-            handler.module(), handler.func(),
-            format_validation_errors(&errors),
-        );
+if let HandlerKind::TypeScript(ts_handler) = handler_kind {
+    if let Some(validator) = compiled_schemas.output.get(&action_index) {
+        let errors: Vec<_> = validator.iter_errors(&value).collect();
+        if !errors.is_empty() {
+            return Err(RunWorkflowError::SchemaValidation {
+                module: ts_handler.module.to_string(),
+                func: ts_handler.func.to_string(),
+                direction: SchemaDirection::Output,
+                errors: format_validation_errors(&errors),
+            });
+        }
     }
 }
+// TODO: elide redundant validation when adjacent schemas match
 
-if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+let completion_event = CompletionEvent { task_id, value };
+if let Some(terminal_value) = complete(workflow_state, completion_event)? {
     return Ok(terminal_value);
 }
 ```
 
-Note: `handler_id_for_task` is a new method on `WorkflowState` that reads from `task_to_frame` without removing the entry. Currently `complete()` does `task_to_frame.remove()`. We need to read the handler_id first (via `task_to_frame.get()` → frame → handler_id) before `complete()` consumes it.
+Note: `handler_for_task` is a new method that reads from `task_to_frame` (via `.get()`, not `.remove()`) to get the handler kind and action index before `complete()` consumes the frame.
 
-### 2.3 `format_validation_errors` helper
+### 4.3 Error formatting helper
 
 ```rust
-fn format_validation_errors(errors: &[jsonschema::ValidationError]) -> String {
+fn format_validation_errors(errors: &[jsonschema::ValidationError]) -> Vec<String> {
     errors
         .iter()
-        .map(|e| format!("  - {}: {}", e.instance_path, e))
-        .collect::<Vec<_>>()
-        .join("\n")
+        .map(|e| format!("{}: {}", e.instance_path, e))
+        .collect()
 }
 ```
 
 ---
 
-## Future optimization: eliding redundant validation
-
-When two handlers are adjacent in a chain and the first handler's output schema is identical to the second handler's input schema, the output validation of the first and input validation of the second are redundant — one of them can be skipped. More generally, if a value flows through builtins (which are trusted) between two handlers with matching schemas, the intermediate validation can be elided.
-
-This is a pure optimization and not part of this refactor. Implement naive validate-everything first, then add schema equality checks to skip redundant passes. Leave `// TODO: elide redundant validation when adjacent schemas match` comments at the validation call sites.
-
 ## What this does NOT include
 
-- **No `Validate` builtin.** Validation is not a user-composable action in the pipeline. It's automatic enforcement at the handler boundary.
-- **No handler deduplication / handler IDs.** Future work. For now, schemas are duplicated if the same handler appears multiple times in the AST.
-- **No recovery from validation failures.** Validation failure = panic = workflow terminates. This is a contract violation, not an expected error. If we later want softer behavior (Result-based), that's a separate design.
-- **No validation for builtins.** Builtins are framework code with known types. They don't cross a trust boundary.
-- **No type-only handlers (specifying types without validators).** Separate refactor. For now, if you want runtime validation, provide a Zod schema. If you don't provide one, no validation occurs and the type defaults to `unknown` / `never` per existing behavior.
+- **No `Validate` builtin.** Validation is automatic at the handler boundary, not a user-composable pipeline action.
+- **No handler deduplication.** If the same handler appears multiple times in the AST, its schema is compiled multiple times. Future optimization.
+- **No validation for builtins.** Builtins are framework code with known types. No trust boundary.
+- **No redundant validation elision.** Validate everything naively first. When two adjacent handlers share a schema, one validation can be skipped — that's a future optimization. `// TODO` comments mark the sites.
+- **No recovery from validation failures.** Validation failure terminates the workflow via `RunWorkflowError`. This is a contract violation, not a retryable error.
 
 ## Dependencies
 
 | Package | Where | Purpose |
 |---------|-------|---------|
-| `jsonschema` (crate) | `barnum_event_loop` | Validate values against JSON Schema at runtime |
+| `jsonschema` (crate) | `barnum_event_loop` | Compile and validate JSON Schema at runtime |
