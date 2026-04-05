@@ -2438,4 +2438,150 @@ mod tests {
         .unwrap();
         assert_eq!(result, Some(json!(["e1_resumed", "e2_resumed"])),);
     }
+
+    // -- Resume handler non-suspension tests --
+    //
+    // These tests document the desired behavior after the Resume/Restart
+    // handler split: resume handlers should NOT suspend the Handle frame,
+    // so concurrent siblings should not be blocked.
+    //
+    // Currently these fail because the engine suspends on ALL Performs.
+
+    /// Resume handler with async handler DAG should not block sibling
+    /// completions.
+    ///
+    /// Setup: Handle(e, ts_handler, All(Chain(Invoke(A), Perform(e)), Invoke(B)))
+    /// Branch 0: A completes → Perform(e) → handler dispatched (async).
+    /// Branch 1: B completes → should deliver to All slot 1 immediately.
+    ///
+    /// Currently: B's completion is stashed because Handle is suspended.
+    /// After refactor: Handle is never suspended for resume, B delivers.
+    #[test]
+    #[should_panic]
+    #[allow(clippy::unwrap_used)]
+    fn resume_handler_does_not_block_sibling_completion() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), perform(1)),
+                invoke("./b.ts", "b"),
+            ]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2); // A and B
+
+        // Complete A → Perform → handler dispatched (async TS handler).
+        let (result, handler_ts) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(handler_ts.len(), 1);
+
+        // Complete B while handler is in flight.
+        // After refactor: should NOT be stashed.
+        let result = engine.complete(ts[1].task_id, json!("b_out")).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(
+            engine.stashed_items.len(),
+            0,
+            "resume handler should not cause stashing"
+        );
+    }
+
+    /// Two concurrent resume Performs should both dispatch their handlers
+    /// without serialization.
+    ///
+    /// Setup: Handle(e, ts_handler, All(Perform(e), Perform(e)))
+    /// Both Performs fire during advance. Neither should block the other.
+    ///
+    /// Currently: first Perform suspends Handle, second is stashed.
+    /// After refactor: both dispatch concurrently (two handler dispatches).
+    #[test]
+    #[should_panic]
+    #[allow(clippy::unwrap_used)]
+    fn concurrent_resume_performs_not_serialized() {
+        let mut engine = engine_from(handle(
+            1,
+            invoke("./handler.ts", "handler"),
+            parallel(vec![perform(1), perform(1)]),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        // After refactor: both Performs should dispatch, no stashing.
+        let ts = engine.take_pending_dispatches();
+        assert_eq!(ts.len(), 2, "both handlers should dispatch concurrently");
+        assert_eq!(
+            engine.stashed_items.len(),
+            0,
+            "no Perform should be stashed"
+        );
+    }
+
+    /// A throw (to an outer tryCatch) should proceed even while a resume
+    /// handler is in flight in a sibling branch.
+    ///
+    /// Setup:
+    ///   Handle(outer_e, discard_handler,         // tryCatch-like
+    ///     Handle(inner_e, ts_handler,             // resume-like (bind)
+    ///       All(
+    ///         Chain(Invoke(A), Perform(inner_e)), // branch 0: reads var
+    ///         Chain(Invoke(B), Perform(outer_e)), // branch 1: throws
+    ///       )
+    ///     )
+    ///   )
+    ///
+    /// Branch 0: A completes → Perform(inner_e) → resume handler in flight.
+    /// Branch 1: B completes → Perform(outer_e) → should bubble up past
+    ///   inner Handle and reach outer Handle, discarding the body.
+    ///
+    /// Currently: Perform(outer_e) is stashed because inner Handle is
+    ///   suspended. After refactor: inner Handle is not suspended (resume
+    ///   handler), so the throw proceeds immediately.
+    #[test]
+    #[should_panic]
+    #[allow(clippy::unwrap_used)]
+    fn throw_proceeds_while_resume_handler_in_flight() {
+        let inner_e = 1; // resume-style
+        let outer_e = 2; // discard-style (tryCatch)
+
+        let mut engine = engine_from(handle(
+            outer_e,
+            always_discard_handler(json!("caught")),
+            handle(
+                inner_e,
+                invoke("./handler.ts", "handler"), // async resume handler
+                parallel(vec![
+                    chain(invoke("./a.ts", "a"), perform(inner_e)),
+                    chain(invoke("./b.ts", "b"), perform(outer_e)),
+                ]),
+            ),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2); // A and B
+
+        // Complete A → Perform(inner_e) → resume handler dispatched.
+        let (result, handler_ts) =
+            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(handler_ts.len(), 1);
+
+        // Complete B → Perform(outer_e). Should bubble up past inner Handle
+        // (which is NOT suspended for a resume handler) and reach outer Handle.
+        let (result, _) =
+            complete_and_drive(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
+
+        // Outer handle discards with "caught". The entire body is torn down.
+        assert_eq!(
+            result,
+            Some(json!("caught")),
+            "throw should reach outer handler immediately"
+        );
+    }
 }
