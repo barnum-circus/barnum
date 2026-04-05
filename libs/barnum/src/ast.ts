@@ -45,14 +45,14 @@ export interface StepAction {
 
 export interface HandleAction {
   kind: "Handle";
-  effect_id: number;
+  effect_id: EffectId;
   body: Action;
   handler: Action;
 }
 
 export interface PerformAction {
   kind: "Perform";
-  effect_id: number;
+  effect_id: EffectId;
 }
 
 export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
@@ -686,7 +686,7 @@ export { chain } from "./chain.js";
 export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
 export { resetEffectIdCounter } from "./effect-id.js";
-import { allocateEffectId } from "./effect-id.js";
+import { allocateEffectId, type EffectId } from "./effect-id.js";
 export { tryCatch } from "./try-catch.js";
 export { race, sleep, withTimeout } from "./race.js";
 
@@ -862,7 +862,7 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any, TRefs e
  *
  * Used by earlyReturn, loop, tryCatch, and race.
  */
-export function buildRestartBranchAction(effectId: number, continueArm: Action, breakArm: Action): Action {
+export function buildRestartBranchAction(effectId: EffectId, continueArm: Action, breakArm: Action): Action {
   return {
     kind: "Chain",
     first: TAG_CONTINUE,

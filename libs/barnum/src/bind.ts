@@ -1,6 +1,6 @@
 import { type Action, type ExtractInput, type ExtractOutput, type TypedAction, typedAction } from "./ast.js";
 import { identity, drop } from "./builtins.js";
-import { allocateEffectId } from "./effect-id.js";
+import { allocateEffectId, type EffectId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,7 @@ import { pipe } from "./pipe.js";
  */
 export type VarRef<TValue> = TypedAction<never, TValue>;
 
-function createVarRef<TValue>(effectId: number): VarRef<TValue> {
+function createVarRef<TValue>(effectId: EffectId): VarRef<TValue> {
   return typedAction({ kind: "Perform", effect_id: effectId });
 }
 

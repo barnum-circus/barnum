@@ -8,7 +8,7 @@ import {
   TAG_BREAK,
   IDENTITY,
 } from "./ast.js";
-import { allocateEffectId } from "./effect-id.js";
+import { allocateEffectId, type EffectId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
 // Shared AST fragments
@@ -29,7 +29,7 @@ const TAG_ERR: Action = {
  * The winning branch tags its result as Break, then Performs. The handler
  * restarts the body; Branch takes the Break arm (identity), Handle exits.
  */
-function breakPerform(effectId: number): Action {
+function breakPerform(effectId: EffectId): Action {
   return {
     kind: "Chain",
     first: TAG_BREAK,
