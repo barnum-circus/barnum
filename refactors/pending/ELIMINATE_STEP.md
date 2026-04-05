@@ -12,11 +12,14 @@ Naming is already solved — pipelines are values (`const x = pipe(...)`). Non-r
 
 ## API
 
-Explicit type parameters specify each function's input and output:
+One type parameter — an array of `[In, Out]` tuples, one per function:
 
 ```ts
 // Define the functions. Returns a curried combinator.
-const withFns = defineRecursiveFunctions<[ProcessIn, ProcessOut], [TransformIn, TransformOut]>(
+const withFns = defineRecursiveFunctions<[
+  [ProcessIn, ProcessOut],
+  [TransformIn, TransformOut],
+]>(
   (fnA, fnB) => [
     // fnA: TypedAction<ProcessIn, ProcessOut>
     // fnB: TypedAction<TransformIn, TransformOut>
@@ -29,21 +32,21 @@ const withFns = defineRecursiveFunctions<[ProcessIn, ProcessOut], [TransformIn, 
 withFns((fnA, fnB) => pipe(setup, fnA, deploy))
 ```
 
-Each type parameter is a `[In, Out]` tuple, one per function. The call tokens carry the corresponding types — `fnA` is `TypedAction<ProcessIn, ProcessOut>`, `fnB` is `TypedAction<TransformIn, TransformOut>`. TypeScript can't infer these from the circular definition, so they're explicit.
+The type parameter `TFunctions extends [unknown, unknown][]` is a single array. TypeScript maps over it to produce call tokens — `TFunctions[0]` is `[ProcessIn, ProcessOut]`, so `fnA` is `TypedAction<ProcessIn, ProcessOut>`. TypeScript can't infer these from the circular definition, so they're explicit.
 
 The call tokens are the same values in both callbacks. They're `Chain(Tag("Call0"), ResumePerform(resumeHandlerId))` — tagged ResumePerforms. The first callback uses them for recursion inside function bodies. The second uses them for initial calls in the workflow body. Both execute inside the ResumeHandle's scope.
 
 Single-function convenience:
 
 ```ts
-const withSelf = defineRecursiveFunction<ProcessIn, ProcessOut>((self) =>
-  pipe(process, branch({ Retry: self, Done: identity }))
+const withSelf = defineRecursiveFunctions<[[ProcessIn, ProcessOut]]>((self) =>
+  [pipe(process, branch({ Retry: self, Done: identity }))]
 );
 
 withSelf((fn) => pipe(setup, fn, deploy))
 ```
 
-`self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. `defineRecursiveFunction` covers the general self-recursion case where you need the result back.
+Same API, single-element array. No separate `defineRecursiveFunction` — just `defineRecursiveFunctions` with one entry. `self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. `defineRecursiveFunctions` with one entry covers the general self-recursion case where you need the result back.
 
 ## Desugaring
 
