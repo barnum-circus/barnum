@@ -248,14 +248,48 @@ Another way to see it: bind captures a value and the handler returns it. `define
 
 This means the function body has the same expressive power as any other pipeline. It can contain Invoke nodes (external handlers), other ResumePerforms (recursive calls), nested Handles, All/ForEach, everything. The handler DAG isn't limited to builtins — it's a full action tree.
 
+## Phases
+
+### Phase 1: Add `defineRecursiveFunctions` combinator
+
+Purely additive. No changes to existing code.
+
+- Implement `defineRecursiveFunction` (singular) and `defineRecursiveFunctions` (plural) in `libs/barnum/src/`.
+- Desugars to ResumeHandle/ResumePerform (or current Handle/Perform with Resume output if landing before RESUME_VS_RESTART_HANDLERS).
+- Call tokens are `TypedAction` values wrapping tagged ResumePerform nodes.
+- Handler contains a Branch with one arm per function body.
+- Add tests — self-recursion, mutual recursion, non-tail calls.
+- Existing steps, demos, engine: untouched.
+
+### Phase 2: Migrate consumers off steps
+
+- **identify-and-address-refactors demo**: uses `registerSteps` for `TypeCheckFix` and `ImplementAndReview`. `TypeCheckFix` is non-recursive (just a named pipeline — extract to a `const`). `ImplementAndReview` references `TypeCheckFix` via `steps.TypeCheckFix` — also non-recursive, extract to a `const`. No `defineRecursiveFunctions` needed for this demo.
+- **Any `self` usage**: replace with `defineRecursiveFunction` wrapping the workflow.
+- **Any `stepRef` mutual recursion**: replace with `defineRecursiveFunctions`.
+- After migration: no demo or library code uses `registerSteps`, `stepRef`, or `self`.
+
+### Phase 3: Remove Step infrastructure
+
+Once no consumers remain:
+
+- Delete from TS AST: `StepAction`, `StepRef`, `StepRef` type
+- Delete from TS API: `ConfigBuilder.registerSteps()`, `stepRef()`, `ValidateStepRefs<R>`, `StripRefs<TSteps>`, `steps`/`self` params in `workflow()` callback
+- Delete from Rust AST: `StepAction`, `StepRef`, `StepName`
+- Delete `Config.steps` (TS and Rust). Config becomes `{ workflow: Action }`.
+- Delete from flattener: step flattening (pass 1), step resolution (pass 2), `StepTarget`, `FlattenError::StepRootInStepBody`, `FlattenError::UnknownStep`
+- Delete from engine: `FlatAction::Step { target }`
+- Simplify `ConfigBuilder` — no step type parameter, no step refs. `workflow()` takes a plain callback with no params (or just returns an action).
+
+Each phase lands independently. Phase 1 can go on master immediately. Phase 2 can be a series of small commits (one per demo/consumer). Phase 3 is a single deletion pass.
+
 ## Open questions
 
 1. **`defineRecursiveFunctions` type safety.** The current `stepRef` is `TypedAction<any, any, N>` — untyped. Can the new API do better? The call tokens need types (input/output of the function they call). But with mutual recursion, function A's output might depend on function B's output and vice versa. TypeScript can't infer circular types from a callback. We might need explicit type parameters: `defineRecursiveFunctions<[In1, Out1], [In2, Out2]>(...)`. Worse ergonomics than `stepRef` but more type-safe.
 
-2. **Interaction with RESUME_VS_RESTART_HANDLERS.** The desugaring uses ResumeHandle/ResumePerform. This refactor depends on RESUME_VS_RESTART_HANDLERS landing first (or uses the current Handle/Perform with Resume output, which works today but is less clean).
+2. **Interaction with RESUME_VS_RESTART_HANDLERS.** The desugaring uses ResumeHandle/ResumePerform. Phase 1 can use the current Handle/Perform with Resume output (works today). After RESUME_VS_RESTART_HANDLERS lands, the desugaring becomes cleaner (direct ResumeHandle/ResumePerform, no Tag("Resume") wrapping).
 
 3. **Stack depth for tail recursion.** Each function call accumulates a ResumePerformFrame. For tail-recursive patterns (loop iterations), this means O(n) frames. `loop` (RestartHandle-based) is O(1) because it tears down the body. So `loop` should remain the preferred tool for iteration. `defineRecursiveFunction` is for general recursion where non-tail calls need the caller's continuation preserved.
 
-4. **Single-function convenience.** `defineRecursiveFunction` (singular) for self-recursion is common enough to warrant its own combinator. It's a thin wrapper around the general form.
+4. **Single-function convenience.** `defineRecursiveFunction` (singular) for self-recursion is common enough to warrant its own combinator. Thin wrapper around the plural form.
 
 5. **State field.** The ResumeHandle carries a `captured_value`/state. For function dispatch, there's no state to maintain — the state is unused (null). This works but wastes a field. Minor.
