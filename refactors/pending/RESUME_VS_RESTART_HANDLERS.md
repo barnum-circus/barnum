@@ -74,7 +74,7 @@ pub struct RestartHandleFrame {
 
 ### 3. Split FrameKind, ParentRef, and HandleSide
 
-The frame tree infrastructure mirrors the split. These are the enums that the engine dispatches on at every `deliver` and `advance`.
+The frame tree infrastructure mirrors the split.
 
 **FrameKind — before** (`frame.rs:69`):
 
@@ -119,10 +119,12 @@ pub enum ParentRef {
     Chain { frame_id: FrameId },
     All { frame_id: FrameId, child_index: usize },
     ForEach { frame_id: FrameId, child_index: usize },
-    ResumeHandle { frame_id: FrameId, side: ResumeHandleSide },
+    ResumeHandle { frame_id: FrameId },
     RestartHandle { frame_id: FrameId, side: RestartHandleSide },
 }
 ```
+
+Key difference: `ResumeHandle` has no `side` field. The ResumeHandle frame only ever has body children. The handler DAG runs at the Perform site, not as a child of the Handle frame (see section 6 below).
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -133,14 +135,9 @@ pub enum HandleSide {
 }
 ```
 
-**HandleSide — after:** Two separate enums. `ResumeHandleSide` may not need a Handler variant at all if the resume handler DAG is inlined into `dispatch_to_handler` rather than spawned as a child frame. But if the handler DAG runs as a child:
+**HandleSide — after:** Replaced by `RestartHandleSide`. ResumeHandle doesn't need a side enum — it has no handler-side children.
 
 ```rust
-pub enum ResumeHandleSide {
-    Body,
-    Handler,
-}
-
 pub enum RestartHandleSide {
     Body,
     Handler,
@@ -159,17 +156,25 @@ ParentRef::Handle { frame_id, side } => match side {
 **deliver — after:**
 
 ```rust
-ParentRef::ResumeHandle { frame_id, side } => match side {
-    ResumeHandleSide::Body => { /* body completed, deliver to Handle's parent */ }
-    ResumeHandleSide::Handler => { /* handler completed, deliver raw value to perform_parent */ }
+ParentRef::ResumeHandle { frame_id } => {
+    // Body completed normally. Remove the ResumeHandle frame,
+    // deliver to its parent.
+    let frame = self.frames.remove(frame_id).expect("frame exists");
+    self.deliver(frame.parent, value)
 }
 ParentRef::RestartHandle { frame_id, side } => match side {
-    RestartHandleSide::Body => { /* body completed, deliver to Handle's parent */ }
-    RestartHandleSide::Handler => { /* handler completed, teardown body, re-enter with raw value */ }
+    RestartHandleSide::Body => {
+        // Body completed normally. Remove RestartHandle frame,
+        // deliver to its parent.
+        let frame = self.frames.remove(frame_id).expect("frame exists");
+        self.deliver(frame.parent, value)
+    }
+    RestartHandleSide::Handler => {
+        // Handler completed. Tear down body, re-enter with raw value.
+        self.restart_body(frame_id, value)
+    }
 }
 ```
-
-No `HandlerOutput` deserialization in either arm. The `deliver` match determines behavior from the `ParentRef` variant, not from the handler's return value.
 
 ### 4. Split the AST nodes (Handle and Perform)
 
@@ -238,23 +243,63 @@ enum HandlerOutput {
 
 No deserialization. No tag matching.
 
-### 6. Change dispatch_to_handler
+### 6. ResumePerform: inline handler execution at the Perform site
 
-**Before** (`lib.rs:440`): Always suspends, always runs handler as child of the Handle frame on the Handler side.
+**Before** (`lib.rs:440`): `dispatch_to_handler` suspends the Handle and runs the handler DAG as a child of the Handle frame with `ParentRef::Handle { side: Handler }`.
 
-**After:** Dispatch on frame kind.
+**After for ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never modified.
 
-- **ResumeHandleFrame**: Skip suspension. Run handler DAG. When handler completes, deliver value to `perform_parent`.
-- **RestartHandleFrame**: Suspend body. Run handler DAG. When handler completes, tear down body, re-enter with value.
+When the engine walks up and finds a matching `ResumeHandle`:
 
-### 7. Change handle_handler_completion
+```rust
+// Look up handler ActionId and state from the ResumeHandle frame.
+let handler_action_id = resume_handle.handler;
+let state = resume_handle.state.clone();
+
+// Build handler input.
+let handler_input = json!({ "payload": payload, "state": state });
+
+// Advance the handler DAG parented to the *Perform's parent* in the body.
+// Not parented to the Handle frame. The Handle frame doesn't know this happened.
+self.advance(handler_action_id, handler_input, Some(perform_parent))?;
+```
+
+The handler DAG creates whatever frames it needs, all parented within the body's frame tree. When it completes, it delivers to `perform_parent` — the Perform's continuation in the body. The body continues. The ResumeHandle frame stays Free. No suspension, no Handler side, no `handle_handler_completion` path.
+
+This is a synchronous inline call. The Perform resolves to "run this handler DAG, deliver the result back here." The ResumeHandle is a passive interceptor — the body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
+
+### 7. RestartPerform: suspend and restart (current behavior, simplified)
+
+**Before** (`lib.rs:440`): Same as ResumePerform — suspends, runs handler as child of Handle frame.
+
+**After for RestartPerform:** Unchanged in structure, but simplified (no `HandlerOutput` deserialization).
+
+```rust
+// Suspend the body at the Perform site.
+restart_handle.status = HandleStatus::Suspended(perform_parent);
+
+// Look up handler ActionId and state.
+let handler_action_id = restart_handle.handler;
+let state = restart_handle.state.clone();
+let handler_input = json!({ "payload": payload, "state": state });
+
+// Advance handler DAG as child of the RestartHandle frame (Handler side).
+self.advance(handler_action_id, handler_input, Some(ParentRef::RestartHandle {
+    frame_id: handle_frame_id,
+    side: RestartHandleSide::Handler,
+}))?;
+```
+
+When the handler completes, `deliver` hits `ParentRef::RestartHandle { side: Handler }`, which calls `restart_body(frame_id, value)` — tear down the body, re-enter with the raw value. No `HandlerOutput` deserialization.
+
+### 8. Delete handle_handler_completion
 
 **Before** (`lib.rs:495`): Deserializes `HandlerOutput`, matches on Resume/Discard/RestartBody.
 
-**After:** Dispatch on frame kind. Value is always raw.
+**After:** Deleted. The two handler kinds don't share a completion path:
 
-- **ResumeHandleFrame**: deliver to `perform_parent`. Apply state update if applicable.
-- **RestartHandleFrame**: `teardown_body` + `restart_body` with value. Apply state update.
+- **ResumeHandle**: no handler completion — the handler DAG delivers directly to `perform_parent` via normal `deliver`. The Handle frame is uninvolved.
+- **RestartHandle**: handler completion is a single call to `restart_body` in the `deliver` match arm for `ParentRef::RestartHandle { side: Handler }`. No function needed.
 
 ### 8. Update handler DAGs to produce raw values
 
