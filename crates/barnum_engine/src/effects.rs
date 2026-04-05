@@ -606,6 +606,35 @@ mod tests {
         assert!(engine.task_to_frame.is_empty());
     }
 
+    /// Completing a task that was torn down during body teardown should
+    /// return Ok(None), not panic.
+    #[test]
+    #[should_panic(expected = "unknown task")]
+    fn completing_torn_down_task_is_noop() {
+        let mut engine = engine_from(restart_branch(
+            1,
+            parallel(vec![
+                chain(invoke("./a.ts", "a"), break_perform(1)),
+                invoke("./b.ts", "b"),
+            ]),
+            identity_action(),
+        ));
+        let root = engine.workflow_root();
+        engine.advance(root, json!("input"), None).unwrap();
+
+        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(ts.len(), 2);
+        let b_task_id = ts[1].task_id;
+
+        // Complete A → teardown tears down B's task.
+        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        assert_eq!(result, Some(json!("a_out")));
+
+        // B's handler completes after teardown. Should be Ok(None).
+        let result = engine.complete(b_task_id, json!("b_out")).unwrap();
+        assert_eq!(result, None);
+    }
+
     /// Test 22: All(Perform(e), Perform(e)) — concurrent Performs.
     /// First dispatches handler, second stashed. After resume, sweep retries.
     #[test]
