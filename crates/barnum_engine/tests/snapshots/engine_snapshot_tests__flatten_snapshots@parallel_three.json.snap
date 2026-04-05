@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 43
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/parallel_three.json
 ---
@@ -43,6 +44,8 @@ FlatConfig {
                 func: FuncName(
                     "a",
                 ),
+                input_schema: None,
+                output_schema: None,
             },
         ),
         TypeScript(
@@ -53,6 +56,8 @@ FlatConfig {
                 func: FuncName(
                     "b",
                 ),
+                input_schema: None,
+                output_schema: None,
             },
         ),
         TypeScript(
@@ -63,6 +68,8 @@ FlatConfig {
                 func: FuncName(
                     "c",
                 ),
+                input_schema: None,
+                output_schema: None,
             },
         ),
     ],

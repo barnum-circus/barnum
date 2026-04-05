@@ -161,6 +161,12 @@ impl WorkflowState {
         }
     }
 
+    /// The underlying flat configuration.
+    #[must_use]
+    pub const fn flat_config(&self) -> &FlatConfig {
+        &self.flat_config
+    }
+
     /// The workflow's root action. Pass this to [`advance`](WorkflowState::advance)
     /// with the initial input to start execution.
     #[must_use]
@@ -185,6 +191,32 @@ impl WorkflowState {
     #[must_use]
     pub fn handler(&self, id: HandlerId) -> &HandlerKind {
         self.flat_config.handler(id)
+    }
+
+    /// Look up the `HandlerId` for a live task. Reads the Invoke frame
+    /// without removing it — safe to call before [`complete::complete`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `task_id` is unknown or its frame is not an Invoke.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn handler_id_for_task(&self, task_id: TaskId) -> HandlerId {
+        let frame_id = self
+            .task_to_frame
+            .get(&task_id)
+            .expect("handler_id_for_task: unknown task");
+        let frame = self
+            .frames
+            .get(*frame_id)
+            .expect("handler_id_for_task: frame not in arena");
+        match frame.kind {
+            frame::FrameKind::Invoke { handler } => handler,
+            ref other => panic!(
+                "handler_id_for_task: expected Invoke frame, got {:?}",
+                other
+            ),
+        }
     }
 
     // -- Private helpers --

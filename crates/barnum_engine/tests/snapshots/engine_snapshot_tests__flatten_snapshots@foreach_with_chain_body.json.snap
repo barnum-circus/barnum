@@ -1,6 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 42
+assertion_line: 43
 expression: flat_config
 input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
 ---
@@ -44,6 +44,8 @@ FlatConfig {
                 func: FuncName(
                     "validate",
                 ),
+                input_schema: None,
+                output_schema: None,
             },
         ),
         TypeScript(
@@ -54,6 +56,8 @@ FlatConfig {
                 func: FuncName(
                     "process",
                 ),
+                input_schema: None,
+                output_schema: None,
             },
         ),
     ],

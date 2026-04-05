@@ -19,6 +19,8 @@ pub fn ts_handler(module: &str, func: &str) -> HandlerKind {
     HandlerKind::TypeScript(TypeScriptHandler {
         module: ModulePath::from(module.intern()),
         func: FuncName::from(func.intern()),
+        input_schema: None,
+        output_schema: None,
     })
 }
 

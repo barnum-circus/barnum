@@ -49,6 +49,8 @@ WorkflowState {
                     func: FuncName(
                         "a",
                     ),
+                    input_schema: None,
+                    output_schema: None,
                 },
             ),
             TypeScript(
@@ -59,6 +61,8 @@ WorkflowState {
                     func: FuncName(
                         "b",
                     ),
+                    input_schema: None,
+                    output_schema: None,
                 },
             ),
         ],
@@ -157,6 +161,8 @@ WorkflowState {
                     func: FuncName(
                         "a",
                     ),
+                    input_schema: None,
+                    output_schema: None,
                 },
             ),
             TypeScript(
@@ -167,6 +173,8 @@ WorkflowState {
                     func: FuncName(
                         "b",
                     ),
+                    input_schema: None,
+                    output_schema: None,
                 },
             ),
         ],

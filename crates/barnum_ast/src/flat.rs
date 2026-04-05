@@ -230,6 +230,14 @@ impl FlatConfig {
         &self.handlers[id.0 as usize]
     }
 
+    /// Iterate all handlers in the pool with their IDs.
+    pub fn handlers(&self) -> impl Iterator<Item = (HandlerId, &HandlerKind)> {
+        self.handlers
+            .iter()
+            .enumerate()
+            .map(|(i, h)| (HandlerId(i as u32), h))
+    }
+
     /// Resolve a child slot to an `ActionId`.
     /// - Inlined action: the slot position is the `ActionId`.
     /// - `ChildRef`: follow the pointer.
@@ -558,6 +566,8 @@ mod tests {
         HandlerKind::TypeScript(TypeScriptHandler {
             module: ModulePath::from(module.intern()),
             func: FuncName::from(func.intern()),
+            input_schema: None,
+            output_schema: None,
         })
     }
 

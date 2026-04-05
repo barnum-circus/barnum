@@ -24,6 +24,8 @@ WorkflowState {
                     func: FuncName(
                         "run",
                     ),
+                    input_schema: None,
+                    output_schema: None,
                 },
             ),
         ],

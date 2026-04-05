@@ -12,6 +12,7 @@ barnum_builtins = { path = "../barnum_builtins" }
 barnum_engine = { path = "../barnum_engine" }
 barnum_typescript_handler = { path = "../barnum_typescript_handler" }
 intern = { path = "../intern" }
+jsonschema = "0.28"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
