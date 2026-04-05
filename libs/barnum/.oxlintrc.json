@@ -45,6 +45,7 @@
     "typescript/no-use-before-define": "off",
     "typescript/no-invalid-void-type": "off",
     "typescript/consistent-type-definitions": "off",
+    "typescript/unified-signatures": "off",
 
     "eslint/max-lines-per-function": "off",
     "eslint/no-promise-executor-return": "off"
