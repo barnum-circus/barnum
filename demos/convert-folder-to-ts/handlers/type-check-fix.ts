@@ -4,7 +4,13 @@
 // classifyErrors: split into HasErrors / Clean discriminated union for branch
 // fix: invoke Claude to fix a single type error
 
-import { createHandler } from "@barnum/barnum";
+import {
+  createHandler,
+  pipe,
+  forEach,
+  loop,
+  drop,
+} from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -130,3 +136,12 @@ export const fix = createHandler({
     return { file: error.file, fixed: true as const };
   },
 }, "fix");
+
+// --- Pipeline ---
+
+export const typeCheckFix = loop((recur) =>
+  pipe(typeCheck, classifyErrors).branch({
+    HasErrors: pipe(forEach(fix).drop(), recur),
+    Clean: drop,
+  }),
+);

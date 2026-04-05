@@ -16,12 +16,9 @@
 import {
   workflowBuilder,
   pipe,
-  forEach,
-  loop,
-  drop,
 } from "@barnum/barnum";
 import { setup, listFiles, migrate } from "./handlers/convert.js";
-import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
+import { typeCheckFix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
@@ -32,13 +29,7 @@ await workflowBuilder()
       listFiles
         .forEach(migrate({ to: "Typescript" }))
         .drop(),
-      // Type-check/fix loop: run tsc, fix any errors, repeat until clean.
-      loop((recur) =>
-        pipe(typeCheck, classifyErrors).branch({
-          HasErrors: pipe(forEach(fix).drop(), recur),
-          Clean: drop,
-        }),
-      ),
+      typeCheckFix,
     ),
   )
   .run();
