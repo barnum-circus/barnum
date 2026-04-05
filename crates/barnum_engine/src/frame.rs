@@ -1,6 +1,7 @@
 //! Frame types for the engine's frame tree.
 
 use barnum_ast::EffectId;
+use barnum_ast::ResumeHandlerId;
 use barnum_ast::flat::{ActionId, HandlerId};
 use serde_json::Value;
 
@@ -40,6 +41,16 @@ pub enum ParentRef {
         /// Which side of the Handle this child is on.
         side: HandleSide,
     },
+    /// Parent is a `ResumeHandle` frame — body child only.
+    ResumeHandle {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+    },
+    /// Parent is a `ResumePerform` frame — handler child only.
+    ResumePerform {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+    },
 }
 
 /// Which side of a Handle frame a child belongs to.
@@ -59,7 +70,9 @@ impl ParentRef {
             Self::Chain { frame_id }
             | Self::All { frame_id, .. }
             | Self::ForEach { frame_id, .. }
-            | Self::Handle { frame_id, .. } => frame_id,
+            | Self::Handle { frame_id, .. }
+            | Self::ResumeHandle { frame_id }
+            | Self::ResumePerform { frame_id } => frame_id,
         }
     }
 }
@@ -92,6 +105,14 @@ pub enum FrameKind {
         /// Which handler this task is running.
         handler: HandlerId,
     },
+    /// Resume-style effect handler. Handler runs inline at the Perform
+    /// site. Never suspends.
+    ResumeHandle(ResumeHandleFrame),
+    /// Frame at the Perform site for a resume-style effect. The handler
+    /// DAG runs as a child of this frame. On handler completion, the
+    /// result is destructured as `[value, new_state]`, state is written
+    /// back to the `ResumeHandle`, and value is delivered upward.
+    ResumePerform(ResumePerformFrame),
 }
 
 /// Whether a Handle frame is free or suspended waiting for a handler.
@@ -119,6 +140,27 @@ pub struct HandleFrame {
     pub state: Value,
     /// Whether the Handle is free or suspended.
     pub status: HandleStatus,
+}
+
+/// ResumeHandle-specific state, stored in [`FrameKind::ResumeHandle`].
+#[derive(Debug)]
+pub struct ResumeHandleFrame {
+    /// Which resume effect type this handler intercepts.
+    pub resume_handler_id: ResumeHandlerId,
+    /// The body action.
+    pub body: ActionId,
+    /// The handler DAG to invoke when the effect fires.
+    pub handler: ActionId,
+    /// State value maintained across handler invocations.
+    pub state: Value,
+}
+
+/// ResumePerform-specific state, stored in [`FrameKind::ResumePerform`].
+#[derive(Debug)]
+pub struct ResumePerformFrame {
+    /// The `ResumeHandle` frame that this Perform targets. Used to write
+    /// state back when the handler completes.
+    pub resume_handle_frame_id: FrameId,
 }
 
 /// A single frame in the engine's frame tree.

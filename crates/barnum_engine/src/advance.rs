@@ -2,7 +2,9 @@ use barnum_ast::flat::{ActionId, FlatAction};
 use intern::Lookup;
 use serde_json::Value;
 
-use super::frame::{Frame, FrameKind, HandleFrame, HandleSide, HandleStatus, ParentRef};
+use super::frame::{
+    Frame, FrameKind, HandleFrame, HandleSide, HandleStatus, ParentRef, ResumeHandleFrame,
+};
 use super::{AdvanceError, Dispatch, StashOutcome, StashedItem, WorkflowState};
 
 /// Expand an `ActionId` into frames. Creates frames for structural
@@ -176,6 +178,31 @@ pub fn advance(
                     });
                 }
             }
+        }
+
+        FlatAction::ResumeHandle { resume_handler_id } => {
+            let body = workflow_state.flat_config.resume_handle_body(action_id);
+            let handler = workflow_state.flat_config.resume_handle_handler(action_id);
+            let frame_id = workflow_state.insert_frame(Frame {
+                parent,
+                kind: FrameKind::ResumeHandle(ResumeHandleFrame {
+                    resume_handler_id,
+                    body,
+                    handler,
+                    state: value.clone(),
+                }),
+            });
+            advance(
+                workflow_state,
+                body,
+                value,
+                Some(ParentRef::ResumeHandle { frame_id }),
+            )?;
+        }
+
+        FlatAction::ResumePerform { resume_handler_id } => {
+            let parent = parent.ok_or(AdvanceError::UnhandledResumeEffect { resume_handler_id })?;
+            super::effects::bubble_resume_effect(workflow_state, parent, resume_handler_id, value)?;
         }
     }
     Ok(())

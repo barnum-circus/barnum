@@ -144,6 +144,39 @@ pub fn restart_branch(effect_id: u16, continue_arm: Action, break_arm: Action) -
     )
 }
 
+// ---------------------------------------------------------------------------
+// ResumeHandle / ResumePerform helpers
+// ---------------------------------------------------------------------------
+
+pub fn resume_handle(resume_handler_id: u16, handler: Action, body: Action) -> Action {
+    Action::ResumeHandle(ResumeHandleAction {
+        resume_handler_id: ResumeHandlerId(resume_handler_id),
+        body: Box::new(body),
+        handler: Box::new(handler),
+    })
+}
+
+pub fn resume_perform(resume_handler_id: u16) -> Action {
+    Action::ResumePerform(ResumePerformAction {
+        resume_handler_id: ResumeHandlerId(resume_handler_id),
+    })
+}
+
+/// `readVar(n)` for `ResumePerform`: `All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))`
+///
+/// Input: `[payload, state]`. Output: `[state[n], state]`.
+/// Value is `state[n]`, state is unchanged.
+pub fn resume_read_var(n: u64) -> Action {
+    parallel(vec![
+        chain(extract_index(1), extract_index(n)),
+        extract_index(1),
+    ])
+}
+
+// ---------------------------------------------------------------------------
+// Legacy Handle helpers (pre-Resume/Restart split)
+// ---------------------------------------------------------------------------
+
 pub fn echo_resume_handler() -> Action {
     chain(
         invoke_builtin(BuiltinKind::ExtractIndex { value: json!(0) }),

@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, VecDeque};
 
 use barnum_ast::EffectId;
 use barnum_ast::HandlerKind;
+use barnum_ast::ResumeHandlerId;
 use barnum_ast::flat::{ActionId, FlatConfig, HandlerId};
 use frame::{Frame, FrameId, ParentRef};
 use serde::Deserialize;
@@ -80,6 +81,13 @@ pub enum AdvanceError {
     UnhandledEffect {
         /// The effect type that was not handled.
         effect_id: EffectId,
+    },
+    /// A `ResumePerform` node was reached but no enclosing `ResumeHandle`
+    /// matches the resume handler ID.
+    #[error("unhandled resume effect: {resume_handler_id}")]
+    UnhandledResumeEffect {
+        /// The resume handler ID that was not handled.
+        resume_handler_id: ResumeHandlerId,
     },
 }
 

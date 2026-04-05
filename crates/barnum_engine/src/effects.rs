@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 use barnum_ast::EffectId;
+use barnum_ast::ResumeHandlerId;
 use serde_json::Value;
 use thunderdome::Arena;
 
-use super::frame::{Frame, FrameId, FrameKind, HandleSide, HandleStatus, ParentRef};
+use super::frame::{
+    Frame, FrameId, FrameKind, HandleSide, HandleStatus, ParentRef, ResumePerformFrame,
+};
 use super::{
     AdvanceError, AncestorCheck, CompleteError, HandlerOutput, StashOutcome, StashedItem,
     StateUpdate, TaskId, TryDeliverResult, WorkflowState,
@@ -29,6 +32,67 @@ pub fn bubble_effect(
 
     // Not blocked — walk the parent chain to find the matching Handle.
     find_and_dispatch_handler(workflow_state, starting_parent, effect_id, payload)
+}
+
+/// Walk the parent chain from `starting_parent` upward looking for a
+/// `ResumeHandle` that matches `resume_handler_id`. Creates a `ResumePerformFrame`
+/// at the Perform site and advances the handler DAG as its child.
+///
+/// No blocking/stashing — `ResumeHandle` never suspends.
+#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
+pub fn bubble_resume_effect(
+    workflow_state: &mut WorkflowState,
+    starting_parent: ParentRef,
+    resume_handler_id: ResumeHandlerId,
+    payload: Value,
+) -> Result<(), AdvanceError> {
+    // Find the matching ResumeHandle.
+    let resume_handle_frame_id =
+        super::ancestors::ancestors(&workflow_state.frames, starting_parent)
+            .find_map(|(edge, frame)| {
+                if let FrameKind::ResumeHandle(resume_handle) = &frame.kind
+                    && resume_handle.resume_handler_id == resume_handler_id
+                {
+                    Some(edge.frame_id())
+                } else {
+                    None
+                }
+            })
+            .ok_or(AdvanceError::UnhandledResumeEffect { resume_handler_id })?;
+
+    // Look up handler ActionId and state.
+    let resume_handle_frame = workflow_state
+        .frames
+        .get(resume_handle_frame_id)
+        .expect("ResumeHandle frame exists");
+    let FrameKind::ResumeHandle(ref resume_handle) = resume_handle_frame.kind else {
+        unreachable!("bubble_resume_effect found non-ResumeHandle frame");
+    };
+    let handler_action_id = resume_handle.handler;
+    let state = resume_handle.state.clone();
+
+    // Create a ResumePerformFrame at the Perform site.
+    let resume_perform_frame_id = workflow_state.insert_frame(Frame {
+        parent: Some(starting_parent),
+        kind: FrameKind::ResumePerform(ResumePerformFrame {
+            resume_handle_frame_id,
+        }),
+    });
+
+    // Build handler input: [payload, state].
+    let handler_input = serde_json::json!([payload, state]);
+
+    // Advance handler DAG as child of the ResumePerformFrame.
+    super::advance::advance(
+        workflow_state,
+        handler_action_id,
+        handler_input,
+        Some(ParentRef::ResumePerform {
+            frame_id: resume_perform_frame_id,
+        }),
+    )?;
+
+    Ok(())
 }
 
 /// Walk from `starting_parent` upward. All ancestors are guaranteed
@@ -1242,21 +1306,18 @@ mod tests {
 
     // -- Resume handler non-suspension tests --
     //
-    // These tests document the desired behavior after the Resume/Restart
-    // handler split: resume handlers should NOT suspend the Handle frame,
-    // so concurrent siblings should not be blocked.
-    //
-    // Currently these fail because the engine suspends on ALL Performs.
+    // These tests verify that ResumeHandle/ResumePerform does NOT suspend
+    // the handle frame, so concurrent siblings are not blocked.
 
     /// Resume handler with async handler DAG should not block sibling
     /// completions.
     #[test]
     fn resume_handler_does_not_block_sibling_completion() {
-        let mut engine = engine_from(handle(
+        let mut engine = engine_from(resume_handle(
             1,
             invoke("./handler.ts", "handler"),
             parallel(vec![
-                chain(invoke("./a.ts", "a"), perform(1)),
+                chain(invoke("./a.ts", "a"), resume_perform(1)),
                 invoke("./b.ts", "b"),
             ]),
         ));
@@ -1266,14 +1327,13 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2); // A and B
 
-        // Complete A → Perform → handler dispatched (async TS handler).
+        // Complete A → ResumePerform → handler dispatched (async TS handler).
         let (result, handler_ts) =
             complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
 
-        // Complete B while handler is in flight.
-        // After refactor: should NOT be stashed.
+        // Complete B while handler is in flight — NOT stashed.
         let result = engine.complete(ts[1].task_id, json!("b_out")).unwrap();
         assert_eq!(result, None);
         assert_eq!(
@@ -1287,15 +1347,15 @@ mod tests {
     /// without serialization.
     #[test]
     fn concurrent_resume_performs_not_serialized() {
-        let mut engine = engine_from(handle(
+        let mut engine = engine_from(resume_handle(
             1,
             invoke("./handler.ts", "handler"),
-            parallel(vec![perform(1), perform(1)]),
+            parallel(vec![resume_perform(1), resume_perform(1)]),
         ));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
 
-        // After refactor: both Performs should dispatch, no stashing.
+        // Both Performs dispatch their handlers, no stashing.
         let ts = engine.take_pending_dispatches();
         assert_eq!(ts.len(), 2, "both handlers should dispatch concurrently");
         assert_eq!(
@@ -1312,30 +1372,34 @@ mod tests {
         let inner_e = 1; // resume-style
         let outer_e = 2; // restart-style (tryCatch)
 
-        let inner_handle = handle(
+        let inner_resume_handle = resume_handle(
             inner_e,
             invoke("./handler.ts", "handler"), // async resume handler
             parallel(vec![
-                chain(invoke("./a.ts", "a"), perform(inner_e)),
+                chain(invoke("./a.ts", "a"), resume_perform(inner_e)),
                 chain(invoke("./b.ts", "b"), break_perform(outer_e)),
             ]),
         );
 
-        let mut engine = engine_from(restart_branch(outer_e, inner_handle, identity_action()));
+        let mut engine = engine_from(restart_branch(
+            outer_e,
+            inner_resume_handle,
+            identity_action(),
+        ));
         let root = engine.workflow_root();
         engine.advance(root, json!("input"), None).unwrap();
 
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 2); // A and B
 
-        // Complete A → Perform(inner_e) → resume handler dispatched.
+        // Complete A → ResumePerform(inner_e) → resume handler dispatched.
         let (result, handler_ts) =
             complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
 
-        // Complete B → break_perform(outer_e). Should bubble up past inner Handle
-        // (which is NOT suspended for a resume handler) and reach outer Handle.
+        // Complete B → break_perform(outer_e). Bubbles past inner ResumeHandle
+        // (NOT suspended) and reaches outer Handle.
         let (result, _) = complete_and_drive(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
 
         // Outer handler restarts body, Branch takes Break arm, Handle exits.

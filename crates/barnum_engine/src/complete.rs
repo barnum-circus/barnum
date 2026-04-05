@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::frame::{FrameKind, HandleSide, ParentRef};
+use super::frame::{FrameKind, HandleSide, ParentRef, ResumeHandleFrame};
 use super::{
     AncestorCheck, CompleteError, StashOutcome, StashedItem, SweepResult, TaskId, TryDeliverResult,
     WorkflowState,
@@ -191,6 +191,45 @@ pub fn deliver(
                 super::effects::handle_handler_completion(workflow_state, frame_id, value)
             }
         },
+
+        ParentRef::ResumeHandle { frame_id } => {
+            // Body completed. Remove the ResumeHandle frame and deliver
+            // the value to the ResumeHandle's parent.
+            let frame = workflow_state
+                .frames
+                .remove(frame_id)
+                .expect("parent frame exists");
+            deliver(workflow_state, frame.parent, value)
+        }
+
+        ParentRef::ResumePerform { frame_id } => {
+            // Handler completed. Destructure [value, new_state], write
+            // state back to ResumeHandle, deliver value upward.
+            let frame = workflow_state
+                .frames
+                .remove(frame_id)
+                .expect("ResumePerform frame exists");
+            let FrameKind::ResumePerform(resume_perform) = frame.kind else {
+                unreachable!("ResumePerform ParentRef points to non-ResumePerform frame");
+            };
+            let (result_value, new_state): (Value, Value) = serde_json::from_value(value)
+                .map_err(|source| CompleteError::InvalidHandlerOutput { source })?;
+
+            // Write state back to the ResumeHandle frame.
+            let resume_handle_frame = workflow_state
+                .frames
+                .get_mut(resume_perform.resume_handle_frame_id)
+                .expect("ResumeHandle frame exists");
+            let FrameKind::ResumeHandle(ResumeHandleFrame { ref mut state, .. }) =
+                resume_handle_frame.kind
+            else {
+                unreachable!("resume_handle_frame_id points to non-ResumeHandle frame");
+            };
+            *state = new_state;
+
+            // Deliver the value to the Perform site's parent.
+            deliver(workflow_state, frame.parent, result_value)
+        }
 
         ParentRef::All {
             frame_id,

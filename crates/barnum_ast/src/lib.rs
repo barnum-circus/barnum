@@ -45,6 +45,19 @@ impl std::fmt::Display for EffectId {
     }
 }
 
+/// Identifies a resume-style effect handler. Paired with [`ResumePerformAction`].
+/// Separate type from [`EffectId`] prevents cross-matching at compile time.
+///
+/// `u16` to keep [`FlatEntry`](flat::FlatEntry) at 8 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ResumeHandlerId(pub u16);
+
+impl std::fmt::Display for ResumeHandlerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Action (the AST)
 // ---------------------------------------------------------------------------
@@ -78,6 +91,15 @@ pub enum Action {
     /// Raise an effect. Suspends the continuation until the nearest
     /// enclosing [`Handle`](Action::Handle) for this effect type processes it.
     Perform(PerformAction),
+
+    /// Resume-style effect handler. Handler runs inline at the Perform site.
+    /// Handler produces `[value, new_state]`. Engine delivers `value` to
+    /// the Perform's parent and writes `new_state` back to the handle frame.
+    ResumeHandle(ResumeHandleAction),
+
+    /// Raise a resume-style effect. Targets the nearest enclosing
+    /// [`ResumeHandle`](Action::ResumeHandle) with matching `resume_handler_id`.
+    ResumePerform(ResumePerformAction),
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +167,29 @@ pub struct HandleAction {
 pub struct PerformAction {
     /// Which effect type to raise.
     pub effect_id: EffectId,
+}
+
+/// Resume-style effect handler.
+///
+/// Handler runs inline at the Perform site. Produces `[value, new_state]`.
+/// Engine delivers `value` to the Perform's parent and writes `new_state`
+/// back to the handle frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeHandleAction {
+    /// Which resume effect type this handler intercepts.
+    pub resume_handler_id: ResumeHandlerId,
+    /// The action to run (may contain `ResumePerform` nodes).
+    pub body: Box<Action>,
+    /// The handler DAG invoked when the effect fires.
+    pub handler: Box<Action>,
+}
+
+/// Raise a resume-style effect. Targets the nearest enclosing
+/// [`ResumeHandle`](Action::ResumeHandle) with matching `resume_handler_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumePerformAction {
+    /// Which resume effect type to raise.
+    pub resume_handler_id: ResumeHandlerId,
 }
 
 // ---------------------------------------------------------------------------
