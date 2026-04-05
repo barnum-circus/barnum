@@ -315,6 +315,54 @@ describe("optional handler types", () => {
       handle: async ({ value }) => value.toUpperCase(),
     }, "h");
   });
+
+  // --- validators must match explicit types invariantly ---
+  // When you provide both explicit type params AND a validator, the validator's
+  // type must exactly match the explicit type. Wider or narrower should reject.
+
+  it("rejects inputValidator wider than explicit TValue", () => {
+    // @ts-expect-error — TValue is "hello" but validator accepts any string
+    createHandler<"hello", string>({
+      inputValidator: z.string(),
+      handle: async ({ value }) => value,
+    }, "h");
+  });
+
+  it("rejects outputValidator wider than explicit TOutput", () => {
+    // @ts-expect-error — TOutput is "ok" but validator accepts any string
+    createHandler<string, "ok">({
+      inputValidator: z.string(),
+      outputValidator: z.string(),
+      handle: async ({ value }) => "ok" as const,
+    }, "h");
+  });
+
+  it("rejects inputValidator narrower than explicit TValue", () => {
+    // @ts-expect-error — TValue is string but validator only accepts "hello"
+    createHandler<string, string>({
+      inputValidator: z.literal("hello"),
+      handle: async ({ value }) => value,
+    }, "h");
+  });
+
+  it("accepts inputValidator that exactly matches explicit TValue", () => {
+    const h = createHandler<string, number>({
+      inputValidator: z.string(),
+      handle: async ({ value }) => value.length,
+    }, "h");
+    assertExact<IsExact<ExtractInput<typeof h>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof h>, number>>();
+  });
+
+  it("accepts outputValidator that exactly matches explicit TOutput", () => {
+    const h = createHandler<string, number>({
+      inputValidator: z.string(),
+      outputValidator: z.number(),
+      handle: async ({ value }) => value.length,
+    }, "h");
+    assertExact<IsExact<ExtractInput<typeof h>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof h>, number>>();
+  });
 ```
 
 ### createHandler: source handlers in workflows
@@ -534,6 +582,36 @@ describe("optional handler types", () => {
       outputValidator: z.string(),
       handle: async ({ stepConfig }) => 42,
     }, "h");
+  });
+
+  // --- validators must match explicit types invariantly ---
+
+  it("rejects stepConfigValidator wider than explicit TStepConfig", () => {
+    // @ts-expect-error — TStepConfig is { retries: 3 } but validator accepts any { retries: number }
+    createHandlerWithConfig<never, string, { retries: 3 }>({
+      stepConfigValidator: z.object({ retries: z.number() }),
+      handle: async ({ stepConfig }) => String(stepConfig.retries),
+    }, "h");
+  });
+
+  it("rejects stepConfigValidator narrower than explicit TStepConfig", () => {
+    // @ts-expect-error — TStepConfig is { retries: number } but validator only accepts { retries: 3 }
+    createHandlerWithConfig<never, string, { retries: number }>({
+      stepConfigValidator: z.object({ retries: z.literal(3) }),
+      handle: async ({ stepConfig }) => String(stepConfig.retries),
+    }, "h");
+  });
+
+  it("accepts all validators exactly matching explicit types", () => {
+    const factory = createHandlerWithConfig<string, number, { retries: number }>({
+      inputValidator: z.string(),
+      outputValidator: z.number(),
+      stepConfigValidator: z.object({ retries: z.number() }),
+      handle: async ({ value, stepConfig }) => value.length + stepConfig.retries,
+    }, "h");
+    const action = factory({ retries: 3 });
+    assertExact<IsExact<ExtractInput<typeof action>, string>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, number>>();
   });
 ```
 
