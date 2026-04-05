@@ -4,7 +4,7 @@
 
 `workflowBuilder().workflow(() => pipeline).run()` is three layers of indirection around what should be a single function call. `WorkflowBuilder` creates a `RunnableConfig`, which wraps a `Config`, which wraps the pipeline action. The builder adds no value: there's one workflow per config, no configuration steps between `workflowBuilder()` and `.workflow()`, and no reuse of the builder instance.
 
-Replace with `runPipeline(pipeline)` (or `runPipeline(pipeline, input)` when the pipeline expects input).
+Replace with `runPipeline(pipeline)`. Pipelines that need input use `constant()` at the head of the pipeline, as all current demos already do.
 
 ## Current state
 
@@ -59,160 +59,42 @@ await workflowBuilder()
 
 **Tests**: `types.test.ts` uses `workflowBuilder().workflow(() => ...)` for type-level assertions. `round-trip.test.ts` uses it to construct serializable configs.
 
-### Rust
-
-**CLI** (`crates/barnum_cli/src/main.rs:26-38`):
-
-```rust
-Run {
-    #[arg(long)]
-    config: String,
-    #[arg(long)]
-    executor: String,
-    #[arg(long)]
-    worker: String,
-}
-```
-
-**Event loop** (`crates/barnum_event_loop/src/lib.rs:300-301`):
-
-```rust
-let root = workflow_state.workflow_root();
-advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
-```
-
-The initial input is hardcoded to `Value::Null`.
-
 ## Proposed changes
 
 ### 1. Add `runPipeline` to `run.ts`
 
-Two overloads: one for void-input pipelines (no second argument), one for pipelines that require input.
+`runPipeline` takes a `WorkflowAction` (pipeline with void input) and runs it. Input is always provided via `constant()` at the pipeline head.
 
 ```typescript
 // libs/barnum/src/run.ts
 
-// Overload: pipeline with void input (all current demos)
-export function runPipeline<TOut>(
+export async function runPipeline<TOut>(
   pipeline: WorkflowAction<TOut>,
-): Promise<void>;
-
-// Overload: pipeline with explicit input
-export function runPipeline<TIn, TOut>(
-  pipeline: Pipeable<TIn, TOut>,
-  input: TIn,
-): Promise<void>;
-
-// Implementation
-export async function runPipeline(
-  pipeline: Action,
-  input?: unknown,
 ): Promise<void> {
-  await run({ workflow: pipeline as WorkflowAction }, input);
+  await run({ workflow: pipeline });
 }
 ```
 
-When a pipeline has `__in?: void` (or `never` or `any`), overload 1 matches and no input is needed. When a pipeline has a concrete input type like `string`, only overload 2 matches, making `input` required.
-
-### 2. Update `run()` to accept input
-
-```typescript
-// libs/barnum/src/run.ts
-
-export function run(config: Config, input?: unknown): Promise<void> {
-  // ...existing binary/executor/worker resolution...
-  const configJson = JSON.stringify(config);
-
-  const args = [
-    "run",
-    "--config", configJson,
-    "--executor", executor,
-    "--worker", worker,
-  ];
-  if (input !== undefined && input !== null) {
-    args.push("--input", JSON.stringify(input));
-  }
-
-  // ...spawn child process with args...
-}
-```
-
-### 3. Add `--input` to CLI
-
-```rust
-// crates/barnum_cli/src/main.rs
-
-Run {
-    #[arg(long)]
-    config: String,
-    #[arg(long)]
-    executor: String,
-    #[arg(long)]
-    worker: String,
-    /// Optional JSON input value for the workflow root.
-    #[arg(long)]
-    input: Option<String>,
-}
-```
-
-```rust
-async fn run(
-    config_json: &str,
-    executor: &str,
-    worker: &str,
-    input_json: Option<&str>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let config: barnum_ast::Config = serde_json::from_str(config_json)?;
-    let input: Value = match input_json {
-        Some(json) => serde_json::from_str(json)?,
-        None => Value::Null,
-    };
-    let flat_config = flatten(config)?;
-    let mut workflow_state = WorkflowState::new(flat_config);
-    let mut scheduler = Scheduler::new(executor.to_owned(), worker.to_owned());
-
-    let result = run_workflow(&mut workflow_state, &mut scheduler, input).await?;
-    // ...
-}
-```
-
-### 4. Pass input through `run_workflow`
-
-```rust
-// crates/barnum_event_loop/src/lib.rs
-
-pub async fn run_workflow(
-    workflow_state: &mut WorkflowState,
-    scheduler: &mut Scheduler,
-    input: Value,  // was hardcoded Value::Null
-) -> Result<Value, RunWorkflowError> {
-    let compiled_schemas = compile_schemas(workflow_state)?;
-    let root = workflow_state.workflow_root();
-    advance(workflow_state, root, input, None).expect("initial advance failed");
-    // ...rest unchanged...
-}
-```
-
-### 5. Delete `WorkflowBuilder` and `RunnableConfig`
+### 2. Delete `WorkflowBuilder` and `RunnableConfig`
 
 Remove from `libs/barnum/src/ast.ts`:
 - `WorkflowBuilder` interface (lines 971-974)
 - `workflowBuilder()` function (lines 976-983)
 - `RunnableConfig` class (lines 950-969)
 
-Keep the `config()` helper function (line 939-941) for the type and round-trip tests.
+Keep the `config()` helper function (line 939-941) for type and round-trip tests.
 
-### 6. Update exports
+### 3. Update exports
 
 ```typescript
 // libs/barnum/src/index.ts
 
-// Remove: workflowBuilder is no longer exported (it's deleted)
-// Add:
+// workflowBuilder disappears from `export * from "./ast.js"` when deleted.
+// Add runPipeline:
 export { run, runPipeline } from "./run.js";
 ```
 
-### 7. Update demos
+### 4. Update demos
 
 All four demos change from:
 
@@ -248,7 +130,15 @@ await runPipeline(
 await runPipeline(
   loop((recur, done) =>
     tryCatch(
-      (throwError) => pipe(/* ... */),
+      (throwError) =>
+        pipe(
+          stepA.mapErr(drop).unwrapOr(done).drop(),
+          withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+            .mapErr(constant("stepB: timed out"))
+            .unwrapOr(throwError)
+            .drop(),
+          stepC.unwrapOr(throwError).drop(),
+        ),
       logError.then(recur),
     ),
   ),
@@ -258,7 +148,11 @@ await runPipeline(
 **`demos/convert-folder-to-ts/run.ts`:**
 ```typescript
 await runPipeline(
-  pipe(setup, listFiles.forEach(migrate({ to: "Typescript" })).drop(), typeCheckFix),
+  pipe(
+    setup,
+    listFiles.forEach(migrate({ to: "Typescript" })).drop(),
+    typeCheckFix,
+  ),
 );
 ```
 
@@ -270,12 +164,18 @@ await runPipeline(
     listTargetFiles,
     forEach(analyze).flatten(),
     forEach(assessWorthiness).then(Option.collect()),
-    forEach(withResource({ create: createBranchWorktree, action: implementAndReview, dispose: deleteWorktree })),
+    forEach(
+      withResource({
+        create: createBranchWorktree,
+        action: implementAndReview,
+        dispose: deleteWorktree,
+      }),
+    ),
   ),
 );
 ```
 
-### 8. Update tests
+### 5. Update tests
 
 **`libs/barnum/tests/types.test.ts`** — "config entry point" tests:
 
@@ -319,23 +219,13 @@ const cfg = workflowBuilder().workflow(() =>
 const cfg = config(pipe(constant({ project: "test" }), setup));
 ```
 
-### 9. Update event loop tests
-
-The event loop tests in `crates/barnum_event_loop/src/lib.rs` call `run_workflow`. After adding the `input` parameter, these tests pass `Value::Null`:
-
-```rust
-// Before
-let result = run_workflow(&mut workflow_state, &mut scheduler).await.unwrap();
-
-// After
-let result = run_workflow(&mut workflow_state, &mut scheduler, Value::Null).await.unwrap();
-```
-
 ## Task list
 
-1. **Rust: add `input` parameter to `run_workflow`** — Change signature, pass to `advance` instead of hardcoded `Value::Null`. Update event loop tests. Update CLI `run()` to pass `Value::Null` (preserve current behavior).
-2. **Rust: add `--input` CLI flag** — Optional `--input <json>` argument. Parse and pass to `run_workflow`.
-3. **TypeScript: add `runPipeline`, update `run()`** — Add overloaded `runPipeline` to `run.ts`. Add `input` parameter to `run()`. Pass `--input` to CLI when input is provided. Export `runPipeline` from `index.ts`.
-4. **TypeScript: delete `WorkflowBuilder` and `RunnableConfig`** — Remove from `ast.ts`. Remove `workflowBuilder` from `index.ts` exports (it's an `export *` so just deleting the source suffices).
-5. **Update demos** — Replace `workflowBuilder().workflow(() => ...).run()` with `runPipeline(...)` in all four demos.
-6. **Update tests** — Replace `workflowBuilder()` usage in `types.test.ts` and `round-trip.test.ts` with `config()`.
+1. **TypeScript: add `runPipeline`** — Add `runPipeline` to `run.ts`. Export from `index.ts`.
+2. **TypeScript: delete `WorkflowBuilder` and `RunnableConfig`** — Remove from `ast.ts`.
+3. **Update demos** — Replace `workflowBuilder().workflow(() => ...).run()` with `runPipeline(...)` in all four demos.
+4. **Update tests** — Replace `workflowBuilder()` usage in `types.test.ts` and `round-trip.test.ts` with `config()`.
+
+## Deferred
+
+- **Rust-level input parameter**: Add `--input <json>` CLI flag, `input: Value` parameter to `run_workflow`, and a with-input overload on `runPipeline`. This would allow pipelines with concrete input types to receive their input from the caller rather than from a `constant()` node. All current demos use `constant()` for input, so this is not blocking.

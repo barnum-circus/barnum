@@ -130,6 +130,56 @@ jobs:
             echo "skip=true" >> $GITHUB_OUTPUT
           fi
 
+  # Gate for docs website - skips if no changes to docs-website/
+  gate-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for docs changes
+        id: check
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Running: tag push"
+            exit 0
+          fi
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            CHANGES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD -- docs-website/ .github/)
+            if [[ -n "$CHANGES" ]]; then
+              echo "Running: PR has changes in docs-website/ or .github/"
+              echo "$CHANGES"
+            else
+              echo "Skipping: PR has no changes to docs-website/ or .github/"
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+            exit 0
+          fi
+
+          BEFORE="${{ github.event.before }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
+            echo "Running: new branch or cannot determine previous commit"
+            exit 0
+          fi
+
+          echo "Comparing HEAD against before: $BEFORE"
+          if ! git cat-file -e "$BEFORE" 2>/dev/null; then
+            echo "Running: before commit unreachable (force push)"
+            exit 0
+          fi
+          CHANGES=$(git diff --name-only $BEFORE HEAD -- docs-website/ .github/)
+          if [[ -n "$CHANGES" ]]; then
+            echo "Running: changes detected in docs-website/ or .github/"
+            echo "$CHANGES"
+          else
+            echo "Skipping: no changes to docs-website/ or .github/"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
   fmt:
     needs: gate-rust
     if: needs.gate-rust.outputs.skip != 'true'
@@ -386,6 +436,66 @@ jobs:
         with:
           name: barnum-win-x64
           path: target/x86_64-pc-windows-msvc/release/barnum.exe
+
+  build-website:
+    needs: gate-docs
+    if: needs.gate-docs.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: ./docs-website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+          cache-dependency-path: docs-website/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build website
+        run: pnpm build
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docusaurus-build
+          path: docs-website/build/
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy-website:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [gate-docs, build-website, test, demo-tests]
+    if: >-
+      always() &&
+      needs.gate-docs.outputs.skip != 'true' &&
+      needs.build-website.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped') &&
+      (needs.demo-tests.result == 'success' || needs.demo-tests.result == 'skipped') &&
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    steps:
+      - name: Download build folder
+        uses: actions/download-artifact@v4
+        with:
+          name: docusaurus-build
+          path: docs-website/build
+      - name: Deploy to barnum-circus.github.io
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          personal_token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          external_repository: barnum-circus/barnum-circus.github.io
+          publish_branch: main
+          publish_dir: docs-website/build
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
+          commit_message: 'Deploy docs from barnum@${{ github.sha }}'
 
   publish:
     if: needs.gate-rust.outputs.skip != 'true' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/trapeze' || startsWith(github.ref, 'refs/tags/v'))
