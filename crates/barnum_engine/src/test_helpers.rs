@@ -54,25 +54,12 @@ pub fn branch(cases: Vec<(&str, Action)>) -> Action {
     })
 }
 
-pub fn step_named(name: &str) -> Action {
-    Action::Step(StepAction {
-        step: StepRef::Named {
-            name: StepName::from(name.intern()),
-        },
-    })
-}
-
 #[allow(clippy::unwrap_used)]
 pub fn engine_from(workflow: Action) -> WorkflowState {
     let config = Config {
         workflow,
         steps: HashMap::new(),
     };
-    WorkflowState::new(flatten(config).unwrap())
-}
-
-#[allow(clippy::unwrap_used)]
-pub fn engine_from_config(config: Config) -> WorkflowState {
     WorkflowState::new(flatten(config).unwrap())
 }
 

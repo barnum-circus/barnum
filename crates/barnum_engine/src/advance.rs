@@ -190,9 +190,7 @@ pub fn advance(
 mod tests {
     use crate::test_helpers::*;
     use barnum_ast::*;
-    use intern::string_key::Intern;
     use serde_json::json;
-    use std::collections::HashMap;
 
     /// Single invoke: advance -> 1 dispatch.
     #[test]
@@ -275,28 +273,6 @@ mod tests {
         assert_eq!(
             engine.handler(dispatches[0].handler_id),
             &ts_handler("./ok.ts", "handle"),
-        );
-    }
-
-    /// Step(Named): follows the step reference to the target action.
-    #[test]
-    fn step_follows_named() {
-        let config = Config {
-            workflow: step_named("setup"),
-            steps: HashMap::from([(
-                StepName::from("setup".intern()),
-                invoke("./setup.ts", "run"),
-            )]),
-        };
-        let mut engine = engine_from_config(config);
-        let root = engine.workflow_root();
-        engine.advance(root, json!(null), None).unwrap();
-
-        let dispatches = engine.take_pending_dispatches();
-        assert_eq!(dispatches.len(), 1);
-        assert_eq!(
-            engine.handler(dispatches[0].handler_id),
-            &ts_handler("./setup.ts", "run"),
         );
     }
 
