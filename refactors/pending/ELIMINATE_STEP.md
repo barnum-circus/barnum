@@ -36,17 +36,7 @@ The type parameter `TFunctions extends [unknown, unknown][]` is a single array. 
 
 The call tokens are the same values in both callbacks. They're `Chain(Tag("Call0"), ResumePerform(resumeHandlerId))` — tagged ResumePerforms. The first callback uses them for recursion inside function bodies. The second uses them for initial calls in the workflow body. Both execute inside the ResumeHandle's scope.
 
-Single-function convenience:
-
-```ts
-const withSelf = defineRecursiveFunctions<[[ProcessIn, ProcessOut]]>((self) =>
-  [pipe(process, branch({ Retry: self, Done: identity }))]
-);
-
-withSelf((fn) => pipe(setup, fn, deploy))
-```
-
-Same API, single-element array. No separate `defineRecursiveFunction` — just `defineRecursiveFunctions` with one entry. `self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. `defineRecursiveFunctions` with one entry covers the general self-recursion case where you need the result back.
+`self` (`Step(Root)`) is gone — a scope handler already handles restarting the workflow. Single-function self-recursion uses `defineRecursiveFunctions` with one entry.
 
 ## Desugaring
 
