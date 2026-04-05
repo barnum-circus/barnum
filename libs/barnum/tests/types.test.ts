@@ -1130,12 +1130,13 @@ describe("tryCatch types", () => {
     );
   });
 
-  it("tryCatch produces Handle AST node", () => {
+  it("tryCatch produces Chain(Tag(Continue), Handle(...)) AST", () => {
     const action = tryCatch(
       (_throwError) => pipe(drop, constant("ok")),
       identity,
     );
-    expect(action.kind).toBe("Handle");
+    // Outer node is Chain(Tag("Continue"), Handle(...)) — restart+Branch pattern.
+    expect(action.kind).toBe("Chain");
   });
 });
 
@@ -1221,9 +1222,10 @@ describe("race types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, { verified: boolean }>>();
   });
 
-  it("race produces Handle AST node", () => {
+  it("race produces Chain(Tag(Continue), Handle(...)) AST", () => {
     const action = race(verify, verify);
-    expect(action.kind).toBe("Handle");
+    // Outer node is Chain(Tag("Continue"), Handle(...)) — restart+Branch pattern.
+    expect(action.kind).toBe("Chain");
   });
 
   it("sleep: number → void", () => {
@@ -1253,9 +1255,10 @@ describe("withTimeout types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, Result<{ verified: boolean }, void>>>();
   });
 
-  it("withTimeout produces Handle AST node", () => {
+  it("withTimeout produces Chain(Tag(Continue), Handle(...)) AST", () => {
     const action = withTimeout(constant(1000), verify);
-    expect(action.kind).toBe("Handle");
+    // Outer node is Chain(Tag("Continue"), Handle(...)) — restart+Branch pattern.
+    expect(action.kind).toBe("Chain");
   });
 
   it("withTimeout with any-input body", () => {
