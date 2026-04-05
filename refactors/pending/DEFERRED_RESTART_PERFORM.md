@@ -8,7 +8,7 @@
 
 ### Bug 1: Stale task completion panic (fixed by EVENT_LOOP_RESTRUCTURE)
 
-When `RestartPerform` fires (during `complete` → deliver → Chain trampoline → advance), `teardown_body` removes frames and `task_to_frame` entries for in-flight sibling tasks. When those tasks complete later, `complete()` panics on `expect("unknown task")`. EVENT_LOOP_RESTRUCTURE fixes this by adding an `is_task_live()` check in the event loop and test helpers so `complete()` is never called with unknown task_ids. The `expect("unknown task")` invariant is preserved.
+When `RestartPerform` fires (during `complete` → deliver → Chain trampoline → advance), `teardown_body` removes frames and `task_to_frame` entries for in-flight sibling tasks. When those tasks complete later, `complete()` panics on `expect("unknown task")`. EVENT_LOOP_RESTRUCTURE and FRAME_BASED_LIVENESS fix this: the event loop checks `is_frame_live()` before processing any event, so `complete()` is never called with unknown task_ids. The `expect("unknown task")` invariant is preserved.
 
 ### Bug 2: Iterator invalidation in All/ForEach
 
