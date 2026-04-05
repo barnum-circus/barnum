@@ -97,6 +97,7 @@ pub enum FrameKind {
     ForEach { results: Vec<Option<Value>> },
     ResumeHandle(ResumeHandleFrame),
     RestartHandle(RestartHandleFrame),
+    ResumePerform(ResumePerformFrame),
     Invoke { handler: HandlerId },
 }
 ```
@@ -121,10 +122,13 @@ pub enum ParentRef {
     ForEach { frame_id: FrameId, child_index: usize },
     ResumeHandle { frame_id: FrameId },
     RestartHandle { frame_id: FrameId, side: RestartHandleSide },
+    ResumePerform { frame_id: FrameId },
 }
 ```
 
-Key difference: `ResumeHandle` has no `side` field. The ResumeHandle frame only ever has body children. The handler DAG runs at the Perform site, not as a child of the Handle frame (see section 6 below).
+Key differences:
+- `ResumeHandle` has no `side` field — it only ever has body children. The handler runs at the Perform site, not at the Handle (see section 6).
+- `ResumePerform` is a trampoline frame (like Chain). When its child completes, it removes itself and delivers to its parent.
 
 **HandleSide — before** (`frame.rs:46`):
 
@@ -251,42 +255,44 @@ No deserialization. No tag matching.
 
 When the engine walks up and finds a matching `ResumeHandle`:
 
+1. Create a `ResumePerform` frame at the Perform site (parent = `perform_parent`).
+2. Look up handler ActionId and state from the ResumeHandle frame.
+3. Advance the handler DAG as a child of the ResumePerform frame.
+
 ```rust
-// Look up handler ActionId and state from the ResumeHandle frame.
+// Create ResumePerform frame for observability (like Invoke).
+let perform_frame_id = self.frames.insert(Frame {
+    parent: Some(perform_parent),
+    kind: FrameKind::ResumePerform(ResumePerformFrame {
+        resume_handler_id: resume_handle.resume_handler_id,
+    }),
+});
+
+// Look up handler from the ResumeHandle frame.
 let handler_action_id = resume_handle.handler;
 let state = resume_handle.state.clone();
-
-// Build handler input.
 let handler_input = json!({ "payload": payload, "state": state });
 
-// Advance the handler DAG parented to the *Perform's parent* in the body.
-// Not parented to the Handle frame. The Handle frame doesn't know this happened.
-self.advance(handler_action_id, handler_input, Some(perform_parent))?;
+// Handler DAG runs as child of the ResumePerform frame.
+self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
+    frame_id: perform_frame_id,
+}))?;
 ```
 
-The handler DAG creates whatever frames it needs, all parented within the body's frame tree. When it completes, it delivers to `perform_parent` — the Perform's continuation in the body. The body continues. The ResumeHandle frame stays Free. No suspension, no Handler side, no `handle_handler_completion` path.
+When the handler completes, it delivers to the ResumePerform frame. The frame removes itself and delivers the value to `perform_parent` (trampoline, same as Chain). The body continues. The ResumeHandle frame is uninvolved — no suspension, no Handler side, no `handle_handler_completion` path.
 
-This is a synchronous inline call. The Perform resolves to "run this handler DAG, deliver the result back here." The ResumeHandle is a passive interceptor — the body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
+The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
 
-The engine creates a `ResumePerform` frame at the Perform site for observability (same rationale as the Invoke frame — it's functionally a no-op but makes the frame tree self-describing):
+### 7. RestartPerform: tear down body immediately, run handler, re-enter
 
-```rust
-pub struct ResumePerformFrame {
-    pub resume_handler_id: ResumeHandlerId,
-}
-```
+**Before** (`lib.rs:440`): Suspends the Handle (marking body as blocked), runs handler as child of Handle frame. Body frames stay alive during handler execution. Other completions for body-side frames are stashed. When handler completes, body is torn down and re-entered.
 
-The frame's parent is `perform_parent`. The handler DAG runs as a child of this frame. When the handler completes, the ResumePerform frame removes itself and delivers the value to its parent (trampoline, same as Chain).
-
-### 7. RestartPerform: suspend and restart (current behavior, simplified)
-
-**Before** (`lib.rs:440`): Same as ResumePerform — suspends, runs handler as child of Handle frame.
-
-**After for RestartPerform:** Unchanged in structure, but simplified (no `HandlerOutput` deserialization).
+**After for RestartPerform:** The body is torn down immediately when the RestartPerform fires. No suspension. The handler becomes the sole child of the RestartHandle frame.
 
 ```rust
-// Suspend the body at the Perform site.
-restart_handle.status = HandleStatus::Suspended(perform_parent);
+// Tear down the body immediately. All body frames and in-flight tasks
+// are removed from the arena. No suspension, no stash needed.
+self.teardown_children(handle_frame_id);
 
 // Look up handler ActionId and state.
 let handler_action_id = restart_handle.handler;
@@ -300,7 +306,20 @@ self.advance(handler_action_id, handler_input, Some(ParentRef::RestartHandle {
 }))?;
 ```
 
-When the handler completes, `deliver` hits `ParentRef::RestartHandle { side: Handler }`, which calls `restart_body(frame_id, value)` — tear down the body, re-enter with the raw value. No `HandlerOutput` deserialization.
+When the handler completes, `deliver` hits `ParentRef::RestartHandle { side: Handler }`, which calls `restart_body(frame_id, value)` — re-enter the body with the raw value. No teardown at this point (body was already torn down when the RestartPerform fired).
+
+### Stash elimination
+
+Neither handler kind suspends the Handle frame:
+
+- **ResumePerform**: handler runs inline at the Perform site. Handle frame is uninvolved.
+- **RestartPerform**: body is torn down immediately. Handle frame transitions directly from "running body" to "running handler."
+
+`HandleStatus::Suspended` is deleted. `is_blocked_by_handle` is deleted. The stash (`stashed_items`, `sweep_stash`, `sweep_stash_once`, `StashedItem`, `SweepResult`, `StashOutcome`, `TryDeliverResult::Blocked`, `find_blocking_ancestor`, `AncestorCheck::Blocked`) is deleted entirely.
+
+Completions for tasks that belonged to the torn-down body arrive at the engine with a stale `FrameId` (the generational index rejects them). The existing `FrameGone` handling covers this — no new code needed.
+
+This is a significant simplification. The stash was the most complex part of the engine (the sweep loop, blocked ancestor detection, re-entrant stash processing). Removing it cuts a substantial amount of code and eliminates an entire class of ordering bugs.
 
 ### 8. Delete handle_handler_completion
 
@@ -308,24 +327,26 @@ When the handler completes, `deliver` hits `ParentRef::RestartHandle { side: Han
 
 **After:** Deleted. The two handler kinds don't share a completion path:
 
-- **ResumeHandle**: no handler completion — the handler DAG delivers directly to `perform_parent` via normal `deliver`. The Handle frame is uninvolved.
+- **ResumeHandle**: no handler completion — the handler DAG delivers directly to the ResumePerform frame's parent via normal `deliver`. The Handle frame is uninvolved.
 - **RestartHandle**: handler completion is a single call to `restart_body` in the `deliver` match arm for `ParentRef::RestartHandle { side: Handler }`. No function needed.
 
-### 8. Update handler DAGs to produce raw values
+### 9. Update handler DAGs to produce raw values
 
 All handler DAGs drop their `Tag(...)` wrapping.
 
 | Combinator | Before | After |
 |-----------|--------|-------|
 | `bind` | `Tag("Resume")` wrapper | Raw value |
-| `tryCatch` | `Tag("Discard")` wrapper | Raw value (handler just extracts payload, runs recovery) |
+| `tryCatch` | `Tag("Discard")` wrapper | Raw value (handler just extracts payload; recovery moves to body Branch) |
 | `race` | `Tag("Discard")` wrapper | Raw value (handler just extracts payload) |
 | `loop` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
 | `scope`/`jump` | `Tag("RestartBody")` wrapper | Raw value (handler just extracts payload) |
 
-### 9. Recompile tryCatch and race as restart+Branch
+### 10. Recompile tryCatch and race as restart+Branch
 
 `tryCatch` and `race` currently use `Tag("Discard")` in the handler to exit the Handle directly. With only Resume and Restart, they use the same restart+Branch pattern as loop.
+
+Note: Branch passes the full tagged value `{ kind, value }` to the matching arm. Arms that need the inner value must extract it with `ExtractField("value")`.
 
 **tryCatch — before:**
 
@@ -342,15 +363,17 @@ Handle(effectId,
 Chain(Tag("Continue"),
   RestartHandle(restartHandlerId,
     Branch({
-      Continue: body,       // first entry: run the body
-      Break: recovery,      // throw → restart → Branch takes Break → recovery runs → body completes
+      Continue: Chain(ExtractField("value"), body),
+      Break: Chain(ExtractField("value"), recovery),
     }),
-    ExtractPayloadHandler   // handler extracts payload, engine restarts unconditionally
+    ExtractPayloadHandler
   )
 )
 ```
 
-`throwError` = `Chain(Tag("Break"), RestartPerform(restartHandlerId))`. Tags the error as Break, Performs. Handler extracts payload (the tagged value), engine restarts. Branch sees `{ kind: "Break", value: error }`, takes the Break arm, runs recovery. Body completes normally with recovery output. Handle exits.
+`throwError` = `Chain(Tag("Break"), RestartPerform(restartHandlerId))`. Tags the error as Break, Performs. Handler extracts payload (`{ kind: "Break", value: error }`), engine restarts. Branch sees `kind: "Break"`, takes the Break arm. `ExtractField("value")` unwraps the error. Recovery runs. Body completes normally. Handle exits.
+
+Initial entry: input is tagged Continue. Branch takes Continue arm. `ExtractField("value")` unwraps the input. Body runs.
 
 **race — before:**
 
@@ -367,20 +390,22 @@ Handle(effectId,
 Chain(Tag("Continue"),
   RestartHandle(restartHandlerId,
     Branch({
-      Continue: All(                           // first entry: run all branches
-        Chain(a, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
-        Chain(b, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
+      Continue: Chain(ExtractField("value"),
+        All(
+          Chain(a, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
+          Chain(b, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
+        )
       ),
-      Break: identity(),                       // winner → restart → exits
+      Break: Chain(ExtractField("value"), identity()),
     }),
     ExtractPayloadHandler
   )
 )
 ```
 
-First branch to complete tags Break, Performs. Handler extracts payload, engine restarts (tearing down the All and its remaining branches). Branch sees Break, identity completes, Handle exits with winner's value.
+First branch to complete tags Break, Performs. Handler extracts payload, engine restarts (tearing down the All and its remaining branches). Branch takes Break arm, `ExtractField("value")` unwraps the winner's value, identity completes, Handle exits.
 
-### 10. All restart handlers share the same handler DAG
+### 11. All restart handlers share the same handler DAG
 
 Every restart handler's DAG is now: extract the payload from `{ payload, state }`. That's it. The handler doesn't decide what to do — the engine always restarts, and the body's Branch routes the value.
 
@@ -404,8 +429,22 @@ One handler DAG for all restart combinators.
 | `loop` | RestartHandle | RestartPerform |
 | `scope` / `jump` | RestartHandle | RestartPerform |
 
+## Changes that can land independently on master
+
+These don't require the full refactor. They simplify the current code and reduce the diff when the refactor lands.
+
+1. **~~`HandleFrame::state: Option<Value>` → `Value`.~~** Done (already landed).
+
+2. **Extract `restart_body` as a standalone method.** Currently `handle_handler_completion` handles Resume, Discard, and RestartBody. Extracting the RestartBody path into its own method prepares for the split where it becomes the sole `RestartHandle { side: Handler }` deliver path.
+
+3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
+
+4. **Delete `Discard` handler output from tryCatch/race.** Recompile them to use the same restart+Branch pattern as loop (section 10). This can land without splitting Handle/Perform — just change `Tag("Discard")` to `Tag("RestartBody")` and restructure the body to use Branch. The engine's existing `RestartBody` path handles it.
+
 ## Open questions
 
-1. **State updates.** bind's state is set once and never updated (read-only). Restart handlers (loop) may need state updates across iterations. The handler DAG currently produces `{ payload, state }` input and the engine applies state updates from the handler output. With raw values, state updates need a separate mechanism — either the handler DAG produces `{ value, state_update }` and the engine destructures, or state is always overwritten with the handler's raw value (which is the restart input and becomes the new state).
+1. **State updates.** bind's state is set once and never updated (read-only). Restart handlers (loop) need state updates across iterations. With raw handler output values, state updates need a separate mechanism — either the handler DAG produces `{ value, state_update }` and the engine destructures, or state is always overwritten with the handler's raw value.
 
-2. **Resume handler error semantics.** If a resume handler's DAG fails, the body is NOT suspended. The error propagates through the Handle frame to its parent, same as if the body itself failed.
+2. **Resume handler error semantics.** If a resume handler's DAG fails, the body is NOT suspended (the ResumePerform frame propagates the error to its parent in the body). The error flows through the body's frame tree to the Handle frame's parent. Same behavior as if the body itself failed.
+
+3. **Stash deletion sequencing.** The stash can be deleted only after both handler kinds stop suspending. If RestartPerform's immediate teardown lands first (before ResumePerform's inline execution), the stash is still needed for resume handlers. Both changes should land together or RestartPerform's teardown should land second.
