@@ -265,38 +265,89 @@ No deserialization. No tag matching.
 
 **Before** (`lib.rs:440`): `dispatch_to_handler` suspends the Handle and runs the handler DAG as a child of the Handle frame with `ParentRef::Handle { side: Handler }`.
 
-**After for ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never modified.
+**After for ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never modified — no suspension, no side enum.
 
-When the engine walks up and finds a matching `ResumeHandle`:
+#### 6a. `advance` match arm for `FlatAction::ResumePerform`
 
-1. Create a `ResumePerform` frame at the Perform site (parent = `perform_parent`).
-2. Look up handler ActionId and state from the ResumeHandle frame.
-3. Advance the handler DAG as a child of the ResumePerform frame.
+When the engine encounters a `ResumePerform` action during `advance`:
 
 ```rust
-// Create ResumePerform trampoline frame. The handler DAG's completion
-// delivers here, then the frame forwards to perform_parent (the
-// Perform site's parent in the body). Without this frame, the handler
-// result has no delivery target.
-let perform_frame_id = self.frames.insert(Frame {
-    parent: Some(perform_parent),
-    kind: FrameKind::ResumePerform(ResumePerformFrame {
-        resume_handler_id: resume_handle.resume_handler_id,
-    }),
-});
+FlatAction::ResumePerform { resume_handler_id } => {
+    let Some(parent) = parent else {
+        return Err(AdvanceError::UnhandledEffect { ... });
+    };
+    // Walk up the frame tree to find the matching ResumeHandle.
+    let (handle_frame_id, resume_handle) = self
+        .ancestors(parent)
+        .find_map(|(frame_id, frame)| match &frame.kind {
+            FrameKind::ResumeHandle(handle)
+                if handle.resume_handler_id == resume_handler_id =>
+            {
+                Some((frame_id, handle))
+            }
+            _ => None,
+        })
+        .ok_or(AdvanceError::UnhandledEffect { ... })?;
 
-// Look up handler from the ResumeHandle frame.
-let handler_action_id = resume_handle.handler;
-let state = resume_handle.state.clone();
-let handler_input = json!({ "payload": payload, "state": state });
-
-// Handler DAG runs as child of the ResumePerform frame.
-self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
-    frame_id: perform_frame_id,
-}))?;
+    self.dispatch_resume_handler(
+        handle_frame_id,
+        resume_handle,
+        parent, // perform_parent — where the result goes back to
+        payload,
+    )?;
+}
 ```
 
-When the handler completes, it delivers to the ResumePerform frame. The frame removes itself and delivers the value to `perform_parent` (trampoline, same as Chain). The body continues from where the Perform was. The ResumeHandle frame is uninvolved — no suspension, no Handler side, no `handle_handler_completion` path.
+The `payload` is the value passed into the Perform (the argument to the effect). `parent` is the Perform site's parent in the body — the handler result will be delivered back here.
+
+#### 6b. `dispatch_resume_handler`
+
+```rust
+fn dispatch_resume_handler(
+    &mut self,
+    handle_frame_id: FrameId,
+    resume_handle: &ResumeHandleFrame,
+    perform_parent: ParentRef,
+    payload: Value,
+) -> Result<(), AdvanceError> {
+    // Look up handler ActionId and state from the ResumeHandle frame.
+    let handler_action_id = resume_handle.handler;
+    let state = resume_handle.state.clone();
+    let handler_input = json!({ "payload": payload, "state": state });
+
+    // Create ResumePerform trampoline frame. The handler DAG's completion
+    // delivers here, then the frame forwards to perform_parent. Without
+    // this frame, the handler result has no delivery target.
+    let perform_frame_id = self.frames.insert(Frame {
+        parent: Some(perform_parent),
+        kind: FrameKind::ResumePerform(ResumePerformFrame {
+            resume_handler_id: resume_handle.resume_handler_id,
+        }),
+    });
+
+    // Handler DAG runs as child of the ResumePerform frame.
+    self.advance(handler_action_id, handler_input, Some(ParentRef::ResumePerform {
+        frame_id: perform_frame_id,
+    }))
+}
+```
+
+The ResumeHandle frame is not touched. No suspension, no status change. Multiple concurrent ResumePerforms can be in flight for the same ResumeHandle — each creates its own trampoline frame with its own `perform_parent`.
+
+#### 6c. `deliver` match arm for `ParentRef::ResumePerform`
+
+When the handler DAG completes, it delivers up to the ResumePerform frame:
+
+```rust
+ParentRef::ResumePerform { frame_id } => {
+    // Trampoline: remove self, forward result to parent.
+    let frame = self.frames.remove(frame_id).expect("frame exists");
+    let parent = frame.parent.expect("ResumePerform always has a parent");
+    self.deliver(parent, value)
+}
+```
+
+Same pattern as Chain's deliver. The value flows back to the body at the original Perform site. The body continues as if the Perform returned synchronously (modulo any async handler invocations that produced dispatches).
 
 The ResumeHandle is a passive interceptor. The body runs through it, Performs look it up to find the handler and state, but execution stays in the body's frame subtree.
 
@@ -467,7 +518,7 @@ These don't require the full refactor. They simplify the current code and reduce
 
 3. **Extract `teardown_children` as a standalone method.** Currently body teardown is interleaved in `handle_handler_completion`. Extracting it makes the "tear down immediately on RestartPerform" change trivial.
 
-4. **Extract an ancestor frame iterator.** `find_and_dispatch_handler` walks from a `ParentRef` up the frame tree looking for a matching Handle. After the split, this walk exists in two places: one for ResumePerform (looking for `ResumeHandle`) and one for RestartPerform (looking for `RestartHandle`). Extract an `ancestors(starting_parent)` iterator that yields `(FrameId, &Frame)` pairs. Both find methods call `.find()` on it with their respective predicate.
+4. **~~Extract an ancestor frame iterator.~~** Done (already landed). `Ancestors` iterator yields `(ParentRef, &Frame)` pairs. `find_blocking_ancestor` and `find_and_dispatch_handler` both use it.
 
 ## Open questions
 
