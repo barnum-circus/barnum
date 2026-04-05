@@ -374,6 +374,3 @@ Update TS round-trip tests (`libs/barnum/tests/round-trip.test.ts:95-117`) — r
 
 Delete flattener step tests in `crates/barnum_ast/src/flat.rs` (tests using `step_named`, `config_with_steps`, `flatten_chain_of_steps`, etc.).
 
-## Open questions
-
-1. **Handler duplication.** Each returned function group shares the same handler. If `withFns` is used in multiple places, the handler (all function bodies) appears once per usage site. Negligible for small function groups.
