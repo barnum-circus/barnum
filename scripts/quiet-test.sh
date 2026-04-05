@@ -1,9 +1,22 @@
 #!/bin/bash
 # Run tests quietly — only print output on failure.
 
-output=$(pnpm -r test 2>&1)
-status=$?
-if [ $status -ne 0 ]; then
-  echo "$output"
+fail=0
+
+pnpm_output=$(pnpm -r test 2>&1)
+if [ $? -ne 0 ]; then
+  echo "$pnpm_output"
+  fail=1
 fi
-exit $status
+
+cargo_output=$(cargo test --workspace 2>&1)
+if [ $? -ne 0 ]; then
+  echo "$cargo_output"
+  fail=1
+fi
+
+if [ $fail -eq 0 ]; then
+  echo "All tests passed."
+fi
+
+exit $fail
