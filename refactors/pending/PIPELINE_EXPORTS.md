@@ -247,30 +247,7 @@ await workflowBuilder()
 
 The workflow file is now purely about orchestration — what runs in what order, resource management, fan-out. The how of implementation+review lives in the handler module.
 
-### Example 3: `classifyJudgment` — pure classification, logically a pipeline step
-
-**Before** — `handlers/refactor.ts`:
-
-```ts
-export const classifyJudgment = createHandler({
-  inputValidator: z.union([
-    z.object({ approved: z.literal(true) }),
-    z.object({ approved: z.literal(false), instructions: z.string() }),
-  ]),
-  handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
-    if (judgment.approved) {
-      return { kind: "Approved", value: undefined };
-    }
-    return { kind: "NeedsWork", value: judgment.instructions };
-  },
-}, "classifyJudgment");
-```
-
-This is a pure data transformation — it converts `{ approved: boolean, instructions?: string }` into a `TaggedUnion`. No I/O, no side effects. It's a handler only because the framework doesn't have a builtin for tagging. A future `tag`/`classify` builtin would let this be expressed as a pipeline, eliminating the worker dispatch overhead. For now, no change — just noting it as a pattern that pipeline exports make visible.
-
-`classifyErrors` in `type-check-fix.ts` is the same pattern: `TypeError[] → TaggedUnion<{ HasErrors, Clean }>`.
-
-### Example 4: `deriveBranch` + `preparePRInput` — composable atoms
+### Example 3: `deriveBranch` + `preparePRInput` — composable atoms
 
 **Before** — used in `run.ts` as:
 
