@@ -167,12 +167,14 @@ The maximally reduced AST:
 FlatAction =
   | ResumeHandle { resume_handler_id: ResumeHandlerId, body: HandleBody, handler: HandlerDag }
   | RestartHandle { restart_handler_id: RestartHandlerId, body: HandleBody, handler: HandlerDag }
+  | BreakHandle { break_handler_id: BreakHandlerId, body: HandleBody, handler: HandlerDag }
   | ResumePerform { resume_handler_id: ResumeHandlerId }
   | RestartPerform { restart_handler_id: RestartHandlerId }
+  | BreakPerform { break_handler_id: BreakHandlerId }
   | Chain { rest: ActionId }
 ```
 
-Five node types. Handle absorbs All (concurrent bodies), ForEach (dynamic concurrent bodies), Branch (case-dispatch handler), and Loop (Continue/Break). Invoke becomes ResumePerform targeting a root ResumeHandle.
+Seven node types. Handle absorbs All (concurrent bodies), ForEach (dynamic concurrent bodies), Branch (case-dispatch handler), and Loop (RestartHandle + body-level Branch for break). Invoke becomes ResumePerform targeting a root ResumeHandle.
 
 ## Resume handlers as a general call mechanism
 
