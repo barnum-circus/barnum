@@ -1,6 +1,6 @@
 # Handler Schemas in AST
 
-**Blocked by:** `OPTIONAL_HANDLER_TYPES.md` (done), `ZOD_TO_JSON_SCHEMA.md`
+**Blocked by:** `OPTIONAL_HANDLER_TYPES.md` (done), `ZOD_TO_JSON_SCHEMA.md` (done)
 **Blocks:** `HANDLER_VALIDATION.md` (which adds Rust-side runtime validation using these schemas)
 
 ## TL;DR

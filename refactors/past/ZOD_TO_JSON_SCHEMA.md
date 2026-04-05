@@ -303,10 +303,10 @@ z.nullable(z.string())
 | `z.string().max(10)` | `{ type: "string", maxLength: 10 }` |
 | `z.string().length(5)` | `{ type: "string", minLength: 5, maxLength: 5 }` |
 | `z.string().regex(/^foo/)` | `{ type: "string", pattern: "^foo" }` |
-| `z.string().email()` | `{ type: "string", format: "email" }` |
+| `z.string().email()` | `{ type: "string", format: "email", pattern: "..." }` (includes email regex pattern) |
 | `z.string().url()` | `{ type: "string", format: "uri" }` |
-| `z.string().startsWith("foo")` | `{ type: "string", pattern: "^foo" }` |
-| `z.string().endsWith("bar")` | `{ type: "string", pattern: "bar$" }` |
+| `z.string().startsWith("foo")` | `{ type: "string", pattern: "^foo.*" }` |
+| `z.string().endsWith("bar")` | `{ type: "string", pattern: ".*bar$" }` |
 
 ### Modifiers (number)
 
@@ -316,7 +316,7 @@ z.nullable(z.string())
 | `z.number().max(100)` | `{ type: "number", maximum: 100 }` |
 | `z.number().gt(0)` | `{ type: "number", exclusiveMinimum: 0 }` |
 | `z.number().lt(100)` | `{ type: "number", exclusiveMaximum: 100 }` |
-| `z.number().int()` | `{ type: "integer" }` |
+| `z.number().int()` | `{ type: "integer", minimum: -9007199254740991, maximum: 9007199254740991 }` |
 | `z.number().multipleOf(5)` | `{ type: "number", multipleOf: 5 }` |
 
 ### Modifiers (array)
@@ -584,10 +584,13 @@ describe("zodToCheckedJsonSchema", () => {
     });
 
     it("email format", () => {
-      expect(convert(z.string().email())).toEqual({
+      const result = convert(z.string().email());
+      expect(result).toMatchObject({
         type: "string",
         format: "email",
       });
+      // Zod v4 also emits a pattern for email validation
+      expect(result).toHaveProperty("pattern");
     });
 
     it("url format", () => {
@@ -600,14 +603,14 @@ describe("zodToCheckedJsonSchema", () => {
     it("startsWith", () => {
       expect(convert(z.string().startsWith("foo"))).toEqual({
         type: "string",
-        pattern: "^foo",
+        pattern: "^foo.*",
       });
     });
 
     it("endsWith", () => {
       expect(convert(z.string().endsWith("bar"))).toEqual({
         type: "string",
-        pattern: "bar$",
+        pattern: ".*bar$",
       });
     });
   });
@@ -646,7 +649,11 @@ describe("zodToCheckedJsonSchema", () => {
     });
 
     it("integer", () => {
-      expect(convert(z.number().int())).toEqual({ type: "integer" });
+      expect(convert(z.number().int())).toEqual({
+        type: "integer",
+        minimum: -9007199254740991,
+        maximum: 9007199254740991,
+      });
     });
 
     it("multipleOf", () => {
