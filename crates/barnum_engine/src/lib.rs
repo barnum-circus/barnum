@@ -9,7 +9,8 @@ pub mod advance;
 mod ancestors;
 /// Deliver a completed task result back to the workflow.
 pub mod complete;
-mod effects;
+/// Effect processing: restart and resume handlers.
+pub mod effects;
 pub mod frame;
 #[cfg(test)]
 pub(crate) mod test_helpers;
@@ -78,6 +79,19 @@ pub type PendingEffect = (FrameId, PendingEffectKind);
 pub enum PendingEffectKind {
     /// A handler invocation ready to be dispatched to a worker.
     Dispatch(DispatchEvent),
+    /// A deferred restart. The body will be torn down and the handler advanced.
+    Restart(RestartEvent),
+}
+
+/// A deferred restart effect. The `FrameId` in the `PendingEffect` tuple
+/// is the marker frame (liveness key). This struct carries the handle
+/// target and payload.
+#[derive(Debug)]
+pub struct RestartEvent {
+    /// The `RestartHandle` frame that will process this restart.
+    pub restart_handle_frame_id: FrameId,
+    /// The payload value passed to the handler.
+    pub payload: Value,
 }
 
 // ---------------------------------------------------------------------------

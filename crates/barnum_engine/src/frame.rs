@@ -113,6 +113,10 @@ pub enum FrameKind {
     /// Restart-style effect handler. When `RestartPerform` fires, the body
     /// is torn down and the handler runs. Handler output is the new body input.
     RestartHandle(RestartHandleFrame),
+    /// Marker for a deferred `RestartPerform`. No data — exists only so
+    /// that `teardown_body` can remove it, causing the liveness check to
+    /// fail for stale restart effects.
+    RestartPerformMarker,
 }
 
 /// ResumeHandle-specific state, stored in [`FrameKind::ResumeHandle`].

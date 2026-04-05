@@ -4,6 +4,7 @@
 //! across test modules in advance, complete, effects, and frame.
 
 use crate::complete::complete;
+use crate::effects::process_restart;
 use crate::{CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, WorkflowState};
 
 use barnum_ast::flat::flatten;
@@ -175,13 +176,17 @@ pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: 
 // ---------------------------------------------------------------------------
 
 /// Pop the next pending dispatch from the effect queue.
+///
+/// # Panics
+///
 /// Panics if the next effect is not a `Dispatch`.
-/// Test-only convenience — when `Restart` is added, non-exhaustive
-/// match will force callers to handle it.
+#[allow(clippy::panic)]
 pub fn pop_dispatch(engine: &mut WorkflowState) -> Option<DispatchEvent> {
     let (_, kind) = engine.pop_pending_effect()?;
-    let PendingEffectKind::Dispatch(dispatch_event) = kind;
-    Some(dispatch_event)
+    match kind {
+        PendingEffectKind::Dispatch(dispatch_event) => Some(dispatch_event),
+        other @ PendingEffectKind::Restart(_) => panic!("expected Dispatch, got {other:?}"),
+    }
 }
 
 /// Process all pending builtin dispatches. Returns TypeScript dispatches
@@ -198,24 +203,30 @@ pub fn drive_builtins(
         if !engine.is_frame_live(frame_id) {
             continue;
         }
-        let PendingEffectKind::Dispatch(dispatch_event) = pending_effect_kind;
-        match engine.handler(dispatch_event.handler_id).clone() {
-            HandlerKind::Builtin(builtin_handler) => {
-                let result = barnum_builtins::execute_builtin(
-                    &builtin_handler.builtin,
-                    &dispatch_event.value,
-                )
-                .unwrap();
-                let completion_event = CompletionEvent {
-                    task_id: dispatch_event.task_id,
-                    value: result,
-                };
-                if let Some(value) = complete(engine, completion_event)? {
-                    return Ok((Some(value), ts_dispatches));
-                }
+        match pending_effect_kind {
+            PendingEffectKind::Restart(restart_event) => {
+                process_restart(engine, restart_event)?;
             }
-            HandlerKind::TypeScript(_) => {
-                ts_dispatches.push(dispatch_event);
+            PendingEffectKind::Dispatch(dispatch_event) => {
+                match engine.handler(dispatch_event.handler_id).clone() {
+                    HandlerKind::Builtin(builtin_handler) => {
+                        let result = barnum_builtins::execute_builtin(
+                            &builtin_handler.builtin,
+                            &dispatch_event.value,
+                        )
+                        .unwrap();
+                        let completion_event = CompletionEvent {
+                            task_id: dispatch_event.task_id,
+                            value: result,
+                        };
+                        if let Some(value) = complete(engine, completion_event)? {
+                            return Ok((Some(value), ts_dispatches));
+                        }
+                    }
+                    HandlerKind::TypeScript(_) => {
+                        ts_dispatches.push(dispatch_event);
+                    }
+                }
             }
         }
     }

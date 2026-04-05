@@ -12,8 +12,10 @@ use barnum_ast::flat::HandlerId;
 use barnum_builtins::{BuiltinError, execute_builtin};
 use barnum_engine::advance::advance;
 use barnum_engine::complete::complete;
+use barnum_engine::effects::process_restart;
 use barnum_engine::{
-    CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, TaskId, WorkflowState,
+    CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, RestartEvent, TaskId,
+    WorkflowState,
 };
 use barnum_typescript_handler::{TypeScriptHandlerError, execute_typescript};
 use intern::Lookup;
@@ -44,6 +46,8 @@ pub enum HandlerError {
 enum EventKind {
     /// A handler invocation ready to dispatch to a worker.
     Dispatch(DispatchEvent),
+    /// A deferred restart effect ready to process.
+    Restart(RestartEvent),
     /// A worker completed a task.
     Completion(CompletionEvent),
 }
@@ -52,6 +56,7 @@ impl From<PendingEffectKind> for EventKind {
     fn from(kind: PendingEffectKind) -> Self {
         match kind {
             PendingEffectKind::Dispatch(dispatch_event) => EventKind::Dispatch(dispatch_event),
+            PendingEffectKind::Restart(restart_event) => EventKind::Restart(restart_event),
         }
     }
 }
@@ -230,6 +235,9 @@ pub enum RunWorkflowError {
     /// The engine encountered an error during completion.
     #[error(transparent)]
     Complete(#[from] CompleteError),
+    /// An advance error occurred during restart processing.
+    #[error(transparent)]
+    Advance(#[from] barnum_engine::AdvanceError),
     /// A handler's embedded JSON Schema is not valid JSON Schema.
     /// Caught at workflow init during schema compilation.
     #[error("invalid {direction} schema for {module}:{func}: {error}")]
@@ -321,6 +329,9 @@ pub async fn run_workflow(
 
                 let handler = workflow_state.handler(dispatch_event.handler_id);
                 scheduler.dispatch(&dispatch_event, handler);
+            }
+            EventKind::Restart(restart_event) => {
+                process_restart(workflow_state, restart_event)?;
             }
             EventKind::Completion(completion_event) => {
                 // Validate output before delivering the completion.

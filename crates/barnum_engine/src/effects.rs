@@ -1,18 +1,28 @@
 use std::collections::BTreeMap;
 
-use barnum_ast::RestartHandlerId;
 use barnum_ast::ResumeHandlerId;
 use serde_json::Value;
 use thunderdome::Arena;
 
 use super::frame::{Frame, FrameId, FrameKind, ParentRef, RestartHandleSide, ResumePerformFrame};
-use super::{AdvanceError, TaskId, WorkflowState};
+use super::{AdvanceError, RestartEvent, TaskId, WorkflowState};
 
-/// Walk the parent chain from `starting_parent` upward looking for a
-/// `ResumeHandle` that matches `resume_handler_id`. Creates a `ResumePerformFrame`
-/// at the Perform site and advances the handler DAG as its child.
+/// Walk the parent chain to find a matching `ResumeHandle`.
 ///
-/// No blocking/stashing — `ResumeHandle` never suspends.
+/// Creates a `ResumePerformFrame` at the Perform site and advances the
+/// handler DAG as its child. No blocking/stashing — `ResumeHandle` never
+/// suspends.
+///
+/// # Errors
+///
+/// Returns [`AdvanceError::UnhandledResumeEffect`] if no enclosing
+/// `ResumeHandle` matches `resume_handler_id`, or propagates errors from
+/// handler advance.
+///
+/// # Panics
+///
+/// Panics if the `ResumeHandle` frame is not in the arena (should be
+/// unreachable if the ancestor walk found it).
 #[allow(clippy::expect_used, clippy::needless_pass_by_value)]
 pub fn bubble_resume_effect(
     workflow_state: &mut WorkflowState,
@@ -69,52 +79,48 @@ pub fn bubble_resume_effect(
     Ok(())
 }
 
-/// Walk the parent chain from `starting_parent` upward looking for a
-/// `RestartHandle` that matches `restart_handler_id`. Tears down the body,
-/// then advances the handler DAG as the `RestartHandle`'s handler child.
-#[allow(clippy::expect_used, clippy::needless_pass_by_value)]
-pub fn bubble_restart_effect(
+/// Process a single restart: tear down the body, advance the handler.
+///
+/// The handler advance may push more effects to `pending_effects`.
+///
+/// # Errors
+///
+/// Propagates [`AdvanceError`] from handler advance.
+///
+/// # Panics
+///
+/// Panics if the `RestartHandle` frame does not exist. The caller must
+/// verify liveness via `is_frame_live` before calling.
+#[allow(clippy::expect_used)]
+pub fn process_restart(
     workflow_state: &mut WorkflowState,
-    starting_parent: ParentRef,
-    restart_handler_id: RestartHandlerId,
-    payload: Value,
+    restart_event: RestartEvent,
 ) -> Result<(), AdvanceError> {
-    // Find the matching RestartHandle.
-    let restart_handle_frame_id =
-        super::ancestors::ancestors(&workflow_state.frames, starting_parent)
-            .find_map(|(edge, frame)| {
-                if let FrameKind::RestartHandle(restart_handle) = &frame.kind
-                    && restart_handle.restart_handler_id == restart_handler_id
-                {
-                    Some(edge.frame_id())
-                } else {
-                    None
-                }
-            })
-            .ok_or(AdvanceError::UnhandledRestartEffect { restart_handler_id })?;
+    let RestartEvent {
+        restart_handle_frame_id,
+        payload,
+    } = restart_event;
 
-    // Tear down the body.
+    let restart_handle_frame = workflow_state
+        .frames
+        .get(restart_handle_frame_id)
+        .expect("RestartHandle frame exists (liveness verified by caller)");
+    let FrameKind::RestartHandle(ref restart_handle) = restart_handle_frame.kind else {
+        unreachable!("restart_handle_frame_id points to non-RestartHandle frame");
+    };
+
+    let handler_action_id = restart_handle.handler;
+    let state = restart_handle.state.clone();
+
+    // Tear down body (removes marker frame and all other body descendants).
     teardown_body(
         &mut workflow_state.frames,
         &mut workflow_state.task_to_frame,
         restart_handle_frame_id,
     );
 
-    // Look up handler ActionId and state.
-    let restart_handle_frame = workflow_state
-        .frames
-        .get(restart_handle_frame_id)
-        .expect("RestartHandle frame exists");
-    let FrameKind::RestartHandle(ref restart_handle) = restart_handle_frame.kind else {
-        unreachable!("bubble_restart_effect found non-RestartHandle frame");
-    };
-    let handler_action_id = restart_handle.handler;
-    let state = restart_handle.state.clone();
-
-    // Build handler input: [payload, state].
+    // Advance handler. This pushes more effects to pending_effects.
     let handler_input = serde_json::json!([payload, state]);
-
-    // Advance handler DAG as child of RestartHandle (handler side).
     super::advance::advance(
         workflow_state,
         handler_action_id,
@@ -439,11 +445,11 @@ mod tests {
     }
 
     /// `RestartPerform` fires during advance as a non-terminal child of All.
-    /// Teardown removes the All frame, but the sibling Invoke is created after
-    /// teardown (in the same All advance loop), so its parent points to the
-    /// removed All frame. Completing this orphaned task panics.
+    /// With deferred restarts, advance completes entirely (both children
+    /// produce effects). The restart is processed by `drive_builtins`, which
+    /// tears down the body (including sibling b's Invoke frame). The stale
+    /// dispatch for b is then dropped by the liveness check.
     #[test]
-    #[should_panic(expected = "parent frame exists")]
     fn restart_perform_non_terminal_in_all() {
         let mut engine = engine_from(restart_handle(
             1,
@@ -453,29 +459,11 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
-        assert_eq!(ts.len(), 2);
-        let b_task_id = ts[1].task_id;
-
-        // Complete handler → restart body. B's task was torn down.
-        let _ = complete_and_drive(
-            &mut engine,
-            CompletionEvent {
-                task_id: ts[0].task_id,
-                value: json!("restarted"),
-            },
-        )
-        .unwrap();
-
-        // B's task was torn down. Completing it panics with "parent frame exists".
-        complete(
-            &mut engine,
-            CompletionEvent {
-                task_id: b_task_id,
-                value: json!("b_out"),
-            },
-        )
-        .unwrap();
+        // Restart effect processed first: body torn down (including b's frame).
+        // b's stale dispatch dropped by liveness check. Handler dispatched.
+        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        assert_eq!(result, None);
+        assert_eq!(ts.len(), 1); // Only handler.ts — b was torn down.
     }
 
     /// Effect shadowing — inner RestartHandle intercepts same restart_handler_id.
@@ -523,8 +511,9 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1);
 
-        // Complete body → Chain trampolines to RestartPerform → handler Chain starts → step1 dispatched.
-        let result = complete(
+        // Complete body → Chain trampolines to RestartPerform → Restart enqueued.
+        // drive_builtins processes Restart → teardown + handler Chain advance → step1 dispatched.
+        let (result, ts) = complete_and_drive(
             &mut engine,
             CompletionEvent {
                 task_id: ts[0].task_id,
@@ -533,15 +522,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, None);
-
-        let s1_dispatch = pop_dispatch(&mut engine).unwrap();
-        assert!(pop_dispatch(&mut engine).is_none());
+        assert_eq!(ts.len(), 1); // step1
 
         // Complete step1 → Chain trampolines to step2.
         let result = complete(
             &mut engine,
             CompletionEvent {
-                task_id: s1_dispatch.task_id,
+                task_id: ts[0].task_id,
                 value: json!("s1_out"),
             },
         )

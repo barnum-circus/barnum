@@ -4,7 +4,11 @@
 //! and a sequence of completions (task results). The test replays the
 //! completions and builds a trace of engine state at every step.
 
-#![allow(clippy::unwrap_used)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::match_wildcard_for_single_variants
+)]
 
 use barnum_ast::Config;
 use barnum_ast::flat::flatten;
@@ -16,11 +20,14 @@ use serde_json::Value;
 use std::fmt::Write;
 
 /// Drain all pending dispatches into a Vec (for snapshot traces).
+/// Panics on non-Dispatch effects (snapshot tests only exercise dispatch paths).
 fn drain_pending_dispatches(engine: &mut WorkflowState) -> Vec<DispatchEvent> {
     let mut dispatches = Vec::new();
     while let Some((_, kind)) = engine.pop_pending_effect() {
-        let PendingEffectKind::Dispatch(dispatch_event) = kind;
-        dispatches.push(dispatch_event);
+        match kind {
+            PendingEffectKind::Dispatch(dispatch_event) => dispatches.push(dispatch_event),
+            other => panic!("expected Dispatch, got {other:?}"),
+        }
     }
     dispatches
 }

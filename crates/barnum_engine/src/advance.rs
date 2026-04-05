@@ -196,12 +196,35 @@ pub fn advance(
         FlatAction::RestartPerform { restart_handler_id } => {
             let parent =
                 parent.ok_or(AdvanceError::UnhandledRestartEffect { restart_handler_id })?;
-            super::effects::bubble_restart_effect(
-                workflow_state,
-                parent,
-                restart_handler_id,
-                value,
-            )?;
+
+            // Walk ancestors to find the matching RestartHandle.
+            let restart_handle_frame_id =
+                super::ancestors::ancestors(&workflow_state.frames, parent)
+                    .find_map(|(edge, frame)| {
+                        if let FrameKind::RestartHandle(restart_handle) = &frame.kind
+                            && restart_handle.restart_handler_id == restart_handler_id
+                        {
+                            Some(edge.frame_id())
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(AdvanceError::UnhandledRestartEffect { restart_handler_id })?;
+
+            // Marker frame for liveness tracking. Lives in the body subtree,
+            // so teardown_body removes it.
+            let marker_frame_id = workflow_state.insert_frame(Frame {
+                parent: Some(parent),
+                kind: FrameKind::RestartPerformMarker,
+            });
+
+            workflow_state.pending_effects.push_back((
+                marker_frame_id,
+                PendingEffectKind::Restart(super::RestartEvent {
+                    restart_handle_frame_id,
+                    payload: value,
+                }),
+            ));
         }
     }
     Ok(())
