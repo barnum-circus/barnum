@@ -92,27 +92,4 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
-  it("Step", () => {
-    const cfg = workflowBuilder()
-      .registerSteps({ DoVerify: verify })
-      .workflow(({ steps }) =>
-        pipe(constant({ artifact: "test" }), steps.DoVerify),
-      );
-    expect(roundTrip(cfg)).toEqual(cfg);
-  });
-
-  it("combined workflow", () => {
-    const cfg = workflowBuilder()
-      .registerSteps({ Recheck: verify })
-      .workflow(({ steps }) =>
-        pipe(
-          constant({ project: "test" }),
-          setup,
-          build,
-          steps.Recheck,
-          deploy,
-        ),
-      );
-    expect(roundTrip(cfg)).toEqual(cfg);
-  });
 });

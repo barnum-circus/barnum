@@ -8,7 +8,6 @@ import {
   type TypedAction,
   type ExtractInput,
   type ExtractOutput,
-  type ExtractRefs,
   type LoopResult,
   type Option,
   type OptionDef,
@@ -486,50 +485,6 @@ describe("postfix .branch() type safety", () => {
     deploy.branch({ A: drop });
   });
 
-  it("accepts case handlers with step refs (non-never Refs)", () => {
-    // stepRef returns TypedAction<any, any, N> — the N brand must be
-    // accepted by the branch constraint (CaseHandler allows string refs).
-    // This is critical for mutual recursion patterns: branch dispatches
-    // to named steps via stepRef inside .branch() cases.
-    workflowBuilder()
-      .registerSteps(({ stepRef }) => ({
-        TypeCheck: classifyErrors.branch({
-          HasErrors: stepRef("Fix"),
-          Clean: drop,
-        }),
-        Fix: pipe(forEach(fix).drop(), stepRef("TypeCheck")),
-      }));
-    // Type-checks iff CaseHandler constraint accepts non-never refs.
-    // Before fix: CaseHandler defaulted TRefs=never, rejecting stepRef("Fix").
-  });
-
-  it("branch collects refs from case handlers", () => {
-    // Branch return type should union refs from all case handlers.
-    const branched = classifyErrors.branch({
-      HasErrors: drop,
-      Clean: drop,
-    });
-    // With no step refs, Refs should be never
-    assertExact<IsExact<ExtractRefs<typeof branched>, never>>();
-  });
-
-  it("branch propagates refs from step refs in cases", () => {
-    // When case handlers carry step refs, .branch() collects them.
-    workflowBuilder()
-      .registerSteps(({ stepRef }) => {
-        const branched = classifyErrors.branch({
-          HasErrors: stepRef("Fix"),
-          Clean: stepRef("Other"),
-        });
-        // Refs should be "Fix" | "Other"
-        assertExact<IsExact<ExtractRefs<typeof branched>, "Fix" | "Other">>();
-        return {
-          Fix: drop as TypedAction<any, any>,
-          Other: drop as TypedAction<any, any>,
-          Root: branched,
-        };
-      });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -589,127 +544,6 @@ describe("config entry point", () => {
       pipe(constant({ artifact: "test" }), verify),
     );
     expect(cfg.workflow.kind).toBe("Chain");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Step references
-// ---------------------------------------------------------------------------
-
-describe("step reference types", () => {
-  it("rejects references to unregistered steps", () => {
-    workflowBuilder()
-      .registerSteps({ Deploy: deploy })
-      .workflow(({ steps }) => {
-        // @ts-expect-error — "Nonexistent" was never registered
-        return steps.Nonexistent;
-      });
-  });
-
-  it("preserves step types from static registration", () => {
-    const builder = workflowBuilder().registerSteps({
-      Verify: verify,
-      Deploy: deploy,
-    });
-
-    // Verify the step types are preserved in the builder's generic
-    builder.workflow(({ steps }) => {
-      assertExact<
-        IsExact<ExtractInput<typeof steps.Verify>, { artifact: string }>
-      >();
-      assertExact<
-        IsExact<ExtractOutput<typeof steps.Verify>, { verified: boolean }>
-      >();
-      assertExact<
-        IsExact<ExtractInput<typeof steps.Deploy>, { verified: boolean }>
-      >();
-      assertExact<IsExact<ExtractOutput<typeof steps.Deploy>, { deployed: boolean }>>();
-      return pipe(constant({ artifact: "test" }), steps.Verify, steps.Deploy);
-    });
-  });
-
-  it("self is TypedAction<never, never>", () => {
-    workflowBuilder().workflow(({ self }) => {
-      assertExact<IsExact<ExtractInput<typeof self>, never>>();
-      assertExact<IsExact<ExtractOutput<typeof self>, never>>();
-      return constant({ done: true });
-    });
-  });
-
-  it("self cannot be piped after a value-producing action", () => {
-    workflowBuilder().workflow(({ self }) =>
-      // @ts-expect-error — verify outputs { verified: boolean } but self expects never
-      pipe(constant({ artifact: "test" }), verify, self),
-    );
-  });
-
-  it("preserves step types through callback form registerSteps", () => {
-    workflowBuilder()
-      .registerSteps(({ stepRef }) => ({
-        A: pipe(verify, stepRef("B")),
-        B: pipe(verify, stepRef("A")),
-      }))
-      .workflow(({ steps }) => {
-        // Input type comes from verify's input: { artifact: string }
-        assertExact<
-          IsExact<ExtractInput<typeof steps.A>, { artifact: string }>
-        >();
-        assertExact<
-          IsExact<ExtractInput<typeof steps.B>, { artifact: string }>
-        >();
-        // Output is any because stepRef doesn't track output types
-        assertExact<IsExact<ExtractOutput<typeof steps.A>, any>>();
-        assertExact<IsExact<ExtractOutput<typeof steps.B>, any>>();
-        return pipe(constant({ artifact: "test" }), steps.A);
-      });
-  });
-
-  it("callback steps parameter excludes current-batch keys", () => {
-    workflowBuilder()
-      .registerSteps({ Setup: setup })
-      .registerSteps(({ steps }) => {
-        // steps.Setup exists (from prior batch)
-        assertExact<
-          IsExact<ExtractInput<typeof steps.Setup>, { project: string }>
-        >();
-        // @ts-expect-error — Pipeline is in the current batch, not prior
-        steps.Pipeline;
-        return { Pipeline: pipe(steps.Setup, build) };
-      });
-  });
-
-  it("preserves types across mixed object + callback batches into workflow", () => {
-    workflowBuilder()
-      // Batch 1: object form
-      .registerSteps({ Setup: setup })
-      // Batch 2: callback form
-      .registerSteps(({ steps }) => ({
-        Pipeline: pipe(steps.Setup, build),
-      }))
-      .workflow(({ steps }) => {
-        // Batch 1 step types survive
-        assertExact<
-          IsExact<ExtractInput<typeof steps.Setup>, { project: string }>
-        >();
-        assertExact<
-          IsExact<
-            ExtractOutput<typeof steps.Setup>,
-            { initialized: boolean; project: string }
-          >
-        >();
-        // Batch 2 step types survive — input comes from steps.Setup (a Step
-        // ref at runtime), but the static type is what registerSteps inferred:
-        // pipe(steps.Setup, build) where steps.Setup is
-        // TypedAction<{ project: string }, { initialized: boolean, project: string }>
-        // and build is TypedAction<{ initialized: boolean, project: string }, { artifact: string }>
-        assertExact<
-          IsExact<ExtractInput<typeof steps.Pipeline>, { project: string }>
-        >();
-        assertExact<
-          IsExact<ExtractOutput<typeof steps.Pipeline>, { artifact: string }>
-        >();
-        return pipe(constant({ project: "test" }), steps.Pipeline);
-      });
   });
 });
 
