@@ -8,7 +8,6 @@ export type Action =
   | ForEachAction
   | AllAction
   | BranchAction
-  | StepAction
   | HandleAction
   | PerformAction;
 
@@ -38,11 +37,6 @@ export interface BranchAction {
   cases: Record<string, Action>;
 }
 
-export interface StepAction {
-  kind: "Step";
-  step: StepRef;
-}
-
 export interface HandleAction {
   kind: "Handle";
   effect_id: EffectId;
@@ -54,8 +48,6 @@ export interface PerformAction {
   kind: "Perform";
   effect_id: EffectId;
 }
-
-export type StepRef = { kind: "Named"; name: string } | { kind: "Root" };
 
 // ---------------------------------------------------------------------------
 // HandlerKind
@@ -125,7 +117,6 @@ export type PipeIn<T> = [T] extends [never] ? any : T;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface Config<Out = any> {
   workflow: WorkflowAction<Out>;
-  steps?: Record<string, Action>;
 }
 
 // ---------------------------------------------------------------------------
@@ -165,8 +156,6 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
  * (the contravariant __phantom_in makes never the most permissive input,
  * so the covariant __in is needed for the entry point check).
  *
- * Refs: tracks step reference names through combinators for compile-time
- *   validation in registerSteps (see ValidateStepRefs)
  */
 export type TypedAction<
   In = unknown,
@@ -204,11 +193,7 @@ export type TypedAction<
     },
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
-  ): TypedAction<
-    In,
-    ExtractOutput<TCases[keyof TCases & string]>,
-    Refs | ExtractRefs<TCases[keyof TCases & string]>
-  >;
+  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
   flatten(): TypedAction<
     In,
@@ -657,129 +642,6 @@ export type ExtractOutput<T> = T extends { __phantom_out?: () => infer Out }
   ? Out
   : never;
 
-/**
- * Extract step reference names tracked in a TypedAction's Refs parameter.
- *
- * Uses direct __refs extraction (not full TypedAction matching) to avoid
- * variance issues with contravariant __phantom_in when In = never.
- */
-export type ExtractRefs<T> = T extends { __refs?: { _brand: infer R } }
-  ? R extends string
-    ? R
-    : never
-  : never;
-
-/**
- * Validates that all step references in R resolve to known step names
- * within the current batch only (keyof R). Previously registered steps
- * should be accessed via the callback's `steps` parameter, not stepRef.
- *
- * When valid: resolves to {} (transparent intersection).
- * When invalid: resolves to a type with __error that causes a compile error.
- */
-export type ValidateStepRefs<R extends Record<string, Action>> = [
-  ExtractRefs<R[keyof R]>,
-] extends [keyof R]
-  ? // eslint-disable-next-line @typescript-eslint/no-empty-object-type
-    {}
-  : {
-      __error: `Step reference to undefined step: ${Exclude<ExtractRefs<R[keyof R]>, keyof R> & string}`;
-    };
-
-// ---------------------------------------------------------------------------
-// Step Reference Tracking (Refs type parameter)
-// ---------------------------------------------------------------------------
-//
-// ## Overview
-//
-// Named steps can reference each other via `stepRef("B")`. These references
-// are validated at compile time: if you write `stepRef("Bt")` when only "A"
-// and "B" exist, TypeScript rejects it. This works through a third type
-// parameter on TypedAction called `Refs`.
-//
-// ## How it works
-//
-// 1. `stepRef<N extends string>(name: N)` returns `TypedAction<any, any, N>`.
-//    The literal string "B" is captured in the Refs position.
-//
-// 2. Every combinator propagates Refs via union. For example, pipe's 2-arg
-//    overload is:
-//
-//      pipe<T1, T2, T3, R1 extends string, R2 extends string>(
-//        a1: TypedAction<T1, T2, R1>,
-//        a2: TypedAction<T2, T3, R2>,
-//      ): TypedAction<T1, T3, R1 | R2>
-//
-//    So `pipe(check(), stepRef("B"))` has Refs = never | "B" = "B".
-//    And `pipe(stepRef("A"), stepRef("B"))` has Refs = "A" | "B".
-//
-// 3. `registerSteps` uses `ValidateStepRefs` to extract all Refs from the
-//    registered step values and check they're a subset of the current batch
-//    keys only (keyof R). Previously registered steps are accessed via the
-//    typed `steps` parameter in the callback form, not via stepRef:
-//
-//      registerSteps<R extends Record<string, Action>>(
-//        stepsOrBuild:
-//          | (R & ValidateStepRefs<R>)
-//          | ((ctx: { steps: StripRefs<TSteps>; stepRef: ... })
-//              => R & ValidateStepRefs<R>),
-//      )
-//
-//    When valid, ValidateStepRefs resolves to {} (transparent intersection).
-//    When invalid, it resolves to { __error: "Step reference to undefined
-//    step: Bt" }, which makes the argument incompatible and produces a
-//    readable compile error.
-//
-//    stepRef is not exported — it's only available as a parameter in the
-//    registerSteps callback. This ensures step references are always
-//    validated within a batch context.
-//
-// 4. `StripRefs` removes Refs from step types before they're passed to the
-//    workflow callback, since refs have already been validated by
-//    registerSteps and shouldn't propagate into the workflow's return type.
-//
-// ## Why Refs is boxed: `__refs?: { _brand: Refs }`
-//
-// The Refs phantom field uses a boxing wrapper `{ _brand: Refs }` instead of
-// a bare `__refs?: Refs`. This is necessary because of how TypeScript infers
-// generic type parameters from optional properties on discriminated unions.
-//
-// When Refs = never (the common case — most actions don't use stepRef), the
-// field `__refs?: never` collapses to `undefined` at the type level. When
-// pipe's overload tries to infer `R1 extends string` from this field, TS
-// sees `undefined`, can't find a valid inference for `R1`, and falls back to
-// the constraint bound `string`.
-//
-// This means `pipe(check(), recur())` — two actions with no step refs —
-// would infer Refs = string | string = string. Then ValidateStepRefs sees
-// Refs = string and rejects it because `string` doesn't extend the step
-// name literals.
-//
-// **Important**: this only happens with the real Action type (a discriminated
-// union of 8 variants). With a simple `{ kind: string }` Action type, TS
-// infers correctly. The union distribution changes how TS resolves optional
-// fields during inference.
-//
-// The fix: `__refs?: { _brand: Refs }`. When Refs = never, the field is
-// `__refs?: { _brand: never }`. The wrapper `{ _brand: never }` is a
-// distinct structural type (not just `undefined`), so TS can match
-// `{ _brand: R1 }` against `{ _brand: never }` and correctly infer
-// R1 = never.
-//
-// ## Why ExtractInput/ExtractOutput/ExtractRefs use structural extraction
-//
-// All three Extract* utilities match on individual phantom fields rather than
-// on the full TypedAction type. The constraint `TypedAction<any, any, any>`
-// fails for actions with In = never because `(input: never) => void` is not
-// assignable to `(input: any) => void` (function params are contravariant).
-// Structural extraction avoids this entirely.
-//
-// ExtractRefs uses a two-step conditional (`infer R` then `R extends string`)
-// rather than `infer R extends string` because the latter falls back to the
-// constraint bound `string` when R = never.
-//
-// ---------------------------------------------------------------------------
-
 // ---------------------------------------------------------------------------
 // Combinators
 // ---------------------------------------------------------------------------
@@ -834,8 +696,8 @@ function unwrapBranchCases(
  * Example: `BranchInput<{ Yes: TypedAction<number, ...>, No: TypedAction<string, ...> }>`
  *        = `{ kind: "Yes"; value: number } | { kind: "No"; value: string }`
  *
- * When a case handler uses `any` as input (e.g. stepRef), the wrapping
- * produces `{ kind: K; value: any }`, which is the correct escape hatch.
+ * When a case handler uses `any` as input, the wrapping produces
+ * `{ kind: K; value: any }`, which is the correct escape hatch.
  */
 export type BranchInput<TCases> = {
   [K in keyof TCases & string]: { kind: K; value: ExtractInput<TCases[K]> };
@@ -846,8 +708,7 @@ export function branch<TCases extends Record<string, Action>>(
   cases: TCases,
 ): TypedAction<
   BranchInput<TCases>,
-  ExtractOutput<TCases[keyof TCases & string]>,
-  ExtractRefs<TCases[keyof TCases & string]>
+  ExtractOutput<TCases[keyof TCases & string]>
 > {
   return typedAction({ kind: "Branch", cases: unwrapBranchCases(cases) });
 }
@@ -1041,169 +902,13 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
   return typedAction(buildRestartBranchAction(effectId, body, IDENTITY));
 }
 
-/**
- * Create a typed step reference. The name is tracked at the type level
- * via the Refs parameter so registerSteps can validate all references resolve.
- *
- * Not exported — only available as a parameter in registerSteps callbacks.
- * This ensures step references are always validated within a batch context.
- *
- * **Warning: no input/output type safety.** stepRef returns
- * `TypedAction<any, any, N>` — it validates the reference *name* at compile
- * time, but provides no type checking on input or output. The referenced
- * step's types are unknown at the call site (mutual recursion means the
- * step may not be fully defined yet). Prefer `steps.X` from the callback
- * parameter when referencing previously registered steps, as that preserves
- * full input/output types.
- */
-function stepRef<N extends string>(name: N): TypedAction<any, any, N> {
-  return typedAction({
-    kind: "Step",
-    step: { kind: "Named", name },
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Config builders
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnyAction = TypedAction<any, any, any>;
-
-/**
- * Strip the Refs parameter from registered step types. Refs are a compile-time
- * mechanism for validating step references in registerSteps — once validated,
- * they shouldn't propagate into the workflow callback's return type.
- */
-type StripRefs<TSteps> = {
-  [K in keyof TSteps]: TypedAction<
-    ExtractInput<TSteps[K]>,
-    ExtractOutput<TSteps[K]>
-  >;
-};
-
 /** Simple config with no named steps. */
 export function config<Out>(workflow: WorkflowAction<Out>): Config<Out> {
   return { workflow };
-}
-
-/** Builder for configs with type-safe named steps. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
-  private readonly _steps: Record<string, Action>;
-
-  constructor(steps: Record<string, Action> = {}) {
-    this._steps = steps;
-  }
-
-  /**
-   * Register named steps. Two forms:
-   *
-   * **Object form** — for steps with no cross-references:
-   *
-   * ```ts
-   * .registerSteps({
-   *   Setup: setup(),
-   *   Migrate: pipe(listFiles(), forEach(migrate())),
-   * })
-   * ```
-   *
-   * **Callback form** — for mutual recursion (via `stepRef`) and/or
-   * referencing previously registered steps (via `steps`):
-   *
-   * ```ts
-   * .registerSteps({ Setup: setup() })
-   * .registerSteps(({ steps, stepRef }) => ({
-   *   Pipeline: pipe(steps.Setup, process(), stepRef("FixCycle")),
-   *   FixCycle: loop(pipe(check(), stepRef("Pipeline"))),
-   * }))
-   * ```
-   *
-   * `stepRef` only validates against current-batch keys. Previously
-   * registered steps must be accessed via `steps`.
-   */
-  registerSteps<R extends Record<string, Action>>(
-    steps: R & ValidateStepRefs<R>,
-  ): ConfigBuilder<TSteps & R>;
-  registerSteps<R extends Record<string, Action>>(
-    build: (ctx: {
-      steps: StripRefs<TSteps>;
-      stepRef: <N extends string>(name: N) => TypedAction<any, any, N>;
-    }) => R,
-  ): [ExtractRefs<R[keyof R]>] extends [keyof R]
-    ? ConfigBuilder<TSteps & R>
-    : ValidateStepRefs<R>;
-  registerSteps<R extends Record<string, Action>>(
-    stepsOrBuild:
-      | (R & ValidateStepRefs<R>)
-      | ((ctx: {
-          steps: StripRefs<TSteps>;
-          stepRef: <N extends string>(name: N) => TypedAction<any, any, N>;
-        }) => R),
-  ): ConfigBuilder<TSteps & R> {
-    const resolved =
-      typeof stepsOrBuild === "function"
-        ? stepsOrBuild({
-            steps: this._buildStepRefs() as StripRefs<TSteps>,
-            stepRef,
-          })
-        : stepsOrBuild;
-    return new ConfigBuilder({
-      ...this._steps,
-      ...resolved,
-    }) as ConfigBuilder<TSteps & R>;
-  }
-
-  /** Build typed step reference objects for previously registered steps. */
-  private _buildStepRefs(): Record<string, Action> {
-    const refs: Record<string, Action> = {};
-    for (const name of Object.keys(this._steps)) {
-      refs[name] = typedAction({ kind: "Step", step: { kind: "Named", name } });
-    }
-    return refs;
-  }
-
-  /**
-   * Define the workflow entry point.
-   *
-   * @param build - receives `{ steps, self }`.
-   *   `self` is `TypedAction<never, never>` — a jump to the workflow
-   *   root. Input `never` because it doesn't consume pipeline data.
-   *   Output `never` because the execution path restarts (and `never`
-   *   is eliminated from unions, so branches with `self` don't pollute
-   *   the output type).
-   *
-   *   Use `pipe(drop, self)` to place `self` in a branch case.
-   *
-   *   Note: ideally `self` would be `TypedAction<never, Out>` so it
-   *   carries the workflow's output type, but TypeScript can't infer
-   *   a generic from a callback's return and use it in the same
-   *   callback's parameter — Out falls back to `unknown`.
-   */
-  workflow<Out>(
-    build: (ctx: {
-      steps: StripRefs<TSteps>;
-      self: TypedAction<never, never>;
-    }) => WorkflowAction<Out>,
-  ): RunnableConfig<Out> {
-    const stepRefs: Record<string, Action> = {};
-    for (const name of Object.keys(this._steps)) {
-      stepRefs[name] = typedAction({
-        kind: "Step",
-        step: { kind: "Named", name },
-      });
-    }
-    const self = typedAction<never, never>({
-      kind: "Step",
-      step: { kind: "Root" },
-    });
-    const workflowAction = build({
-      steps: stepRefs as StripRefs<TSteps>,
-      self,
-    });
-    const steps = Object.keys(this._steps).length > 0 ? this._steps : undefined;
-    return new RunnableConfig(workflowAction, steps);
-  }
 }
 
 /**
@@ -1215,11 +920,9 @@ export class ConfigBuilder<TSteps extends Record<string, AnyAction> = {}> {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class RunnableConfig<Out = any> {
   readonly workflow: WorkflowAction<Out>;
-  readonly steps?: Record<string, Action>;
 
-  constructor(workflow: WorkflowAction<Out>, steps?: Record<string, Action>) {
+  constructor(workflow: WorkflowAction<Out>) {
     this.workflow = workflow;
-    this.steps = steps;
   }
 
   /** Run this workflow to completion. Prints result to stdout. */
@@ -1232,14 +935,20 @@ export class RunnableConfig<Out = any> {
 
   /** Serialize to the same shape as Config. */
   toJSON(): Config<Out> {
-    const result: Config<Out> = { workflow: this.workflow };
-    if (this.steps) {
-      result.steps = this.steps;
-    }
-    return result;
+    return { workflow: this.workflow };
   }
 }
 
-export function workflowBuilder(): ConfigBuilder {
-  return new ConfigBuilder();
+export interface WorkflowBuilder {
+  /** Define the workflow entry point. */
+  workflow<Out>(build: () => WorkflowAction<Out>): RunnableConfig<Out>;
+}
+
+/** Create a workflow builder. */
+export function workflowBuilder(): WorkflowBuilder {
+  return {
+    workflow<Out>(build: () => WorkflowAction<Out>): RunnableConfig<Out> {
+      return new RunnableConfig(build());
+    },
+  };
 }
