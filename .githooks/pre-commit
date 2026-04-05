@@ -1,6 +1,6 @@
 #!/bin/bash
-# Pre-commit hook: runs fmt, check, clippy, barnum tests
-# Skips cargo commands if no Rust files are staged
+# Pre-commit hook: only runs checks relevant to staged file types.
+# Markdown-only commits skip everything.
 
 set -e
 
@@ -8,7 +8,12 @@ STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
 TS_FILES=$(echo "$STAGED_FILES" | grep -E '\.(ts|tsx)$' || true)
 RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
 
-# TypeScript: type-check, lint, format (if TS files are staged)
+if [ -z "$TS_FILES" ] && [ -z "$RUST_FILES" ]; then
+    exit 0
+fi
+
+# -- TypeScript checks (if TS files staged) --
+
 if [ -n "$TS_FILES" ]; then
     echo "Running oxlint..."
     pnpm --filter barnum run lint || { echo "oxlint failed"; exit 1; }
@@ -27,34 +32,34 @@ if [ -n "$TS_FILES" ]; then
     done
 fi
 
-if [ -z "$RUST_FILES" ]; then
-    echo "No Rust files changed, skipping cargo checks."
-    exit 0
+# -- Rust checks (if Rust files staged) --
+
+if [ -n "$RUST_FILES" ]; then
+    echo "Running cargo fmt..."
+    cargo fmt --all
+
+    # Re-stage only files that were already staged (not unrelated unstaged changes)
+    echo "$STAGED_FILES" | xargs git add
+
+    echo "Building CLI binaries..."
+    cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
+
+    echo "Running cargo check..."
+    cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
+
+    echo "Running cargo clippy..."
+    cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy failed"; exit 1; }
+
+    # udeps is optional
+    if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
+        echo "Running cargo udeps..."
+        cargo +nightly udeps --workspace --all-targets || { echo "cargo udeps failed"; exit 1; }
+    fi
 fi
 
-echo "Running cargo fmt..."
-cargo fmt --all
-
-# Re-stage only files that were already staged (not unrelated unstaged changes)
-echo "$STAGED_FILES" | xargs git add
-
-# Build CLI binaries first (tests spawn them as subprocesses)
-echo "Building CLI binaries..."
-cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
-
-echo "Running cargo check..."
-cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
-
-echo "Running cargo clippy..."
-cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy failed"; exit 1; }
+# -- Tests (if any code changed) --
 
 echo "Running tests..."
 pnpm test || { echo "pnpm test failed"; exit 1; }
-
-# udeps is optional
-if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
-    echo "Running cargo udeps..."
-    cargo +nightly udeps --workspace --all-targets || { echo "cargo udeps failed"; exit 1; }
-fi
 
 echo "Pre-commit checks passed!"
