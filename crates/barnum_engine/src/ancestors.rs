@@ -1,5 +1,4 @@
-use super::AncestorCheck;
-use super::frame::{Frame, FrameKind, HandleSide, HandleStatus, ParentRef};
+use super::frame::{Frame, ParentRef};
 use thunderdome::Arena;
 
 /// Walks up the frame tree from a starting [`ParentRef`].
@@ -35,31 +34,4 @@ pub const fn ancestors(frames: &Arena<Frame>, parent_ref: ParentRef) -> Ancestor
         frames,
         next: Some(parent_ref),
     }
-}
-
-/// Check whether a `ParentRef`'s path to the root is blocked by a
-/// suspended Handle, or whether the frame has been torn down.
-pub fn find_blocking_ancestor(frames: &Arena<Frame>, parent_ref: ParentRef) -> AncestorCheck {
-    if frames.get(parent_ref.frame_id()).is_none() {
-        return AncestorCheck::FrameGone;
-    }
-    for (edge, frame) in ancestors(frames, parent_ref) {
-        if is_blocked_by_handle(&edge, &frame.kind) {
-            return AncestorCheck::Blocked;
-        }
-    }
-    AncestorCheck::Clear
-}
-
-/// Does this parent edge cross from a body child into a suspended Handle?
-const fn is_blocked_by_handle(parent_ref: &ParentRef, parent_kind: &FrameKind) -> bool {
-    if let ParentRef::Handle {
-        side: HandleSide::Body,
-        ..
-    } = parent_ref
-        && let FrameKind::Handle(handle_frame) = parent_kind
-    {
-        return matches!(handle_frame.status, HandleStatus::Suspended(_));
-    }
-    false
 }

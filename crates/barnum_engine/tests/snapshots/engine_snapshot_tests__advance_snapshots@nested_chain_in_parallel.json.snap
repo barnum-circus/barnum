@@ -199,6 +199,5 @@ WorkflowState {
             value: Null,
         },
     ],
-    stashed_items: [],
     next_task_id: 2,
 }

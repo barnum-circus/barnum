@@ -3,9 +3,9 @@ use intern::Lookup;
 use serde_json::Value;
 
 use super::frame::{
-    Frame, FrameKind, HandleFrame, HandleSide, HandleStatus, ParentRef, ResumeHandleFrame,
+    Frame, FrameKind, ParentRef, RestartHandleFrame, RestartHandleSide, ResumeHandleFrame,
 };
-use super::{AdvanceError, Dispatch, StashOutcome, StashedItem, WorkflowState};
+use super::{AdvanceError, Dispatch, WorkflowState};
 
 /// Expand an `ActionId` into frames. Creates frames for structural
 /// combinators and Invoke leaves. Invoke frames hold the parent pointer
@@ -142,44 +142,6 @@ pub fn advance(
             advance(workflow_state, case_action_id, value, parent)?;
         }
 
-        FlatAction::Handle { effect_id } => {
-            let body = workflow_state.flat_config.handle_body(action_id);
-            let handler = workflow_state.flat_config.handle_handler(action_id);
-            let frame_id = workflow_state.insert_frame(Frame {
-                parent,
-                kind: FrameKind::Handle(HandleFrame {
-                    effect_id,
-                    body,
-                    handler,
-                    state: value.clone(),
-                    status: HandleStatus::Free,
-                }),
-            });
-            advance(
-                workflow_state,
-                body,
-                value,
-                Some(ParentRef::Handle {
-                    frame_id,
-                    side: HandleSide::Body,
-                }),
-            )?;
-        }
-
-        FlatAction::Perform { effect_id } => {
-            let parent = parent.ok_or(AdvanceError::UnhandledEffect { effect_id })?;
-            match super::effects::bubble_effect(workflow_state, parent, effect_id, value)? {
-                StashOutcome::Consumed => {}
-                StashOutcome::Blocked(payload) => {
-                    workflow_state.stashed_items.push_back(StashedItem::Effect {
-                        starting_parent: parent,
-                        effect_id,
-                        payload,
-                    });
-                }
-            }
-        }
-
         FlatAction::ResumeHandle { resume_handler_id } => {
             let body = workflow_state.flat_config.resume_handle_body(action_id);
             let handler = workflow_state.flat_config.resume_handle_handler(action_id);
@@ -203,6 +165,40 @@ pub fn advance(
         FlatAction::ResumePerform { resume_handler_id } => {
             let parent = parent.ok_or(AdvanceError::UnhandledResumeEffect { resume_handler_id })?;
             super::effects::bubble_resume_effect(workflow_state, parent, resume_handler_id, value)?;
+        }
+
+        FlatAction::RestartHandle { restart_handler_id } => {
+            let body = workflow_state.flat_config.restart_handle_body(action_id);
+            let handler = workflow_state.flat_config.restart_handle_handler(action_id);
+            let frame_id = workflow_state.insert_frame(Frame {
+                parent,
+                kind: FrameKind::RestartHandle(RestartHandleFrame {
+                    restart_handler_id,
+                    body,
+                    handler,
+                    state: value.clone(),
+                }),
+            });
+            advance(
+                workflow_state,
+                body,
+                value,
+                Some(ParentRef::RestartHandle {
+                    frame_id,
+                    side: RestartHandleSide::Body,
+                }),
+            )?;
+        }
+
+        FlatAction::RestartPerform { restart_handler_id } => {
+            let parent =
+                parent.ok_or(AdvanceError::UnhandledRestartEffect { restart_handler_id })?;
+            super::effects::bubble_restart_effect(
+                workflow_state,
+                parent,
+                restart_handler_id,
+                value,
+            )?;
         }
     }
     Ok(())
@@ -362,15 +358,27 @@ mod tests {
         assert_eq!(dispatches.len(), 0);
     }
 
-    // Test 1: Bare Perform with no enclosing Handle → UnhandledEffect.
+    // Bare RestartPerform with no enclosing RestartHandle → UnhandledRestartEffect.
     #[test]
-    fn perform_without_handle_errors() {
-        let mut engine = engine_from(perform(1));
+    fn restart_perform_without_handle_errors() {
+        let mut engine = engine_from(restart_perform(1));
         let root = engine.workflow_root();
         let err = engine.advance(root, json!(null), None).unwrap_err();
         assert!(
-            matches!(err, crate::AdvanceError::UnhandledEffect { effect_id } if effect_id == EffectId(1)),
-            "expected UnhandledEffect, got: {err:?}",
+            matches!(err, crate::AdvanceError::UnhandledRestartEffect { restart_handler_id } if restart_handler_id == RestartHandlerId(1)),
+            "expected UnhandledRestartEffect, got: {err:?}",
+        );
+    }
+
+    // Bare ResumePerform with no enclosing ResumeHandle → UnhandledResumeEffect.
+    #[test]
+    fn resume_perform_without_handle_errors() {
+        let mut engine = engine_from(resume_perform(1));
+        let root = engine.workflow_root();
+        let err = engine.advance(root, json!(null), None).unwrap_err();
+        assert!(
+            matches!(err, crate::AdvanceError::UnhandledResumeEffect { resume_handler_id } if resume_handler_id == ResumeHandlerId(1)),
+            "expected UnhandledResumeEffect, got: {err:?}",
         );
     }
 }

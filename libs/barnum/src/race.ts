@@ -8,7 +8,10 @@ import {
   TAG_BREAK,
   IDENTITY,
 } from "./ast.js";
-import { allocateEffectId, type EffectId } from "./effect-id.js";
+import {
+  allocateRestartHandlerId,
+  type RestartHandlerId,
+} from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
 // Shared AST fragments
@@ -25,15 +28,15 @@ const TAG_ERR: Action = {
 };
 
 /**
- * Chain(Tag("Break"), Perform(effectId)) — shared by race branches.
- * The winning branch tags its result as Break, then Performs. The handler
- * restarts the body; Branch takes the Break arm (identity), Handle exits.
+ * `Chain(Tag("Break"), RestartPerform(id))` — shared by race branches.
+ * The winning branch tags its result as Break, then performs. The handler
+ * restarts the body; Branch takes the Break arm (identity), `RestartHandle` exits.
  */
-function breakPerform(effectId: EffectId): Action {
+function breakPerform(restartHandlerId: RestartHandlerId): Action {
   return {
     kind: "Chain",
     first: TAG_BREAK,
-    rest: { kind: "Perform", effect_id: effectId },
+    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
   };
 }
 
@@ -43,28 +46,27 @@ function breakPerform(effectId: EffectId): Action {
 
 /**
  * Run multiple actions concurrently. The first to complete wins; losers
- * are cancelled during Handle frame teardown.
+ * are cancelled during `RestartHandle` frame teardown.
  *
  * All branches must have the same input and output type (since either
  * could win).
  *
  * Compiled form (restart+Branch, same substrate as loop/earlyReturn):
- *   Chain(Tag("Continue"),
- *     Handle(effectId,
- *       Branch({
- *         Continue: All(Chain(a, breakPerform), Chain(b, breakPerform), ...),
- *         Break: identity,
- *       }),
- *       RestartBodyHandler))
+ *   `Chain(Tag("Continue"),`
+ *     `RestartHandle(id, ExtractIndex(0),`
+ *       `Branch({`
+ *         `Continue: All(Chain(a, breakPerform), Chain(b, breakPerform), ...),`
+ *         `Break: identity,`
+ *       `})))`
  *
- * First branch to complete tags Break → Perform → handler restarts →
- * Branch takes Break arm → identity → Handle exits with winner's value.
+ * First branch to complete tags Break → `RestartPerform` → handler restarts →
+ * Branch takes Break arm → identity → `RestartHandle` exits with winner's value.
  */
 export function race<TIn, TOut>(
   ...actions: Pipeable<TIn, TOut>[]
 ): TypedAction<TIn, TOut> {
-  const effectId = allocateEffectId();
-  const perform = breakPerform(effectId);
+  const restartHandlerId = allocateRestartHandlerId();
+  const perform = breakPerform(restartHandlerId);
 
   const branches = actions.map((action) => ({
     kind: "Chain" as const,
@@ -74,7 +76,9 @@ export function race<TIn, TOut>(
 
   const allAction: Action = { kind: "All", actions: branches };
 
-  return typedAction(buildRestartBranchAction(effectId, allAction, IDENTITY));
+  return typedAction(
+    buildRestartBranchAction(restartHandlerId, allAction, IDENTITY),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -144,17 +148,17 @@ export function withTimeout<TIn, TOut>(
   ms: Pipeable<TIn, number>,
   body: Pipeable<TIn, TOut>,
 ): TypedAction<TIn, Result<TOut, void>> {
-  const effectId = allocateEffectId();
-  const perform = breakPerform(effectId);
+  const restartHandlerId = allocateRestartHandlerId();
+  const perform = breakPerform(restartHandlerId);
 
-  // Branch 1: body → Tag("Ok") → Tag("Break") → Perform
+  // Branch 1: body → Tag("Ok") → Tag("Break") → RestartPerform
   const bodyBranch: Action = {
     kind: "Chain",
     first: { kind: "Chain", first: body as Action, rest: TAG_OK },
     rest: perform,
   };
 
-  // Branch 2: ms → sleep() → Tag("Err") → Tag("Break") → Perform
+  // Branch 2: ms → sleep() → Tag("Err") → Tag("Break") → RestartPerform
   const sleepBranch: Action = {
     kind: "Chain",
     first: {
@@ -167,5 +171,7 @@ export function withTimeout<TIn, TOut>(
 
   const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 
-  return typedAction(buildRestartBranchAction(effectId, allAction, IDENTITY));
+  return typedAction(
+    buildRestartBranchAction(restartHandlerId, allAction, IDENTITY),
+  );
 }

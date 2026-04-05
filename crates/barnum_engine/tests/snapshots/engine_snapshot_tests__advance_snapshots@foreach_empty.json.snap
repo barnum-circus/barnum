@@ -44,6 +44,5 @@ WorkflowState {
     },
     task_to_frame: {},
     pending_dispatches: [],
-    stashed_items: [],
     next_task_id: 0,
 }

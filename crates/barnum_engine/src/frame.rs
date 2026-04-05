@@ -1,6 +1,6 @@
 //! Frame types for the engine's frame tree.
 
-use barnum_ast::EffectId;
+use barnum_ast::RestartHandlerId;
 use barnum_ast::ResumeHandlerId;
 use barnum_ast::flat::{ActionId, HandlerId};
 use serde_json::Value;
@@ -34,13 +34,6 @@ pub enum ParentRef {
         /// This child's index in the parent's results vector.
         child_index: usize,
     },
-    /// Parent is a Handle frame — either the body or handler side.
-    Handle {
-        /// The parent frame's ID.
-        frame_id: FrameId,
-        /// Which side of the Handle this child is on.
-        side: HandleSide,
-    },
     /// Parent is a `ResumeHandle` frame — body child only.
     ResumeHandle {
         /// The parent frame's ID.
@@ -51,14 +44,21 @@ pub enum ParentRef {
         /// The parent frame's ID.
         frame_id: FrameId,
     },
+    /// Parent is a `RestartHandle` frame — either the body or handler side.
+    RestartHandle {
+        /// The parent frame's ID.
+        frame_id: FrameId,
+        /// Which side of the `RestartHandle` this child is on.
+        side: RestartHandleSide,
+    },
 }
 
-/// Which side of a Handle frame a child belongs to.
+/// Which side of a `RestartHandle` frame a child belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HandleSide {
-    /// The body — the action that may Perform effects.
+pub enum RestartHandleSide {
+    /// The body — the action that may `RestartPerform` effects.
     Body,
-    /// The handler — the action invoked when an effect fires.
+    /// The handler — the action invoked when the effect fires.
     Handler,
 }
 
@@ -70,9 +70,9 @@ impl ParentRef {
             Self::Chain { frame_id }
             | Self::All { frame_id, .. }
             | Self::ForEach { frame_id, .. }
-            | Self::Handle { frame_id, .. }
             | Self::ResumeHandle { frame_id }
-            | Self::ResumePerform { frame_id } => frame_id,
+            | Self::ResumePerform { frame_id }
+            | Self::RestartHandle { frame_id, .. } => frame_id,
         }
     }
 }
@@ -95,9 +95,6 @@ pub enum FrameKind {
         /// Slot per element; `None` until the child completes.
         results: Vec<Option<Value>>,
     },
-    /// Effect handler. Intercepts effects from the body; routes them
-    /// to the handler DAG.
-    Handle(HandleFrame),
     /// Leaf dispatch: a handler invocation in flight. The `handler`
     /// field duplicates `Dispatch::handler_id` — it's stored here so
     /// the frame tree is self-describing for observability.
@@ -113,33 +110,9 @@ pub enum FrameKind {
     /// result is destructured as `[value, new_state]`, state is written
     /// back to the `ResumeHandle`, and value is delivered upward.
     ResumePerform(ResumePerformFrame),
-}
-
-/// Whether a Handle frame is free or suspended waiting for a handler.
-#[derive(Debug)]
-pub enum HandleStatus {
-    /// No handler is running. The body is active and can Perform effects.
-    Free,
-    /// A handler is running. The body is frozen at the Perform site.
-    /// The `ParentRef` points to the Perform's parent — delivery resumes here
-    /// when the handler completes with Resume.
-    Suspended(ParentRef),
-}
-
-/// Handle-specific state, stored in [`FrameKind::Handle`].
-#[derive(Debug)]
-pub struct HandleFrame {
-    /// Which effect type this handler intercepts.
-    pub effect_id: EffectId,
-    /// The body action (for `RestartBody`).
-    pub body: ActionId,
-    /// The handler DAG to invoke when the effect fires.
-    pub handler: ActionId,
-    /// State value maintained across handler invocations.
-    /// Initialized to the Handle's input value.
-    pub state: Value,
-    /// Whether the Handle is free or suspended.
-    pub status: HandleStatus,
+    /// Restart-style effect handler. When `RestartPerform` fires, the body
+    /// is torn down and the handler runs. Handler output is the new body input.
+    RestartHandle(RestartHandleFrame),
 }
 
 /// ResumeHandle-specific state, stored in [`FrameKind::ResumeHandle`].
@@ -161,6 +134,20 @@ pub struct ResumePerformFrame {
     /// The `ResumeHandle` frame that this Perform targets. Used to write
     /// state back when the handler completes.
     pub resume_handle_frame_id: FrameId,
+}
+
+/// RestartHandle-specific state, stored in [`FrameKind::RestartHandle`].
+#[derive(Debug)]
+pub struct RestartHandleFrame {
+    /// Which restart effect type this handler intercepts.
+    pub restart_handler_id: RestartHandlerId,
+    /// The body action (for re-advancing after handler completes).
+    pub body: ActionId,
+    /// The handler DAG to invoke when the effect fires.
+    pub handler: ActionId,
+    /// State value passed to the handler alongside the payload.
+    /// Initialized to the `RestartHandle`'s input value. Immutable.
+    pub state: Value,
 }
 
 /// A single frame in the engine's frame tree.

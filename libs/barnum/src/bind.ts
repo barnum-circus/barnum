@@ -22,8 +22,13 @@ import { pipe } from "./pipe.js";
  */
 export type VarRef<TValue> = TypedAction<never, TValue>;
 
-function createVarRef<TValue>(resumeHandlerId: ResumeHandlerId): VarRef<TValue> {
-  return typedAction({ kind: "ResumePerform", resume_handler_id: resumeHandlerId });
+function createVarRef<TValue>(
+  resumeHandlerId: ResumeHandlerId,
+): VarRef<TValue> {
+  return typedAction({
+    kind: "ResumePerform",
+    resume_handler_id: resumeHandlerId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +71,10 @@ function readVar(n: number): Action {
         kind: "Chain",
         first: {
           kind: "Invoke",
-          handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
+          handler: {
+            kind: "Builtin",
+            builtin: { kind: "ExtractIndex", value: 1 },
+          },
         },
         rest: {
           kind: "Invoke",
@@ -78,7 +86,10 @@ function readVar(n: number): Action {
       },
       {
         kind: "Invoke",
-        handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } },
+        handler: {
+          kind: "Builtin",
+          builtin: { kind: "ExtractIndex", value: 1 },
+        },
       },
     ],
   };

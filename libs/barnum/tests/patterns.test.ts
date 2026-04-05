@@ -155,7 +155,7 @@ describe("loop", () => {
     resetEffectIdCounter();
   });
 
-  it("produces Chain(Tag(Continue), Handle(...)) AST", () => {
+  it("produces Chain(Tag(Continue), RestartHandle(...)) AST", () => {
     const workflow = loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
       healthCheck.branch({ Continue: recur, Break: done }),
     );
@@ -164,16 +164,16 @@ describe("loop", () => {
     // First: Tag("Continue")
     expect(chain.first.handler.builtin.kind).toBe("Tag");
     expect(chain.first.handler.builtin.value).toBe("Continue");
-    // Rest: Handle
-    expect(chain.rest.kind).toBe("Handle");
-    expect(typeof chain.rest.effect_id).toBe("number");
-    // Handle body: Branch with Continue/Break cases
+    // Rest: RestartHandle
+    expect(chain.rest.kind).toBe("RestartHandle");
+    expect(typeof chain.rest.restart_handler_id).toBe("number");
+    // RestartHandle body: Branch with Continue/Break cases
     expect(chain.rest.body.kind).toBe("Branch");
     expect(Object.keys(chain.rest.body.cases).sort()).toEqual(["Break", "Continue"]);
-    // Handle handler: Chain(ExtractIndex(0), Tag("RestartBody"))
-    expect(chain.rest.handler.kind).toBe("Chain");
-    expect(chain.rest.handler.first.handler.builtin.value).toBe(0);
-    expect(chain.rest.handler.rest.handler.builtin.value).toBe("RestartBody");
+    // RestartHandle handler: Invoke(ExtractIndex(0))
+    expect(chain.rest.handler.kind).toBe("Invoke");
+    expect(chain.rest.handler.handler.builtin.kind).toBe("ExtractIndex");
+    expect(chain.rest.handler.handler.builtin.value).toBe(0);
   });
 
   it("composes type-check loop with branch", () => {
@@ -433,7 +433,7 @@ describe("bind", () => {
     resetEffectIdCounter();
   });
 
-  it("single binding produces Chain(All(..., Identity), Handle(readVar, Chain(ExtractIndex, body)))", () => {
+  it("single binding produces Chain(All(..., Identity), ResumeHandle(readVar, Chain(ExtractIndex, body)))", () => {
     const exprA = constant(42);
     const bodyAction = identity;
     const result = bind([exprA], ([_a]) => bodyAction);
@@ -448,21 +448,25 @@ describe("bind", () => {
     expect(outer.first.actions[0]).toEqual(exprA);
     expect(outer.first.actions[1].handler.builtin.kind).toBe("Identity");
 
-    // Rest: Handle
-    expect(outer.rest.kind).toBe("Handle");
-    const handle = outer.rest as { kind: "Handle"; effect_id: number; handler: any; body: any };
-    expect(typeof handle.effect_id).toBe("number");
+    // Rest: ResumeHandle
+    expect(outer.rest.kind).toBe("ResumeHandle");
+    const handle = outer.rest as { kind: "ResumeHandle"; resume_handler_id: number; handler: any; body: any };
+    expect(typeof handle.resume_handler_id).toBe("number");
 
-    // Handle handler: readVar(0) = Chain(ExtractIndex(1), Chain(ExtractIndex(0), Tag("Resume")))
-    expect(handle.handler.kind).toBe("Chain");
-    expect(handle.handler.first.handler.builtin.kind).toBe("ExtractIndex");
-    expect(handle.handler.first.handler.builtin.value).toBe(1);
-    expect(handle.handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
-    expect(handle.handler.rest.first.handler.builtin.value).toBe(0);
-    expect(handle.handler.rest.rest.handler.builtin.kind).toBe("Tag");
-    expect(handle.handler.rest.rest.handler.builtin.value).toBe("Resume");
+    // ResumeHandle handler: readVar(0) = All(Chain(ExtractIndex(1), ExtractIndex(0)), ExtractIndex(1))
+    expect(handle.handler.kind).toBe("All");
+    expect(handle.handler.actions).toHaveLength(2);
+    // First action: Chain(ExtractIndex(1), ExtractIndex(0))
+    expect(handle.handler.actions[0].kind).toBe("Chain");
+    expect(handle.handler.actions[0].first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.actions[0].first.handler.builtin.value).toBe(1);
+    expect(handle.handler.actions[0].rest.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.actions[0].rest.handler.builtin.value).toBe(0);
+    // Second action: ExtractIndex(1)
+    expect(handle.handler.actions[1].handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.actions[1].handler.builtin.value).toBe(1);
 
-    // Handle body: Chain(ExtractIndex(1), bodyAction)
+    // ResumeHandle body: Chain(ExtractIndex(1), bodyAction)
     expect(handle.body.kind).toBe("Chain");
     expect(handle.body.first.handler.builtin.kind).toBe("ExtractIndex");
     expect(handle.body.first.handler.builtin.value).toBe(1);
@@ -480,20 +484,20 @@ describe("bind", () => {
     expect(outer.first.kind).toBe("All");
     expect(outer.first.actions).toHaveLength(3);
 
-    // Outer Handle
+    // Outer ResumeHandle
     const handle0 = outer.rest;
-    expect(handle0.kind).toBe("Handle");
+    expect(handle0.kind).toBe("ResumeHandle");
 
-    // Inner Handle
+    // Inner ResumeHandle
     const handle1 = handle0.body;
-    expect(handle1.kind).toBe("Handle");
+    expect(handle1.kind).toBe("ResumeHandle");
 
-    // Distinct effectIds
-    expect(handle0.effect_id).not.toBe(handle1.effect_id);
+    // Distinct resume_handler_ids
+    expect(handle0.resume_handler_id).not.toBe(handle1.resume_handler_id);
 
     // readVar indices: outer=0, inner=1
-    expect(handle0.handler.rest.first.handler.builtin.value).toBe(0);
-    expect(handle1.handler.rest.first.handler.builtin.value).toBe(1);
+    expect(handle0.handler.actions[0].rest.handler.builtin.value).toBe(0);
+    expect(handle1.handler.actions[0].rest.handler.builtin.value).toBe(1);
 
     // Innermost body: Chain(ExtractIndex(2), bodyAction) — pipeline_input at index 2
     expect(handle1.body.kind).toBe("Chain");
@@ -501,7 +505,7 @@ describe("bind", () => {
     expect(handle1.body.first.handler.builtin.value).toBe(2);
   });
 
-  it("VarRef is a Perform node with unique effectId", () => {
+  it("VarRef is a ResumePerform node with unique resume_handler_id", () => {
     const exprA = constant("x");
     let capturedVarRef: any;
     bind([exprA], ([a]) => {
@@ -509,16 +513,16 @@ describe("bind", () => {
       return identity;
     });
 
-    expect(capturedVarRef.kind).toBe("Perform");
-    expect(typeof capturedVarRef.effect_id).toBe("number");
+    expect(capturedVarRef.kind).toBe("ResumePerform");
+    expect(typeof capturedVarRef.resume_handler_id).toBe("number");
   });
 
-  it("effectIds are unique across separate bind calls", () => {
-    const effectIds: number[] = [];
+  it("resume_handler_ids are unique across separate bind calls", () => {
+    const resumeHandlerIds: number[] = [];
     bind([constant(1), constant(2)], ([_a, _b]) => {
       return identity;
     });
-    // First bind uses effectIds 0, 1
+    // First bind uses resume_handler_ids 0, 1
 
     let ref1: any, ref2: any;
     bind([constant(3), constant(4)], ([a, b]) => {
@@ -526,18 +530,18 @@ describe("bind", () => {
       ref2 = b;
       return identity;
     });
-    // Second bind uses effectIds 2, 3
-    effectIds.push(ref1.effect_id, ref2.effect_id);
+    // Second bind uses resume_handler_ids 2, 3
+    resumeHandlerIds.push(ref1.resume_handler_id, ref2.resume_handler_id);
 
-    // All four effectIds (0, 1, 2, 3) are distinct
-    expect(ref1.effect_id).not.toBe(0);
-    expect(ref1.effect_id).not.toBe(1);
-    expect(ref2.effect_id).not.toBe(0);
-    expect(ref2.effect_id).not.toBe(1);
-    expect(ref1.effect_id).not.toBe(ref2.effect_id);
+    // All four resume_handler_ids (0, 1, 2, 3) are distinct
+    expect(ref1.resume_handler_id).not.toBe(0);
+    expect(ref1.resume_handler_id).not.toBe(1);
+    expect(ref2.resume_handler_id).not.toBe(0);
+    expect(ref2.resume_handler_id).not.toBe(1);
+    expect(ref1.resume_handler_id).not.toBe(ref2.resume_handler_id);
   });
 
-  it("readVar(n) structure is Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag('Resume')))", () => {
+  it("readVar(n) structure is All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
@@ -551,16 +555,19 @@ describe("bind", () => {
 
     for (const [handle, expectedIndex] of [[handle0, 0], [handle1, 1], [handle2, 2]] as const) {
       const handler = handle.handler;
-      expect(handler.kind).toBe("Chain");
-      // ExtractIndex(1) — extract state from [payload, state] tuple
-      expect(handler.first.handler.builtin.kind).toBe("ExtractIndex");
-      expect(handler.first.handler.builtin.value).toBe(1);
-      // ExtractIndex(n)
-      expect(handler.rest.first.handler.builtin.kind).toBe("ExtractIndex");
-      expect(handler.rest.first.handler.builtin.value).toBe(expectedIndex);
-      // Tag("Resume")
-      expect(handler.rest.rest.handler.builtin.kind).toBe("Tag");
-      expect(handler.rest.rest.handler.builtin.value).toBe("Resume");
+      expect(handler.kind).toBe("All");
+      expect(handler.actions).toHaveLength(2);
+      // First action: Chain(ExtractIndex(1), ExtractIndex(n))
+      const chainAction = handler.actions[0];
+      expect(chainAction.kind).toBe("Chain");
+      expect(chainAction.first.handler.builtin.kind).toBe("ExtractIndex");
+      expect(chainAction.first.handler.builtin.value).toBe(1);
+      expect(chainAction.rest.handler.builtin.kind).toBe("ExtractIndex");
+      expect(chainAction.rest.handler.builtin.value).toBe(expectedIndex);
+      // Second action: ExtractIndex(1)
+      const extractAction = handler.actions[1];
+      expect(extractAction.handler.builtin.kind).toBe("ExtractIndex");
+      expect(extractAction.handler.builtin.value).toBe(1);
     }
   });
 });
@@ -583,8 +590,8 @@ describe("bindInput", () => {
     // Second action is identity (pipeline input preservation)
     expect(outer.first.actions[1].handler.builtin.kind).toBe("Identity");
 
-    // Handle wraps the body
-    expect(outer.rest.kind).toBe("Handle");
+    // ResumeHandle wraps the body
+    expect(outer.rest.kind).toBe("ResumeHandle");
     const handle = outer.rest;
 
     // Handle body: Chain(ExtractIndex(1), Chain(Drop, bodyAction))
@@ -598,15 +605,15 @@ describe("bindInput", () => {
     expect(bodyChain.first.handler.builtin.kind).toBe("Drop");
   });
 
-  it("VarRef from bindInput is a Perform node", () => {
+  it("VarRef from bindInput is a ResumePerform node", () => {
     let capturedRef: any;
     bindInput<string, string>((input) => {
       capturedRef = input;
       return constant("result");
     });
 
-    expect(capturedRef.kind).toBe("Perform");
-    expect(typeof capturedRef.effect_id).toBe("number");
+    expect(capturedRef.kind).toBe("ResumePerform");
+    expect(typeof capturedRef.resume_handler_id).toBe("number");
   });
 });
 

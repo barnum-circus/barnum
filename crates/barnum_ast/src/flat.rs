@@ -13,8 +13,9 @@ use std::ops::Add;
 use u32_newtype::u32_newtype;
 
 use crate::{
-    Action, BranchAction, ChainAction, Config, EffectId, HandleAction, HandlerKind, InvokeAction,
-    KindDiscriminator, PerformAction, ResumeHandleAction, ResumeHandlerId, ResumePerformAction,
+    Action, BranchAction, ChainAction, Config, HandlerKind, InvokeAction, KindDiscriminator,
+    RestartHandleAction, RestartHandlerId, RestartPerformAction, ResumeHandleAction,
+    ResumeHandlerId, ResumePerformAction,
 };
 
 u32_newtype!(
@@ -107,21 +108,6 @@ pub enum FlatAction {
         count: Count,
     },
 
-    /// Effect handler. 3-entry action: this entry, then a child slot for
-    /// the body (at `action_id + 1`), then a child slot for the handler
-    /// (at `action_id + 2`).
-    Handle {
-        /// Which effect type this handler intercepts.
-        effect_id: EffectId,
-    },
-
-    /// Raise an effect. Single-entry action (like Invoke). The input
-    /// becomes the handler's payload.
-    Perform {
-        /// Which effect type to raise.
-        effect_id: EffectId,
-    },
-
     /// Resume-style effect handler.
     ///
     /// Same layout as Handle: 3-entry action
@@ -131,10 +117,25 @@ pub enum FlatAction {
         resume_handler_id: ResumeHandlerId,
     },
 
-    /// Raise a resume-style effect. Single-entry action (like Invoke/Perform).
+    /// Raise a resume-style effect. Single-entry action (like Invoke).
     ResumePerform {
         /// Which resume effect type to raise.
         resume_handler_id: ResumeHandlerId,
+    },
+
+    /// Restart-style effect handler.
+    ///
+    /// Same layout as `ResumeHandle`: 3-entry action
+    /// with child slots for body (`action_id` + 1) and handler (`action_id` + 2).
+    RestartHandle {
+        /// Which restart effect type this handler intercepts.
+        restart_handler_id: RestartHandlerId,
+    },
+
+    /// Raise a restart-style effect. Single-entry action (like Invoke).
+    RestartPerform {
+        /// Which restart effect type to raise.
+        restart_handler_id: RestartHandlerId,
     },
 }
 
@@ -261,22 +262,6 @@ impl FlatConfig {
         (0..count).map(move |i| self.resolve_child_slot(id + 1 + i))
     }
 
-    /// Returns the body `ActionId` for a Handle (resolves the child
-    /// slot at `action_id + 1`).
-    #[must_use]
-    pub fn handle_body(&self, id: ActionId) -> ActionId {
-        debug_assert!(matches!(self.action(id), FlatAction::Handle { .. }));
-        self.resolve_child_slot(id + 1)
-    }
-
-    /// Returns the handler `ActionId` for a Handle (resolves the child
-    /// slot at `action_id + 2`).
-    #[must_use]
-    pub fn handle_handler(&self, id: ActionId) -> ActionId {
-        debug_assert!(matches!(self.action(id), FlatAction::Handle { .. }));
-        self.resolve_child_slot(id + 2)
-    }
-
     /// Returns the body `ActionId` for a `ResumeHandle` (resolves the child
     /// slot at `action_id + 1`).
     #[must_use]
@@ -290,6 +275,22 @@ impl FlatConfig {
     #[must_use]
     pub fn resume_handle_handler(&self, id: ActionId) -> ActionId {
         debug_assert!(matches!(self.action(id), FlatAction::ResumeHandle { .. }));
+        self.resolve_child_slot(id + 2)
+    }
+
+    /// Returns the body `ActionId` for a `RestartHandle` (resolves the child
+    /// slot at `action_id + 1`).
+    #[must_use]
+    pub fn restart_handle_body(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::RestartHandle { .. }));
+        self.resolve_child_slot(id + 1)
+    }
+
+    /// Returns the handler `ActionId` for a `RestartHandle` (resolves the child
+    /// slot at `action_id + 2`).
+    #[must_use]
+    pub fn restart_handle_handler(&self, id: ActionId) -> ActionId {
+        debug_assert!(matches!(self.action(id), FlatAction::RestartHandle { .. }));
         self.resolve_child_slot(id + 2)
     }
 
@@ -418,20 +419,6 @@ impl UnresolvedFlatConfig {
                 FlatAction::ForEach { body: body_id }
             }
 
-            Action::Handle(HandleAction {
-                effect_id,
-                body,
-                handler,
-            }) => {
-                self.alloc(); // child slot for body (at action_id + 1)
-                self.alloc(); // child slot for handler (at action_id + 2)
-                self.fill_child_slot(*body, action_id + 1)?;
-                self.fill_child_slot(*handler, action_id + 2)?;
-                FlatAction::Handle { effect_id }
-            }
-
-            Action::Perform(PerformAction { effect_id }) => FlatAction::Perform { effect_id },
-
             Action::ResumeHandle(ResumeHandleAction {
                 resume_handler_id,
                 body,
@@ -446,6 +433,22 @@ impl UnresolvedFlatConfig {
 
             Action::ResumePerform(ResumePerformAction { resume_handler_id }) => {
                 FlatAction::ResumePerform { resume_handler_id }
+            }
+
+            Action::RestartHandle(RestartHandleAction {
+                restart_handler_id,
+                body,
+                handler,
+            }) => {
+                self.alloc(); // child slot for body (at action_id + 1)
+                self.alloc(); // child slot for handler (at action_id + 2)
+                self.fill_child_slot(*body, action_id + 1)?;
+                self.fill_child_slot(*handler, action_id + 2)?;
+                FlatAction::RestartHandle { restart_handler_id }
+            }
+
+            Action::RestartPerform(RestartPerformAction { restart_handler_id }) => {
+                FlatAction::RestartPerform { restart_handler_id }
             }
         };
         self.entries[action_id.0 as usize] = Some(FlatEntry::Action(entry));
@@ -465,8 +468,8 @@ impl UnresolvedFlatConfig {
             Action::Chain { .. }
             | Action::All { .. }
             | Action::Branch { .. }
-            | Action::Handle { .. }
-            | Action::ResumeHandle { .. } => {
+            | Action::ResumeHandle { .. }
+            | Action::RestartHandle { .. } => {
                 let action_id = self.flatten_action(action)?;
                 self.entries[slot.0 as usize] = Some(FlatEntry::ChildRef { action: action_id });
             }

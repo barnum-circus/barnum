@@ -29,7 +29,7 @@ import {
   sleep,
   withTimeout,
 } from "../src/ast.js";
-import { allocateEffectId } from "../src/effect-id.js";
+import { allocateRestartHandlerId } from "../src/effect-id.js";
 import {
   constant,
   identity,
@@ -985,7 +985,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it("Result.unwrapOr accepts throw token with explicit types", () => {
-    const throwToken = typedAction<string, never>({ kind: "Perform", effect_id: allocateEffectId() });
+    const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = R.unwrapOr<string, string>(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, Result<string, string>>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
@@ -993,7 +993,7 @@ describe("Result.unwrapOr with throw tokens", () => {
 
   it(".unwrapOr() infers types from this constraint", () => {
     const resultAction = identity as TypedAction<string, Result<string, number>>;
-    const throwToken = typedAction<number, never>({ kind: "Perform", effect_id: allocateEffectId() });
+    const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
@@ -1030,7 +1030,7 @@ describe("Result.unwrapOr with throw tokens", () => {
 
   it(".unwrapOr() produces Chain AST node", () => {
     const resultAction = identity as TypedAction<void, Result<string, string>>;
-    const throwToken = typedAction<string, never>({ kind: "Perform", effect_id: allocateEffectId() });
+    const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     expect(action.kind).toBe("Chain");
   });

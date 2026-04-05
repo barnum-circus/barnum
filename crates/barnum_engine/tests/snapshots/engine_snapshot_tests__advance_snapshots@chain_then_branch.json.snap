@@ -146,6 +146,5 @@ WorkflowState {
             value: String("raw"),
         },
     ],
-    stashed_items: [],
     next_task_id: 1,
 }

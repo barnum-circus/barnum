@@ -8,10 +8,10 @@ export type Action =
   | ForEachAction
   | AllAction
   | BranchAction
-  | HandleAction
-  | PerformAction
   | ResumeHandleAction
-  | ResumePerformAction;
+  | ResumePerformAction
+  | RestartHandleAction
+  | RestartPerformAction;
 
 export interface InvokeAction {
   kind: "Invoke";
@@ -39,18 +39,6 @@ export interface BranchAction {
   cases: Record<string, Action>;
 }
 
-export interface HandleAction {
-  kind: "Handle";
-  effect_id: EffectId;
-  body: Action;
-  handler: Action;
-}
-
-export interface PerformAction {
-  kind: "Perform";
-  effect_id: EffectId;
-}
-
 export interface ResumeHandleAction {
   kind: "ResumeHandle";
   resume_handler_id: ResumeHandlerId;
@@ -61,6 +49,18 @@ export interface ResumeHandleAction {
 export interface ResumePerformAction {
   kind: "ResumePerform";
   resume_handler_id: ResumeHandlerId;
+}
+
+export interface RestartHandleAction {
+  kind: "RestartHandle";
+  restart_handler_id: RestartHandlerId;
+  body: Action;
+  handler: Action;
+}
+
+export interface RestartPerformAction {
+  kind: "RestartPerform";
+  restart_handler_id: RestartHandlerId;
 }
 
 // ---------------------------------------------------------------------------
@@ -665,7 +665,11 @@ export { chain } from "./chain.js";
 export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
 export { resetEffectIdCounter } from "./effect-id.js";
-import { allocateEffectId, type EffectId, type ResumeHandlerId } from "./effect-id.js";
+import {
+  allocateRestartHandlerId,
+  type RestartHandlerId,
+  type ResumeHandlerId,
+} from "./effect-id.js";
 export { tryCatch } from "./try-catch.js";
 export { race, sleep, withTimeout } from "./race.js";
 
@@ -745,11 +749,6 @@ const EXTRACT_PAYLOAD: Action = {
   handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
 };
 
-const TAG_RESTART_BODY: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "RestartBody" } },
-};
-
 const TAG_CONTINUE: Action = {
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
@@ -765,13 +764,6 @@ export const IDENTITY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Identity" } },
 };
 
-/** Handler: extract payload, tag as RestartBody. */
-const RESTART_BODY_HANDLER: Action = {
-  kind: "Chain",
-  first: EXTRACT_PAYLOAD,
-  rest: TAG_RESTART_BODY,
-};
-
 // ---------------------------------------------------------------------------
 // recur — restart body primitive
 // ---------------------------------------------------------------------------
@@ -783,25 +775,25 @@ const RESTART_BODY_HANDLER: Action = {
  * If the body completes normally → output is TOut.
  * If restart fires → body re-executes with the restarted value.
  *
- * Compiled form: Handle(effectId, body, RestartBodyHandler)
+ * Compiled form: `RestartHandle(id, ExtractIndex(0), body)`
  */
 export function recur<TIn = never, TOut = any, TRefs extends string = never>(
   bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut, TRefs>,
 ): TypedAction<PipeIn<TIn>, TOut, TRefs> {
-  const effectId = allocateEffectId();
+  const restartHandlerId = allocateRestartHandlerId();
 
   const restartAction = typedAction<TIn, never>({
-    kind: "Perform",
-    effect_id: effectId,
+    kind: "RestartPerform",
+    restart_handler_id: restartHandlerId,
   });
 
   const body = bodyFn(restartAction) as Action;
 
   return typedAction({
-    kind: "Handle",
-    effect_id: effectId,
+    kind: "RestartHandle",
+    restart_handler_id: restartHandlerId,
     body,
-    handler: RESTART_BODY_HANDLER,
+    handler: EXTRACT_PAYLOAD,
   });
 }
 
@@ -831,17 +823,19 @@ export function earlyReturn<
     earlyReturn: TypedAction<TEarlyReturn, never>,
   ) => Pipeable<TIn, TOut, TRefs>,
 ): TypedAction<TIn, TEarlyReturn | TOut, TRefs> {
-  const effectId = allocateEffectId();
+  const restartHandlerId = allocateRestartHandlerId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>({
     kind: "Chain",
     first: TAG_BREAK,
-    rest: { kind: "Perform", effect_id: effectId },
+    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
   });
 
   const body = bodyFn(earlyReturnAction) as Action;
 
-  return typedAction(buildRestartBranchAction(effectId, body, IDENTITY));
+  return typedAction(
+    buildRestartBranchAction(restartHandlerId, body, IDENTITY),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -850,15 +844,15 @@ export function earlyReturn<
 
 /**
  * Build the restart+branch compiled form:
- * Chain(Tag("Continue"), Handle(effectId, Branch({ Continue: continueArm, Break: breakArm }), RestartBodyHandler))
+ * `Chain(Tag("Continue"), RestartHandle(id, ExtractIndex(0), Branch({ Continue: continueArm, Break: breakArm })))`
  *
  * Input is tagged Continue so the Branch enters the continueArm on first execution.
- * Continue tag → restart → re-enters continueArm. Break tag → restart → runs breakArm, exits Handle.
+ * Continue tag → restart → re-enters continueArm. Break tag → restart → runs breakArm, exits `RestartHandle`.
  *
  * Used by earlyReturn, loop, tryCatch, and race.
  */
 export function buildRestartBranchAction(
-  effectId: EffectId,
+  restartHandlerId: RestartHandlerId,
   continueArm: Action,
   breakArm: Action,
 ): Action {
@@ -866,8 +860,8 @@ export function buildRestartBranchAction(
     kind: "Chain",
     first: TAG_CONTINUE,
     rest: {
-      kind: "Handle",
-      effect_id: effectId,
+      kind: "RestartHandle",
+      restart_handler_id: restartHandlerId,
       body: {
         kind: "Branch",
         cases: unwrapBranchCases({
@@ -875,7 +869,7 @@ export function buildRestartBranchAction(
           Break: breakArm,
         }),
       },
-      handler: RESTART_BODY_HANDLER,
+      handler: EXTRACT_PAYLOAD,
     },
   };
 }
@@ -887,7 +881,7 @@ export function buildRestartBranchAction(
  *
  * Both are TypedAction values (not functions), consistent with throwError in tryCatch.
  *
- * Compiles to Handle/Perform/Branch — same effect substrate as tryCatch and earlyReturn.
+ * Compiles to `RestartHandle`/`RestartPerform`/Branch — same effect substrate as tryCatch and earlyReturn.
  */
 export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
   bodyFn: (
@@ -895,9 +889,12 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
     done: TypedAction<TBreak, never>,
   ) => Pipeable<TIn, never, TRefs>,
 ): TypedAction<PipeIn<TIn>, TBreak, TRefs> {
-  const effectId = allocateEffectId();
+  const restartHandlerId = allocateRestartHandlerId();
 
-  const perform: Action = { kind: "Perform", effect_id: effectId };
+  const perform: Action = {
+    kind: "RestartPerform",
+    restart_handler_id: restartHandlerId,
+  };
 
   const recurAction = typedAction<TIn, never>({
     kind: "Chain",
@@ -913,7 +910,9 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
 
   const body = bodyFn(recurAction, doneAction) as Action;
 
-  return typedAction(buildRestartBranchAction(effectId, body, IDENTITY));
+  return typedAction(
+    buildRestartBranchAction(restartHandlerId, body, IDENTITY),
+  );
 }
 
 // ---------------------------------------------------------------------------

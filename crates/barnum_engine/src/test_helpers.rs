@@ -60,39 +60,13 @@ pub fn engine_from(workflow: Action) -> WorkflowState {
 }
 
 // ---------------------------------------------------------------------------
-// Handle / Perform helpers
+// Builtin helpers
 // ---------------------------------------------------------------------------
-
-pub fn handle(effect_id: u16, handler: Action, body: Action) -> Action {
-    Action::Handle(HandleAction {
-        effect_id: EffectId(effect_id),
-        body: Box::new(body),
-        handler: Box::new(handler),
-    })
-}
-
-pub fn perform(effect_id: u16) -> Action {
-    Action::Perform(PerformAction {
-        effect_id: EffectId(effect_id),
-    })
-}
 
 pub fn invoke_builtin(builtin: BuiltinKind) -> Action {
     Action::Invoke(InvokeAction {
         handler: HandlerKind::Builtin(BuiltinHandler { builtin }),
     })
-}
-
-pub fn constant_handler(value: Value) -> Action {
-    invoke_builtin(BuiltinKind::Constant { value })
-}
-
-#[allow(clippy::needless_pass_by_value)]
-pub fn always_resume_handler(value: Value) -> Action {
-    constant_handler(json!({
-        "kind": "Resume",
-        "value": value,
-    }))
 }
 
 pub fn tag_builtin(kind: &str) -> Action {
@@ -113,35 +87,6 @@ pub fn extract_index(index: u64) -> Action {
 
 pub fn identity_action() -> Action {
     invoke_builtin(BuiltinKind::Identity)
-}
-
-/// Handler for restart+Branch: extract payload (index 0), tag `RestartBody`.
-pub fn restart_body_handler() -> Action {
-    chain(extract_index(0), tag_builtin("RestartBody"))
-}
-
-/// `Chain(Tag("Break"), Perform(effect_id))` — triggers restart with Break routing.
-pub fn break_perform(effect_id: u16) -> Action {
-    chain(tag_builtin("Break"), perform(effect_id))
-}
-
-/// Build restart+Branch compiled form:
-/// `Chain(Tag("Continue"), Handle(effectId, Branch({`
-///   `Continue: Chain(ExtractField("value"), continueArm),`
-///   `Break: Chain(ExtractField("value"), breakArm),`
-/// `}), RestartBodyHandler))`
-pub fn restart_branch(effect_id: u16, continue_arm: Action, break_arm: Action) -> Action {
-    chain(
-        tag_builtin("Continue"),
-        handle(
-            effect_id,
-            restart_body_handler(),
-            branch(vec![
-                ("Continue", chain(extract_field("value"), continue_arm)),
-                ("Break", chain(extract_field("value"), break_arm)),
-            ]),
-        ),
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -174,35 +119,50 @@ pub fn resume_read_var(n: u64) -> Action {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy Handle helpers (pre-Resume/Restart split)
+// RestartHandle / RestartPerform helpers
 // ---------------------------------------------------------------------------
 
-pub fn echo_resume_handler() -> Action {
+pub fn restart_handle(restart_handler_id: u16, handler: Action, body: Action) -> Action {
+    Action::RestartHandle(RestartHandleAction {
+        restart_handler_id: RestartHandlerId(restart_handler_id),
+        body: Box::new(body),
+        handler: Box::new(handler),
+    })
+}
+
+pub fn restart_perform(restart_handler_id: u16) -> Action {
+    Action::RestartPerform(RestartPerformAction {
+        restart_handler_id: RestartHandlerId(restart_handler_id),
+    })
+}
+
+/// `Chain(Tag("Break"), RestartPerform(restart_handler_id))` —
+/// triggers restart with Break routing.
+pub fn break_restart_perform(restart_handler_id: u16) -> Action {
+    chain(tag_builtin("Break"), restart_perform(restart_handler_id))
+}
+
+/// Handler for restart+Branch: extract payload (index 0) from `[payload, state]`.
+/// The raw payload is the new body input.
+pub fn restart_extract_payload_handler() -> Action {
+    extract_index(0)
+}
+
+/// Build restart+Branch compiled form:
+/// `Chain(Tag("Continue"), RestartHandle(id, ExtractIndex(0), Branch({`
+///   `Continue: Chain(ExtractField("value"), continueArm),`
+///   `Break: Chain(ExtractField("value"), breakArm),`
+/// `})))`
+pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Action) -> Action {
     chain(
-        invoke_builtin(BuiltinKind::ExtractIndex { value: json!(0) }),
-        invoke_builtin(BuiltinKind::Tag {
-            value: json!("Resume"),
-        }),
-    )
-}
-
-pub fn garbage_output_handler() -> Action {
-    constant_handler(json!({ "kind": "Unknown" }))
-}
-
-pub fn missing_fields_handler() -> Action {
-    constant_handler(json!({ "kind": "Resume" }))
-}
-
-/// readVar(n): Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))
-pub fn read_var(n: u64) -> Action {
-    chain(
-        invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
-        chain(
-            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(n) }),
-            invoke_builtin(BuiltinKind::Tag {
-                value: json!("Resume"),
-            }),
+        tag_builtin("Continue"),
+        restart_handle(
+            restart_handler_id,
+            restart_extract_payload_handler(),
+            branch(vec![
+                ("Continue", chain(extract_field("value"), continue_arm)),
+                ("Break", chain(extract_field("value"), break_arm)),
+            ]),
         ),
     )
 }

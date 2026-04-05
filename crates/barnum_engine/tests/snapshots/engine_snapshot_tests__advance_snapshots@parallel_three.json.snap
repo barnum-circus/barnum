@@ -210,6 +210,5 @@ WorkflowState {
             },
         },
     ],
-    stashed_items: [],
     next_task_id: 3,
 }

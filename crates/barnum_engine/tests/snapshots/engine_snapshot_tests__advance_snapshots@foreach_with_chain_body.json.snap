@@ -197,6 +197,5 @@ WorkflowState {
             value: String("item2"),
         },
     ],
-    stashed_items: [],
     next_task_id: 2,
 }

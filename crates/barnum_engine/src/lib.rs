@@ -12,14 +12,13 @@ pub mod frame;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 
-use barnum_ast::EffectId;
 use barnum_ast::HandlerKind;
+use barnum_ast::RestartHandlerId;
 use barnum_ast::ResumeHandlerId;
 use barnum_ast::flat::{ActionId, FlatConfig, HandlerId};
 use frame::{Frame, FrameId, ParentRef};
-use serde::Deserialize;
 use serde_json::Value;
 use thunderdome::Arena;
 use u32_newtype::u32_newtype;
@@ -75,19 +74,19 @@ pub enum AdvanceError {
         /// The `kind` value that had no matching case.
         kind: String,
     },
-    /// A `Perform` node was reached but no enclosing `Handle` matches
-    /// the effect type.
-    #[error("unhandled effect: {effect_id}")]
-    UnhandledEffect {
-        /// The effect type that was not handled.
-        effect_id: EffectId,
-    },
     /// A `ResumePerform` node was reached but no enclosing `ResumeHandle`
     /// matches the resume handler ID.
     #[error("unhandled resume effect: {resume_handler_id}")]
     UnhandledResumeEffect {
         /// The resume handler ID that was not handled.
         resume_handler_id: ResumeHandlerId,
+    },
+    /// A `RestartPerform` node was reached but no enclosing `RestartHandle`
+    /// matches the restart handler ID.
+    #[error("unhandled restart effect: {restart_handler_id}")]
+    UnhandledRestartEffect {
+        /// The restart handler ID that was not handled.
+        restart_handler_id: RestartHandlerId,
     },
 }
 
@@ -98,126 +97,18 @@ pub enum AdvanceError {
 /// Errors that can occur during [`WorkflowState::complete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CompleteError {
-    /// An advance error occurred during Chain trampoline or Handle re-entry.
+    /// An advance error occurred during Chain trampoline or `RestartHandle`
+    /// re-entry.
     #[error(transparent)]
     Advance(#[from] AdvanceError),
-    /// A handler returned a value that doesn't deserialize as a valid
-    /// [`HandlerOutput`].
+    /// A resume handler returned a value that doesn't deserialize as
+    /// `[value, new_state]`.
     #[error("invalid handler output: {source}")]
     InvalidHandlerOutput {
         /// The serde deserialization error.
         #[from]
         source: serde_json::Error,
     },
-}
-
-// ---------------------------------------------------------------------------
-// HandlerOutput / StateUpdate (serde types)
-// ---------------------------------------------------------------------------
-
-/// The output of a handler DAG, deserialized from the handler's return value.
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind")]
-enum HandlerOutput {
-    /// Resume the body at the Perform site with the given value.
-    Resume {
-        /// The value to deliver to the Perform's parent.
-        value: Value,
-        /// Whether to update the Handle's state.
-        #[serde(default)]
-        state_update: StateUpdate,
-    },
-    /// Tear down the body and re-advance from the Handle's body action.
-    RestartBody {
-        /// The input value for the re-advanced body.
-        value: Value,
-        /// Whether to update the Handle's state.
-        #[serde(default)]
-        state_update: StateUpdate,
-    },
-}
-
-/// Whether a handler updated the Handle's state.
-#[derive(Debug, Default, Deserialize)]
-#[serde(tag = "kind")]
-enum StateUpdate {
-    /// State unchanged.
-    #[default]
-    Unchanged,
-    /// Replace the state with a new value.
-    Updated {
-        /// The new state value.
-        value: Value,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// StashedItem / engine enums
-// ---------------------------------------------------------------------------
-
-/// A deferred work item waiting to be processed.
-#[derive(Debug)]
-enum StashedItem {
-    /// A task completion waiting to be delivered.
-    Delivery {
-        /// Where to deliver the value.
-        parent_ref: ParentRef,
-        /// The value to deliver.
-        value: Value,
-    },
-    /// An effect waiting to be bubbled.
-    Effect {
-        /// The Perform's parent — where bubbling starts.
-        starting_parent: ParentRef,
-        /// Which effect type.
-        effect_id: EffectId,
-        /// The Perform's input value (handler payload).
-        payload: Value,
-    },
-}
-
-/// Result of checking the ancestor chain for blockers.
-#[derive(Debug)]
-enum AncestorCheck {
-    /// No blockers — the path to the root (or target Handle) is clear.
-    Clear,
-    /// A suspended Handle blocks the path.
-    Blocked,
-    /// A frame in the ancestor chain was torn down (generational arena miss).
-    FrameGone,
-}
-
-/// Result of `try_deliver` — does NOT mutate the stash.
-#[derive(Debug)]
-enum TryDeliverResult {
-    /// Delivery succeeded. Inner value is the workflow result, if any.
-    Delivered(Option<Value>),
-    /// Target frame is blocked by a suspended Handle. Returns the value
-    /// so the caller can stash without cloning.
-    Blocked(Value),
-    /// Target frame was torn down.
-    FrameGone,
-}
-
-/// Result of `bubble_effect` — does NOT mutate the stash.
-#[derive(Debug)]
-enum StashOutcome {
-    /// Effect was dispatched to a handler, or dropped (frame gone).
-    Consumed,
-    /// Target is blocked by a suspended Handle. Returns the payload
-    /// so the caller can stash without cloning.
-    Blocked(Value),
-}
-
-/// Result of a single sweep pass over the stash.
-#[derive(Debug)]
-enum SweepResult {
-    /// The workflow produced a terminal value.
-    WorkflowDone(Value),
-    /// At least one item was consumed — tree state may have changed.
-    MadeProgress,
-    /// No items were consumed — all remain blocked or stash was empty.
-    NoProgress,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,7 +127,6 @@ pub struct WorkflowState {
     frames: Arena<Frame>,
     task_to_frame: BTreeMap<TaskId, FrameId>,
     pending_dispatches: Vec<Dispatch>,
-    stashed_items: VecDeque<StashedItem>,
     next_task_id: u32,
 }
 
@@ -250,7 +140,6 @@ impl WorkflowState {
             frames: Arena::new(),
             task_to_frame: BTreeMap::new(),
             pending_dispatches: Vec::new(),
-            stashed_items: VecDeque::new(),
             next_task_id: 0,
         }
     }

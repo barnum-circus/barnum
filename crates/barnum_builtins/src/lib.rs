@@ -127,10 +127,6 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
 
         BuiltinKind::TagBreak => Ok(json!({ "kind": "Break", "value": input })),
 
-        BuiltinKind::TagResume => Ok(json!({ "kind": "Resume", "value": input })),
-
-        BuiltinKind::TagRestartBody => Ok(json!({ "kind": "RestartBody", "value": input })),
-
         BuiltinKind::Pick { value: keys } => {
             let Value::Array(key_values) = keys else {
                 return Err(BuiltinError {
@@ -361,20 +357,5 @@ mod tests {
     fn tag_break_wraps_input() {
         let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done"));
         assert_eq!(result.unwrap(), json!({"kind": "Break", "value": "done"}),);
-    }
-
-    #[test]
-    fn tag_resume_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagResume, &json!(42));
-        assert_eq!(result.unwrap(), json!({"kind": "Resume", "value": 42}));
-    }
-
-    #[test]
-    fn tag_restart_body_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagRestartBody, &json!({"retry": true}));
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "RestartBody", "value": {"retry": true}}),
-        );
     }
 }
