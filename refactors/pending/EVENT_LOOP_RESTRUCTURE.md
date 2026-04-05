@@ -5,47 +5,33 @@
 
 ## Motivation
 
-Two changes are needed before the deferred restart refactor can land.
+The event loop in `barnum_event_loop` processes dispatches in bulk with no per-event structure and no liveness checks. `run_workflow` calls `take_pending_dispatches()`, sends all dispatches to the scheduler at once, then blocks for one completion and calls `complete()` on it unconditionally. This creates a panic when a task is torn down by a restart before its completion arrives (Bug 1 in DEFERRED_RESTART_PERFORM).
 
-`complete()` panics on stale task_ids. When `RestartPerform` fires during `complete()` (via Chain trampoline → advance → `bubble_restart_effect`), `teardown_body` removes frames and `task_to_frame` entries for in-flight sibling tasks. When those siblings' results arrive from the scheduler, `complete()` panics at `expect("unknown task")` (complete.rs:30). Stale task completions are an inherent consequence of async task execution combined with synchronous teardown. The fix belongs inside `complete()`, not in a caller-side pre-check: `complete()` should return `Ok(None)` for unknown task_ids, the same way `process_restart` returns `Ok(())` when its `RestartHandle` frame no longer exists. Documented by the `completing_torn_down_task_is_noop` test with `#[should_panic(expected = "unknown task")]` in effects.rs:370.
+The panic happens because the event loop violates an invariant: `complete()` expects every task_id it receives to exist in `task_to_frame`. When `RestartPerform` fires during `complete()` (via Chain trampoline → advance → `bubble_restart_effect`), `teardown_body` removes sibling tasks' `task_to_frame` entries. When those siblings' results arrive from the scheduler, the event loop passes them to `complete()` unconditionally, and `complete()` panics at `expect("unknown task")` (complete.rs:30).
 
-The event loop processes dispatches in bulk with no per-event structure. `run_workflow` calls `take_pending_dispatches()`, sends all dispatches to the scheduler at once, then blocks for one completion. The deferred restart refactor introduces a unified effect queue (dispatches and restarts interleaved) with one-at-a-time processing via an `Event` enum. Restructuring the event loop now means the main refactor only needs to add the `Restart` variant and change the underlying queue type.
+The `expect("unknown task")` is a correct invariant. Callers of `complete()` must only pass live task_ids. The bug is in the event loop: it doesn't check whether a task is still part of a live tree before calling `complete()`. Documented by the `completing_torn_down_task_is_noop` test with `#[should_panic(expected = "unknown task")]` in effects.rs:370.
+
+The fix: restructure the event loop to process events one at a time via an `Event` enum. Every event is checked for liveness before processing. Stale events are silently dropped. `complete()` is never called with a dead task.
 
 ## Design
 
-### Fix `complete()` for stale task_ids
+### Liveness check
 
-When `task_to_frame` has no entry for the given `task_id`, the task was torn down by a restart. Return `Ok(None)`.
+Add a method to check whether a task's Invoke frame is still part of the live tree:
 
 ```rust
-// complete.rs — complete() (before, lines 21-30)
-#[allow(clippy::expect_used)]
-pub fn complete(
-    workflow_state: &mut WorkflowState,
-    task_id: super::TaskId,
-    value: Value,
-) -> Result<Option<Value>, CompleteError> {
-    let frame_id = workflow_state
-        .task_to_frame
-        .remove(&task_id)
-        .expect("unknown task");
+// lib.rs — WorkflowState impl (new method)
 
-// complete.rs — complete() (after)
-pub fn complete(
-    workflow_state: &mut WorkflowState,
-    task_id: super::TaskId,
-    value: Value,
-) -> Result<Option<Value>, CompleteError> {
-    let Some(frame_id) = workflow_state.task_to_frame.remove(&task_id) else {
-        return Ok(None);
-    };
+/// Returns true if this task's Invoke frame still exists in the tree.
+/// Used by the event loop to drop stale events before processing.
+pub fn is_task_live(&self, task_id: TaskId) -> bool {
+    self.task_to_frame.contains_key(&task_id)
+}
 ```
-
-The `#[allow(clippy::expect_used)]` on `complete()` (line 21) is removed. The remaining `expect` calls inside `deliver` are invariant assertions for frames that must exist (Chain, All/ForEach, ResumeHandle, RestartHandle parents) and are genuine bugs if they fail.
 
 ### One-at-a-time dispatch processing
 
-Change `pending_dispatches` from `Vec<Dispatch>` to `VecDeque<Dispatch>`. Add `pop_pending_dispatch()` for one-at-a-time consumption. Keep `take_pending_dispatches()` (reimplemented as drain + collect) for existing engine tests that assert on the full batch.
+Change `pending_dispatches` from `Vec<Dispatch>` to `VecDeque<Dispatch>`. Add `pop_pending_dispatch()` for one-at-a-time consumption. Keep `take_pending_dispatches()` (reimplemented as drain + collect) for engine tests that assert on the full batch.
 
 ```rust
 // lib.rs — WorkflowState (before, lines 125-131)
@@ -151,7 +137,7 @@ enum Event {
 
 ### Event loop
 
-Each iteration sources the next event — pending dispatch first, blocking for a scheduler completion only when the queue is empty — then processes it in a two-branch match. `complete()` handles stale task_ids internally, so the Completion arm has no external liveness check.
+Each iteration sources the next event (pending dispatch first, scheduler completion when the queue is empty), then checks liveness, then processes it. Every branch checks liveness before doing work. `complete()` keeps its `expect("unknown task")` — the liveness check guarantees it is never called with a stale task.
 
 ```rust
 // barnum_event_loop/src/lib.rs — run_workflow (before, lines 141-168)
@@ -211,10 +197,16 @@ pub async fn run_workflow(
 
         match event {
             Event::Dispatch(dispatch) => {
+                if !workflow_state.is_task_live(dispatch.task_id) {
+                    continue;
+                }
                 let handler = workflow_state.handler(dispatch.handler_id);
                 scheduler.dispatch(&dispatch, handler);
             }
             Event::Completion(CompletionEvent { task_id, value }) => {
+                if !workflow_state.is_task_live(task_id) {
+                    continue;
+                }
                 if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
                     return Ok(terminal_value);
                 }
@@ -226,7 +218,7 @@ pub async fn run_workflow(
 
 ### Test helpers
 
-`drive_builtins` switches to `pop_pending_dispatch` for one-at-a-time processing. This eliminates the `had_builtin` tracking from the batch approach: the loop pops until the queue is empty, and builtin completions that produce new dispatches (via Chain trampoline) make them immediately available on the next pop.
+`drive_builtins` switches to `pop_pending_dispatch` for one-at-a-time processing and checks liveness before each dispatch. This eliminates the `had_builtin` tracking from the batch approach and mirrors the event loop's liveness check pattern. Stale dispatches (from restarts triggered by earlier builtins in the same queue) are dropped before reaching `complete()`.
 
 ```rust
 // test_helpers.rs — drive_builtins (before, lines 177-208)
@@ -272,6 +264,9 @@ pub fn drive_builtins(
         let Some(dispatch) = engine.pop_pending_dispatch() else {
             break;
         };
+        if !engine.is_task_live(dispatch.task_id) {
+            continue;
+        }
         match engine.handler(dispatch.handler_id).clone() {
             HandlerKind::Builtin(builtin_handler) => {
                 let result =
@@ -290,7 +285,7 @@ pub fn drive_builtins(
 }
 ```
 
-`complete_and_drive` simplifies: when the workflow terminates, return an empty dispatch vector. No caller uses the dispatches when the result is `Some`.
+`complete_and_drive` checks liveness before calling `complete()`. Stale task completions return `(None, [])` without touching the engine. When the workflow terminates, return an empty dispatch vector (no caller uses dispatches after termination).
 
 ```rust
 // test_helpers.rs — complete_and_drive (before, lines 212-223)
@@ -313,6 +308,9 @@ pub fn complete_and_drive(
     task_id: TaskId,
     value: Value,
 ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
+    if !engine.is_task_live(task_id) {
+        return Ok((None, Vec::new()));
+    }
     let result = engine.complete(task_id, value)?;
     if result.is_some() {
         return Ok((result, Vec::new()));
@@ -321,23 +319,62 @@ pub fn complete_and_drive(
 }
 ```
 
+### `complete()` is unchanged
+
+`complete()` keeps its `expect("unknown task")` (complete.rs:30). This is a correct invariant: every task_id passed to `complete()` must exist in `task_to_frame`. The event loop and test helpers enforce this by checking liveness before calling `complete()`.
+
 ## What changes
 
 | Component | Before | After |
 |-----------|--------|-------|
-| `complete()` | Panics on unknown `task_id` | Returns `Ok(None)` for stale tasks |
+| `is_task_live` | Does not exist | Checks `task_to_frame` for the task's Invoke frame |
+| `complete()` | `expect("unknown task")` | Unchanged — invariant preserved by event loop |
 | `WorkflowState::pending_dispatches` | `Vec<Dispatch>` | `VecDeque<Dispatch>` |
 | `WorkflowState::new` | `Vec::new()` | `VecDeque::new()` |
 | `pop_pending_dispatch` | Does not exist | Returns `Option<Dispatch>` from front of queue |
-| `take_pending_dispatches` | `std::mem::take` | `drain(..).collect()` (retained for tests) |
+| `take_pending_dispatches` | `std::mem::take` | `drain(..).collect()` (retained for engine tests) |
 | `advance` Invoke arm | `.push(...)` | `.push_back(...)` |
-| Event loop | Batch dispatch all, recv one, complete | One-at-a-time via `Event` enum, two-branch match |
-| `drive_builtins` | Batch with `had_builtin` tracking | One-at-a-time via `pop_pending_dispatch` |
-| `complete_and_drive` | Drains remaining dispatches on termination | Returns empty vec on termination |
+| Event loop | Batch dispatch all, recv one, complete unconditionally | One-at-a-time via `Event` enum; liveness check before every event |
+| `drive_builtins` | Batch with `had_builtin` tracking | One-at-a-time; liveness check before each dispatch |
+| `complete_and_drive` | Calls `complete()` unconditionally | Liveness check before `complete()`; returns `(None, [])` for stale tasks |
 
 ## Tests
 
-`completing_torn_down_task_is_noop` (effects.rs:370): remove `#[should_panic(expected = "unknown task")]`. The test passes: `complete(b_task_id, ...)` returns `Ok(None)`.
+`completing_torn_down_task_is_noop` (effects.rs:370): remove `#[should_panic(expected = "unknown task")]`. Change the final assertion to use `complete_and_drive` instead of calling `engine.complete()` directly, so the liveness check drops the stale completion before it reaches `complete()`.
+
+```rust
+// effects.rs — completing_torn_down_task_is_noop (before)
+#[test]
+#[should_panic(expected = "unknown task")]
+fn completing_torn_down_task_is_noop() {
+    // ... setup: restart_branch with All(Chain(A, break_restart_perform), B) ...
+    let (_, ts) = drive_builtins(&mut engine).unwrap();
+    assert_eq!(ts.len(), 2);
+    let b_task_id = ts[1].task_id;
+
+    let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+    assert_eq!(result, Some(json!("a_out")));
+
+    let result = engine.complete(b_task_id, json!("b_out")).unwrap();
+    assert_eq!(result, None);
+}
+
+// effects.rs — completing_torn_down_task_is_noop (after)
+#[test]
+fn completing_torn_down_task_is_noop() {
+    // ... setup unchanged ...
+    let (_, ts) = drive_builtins(&mut engine).unwrap();
+    assert_eq!(ts.len(), 2);
+    let b_task_id = ts[1].task_id;
+
+    let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+    assert_eq!(result, Some(json!("a_out")));
+
+    // B's task was torn down. Liveness check drops the stale completion.
+    let (result, _) = complete_and_drive(&mut engine, b_task_id, json!("b_out")).unwrap();
+    assert_eq!(result, None);
+}
+```
 
 `restart_perform_non_terminal_in_all` (effects.rs:401): unchanged, stays `#[should_panic(expected = "parent frame exists")]`. That bug requires the deferred restart refactor (advance must be purely additive).
 
