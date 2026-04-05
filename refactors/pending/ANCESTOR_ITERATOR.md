@@ -170,37 +170,7 @@ fn find_blocking_ancestor(&self, parent_ref: ParentRef) -> AncestorCheck {
 
 Hmm — the "did we yield anything" check is ugly. Two options:
 
-**Option A: Iterator returns `Result` items.**
-
-```rust
-type Item = Result<(ParentRef, &'a Frame), FrameGone>;
-```
-
-Gone frames produce `Err(FrameGone)` instead of silently stopping. Callers handle it:
-
-```rust
-fn find_blocking_ancestor(&self, parent_ref: ParentRef) -> AncestorCheck {
-    for result in self.ancestors(parent_ref) {
-        let Ok((edge, frame)) = result else {
-            return AncestorCheck::FrameGone;
-        };
-        if Self::is_blocked_by_handle(&edge, &frame.kind) {
-            return AncestorCheck::Blocked;
-        }
-    }
-    AncestorCheck::Clear
-}
-```
-
-Downside: every caller needs to unwrap the Result, even `find_and_dispatch_handler` where frames are guaranteed present.
-
-**Option B: Two methods — `ancestors` (stops on gone) and `ancestors_checked` (returns Result).**
-
-Over-engineering. Two methods for one pattern.
-
-**Option C (recommended): Iterator yields `Option`-like enum, but actually just keep `find_blocking_ancestor`'s FrameGone detection inline.**
-
-The iterator stops on gone frames. `find_blocking_ancestor` needs to detect FrameGone vs root, so it does a preliminary `self.frames.get(parent_ref.frame_id())` check before iterating:
+The iterator stops on gone frames (returns `None`). `find_blocking_ancestor` needs to detect FrameGone vs root, so it does a preliminary `self.frames.get(parent_ref.frame_id())` check before iterating:
 
 ```rust
 fn find_blocking_ancestor(&self, parent_ref: ParentRef) -> AncestorCheck {
@@ -222,7 +192,7 @@ This works because:
 - If a later frame is gone → impossible. If the first frame is present but its parent is gone, that means a parent was removed while its child still exists. The engine maintains the invariant that removing a frame removes all descendants first (teardown is top-down). So if a frame is present, its entire ancestor chain up to root is present.
 - Therefore the only "gone" case is the very first frame. After that, the iterator is guaranteed to reach root.
 
-This is the cleanest approach. The one-line guard handles FrameGone. The iterator handles the walk.
+**Future: single-pass walk.** `find_blocking_ancestor` and `find_and_dispatch_handler` could be combined into one iteration that checks for blocking AND finds the matching Handle in a single walk. At that point the iterator would return `Result` items so the combined pass can handle FrameGone. For now, two separate iterations is fine — the second walk can unwrap freely since `find_blocking_ancestor` already confirmed all frames are present.
 
 ## After: `find_and_dispatch_handler`
 
