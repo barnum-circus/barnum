@@ -21,6 +21,7 @@ export {
 } from "./builtins.js";
 export * from "./handler.js";
 export { run } from "./run.js";
+export { zodToCheckedJsonSchema } from "./schema.js";
 
 // Declaration merge: the explicit value exports of Option/Result from builtins
 // shadow the type-only exports from ast's `export *`. Re-declare the generic
