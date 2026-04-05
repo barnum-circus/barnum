@@ -10,10 +10,19 @@ use barnum_ast::Config;
 use barnum_ast::flat::flatten;
 use barnum_engine::advance::advance;
 use barnum_engine::complete::complete;
-use barnum_engine::{TaskId, WorkflowState};
+use barnum_engine::{CompletionEvent, DispatchEvent, TaskId, WorkflowState};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Write;
+
+/// Drain all pending dispatches into a Vec (for snapshot traces).
+fn drain_pending_dispatches(engine: &mut WorkflowState) -> Vec<DispatchEvent> {
+    let mut dispatches = Vec::new();
+    while let Some(dispatch_event) = engine.pop_pending_dispatch() {
+        dispatches.push(dispatch_event);
+    }
+    dispatches
+}
 
 /// A single task completion event in the fixture.
 #[derive(Deserialize)]
@@ -44,7 +53,7 @@ fn completion_snapshots() {
 
         // Initial advance
         advance(&mut engine, root, test_case.input, None).unwrap();
-        let dispatches = engine.take_pending_dispatches();
+        let dispatches = drain_pending_dispatches(&mut engine);
         writeln!(trace, "--- After advance ---").unwrap();
         writeln!(trace, "{engine:#?}").unwrap();
         writeln!(trace, "Pending: {dispatches:#?}").unwrap();
@@ -52,8 +61,12 @@ fn completion_snapshots() {
         // Replay completions
         for completion in &test_case.completions {
             let task_id = TaskId(completion.task_id);
-            let result = complete(&mut engine, task_id, completion.value.clone()).unwrap();
-            let dispatches = engine.take_pending_dispatches();
+            let completion_event = CompletionEvent {
+                task_id,
+                value: completion.value.clone(),
+            };
+            let result = complete(&mut engine, completion_event).unwrap();
+            let dispatches = drain_pending_dispatches(&mut engine);
 
             writeln!(trace).unwrap();
             writeln!(

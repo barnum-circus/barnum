@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
 ---
@@ -178,7 +179,7 @@ WorkflowState {
         },
     },
     pending_dispatches: [
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 0,
             ),
@@ -187,7 +188,7 @@ WorkflowState {
             ),
             value: String("item1"),
         },
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 1,
             ),

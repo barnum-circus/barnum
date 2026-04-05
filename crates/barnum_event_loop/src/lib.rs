@@ -6,10 +6,11 @@
 //! completions back until the workflow terminates.
 
 use barnum_ast::HandlerKind;
+use barnum_ast::flat::HandlerId;
 use barnum_builtins::{BuiltinError, execute_builtin};
 use barnum_engine::advance::advance;
 use barnum_engine::complete::complete;
-use barnum_engine::{CompleteError, Dispatch, TaskId, WorkflowState};
+use barnum_engine::{CompleteError, CompletionEvent, DispatchEvent, TaskId, WorkflowState};
 use barnum_typescript_handler::{TypeScriptHandlerError, execute_typescript};
 use intern::Lookup;
 use serde_json::Value;
@@ -28,6 +29,25 @@ pub enum HandlerError {
     /// A TypeScript handler subprocess failed.
     #[error(transparent)]
     TypeScript(#[from] TypeScriptHandlerError),
+}
+
+// =============================================================================
+// Event
+// =============================================================================
+
+/// An event for the workflow event loop.
+/// `task_id` is factored out for uniform liveness checking.
+struct Event {
+    task_id: TaskId,
+    kind: EventKind,
+}
+
+/// The payload of a workflow event, without `task_id`.
+enum EventKind {
+    /// A handler invocation ready to dispatch to a worker.
+    Dispatch { handler_id: HandlerId, value: Value },
+    /// A worker completed a task.
+    Completion { value: Value },
 }
 
 // =============================================================================
@@ -68,14 +88,14 @@ impl Scheduler {
     /// Spawns a tokio task that executes the handler and sends the result
     /// through the internal channel. Builtins are executed inline within
     /// the spawned task. TypeScript handlers spawn a subprocess.
-    pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
+    pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) {
         let result_tx = self.result_tx.clone();
-        let task_id = dispatch.task_id;
+        let task_id = dispatch_event.task_id;
 
         match handler {
             HandlerKind::Builtin(builtin_handler) => {
                 let builtin_kind = builtin_handler.builtin.clone();
-                let value = dispatch.value.clone();
+                let value = dispatch_event.value.clone();
                 tokio::spawn(async move {
                     let result = execute_builtin(&builtin_kind, &value).map_err(HandlerError::from);
                     let _ = result_tx.send((task_id, result));
@@ -84,7 +104,7 @@ impl Scheduler {
             HandlerKind::TypeScript(ts) => {
                 let module = ts.module.lookup().to_owned();
                 let func = ts.func.lookup().to_owned();
-                let value = dispatch.value.clone();
+                let value = dispatch_event.value.clone();
                 let executor = self.executor.clone();
                 let worker_path = self.worker_path.clone();
 
@@ -148,21 +168,48 @@ pub async fn run_workflow(
     advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
 
     loop {
-        let dispatches = workflow_state.take_pending_dispatches();
-        for dispatch in &dispatches {
-            let handler = workflow_state.handler(dispatch.handler_id);
-            scheduler.dispatch(dispatch, handler);
+        let event = if let Some(dispatch_event) = workflow_state.pop_pending_dispatch() {
+            Event {
+                task_id: dispatch_event.task_id,
+                kind: EventKind::Dispatch {
+                    handler_id: dispatch_event.handler_id,
+                    value: dispatch_event.value,
+                },
+            }
+        } else {
+            let (task_id, result) = scheduler
+                .recv()
+                .await
+                .expect("scheduler channel closed unexpectedly");
+            Event {
+                task_id,
+                kind: EventKind::Completion { value: result? },
+            }
+        };
+
+        if !workflow_state.is_task_live(event.task_id) {
+            continue;
         }
 
-        let (task_id, result) = scheduler
-            .recv()
-            .await
-            .expect("scheduler channel closed unexpectedly");
-
-        let value = result?;
-
-        if let Some(terminal_value) = complete(workflow_state, task_id, value)? {
-            return Ok(terminal_value);
+        match event.kind {
+            EventKind::Dispatch { handler_id, value } => {
+                let handler = workflow_state.handler(handler_id);
+                let dispatch_event = DispatchEvent {
+                    task_id: event.task_id,
+                    handler_id,
+                    value,
+                };
+                scheduler.dispatch(&dispatch_event, handler);
+            }
+            EventKind::Completion { value } => {
+                let completion_event = CompletionEvent {
+                    task_id: event.task_id,
+                    value,
+                };
+                if let Some(terminal_value) = complete(workflow_state, completion_event)? {
+                    return Ok(terminal_value);
+                }
+            }
         }
     }
 }

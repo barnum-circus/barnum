@@ -21,9 +21,9 @@ use super::{CompleteError, WorkflowState};
 #[allow(clippy::expect_used)]
 pub fn complete(
     workflow_state: &mut WorkflowState,
-    task_id: super::TaskId,
-    value: Value,
+    completion_event: super::CompletionEvent,
 ) -> Result<Option<Value>, CompleteError> {
+    let super::CompletionEvent { task_id, value } = completion_event;
     let frame_id = workflow_state
         .task_to_frame
         .remove(&task_id)
@@ -183,6 +183,7 @@ pub(crate) fn deliver(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use crate::CompletionEvent;
     use crate::test_helpers::*;
     use serde_json::json;
 
@@ -193,17 +194,31 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let d1 = engine.take_pending_dispatches();
-        assert_eq!(d1.len(), 1);
+        let d1 = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
 
-        let result = super::complete(&mut engine, d1[0].task_id, json!("a_result")).unwrap();
+        let result = super::complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: d1.task_id,
+                value: json!("a_result"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
 
-        let d2 = engine.take_pending_dispatches();
-        assert_eq!(d2.len(), 1);
-        assert_eq!(d2[0].value, json!("a_result"));
+        let d2 = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        assert_eq!(d2.value, json!("a_result"));
 
-        let result = super::complete(&mut engine, d2[0].task_id, json!("b_result")).unwrap();
+        let result = super::complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: d2.task_id,
+                value: json!("b_result"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("b_result")));
     }
 
@@ -218,23 +233,47 @@ mod tests {
         crate::advance::advance(&mut engine, root, json!("input"), None).unwrap();
 
         // A
-        let d = engine.take_pending_dispatches();
+        let d = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
         assert_eq!(
-            super::complete(&mut engine, d[0].task_id, json!("a_out")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: d.task_id,
+                    value: json!("a_out")
+                }
+            )
+            .unwrap(),
             None
         );
         // B
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d[0].value, json!("a_out"));
+        let d = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        assert_eq!(d.value, json!("a_out"));
         assert_eq!(
-            super::complete(&mut engine, d[0].task_id, json!("b_out")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: d.task_id,
+                    value: json!("b_out")
+                }
+            )
+            .unwrap(),
             None
         );
         // C
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d[0].value, json!("b_out"));
+        let d = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        assert_eq!(d.value, json!("b_out"));
         assert_eq!(
-            super::complete(&mut engine, d[0].task_id, json!("c_out")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: d.task_id,
+                    value: json!("c_out")
+                }
+            )
+            .unwrap(),
             Some(json!("c_out")),
         );
     }
@@ -246,16 +285,31 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d.len(), 2);
+        let a_dispatch = engine.pop_pending_dispatch().unwrap();
+        let b_dispatch = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
 
         // Complete in reverse order to verify index-based collection.
         assert_eq!(
-            super::complete(&mut engine, d[1].task_id, json!("b_result")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: b_dispatch.task_id,
+                    value: json!("b_result")
+                }
+            )
+            .unwrap(),
             None,
         );
         assert_eq!(
-            super::complete(&mut engine, d[0].task_id, json!("a_result")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: a_dispatch.task_id,
+                    value: json!("a_result")
+                }
+            )
+            .unwrap(),
             Some(json!(["a_result", "b_result"])),
         );
     }
@@ -267,15 +321,30 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!([10, 20]), None).unwrap();
 
-        let d = engine.take_pending_dispatches();
-        assert_eq!(d.len(), 2);
+        let d0 = engine.pop_pending_dispatch().unwrap();
+        let d1 = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
 
         assert_eq!(
-            super::complete(&mut engine, d[0].task_id, json!("r10")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: d0.task_id,
+                    value: json!("r10")
+                }
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            super::complete(&mut engine, d[1].task_id, json!("r20")).unwrap(),
+            super::complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: d1.task_id,
+                    value: json!("r20")
+                }
+            )
+            .unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }

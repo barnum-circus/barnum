@@ -186,6 +186,7 @@ fn is_descendant_of_body(
 #[cfg(test)]
 #[allow(clippy::doc_markdown, clippy::unwrap_used)]
 mod tests {
+    use crate::CompletionEvent;
     use crate::advance::advance;
     use crate::complete::complete;
     use crate::test_helpers::*;
@@ -237,8 +238,14 @@ mod tests {
         // Bubbles past inner RestartHandle(2), caught by outer RestartHandle(1).
         // Handler = ExtractIndex(0) on ["body_out", "input"] → "body_out".
         // Body re-advances with "body_out" → inner RestartHandle(2) → invoke dispatched.
-        let (result, ts2) =
-            complete_and_drive(&mut engine, ts[0].task_id, json!("body_out")).unwrap();
+        let (result, ts2) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("body_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
         assert_eq!(ts2.len(), 1);
         assert_eq!(ts2[0].value, json!("body_out"));
@@ -261,7 +268,14 @@ mod tests {
         assert_eq!(ts.len(), 1);
 
         // Complete A → break_restart_perform → handler restarts → Branch(Break) → identity → exits.
-        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("a_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("a_out")));
 
         // Verify frames are empty.
@@ -289,8 +303,10 @@ mod tests {
         for _ in 0..3 {
             let (result, new_dispatches) = complete_and_drive(
                 &mut engine,
-                body_dispatches[0].task_id,
-                json!({"kind": "Continue", "value": "restarted"}),
+                CompletionEvent {
+                    task_id: body_dispatches[0].task_id,
+                    value: json!({"kind": "Continue", "value": "restarted"}),
+                },
             )
             .unwrap();
             assert_eq!(result, None);
@@ -311,8 +327,10 @@ mod tests {
         // Final iteration: Break instead of Continue.
         let (result, _) = complete_and_drive(
             &mut engine,
-            body_dispatches[0].task_id,
-            json!({"kind": "Break", "value": "gave_up"}),
+            CompletionEvent {
+                task_id: body_dispatches[0].task_id,
+                value: json!({"kind": "Break", "value": "gave_up"}),
+            },
         )
         .unwrap();
         assert_eq!(result, Some(json!("gave_up")));
@@ -333,7 +351,14 @@ mod tests {
         let (_, ts) = drive_builtins(&mut engine).unwrap();
         assert_eq!(ts.len(), 1); // body invoke dispatched
 
-        let result = complete(&mut engine, ts[0].task_id, json!("body_result")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("body_result"),
+            },
+        )
+        .unwrap();
         // Body done, no RestartPerform, RestartHandle exits with body result.
         assert_eq!(result, Some(json!("body_result")));
     }
@@ -358,7 +383,14 @@ mod tests {
 
         // Complete A → break_restart_perform → handler (builtin) → restart → Branch(Break) → exits.
         // B's task_to_frame entry is cleaned up during body teardown.
-        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("a_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("a_out")));
         assert_eq!(engine.frames.len(), 0);
         assert!(engine.task_to_frame.is_empty());
@@ -367,7 +399,6 @@ mod tests {
     /// Completing a task that was torn down during body teardown should
     /// return Ok(None), not panic.
     #[test]
-    #[should_panic(expected = "unknown task")]
     fn completing_torn_down_task_is_noop() {
         let mut engine = engine_from(restart_branch(
             1,
@@ -385,11 +416,25 @@ mod tests {
         let b_task_id = ts[1].task_id;
 
         // Complete A → teardown tears down B's task.
-        let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("a_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("a_out")));
 
-        // B's handler completes after teardown. Should be Ok(None).
-        let result = complete(&mut engine, b_task_id, json!("b_out")).unwrap();
+        // B's task was torn down. Liveness check drops the stale completion.
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: b_task_id,
+                value: json!("b_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
     }
 
@@ -413,10 +458,24 @@ mod tests {
         let b_task_id = ts[1].task_id;
 
         // Complete handler → restart body. B's task was torn down.
-        let _ = complete_and_drive(&mut engine, ts[0].task_id, json!("restarted")).unwrap();
+        let _ = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("restarted"),
+            },
+        )
+        .unwrap();
 
-        // B's task was torn down. Completing it panics with "unknown task".
-        complete(&mut engine, b_task_id, json!("b_out")).unwrap();
+        // B's task was torn down. Completing it panics with "parent frame exists".
+        complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: b_task_id,
+                value: json!("b_out"),
+            },
+        )
+        .unwrap();
     }
 
     /// Effect shadowing — inner RestartHandle intercepts same restart_handler_id.
@@ -465,28 +524,49 @@ mod tests {
         assert_eq!(ts.len(), 1);
 
         // Complete body → Chain trampolines to RestartPerform → handler Chain starts → step1 dispatched.
-        let result = complete(&mut engine, ts[0].task_id, json!("body_out")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("body_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
 
-        let ts = engine.take_pending_dispatches();
-        assert_eq!(ts.len(), 1);
+        let s1_dispatch = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
 
         // Complete step1 → Chain trampolines to step2.
-        let result = complete(&mut engine, ts[0].task_id, json!("s1_out")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: s1_dispatch.task_id,
+                value: json!("s1_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
 
-        let ts = engine.take_pending_dispatches();
-        assert_eq!(ts.len(), 1);
-        assert_eq!(ts[0].value, json!("s1_out"));
+        let s2_dispatch = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        assert_eq!(s2_dispatch.value, json!("s1_out"));
 
         // Complete step2 → handler done → body re-advances with step2 output.
-        let result = complete(&mut engine, ts[0].task_id, json!("s2_out")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: s2_dispatch.task_id,
+                value: json!("s2_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
 
         // Body re-advanced with "s2_out". body.ts dispatched again.
-        let ts = engine.take_pending_dispatches();
-        assert_eq!(ts.len(), 1);
-        assert_eq!(ts[0].value, json!("s2_out"));
+        let body_dispatch = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        assert_eq!(body_dispatch.value, json!("s2_out"));
     }
 
     // -- ResumeHandle non-suspension tests --
@@ -510,13 +590,26 @@ mod tests {
         assert_eq!(ts.len(), 2); // A and B
 
         // Complete A → ResumePerform → handler dispatched (async TS handler).
-        let (result, handler_ts) =
-            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        let (result, handler_ts) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("a_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
 
         // Complete B while handler is in flight — NOT blocked.
-        let result = complete(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[1].task_id,
+                value: json!("b_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
     }
 
@@ -533,8 +626,10 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Both Performs dispatch their handlers, no blocking.
-        let ts = engine.take_pending_dispatches();
-        assert_eq!(ts.len(), 2, "both handlers should dispatch concurrently");
+        let h0 = engine.pop_pending_dispatch().unwrap();
+        let h1 = engine.pop_pending_dispatch().unwrap();
+        assert!(engine.pop_pending_dispatch().is_none());
+        let _ = (h0, h1); // verify both dispatched
     }
 
     /// A throw (to an outer restart+Branch) should proceed even while a resume
@@ -565,14 +660,27 @@ mod tests {
         assert_eq!(ts.len(), 2); // A and B
 
         // Complete A → ResumePerform(inner_e) → resume handler dispatched.
-        let (result, handler_ts) =
-            complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+        let (result, handler_ts) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("a_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
 
         // Complete B → break_restart_perform(outer_e). Bubbles past inner ResumeHandle
         // and reaches outer RestartHandle.
-        let (result, _) = complete_and_drive(&mut engine, ts[1].task_id, json!("b_out")).unwrap();
+        let (result, _) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[1].task_id,
+                value: json!("b_out"),
+            },
+        )
+        .unwrap();
 
         // Outer handler restarts body, Branch takes Break arm, RestartHandle exits.
         assert_eq!(
@@ -607,7 +715,14 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!(42)); // echo receives 42
 
-        let result = complete(&mut engine, ts[0].task_id, json!("echo_done")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("echo_done"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("echo_done")));
     }
 
@@ -637,7 +752,14 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("input")); // echo receives pipeline_input
 
-        let result = complete(&mut engine, ts[0].task_id, json!("done")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("done"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("done")));
     }
 
@@ -675,8 +797,14 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("alice"));
 
-        let (result, ts2) =
-            complete_and_drive(&mut engine, ts[0].task_id, json!("mid_out")).unwrap();
+        let (result, ts2) = complete_and_drive(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("mid_out"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!(99)));
         assert!(ts2.is_empty());
     }
@@ -779,11 +907,25 @@ mod tests {
         assert_eq!(ts.len(), 2);
 
         assert_eq!(
-            complete(&mut engine, ts[0].task_id, json!("r10")).unwrap(),
+            complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: ts[0].task_id,
+                    value: json!("r10")
+                }
+            )
+            .unwrap(),
             None
         );
         assert_eq!(
-            complete(&mut engine, ts[1].task_id, json!("r20")).unwrap(),
+            complete(
+                &mut engine,
+                CompletionEvent {
+                    task_id: ts[1].task_id,
+                    value: json!("r20")
+                }
+            )
+            .unwrap(),
             Some(json!(["r10", "r20"])),
         );
     }
@@ -844,7 +986,14 @@ mod tests {
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("b"));
 
-        let result = complete(&mut engine, ts[0].task_id, json!("done")).unwrap();
+        let result = complete(
+            &mut engine,
+            CompletionEvent {
+                task_id: ts[0].task_id,
+                value: json!("done"),
+            },
+        )
+        .unwrap();
         assert_eq!(result, Some(json!("done")));
     }
 }

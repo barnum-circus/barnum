@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
+assertion_line: 83
 expression: trace
 input_file: crates/barnum_engine/tests/completion/deep_chain.json
 ---
@@ -130,7 +131,7 @@ WorkflowState {
     next_task_id: 1,
 }
 Pending: [
-    Dispatch {
+    DispatchEvent {
         task_id: TaskId(
             0,
         ),
@@ -269,7 +270,7 @@ WorkflowState {
     next_task_id: 2,
 }
 Pending: [
-    Dispatch {
+    DispatchEvent {
         task_id: TaskId(
             1,
         ),
@@ -396,7 +397,7 @@ WorkflowState {
     next_task_id: 3,
 }
 Pending: [
-    Dispatch {
+    DispatchEvent {
         task_id: TaskId(
             2,
         ),

@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/single_invoke.json
 ---
@@ -58,7 +59,7 @@ WorkflowState {
         },
     },
     pending_dispatches: [
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 0,
             ),

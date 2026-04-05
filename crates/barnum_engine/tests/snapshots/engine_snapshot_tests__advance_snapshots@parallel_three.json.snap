@@ -1,5 +1,6 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
+assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/parallel_three.json
 ---
@@ -176,7 +177,7 @@ WorkflowState {
         },
     },
     pending_dispatches: [
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 0,
             ),
@@ -187,7 +188,7 @@ WorkflowState {
                 "shared": Bool(true),
             },
         },
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 1,
             ),
@@ -198,7 +199,7 @@ WorkflowState {
                 "shared": Bool(true),
             },
         },
-        Dispatch {
+        DispatchEvent {
             task_id: TaskId(
                 2,
             ),

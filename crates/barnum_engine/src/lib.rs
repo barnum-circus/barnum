@@ -1,8 +1,8 @@
 //! Pure state-machine workflow engine for Barnum.
 //!
 //! The engine is a synchronous state machine with no I/O, no async, no timers,
-//! and no concurrency. External code drives it by calling [`WorkflowState::advance`]
-//! and draining dispatches via [`WorkflowState::take_pending_dispatches`].
+//! and no concurrency. External code drives it by calling [`advance::advance`]
+//! and popping dispatches via [`WorkflowState::pop_pending_dispatch`].
 
 /// Advance (expand) an action into frames.
 pub mod advance;
@@ -15,6 +15,7 @@ pub mod frame;
 pub(crate) mod test_helpers;
 
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 
 use barnum_ast::HandlerKind;
 use barnum_ast::RestartHandlerId;
@@ -31,23 +32,37 @@ use u32_newtype::u32_newtype;
 
 u32_newtype!(
     /// Identifies a pending handler invocation. Assigned by the engine,
-    /// returned to the engine in [`WorkflowState::complete`].
+    /// returned to the engine in [`complete::complete`].
     TaskId
 );
 
 // ---------------------------------------------------------------------------
-// Dispatch
+// DispatchEvent
 // ---------------------------------------------------------------------------
 
-/// A pending handler invocation produced by `advance`.
+/// A pending handler invocation produced by [`advance::advance`].
 #[derive(Debug)]
-pub struct Dispatch {
+pub struct DispatchEvent {
     /// Correlates this dispatch with the result delivered to
-    /// [`WorkflowState::complete`].
+    /// [`complete::complete`].
     pub task_id: TaskId,
     /// Index into the handler pool. Resolve via [`WorkflowState::handler`].
     pub handler_id: HandlerId,
     /// The value to pass to the handler.
+    pub value: Value,
+}
+
+// ---------------------------------------------------------------------------
+// CompletionEvent
+// ---------------------------------------------------------------------------
+
+/// A completed handler result, ready to be delivered to the workflow engine
+/// via [`complete::complete`].
+#[derive(Debug)]
+pub struct CompletionEvent {
+    /// The task that completed.
+    pub task_id: TaskId,
+    /// The handler's return value.
     pub value: Value,
 }
 
@@ -96,7 +111,7 @@ pub enum AdvanceError {
 // CompleteError
 // ---------------------------------------------------------------------------
 
-/// Errors that can occur during [`WorkflowState::complete`].
+/// Errors that can occur during [`complete::complete`].
 #[derive(Debug, thiserror::Error)]
 pub enum CompleteError {
     /// An advance error occurred during Chain trampoline or `RestartHandle`
@@ -119,16 +134,16 @@ pub enum CompleteError {
 
 /// Pure state-machine workflow engine.
 ///
-/// Call [`advance`](WorkflowState::advance) with [`workflow_root`](WorkflowState::workflow_root)
-/// to begin execution, then drain dispatches via
-/// [`take_pending_dispatches`](WorkflowState::take_pending_dispatches). Deliver handler
-/// results via [`complete`](WorkflowState::complete).
+/// Call [`advance::advance`] with [`workflow_root`](WorkflowState::workflow_root)
+/// to begin execution, then pop dispatches via
+/// [`pop_pending_dispatch`](WorkflowState::pop_pending_dispatch). Deliver handler
+/// results via [`complete::complete`].
 #[derive(Debug)]
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
     task_to_frame: BTreeMap<TaskId, FrameId>,
-    pending_dispatches: Vec<Dispatch>,
+    pending_dispatches: VecDeque<DispatchEvent>,
     next_task_id: u32,
 }
 
@@ -141,7 +156,7 @@ impl WorkflowState {
             flat_config,
             frames: Arena::new(),
             task_to_frame: BTreeMap::new(),
-            pending_dispatches: Vec::new(),
+            pending_dispatches: VecDeque::new(),
             next_task_id: 0,
         }
     }
@@ -153,13 +168,20 @@ impl WorkflowState {
         self.flat_config.workflow_root()
     }
 
-    /// Drain all pending dispatches accumulated since the last call.
-    pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
-        std::mem::take(&mut self.pending_dispatches)
+    /// Pop the next pending dispatch, or `None` if the queue is empty.
+    pub fn pop_pending_dispatch(&mut self) -> Option<DispatchEvent> {
+        self.pending_dispatches.pop_front()
+    }
+
+    /// Returns true if this task's Invoke frame still exists in the tree.
+    /// Used by the event loop to drop stale events before processing.
+    #[must_use]
+    pub fn is_task_live(&self, task_id: TaskId) -> bool {
+        self.task_to_frame.contains_key(&task_id)
     }
 
     /// Look up a handler by ID. Used by the caller to resolve
-    /// [`Dispatch::handler_id`].
+    /// [`DispatchEvent::handler_id`].
     #[must_use]
     pub fn handler(&self, id: HandlerId) -> &HandlerKind {
         self.flat_config.handler(id)

@@ -4,7 +4,7 @@
 //! across test modules in advance, complete, effects, and frame.
 
 use crate::complete::complete;
-use crate::{CompleteError, Dispatch, TaskId, WorkflowState};
+use crate::{CompleteError, CompletionEvent, DispatchEvent, WorkflowState};
 
 use barnum_ast::flat::flatten;
 use barnum_ast::*;
@@ -177,32 +177,33 @@ pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: 
 #[allow(clippy::unwrap_used, clippy::type_complexity)]
 pub fn drive_builtins(
     engine: &mut WorkflowState,
-) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
-    let mut ts_dispatches: Vec<Dispatch> = Vec::new();
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    let mut ts_dispatches: Vec<DispatchEvent> = Vec::new();
     loop {
-        let dispatches = engine.take_pending_dispatches();
-        if dispatches.is_empty() {
+        let Some(dispatch_event) = engine.pop_pending_dispatch() else {
             break;
+        };
+        if !engine.is_task_live(dispatch_event.task_id) {
+            continue;
         }
-        let mut had_builtin = false;
-        for dispatch in dispatches {
-            match engine.handler(dispatch.handler_id).clone() {
-                HandlerKind::Builtin(builtin_handler) => {
-                    let result =
-                        barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
-                            .unwrap();
-                    if let Some(value) = complete(engine, dispatch.task_id, result)? {
-                        return Ok((Some(value), ts_dispatches));
-                    }
-                    had_builtin = true;
-                }
-                HandlerKind::TypeScript(_) => {
-                    ts_dispatches.push(dispatch);
+        match engine.handler(dispatch_event.handler_id).clone() {
+            HandlerKind::Builtin(builtin_handler) => {
+                let result = barnum_builtins::execute_builtin(
+                    &builtin_handler.builtin,
+                    &dispatch_event.value,
+                )
+                .unwrap();
+                let completion_event = CompletionEvent {
+                    task_id: dispatch_event.task_id,
+                    value: result,
+                };
+                if let Some(value) = complete(engine, completion_event)? {
+                    return Ok((Some(value), ts_dispatches));
                 }
             }
-        }
-        if !had_builtin {
-            break;
+            HandlerKind::TypeScript(_) => {
+                ts_dispatches.push(dispatch_event);
+            }
         }
     }
     Ok((None, ts_dispatches))
@@ -212,13 +213,14 @@ pub fn drive_builtins(
 #[allow(clippy::unwrap_used)]
 pub fn complete_and_drive(
     engine: &mut WorkflowState,
-    task_id: TaskId,
-    value: Value,
-) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
-    let result = complete(engine, task_id, value)?;
+    completion_event: CompletionEvent,
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    if !engine.is_task_live(completion_event.task_id) {
+        return Ok((None, Vec::new()));
+    }
+    let result = complete(engine, completion_event)?;
     if result.is_some() {
-        let ts = engine.take_pending_dispatches();
-        return Ok((result, ts));
+        return Ok((result, Vec::new()));
     }
     drive_builtins(engine)
 }
