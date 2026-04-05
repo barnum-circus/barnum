@@ -8,8 +8,14 @@ STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
 TS_FILES=$(echo "$STAGED_FILES" | grep -E '\.(ts|tsx)$' || true)
 RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
 
-# TypeScript type-checking (always runs if TS files are staged)
+# TypeScript: type-check, lint, format (if TS files are staged)
 if [ -n "$TS_FILES" ]; then
+    echo "Running oxlint..."
+    pnpm --filter barnum run lint || { echo "oxlint failed"; exit 1; }
+
+    echo "Running prettier --check..."
+    pnpm --filter barnum exec prettier --check 'src/**/*.ts' || { echo "prettier check failed (run: pnpm --filter barnum exec prettier --write 'src/**/*.ts')"; exit 1; }
+
     echo "Running TypeScript type-check (barnum)..."
     pnpm --filter barnum exec tsc --noEmit || { echo "tsc --noEmit failed (barnum)"; exit 1; }
 
