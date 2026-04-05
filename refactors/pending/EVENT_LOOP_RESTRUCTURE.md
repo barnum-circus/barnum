@@ -15,12 +15,103 @@ The fix: restructure the event loop to process events one at a time via an `Even
 
 ## Design
 
+### Rename `Dispatch` to `DispatchEvent`
+
+The struct is an event consumed by the event loop, not a command. Rename it to match the naming convention of `CompletionEvent` (and the future `PendingRestartEvent` from DEFERRED_RESTART_PERFORM).
+
+```rust
+// barnum_engine/src/lib.rs — Dispatch (before, lines 42-50)
+pub struct Dispatch {
+    pub task_id: TaskId,
+    pub handler_id: HandlerId,
+    pub value: Value,
+}
+
+// barnum_engine/src/lib.rs — DispatchEvent (after)
+#[derive(Debug)]
+pub struct DispatchEvent {
+    pub task_id: TaskId,
+    pub handler_id: HandlerId,
+    pub value: Value,
+}
+```
+
+### `CompletionEvent`
+
+Define `CompletionEvent` in `barnum_engine` alongside `DispatchEvent`. This is the event type consumed by `complete()` — a handler result keyed by task.
+
+```rust
+// barnum_engine/src/lib.rs — new struct, after DispatchEvent
+
+/// A completed handler result, ready to be delivered to the workflow engine.
+#[derive(Debug)]
+pub struct CompletionEvent {
+    /// The task that completed.
+    pub task_id: TaskId,
+    /// The handler's return value.
+    pub value: Value,
+}
+```
+
+### `complete()` takes `CompletionEvent`
+
+`complete()` takes the entire `CompletionEvent` instead of separate `task_id` and `value` arguments. The body destructures at the top and is otherwise unchanged.
+
+```rust
+// barnum_engine/src/complete.rs — complete (before, lines 22-44)
+pub fn complete(
+    workflow_state: &mut WorkflowState,
+    task_id: super::TaskId,
+    value: Value,
+) -> Result<Option<Value>, CompleteError> {
+    let frame_id = workflow_state
+        .task_to_frame
+        .remove(&task_id)
+        .expect("unknown task");
+    // ... rest uses task_id and value
+}
+
+// barnum_engine/src/complete.rs — complete (after)
+pub fn complete(
+    workflow_state: &mut WorkflowState,
+    completion_event: super::CompletionEvent,
+) -> Result<Option<Value>, CompleteError> {
+    let super::CompletionEvent { task_id, value } = completion_event;
+    let frame_id = workflow_state
+        .task_to_frame
+        .remove(&task_id)
+        .expect("unknown task");
+    // ... rest unchanged
+}
+```
+
+The `WorkflowState` method delegates to the free function:
+
+```rust
+// barnum_engine/src/lib.rs — WorkflowState::complete (before, lines 201-207)
+pub fn complete(
+    &mut self,
+    task_id: TaskId,
+    value: Value,
+) -> Result<Option<Value>, CompleteError> {
+    complete::complete(self, task_id, value)
+}
+
+// barnum_engine/src/lib.rs — WorkflowState::complete (after)
+pub fn complete(
+    &mut self,
+    completion_event: CompletionEvent,
+) -> Result<Option<Value>, CompleteError> {
+    complete::complete(self, completion_event)
+}
+```
+
 ### Liveness check
 
 Add a method to check whether a task's Invoke frame is still part of the live tree:
 
 ```rust
-// lib.rs — WorkflowState impl (new method)
+// barnum_engine/src/lib.rs — WorkflowState impl (new method)
 
 /// Returns true if this task's Invoke frame still exists in the tree.
 /// Used by the event loop to drop stale events before processing.
@@ -31,10 +122,10 @@ pub fn is_task_live(&self, task_id: TaskId) -> bool {
 
 ### One-at-a-time dispatch processing
 
-Change `pending_dispatches` from `Vec<Dispatch>` to `VecDeque<Dispatch>`. Add `pop_pending_dispatch()` for one-at-a-time consumption. Keep `take_pending_dispatches()` (reimplemented as drain + collect) for engine tests that assert on the full batch.
+Change `pending_dispatches` from `Vec<Dispatch>` to `VecDeque<DispatchEvent>`. Replace `take_pending_dispatches()` with `pop_pending_dispatch()` for one-at-a-time consumption. `take_pending_dispatches` is removed entirely — tests pop one at a time.
 
 ```rust
-// lib.rs — WorkflowState (before, lines 125-131)
+// barnum_engine/src/lib.rs — WorkflowState (before, lines 125-131)
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
@@ -43,18 +134,18 @@ pub struct WorkflowState {
     next_task_id: u32,
 }
 
-// lib.rs — WorkflowState (after)
+// barnum_engine/src/lib.rs — WorkflowState (after)
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
     task_to_frame: BTreeMap<TaskId, FrameId>,
-    pending_dispatches: VecDeque<Dispatch>,
+    pending_dispatches: VecDeque<DispatchEvent>,
     next_task_id: u32,
 }
 ```
 
 ```rust
-// lib.rs — WorkflowState::new (before, lines 137-145)
+// barnum_engine/src/lib.rs — WorkflowState::new (before, lines 137-145)
 pub fn new(flat_config: FlatConfig) -> Self {
     Self {
         flat_config,
@@ -65,7 +156,7 @@ pub fn new(flat_config: FlatConfig) -> Self {
     }
 }
 
-// lib.rs — WorkflowState::new (after)
+// barnum_engine/src/lib.rs — WorkflowState::new (after)
 pub fn new(flat_config: FlatConfig) -> Self {
     Self {
         flat_config,
@@ -78,35 +169,29 @@ pub fn new(flat_config: FlatConfig) -> Self {
 ```
 
 ```rust
-// lib.rs — methods (before, lines 155-157)
+// barnum_engine/src/lib.rs — methods (before, lines 155-157)
 pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
     std::mem::take(&mut self.pending_dispatches)
 }
 
-// lib.rs — methods (after)
+// barnum_engine/src/lib.rs — methods (after)
 
 /// Pop the next pending dispatch, or `None` if the queue is empty.
-pub fn pop_pending_dispatch(&mut self) -> Option<Dispatch> {
+pub fn pop_pending_dispatch(&mut self) -> Option<DispatchEvent> {
     self.pending_dispatches.pop_front()
-}
-
-/// Drain all pending dispatches into a `Vec`. Used by engine tests
-/// that assert on the full batch.
-pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
-    self.pending_dispatches.drain(..).collect()
 }
 ```
 
 ```rust
-// advance.rs — Invoke arm (before, line 42)
+// barnum_engine/src/advance.rs — Invoke arm (before, line 42)
 workflow_state.pending_dispatches.push(Dispatch {
     task_id,
     handler_id: handler,
     value,
 });
 
-// advance.rs — Invoke arm (after)
-workflow_state.pending_dispatches.push_back(Dispatch {
+// barnum_engine/src/advance.rs — Invoke arm (after)
+workflow_state.pending_dispatches.push_back(DispatchEvent {
     task_id,
     handler_id: handler,
     value,
@@ -115,29 +200,52 @@ workflow_state.pending_dispatches.push_back(Dispatch {
 
 ### Event enum
 
-A local `Event` enum in `barnum_event_loop` with two variants. The deferred restart refactor adds the `Restart` variant.
+A local `Event` enum in `barnum_event_loop` with two variants. Both variants carry a `task_id`, exposed via `Event::task_id()` for the liveness check before the `match`. `CompletionEvent` is imported from `barnum_engine` — it is not redefined locally. The deferred restart refactor adds the `Restart` variant and evolves the liveness extraction accordingly.
 
 ```rust
 // barnum_event_loop/src/lib.rs
 
-/// A completed handler result from the scheduler.
-struct CompletionEvent {
-    task_id: TaskId,
-    value: Value,
-}
-
 /// Events processed by the workflow event loop.
 enum Event {
     /// A handler invocation ready to dispatch to a worker.
-    Dispatch(Dispatch),
+    Dispatch(DispatchEvent),
     /// A worker completed a task.
     Completion(CompletionEvent),
+}
+
+impl Event {
+    /// The task this event pertains to. Used for the liveness check
+    /// before the event is processed.
+    fn task_id(&self) -> TaskId {
+        match self {
+            Event::Dispatch(dispatch_event) => dispatch_event.task_id,
+            Event::Completion(completion_event) => completion_event.task_id,
+        }
+    }
+}
+```
+
+### Scheduler dispatch signature
+
+```rust
+// barnum_event_loop/src/lib.rs — Scheduler::dispatch (before, line 69)
+pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
+    let result_tx = self.result_tx.clone();
+    let task_id = dispatch.task_id;
+    // ... rest unchanged
+}
+
+// barnum_event_loop/src/lib.rs — Scheduler::dispatch (after)
+pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) {
+    let result_tx = self.result_tx.clone();
+    let task_id = dispatch_event.task_id;
+    // ... rest unchanged
 }
 ```
 
 ### Event loop
 
-Each iteration sources the next event (pending dispatch first, scheduler completion when the queue is empty), then checks liveness, then processes it. Every branch checks liveness before doing work. `complete()` keeps its `expect("unknown task")` — the liveness check guarantees it is never called with a stale task.
+Each iteration sources the next event (pending dispatch first, scheduler completion when the queue is empty). A single `is_task_live` call on `event.task_id()` precedes the `match` — stale events are dropped without entering any branch. `complete()` keeps its `expect("unknown task")` because the liveness check guarantees it is never called with a stale task.
 
 ```rust
 // barnum_event_loop/src/lib.rs — run_workflow (before, lines 141-168)
@@ -182,7 +290,7 @@ pub async fn run_workflow(
 
     loop {
         let event = match workflow_state.pop_pending_dispatch() {
-            Some(dispatch) => Event::Dispatch(dispatch),
+            Some(dispatch_event) => Event::Dispatch(dispatch_event),
             None => {
                 let (task_id, result) = scheduler
                     .recv()
@@ -195,19 +303,17 @@ pub async fn run_workflow(
             }
         };
 
+        if !workflow_state.is_task_live(event.task_id()) {
+            continue;
+        }
+
         match event {
-            Event::Dispatch(dispatch) => {
-                if !workflow_state.is_task_live(dispatch.task_id) {
-                    continue;
-                }
-                let handler = workflow_state.handler(dispatch.handler_id);
-                scheduler.dispatch(&dispatch, handler);
+            Event::Dispatch(dispatch_event) => {
+                let handler = workflow_state.handler(dispatch_event.handler_id);
+                scheduler.dispatch(&dispatch_event, handler);
             }
-            Event::Completion(CompletionEvent { task_id, value }) => {
-                if !workflow_state.is_task_live(task_id) {
-                    continue;
-                }
-                if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+            Event::Completion(completion_event) => {
+                if let Some(terminal_value) = workflow_state.complete(completion_event)? {
                     return Ok(terminal_value);
                 }
             }
@@ -218,10 +324,10 @@ pub async fn run_workflow(
 
 ### Test helpers
 
-`drive_builtins` switches to `pop_pending_dispatch` for one-at-a-time processing and checks liveness before each dispatch. This eliminates the `had_builtin` tracking from the batch approach and mirrors the event loop's liveness check pattern. Stale dispatches (from restarts triggered by earlier builtins in the same queue) are dropped before reaching `complete()`.
+`drive_builtins` switches to `pop_pending_dispatch` for one-at-a-time processing and checks liveness before each dispatch. When completing a builtin, it constructs a `CompletionEvent` to pass to `complete()`. Stale dispatches (from restarts triggered by earlier builtins in the same queue) are dropped before reaching `complete()`.
 
 ```rust
-// test_helpers.rs — drive_builtins (before, lines 177-208)
+// barnum_engine/src/test_helpers.rs — drive_builtins (before, lines 177-208)
 pub fn drive_builtins(
     engine: &mut WorkflowState,
 ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
@@ -255,29 +361,33 @@ pub fn drive_builtins(
     Ok((None, ts_dispatches))
 }
 
-// test_helpers.rs — drive_builtins (after)
+// barnum_engine/src/test_helpers.rs — drive_builtins (after)
 pub fn drive_builtins(
     engine: &mut WorkflowState,
-) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
-    let mut ts_dispatches: Vec<Dispatch> = Vec::new();
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    let mut ts_dispatches: Vec<DispatchEvent> = Vec::new();
     loop {
-        let Some(dispatch) = engine.pop_pending_dispatch() else {
+        let Some(dispatch_event) = engine.pop_pending_dispatch() else {
             break;
         };
-        if !engine.is_task_live(dispatch.task_id) {
+        if !engine.is_task_live(dispatch_event.task_id) {
             continue;
         }
-        match engine.handler(dispatch.handler_id).clone() {
+        match engine.handler(dispatch_event.handler_id).clone() {
             HandlerKind::Builtin(builtin_handler) => {
                 let result =
-                    barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
+                    barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch_event.value)
                         .unwrap();
-                if let Some(value) = engine.complete(dispatch.task_id, result)? {
+                let completion_event = CompletionEvent {
+                    task_id: dispatch_event.task_id,
+                    value: result,
+                };
+                if let Some(value) = engine.complete(completion_event)? {
                     return Ok((Some(value), ts_dispatches));
                 }
             }
             HandlerKind::TypeScript(_) => {
-                ts_dispatches.push(dispatch);
+                ts_dispatches.push(dispatch_event);
             }
         }
     }
@@ -285,10 +395,10 @@ pub fn drive_builtins(
 }
 ```
 
-`complete_and_drive` checks liveness before calling `complete()`. Stale task completions return `(None, [])` without touching the engine. When the workflow terminates, return an empty dispatch vector (no caller uses dispatches after termination).
+`complete_and_drive` takes a `CompletionEvent` and checks liveness before calling `complete()`. Stale task completions return `(None, [])` without touching the engine.
 
 ```rust
-// test_helpers.rs — complete_and_drive (before, lines 212-223)
+// barnum_engine/src/test_helpers.rs — complete_and_drive (before, lines 212-223)
 pub fn complete_and_drive(
     engine: &mut WorkflowState,
     task_id: TaskId,
@@ -302,16 +412,15 @@ pub fn complete_and_drive(
     drive_builtins(engine)
 }
 
-// test_helpers.rs — complete_and_drive (after)
+// barnum_engine/src/test_helpers.rs — complete_and_drive (after)
 pub fn complete_and_drive(
     engine: &mut WorkflowState,
-    task_id: TaskId,
-    value: Value,
-) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
-    if !engine.is_task_live(task_id) {
+    completion_event: CompletionEvent,
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    if !engine.is_task_live(completion_event.task_id) {
         return Ok((None, Vec::new()));
     }
-    let result = engine.complete(task_id, value)?;
+    let result = engine.complete(completion_event)?;
     if result.is_some() {
         return Ok((result, Vec::new()));
     }
@@ -319,28 +428,35 @@ pub fn complete_and_drive(
 }
 ```
 
-### `complete()` is unchanged
+### `complete()` internals are unchanged
 
-`complete()` keeps its `expect("unknown task")` (complete.rs:30). This is a correct invariant: every task_id passed to `complete()` must exist in `task_to_frame`. The event loop and test helpers enforce this by checking liveness before calling `complete()`.
+`complete()` keeps its `expect("unknown task")` (complete.rs:30). The only change is the signature: it takes `CompletionEvent` and destructures at the top. The liveness check guarantees the task_id exists in `task_to_frame`, so the `expect` is never hit with a stale task.
 
 ## What changes
 
 | Component | Before | After |
 |-----------|--------|-------|
+| `Dispatch` struct | Named `Dispatch` | Renamed to `DispatchEvent` |
+| `CompletionEvent` struct | Does not exist | Defined in `barnum_engine`, consumed by `complete()` |
+| `complete()` signature | Takes `(TaskId, Value)` | Takes `CompletionEvent` |
+| `complete()` internals | `expect("unknown task")` | Unchanged — invariant preserved by event loop |
 | `is_task_live` | Does not exist | Checks `task_to_frame` for the task's Invoke frame |
-| `complete()` | `expect("unknown task")` | Unchanged — invariant preserved by event loop |
-| `WorkflowState::pending_dispatches` | `Vec<Dispatch>` | `VecDeque<Dispatch>` |
+| `WorkflowState::pending_dispatches` | `Vec<Dispatch>` | `VecDeque<DispatchEvent>` |
 | `WorkflowState::new` | `Vec::new()` | `VecDeque::new()` |
-| `pop_pending_dispatch` | Does not exist | Returns `Option<Dispatch>` from front of queue |
-| `take_pending_dispatches` | `std::mem::take` | `drain(..).collect()` (retained for engine tests) |
-| `advance` Invoke arm | `.push(...)` | `.push_back(...)` |
-| Event loop | Batch dispatch all, recv one, complete unconditionally | One-at-a-time via `Event` enum; liveness check before every event |
-| `drive_builtins` | Batch with `had_builtin` tracking | One-at-a-time; liveness check before each dispatch |
-| `complete_and_drive` | Calls `complete()` unconditionally | Liveness check before `complete()`; returns `(None, [])` for stale tasks |
+| `pop_pending_dispatch` | Does not exist | Returns `Option<DispatchEvent>` from front of queue |
+| `take_pending_dispatches` | `std::mem::take` returning `Vec<Dispatch>` | Removed — tests use `pop_pending_dispatch` one at a time |
+| `advance` Invoke arm | `.push(Dispatch{...})` | `.push_back(DispatchEvent{...})` |
+| `Scheduler::dispatch` | Takes `&Dispatch` | Takes `&DispatchEvent` |
+| `Event` enum | Does not exist | Two variants with `task_id()` method for uniform liveness check |
+| Event loop | Batch dispatch all, recv one, complete unconditionally | One-at-a-time via `Event` enum; single `is_task_live` check before match |
+| `drive_builtins` | Batch with `had_builtin` tracking; returns `Vec<Dispatch>` | One-at-a-time; liveness check; constructs `CompletionEvent`; returns `Vec<DispatchEvent>` |
+| `complete_and_drive` | Takes `(TaskId, Value)`, calls `complete()` unconditionally, returns `Vec<Dispatch>` | Takes `CompletionEvent`, liveness check before `complete()`, returns `Vec<DispatchEvent>` |
 
 ## Tests
 
-`completing_torn_down_task_is_noop` (effects.rs:370): remove `#[should_panic(expected = "unknown task")]`. Change the final assertion to use `complete_and_drive` instead of calling `engine.complete()` directly, so the liveness check drops the stale completion before it reaches `complete()`.
+### `completing_torn_down_task_is_noop` (effects.rs:370)
+
+Remove `#[should_panic(expected = "unknown task")]`. Change the final assertion to use `complete_and_drive` instead of calling `engine.complete()` directly, so the liveness check drops the stale completion before it reaches `complete()`.
 
 ```rust
 // effects.rs — completing_torn_down_task_is_noop (before)
@@ -367,15 +483,84 @@ fn completing_torn_down_task_is_noop() {
     assert_eq!(ts.len(), 2);
     let b_task_id = ts[1].task_id;
 
-    let (result, _) = complete_and_drive(&mut engine, ts[0].task_id, json!("a_out")).unwrap();
+    let (result, _) = complete_and_drive(
+        &mut engine,
+        CompletionEvent { task_id: ts[0].task_id, value: json!("a_out") },
+    ).unwrap();
     assert_eq!(result, Some(json!("a_out")));
 
     // B's task was torn down. Liveness check drops the stale completion.
-    let (result, _) = complete_and_drive(&mut engine, b_task_id, json!("b_out")).unwrap();
+    let (result, _) = complete_and_drive(
+        &mut engine,
+        CompletionEvent { task_id: b_task_id, value: json!("b_out") },
+    ).unwrap();
     assert_eq!(result, None);
 }
 ```
 
-`restart_perform_non_terminal_in_all` (effects.rs:401): unchanged, stays `#[should_panic(expected = "parent frame exists")]`. That bug requires the deferred restart refactor (advance must be purely additive).
+### `restart_perform_non_terminal_in_all` (effects.rs:401)
 
-All other existing tests pass unchanged. Tests in advance.rs and complete.rs continue using `take_pending_dispatches()`.
+Unchanged behavior — stays `#[should_panic(expected = "parent frame exists")]`. That bug requires the deferred restart refactor (advance must be purely additive). The `complete()` call updates to use `CompletionEvent`:
+
+```rust
+// effects.rs — restart_perform_non_terminal_in_all (before, line 419)
+engine.complete(b_task_id, json!("b_out")).unwrap();
+
+// effects.rs — restart_perform_non_terminal_in_all (after)
+engine
+    .complete(CompletionEvent { task_id: b_task_id, value: json!("b_out") })
+    .unwrap();
+```
+
+### All `complete()` and `complete_and_drive` call sites
+
+Every direct `engine.complete(task_id, value)` call becomes `engine.complete(CompletionEvent { task_id, value })`. Every `complete_and_drive(&mut engine, task_id, value)` call becomes `complete_and_drive(&mut engine, CompletionEvent { task_id, value })`. This is a mechanical transformation. Affected tests:
+
+**complete.rs:** `chain_trampolines_on_completion`, `nested_chain_completes`, `parallel_collects_results`, `foreach_collects_results`
+
+**effects.rs:** `restart_handle_body_no_perform_exits_normally`, `multi_step_restart_handler_chain`, `resume_handler_does_not_block_sibling_completion`, `bind_single_binding_single_read`, `bind_single_binding_body_ignores_varref`, `bind_inside_foreach`, `bind_read_var_produces_correct_resume`, and all tests using `complete_and_drive`
+
+Pattern:
+
+```rust
+// Before
+engine.complete(d[0].task_id, json!("a_result"))
+
+// After
+engine.complete(CompletionEvent { task_id: d[0].task_id, value: json!("a_result") })
+```
+
+```rust
+// Before
+complete_and_drive(&mut engine, ts[0].task_id, json!("a_out"))
+
+// After
+complete_and_drive(&mut engine, CompletionEvent { task_id: ts[0].task_id, value: json!("a_out") })
+```
+
+### All `take_pending_dispatches` call sites
+
+`take_pending_dispatches` is removed. Every test that called it switches to `pop_pending_dispatch`. Tests that asserted on the batch size pop each dispatch into a named binding and assert the queue is empty afterward.
+
+Pattern:
+
+```rust
+// Before
+let d = engine.take_pending_dispatches();
+assert_eq!(d.len(), 2);
+// ... use d[0], d[1]
+
+// After
+let a_dispatch = engine.pop_pending_dispatch().unwrap();
+let b_dispatch = engine.pop_pending_dispatch().unwrap();
+assert!(engine.pop_pending_dispatch().is_none());
+// ... use a_dispatch, b_dispatch
+```
+
+Affected tests:
+
+**complete.rs:** `chain_trampolines_on_completion`, `nested_chain_completes`, `parallel_collects_results`, `foreach_collects_results`
+
+**effects.rs:** `multi_step_restart_handler_chain`, `concurrent_resume_performs_not_serialized`
+
+Tests in advance.rs also use `take_pending_dispatches()` and switch to the same pattern. No advance.rs tests call `complete()`.
