@@ -8,7 +8,7 @@ The event loop checks `is_task_live(event.task_id)` — which looks up `task_to_
 
 This indirection also can't generalize. Restart effects don't have a task_id — they target a frame directly. To have a uniform liveness gate for all event types (dispatches, completions, and future restart effects), the check must be frame-based.
 
-Two pre-factors, implemented together.
+Both `PendingEffect` and `Event` are two-tuples of `(FrameId, Kind)`. The `FrameId` is the liveness key. The `Kind` is the payload. This structural pattern is established here so DEFERRED_RESTART_PERFORM just adds new variants.
 
 ---
 
@@ -39,43 +39,106 @@ pub fn task_frame_id(&self, task_id: TaskId) -> Option<FrameId> {
 }
 ```
 
-### Test helpers
-
-```rust
-// test_helpers.rs — drive_builtins (before)
-if !engine.is_task_live(dispatch_event.task_id) {
-    continue;
-}
-
-// test_helpers.rs — drive_builtins (after)
-if engine.task_frame_id(dispatch_event.task_id).is_none() {
-    continue;
-}
-```
-
-```rust
-// test_helpers.rs — complete_and_drive (before)
-if !engine.is_task_live(completion_event.task_id) {
-    return Ok((None, Vec::new()));
-}
-
-// test_helpers.rs — complete_and_drive (after)
-if engine.task_frame_id(completion_event.task_id).is_none() {
-    return Ok((None, Vec::new()));
-}
-```
-
 ---
 
-## Pre-factor 2: Event carries frame_id
+## Pre-factor 2: PendingEffect and Event as (FrameId, Kind) tuples
 
-Every event carries a `frame_id` — the frame it originates from. The event loop checks `is_frame_live(event.frame_id)` once before the match. This is the single liveness gate for all event types.
+`PendingEffect` and `Event` are both `(FrameId, Kind)`. The first element is the liveness key. The second is the payload.
 
-For dispatches and completions, the `frame_id` is derived from `task_frame_id(task_id)` at event construction time. After DEFERRED_RESTART_PERFORM, restart effects will carry their own `frame_id` (a marker frame), so the frame-based check generalizes without any changes to the liveness gate.
+`PendingEffectKind` starts with one variant (`Dispatch`). DEFERRED_RESTART_PERFORM adds `Restart`. `EventKind` has `Dispatch` and `Completion`; DEFERRED_RESTART_PERFORM adds `Restart`.
+
+The payload types (`DispatchEvent`, `CompletionEvent`, and later `RestartEvent`) are shared between both enums.
+
+### Engine types
+
+```rust
+// lib.rs (new types)
+
+/// `(FrameId, PendingEffectKind)` — the liveness key and effect payload.
+pub type PendingEffect = (FrameId, PendingEffectKind);
+
+/// The payload of a pending effect.
+#[derive(Debug)]
+pub enum PendingEffectKind {
+    /// A handler invocation ready to be dispatched to a worker.
+    Dispatch(DispatchEvent),
+}
+```
+
+### WorkflowState
+
+```rust
+// lib.rs — WorkflowState (before)
+pub struct WorkflowState {
+    flat_config: FlatConfig,
+    frames: Arena<Frame>,
+    task_to_frame: BTreeMap<TaskId, FrameId>,
+    pending_dispatches: VecDeque<DispatchEvent>,
+    next_task_id: u32,
+}
+
+// lib.rs — WorkflowState (after)
+pub struct WorkflowState {
+    flat_config: FlatConfig,
+    frames: Arena<Frame>,
+    task_to_frame: BTreeMap<TaskId, FrameId>,
+    pending_effects: VecDeque<PendingEffect>,
+    next_task_id: u32,
+}
+```
+
+```rust
+// lib.rs — WorkflowState impl (before)
+pub fn pop_pending_dispatch(&mut self) -> Option<DispatchEvent> {
+    self.pending_dispatches.pop_front()
+}
+
+// lib.rs — WorkflowState impl (after)
+pub fn pop_pending_effect(&mut self) -> Option<PendingEffect> {
+    self.pending_effects.pop_front()
+}
+```
+
+### Advance
+
+```rust
+// advance.rs — Invoke arm (before)
+FlatAction::Invoke { handler } => {
+    let task_id = workflow_state.next_task_id();
+    let frame_id = workflow_state.insert_frame(Frame {
+        parent,
+        kind: FrameKind::Invoke { handler },
+    });
+    workflow_state.task_to_frame.insert(task_id, frame_id);
+    workflow_state.pending_dispatches.push_back(DispatchEvent {
+        task_id,
+        handler_id: handler,
+        value,
+    });
+}
+
+// advance.rs — Invoke arm (after)
+FlatAction::Invoke { handler } => {
+    let task_id = workflow_state.next_task_id();
+    let frame_id = workflow_state.insert_frame(Frame {
+        parent,
+        kind: FrameKind::Invoke { handler },
+    });
+    workflow_state.task_to_frame.insert(task_id, frame_id);
+    workflow_state.pending_effects.push_back((
+        frame_id,
+        PendingEffectKind::Dispatch(DispatchEvent {
+            task_id,
+            handler_id: handler,
+            value,
+        }),
+    ));
+}
+```
 
 ### Event loop types
 
-`Event` carries `frame_id` instead of `task_id`. `EventKind` variants carry full `DispatchEvent`/`CompletionEvent` structs (task_id lives inside them, not factored out).
+`Event` is `(FrameId, EventKind)`, mirroring `PendingEffect`.
 
 ```rust
 // barnum_event_loop/src/lib.rs (before)
@@ -90,14 +153,19 @@ enum EventKind {
 }
 
 // barnum_event_loop/src/lib.rs (after)
-struct Event {
-    frame_id: FrameId,
-    kind: EventKind,
-}
+type Event = (FrameId, EventKind);
 
 enum EventKind {
     Dispatch(DispatchEvent),
     Completion(CompletionEvent),
+}
+
+impl From<PendingEffectKind> for EventKind {
+    fn from(kind: PendingEffectKind) -> Self {
+        match kind {
+            PendingEffectKind::Dispatch(dispatch_event) => EventKind::Dispatch(dispatch_event),
+        }
+    }
 }
 ```
 
@@ -153,14 +221,10 @@ loop {
 
 // barnum_event_loop/src/lib.rs — run_workflow (after)
 loop {
-    let event = if let Some(dispatch_event) = workflow_state.pop_pending_dispatch() {
-        let Some(frame_id) = workflow_state.task_frame_id(dispatch_event.task_id) else {
-            continue; // stale dispatch — task was torn down
-        };
-        Event {
-            frame_id,
-            kind: EventKind::Dispatch(dispatch_event),
-        }
+    let (frame_id, event_kind) = if let Some((frame_id, pending_kind)) =
+        workflow_state.pop_pending_effect()
+    {
+        (frame_id, EventKind::from(pending_kind))
     } else {
         let (task_id, result) = scheduler
             .recv()
@@ -169,17 +233,14 @@ loop {
         let Some(frame_id) = workflow_state.task_frame_id(task_id) else {
             continue; // stale completion — task was torn down
         };
-        Event {
-            frame_id,
-            kind: EventKind::Completion(CompletionEvent { task_id, value: result? }),
-        }
+        (frame_id, EventKind::Completion(CompletionEvent { task_id, value: result? }))
     };
 
-    if !workflow_state.is_frame_live(event.frame_id) {
+    if !workflow_state.is_frame_live(frame_id) {
         continue;
     }
 
-    match event.kind {
+    match event_kind {
         EventKind::Dispatch(dispatch_event) => {
             let handler = workflow_state.handler(dispatch_event.handler_id);
             scheduler.dispatch(&dispatch_event, handler);
@@ -193,7 +254,45 @@ loop {
 }
 ```
 
-Note: `task_frame_id` returning `None` at construction time filters stale events. `is_frame_live` at processing time is redundant here (if `task_frame_id` returned `Some`, the frame exists). It becomes load-bearing after DEFERRED_RESTART_PERFORM, where restart effects carry a marker frame_id that isn't looked up via `task_frame_id`.
+### Test helpers
+
+```rust
+// test_helpers.rs — drive_builtins (before)
+let Some(dispatch_event) = engine.pop_pending_dispatch() else { break; };
+if !engine.is_task_live(dispatch_event.task_id) {
+    continue;
+}
+match engine.handler(dispatch_event.handler_id).clone() {
+    // ...
+}
+
+// test_helpers.rs — drive_builtins (after)
+let Some((frame_id, pending_effect_kind)) = engine.pop_pending_effect() else {
+    break;
+};
+if !engine.is_frame_live(frame_id) {
+    continue;
+}
+match pending_effect_kind {
+    PendingEffectKind::Dispatch(dispatch_event) => {
+        match engine.handler(dispatch_event.handler_id).clone() {
+            // ...
+        }
+    }
+}
+```
+
+```rust
+// test_helpers.rs — complete_and_drive (before)
+if !engine.is_task_live(completion_event.task_id) {
+    return Ok((None, Vec::new()));
+}
+
+// test_helpers.rs — complete_and_drive (after)
+if engine.task_frame_id(completion_event.task_id).is_none() {
+    return Ok((None, Vec::new()));
+}
+```
 
 ---
 
@@ -204,7 +303,13 @@ Note: `task_frame_id` returning `None` at construction time filters stale events
 | `is_task_live` | Checks `task_to_frame.contains_key(&task_id)` | Deleted |
 | `is_frame_live` | Does not exist | Checks `frames.contains(frame_id)` |
 | `task_frame_id` | Does not exist | Returns `task_to_frame.get(&task_id).copied()` |
-| `Event` struct | `Event { task_id, kind }` | `Event { frame_id, kind }` |
+| `PendingEffect` | Does not exist | Type alias: `(FrameId, PendingEffectKind)` |
+| `PendingEffectKind` | Does not exist | Enum: `Dispatch(DispatchEvent)` |
+| `pending_dispatches` | `VecDeque<DispatchEvent>` | Replaced by `pending_effects: VecDeque<PendingEffect>` |
+| `pop_pending_dispatch` | Returns `Option<DispatchEvent>` | Replaced by `pop_pending_effect` returning `Option<PendingEffect>` |
+| `advance` Invoke arm | Pushes `DispatchEvent` to `pending_dispatches` | Pushes `(frame_id, PendingEffectKind::Dispatch(...))` to `pending_effects` |
+| `Event` | Struct: `{ task_id, kind }` | Type alias: `(FrameId, EventKind)` |
 | `EventKind::Dispatch` | `{ handler_id, value }` | `Dispatch(DispatchEvent)` |
 | `EventKind::Completion` | `{ value }` | `Completion(CompletionEvent)` |
-| Event loop liveness | `is_task_live(event.task_id)` | `is_frame_live(event.frame_id)` |
+| Event loop source | `pop_pending_dispatch` + manual Event construction | `pop_pending_effect` + `EventKind::from(pending_kind)` |
+| Event loop liveness | `is_task_live(event.task_id)` | `is_frame_live(frame_id)` |
