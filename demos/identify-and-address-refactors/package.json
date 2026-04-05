@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "demo": "tsx run.ts"
+    "demo": "if [ -f ../../Cargo.toml ]; then pnpm -C ../../libs/barnum run build; fi && tsx run.ts"
   },
   "dependencies": {
     "@barnum/barnum": "link:../../libs/barnum",

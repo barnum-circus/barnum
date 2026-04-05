@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   const result = await handler.__definition.handle({ value: input.value });
 
   // Write result to stdout
-  process.stdout.write(JSON.stringify(result));
+  process.stdout.write(JSON.stringify(result) ?? "null");
 }
 
 main().catch((error) => {
