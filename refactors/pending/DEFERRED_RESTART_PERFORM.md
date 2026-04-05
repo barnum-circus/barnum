@@ -397,6 +397,50 @@ pub async fn run_workflow(
 
 Dispatch(A) was sent to a worker before the restart tore it down. That's wasted work, and that's fine. Dispatch(B) came after the restart in the queue, so it was skipped cheaply.
 
+### WorkflowState construction
+
+```rust
+// lib.rs — WorkflowState::new (before)
+pub fn new(flat_config: FlatConfig) -> Self {
+    Self {
+        flat_config,
+        frames: Arena::new(),
+        task_to_frame: BTreeMap::new(),
+        pending_dispatches: Vec::new(),
+        next_task_id: 0,
+    }
+}
+
+// lib.rs — WorkflowState::new (after)
+pub fn new(flat_config: FlatConfig) -> Self {
+    Self {
+        flat_config,
+        frames: Arena::new(),
+        task_to_frame: BTreeMap::new(),
+        pending_effects: VecDeque::new(),
+        next_task_id: 0,
+    }
+}
+```
+
+### Scheduler dispatch signature
+
+```rust
+// barnum_event_loop/src/lib.rs — Scheduler::dispatch (before)
+pub fn dispatch(&self, dispatch: &Dispatch, handler: &HandlerKind) {
+    let result_tx = self.result_tx.clone();
+    let task_id = dispatch.task_id;
+    // ... rest unchanged
+}
+
+// barnum_event_loop/src/lib.rs — Scheduler::dispatch (after)
+pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) {
+    let result_tx = self.result_tx.clone();
+    let task_id = dispatch_event.task_id;
+    // ... rest unchanged
+}
+```
+
 ### What gets deleted
 
 - `bubble_restart_effect` in effects.rs — replaced by the `RestartPerform` advance arm (ancestor walk + enqueue) and `process_restart` (teardown + handler advance).
@@ -465,6 +509,112 @@ Both `#[should_panic]` tests become passing tests:
 - `completing_torn_down_task_is_noop`: The event loop checks `is_task_pending` before calling `complete()`. Stale completions are skipped. `complete()` is never called with an unknown task.
 - `restart_perform_non_terminal_in_all`: All advance loop completes entirely. Both children advance. Event loop processes the restart (teardown), then skips the stale dispatch.
 
-The `drive_builtins` test helper needs to process effects instead of dispatches. It takes effects one at a time, processes restarts, checks dispatch liveness, and executes builtins. This mirrors the event loop's behavior in a synchronous test context.
+The `drive_builtins` and `complete_and_drive` test helpers mirror the event loop in a synchronous test context. They pop effects one at a time, process restarts, check dispatch liveness, and execute builtins inline.
+
+```rust
+// test_helpers.rs — drive_builtins (before)
+pub fn drive_builtins(
+    engine: &mut WorkflowState,
+) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
+    let mut ts_dispatches: Vec<Dispatch> = Vec::new();
+    loop {
+        let dispatches = engine.take_pending_dispatches();
+        if dispatches.is_empty() {
+            break;
+        }
+        let mut had_builtin = false;
+        for dispatch in dispatches {
+            match engine.handler(dispatch.handler_id).clone() {
+                HandlerKind::Builtin(builtin_handler) => {
+                    let result =
+                        barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
+                            .unwrap();
+                    if let Some(value) = engine.complete(dispatch.task_id, result)? {
+                        return Ok((Some(value), ts_dispatches));
+                    }
+                    had_builtin = true;
+                }
+                HandlerKind::TypeScript(_) => {
+                    ts_dispatches.push(dispatch);
+                }
+            }
+        }
+        if !had_builtin {
+            break;
+        }
+    }
+    Ok((None, ts_dispatches))
+}
+
+// test_helpers.rs — drive_builtins (after)
+pub fn drive_builtins(
+    engine: &mut WorkflowState,
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    let mut ts_dispatches: Vec<DispatchEvent> = Vec::new();
+    loop {
+        let Some(pending_effect) = engine.pop_pending_effect() else {
+            break;
+        };
+        match pending_effect {
+            PendingEffect::Restart(pending_restart_event) => {
+                engine.process_restart(pending_restart_event)?;
+            }
+            PendingEffect::Dispatch(dispatch_event) => {
+                if !engine.is_task_pending(dispatch_event.task_id) {
+                    continue;
+                }
+                match engine.handler(dispatch_event.handler_id).clone() {
+                    HandlerKind::Builtin(builtin_handler) => {
+                        let result = barnum_builtins::execute_builtin(
+                            &builtin_handler.builtin,
+                            &dispatch_event.value,
+                        )
+                        .unwrap();
+                        if let Some(value) = engine.complete(dispatch_event.task_id, result)? {
+                            return Ok((Some(value), ts_dispatches));
+                        }
+                    }
+                    HandlerKind::TypeScript(_) => {
+                        ts_dispatches.push(dispatch_event);
+                    }
+                }
+            }
+        }
+    }
+    Ok((None, ts_dispatches))
+}
+```
+
+```rust
+// test_helpers.rs — complete_and_drive (before)
+pub fn complete_and_drive(
+    engine: &mut WorkflowState,
+    task_id: TaskId,
+    value: Value,
+) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
+    let result = engine.complete(task_id, value)?;
+    if result.is_some() {
+        let ts = engine.take_pending_dispatches();
+        return Ok((result, ts));
+    }
+    drive_builtins(engine)
+}
+
+// test_helpers.rs — complete_and_drive (after)
+pub fn complete_and_drive(
+    engine: &mut WorkflowState,
+    task_id: TaskId,
+    value: Value,
+) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
+    if !engine.is_task_pending(task_id) {
+        return Ok((None, Vec::new()));
+    }
+    let result = engine.complete(task_id, value)?;
+    if result.is_some() {
+        return Ok((result, Vec::new()));
+    }
+    drive_builtins(engine)
+}
+```
 
 All existing restart tests (`restart_branch_*`, `teardown_cleans_up_*`, `multi_step_restart_handler_chain`, etc.) should continue to pass with the updated helper.
