@@ -282,6 +282,15 @@ enum Event {
     /// A worker completed a task.
     Completion(CompletionEvent),
 }
+
+impl From<PendingEffect> for Event {
+    fn from(effect: PendingEffect) -> Self {
+        match effect {
+            PendingEffect::Dispatch(dispatch_event) => Event::Dispatch(dispatch_event),
+            PendingEffect::Restart(pending_restart_event) => Event::Restart(pending_restart_event),
+        }
+    }
+}
 ```
 
 Each iteration sources the next event — pending effects first, blocking for a scheduler completion only when the effect queue is empty — then processes it in a three-branch match. Every branch checks liveness before doing work:
@@ -335,9 +344,8 @@ pub async fn run_workflow(
 
     loop {
         // Source the next event: pending effects first, then block for completion.
-        let event = match workflow_state.pop_pending_effect() {
-            Some(PendingEffect::Dispatch(dispatch_event)) => Event::Dispatch(dispatch_event),
-            Some(PendingEffect::Restart(pending_restart_event)) => Event::Restart(pending_restart_event),
+        let event: Event = match workflow_state.pop_pending_effect() {
+            Some(pending_effect) => pending_effect.into(),
             None => {
                 let (task_id, result) = scheduler
                     .recv()
