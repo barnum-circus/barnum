@@ -4,7 +4,7 @@ Barnum is a programming language for asynchronous programming that is geared tow
 
 ## Why?
 
-LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions.
+LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions. You can't rely on them to faithfully execute a complicated, multi-step plan.
 
 Barnum is an attempt to enable LLMs to perform dramatically more complicated, ambitious tasks. With Barnum, you define an asynchronous workflow, which is effectively a state machine. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and small.
 
@@ -69,25 +69,23 @@ When the workflow grows in complexity, you might reach for plan mode or write a 
 
 And in practice, you *do* want the complicated version. You don't want `listFiles` done by an agent — it's deterministic, just read the filesystem. You don't want a single `refactor` step — you want the agent to refactor, then evaluate the result, then type-check, then fix errors in a loop until it's clean:
 
-```diff
-  await workflowBuilder()
-    .workflow(() =>
-      listFiles
--       .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-+       .forEach(pipe(
-+         refactor,
-+         loop((recur) =>
-+           pipe(typeCheck, classifyErrors).branch({
-+             HasErrors: pipe(forEach(fix).drop(), recur),
-+             Clean: drop,
-+           })
-+         ),
-+         commit,
-+         createPR,
-+       ))
-        .drop()
-    )
-    .run();
+```ts
+const refactorWithRetry = pipe(
+  refactor,
+  evaluate,
+  loop((recur) =>
+    pipe(typeCheck, classifyErrors).branch({
+      HasErrors: pipe(forEach(fix).drop(), recur),
+      Clean: drop,
+    })
+  ),
+  commit,
+  createPR,
+);
+
+await workflowBuilder()
+  .workflow(() => listFiles.forEach(refactorWithRetry).drop())
+  .run();
 ```
 
 Now type errors are fixed in a loop — the agent keeps fixing until the code is clean. And this is still a simplified version. A real workflow might add review steps, worktree isolation, retry-on-timeout, or error escalation.
@@ -109,14 +107,12 @@ pnpm install
 pnpm run demo
 ```
 
-## Architecture
+## Repertoire
 
-```
-TypeScript DSL (libs/barnum)
-  → Serializable AST (JSON)
-    → Rust engine (crates/barnum_engine)
-      → Event loop + scheduler (crates/barnum_event_loop)
-        → Handler subprocess execution (crates/barnum_typescript_handler)
-```
+The [Repertoire](https://barnum-circus.github.io/barnum/repertoire) showcases advanced patterns — `tryCatch` with retry, `withTimeout`, worktree isolation, LLM-powered code review loops, and more.
 
-The TypeScript library defines the workflow. `workflowBuilder().run()` serializes the AST to JSON and spawns the Rust binary, which flattens the AST into a `FlatConfig`, manages frames and task dispatch, and executes each handler as an isolated subprocess. Input and output schemas (defined via Zod) are compiled into JSON Schema validators at init and enforced at every handler boundary.
+## How Barnum works
+
+- [How Barnum works](https://barnum-circus.github.io/barnum/how-it-works)
+- [How the compiler works](https://barnum-circus.github.io/barnum/compiler)
+- [Algebraic event handlers](https://barnum-circus.github.io/barnum/algebraic-event-handlers)
