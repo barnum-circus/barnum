@@ -231,6 +231,7 @@ impl FlatConfig {
     }
 
     /// Iterate all handlers in the pool with their IDs.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn handlers(&self) -> impl Iterator<Item = (HandlerId, &HandlerKind)> {
         self.handlers
             .iter()

@@ -194,8 +194,8 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let d1 = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d1 = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
 
         let result = super::complete(
             &mut engine,
@@ -207,8 +207,8 @@ mod tests {
         .unwrap();
         assert_eq!(result, None);
 
-        let d2 = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d2 = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(d2.value, json!("a_result"));
 
         let result = super::complete(
@@ -233,8 +233,8 @@ mod tests {
         crate::advance::advance(&mut engine, root, json!("input"), None).unwrap();
 
         // A
-        let d = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(
             super::complete(
                 &mut engine,
@@ -247,8 +247,8 @@ mod tests {
             None
         );
         // B
-        let d = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(d.value, json!("a_out"));
         assert_eq!(
             super::complete(
@@ -262,8 +262,8 @@ mod tests {
             None
         );
         // C
-        let d = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(d.value, json!("b_out"));
         assert_eq!(
             super::complete(
@@ -285,9 +285,9 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let a_dispatch = engine.pop_pending_dispatch().unwrap();
-        let b_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let a_dispatch = pop_dispatch(&mut engine).unwrap();
+        let b_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
 
         // Complete in reverse order to verify index-based collection.
         assert_eq!(
@@ -321,9 +321,9 @@ mod tests {
         let root = engine.workflow_root();
         crate::advance::advance(&mut engine, root, json!([10, 20]), None).unwrap();
 
-        let d0 = engine.pop_pending_dispatch().unwrap();
-        let d1 = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d0 = pop_dispatch(&mut engine).unwrap();
+        let d1 = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
 
         assert_eq!(
             super::complete(

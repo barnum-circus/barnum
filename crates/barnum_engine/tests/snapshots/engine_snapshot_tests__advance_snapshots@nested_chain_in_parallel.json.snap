@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/nested_chain_in_parallel.json
 ---
@@ -186,25 +185,41 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [
-        DispatchEvent {
-            task_id: TaskId(
-                0,
+    pending_effects: [
+        (
+            Index {
+                slot: 2,
+                generation: Generation(1),
+            },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        0,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: Null,
+                },
             ),
-            handler_id: HandlerId(
-                0,
+        ),
+        (
+            Index {
+                slot: 3,
+                generation: Generation(1),
+            },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        1,
+                    ),
+                    handler_id: HandlerId(
+                        2,
+                    ),
+                    value: Null,
+                },
             ),
-            value: Null,
-        },
-        DispatchEvent {
-            task_id: TaskId(
-                1,
-            ),
-            handler_id: HandlerId(
-                2,
-            ),
-            value: Null,
-        },
+        ),
     ],
     next_task_id: 2,
 }

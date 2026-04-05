@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
-assertion_line: 83
 expression: trace
 input_file: crates/barnum_engine/tests/completion/single_invoke.json
 ---
@@ -61,7 +60,7 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 1,
 }
 Pending: [
@@ -124,7 +123,7 @@ WorkflowState {
         ),
     },
     task_to_frame: {},
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 1,
 }
 Pending: []

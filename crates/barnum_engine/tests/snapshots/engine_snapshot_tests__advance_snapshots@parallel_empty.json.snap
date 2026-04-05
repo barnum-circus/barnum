@@ -25,6 +25,6 @@ WorkflowState {
         first_free: None,
     },
     task_to_frame: {},
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 0,
 }

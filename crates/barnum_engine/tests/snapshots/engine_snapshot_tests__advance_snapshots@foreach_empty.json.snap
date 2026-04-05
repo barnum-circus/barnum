@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_empty.json
 ---
@@ -46,6 +45,6 @@ WorkflowState {
         first_free: None,
     },
     task_to_frame: {},
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 0,
 }

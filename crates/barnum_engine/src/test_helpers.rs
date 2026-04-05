@@ -4,7 +4,7 @@
 //! across test modules in advance, complete, effects, and frame.
 
 use crate::complete::complete;
-use crate::{CompleteError, CompletionEvent, DispatchEvent, WorkflowState};
+use crate::{CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, WorkflowState};
 
 use barnum_ast::flat::flatten;
 use barnum_ast::*;
@@ -174,6 +174,16 @@ pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: 
 // Engine driving helpers
 // ---------------------------------------------------------------------------
 
+/// Pop the next pending dispatch from the effect queue.
+/// Panics if the next effect is not a `Dispatch`.
+/// Test-only convenience — when `Restart` is added, non-exhaustive
+/// match will force callers to handle it.
+pub fn pop_dispatch(engine: &mut WorkflowState) -> Option<DispatchEvent> {
+    let (_, kind) = engine.pop_pending_effect()?;
+    let PendingEffectKind::Dispatch(dispatch_event) = kind;
+    Some(dispatch_event)
+}
+
 /// Process all pending builtin dispatches. Returns TypeScript dispatches
 /// for manual completion and workflow result (if the workflow terminated).
 #[allow(clippy::unwrap_used, clippy::type_complexity)]
@@ -182,12 +192,13 @@ pub fn drive_builtins(
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
     let mut ts_dispatches: Vec<DispatchEvent> = Vec::new();
     loop {
-        let Some(dispatch_event) = engine.pop_pending_dispatch() else {
+        let Some((frame_id, pending_effect_kind)) = engine.pop_pending_effect() else {
             break;
         };
-        if !engine.is_task_live(dispatch_event.task_id) {
+        if !engine.is_frame_live(frame_id) {
             continue;
         }
+        let PendingEffectKind::Dispatch(dispatch_event) = pending_effect_kind;
         match engine.handler(dispatch_event.handler_id).clone() {
             HandlerKind::Builtin(builtin_handler) => {
                 let result = barnum_builtins::execute_builtin(
@@ -217,7 +228,7 @@ pub fn complete_and_drive(
     engine: &mut WorkflowState,
     completion_event: CompletionEvent,
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
-    if !engine.is_task_live(completion_event.task_id) {
+    if engine.task_frame_id(completion_event.task_id).is_none() {
         return Ok((None, Vec::new()));
     }
     let result = complete(engine, completion_event)?;

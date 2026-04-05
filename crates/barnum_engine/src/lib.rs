@@ -2,7 +2,7 @@
 //!
 //! The engine is a synchronous state machine with no I/O, no async, no timers,
 //! and no concurrency. External code drives it by calling [`advance::advance`]
-//! and popping dispatches via [`WorkflowState::pop_pending_dispatch`].
+//! and popping effects via [`WorkflowState::pop_pending_effect`].
 
 /// Advance (expand) an action into frames.
 pub mod advance;
@@ -64,6 +64,20 @@ pub struct CompletionEvent {
     pub task_id: TaskId,
     /// The handler's return value.
     pub value: Value,
+}
+
+// ---------------------------------------------------------------------------
+// PendingEffect
+// ---------------------------------------------------------------------------
+
+/// `(FrameId, PendingEffectKind)` — the liveness key and effect payload.
+pub type PendingEffect = (FrameId, PendingEffectKind);
+
+/// The payload of a pending effect.
+#[derive(Debug)]
+pub enum PendingEffectKind {
+    /// A handler invocation ready to be dispatched to a worker.
+    Dispatch(DispatchEvent),
 }
 
 // ---------------------------------------------------------------------------
@@ -135,15 +149,15 @@ pub enum CompleteError {
 /// Pure state-machine workflow engine.
 ///
 /// Call [`advance::advance`] with [`workflow_root`](WorkflowState::workflow_root)
-/// to begin execution, then pop dispatches via
-/// [`pop_pending_dispatch`](WorkflowState::pop_pending_dispatch). Deliver handler
+/// to begin execution, then pop effects via
+/// [`pop_pending_effect`](WorkflowState::pop_pending_effect). Deliver handler
 /// results via [`complete::complete`].
 #[derive(Debug)]
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
     task_to_frame: BTreeMap<TaskId, FrameId>,
-    pending_dispatches: VecDeque<DispatchEvent>,
+    pending_effects: VecDeque<PendingEffect>,
     next_task_id: u32,
 }
 
@@ -156,7 +170,7 @@ impl WorkflowState {
             flat_config,
             frames: Arena::new(),
             task_to_frame: BTreeMap::new(),
-            pending_dispatches: VecDeque::new(),
+            pending_effects: VecDeque::new(),
             next_task_id: 0,
         }
     }
@@ -174,16 +188,23 @@ impl WorkflowState {
         self.flat_config.workflow_root()
     }
 
-    /// Pop the next pending dispatch, or `None` if the queue is empty.
-    pub fn pop_pending_dispatch(&mut self) -> Option<DispatchEvent> {
-        self.pending_dispatches.pop_front()
+    /// Pop the next pending effect, or `None` if the queue is empty.
+    pub fn pop_pending_effect(&mut self) -> Option<PendingEffect> {
+        self.pending_effects.pop_front()
     }
 
-    /// Returns true if this task's Invoke frame still exists in the tree.
-    /// Used by the event loop to drop stale events before processing.
+    /// Returns true if `frame_id` still exists in the frame arena.
+    /// The single liveness check for all event types.
     #[must_use]
-    pub fn is_task_live(&self, task_id: TaskId) -> bool {
-        self.task_to_frame.contains_key(&task_id)
+    pub fn is_frame_live(&self, frame_id: FrameId) -> bool {
+        self.frames.contains(frame_id)
+    }
+
+    /// Look up the Invoke frame ID for a task. Returns `None` if the task
+    /// was torn down (stale completion from the scheduler).
+    #[must_use]
+    pub fn task_frame_id(&self, task_id: TaskId) -> Option<FrameId> {
+        self.task_to_frame.get(&task_id).copied()
     }
 
     /// Look up a handler by ID. Used by the caller to resolve
@@ -200,7 +221,7 @@ impl WorkflowState {
     ///
     /// Panics if `task_id` is unknown or its frame is not an Invoke.
     #[must_use]
-    #[allow(clippy::expect_used)]
+    #[allow(clippy::expect_used, clippy::panic)]
     pub fn handler_id_for_task(&self, task_id: TaskId) -> HandlerId {
         let frame_id = self
             .task_to_frame
@@ -212,10 +233,7 @@ impl WorkflowState {
             .expect("handler_id_for_task: frame not in arena");
         match frame.kind {
             frame::FrameKind::Invoke { handler } => handler,
-            ref other => panic!(
-                "handler_id_for_task: expected Invoke frame, got {:?}",
-                other
-            ),
+            ref other => panic!("handler_id_for_task: expected Invoke frame, got {other:?}"),
         }
     }
 

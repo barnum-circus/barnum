@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/chain_then_branch.json
 ---
@@ -142,16 +141,24 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [
-        DispatchEvent {
-            task_id: TaskId(
-                0,
+    pending_effects: [
+        (
+            Index {
+                slot: 1,
+                generation: Generation(1),
+            },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        0,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: String("raw"),
+                },
             ),
-            handler_id: HandlerId(
-                0,
-            ),
-            value: String("raw"),
-        },
+        ),
     ],
     next_task_id: 1,
 }

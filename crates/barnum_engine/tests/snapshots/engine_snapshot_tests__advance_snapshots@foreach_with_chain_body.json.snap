@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/foreach_with_chain_body.json
 ---
@@ -182,25 +181,41 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [
-        DispatchEvent {
-            task_id: TaskId(
-                0,
+    pending_effects: [
+        (
+            Index {
+                slot: 2,
+                generation: Generation(1),
+            },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        0,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: String("item1"),
+                },
             ),
-            handler_id: HandlerId(
-                0,
+        ),
+        (
+            Index {
+                slot: 4,
+                generation: Generation(1),
+            },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        1,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: String("item2"),
+                },
             ),
-            value: String("item1"),
-        },
-        DispatchEvent {
-            task_id: TaskId(
-                1,
-            ),
-            handler_id: HandlerId(
-                0,
-            ),
-            value: String("item2"),
-        },
+        ),
     ],
     next_task_id: 2,
 }

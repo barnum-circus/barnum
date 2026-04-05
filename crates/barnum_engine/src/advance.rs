@@ -5,7 +5,7 @@ use serde_json::Value;
 use super::frame::{
     Frame, FrameKind, ParentRef, RestartHandleFrame, RestartHandleSide, ResumeHandleFrame,
 };
-use super::{AdvanceError, DispatchEvent, WorkflowState};
+use super::{AdvanceError, DispatchEvent, PendingEffectKind, WorkflowState};
 
 /// Expand an `ActionId` into frames. Creates frames for structural
 /// combinators and Invoke leaves. Invoke frames hold the parent pointer
@@ -39,11 +39,14 @@ pub fn advance(
                 kind: FrameKind::Invoke { handler },
             });
             workflow_state.task_to_frame.insert(task_id, frame_id);
-            workflow_state.pending_dispatches.push_back(DispatchEvent {
-                task_id,
-                handler_id: handler,
-                value,
-            });
+            workflow_state.pending_effects.push_back((
+                frame_id,
+                PendingEffectKind::Dispatch(DispatchEvent {
+                    task_id,
+                    handler_id: handler,
+                    value,
+                }),
+            ));
         }
 
         FlatAction::Chain { rest } => {
@@ -218,8 +221,8 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!({"x": 1}), None).unwrap();
 
-        let dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(dispatch.value, json!({"x": 1}));
         assert_eq!(
             engine.handler(dispatch.handler_id),
@@ -234,8 +237,8 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(
             engine.handler(dispatch.handler_id),
             &ts_handler("./a.ts", "a"),
@@ -254,10 +257,10 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!({"shared": true}), None).unwrap();
 
-        let a_dispatch = engine.pop_pending_dispatch().unwrap();
-        let b_dispatch = engine.pop_pending_dispatch().unwrap();
-        let c_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let a_dispatch = pop_dispatch(&mut engine).unwrap();
+        let b_dispatch = pop_dispatch(&mut engine).unwrap();
+        let c_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(a_dispatch.value, json!({"shared": true}));
         assert_eq!(b_dispatch.value, json!({"shared": true}));
         assert_eq!(c_dispatch.value, json!({"shared": true}));
@@ -270,10 +273,10 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!([10, 20, 30]), None).unwrap();
 
-        let d0 = engine.pop_pending_dispatch().unwrap();
-        let d1 = engine.pop_pending_dispatch().unwrap();
-        let d2 = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let d0 = pop_dispatch(&mut engine).unwrap();
+        let d1 = pop_dispatch(&mut engine).unwrap();
+        let d2 = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(d0.value, json!(10));
         assert_eq!(d1.value, json!(20));
         assert_eq!(d2.value, json!(30));
@@ -289,8 +292,8 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!({"kind": "Ok", "value": 42}), None).unwrap();
 
-        let dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(
             engine.handler(dispatch.handler_id),
             &ts_handler("./ok.ts", "handle"),
@@ -308,9 +311,9 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let a_dispatch = engine.pop_pending_dispatch().unwrap();
-        let c_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let a_dispatch = pop_dispatch(&mut engine).unwrap();
+        let c_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         let handlers = [
             engine.handler(a_dispatch.handler_id).clone(),
             engine.handler(c_dispatch.handler_id).clone(),
@@ -331,8 +334,8 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!(null), None).unwrap();
 
-        let dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(
             engine.handler(dispatch.handler_id),
             &ts_handler("./a.ts", "a"),
@@ -346,7 +349,7 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!([]), None).unwrap();
 
-        assert!(engine.pop_pending_dispatch().is_none());
+        assert!(pop_dispatch(&mut engine).is_none());
     }
 
     /// All with empty children: no dispatches, immediate completion.
@@ -356,7 +359,7 @@ mod tests {
         let root = engine.workflow_root();
         super::advance(&mut engine, root, json!(null), None).unwrap();
 
-        assert!(engine.pop_pending_dispatch().is_none());
+        assert!(pop_dispatch(&mut engine).is_none());
     }
 
     // Bare RestartPerform with no enclosing RestartHandle → UnhandledRestartEffect.

@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/branch_matching.json
 ---
@@ -96,19 +95,27 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [
-        DispatchEvent {
-            task_id: TaskId(
-                0,
-            ),
-            handler_id: HandlerId(
-                0,
-            ),
-            value: Object {
-                "error": String("something failed"),
-                "kind": String("Err"),
+    pending_effects: [
+        (
+            Index {
+                slot: 0,
+                generation: Generation(1),
             },
-        },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        0,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: Object {
+                        "error": String("something failed"),
+                        "kind": String("Err"),
+                    },
+                },
+            ),
+        ),
     ],
     next_task_id: 1,
 }

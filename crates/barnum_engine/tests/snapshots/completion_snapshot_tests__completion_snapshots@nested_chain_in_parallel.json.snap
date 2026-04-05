@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/completion_snapshot_tests.rs
-assertion_line: 83
 expression: trace
 input_file: crates/barnum_engine/tests/completion/nested_chain_in_parallel.json
 ---
@@ -187,7 +186,7 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 2,
 }
 Pending: [
@@ -378,7 +377,7 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 2,
 }
 Pending: []
@@ -538,7 +537,7 @@ WorkflowState {
             generation: Generation(2),
         },
     },
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 3,
 }
 Pending: [
@@ -680,7 +679,7 @@ WorkflowState {
         ),
     },
     task_to_frame: {},
-    pending_dispatches: [],
+    pending_effects: [],
     next_task_id: 3,
 }
 Pending: []

@@ -12,7 +12,9 @@ use barnum_ast::flat::HandlerId;
 use barnum_builtins::{BuiltinError, execute_builtin};
 use barnum_engine::advance::advance;
 use barnum_engine::complete::complete;
-use barnum_engine::{CompleteError, CompletionEvent, DispatchEvent, TaskId, WorkflowState};
+use barnum_engine::{
+    CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, TaskId, WorkflowState,
+};
 use barnum_typescript_handler::{TypeScriptHandlerError, execute_typescript};
 use intern::Lookup;
 use jsonschema::Validator;
@@ -38,19 +40,20 @@ pub enum HandlerError {
 // Event
 // =============================================================================
 
-/// An event for the workflow event loop.
-/// `task_id` is factored out for uniform liveness checking.
-struct Event {
-    task_id: TaskId,
-    kind: EventKind,
-}
-
-/// The payload of a workflow event, without `task_id`.
+/// The payload of a workflow event. Paired with a `FrameId` liveness key.
 enum EventKind {
     /// A handler invocation ready to dispatch to a worker.
-    Dispatch { handler_id: HandlerId, value: Value },
+    Dispatch(DispatchEvent),
     /// A worker completed a task.
-    Completion { value: Value },
+    Completion(CompletionEvent),
+}
+
+impl From<PendingEffectKind> for EventKind {
+    fn from(kind: PendingEffectKind) -> Self {
+        match kind {
+            PendingEffectKind::Dispatch(dispatch_event) => EventKind::Dispatch(dispatch_event),
+        }
+    }
 }
 
 // =============================================================================
@@ -171,9 +174,7 @@ struct CompiledSchemas {
 /// Iterates the handler pool, compiles each TypeScript handler's input/output
 /// schemas into [`Validator`]s, and returns them keyed by [`HandlerId`].
 /// Invalid schemas (not well-formed JSON Schema) cause an immediate error.
-fn compile_schemas(
-    workflow_state: &WorkflowState,
-) -> Result<CompiledSchemas, RunWorkflowError> {
+fn compile_schemas(workflow_state: &WorkflowState) -> Result<CompiledSchemas, RunWorkflowError> {
     let mut input = HashMap::new();
     let mut output = HashMap::new();
 
@@ -183,26 +184,24 @@ fn compile_schemas(
         };
 
         if let Some(ref schema) = ts_handler.input_schema {
-            let validator = Validator::new(&schema.0).map_err(|err| {
-                RunWorkflowError::InvalidSchema {
+            let validator =
+                Validator::new(&schema.0).map_err(|err| RunWorkflowError::InvalidSchema {
                     module: ts_handler.module.lookup().to_owned(),
                     func: ts_handler.func.lookup().to_owned(),
                     direction: SchemaDirection::Input,
                     error: err.to_string(),
-                }
-            })?;
+                })?;
             input.insert(handler_id, validator);
         }
 
         if let Some(ref schema) = ts_handler.output_schema {
-            let validator = Validator::new(&schema.0).map_err(|err| {
-                RunWorkflowError::InvalidSchema {
+            let validator =
+                Validator::new(&schema.0).map_err(|err| RunWorkflowError::InvalidSchema {
                     module: ts_handler.module.lookup().to_owned(),
                     func: ts_handler.func.lookup().to_owned(),
                     direction: SchemaDirection::Output,
                     error: err.to_string(),
-                }
-            })?;
+                })?;
             output.insert(handler_id, validator);
         }
     }
@@ -285,64 +284,56 @@ pub async fn run_workflow(
     advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
 
     loop {
-        let event = if let Some(dispatch_event) = workflow_state.pop_pending_dispatch() {
-            Event {
-                task_id: dispatch_event.task_id,
-                kind: EventKind::Dispatch {
-                    handler_id: dispatch_event.handler_id,
-                    value: dispatch_event.value,
-                },
-            }
-        } else {
-            let (task_id, result) = scheduler
-                .recv()
-                .await
-                .expect("scheduler channel closed unexpectedly");
-            Event {
-                task_id,
-                kind: EventKind::Completion { value: result? },
-            }
-        };
+        let (frame_id, event_kind) =
+            if let Some((frame_id, pending_kind)) = workflow_state.pop_pending_effect() {
+                (frame_id, EventKind::from(pending_kind))
+            } else {
+                let (task_id, result) = scheduler
+                    .recv()
+                    .await
+                    .expect("scheduler channel closed unexpectedly");
+                let Some(frame_id) = workflow_state.task_frame_id(task_id) else {
+                    continue; // stale completion — task was torn down
+                };
+                (
+                    frame_id,
+                    EventKind::Completion(CompletionEvent {
+                        task_id,
+                        value: result?,
+                    }),
+                )
+            };
 
-        if !workflow_state.is_task_live(event.task_id) {
+        if !workflow_state.is_frame_live(frame_id) {
             continue;
         }
 
-        match event.kind {
-            EventKind::Dispatch { handler_id, value } => {
+        match event_kind {
+            EventKind::Dispatch(dispatch_event) => {
                 // Validate input before dispatching to the handler.
                 validate_value(
                     &compiled_schemas.input,
-                    handler_id,
-                    &value,
+                    dispatch_event.handler_id,
+                    &dispatch_event.value,
                     SchemaDirection::Input,
                     workflow_state,
                 )?;
 
-                let handler = workflow_state.handler(handler_id);
-                let dispatch_event = DispatchEvent {
-                    task_id: event.task_id,
-                    handler_id,
-                    value,
-                };
+                let handler = workflow_state.handler(dispatch_event.handler_id);
                 scheduler.dispatch(&dispatch_event, handler);
             }
-            EventKind::Completion { value } => {
+            EventKind::Completion(completion_event) => {
                 // Validate output before delivering the completion.
                 // Read handler_id BEFORE complete() removes the frame.
-                let handler_id = workflow_state.handler_id_for_task(event.task_id);
+                let handler_id = workflow_state.handler_id_for_task(completion_event.task_id);
                 validate_value(
                     &compiled_schemas.output,
                     handler_id,
-                    &value,
+                    &completion_event.value,
                     SchemaDirection::Output,
                     workflow_state,
                 )?;
 
-                let completion_event = CompletionEvent {
-                    task_id: event.task_id,
-                    value,
-                };
                 if let Some(terminal_value) = complete(workflow_state, completion_event)? {
                     return Ok(terminal_value);
                 }
@@ -388,7 +379,7 @@ fn validate_value(
 // =============================================================================
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::doc_markdown, clippy::panic)]
 mod tests {
     use super::*;
     use barnum_ast::flat::flatten;

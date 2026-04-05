@@ -10,7 +10,7 @@ use barnum_ast::Config;
 use barnum_ast::flat::flatten;
 use barnum_engine::advance::advance;
 use barnum_engine::complete::complete;
-use barnum_engine::{CompletionEvent, DispatchEvent, TaskId, WorkflowState};
+use barnum_engine::{CompletionEvent, DispatchEvent, PendingEffectKind, TaskId, WorkflowState};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Write;
@@ -18,7 +18,8 @@ use std::fmt::Write;
 /// Drain all pending dispatches into a Vec (for snapshot traces).
 fn drain_pending_dispatches(engine: &mut WorkflowState) -> Vec<DispatchEvent> {
     let mut dispatches = Vec::new();
-    while let Some(dispatch_event) = engine.pop_pending_dispatch() {
+    while let Some((_, kind)) = engine.pop_pending_effect() {
+        let PendingEffectKind::Dispatch(dispatch_event) = kind;
         dispatches.push(dispatch_event);
     }
     dispatches

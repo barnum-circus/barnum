@@ -534,8 +534,8 @@ mod tests {
         .unwrap();
         assert_eq!(result, None);
 
-        let s1_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let s1_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
 
         // Complete step1 → Chain trampolines to step2.
         let result = complete(
@@ -548,8 +548,8 @@ mod tests {
         .unwrap();
         assert_eq!(result, None);
 
-        let s2_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let s2_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(s2_dispatch.value, json!("s1_out"));
 
         // Complete step2 → handler done → body re-advances with step2 output.
@@ -564,8 +564,8 @@ mod tests {
         assert_eq!(result, None);
 
         // Body re-advanced with "s2_out". body.ts dispatched again.
-        let body_dispatch = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let body_dispatch = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         assert_eq!(body_dispatch.value, json!("s2_out"));
     }
 
@@ -626,9 +626,9 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Both Performs dispatch their handlers, no blocking.
-        let h0 = engine.pop_pending_dispatch().unwrap();
-        let h1 = engine.pop_pending_dispatch().unwrap();
-        assert!(engine.pop_pending_dispatch().is_none());
+        let h0 = pop_dispatch(&mut engine).unwrap();
+        let h1 = pop_dispatch(&mut engine).unwrap();
+        assert!(pop_dispatch(&mut engine).is_none());
         let _ = (h0, h1); // verify both dispatched
     }
 

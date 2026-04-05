@@ -1,6 +1,5 @@
 ---
 source: crates/barnum_engine/tests/engine_snapshot_tests.rs
-assertion_line: 33
 expression: engine
 input_file: crates/barnum_engine/tests/advance/parallel_three.json
 ---
@@ -182,40 +181,64 @@ WorkflowState {
             generation: Generation(1),
         },
     },
-    pending_dispatches: [
-        DispatchEvent {
-            task_id: TaskId(
-                0,
-            ),
-            handler_id: HandlerId(
-                0,
-            ),
-            value: Object {
-                "shared": Bool(true),
+    pending_effects: [
+        (
+            Index {
+                slot: 1,
+                generation: Generation(1),
             },
-        },
-        DispatchEvent {
-            task_id: TaskId(
-                1,
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        0,
+                    ),
+                    handler_id: HandlerId(
+                        0,
+                    ),
+                    value: Object {
+                        "shared": Bool(true),
+                    },
+                },
             ),
-            handler_id: HandlerId(
-                1,
-            ),
-            value: Object {
-                "shared": Bool(true),
+        ),
+        (
+            Index {
+                slot: 2,
+                generation: Generation(1),
             },
-        },
-        DispatchEvent {
-            task_id: TaskId(
-                2,
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        1,
+                    ),
+                    handler_id: HandlerId(
+                        1,
+                    ),
+                    value: Object {
+                        "shared": Bool(true),
+                    },
+                },
             ),
-            handler_id: HandlerId(
-                2,
-            ),
-            value: Object {
-                "shared": Bool(true),
+        ),
+        (
+            Index {
+                slot: 3,
+                generation: Generation(1),
             },
-        },
+            Dispatch(
+                DispatchEvent {
+                    task_id: TaskId(
+                        2,
+                    ),
+                    handler_id: HandlerId(
+                        2,
+                    ),
+                    value: Object {
+                        "shared": Bool(true),
+                    },
+                },
+            ),
+        ),
     ],
     next_task_id: 3,
 }
