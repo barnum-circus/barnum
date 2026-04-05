@@ -114,8 +114,9 @@ pub struct HandleFrame {
     pub body: ActionId,
     /// The handler DAG to invoke when the effect fires.
     pub handler: ActionId,
-    /// Optional state value maintained across handler invocations.
-    pub state: Option<Value>,
+    /// State value maintained across handler invocations.
+    /// Initialized to the Handle's input value.
+    pub state: Value,
     /// Whether the Handle is free or suspended.
     pub status: HandleStatus,
 }

@@ -73,9 +73,7 @@ WorkflowState {
                                 handler: ActionId(
                                     2,
                                 ),
-                                state: Some(
-                                    String("input"),
-                                ),
+                                state: String("input"),
                                 status: Free,
                             },
                         ),

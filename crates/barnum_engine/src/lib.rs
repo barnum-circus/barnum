@@ -529,7 +529,7 @@ impl WorkflowState {
             let FrameKind::Handle(ref mut handle) = frame.kind else {
                 unreachable!("apply_state_update on non-Handle frame");
             };
-            handle.state = Some(value);
+            handle.state = value;
         }
     }
 
@@ -939,7 +939,7 @@ impl WorkflowState {
                         effect_id,
                         body,
                         handler,
-                        state: Some(value.clone()),
+                        state: value.clone(),
                         status: HandleStatus::Free,
                     }),
                 });

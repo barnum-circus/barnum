@@ -106,9 +106,7 @@ WorkflowState {
                                 handler: ActionId(
                                     2,
                                 ),
-                                state: Some(
-                                    String("input"),
-                                ),
+                                state: String("input"),
                                 status: Suspended(
                                     Chain {
                                         frame_id: Index {
@@ -299,9 +297,7 @@ WorkflowState {
                                 handler: ActionId(
                                     2,
                                 ),
-                                state: Some(
-                                    String("new_state"),
-                                ),
+                                state: String("new_state"),
                                 status: Suspended(
                                     Chain {
                                         frame_id: Index {
@@ -492,9 +488,7 @@ WorkflowState {
                                 handler: ActionId(
                                     2,
                                 ),
-                                state: Some(
-                                    String("new_state"),
-                                ),
+                                state: String("new_state"),
                                 status: Free,
                             },
                         ),
