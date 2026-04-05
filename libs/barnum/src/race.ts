@@ -1,19 +1,18 @@
-import { type Action, type Pipeable, type Result, type TypedAction, typedAction } from "./ast.js";
+import {
+  type Action,
+  type Pipeable,
+  type Result,
+  type TypedAction,
+  typedAction,
+  buildRestartBranchAction,
+  TAG_BREAK,
+  IDENTITY,
+} from "./ast.js";
 import { allocateEffectId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
 // Shared AST fragments
 // ---------------------------------------------------------------------------
-
-const EXTRACT_PAYLOAD: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } },
-};
-
-const TAG_DISCARD: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Discard" } },
-};
 
 const TAG_OK: Action = {
   kind: "Invoke",
@@ -25,12 +24,18 @@ const TAG_ERR: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
 };
 
-/** Handler DAG shared by race and withTimeout: extract payload, tag Discard. */
-const RACE_HANDLER: Action = {
-  kind: "Chain",
-  first: EXTRACT_PAYLOAD,
-  rest: TAG_DISCARD,
-};
+/**
+ * Chain(Tag("Break"), Perform(effectId)) — shared by race branches.
+ * The winning branch tags its result as Break, then Performs. The handler
+ * restarts the body; Branch takes the Break arm (identity), Handle exits.
+ */
+function breakPerform(effectId: number): Action {
+  return {
+    kind: "Chain",
+    first: TAG_BREAK,
+    rest: { kind: "Perform", effect_id: effectId },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // race — first branch to complete wins, losers cancelled
@@ -43,21 +48,23 @@ const RACE_HANDLER: Action = {
  * All branches must have the same input and output type (since either
  * could win).
  *
- * Compiles to:
- *   Handle(effectId, Chain(ExtractField("payload"), Tag("Discard")),
- *     All(
- *       Chain(action1, Perform(effectId)),
- *       Chain(action2, Perform(effectId)),
- *       ...
- *     ),
- *   )
+ * Compiled form (restart+Branch, same substrate as loop/earlyReturn):
+ *   Chain(Tag("Continue"),
+ *     Handle(effectId,
+ *       Branch({
+ *         Continue: All(Chain(a, breakPerform), Chain(b, breakPerform), ...),
+ *         Break: identity,
+ *       }),
+ *       RestartBodyHandler))
+ *
+ * First branch to complete tags Break → Perform → handler restarts →
+ * Branch takes Break arm → identity → Handle exits with winner's value.
  */
 export function race<TIn, TOut>(
   ...actions: Pipeable<TIn, TOut>[]
 ): TypedAction<TIn, TOut> {
   const effectId = allocateEffectId();
-
-  const perform: Action = { kind: "Perform", effect_id: effectId };
+  const perform = breakPerform(effectId);
 
   const branches = actions.map((action) => ({
     kind: "Chain" as const,
@@ -65,12 +72,9 @@ export function race<TIn, TOut>(
     rest: perform,
   }));
 
-  return typedAction({
-    kind: "Handle",
-    effect_id: effectId,
-    handler: RACE_HANDLER,
-    body: { kind: "All", actions: branches },
-  });
+  const allAction: Action = { kind: "All", actions: branches };
+
+  return typedAction(buildRestartBranchAction(effectId, allAction, IDENTITY));
 }
 
 // ---------------------------------------------------------------------------
@@ -129,28 +133,28 @@ Object.defineProperty(sleep, "__definition", {
  * that computes a duration from the pipeline input.
  *
  * Built as raw AST rather than through `race()` because each branch wraps
- * its result differently (Ok vs Err) before Perform. `race()` requires
- * homogeneous output types, but withTimeout needs heterogeneous tagging.
+ * its result differently (Ok vs Err) before the Break+Perform. `race()`
+ * requires homogeneous output types, but withTimeout needs heterogeneous
+ * tagging.
  *
- * Compiles to the same Handle/All/Perform structure as race, with each
- * branch wrapping its result as Ok or Err before Perform.
+ * Same restart+Branch substrate as race: each branch tags Break after
+ * wrapping its result as Ok or Err.
  */
 export function withTimeout<TIn, TOut>(
   ms: Pipeable<TIn, number>,
   body: Pipeable<TIn, TOut>,
 ): TypedAction<TIn, Result<TOut, void>> {
   const effectId = allocateEffectId();
+  const perform = breakPerform(effectId);
 
-  const perform: Action = { kind: "Perform", effect_id: effectId };
-
-  // Branch 1: body → Tag("Ok") → Perform
+  // Branch 1: body → Tag("Ok") → Tag("Break") → Perform
   const bodyBranch: Action = {
     kind: "Chain",
     first: { kind: "Chain", first: body as Action, rest: TAG_OK },
     rest: perform,
   };
 
-  // Branch 2: ms → sleep() → Tag("Err") → Perform
+  // Branch 2: ms → sleep() → Tag("Err") → Tag("Break") → Perform
   const sleepBranch: Action = {
     kind: "Chain",
     first: {
@@ -161,11 +165,7 @@ export function withTimeout<TIn, TOut>(
     rest: perform,
   };
 
-  return typedAction({
-    kind: "Handle",
-    effect_id: effectId,
-    handler: RACE_HANDLER,
-    body: { kind: "All", actions: [bodyBranch, sleepBranch] },
-  });
-}
+  const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 
+  return typedAction(buildRestartBranchAction(effectId, allAction, IDENTITY));
+}
