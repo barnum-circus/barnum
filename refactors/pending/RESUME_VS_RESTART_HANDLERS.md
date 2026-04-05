@@ -304,7 +304,7 @@ FlatAction::ResumeHandle { resume_handler_id } => {
 
 #### 6b. `advance` match arm for `FlatAction::ResumePerform`
 
-When the body hits a `ResumePerform`, the engine creates a `ResumePerformFrame` and advances the handler as its child. Same pattern as Chain (create frame, advance child), except simpler — one child instead of two phases.
+When the body hits a `ResumePerform`, the engine creates a `ResumePerformFrame` and advances the handler as its child. Analogous to Invoke — run work, deliver result to parent — except the work is an internal handler DAG (not an external dispatch) and there's a side effect (state update on the ResumeHandle). No trampoline.
 
 ```rust
 FlatAction::ResumePerform { resume_handler_id } => {
@@ -329,9 +329,9 @@ FlatAction::ResumePerform { resume_handler_id } => {
     let captured_value = resume_handle.captured_value.clone();
     let handler_input = json!([value, captured_value]);
 
-    // Create ResumePerform frame. Like Chain, it intercepts the child's
-    // result. Unlike Chain, there's no second phase — it delivers to
-    // parent and updates state on the ResumeHandle.
+    // ResumePerformFrame intercepts the handler's result to apply
+    // state updates, then delivers the value to parent. No trampoline —
+    // like Invoke, but with an internal child instead of an external dispatch.
     let perform_frame_id = self.frames.insert(Frame {
         parent: Some(perform_parent),
         kind: FrameKind::ResumePerform(ResumePerformFrame {
@@ -579,7 +579,7 @@ Engine execution:
 2. ResumeHandle(e0) receives `[userVal, pipelineInput]`. Engine splits: `captured_value = userVal`, body input = `pipelineInput`.
 3. Body runs with `pipelineInput`. When it hits VarRef `user` (= `ResumePerform(e0)`):
    - Engine walks ancestors, finds ResumeHandle(e0)
-   - Creates ResumePerformFrame (like Chain, but simpler — one child, no `rest`)
+   - Creates ResumePerformFrame (like Invoke — run handler, deliver to parent)
    - Runs handler with `[<body value>, userVal]` (`[payload, state]` tuple)
    - Handler: `All(ExtractIndex(1), ExtractIndex(1))` → `[userVal, userVal]`
    - Engine destructures: value = `userVal`, writes state = `userVal` (unchanged)
