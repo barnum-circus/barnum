@@ -13,8 +13,8 @@
  *      d. Commit and create a PR
  *   6. Clean up the worktree
  *
- * Demonstrates: registerSteps, withResource, loop, forEach, constant,
- * pipe, bindInput, Option.collect, and postfix operators.
+ * Demonstrates: withResource, loop, forEach, constant, pipe, bindInput,
+ * Option.collect, and postfix operators.
  *
  * Usage: pnpm exec tsx run.ts
  */
@@ -57,39 +57,37 @@ import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
 // withResource merges the resource (worktree) into the input (Refactor),
-// giving ImplementAndReview all five fields.
+// giving implementAndReview all five fields.
 type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
 
+// Type-check/fix: run tsc, fix errors, repeat until clean.
+const typeCheckFix = loop((recur) =>
+  pipe(typeCheck, classifyErrors).branch({
+    HasErrors: pipe(forEach(fix).drop(), recur),
+    Clean: drop,
+  }),
+);
+
+// Implement a refactor, get it passing, and open a PR.
+const implementAndReview = bindInput<ImplementAndReviewParams>((implementAndReviewParams) => pipe(
+  implementAndReviewParams.pick("worktreePath", "description").then(implement).drop(),
+  implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
+
+  // Judge quality; revise and re-check if needed.
+  loop((recur) =>
+    pipe(judgeRefactor, classifyJudgment).branch({
+      NeedsWork: pipe(applyFeedback, typeCheckFix).drop().then(recur),
+      Approved: drop,
+    }),
+  ).drop(),
+
+  // Commit and open a PR only after all fixes and revisions are done.
+  implementAndReviewParams.pick("worktreePath").then(commit).drop(),
+  pipe(implementAndReviewParams.pick("branch", "description"), preparePRInput, createPR),
+));
+
 await workflowBuilder()
-  // Type-check/fix: run tsc, fix errors, repeat until clean.
-  .registerSteps({
-    TypeCheckFix: loop((recur) =>
-      pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop(), recur),
-        Clean: drop,
-      }),
-    ),
-  })
-  // Implement a refactor, get it passing, and open a PR.
-  .registerSteps(({ steps }) => ({
-    ImplementAndReview: bindInput<ImplementAndReviewParams>((implementAndReviewParams) => pipe(
-      implementAndReviewParams.pick("worktreePath", "description").then(implement).drop(),
-      implementAndReviewParams.pick("worktreePath").then(steps.TypeCheckFix).drop(),
-
-      // Judge quality; revise and re-check if needed.
-      loop((recur) =>
-        pipe(judgeRefactor, classifyJudgment).branch({
-          NeedsWork: pipe(applyFeedback, steps.TypeCheckFix).drop().then(recur),
-          Approved: drop,
-        }),
-      ).drop(),
-
-      // Commit and open a PR only after all fixes and revisions are done.
-      implementAndReviewParams.pick("worktreePath").then(commit).drop(),
-      pipe(implementAndReviewParams.pick("branch", "description"), preparePRInput, createPR),
-    )),
-  }))
-  .workflow(({ steps }) =>
+  .workflow(() =>
     pipe(
       constant({ folder: srcDir }),
       listTargetFiles,
@@ -104,7 +102,7 @@ await workflowBuilder()
       forEach(
         withResource({
           create: pipe(pick<Refactor, ["description"]>("description"), deriveBranch, createWorktree),
-          action: steps.ImplementAndReview,
+          action: implementAndReview,
           dispose: deleteWorktree,
         }),
       ),
