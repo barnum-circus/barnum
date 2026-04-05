@@ -26,11 +26,7 @@ import {
   workflowBuilder,
   pipe,
   forEach,
-  loop,
-  bindInput,
   constant,
-  drop,
-  pick,
   withResource,
   Option,
 } from "@barnum/barnum";
@@ -42,55 +38,12 @@ import {
   listTargetFiles,
   analyze,
   assessWorthiness,
-  deriveBranch,
-  preparePRInput,
-  implement,
-  commit,
-  judgeRefactor,
-  classifyJudgment,
-  applyFeedback,
-  type Refactor,
+  implementAndReview,
+  createBranchWorktree,
 } from "./handlers/refactor.js";
-import { createWorktree, deleteWorktree, createPR } from "./handlers/git.js";
-import { typeCheck, classifyErrors, fix } from "./handlers/type-check-fix.js";
+import { deleteWorktree } from "./handlers/git.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
-
-// withResource merges the resource (worktree) into the input (Refactor),
-// giving implementAndReview all five fields.
-type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
-
-// Type-check/fix: run tsc, fix errors, repeat until clean.
-// bindInput captures { worktreePath } so the loop body can re-inject it each iteration.
-const typeCheckFix = bindInput<{ worktreePath: string }>((typeCheckFixParams) =>
-  loop<void>((recur, done) =>
-    typeCheckFixParams.then(pipe(typeCheck, classifyErrors)).branch({
-      HasErrors: forEach(fix).drop().then(recur),
-      Clean: done,
-    }),
-  ),
-);
-
-// Implement a refactor, get it passing, and open a PR.
-const implementAndReview = bindInput<ImplementAndReviewParams>((implementAndReviewParams) => pipe(
-  implementAndReviewParams.pick("worktreePath", "description").then(implement).drop(),
-  implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
-
-  // Judge quality; revise and re-check if needed.
-  loop((recur) =>
-    pipe(judgeRefactor, classifyJudgment).branch({
-      NeedsWork: pipe(
-        applyFeedback.drop(),
-        implementAndReviewParams.pick("worktreePath").then(typeCheckFix),
-      ).drop().then(recur),
-      Approved: drop,
-    }),
-  ).drop(),
-
-  // Commit and open a PR only after all fixes and revisions are done.
-  implementAndReviewParams.pick("worktreePath").then(commit).drop(),
-  pipe(implementAndReviewParams.pick("branch", "description"), preparePRInput, createPR),
-));
 
 await workflowBuilder()
   .workflow(() =>
@@ -107,7 +60,7 @@ await workflowBuilder()
       // For each refactor: create a worktree, do the work, open a PR, clean up.
       forEach(
         withResource({
-          create: pipe(pick<Refactor, ["description"]>("description"), deriveBranch, createWorktree),
+          create: createBranchWorktree,
           action: implementAndReview,
           dispose: deleteWorktree,
         }),

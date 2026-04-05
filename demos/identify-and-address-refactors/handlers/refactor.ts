@@ -4,8 +4,16 @@
 // Data shaping: deriveBranch, preparePRInput
 // Implementation: implement, commit
 // Review loop: judgeRefactor, classifyJudgment, applyFeedback
+// Pipelines: implementAndReview, createBranchWorktree, openPR
 
-import { createHandler } from "@barnum/barnum";
+import {
+  createHandler,
+  bindInput,
+  pipe,
+  loop,
+  drop,
+  pick,
+} from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -264,3 +272,38 @@ export const applyFeedback = createHandler({
     console.error(`[apply-feedback] Feedback applied`);
   },
 }, "applyFeedback");
+
+// --- Pipelines ---
+
+import { typeCheckFix } from "./type-check-fix.js";
+import { createWorktree, createPR } from "./git.js";
+
+export type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
+
+export const implementAndReview = bindInput<ImplementAndReviewParams>((implementAndReviewParams) => pipe(
+  implementAndReviewParams.pick("worktreePath", "description").then(implement).drop(),
+  implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
+
+  // Judge quality; revise and re-check if needed.
+  loop((recur) =>
+    pipe(judgeRefactor, classifyJudgment).branch({
+      NeedsWork: pipe(
+        applyFeedback.drop(),
+        implementAndReviewParams.pick("worktreePath").then(typeCheckFix),
+      ).drop().then(recur),
+      Approved: drop,
+    }),
+  ).drop(),
+
+  // Commit and open a PR only after all fixes and revisions are done.
+  implementAndReviewParams.pick("worktreePath").then(commit).drop(),
+  pipe(implementAndReviewParams.pick("branch", "description"), preparePRInput, createPR),
+));
+
+export const createBranchWorktree = pipe(
+  pick<Refactor, ["description"]>("description"),
+  deriveBranch,
+  createWorktree,
+);
+
+export const openPR = pipe(preparePRInput, createPR);
