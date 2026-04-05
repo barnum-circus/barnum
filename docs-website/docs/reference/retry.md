@@ -1,0 +1,176 @@
+---
+image: /img/og/reference-retry.png
+---
+
+# Retry Policies
+
+Configure how Barnum handles failures and retries.
+
+## Global Options
+
+```jsonc
+{
+  "entrypoint": "Process",
+  "options": {
+    "timeout": 120,
+    "max_retries": 3,
+    "retry_on_timeout": true,
+    "retry_on_invalid_response": true
+  },
+  "steps": [
+    {
+      "name": "Process",
+      "value_schema": { "type": "object" },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Process the task. Return `[]`." }
+      },
+      "next": []
+    }
+  ]
+}
+```
+
+## Per-Step Overrides
+
+Override global settings for specific steps:
+
+```jsonc
+{
+  "entrypoint": "QuickCheck",
+  "options": {
+    "timeout": 60,
+    "max_retries": 2
+  },
+  "steps": [
+    {
+      "name": "QuickCheck",
+      "value_schema": { "type": "object" },
+      "options": {
+        "timeout": 10,
+        "max_retries": 0
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Quick validation. Return `[]`." }
+      },
+      "next": ["ExpensiveAnalysis"]
+    },
+    {
+      "name": "ExpensiveAnalysis",
+      "value_schema": { "type": "object" },
+      "options": {
+        "timeout": 300,
+        "max_retries": 5
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Deep analysis. Return `[]`." }
+      },
+      "next": []
+    }
+  ]
+}
+```
+
+## Running
+
+```js
+import { BarnumConfig } from "@barnum/barnum";
+
+BarnumConfig.fromConfig({
+  entrypoint: "QuickCheck",
+  options: {
+    timeout: 60,
+    max_retries: 2,
+  },
+  steps: [
+    {
+      name: "QuickCheck",
+      value_schema: { type: "object" },
+      options: {
+        timeout: 10,
+        max_retries: 0,
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Quick validation. Return `[]`." },
+      },
+      next: ["ExpensiveAnalysis"],
+    },
+    {
+      name: "ExpensiveAnalysis",
+      value_schema: { type: "object" },
+      options: {
+        timeout: 300,
+        max_retries: 5,
+      },
+      action: {
+        kind: "Pool",
+        instructions: { kind: "Inline", value: "Deep analysis. Return `[]`." },
+      },
+      next: [],
+    },
+  ],
+}).run()
+  .on("exit", (code) => process.exit(code ?? 1));
+```
+
+## Retry Triggers
+
+| Condition | Option | Default |
+|-----------|--------|---------|
+| Agent times out | `retry_on_timeout` | `true` |
+| Invalid JSON response | `retry_on_invalid_response` | `true` |
+| Invalid transition (wrong `kind`) | `retry_on_invalid_response` | `true` |
+| Schema validation failure | `retry_on_invalid_response` | `true` |
+| Submit error (network, etc.) | Always retried | - |
+
+## Disabling Retries
+
+For idempotent-sensitive operations:
+
+```jsonc
+{
+  "entrypoint": "SendEmail",
+  "steps": [
+    {
+      "name": "SendEmail",
+      "value_schema": {
+        "type": "object",
+        "required": ["to", "subject"],
+        "properties": {
+          "to": { "type": "string" },
+          "subject": { "type": "string" }
+        }
+      },
+      "options": {
+        "retry_on_timeout": false,
+        "retry_on_invalid_response": false,
+        "max_retries": 0
+      },
+      "action": {
+        "kind": "Pool",
+        "instructions": { "kind": "Inline", "value": "Send the email. Return `[]`." }
+      },
+      "next": []
+    }
+  ]
+}
+```
+
+## Task Outcomes
+
+After processing, each task has one of these outcomes:
+
+- **Completed**: Agent returned valid response, new tasks spawned
+- **Requeued**: Failure occurred, task will be retried
+- **Dropped**: Max retries exceeded or retry disabled
+- **Skipped**: Initial validation failed (unknown step, invalid schema)
+
+## Key Points
+
+- Retries increment a counter on the task (`task.retries`)
+- Tasks are requeued at the back of the queue
+- Use `max_retries: 0` to never retry (fail fast)
+- Combine with schema validation to catch bad responses early
