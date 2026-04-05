@@ -1,22 +1,14 @@
 # Deferred RestartPerform
 
+**Blocked by:** EVENT_LOOP_RESTRUCTURE
+
 ## Motivation
 
 `RestartPerform` currently executes synchronously during `advance`: it tears down the body, advances the handler, and (if the handler is a builtin) restarts the body, all within the same call stack. This creates two bugs and a structural problem.
 
-### Bug 1: Stale task completion panic
+### Bug 1: Stale task completion panic (fixed by EVENT_LOOP_RESTRUCTURE)
 
-When `RestartPerform` fires (during `complete` → deliver → Chain trampoline → advance), `teardown_body` removes frames and `task_to_frame` entries for in-flight sibling tasks. When those tasks complete later, `complete()` panics:
-
-```rust
-// complete.rs:27-30
-let frame_id = workflow_state
-    .task_to_frame
-    .remove(&task_id)
-    .expect("unknown task"); // panics
-```
-
-Documented by the `completing_torn_down_task_is_noop` test with `#[should_panic(expected = "unknown task")]`.
+When `RestartPerform` fires (during `complete` → deliver → Chain trampoline → advance), `teardown_body` removes frames and `task_to_frame` entries for in-flight sibling tasks. When those tasks complete later, `complete()` used to panic on `expect("unknown task")`. The EVENT_LOOP_RESTRUCTURE pre-factor fixes this by making `complete()` return `Ok(None)` for unknown task_ids.
 
 ### Bug 2: Iterator invalidation in All/ForEach
 
@@ -79,16 +71,16 @@ pub struct PendingRestartEvent {
 ```
 
 ```rust
-// lib.rs — WorkflowState (before)
+// lib.rs — WorkflowState (before, after EVENT_LOOP_RESTRUCTURE)
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
     task_to_frame: BTreeMap<TaskId, FrameId>,
-    pending_dispatches: Vec<Dispatch>,
+    pending_dispatches: VecDeque<Dispatch>,
     next_task_id: u32,
 }
 
-// lib.rs — WorkflowState (after)
+// lib.rs — WorkflowState (after this refactor)
 pub struct WorkflowState {
     flat_config: FlatConfig,
     frames: Arena<Frame>,
@@ -100,25 +92,30 @@ pub struct WorkflowState {
 
 ### Engine API
 
-The engine produces effects one at a time and lets the event loop consume them:
+The engine produces effects one at a time. EVENT_LOOP_RESTRUCTURE already changed `pending_dispatches` from `Vec<Dispatch>` to `VecDeque<Dispatch>` and added `pop_pending_dispatch()`. This refactor replaces both the field and the method:
 
 ```rust
-// lib.rs — WorkflowState impl (before)
+// lib.rs — WorkflowState impl (before, after EVENT_LOOP_RESTRUCTURE)
 
-pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
-    std::mem::take(&mut self.pending_dispatches)
+pub fn pop_pending_dispatch(&mut self) -> Option<Dispatch> {
+    self.pending_dispatches.pop_front()
 }
 
-// lib.rs — WorkflowState impl (after)
+pub fn take_pending_dispatches(&mut self) -> Vec<Dispatch> {
+    self.pending_dispatches.drain(..).collect()
+}
+
+// lib.rs — WorkflowState impl (after this refactor)
 
 /// Pop the next pending effect, or None if the queue is empty.
 pub fn pop_pending_effect(&mut self) -> Option<PendingEffect> {
     self.pending_effects.pop_front()
 }
 
-/// Check whether a task is still part of a live tree.
-pub fn is_task_pending(&self, task_id: TaskId) -> bool {
-    self.task_to_frame.contains_key(&task_id)
+/// Drain all pending effects. Used by engine tests that assert on
+/// the full batch.
+pub fn take_pending_effects(&mut self) -> Vec<PendingEffect> {
+    self.pending_effects.drain(..).collect()
 }
 
 /// Process a single restart: tear down the body, advance the handler.
@@ -139,7 +136,7 @@ pub fn process_restart(
 Invoke pushes a `PendingEffect::Dispatch`:
 
 ```rust
-// advance.rs — Invoke arm (before)
+// advance.rs — Invoke arm (before, after EVENT_LOOP_RESTRUCTURE)
 FlatAction::Invoke { handler } => {
     let task_id = workflow_state.next_task_id();
     let frame_id = workflow_state.insert_frame(Frame {
@@ -147,14 +144,14 @@ FlatAction::Invoke { handler } => {
         kind: FrameKind::Invoke { handler },
     });
     workflow_state.task_to_frame.insert(task_id, frame_id);
-    workflow_state.pending_dispatches.push(Dispatch {
+    workflow_state.pending_dispatches.push_back(Dispatch {
         task_id,
         handler_id: handler,
         value,
     });
 }
 
-// advance.rs — Invoke arm (after)
+// advance.rs — Invoke arm (after this refactor)
 FlatAction::Invoke { handler } => {
     let task_id = workflow_state.next_task_id();
     let frame_id = workflow_state.insert_frame(Frame {
@@ -293,16 +290,14 @@ impl From<PendingEffect> for Event {
 }
 ```
 
-Each iteration sources the next event — pending effects first, blocking for a scheduler completion only when the effect queue is empty — then processes it in a three-branch match. Every branch checks liveness before doing work:
+Each iteration sources the next event — pending effects first, blocking for a scheduler completion only when the effect queue is empty — then processes it in a three-branch match:
 
-1. **Dispatch** — check `is_task_pending`; if stale, skip. Otherwise send to worker.
-2. **Restart** — liveness check is inside `process_restart` (checks if RestartHandle frame still exists). If stale, no-op.
-3. **Completion** — check `is_task_pending`; if stale, skip. Otherwise call `complete()`.
-
-`complete()` keeps its `expect("unknown task")` — if the event loop calls it with a stale task, that's a bug in the event loop.
+1. **Dispatch** — send to worker. A stale dispatch results in wasted work: the worker executes, the result comes back, and `complete()` returns `Ok(None)`. Correct but wasteful.
+2. **Restart** — call `process_restart`. Liveness check is internal (checks if RestartHandle frame still exists). If stale, no-op.
+3. **Completion** — call `complete()`. Stale task_ids return `Ok(None)` (fixed by EVENT_LOOP_RESTRUCTURE).
 
 ```rust
-// barnum_event_loop/src/lib.rs — run_workflow (before)
+// barnum_event_loop/src/lib.rs — run_workflow (before, after EVENT_LOOP_RESTRUCTURE)
 pub async fn run_workflow(
     workflow_state: &mut WorkflowState,
     scheduler: &mut Scheduler,
@@ -313,26 +308,32 @@ pub async fn run_workflow(
         .expect("initial advance failed");
 
     loop {
-        let dispatches = workflow_state.take_pending_dispatches();
-        for dispatch in &dispatches {
-            let handler = workflow_state.handler(dispatch.handler_id);
-            scheduler.dispatch(dispatch, handler);
-        }
+        let event = match workflow_state.pop_pending_dispatch() {
+            Some(dispatch) => Event::Dispatch(dispatch),
+            None => {
+                let (task_id, result) = scheduler
+                    .recv()
+                    .await
+                    .expect("scheduler channel closed unexpectedly");
+                Event::Completion(CompletionEvent { task_id, value: result? })
+            }
+        };
 
-        let (task_id, result) = scheduler
-            .recv()
-            .await
-            .expect("scheduler channel closed unexpectedly");
-
-        let value = result?;
-
-        if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
-            return Ok(terminal_value);
+        match event {
+            Event::Dispatch(dispatch) => {
+                let handler = workflow_state.handler(dispatch.handler_id);
+                scheduler.dispatch(&dispatch, handler);
+            }
+            Event::Completion(CompletionEvent { task_id, value }) => {
+                if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+                    return Ok(terminal_value);
+                }
+            }
         }
     }
 }
 
-// barnum_event_loop/src/lib.rs — run_workflow (after)
+// barnum_event_loop/src/lib.rs — run_workflow (after this refactor)
 pub async fn run_workflow(
     workflow_state: &mut WorkflowState,
     scheduler: &mut Scheduler,
@@ -343,7 +344,6 @@ pub async fn run_workflow(
         .expect("initial advance failed");
 
     loop {
-        // Source the next event: pending effects first, then block for completion.
         let event: Event = match workflow_state.pop_pending_effect() {
             Some(pending_effect) => pending_effect.into(),
             None => {
@@ -355,21 +355,15 @@ pub async fn run_workflow(
             }
         };
 
-        // Process the event.
         match event {
             Event::Dispatch(dispatch_event) => {
-                if workflow_state.is_task_pending(dispatch_event.task_id) {
-                    let handler = workflow_state.handler(dispatch_event.handler_id);
-                    scheduler.dispatch(&dispatch_event, handler);
-                }
+                let handler = workflow_state.handler(dispatch_event.handler_id);
+                scheduler.dispatch(&dispatch_event, handler);
             }
             Event::Restart(pending_restart_event) => {
                 workflow_state.process_restart(pending_restart_event)?;
             }
             Event::Completion(CompletionEvent { task_id, value }) => {
-                if !workflow_state.is_task_pending(task_id) {
-                    continue;
-                }
                 if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
                     return Ok(terminal_value);
                 }
@@ -400,18 +394,18 @@ Dispatch(A) was sent to a worker before the restart tore it down. That's wasted 
 ### WorkflowState construction
 
 ```rust
-// lib.rs — WorkflowState::new (before)
+// lib.rs — WorkflowState::new (before, after EVENT_LOOP_RESTRUCTURE)
 pub fn new(flat_config: FlatConfig) -> Self {
     Self {
         flat_config,
         frames: Arena::new(),
         task_to_frame: BTreeMap::new(),
-        pending_dispatches: Vec::new(),
+        pending_dispatches: VecDeque::new(),
         next_task_id: 0,
     }
 }
 
-// lib.rs — WorkflowState::new (after)
+// lib.rs — WorkflowState::new (after this refactor)
 pub fn new(flat_config: FlatConfig) -> Self {
     Self {
         flat_config,
@@ -445,7 +439,7 @@ pub fn dispatch(&self, dispatch_event: &DispatchEvent, handler: &HandlerKind) {
 
 - `bubble_restart_effect` in effects.rs — replaced by the `RestartPerform` advance arm (ancestor walk + enqueue) and `process_restart` (teardown + handler advance).
 - `pending_dispatches` field on `WorkflowState` — replaced by `pending_effects`.
-- `take_pending_dispatches` method — replaced by `pop_pending_effect`.
+- `pop_pending_dispatch` and `take_pending_dispatches` — replaced by `pop_pending_effect` and `take_pending_effects`.
 
 `bubble_resume_effect` is unchanged (ResumePerform is purely additive, no teardown).
 
@@ -491,62 +485,54 @@ ParentRef::RestartHandle { frame_id, side } => match side {
 | Component | Before | After |
 |-----------|--------|-------|
 | `Dispatch` struct | Named `Dispatch` | Renamed to `DispatchEvent` |
-| `advance` for `Invoke` | Pushes to `pending_dispatches` | Pushes `PendingEffect::Dispatch` to `pending_effects` |
+| `advance` for `Invoke` | Pushes `Dispatch` to `pending_dispatches` | Pushes `PendingEffect::Dispatch(DispatchEvent)` to `pending_effects` |
 | `advance` for `RestartPerform` | Calls `bubble_restart_effect` (teardown + handler advance) | Walks ancestors, pushes `PendingEffect::Restart` to `pending_effects` |
 | `bubble_restart_effect` | Exists in effects.rs | Deleted |
-| `WorkflowState` fields | `pending_dispatches: Vec<Dispatch>` | `pending_effects: VecDeque<PendingEffect>` |
-| `take_pending_dispatches` | Returns `Vec<Dispatch>` | Deleted, replaced by `pop_pending_effect` returning `Option<PendingEffect>` |
-| `is_task_pending` | Does not exist | New: checks `task_to_frame` for liveness |
+| `WorkflowState` fields | `pending_dispatches: VecDeque<Dispatch>` | `pending_effects: VecDeque<PendingEffect>` |
+| `pop_pending_dispatch` | Returns `Option<Dispatch>` | Replaced by `pop_pending_effect` returning `Option<PendingEffect>` |
+| `take_pending_dispatches` | Returns `Vec<Dispatch>` | Replaced by `take_pending_effects` returning `Vec<PendingEffect>` |
 | `process_restart` | Does not exist | New: teardown + handler advance, called by event loop |
-| `complete()` | Unchanged | Unchanged — `expect("unknown task")` stays; event loop checks liveness before calling |
-| Event loop | `take_pending_dispatches` → dispatch all → recv → complete | `pop_pending_effect` one at a time → liveness check on each event → recv when empty |
+| `complete()` | Returns `Ok(None)` for stale tasks (from EVENT_LOOP_RESTRUCTURE) | Unchanged |
+| Event loop | Two-branch match (Dispatch, Completion) | Three-branch match (Dispatch, Restart, Completion) |
 | `teardown_body` | Called from `bubble_restart_effect` during advance | Called from `process_restart`, invoked by event loop |
 
 ## Tests
 
-Both `#[should_panic]` tests become passing tests:
+The remaining `#[should_panic]` test becomes a passing test:
 
-- `completing_torn_down_task_is_noop`: The event loop checks `is_task_pending` before calling `complete()`. Stale completions are skipped. `complete()` is never called with an unknown task.
-- `restart_perform_non_terminal_in_all`: All advance loop completes entirely. Both children advance. Event loop processes the restart (teardown), then skips the stale dispatch.
+- `completing_torn_down_task_is_noop`: Already fixed by EVENT_LOOP_RESTRUCTURE.
+- `restart_perform_non_terminal_in_all`: All advance loop completes entirely (advance is purely additive). Both children advance. Event loop processes the restart (teardown), then the stale dispatch goes to a worker and its completion returns `Ok(None)` from `complete()`.
 
-The `drive_builtins` and `complete_and_drive` test helpers mirror the event loop in a synchronous test context. They pop effects one at a time, process restarts, check dispatch liveness, and execute builtins inline.
+The `drive_builtins` and `complete_and_drive` test helpers mirror the event loop. They pop effects one at a time, process restarts, and execute builtins inline. Stale dispatches go through the builtin execution path and `complete()` returns `Ok(None)` for their torn-down task_ids.
 
 ```rust
-// test_helpers.rs — drive_builtins (before)
+// test_helpers.rs — drive_builtins (before, after EVENT_LOOP_RESTRUCTURE)
 pub fn drive_builtins(
     engine: &mut WorkflowState,
 ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
     let mut ts_dispatches: Vec<Dispatch> = Vec::new();
     loop {
-        let dispatches = engine.take_pending_dispatches();
-        if dispatches.is_empty() {
+        let Some(dispatch) = engine.pop_pending_dispatch() else {
             break;
-        }
-        let mut had_builtin = false;
-        for dispatch in dispatches {
-            match engine.handler(dispatch.handler_id).clone() {
-                HandlerKind::Builtin(builtin_handler) => {
-                    let result =
-                        barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
-                            .unwrap();
-                    if let Some(value) = engine.complete(dispatch.task_id, result)? {
-                        return Ok((Some(value), ts_dispatches));
-                    }
-                    had_builtin = true;
-                }
-                HandlerKind::TypeScript(_) => {
-                    ts_dispatches.push(dispatch);
+        };
+        match engine.handler(dispatch.handler_id).clone() {
+            HandlerKind::Builtin(builtin_handler) => {
+                let result =
+                    barnum_builtins::execute_builtin(&builtin_handler.builtin, &dispatch.value)
+                        .unwrap();
+                if let Some(value) = engine.complete(dispatch.task_id, result)? {
+                    return Ok((Some(value), ts_dispatches));
                 }
             }
-        }
-        if !had_builtin {
-            break;
+            HandlerKind::TypeScript(_) => {
+                ts_dispatches.push(dispatch);
+            }
         }
     }
     Ok((None, ts_dispatches))
 }
 
-// test_helpers.rs — drive_builtins (after)
+// test_helpers.rs — drive_builtins (after this refactor)
 pub fn drive_builtins(
     engine: &mut WorkflowState,
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
@@ -560,9 +546,6 @@ pub fn drive_builtins(
                 engine.process_restart(pending_restart_event)?;
             }
             PendingEffect::Dispatch(dispatch_event) => {
-                if !engine.is_task_pending(dispatch_event.task_id) {
-                    continue;
-                }
                 match engine.handler(dispatch_event.handler_id).clone() {
                     HandlerKind::Builtin(builtin_handler) => {
                         let result = barnum_builtins::execute_builtin(
@@ -586,7 +569,7 @@ pub fn drive_builtins(
 ```
 
 ```rust
-// test_helpers.rs — complete_and_drive (before)
+// test_helpers.rs — complete_and_drive (before, after EVENT_LOOP_RESTRUCTURE)
 pub fn complete_and_drive(
     engine: &mut WorkflowState,
     task_id: TaskId,
@@ -594,21 +577,17 @@ pub fn complete_and_drive(
 ) -> Result<(Option<Value>, Vec<Dispatch>), CompleteError> {
     let result = engine.complete(task_id, value)?;
     if result.is_some() {
-        let ts = engine.take_pending_dispatches();
-        return Ok((result, ts));
+        return Ok((result, Vec::new()));
     }
     drive_builtins(engine)
 }
 
-// test_helpers.rs — complete_and_drive (after)
+// test_helpers.rs — complete_and_drive (after this refactor)
 pub fn complete_and_drive(
     engine: &mut WorkflowState,
     task_id: TaskId,
     value: Value,
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
-    if !engine.is_task_pending(task_id) {
-        return Ok((None, Vec::new()));
-    }
     let result = engine.complete(task_id, value)?;
     if result.is_some() {
         return Ok((result, Vec::new()));
