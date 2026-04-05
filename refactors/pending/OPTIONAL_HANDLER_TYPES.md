@@ -85,33 +85,68 @@ export interface HandlerDefinition<TValue = unknown, TOutput = unknown, TStepCon
 }
 ```
 
-### `createHandler` overloads (3 overloads)
+### `createHandler` overloads (6 overloads)
+
+Each validator is either required (present) or absent. TS excess property checking on object literals discriminates them: providing a property not in the overload type → excess → skip; missing a required property → skip.
+
+The first 4 overloads enumerate all `inputValidator × outputValidator` combinations. Overloads 5-6 add the explicit-type-params escape hatch for typed input without a validator (differentiated by type parameter count: 1 vs 2).
 
 ```ts
-// Overload 1: with inputValidator — TValue inferred from validator
+// --- inputValidator present → Handler<TValue, ...> ---
+
+// 1. inputValidator + outputValidator
 export function createHandler<TValue, TOutput>(
   definition: {
     inputValidator: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
+    outputValidator: z.ZodType<TOutput>;
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
 ): Handler<TValue, HandlerOutput<TOutput>>;
 
-// Overload 2: source handler — no inputValidator, handle takes no args
-export function createHandler<TOutput = unknown>(
+// 2. inputValidator only
+export function createHandler<TValue, TOutput>(
   definition: {
-    outputValidator?: z.ZodType<TOutput>;
+    inputValidator: z.ZodType<TValue>;
+    handle: (context: { value: TValue }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): Handler<TValue, HandlerOutput<TOutput>>;
+
+// --- inputValidator absent → Handler<never, ...> (source handler) ---
+
+// 3. outputValidator only, source
+export function createHandler<TOutput>(
+  definition: {
+    outputValidator: z.ZodType<TOutput>;
     handle: () => Promise<TOutput>;
   },
   exportName?: string,
 ): Handler<never, HandlerOutput<TOutput>>;
 
-// Overload 3: explicit type params — no inputValidator, handle takes value
-// Only reachable via explicit type params (overload 2 catches implicit cases)
+// 4. no validators, source
+export function createHandler<TOutput>(
+  definition: {
+    handle: () => Promise<TOutput>;
+  },
+  exportName?: string,
+): Handler<never, HandlerOutput<TOutput>>;
+
+// --- explicit type params, no inputValidator → Handler<TValue, ...> ---
+// Reachable only via explicit type params (2 params → overloads 3-4 skipped, 1 param)
+
+// 5. explicit types + outputValidator
 export function createHandler<TValue, TOutput>(
   definition: {
-    outputValidator?: z.ZodType<TOutput>;
+    outputValidator: z.ZodType<TOutput>;
+    handle: (context: { value: TValue }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): Handler<TValue, HandlerOutput<TOutput>>;
+
+// 6. explicit types, no validators
+export function createHandler<TValue, TOutput>(
+  definition: {
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
@@ -120,86 +155,142 @@ export function createHandler<TValue, TOutput>(
 
 #### Overload resolution
 
-Overload 2 has 1 type parameter (`TOutput`). When the caller provides 2 explicit type params (e.g. `createHandler<string, number>(...)`), TypeScript skips overload 2 entirely (wrong arity). It tries overload 1 (needs `inputValidator`, absent → fail), then overload 3 (matches).
+| Call | Match | Why |
+|------|-------|-----|
+| `{ inputValidator, outputValidator, handle }` | 1 | Both required, both present |
+| `{ inputValidator, handle }` | 2 | inputValidator required + present, no excess outputValidator |
+| `{ outputValidator, handle: () => ... }` | 3 | outputValidator required + present, no excess inputValidator |
+| `{ handle: () => ... }` | 4 | No required validators, no excess |
+| `<T, U>({ outputValidator, handle })` | 5 | 2 type params → skip 3-4 (1 param). 1-2 need inputValidator → fail. 5 matches |
+| `<T, U>({ handle })` | 6 | 2 type params → skip 3-4. 1-2 need inputValidator → fail. 5 needs outputValidator → fail. 6 matches |
 
-Without explicit type params, overload 2 catches all no-`inputValidator` calls because `(ctx: { value: T }) => void` is assignable to `() => void` in TypeScript (fewer params accepted). This is correct — without explicit types or a validator, there's nothing to infer input from.
+### `createHandlerWithConfig` overloads (12 overloads)
 
-#### Usage
+Same enumeration principle. 3 validators → 8 base combinations. For the 4 combinations without `inputValidator`, the handle context is `{ stepConfig }` and input is `never`. 4 additional overloads add explicit-type-params variants where handle context is `{ value, stepConfig }`.
 
-```ts
-// With validator — type inferred
-createHandler({
-  inputValidator: z.string(),
-  handle: async ({ value }) => value.toUpperCase(),
-}, "myHandler");
-// → Handler<string, string>
-
-// With explicit type params — no validator needed
-createHandler<string, number>({
-  handle: async ({ value }) => value.length,
-}, "myHandler");
-// → Handler<string, number>
-
-// Source handler — no input
-createHandler({
-  handle: async () => ["auth.ts", "routes.ts"],
-}, "listFiles");
-// → Handler<never, string[]>
-
-// Output validator — TOutput from validator
-createHandler({
-  inputValidator: z.string(),
-  outputValidator: z.number(),
-  handle: async ({ value }) => value.length,
-}, "myHandler");
-// → Handler<string, number>
-```
-
-### `createHandlerWithConfig` overloads (3 overloads)
-
-For `createHandlerWithConfig`, the handle context object type serves as a natural discriminant: `{ stepConfig }` vs `{ value, stepConfig }` are NOT interchangeable under `strictFunctionTypes` because a function expecting `{ value, stepConfig }` requires `value` in its parameter, and `{ stepConfig }` doesn't satisfy `{ value, stepConfig }` contravariantly.
+Under `strictFunctionTypes`, `({ stepConfig }) => ...` is NOT assignable to `({ value, stepConfig }) => ...` (contravariantly, `{ stepConfig: T }` doesn't satisfy `{ value: U; stepConfig: T }`), so the handle context shape discriminates the base overloads from the explicit-type overloads.
 
 ```ts
-// Overload 1: with inputValidator — TValue from validator
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig = unknown>(
+// --- inputValidator present → TypedAction<TValue, ...> (4 overloads) ---
+
+// 1. input + output + stepConfig
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
   definition: {
     inputValidator: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
-    stepConfigValidator?: z.ZodType<TStepConfig>;
+    outputValidator: z.ZodType<TOutput>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
     handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
 
-// Overload 2: config-only — no value in handle context
-export function createHandlerWithConfig<TOutput = unknown, TStepConfig = unknown>(
+// 2. input + output
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
   definition: {
-    outputValidator?: z.ZodType<TOutput>;
-    stepConfigValidator?: z.ZodType<TStepConfig>;
+    inputValidator: z.ZodType<TValue>;
+    outputValidator: z.ZodType<TOutput>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// 3. input + stepConfig
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    inputValidator: z.ZodType<TValue>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// 4. input only
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    inputValidator: z.ZodType<TValue>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// --- inputValidator absent, handle: ({ stepConfig }) → TypedAction<never, ...> (4 overloads) ---
+
+// 5. output + stepConfig, source
+export function createHandlerWithConfig<TOutput, TStepConfig>(
+  definition: {
+    outputValidator: z.ZodType<TOutput>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
     handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
 
-// Overload 3: explicit type params with value, no inputValidator
-export function createHandlerWithConfig<TValue, TOutput, TStepConfig = unknown>(
+// 6. output only, source
+export function createHandlerWithConfig<TOutput, TStepConfig>(
   definition: {
-    outputValidator?: z.ZodType<TOutput>;
-    stepConfigValidator?: z.ZodType<TStepConfig>;
+    outputValidator: z.ZodType<TOutput>;
+    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
+
+// 7. stepConfig only, source
+export function createHandlerWithConfig<TOutput, TStepConfig>(
+  definition: {
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
+
+// 8. no validators, source
+export function createHandlerWithConfig<TOutput, TStepConfig>(
+  definition: {
+    handle: (context: { stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<never, HandlerOutput<TOutput>>;
+
+// --- explicit type params, no inputValidator, handle: ({ value, stepConfig }) (4 overloads) ---
+// Reachable via explicit type params (3 params → skip overloads 5-8 which have 2)
+// AND via value destructuring (strictFunctionTypes discriminates { stepConfig } from { value, stepConfig })
+
+// 9. output + stepConfig, explicit types
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    outputValidator: z.ZodType<TOutput>;
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// 10. output only, explicit types
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    outputValidator: z.ZodType<TOutput>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// 11. stepConfig only, explicit types
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
+    stepConfigValidator: z.ZodType<TStepConfig>;
+    handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
+  },
+  exportName?: string,
+): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
+
+// 12. no validators, explicit types
+export function createHandlerWithConfig<TValue, TOutput, TStepConfig>(
+  definition: {
     handle: (context: { value: TValue; stepConfig: TStepConfig }) => Promise<TOutput>;
   },
   exportName?: string,
 ): (config: TStepConfig) => TypedAction<TValue, HandlerOutput<TOutput>>;
 ```
-
-#### Overload resolution for `createHandlerWithConfig`
-
-Unlike `createHandler`, the handle context provides a structural discriminant under `strictFunctionTypes`:
-
-- `({ stepConfig }) => ...` — overload 2 matches (value not destructured)
-- `({ value, stepConfig }) => ...` — overload 2 FAILS because `{ stepConfig: T }` does not satisfy `{ value: U; stepConfig: T }` contravariantly. Falls to overloads 1 or 3.
-
-This means overload 3 is reachable both via explicit type params AND by destructuring `value` without providing `inputValidator`.
 
 ### `UntypedHandlerDefinition`
 
@@ -504,7 +595,7 @@ describe("optional handler types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });
 
-  it("without inputValidator, destructuring value: input is unknown (overload 3)", () => {
+  it("without inputValidator, destructuring value: input is unknown (overload 12)", () => {
     const factory = createHandlerWithConfig({
       handle: async ({ value, stepConfig }) => String(value),
     }, "h");
