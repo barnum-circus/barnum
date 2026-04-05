@@ -5,7 +5,7 @@
 
 ## TL;DR
 
-Wrap Zod v4's built-in `toJSONSchema()` with our options and `$schema` stripping. No external library needed — `zod-to-json-schema` is deprecated; Zod v4 does this natively.
+Wrap Zod v4's built-in `toJSONSchema()` with a pre-validation walker and `$schema` stripping. The walker rejects patterns that `toJSONSchema()` handles incorrectly or silently: intersections (produce broken `allOf` on Draft 7 due to `additionalProperties: false` on both sides) and refinements (silently dropped, so the Rust side would think validation passed). No external library needed — `zod-to-json-schema` is deprecated; Zod v4 does this natively.
 
 ---
 
@@ -53,6 +53,89 @@ The returned object has a `$schema` property at the root and a non-enumerable `~
 import type { JSONSchema7 } from "json-schema";
 import { type z, toJSONSchema } from "zod";
 
+// Zod v4 schema def types that have child schemas.
+// Verified against Zod 4.3.6 internals — every compound type's def
+// shape and child property name is listed here.
+const CHILD_ACCESSORS: Record<
+  string,
+  (def: any) => z.ZodType[]
+> = {
+  object: (def) => Object.values(def.shape),
+  array: (def) => [def.element],
+  tuple: (def) => [...def.items, ...(def.rest ? [def.rest] : [])],
+  union: (def) => def.options,
+  intersection: (def) => [def.left, def.right],
+  record: (def) => [def.keyType, def.valueType],
+  // Wrappers with a single inner type
+  nullable: (def) => [def.innerType],
+  optional: (def) => [def.innerType],
+  nonoptional: (def) => [def.innerType],
+  default: (def) => [def.innerType],
+  catch: (def) => [def.innerType],
+  readonly: (def) => [def.innerType],
+  promise: (def) => [def.innerType],
+  // Pipe has two children
+  pipe: (def) => [def.in, def.out],
+  // Lazy resolves to inner schema
+  lazy: (def) => [def.getter()],
+};
+
+/**
+ * Walk the Zod schema tree and reject patterns that `toJSONSchema()`
+ * handles incorrectly or silently drops:
+ *
+ * - `z.intersection()` — produces `allOf` with `additionalProperties: false`
+ *   on both sides (from `io: "output"`), making the intersection unmatchable
+ *   on Draft 7.
+ *
+ * - `.refine()` / `.superRefine()` — silently stripped from JSON Schema
+ *   output, so the Rust side would accept values that fail the refinement.
+ *   Detected by checking for custom checks (`check._zod.def.check === "custom"`)
+ *   in the schema's checks array.
+ */
+function assertNoUnsupportedPatterns(
+  schema: z.ZodType,
+  label: string,
+  visited = new WeakSet<z.ZodType>(),
+): void {
+  if (visited.has(schema)) return;
+  visited.add(schema);
+
+  const def = (schema as any)._zod.def;
+
+  // Reject intersections
+  if (def.type === "intersection") {
+    throw new Error(
+      `Handler "${label}": z.intersection() is not supported. ` +
+        `It produces broken JSON Schema on Draft 7 because both sides ` +
+        `get additionalProperties: false. Use z.object().extend() or ` +
+        `z.object().merge() instead.`,
+    );
+  }
+
+  // Reject custom checks (from .refine() and .superRefine())
+  const checks: any[] | undefined = def.checks;
+  if (checks) {
+    for (const check of checks) {
+      if (check._zod.def.check === "custom") {
+        throw new Error(
+          `Handler "${label}": .refine() and .superRefine() are not ` +
+            `supported. Custom validations cannot be expressed in JSON ` +
+            `Schema and would be silently dropped.`,
+        );
+      }
+    }
+  }
+
+  // Recurse into children
+  const getChildren = CHILD_ACCESSORS[def.type];
+  if (getChildren) {
+    for (const child of getChildren(def)) {
+      assertNoUnsupportedPatterns(child, label, visited);
+    }
+  }
+}
+
 /**
  * Convert a Zod schema to a JSON Schema document suitable for embedding
  * in the serialized AST. Throws if the schema contains types that can't
@@ -62,6 +145,9 @@ export function zodToCheckedJsonSchema(
   schema: z.ZodType,
   label: string,
 ): JSONSchema7 {
+  // Pre-validate: catch patterns that toJSONSchema() handles incorrectly
+  assertNoUnsupportedPatterns(schema, label);
+
   let raw: Record<string, unknown>;
   try {
     raw = toJSONSchema(schema, {
@@ -85,7 +171,7 @@ export function zodToCheckedJsonSchema(
 }
 ```
 
-That's the entire implementation. `toJSONSchema()` does all the heavy lifting: type walking, constraint extraction, and rejection of unsupported types.
+The implementation has two phases: `assertNoUnsupportedPatterns` walks the Zod schema tree to reject intersections and refinements before `toJSONSchema()` sees them. `toJSONSchema()` then handles the actual conversion and rejects its own set of unsupported types (bigint, symbol, etc.).
 
 **File:** `libs/barnum/src/index.ts` — add export
 
@@ -201,34 +287,6 @@ z.union([z.string(), z.number()])
 { "anyOf": [{ "type": "string" }, { "type": "number" }] }
 ```
 
-**Intersection:**
-```ts
-z.intersection(
-  z.object({ a: z.string() }),
-  z.object({ b: z.number() }),
-)
-```
-```json
-{
-  "allOf": [
-    {
-      "type": "object",
-      "properties": { "a": { "type": "string" } },
-      "required": ["a"],
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "properties": { "b": { "type": "number" } },
-      "required": ["b"],
-      "additionalProperties": false
-    }
-  ]
-}
-```
-
-**Intersection caveat:** Both sides get `additionalProperties: false` (from `io: "output"`). In Draft 7, each sub-schema independently rejects the other's properties, making the intersection unmatchable. This is a known Draft 7 limitation — Draft 2020-12's `unevaluatedProperties` solves it. Our demo schemas don't use intersections. If needed in the future, switch to `target: "draft-2020-12"` and replace `JSONSchema7` with a 2020-12 type.
-
 **Nullable:**
 ```ts
 z.nullable(z.string())
@@ -277,8 +335,24 @@ These Zod types are invisible to JSON Schema — the output is the inner type's 
 | `.optional()` | Transparent. Inside objects, omits from `required`. Standalone, produces inner type's schema. |
 | `.default(value)` | Adds `"default": value` to the inner type's schema. |
 | `.readonly()` | Adds `"readOnly": true` to the inner type's schema. |
-| `.refine(fn)` | Transparent. Adds a runtime check; doesn't affect JSON Schema output. |
+
+---
+
+## What we reject (pre-validation walker)
+
+The `assertNoUnsupportedPatterns` walker runs before `toJSONSchema()` and rejects patterns that `toJSONSchema()` handles incorrectly or silently drops:
+
+| Pattern | Error message |
+|---|---|
+| `z.intersection(A, B)` | `Handler "${label}": z.intersection() is not supported. It produces broken JSON Schema on Draft 7 because both sides get additionalProperties: false. Use z.object().extend() or z.object().merge() instead.` |
+| `.refine(fn)` | `Handler "${label}": .refine() and .superRefine() are not supported. Custom validations cannot be expressed in JSON Schema and would be silently dropped.` |
 | `.superRefine(fn)` | Same as `.refine()`. |
+
+**Why intersections are rejected:** `toJSONSchema()` with `io: "output"` adds `additionalProperties: false` to every object. An intersection of `{a: string}` and `{b: number}` produces `allOf` where side A rejects `b` and side B rejects `a`. On Draft 7 there's no `unevaluatedProperties` to fix this — the intersection is unmatchable. Rather than producing silently broken schemas, we reject at build time.
+
+**Why refinements are rejected:** `toJSONSchema()` silently drops `.refine()` and `.superRefine()` — it produces the inner type's schema with no trace of the custom check. The Rust side would then validate with JSON Schema and think the value is valid when it might not be. A refinement that can't cross the serialization boundary must be a build-time error, not a silent hole.
+
+**Detection mechanism:** Intersections are detected by `schema._zod.def.type === "intersection"`. Refinements are detected by scanning `schema._zod.def.checks` for entries where `check._zod.def.check === "custom"`. Built-in checks (min, max, regex, etc.) use specific check type strings like `"min_length"`, `"less_than"`, `"string_format"`, etc. — `"custom"` is exclusively produced by `.refine()`, `.superRefine()`, and `.check(fn)`.
 
 ---
 
@@ -468,32 +542,6 @@ describe("zodToCheckedJsonSchema", () => {
       });
     });
 
-    it("converts z.intersection()", () => {
-      expect(
-        convert(
-          z.intersection(
-            z.object({ a: z.string() }),
-            z.object({ b: z.number() }),
-          ),
-        ),
-      ).toEqual({
-        allOf: [
-          {
-            type: "object",
-            properties: { a: { type: "string" } },
-            required: ["a"],
-            additionalProperties: false,
-          },
-          {
-            type: "object",
-            properties: { b: { type: "number" } },
-            required: ["b"],
-            additionalProperties: false,
-          },
-        ],
-      });
-    });
-
     it("converts z.nullable()", () => {
       expect(convert(z.nullable(z.string()))).toEqual({
         anyOf: [{ type: "string" }, { type: "null" }],
@@ -643,12 +691,6 @@ describe("zodToCheckedJsonSchema", () => {
       });
     });
 
-    it(".refine() is transparent", () => {
-      expect(
-        convert(z.string().refine((s) => s.length > 0)),
-      ).toEqual({ type: "string" });
-    });
-
     it("standalone .optional() produces inner type", () => {
       expect(convert(z.string().optional())).toEqual({
         type: "string",
@@ -738,16 +780,80 @@ describe("zodToCheckedJsonSchema", () => {
         convert(z.union([z.string(), z.undefined()])),
       ).toThrow(/Undefined cannot be represented/);
     });
+  });
+```
 
-    it("throws for rejected type inside intersection", () => {
+### Pre-validation rejection tests
+
+```ts
+  describe("pre-validation rejections", () => {
+    it("throws for z.intersection()", () => {
       expect(() =>
         convert(
           z.intersection(
             z.object({ a: z.string() }),
-            z.object({ b: z.map(z.string(), z.number()) }),
+            z.object({ b: z.number() }),
           ),
         ),
-      ).toThrow(/Map cannot be represented/);
+      ).toThrow(/z\.intersection\(\) is not supported/);
+    });
+
+    it("throws for .refine()", () => {
+      expect(() =>
+        convert(z.string().refine((s) => s.length > 0)),
+      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+    });
+
+    it("throws for .superRefine()", () => {
+      expect(() =>
+        convert(z.string().superRefine(() => {})),
+      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+    });
+
+    it("throws for .refine() on an object", () => {
+      expect(() =>
+        convert(
+          z.object({ a: z.string() }).refine((o) => o.a.length > 0),
+        ),
+      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+    });
+
+    it("throws for .refine() nested inside an object value", () => {
+      expect(() =>
+        convert(
+          z.object({ a: z.string().refine((s) => s.length > 0) }),
+        ),
+      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+    });
+
+    it("throws for .refine() nested inside an array", () => {
+      expect(() =>
+        convert(
+          z.array(z.string().refine((s) => s.length > 0)),
+        ),
+      ).toThrow(/\.refine\(\) and \.superRefine\(\) are not supported/);
+    });
+
+    it("throws for intersection nested inside a union", () => {
+      expect(() =>
+        convert(
+          z.union([
+            z.string(),
+            z.intersection(
+              z.object({ a: z.string() }),
+              z.object({ b: z.number() }),
+            ),
+          ]),
+        ),
+      ).toThrow(/z\.intersection\(\) is not supported/);
+    });
+
+    it("allows built-in checks like .min() alongside rejection of .refine()", () => {
+      // .min() is a built-in check, not custom — should not be rejected
+      expect(convert(z.string().min(3))).toEqual({
+        type: "string",
+        minLength: 3,
+      });
     });
   });
 ```
