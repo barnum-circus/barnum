@@ -247,15 +247,28 @@ pub fn process_restart(
 
 ### Event loop
 
-The event loop processes one event at a time. There are three kinds of events:
+The event loop processes one event at a time. There are three kinds of events, represented by a local enum in the event loop crate:
+
+```rust
+// barnum_event_loop/src/lib.rs
+
+enum Event {
+    /// A handler invocation ready to be sent to a worker.
+    Dispatch(Dispatch),
+    /// A deferred restart to process.
+    Restart(PendingRestart),
+    /// A worker completed a task.
+    Completion { task_id: TaskId, value: Value },
+}
+```
+
+Each iteration sources the next event — pending effects first, blocking for a scheduler completion only when the effect queue is empty — then processes it in a three-branch match. Every branch checks liveness before doing work:
 
 1. **Dispatch** — check `is_task_pending`; if stale, skip. Otherwise send to worker.
-2. **Restart** — check if RestartHandle frame still exists; if stale, skip. Otherwise teardown body, advance handler (may produce more effects).
-3. **Completion** — check `is_task_pending`; if stale, skip. Otherwise call `complete()` (may produce more effects or terminate).
+2. **Restart** — liveness check is inside `process_restart` (checks if RestartHandle frame still exists). If stale, no-op.
+3. **Completion** — check `is_task_pending`; if stale, skip. Otherwise call `complete()`.
 
-Every event type checks liveness first. `complete()` keeps its `expect("unknown task")` — if the event loop calls it with a stale task, that's a bug in the event loop.
-
-Pending effects (dispatches and restarts) are always drained before blocking for completions. This is a simple if/else: if there's a pending effect, process it; otherwise block for the next completion.
+`complete()` keeps its `expect("unknown task")` — if the event loop calls it with a stale task, that's a bug in the event loop.
 
 ```rust
 // barnum_event_loop/src/lib.rs — run_workflow (before)
@@ -299,32 +312,37 @@ pub async fn run_workflow(
         .expect("initial advance failed");
 
     loop {
-        if let Some(effect) = workflow_state.pop_pending_effect() {
-            match effect {
-                PendingEffect::Dispatch(dispatch) => {
-                    if workflow_state.is_task_pending(dispatch.task_id) {
-                        let handler = workflow_state.handler(dispatch.handler_id);
-                        scheduler.dispatch(&dispatch, handler);
-                    }
-                }
-                PendingEffect::Restart(pending_restart) => {
-                    workflow_state.process_restart(pending_restart)?;
+        // Source the next event: pending effects first, then block for completion.
+        let event = match workflow_state.pop_pending_effect() {
+            Some(PendingEffect::Dispatch(dispatch)) => Event::Dispatch(dispatch),
+            Some(PendingEffect::Restart(pending_restart)) => Event::Restart(pending_restart),
+            None => {
+                let (task_id, result) = scheduler
+                    .recv()
+                    .await
+                    .expect("scheduler channel closed unexpectedly");
+                Event::Completion { task_id, value: result? }
+            }
+        };
+
+        // Process the event.
+        match event {
+            Event::Dispatch(dispatch) => {
+                if workflow_state.is_task_pending(dispatch.task_id) {
+                    let handler = workflow_state.handler(dispatch.handler_id);
+                    scheduler.dispatch(&dispatch, handler);
                 }
             }
-        } else {
-            let (task_id, result) = scheduler
-                .recv()
-                .await
-                .expect("scheduler channel closed unexpectedly");
-
-            let value = result?;
-
-            if !workflow_state.is_task_pending(task_id) {
-                continue;
+            Event::Restart(pending_restart) => {
+                workflow_state.process_restart(pending_restart)?;
             }
-
-            if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
-                return Ok(terminal_value);
+            Event::Completion { task_id, value } => {
+                if !workflow_state.is_task_pending(task_id) {
+                    continue;
+                }
+                if let Some(terminal_value) = workflow_state.complete(task_id, value)? {
+                    return Ok(terminal_value);
+                }
             }
         }
     }
