@@ -100,7 +100,7 @@ type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
 export function createHandler<TValue = never, TOutput = unknown>(
   definition: {
     inputValidator?: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
+    outputValidator?: z.ZodType<NoInfer<TOutput>>;
     handle: (context: { value: TValue }) => Promise<TOutput>;
   },
   exportName?: string,
@@ -163,7 +163,7 @@ export function createHandlerWithConfig<
 >(
   definition: {
     inputValidator?: z.ZodType<TValue>;
-    outputValidator?: z.ZodType<TOutput>;
+    outputValidator?: z.ZodType<NoInfer<TOutput>>;
     stepConfigValidator?: z.ZodType<TStepConfig>;
     handle: (context: {
       value: TValue;
