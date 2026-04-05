@@ -6,7 +6,7 @@ Every Handle/Perform usage falls into one of two categories:
 
 | Kind | What happens | Handler output | Examples |
 |------|-------------|---------------|----------|
-| **Resume** | Value delivered to Perform site. Body continues. | `[value, state]` tuple — value for perform site, state overwrites `captured_value` | `bind`, future `createRef` |
+| **Resume** | Value delivered to Perform site. Body continues. | `[value, state]` tuple — value for perform site, state overwrites `captured_value` | `bind`, future `allocateId` |
 | **Restart** | Body torn down, re-entered with new input. | Raw value (new body input) | `loop`, `scope`/`jump`, `tryCatch`, `race` |
 
 Each kind is unconditional. The engine knows what to do based on the Handle kind. There is no `Resume`/`RestartBody` tag dispatch. RestartHandle handlers produce a raw value. ResumeHandle handlers produce a `[value, state]` tuple (via `All`) — the engine destructures it, delivers `value` to the perform site, and writes `state` to `captured_value`.
@@ -447,8 +447,7 @@ All handler DAGs drop their `Tag("Resume")`/`Tag("RestartBody")` wrapping.
 | Combinator | Before | After |
 |-----------|--------|-------|
 | `bind` (readVar) | `ExtractField("state") → ExtractIndex(n) → Tag("Resume")` | `All(Chain(ExtractField("state"), ExtractIndex(n)), ExtractField("state"))` — value = `state[n]`, state = pass-through |
-| `createRef` (get) | N/A | `All(ExtractField("state"), ExtractField("state"))` — value = state, state = pass-through |
-| `createRef` (set) | N/A | `All(Constant(null), Chain(ExtractField("payload"), ExtractField("value")))` — value = null, state = payload.value |
+| `allocateId` | N/A | TypeScript Invoke: `({ state }) => [state, state + 1]` — value = current count, state = incremented |
 
 The `All` node constructs the `[value, state]` tuple that the engine destructures (by convention, index 0 = value, index 1 = new state).
 
@@ -544,7 +543,7 @@ One handler DAG for all restart combinators.
 | Combinator | Handle kind | Perform kind |
 |-----------|-------------|-------------|
 | `bind` / `bindInput` | ResumeHandle | ResumePerform |
-| `createRef` (hypothetical) | ResumeHandle | ResumePerform |
+| `allocateId` (hypothetical) | ResumeHandle | ResumePerform |
 | `tryCatch` | RestartHandle | RestartPerform |
 | `race` | RestartHandle | RestartPerform |
 | `withTimeout` | RestartHandle (built on race) | RestartPerform |
@@ -604,20 +603,21 @@ ResumeHandle(e0,                           ← captured_value = v0, body gets [v
 
 Each handler reads from its own `captured_value` (a single binding value, not the full tuple). No ExtractIndex in handlers. No ExtractIndex in body.
 
-### createRef — mutable captured_value (hypothetical)
+### allocateId — mutable captured_value (hypothetical)
+
+A counter that returns an increasing number each time it's called. Each invocation is a single ResumePerform — the handler atomically reads the current count and increments the state.
 
 User writes:
 ```ts
-createRef(constant(0), (counter) =>
+allocateId((nextId) =>
   pipe(
     fetchItems,
     forEach(
       pipe(
-        processItem,
-        tap(pipe(counter.get(), increment, counter.set())),
+        nextId,             // → 0, 1, 2, ... (each call gets the next number)
+        processWithId,
       ),
     ),
-    counter.get(),   // read final count
   ),
 )
 ```
@@ -625,44 +625,30 @@ createRef(constant(0), (counter) =>
 Compiled form:
 ```
 Chain(
-  All(constant(0), Identity),             ← [0, pipelineInput] = input tuple
-  ResumeHandle(refEffectId,
+  All(Constant(0), Identity),             ← [0, pipelineInput] = input tuple
+  ResumeHandle(counterEffectId,
     body,                                  ← body receives pipelineInput
-    refHandler                             ← Branch on payload.kind
+    incrementHandler                       ← TypeScript Invoke: returns [state, state + 1]
   )
 )
 ```
 
-`counter.get()` compiles to:
-```
-Chain(Tag("Get"), ResumePerform(refEffectId))
-```
-payload = `{ kind: "Get", value: void }`
+`nextId` compiles to `ResumePerform(counterEffectId)` — a leaf action, like a VarRef.
 
-`counter.set()` compiles to:
-```
-Chain(Tag("Set"), ResumePerform(refEffectId))
-```
-payload = `{ kind: "Set", value: newValue }`
+The handler is a TypeScript Invoke that receives `{ payload, state }` and returns `[state, state + 1]`. This is atomic — one Perform, one handler invocation, one state write. No window for interleaving.
 
-The handler is a Branch on `payload.kind`:
-- **Get**: `All(ExtractField("state"), ExtractField("state"))` — value = current state, state = unchanged
-- **Set**: `All(Constant(null), Chain(ExtractField("payload"), ExtractField("value")))` — value = null (void), state = payload.value
+Engine execution:
+1. `All(Constant(0), Identity)` → `[0, pipelineInput]`
+2. ResumeHandle splits: `captured_value = 0`, body gets `pipelineInput`
+3. Body runs. First iteration hits `nextId` (= `ResumePerform(counterEffectId)`):
+   - Engine finds ResumeHandle, reads `captured_value = 0`
+   - Creates ResumePerformFrame, runs handler with `{ payload: null, state: 0 }`
+   - Handler returns `[0, 1]` — value = 0 (delivered to body), state = 1 (written to captured_value)
+4. Second iteration hits `nextId`:
+   - `captured_value = 1` → handler returns `[1, 2]` → body gets 1, state becomes 2
+5. And so on.
 
-Engine execution for `counter.get()`:
-1. Body tags payload as `{ kind: "Get", value: void }`, fires ResumePerform
-2. Engine finds ResumeHandle, reads `captured_value` (current count)
-3. Handler receives `{ payload: { kind: "Get", value: void }, state: 0 }`
-4. Branch takes "Get" arm → `[0, 0]` → value = 0, state = 0 (unchanged)
-5. Delivers 0 to perform site
-
-Engine execution for `counter.set()` with input 5:
-1. Body tags payload as `{ kind: "Set", value: 5 }`, fires ResumePerform
-2. Engine finds ResumeHandle, reads `captured_value` (current count)
-3. Handler receives `{ payload: { kind: "Set", value: 5 }, state: 0 }`
-4. Branch takes "Set" arm → `[null, 5]` → value = null, state = 5
-5. Engine writes `captured_value = 5`, delivers null to perform site
-6. Next `counter.get()` reads `captured_value = 5`
+**Concurrency note:** If multiple iterations hit `nextId` concurrently (e.g., inside forEach which advances children in parallel), the handler invocations interleave through the dispatch → complete cycle. Two handlers could read the same `captured_value` before either writes back — a lost-update race. This is a known limitation. A future mutex combinator built from async TypeScript handlers (a lock-acquire Invoke that suspends until no other handler is in flight) would solve this in user land. The engine substrate supports it — the handler DAG can contain arbitrary async Invoke nodes that delay handler completion. We don't have the primitives yet, but the model doesn't preclude them.
 
 ## Changes that can land independently on master
 
@@ -684,4 +670,6 @@ These don't require the full refactor. They simplify the current code and reduce
 
 3. **Stash deletion sequencing.** The stash can be deleted only after both handler kinds stop suspending. If RestartPerform's immediate teardown lands first (before ResumePerform's inline execution), the stash is still needed for resume handlers. Both changes should land together or RestartPerform's teardown should land second.
 
-4. **ResumeHandle handler output convention.** The handler returns a 2-tuple `[value, state]` constructed via `All`. The engine destructures by index (0 = value for perform site, 1 = new captured_value). This is a convention, not enforced by the type system at the AST level. An alternative is a dedicated `ResumeHandlerResult` AST node that makes the structure explicit, but All + convention works with existing primitives.
+4. **ResumeHandle handler output convention.** The handler returns a 2-tuple `[value, state]` constructed via `All` (for builtin handlers) or directly (for TypeScript handlers). The engine destructures by index (0 = value for perform site, 1 = new captured_value). This is a convention, not enforced by the type system at the AST level.
+
+5. **Mutable-state concurrency control.** Concurrent ResumePerforms on the same ResumeHandle can race on `captured_value` — both read the same state before either writes back. This is solvable in user land: a future mutex combinator would include an async TypeScript Invoke in the handler DAG that suspends (returns a pending Promise) until no other handler is in flight for that ResumeHandle. The engine substrate supports this — handler DAGs can contain arbitrary async Invoke nodes. Not needed now; bind (the only current resume handler) is read-only.
