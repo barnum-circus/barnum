@@ -17,8 +17,7 @@ runPipeline(
         commitChanges,
         createPullRequest,
       ),
-    )
-    .drop(),
+    ),
 );
 ```
 

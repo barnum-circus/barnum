@@ -56,9 +56,7 @@ import { runPipeline } from "@barnum/barnum";
 import { listFiles, migrateComponent } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles
-    .forEach(migrateComponent)
-    .drop(),
+  listFiles.forEach(migrateComponent),
 );
 ```
 

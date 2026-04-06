@@ -25,7 +25,7 @@ runPipeline(
         dispose: cleanupBranch,
       }),
     ),
-  ).drop(),
+  ),
 );
 ```
 

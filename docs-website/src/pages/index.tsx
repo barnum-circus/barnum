@@ -35,9 +35,7 @@ import {
 } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles
-    .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-    .drop(),
+  listFiles.forEach(pipe(refactor, typeCheck, fix, commit, createPR)),
 );`;
 
 const advancedExample = `const refactorWithRetry = pipe(
@@ -54,7 +52,7 @@ const advancedExample = `const refactorWithRetry = pipe(
 );
 
 runPipeline(
-  listFiles.forEach(refactorWithRetry).drop(),
+  listFiles.forEach(refactorWithRetry),
 );`;
 
 function Features() {

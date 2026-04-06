@@ -15,7 +15,7 @@ runPipeline(
         Stale: pipe(rebase, pushAndWait, recur),
       })
     )
-  ).drop(),
+  ),
 );
 ```
 

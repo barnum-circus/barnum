@@ -59,9 +59,7 @@ import { runPipeline, pipe } from "@barnum/barnum";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
 runPipeline(
-  listFiles
-    .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-    .drop(),
+  listFiles.forEach(pipe(refactor, typeCheck, fix, commit, createPR)),
 );
 ```
 

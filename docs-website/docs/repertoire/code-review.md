@@ -54,8 +54,8 @@ export const checkSecurity = createHandler({
 ```ts
 runPipeline(
   listChangedFiles.forEach(
-    all(checkStandards, checkSecurity)
-  ).drop(),
+    all(checkStandards, checkSecurity),
+  ),
 );
 ```
 

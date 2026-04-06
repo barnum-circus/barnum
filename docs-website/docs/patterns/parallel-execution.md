@@ -34,12 +34,11 @@ runPipeline(
         commitChanges,
         createPullRequest,
       ),
-    )
-    .drop(),
+    ),
 );
 ```
 
-`listFiles` returns `string[]`. Each filename flows through the full pipeline independently and concurrently. The results are collected back into an array, then `.drop()` discards them (the side effects — commits and PRs — are what matter).
+`listFiles` returns `string[]`. Each filename flows through the full pipeline independently and concurrently.
 
 ## Fan-out with aggregation
 
