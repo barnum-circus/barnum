@@ -594,9 +594,9 @@ describe("Option namespace types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
   });
 
-  it("Option.none(): void → Option<T>", () => {
+  it("Option.none(): never → Option<T>", () => {
     const action = O.none<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, void>>();
+    assertExact<IsExact<ExtractInput<typeof action>, never>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
   });
 
