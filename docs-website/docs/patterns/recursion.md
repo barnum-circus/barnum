@@ -2,10 +2,6 @@
 
 `defineRecursiveFunctions` defines mutually recursive functions that can call each other. Unlike `loop` (which is O(1) tail recursion via restart), recursive functions preserve the caller's pipeline across the call, forming a call stack of frames.
 
-:::note
-`defineRecursiveFunctions` is not yet implemented. This page documents the planned API. See the [refactor doc](https://github.com/barnum-circus/barnum/blob/master/refactors/pending/DEFINE_RECURSIVE_FUNCTIONS.md) for implementation details.
-:::
-
 ## Mutual recursion: Peano arithmetic
 
 The classic is-even / is-odd mutual recursion. Each function checks if the input is zero (base case) or subtracts one and calls the other function (recursive case).
@@ -13,32 +9,24 @@ The classic is-even / is-odd mutual recursion. Each function checks if the input
 From [`demos/peano-arithmetic/run.ts`](https://github.com/barnum-circus/barnum/tree/master/demos/peano-arithmetic/run.ts):
 
 ```ts
-import {
-  pipe, constant, branch, runPipeline,
-  defineRecursiveFunctions,
-} from "@barnum/barnum";
-import { classifyZero, subtractOne } from "./handlers/steps.js";
-
-const withFns = defineRecursiveFunctions<[
-  [number, boolean],  // isEven: number → boolean
-  [number, boolean],  // isOdd: number → boolean
-]>(
-  (isEven, isOdd) => [
-    // isEven: 0 → true, n → isOdd(n - 1)
-    classifyZero.branch({
-      Zero: constant(true),
-      NonZero: pipe(subtractOne, isOdd),
-    }),
-    // isOdd: 0 → false, n → isEven(n - 1)
-    classifyZero.branch({
-      Zero: constant(false),
-      NonZero: pipe(subtractOne, isEven),
-    }),
-  ],
-);
-
 runPipeline(
-  withFns((isEven, _isOdd) => isEven),
+  defineRecursiveFunctions<[
+    [number, boolean], // isEven: number → boolean
+    [number, boolean], // isOdd:  number → boolean
+  ]>(
+    (isEven, isOdd) => [
+      // isEven: 0 → true, n → isOdd(n - 1)
+      classifyZero.branch({
+        Zero: constant(true),
+        NonZero: pipe(subtractOne, isOdd),
+      }),
+      // isOdd: 0 → false, n → isEven(n - 1)
+      classifyZero.branch({
+        Zero: constant(false),
+        NonZero: pipe(subtractOne, isEven),
+      }),
+    ],
+  )((isEven, _isOdd) => isEven),
   7,
 );
 // isEven(7) → isOdd(6) → isEven(5) → isOdd(4) → isEven(3) → isOdd(2) → isEven(1) → isOdd(0) → false
@@ -46,28 +34,20 @@ runPipeline(
 
 The type parameter `<[[number, boolean], [number, boolean]]>` is explicit because TypeScript can't infer input/output types from circular definitions.
 
-## Self-recursion: factorial
+The first callback defines the function bodies — `isEven` and `isOdd` call each other via the call tokens. The second callback receives the same tokens and returns the workflow entry point.
+
+## Self-recursion
 
 `defineRecursiveFunction` (singular) is sugar for a single function:
 
 ```ts
-const withFactorial = defineRecursiveFunction<number, number>(
+defineRecursiveFunction<number, number>(
   (factorial) =>
     classifyZero.branch({
       Zero: constant(1),
-      NonZero: pipe(
-        subtractOne,
-        factorial,
-        // multiply previous result — but this requires
-        // bindInput to access the original n, so:
-      ),
+      NonZero: pipe(subtractOne, factorial, multiply),
     }),
-);
-
-runPipeline(
-  withFactorial((factorial) => factorial),
-  5,
-);
+)((factorial) => factorial)
 ```
 
 ## When to use recursion vs. loop

@@ -20,25 +20,23 @@ import {
 } from "@barnum/barnum";
 import { classifyZero, subtractOne } from "./handlers/steps.js";
 
-const withFns = defineRecursiveFunctions<[
-  [number, boolean], // isEven: number → boolean
-  [number, boolean], // isOdd:  number → boolean
-]>(
-  (isEven, isOdd) => [
-    // isEven body
-    classifyZero.branch({
-      Zero: constant(true),
-      NonZero: pipe(subtractOne, isOdd),
-    }),
-    // isOdd body
-    classifyZero.branch({
-      Zero: constant(false),
-      NonZero: pipe(subtractOne, isEven),
-    }),
-  ],
-);
-
 runPipeline(
-  withFns((isEven, _isOdd) => isEven),
+  defineRecursiveFunctions<[
+    [number, boolean], // isEven: number → boolean
+    [number, boolean], // isOdd:  number → boolean
+  ]>(
+    (isEven, isOdd) => [
+      // isEven body
+      classifyZero.branch({
+        Zero: constant(true),
+        NonZero: pipe(subtractOne, isOdd),
+      }),
+      // isOdd body
+      classifyZero.branch({
+        Zero: constant(false),
+        NonZero: pipe(subtractOne, isEven),
+      }),
+    ],
+  )((isEven, _isOdd) => isEven),
   7,
 );

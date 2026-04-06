@@ -4,14 +4,12 @@
 
 Steps were removed (ELIMINATE_STEP), but the one capability they provided beyond raw values — recursion (self-reference and mutual reference) — was never replaced. `loop` handles tail recursion with O(1) frames via RestartHandle. General recursion (non-tail calls, mutual recursion) has no combinator.
 
-The design was already specified in ELIMINATE_STEP Phase 1. This document covers the implementation.
-
 ## API
 
 One type parameter — an array of `[In, Out]` tuples, one per function. Returns a curried combinator:
 
 ```ts
-const withFns = defineRecursiveFunctions<[
+defineRecursiveFunctions<[
   [number, boolean],  // isEven: number → boolean
   [number, boolean],  // isOdd: number → boolean
 ]>(
@@ -27,10 +25,7 @@ const withFns = defineRecursiveFunctions<[
       NonZero: pipe(subtractOne, isEven),
     }),
   ]
-);
-
-// Apply to a workflow body
-withFns((isEven, _isOdd) => isEven)
+)((isEven, _isOdd) => isEven)
 // → TypedAction<number, boolean>
 ```
 
@@ -41,15 +36,13 @@ The call tokens (`isEven`, `isOdd`) are the same values in both callbacks. The f
 ### Single-function convenience
 
 ```ts
-const withFn = defineRecursiveFunction<number, number>(
+defineRecursiveFunction<number, number>(
   (factorial) =>
     classifyZero.branch({
       Zero: constant(1),
       NonZero: pipe(subtractOne, factorial, multiply),
     }),
-);
-
-withFn((factorial) => factorial)
+)((factorial) => factorial)
 ```
 
 Sugar for `defineRecursiveFunctions` with a single `[In, Out]` tuple.
@@ -60,13 +53,19 @@ Sugar for `defineRecursiveFunctions` with a single `[In, Out]` tuple.
 
 ## Desugaring
 
-`withFns((fnA, fnB) => body)` produces:
+```ts
+defineRecursiveFunctions<[...]>(
+  (fnA, fnB) => [bodyA, bodyB]
+)((fnA, fnB) => workflow)
+```
+
+produces:
 
 ```
 Chain(
   All(Identity, Constant(null)),            // [value, null] — state is unused
   ResumeHandle(resumeHandlerId,
-    body: Chain(ExtractIndex(0), body),     // extract value, run workflow body
+    body: Chain(ExtractIndex(0), workflow),  // extract value, run workflow body
     handler: All(                           // return [result, null]
       Chain(
         ExtractIndex(0),                    // payload from [payload, state]
@@ -131,7 +130,7 @@ New file. Follows the same pattern as `bind.ts`:
 2. Create call tokens: `Chain(Tag("CallN"), ResumePerform(resumeHandlerId))` for each function.
 3. Invoke the bodies callback with the call tokens to get function body ASTs.
 4. Build the handler Branch: `Branch({ Call0: bodyA, Call1: bodyB, ... })` with `ExtractField("value")` auto-unwrap.
-5. Return a curried function that takes the workflow body callback and produces the full AST.
+5. Return a function that takes the workflow body callback and produces the full AST.
 
 ```ts
 export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
@@ -140,7 +139,8 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
   const resumeHandlerId = allocateResumeHandlerId();
 
   // Create call tokens
-  const callTokens = Array.from({ length: bodiesFn.length }, (_, i) =>
+  const fnCount = bodiesFn.length;
+  const callTokens = Array.from({ length: fnCount }, (_, i) =>
     typedAction({
       kind: "Chain",
       first: {
@@ -167,7 +167,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
     };
   }
 
-  // Return curried combinator
+  // Return workflow body combinator
   return <TOut>(bodyFn: (...fns: FunctionRefs<TDefs>) => BodyResult<TOut>) => {
     const userBody = bodyFn(...(callTokens as FunctionRefs<TDefs>)) as Action;
 
