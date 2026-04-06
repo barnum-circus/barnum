@@ -35,6 +35,7 @@ Zod schemas on handlers are compiled to JSON Schema at definition time, embedded
 ## Sections
 
 - [TypeScript AST](./typescript-ast.md) — how the DSL produces a serializable, type-safe AST
+- [Postfix methods](./postfix-methods.md) — how `this` parameter constraints enable fluent chaining with type narrowing
 - [Compiler and execution model](./compiler.md) — how the tree is flattened and executed
 - [Algebraic effect handlers](./algebraic-effect-handlers.md) — how `loop`, `tryCatch`, and `earlyReturn` work
 - [Validation](./validation.md) — how Zod serves as the single source of truth for types and runtime checks

@@ -55,6 +55,7 @@ const sidebars: SidebarsConfig = {
       items: [
         'architecture/index',
         'architecture/typescript-ast',
+        'architecture/postfix-methods',
         'architecture/compiler',
         'architecture/algebraic-effect-handlers',
         'architecture/validation',
