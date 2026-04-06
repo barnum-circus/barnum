@@ -148,9 +148,9 @@ export function pick<
 // DropResult — run an action for side effects, discard its output
 // ---------------------------------------------------------------------------
 
-export function dropResult<TInput, TOutput, TRefs extends string = never>(
-  action: Pipeable<TInput, TOutput, TRefs>,
-): TypedAction<TInput, never, TRefs> {
+export function dropResult<TInput, TOutput>(
+  action: Pipeable<TInput, TOutput>,
+): TypedAction<TInput, never> {
   // Build AST directly — chain inference fails when drop's TValue
   // isn't constrained by context (resolves to unknown ≠ TOutput).
   return typedAction({
@@ -259,10 +259,9 @@ export function withResource<
 export function augment<
   TInput extends Record<string, unknown>,
   TOutput extends Record<string, unknown>,
-  TRefs extends string = never,
 >(
-  action: Pipeable<TInput, TOutput, TRefs>,
-): TypedAction<TInput, TInput & TOutput, TRefs> {
+  action: Pipeable<TInput, TOutput>,
+): TypedAction<TInput, TInput & TOutput> {
   // Build AST directly — chain inference fails because [TOutput, TInput]
   // doesn't match merge()'s Record<string, unknown>[] with invariance.
   return typedAction({
@@ -296,8 +295,7 @@ export function augment<
  */
 export function tap<
   TInput extends Record<string, unknown>,
-  TRefs extends string = never,
->(action: Pipeable<TInput, any, TRefs>): TypedAction<TInput, TInput, TRefs> {
+>(action: Pipeable<TInput, any>): TypedAction<TInput, TInput> {
   // Build AST directly — internal plumbing (action → constant → augment)
   // can't go through typed chain/augment with invariant phantom fields.
   // tap: all(chain(action, constant({})), identity()) → merge

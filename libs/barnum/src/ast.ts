@@ -153,27 +153,25 @@ export type TypedAction<
   __out_contra?: (output: Out) => void;
   __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
-  then<TNext, TRefs2 extends string = never>(
-    next: Pipeable<Out, TNext, TRefs2>,
-  ): TypedAction<In, TNext, Refs | TRefs2>;
+  then<TNext>(
+    next: Pipeable<Out, TNext>,
+  ): TypedAction<In, TNext, Refs>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
   forEach<
     TIn,
     TElement,
     TNext,
     TRefs extends string,
-    TRefs2 extends string = never,
   >(
     this: TypedAction<TIn, TElement[], TRefs>,
-    action: Pipeable<TElement, TNext, TRefs2>,
-  ): TypedAction<TIn, TNext[], TRefs | TRefs2>;
+    action: Pipeable<TElement, TNext>,
+  ): TypedAction<TIn, TNext[], TRefs>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
   branch<
     TCases extends {
       [K in BranchKeys<Out>]: CaseHandler<
         BranchPayload<Out, K>,
-        unknown,
-        string
+        unknown
       >;
     },
   >(
@@ -270,13 +268,11 @@ export type TypedAction<
 export type Pipeable<
   In = unknown,
   Out = unknown,
-  Refs extends string = never,
 > = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
   __out_contra?: (output: Out) => void;
-  __refs?: { _brand: Refs };
 };
 
 /**
@@ -302,11 +298,9 @@ export type Pipeable<
 type CaseHandler<
   TIn = unknown,
   TOut = unknown,
-  TRefs extends string = never,
 > = Action & {
   __in?: (input: TIn) => void;
   __out?: () => TOut;
-  __refs?: { _brand: TRefs };
 };
 
 // ---------------------------------------------------------------------------
@@ -389,11 +383,10 @@ function thenMethod<
   TOut,
   TRefs extends string,
   TNext,
-  TRefs2 extends string,
 >(
   this: TypedAction<TIn, TOut, TRefs>,
-  next: Pipeable<TOut, TNext, TRefs2>,
-): TypedAction<TIn, TNext, TRefs | TRefs2> {
+  next: Pipeable<TOut, TNext>,
+): TypedAction<TIn, TNext, TRefs> {
   return typedAction({ kind: "Chain", first: this, rest: next as Action });
 }
 
@@ -658,9 +651,9 @@ import {
 export { tryCatch } from "./try-catch.js";
 export { race, sleep, withTimeout } from "./race.js";
 
-export function forEach<In, Out, R extends string = never>(
-  action: Pipeable<In, Out, R>,
-): TypedAction<In[], Out[], R> {
+export function forEach<In, Out>(
+  action: Pipeable<In, Out>,
+): TypedAction<In[], Out[]> {
   return typedAction({ kind: "ForEach", action: action as Action });
 }
 
@@ -762,9 +755,9 @@ export const IDENTITY: Action = {
  *
  * Compiled form: `RestartHandle(id, ExtractIndex(0), body)`
  */
-export function recur<TIn = never, TOut = any, TRefs extends string = never>(
-  bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut, TRefs>,
-): TypedAction<PipeIn<TIn>, TOut, TRefs> {
+export function recur<TIn = never, TOut = any>(
+  bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut>,
+): TypedAction<PipeIn<TIn>, TOut> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const restartAction = typedAction<TIn, never>({
@@ -802,12 +795,11 @@ export function earlyReturn<
   TEarlyReturn = never,
   TIn = any,
   TOut = any,
-  TRefs extends string = never,
 >(
   bodyFn: (
     earlyReturn: TypedAction<TEarlyReturn, never>,
-  ) => Pipeable<TIn, TOut, TRefs>,
-): TypedAction<TIn, TEarlyReturn | TOut, TRefs> {
+  ) => Pipeable<TIn, TOut>,
+): TypedAction<TIn, TEarlyReturn | TOut> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>({
@@ -868,12 +860,12 @@ export function buildRestartBranchAction(
  *
  * Compiles to `RestartHandle`/`RestartPerform`/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
+export function loop<TBreak = never, TIn = never>(
   bodyFn: (
     recur: TypedAction<TIn, never>,
     done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => Pipeable<TIn, never, TRefs>,
-): TypedAction<PipeIn<TIn>, VoidToNull<TBreak>, TRefs> {
+  ) => Pipeable<TIn, never>,
+): TypedAction<PipeIn<TIn>, VoidToNull<TBreak>> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const perform: Action = {
