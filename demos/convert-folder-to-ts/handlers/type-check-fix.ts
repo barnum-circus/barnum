@@ -11,10 +11,10 @@ import {
   drop,
 } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { baseDir, callClaude } from "./lib.js";
+import { baseDir, callClaude, stripCodeFences } from "./lib.js";
 
 // --- Types ---
 
@@ -118,24 +118,27 @@ export const fix = createHandler({
   inputValidator: TypeErrorValidator,
   outputValidator: z.object({ file: z.string(), fixed: z.literal(true) }),
   handle: async ({ value: error }) => {
-    const outputDir = path.join(baseDir, "out");
     const absolutePath = path.resolve(baseDir, error.file);
     console.error(`[fix] Asking Claude to fix: ${absolutePath} — ${error.message}`);
 
-    await callClaude({
-      prompt: [
-        `Fix this TypeScript type error:`,
-        `File: ${absolutePath}`,
+    const fileContent = readFileSync(absolutePath, "utf-8");
+
+    const response = await callClaude(
+      [
+        "Fix this TypeScript type error.",
         `Error: ${error.message}`,
         "",
-        "Read the file, understand the issue, and edit it to fix the error.",
-        "Make the minimal change needed. Do not change behavior.",
-        "Do NOT create new files. Only edit the existing file at the exact path above.",
+        `File (${path.basename(absolutePath)}):`,
+        "```typescript",
+        fileContent,
+        "```",
+        "",
+        "Return the complete fixed file. Make the minimal change needed.",
+        "Do not change behavior. Return ONLY the code, no explanation.",
       ].join("\n"),
-      allowedTools: [`Read(//${outputDir}/**)`, `Edit(//${outputDir}/**)`],
-      cwd: outputDir,
-    });
+    );
 
+    writeFileSync(absolutePath, stripCodeFences(response));
     console.error(`[fix] Applied fix to ${error.file}`);
     return { file: error.file, fixed: true as const };
   },

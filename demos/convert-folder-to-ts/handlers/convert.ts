@@ -5,10 +5,10 @@
 // migrate: invoke Claude to convert a JS file to TypeScript (reads source, writes output)
 
 import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { baseDir, callClaude } from "./lib.js";
+import { baseDir, callClaude, stripCodeFences } from "./lib.js";
 
 // --- Types ---
 
@@ -70,19 +70,24 @@ export const migrate = createHandlerWithConfig({
 
     console.error(`[migrate] Converting ${fileName} to ${stepConfig.to} via Claude...`);
 
-    await callClaude({
-      prompt: [
-        `Convert the JavaScript file at ${value.file} to ${stepConfig.to}.`,
+    const source = readFileSync(value.file, "utf-8");
+
+    const response = await callClaude(
+      [
+        `Convert this JavaScript file to ${stepConfig.to}.`,
         "Add proper type annotations to all function parameters and return types.",
         "Use ES module syntax (export/import) instead of CommonJS (module.exports/require).",
         "Preserve all behavior exactly.",
+        "Return ONLY the converted code, no explanation.",
         "",
-        `Read the source file at: ${value.file}`,
-        `Write the converted ${stepConfig.to} to: ${value.outputPath}`,
+        `Source file (${fileName}):`,
+        "```javascript",
+        source,
+        "```",
       ].join("\n"),
-      allowedTools: [`Read(//${value.file})`, `Write(//${value.outputPath})`],
-    });
+    );
 
+    writeFileSync(value.outputPath, stripCodeFences(response));
     console.error(`[migrate] Wrote ${value.outputPath}`);
   },
 }, "migrate");
