@@ -144,9 +144,9 @@ export const fix = createHandler({
 
 // --- Pipeline ---
 
-export const typeCheckFix = loop((recur) =>
+export const typeCheckFix = loop<never, never>((recur) =>
   pipe(typeCheck, classifyErrors).branch({
     HasErrors: pipe(forEach(fix).drop(), recur),
     Clean: drop,
   }),
-) as TypedAction<never, never>;
+);
