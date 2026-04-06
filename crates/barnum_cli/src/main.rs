@@ -1,4 +1,4 @@
-//! Barnum workflow engine CLI.
+//! Barnum CLI: the workflow engine for orchestrating AI agents.
 
 use barnum_ast::flat::flatten;
 use barnum_engine::WorkflowState;
