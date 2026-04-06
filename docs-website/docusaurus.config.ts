@@ -7,7 +7,7 @@ lightTheme.plain.backgroundColor = 'rgba(0, 0, 0, 0.02)';
 
 const config: Config = {
   title: 'Barnum',
-  tagline: 'The programming language for orchestrating agents.',
+  tagline: 'The programming language for orchestrating AI agents.',
   favicon: 'img/favicon.svg',
 
   url: 'https://barnum-circus.github.io/',
