@@ -118,7 +118,7 @@ function DemoVideo() {
         <h2 className={styles.centeredHeading}>See it in action.</h2>
         <div className={styles.demoVideoWrapper}>
           <iframe
-            src="https://www.youtube.com/embed/HjVMgBIiwBM?si=xTqJaJa7ZMz5oU5P"
+            src="https://www.youtube.com/embed/sNRp7hQub8Y"
             title="Barnum demo"
             allow="encrypted-media; picture-in-picture; web-share"
             allowFullScreen
