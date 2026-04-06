@@ -50,14 +50,12 @@ export const fixTypeErrors = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      listJsFiles.forEach(convertFile).drop(),
-      fixTypeErrors,
-    )
-  )
-  .run();
+runPipeline(
+  pipe(
+    listJsFiles.forEach(convertFile).drop(),
+    fixTypeErrors,
+  ),
+);
 ```
 
 ## Key points

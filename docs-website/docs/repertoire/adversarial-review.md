@@ -64,19 +64,17 @@ export const revise = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      implement,
-      loop((recur, done) =>
-        pipe(judge).branch({
-          Approved: done,
-          NeedsWork: pipe(revise, implement, recur),
-        })
-      ),
-    )
-  )
-  .run();
+runPipeline(
+  pipe(
+    implement,
+    loop((recur, done) =>
+      pipe(judge).branch({
+        Approved: done,
+        NeedsWork: pipe(revise, implement, recur),
+      })
+    ),
+  ),
+);
 ```
 
 ## Key points

@@ -61,12 +61,12 @@ export const implement = createHandler({
 
 ```ts
 // run.ts
-import { workflowBuilder, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import { analyze, review, implement } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() => pipe(analyze, review, implement))
-  .run();
+runPipeline(
+  pipe(analyze, review, implement),
+);
 ```
 
 ## Key points

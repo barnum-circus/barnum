@@ -50,11 +50,9 @@ export const verifyClaim = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    pipe(extractClaims, forEach(verifyClaim))
-  )
-  .run();
+runPipeline(
+  pipe(extractClaims, forEach(verifyClaim)),
+);
 ```
 
 ## Key points

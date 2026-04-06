@@ -52,17 +52,15 @@ export const applyFeedback = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      reviewPR,
-      branch({
-        Approve: drop,
-        RequestChanges: applyFeedback,
-      }),
-    )
-  )
-  .run();
+runPipeline(
+  pipe(
+    reviewPR,
+    branch({
+      Approve: drop,
+      RequestChanges: applyFeedback,
+    }),
+  ),
+);
 ```
 
 ## Key points

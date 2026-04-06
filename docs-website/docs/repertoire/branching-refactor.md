@@ -56,20 +56,18 @@ export const extractFunction = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    listFiles.forEach(
-      pipe(
-        analyzeFile,
-        branch({
-          ExtractFunction: extractFunction,
-          RenameVariables: renameVariables,
-          SimplifyConditions: simplifyConditions,
-        }),
-      )
-    ).drop()
-  )
-  .run();
+runPipeline(
+  listFiles.forEach(
+    pipe(
+      analyzeFile,
+      branch({
+        ExtractFunction: extractFunction,
+        RenameVariables: renameVariables,
+        SimplifyConditions: simplifyConditions,
+      }),
+    )
+  ).drop(),
+);
 ```
 
 ## Key points

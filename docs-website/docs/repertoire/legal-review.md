@@ -66,14 +66,12 @@ export const synthesize = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis),
-      synthesize,
-    )
-  )
-  .run();
+runPipeline(
+  pipe(
+    all(courtCaseAnalysis, financialAnalysis, liabilityAnalysis),
+    synthesize,
+  ),
+);
 ```
 
 ## Key points

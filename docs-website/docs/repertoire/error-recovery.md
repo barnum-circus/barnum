@@ -53,14 +53,12 @@ export const rollback = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    tryCatch(
-      pipe(attemptRefactor, verifyBuild),
-      { catch: rollback },
-    )
-  )
-  .run();
+runPipeline(
+  tryCatch(
+    pipe(attemptRefactor, verifyBuild),
+    { catch: rollback },
+  ),
+);
 ```
 
 ## Key points

@@ -52,9 +52,9 @@ export const applyMigrations = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() => pipe(listMigrations, applyMigrations))
-  .run();
+runPipeline(
+  pipe(listMigrations, applyMigrations),
+);
 ```
 
 ## Key points

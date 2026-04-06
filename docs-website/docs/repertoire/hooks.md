@@ -26,18 +26,16 @@ export const logProgress = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    listFiles.forEach(
-      pipe(
-        tap(logProgress),
-        refactor,
-        tap(logProgress),
-        typeCheck,
-      )
-    ).drop()
-  )
-  .run();
+runPipeline(
+  listFiles.forEach(
+    pipe(
+      tap(logProgress),
+      refactor,
+      tap(logProgress),
+      typeCheck,
+    )
+  ).drop(),
+);
 ```
 
 ## Key points

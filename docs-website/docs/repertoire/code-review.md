@@ -52,13 +52,11 @@ export const checkSecurity = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    listChangedFiles.forEach(
-      all(checkStandards, checkSecurity)
-    ).drop()
-  )
-  .run();
+runPipeline(
+  listChangedFiles.forEach(
+    all(checkStandards, checkSecurity)
+  ).drop(),
+);
 ```
 
 ## Key points

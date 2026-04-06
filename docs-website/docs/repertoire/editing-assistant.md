@@ -56,11 +56,9 @@ export const checkStructure = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() =>
-    all(checkThesis, checkLogic, checkStructure)
-  )
-  .run();
+runPipeline(
+  all(checkThesis, checkLogic, checkStructure),
+);
 ```
 
 ## Key points

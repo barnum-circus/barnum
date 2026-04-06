@@ -38,9 +38,9 @@ export const refactorFile = createHandler({
 ```
 
 ```ts
-await workflowBuilder()
-  .workflow(() => listFiles.forEach(refactorFile).drop())
-  .run();
+runPipeline(
+  listFiles.forEach(refactorFile).drop(),
+);
 ```
 
 ## Key points
