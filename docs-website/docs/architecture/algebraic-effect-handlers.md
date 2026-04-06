@@ -1,10 +1,10 @@
 # Algebraic Effect Handlers
 
-Barnum's control flow combinators — `loop`, `tryCatch`, `earlyReturn`, `race`, `withTimeout` — are all implemented using the same substrate: **algebraic effect handlers**. This is not a metaphor. The AST has dedicated `Handle` and `Perform` nodes, the runtime has a frame-based handler stack, and effects propagate by walking the ancestor chain — the same architecture you'd find in a language designed around algebraic effects.
+Barnum's control flow combinators — `loop`, `tryCatch`, `earlyReturn`, `race`, `withTimeout` — are all implemented using the same substrate: **algebraic effect handlers**. This is not a metaphor. The AST has dedicated `Handle` and `Perform` nodes, the runtime has a frame-based handler stack, and effects propagate by walking the ancestor chain — the same architecture as a language designed around algebraic effects.
 
-This design is strongly influenced by [Andrej Bauer](https://www.andrej.com/)'s work on algebraic effects and the [Eff programming language](https://www.eff-lang.org/). Bauer's [OPLSS 2018 lecture series](https://www.youtube.com/watch?v=atYp386EGo8) — *What's Algebraic About Algebraic Effects and Handlers?* — is the clearest exposition of the theory. The key insight from that work: effects and handlers are an algebraic structure where operations (effects) are free and handlers give them meaning. This separates the *description* of a side effect from its *interpretation*, enabling composable control flow without callbacks, exceptions, or monadic plumbing.
+This design is strongly influenced by [Andrej Bauer](https://www.andrej.com/)'s work on algebraic effects and the [Eff programming language](https://www.eff-lang.org/). Bauer's [OPLSS 2018 lecture series](https://www.youtube.com/watch?v=atYp386EGo8) — *What's Algebraic About Algebraic Effects and Handlers?* — is the clearest exposition of the theory. Effects and handlers form an algebraic structure: operations (effects) are free and handlers give them meaning, separating the *description* of a side effect from its *interpretation*.
 
-Barnum adapts this model for a workflow runtime. Instead of general-purpose delimited continuations, it provides two specialized handler types optimized for the patterns that actually arise in workflow orchestration.
+Barnum adapts this model for a workflow runtime with two specialized handler types instead of general-purpose delimited continuations.
 
 ## Two handler types
 
@@ -228,7 +228,7 @@ Barnum's implementation maps to the theoretical framework as follows:
 | **Effect matching** | By operation name | By `restart_handler_id` / `resume_handler_id` |
 | **Composability** | Handlers compose by nesting | Handlers compose by nesting — inner shadows outer |
 
-The key simplification: Barnum doesn't need general-purpose multi-shot continuations. Workflow orchestration has two patterns — *retry from scratch* (restart) and *read a value* (resume) — and each gets a specialized, efficient implementation rather than being built on a general continuation mechanism.
+Barnum doesn't need general-purpose multi-shot continuations. Workflow orchestration has two patterns — *retry from scratch* (restart) and *read a value* (resume) — and each gets a specialized implementation rather than being built on a general continuation mechanism.
 
 ## Further reading
 

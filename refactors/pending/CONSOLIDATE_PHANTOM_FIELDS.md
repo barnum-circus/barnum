@@ -15,31 +15,35 @@ The first pair (`__phantom_in` + `__in`) makes In invariant. The second pair (`_
 
 Four fields with inconsistent naming (`__in` vs `__phantom_in`), a stale comment about the deleted `WorkflowAction`, and a non-obvious variance encoding. This can be one field.
 
+Additionally, all three types carry a `Refs extends string = never` type parameter and `__refs?: { _brand: Refs }` phantom field. This is threaded through every combinator signature but never extracted or used — no `ExtractRefs` type exists, no test exercises it, no consumer reads it. Dead code.
+
 ## Design
+
+### Step 1: Remove Refs
+
+Delete the `Refs` type parameter and `__refs` field from `TypedAction`, `Pipeable`, and `CaseHandler`. Remove the `TRefs` parameter from every combinator signature that threads it (`then`, `forEach`, `pipe`, `chain`, `loop`, `recur`, `earlyReturn`, `dropResult`, `augment`, `tap`, `typedAction`, etc.).
+
+### Step 2: Consolidate phantom fields
 
 A function type `(x: T) => T` is **invariant** in `T`: `T` appears in both parameter (contravariant) and return (covariant) position. A function `(x: A) => B` is contravariant in `A` and covariant in `B`.
 
-### TypedAction and Pipeable: invariant In, invariant Out
-
-Replace four fields with one:
+**TypedAction and Pipeable** (invariant In, invariant Out): replace four fields with one:
 
 ```ts
 __phantom?: (io: [In, Out]) => [In, Out];
 ```
 
-`[In, Out]` appears in both parameter and return position, making the tuple (and therefore both `In` and `Out`) invariant.
+`[In, Out]` appears in both parameter and return position, making both `In` and `Out` invariant.
 
-### CaseHandler: contravariant In, covariant Out
-
-Replace two fields with one:
+**CaseHandler** (contravariant In, covariant Out): replace two fields with one:
 
 ```ts
-__phantom?: (input: In) => Out;
+__phantom?: (input: TIn) => TOut;
 ```
 
-`In` in parameter position (contravariant), `Out` in return position (covariant).
+`TIn` in parameter position (contravariant), `TOut` in return position (covariant).
 
-### ExtractInput / ExtractOutput
+**ExtractInput / ExtractOutput**: extract from the tuple shape:
 
 ```ts
 export type ExtractInput<T> = T extends {
@@ -55,24 +59,7 @@ export type ExtractOutput<T> = T extends {
   : never;
 ```
 
-Both extract from the same `__phantom` field. `any` in the non-extracted positions avoids interference.
-
-Note: CaseHandler's `(input: In) => Out` signature is a *subtype* of `(io: [In, Out]) => [In, Out]`? No — these are different shapes. But both TypedAction and CaseHandler use `__phantom` as the field name, and TypeScript's structural matching in `extends` clauses will match whichever shape fits the `infer` pattern.
-
-Actually, this is a problem. `ExtractInput` matches `__phantom?: (io: [infer In, any]) => any`. CaseHandler's `__phantom?: (input: In) => Out` doesn't match that pattern because its parameter isn't a tuple. So extraction from CaseHandler would return `never`.
-
-But we never call `ExtractInput` or `ExtractOutput` on a CaseHandler directly — they're only used on TypedAction/Pipeable. CaseHandler is an internal constraint type. Let me verify.
-
-## Extraction compatibility
-
-`ExtractInput<T>` and `ExtractOutput<T>` are used in:
-- Type test assertions (`assertExact<IsExact<ExtractInput<typeof action>, ...>>()`)
-- Branch output extraction (`ExtractOutput<TCases[keyof TCases & string]>`)
-- The `BranchPayload` type utility
-
-The branch output extraction uses `ExtractOutput` on the *values* of the cases object, which are `CaseHandler` types at the constraint level but `TypedAction`/`Pipeable` at the value level. Since concrete handlers are TypedAction instances, `ExtractOutput` will see the tuple-based `__phantom` and work correctly.
-
-So the approach is safe: CaseHandler uses `(input: In) => Out` for variance, TypedAction/Pipeable use `(io: [In, Out]) => [In, Out]` for variance and extraction. The field name `__phantom` is shared but the shapes differ. Extraction only needs to work on TypedAction/Pipeable, which it does.
+CaseHandler's `(input: TIn) => TOut` doesn't match the tuple extraction pattern, but `ExtractInput`/`ExtractOutput` are never called on CaseHandler — only on concrete TypedAction/Pipeable values. CaseHandler is a constraint type for branch case positions.
 
 ## Current state
 
@@ -147,86 +134,49 @@ export function typedAction<In, Out, Refs extends string = never>(
 }
 ```
 
-No runtime changes needed — it's just a cast.
-
 ## Changes
 
-### 1. Replace phantom fields on TypedAction
+### 1. Remove `Refs` type parameter and `__refs` field
 
-**Before:**
-```ts
-export type TypedAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
-  __phantom_in?: (input: In) => void;
-  __phantom_out?: () => Out;
-  __phantom_out_check?: (output: Out) => void;
-  __in?: In;
-  __refs?: { _brand: Refs };
-  // ...methods...
-};
-```
+Remove from:
+- `TypedAction<In, Out, Refs>` → `TypedAction<In, Out>`
+- `Pipeable<In, Out, Refs>` → `Pipeable<In, Out>`
+- `CaseHandler<TIn, TOut, TRefs>` → `CaseHandler<TIn, TOut>`
+- `typedAction<In, Out, Refs>` → `typedAction<In, Out>`
+
+Remove `TRefs` parameters from every combinator that threads them: `then`, `forEach`, `chain`/pipe implementation, `loop`, `recur`, `earlyReturn`, `dropResult`, `augment`, `tap`, and all method signatures on TypedAction.
+
+Remove `__refs` field from all three types.
+
+### 2. Replace phantom fields on TypedAction
 
 **After:**
 ```ts
-export type TypedAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
+export type TypedAction<In = unknown, Out = unknown> = Action & {
   __phantom?: (io: [In, Out]) => [In, Out];
-  __refs?: { _brand: Refs };
-  // ...methods...
+  // ...methods (without Refs)...
 };
 ```
 
-### 2. Replace phantom fields on Pipeable
-
-Same change — four fields become one `__phantom`.
-
-### 3. Replace phantom fields on CaseHandler
-
-**Before:**
-```ts
-type CaseHandler<
-  TIn = unknown,
-  TOut = unknown,
-  TRefs extends string = never,
-> = Action & {
-  __phantom_in?: (input: TIn) => void;
-  __phantom_out?: () => TOut;
-  __refs?: { _brand: TRefs };
-};
-```
+### 3. Replace phantom fields on Pipeable
 
 **After:**
 ```ts
-type CaseHandler<
-  TIn = unknown,
-  TOut = unknown,
-  TRefs extends string = never,
-> = Action & {
-  __phantom?: (input: TIn) => TOut;
-  __refs?: { _brand: TRefs };
+export type Pipeable<In = unknown, Out = unknown> = Action & {
+  __phantom?: (io: [In, Out]) => [In, Out];
 };
 ```
 
-### 4. Update ExtractInput / ExtractOutput
+### 4. Replace phantom fields on CaseHandler
 
-**Before:**
+**After:**
 ```ts
-export type ExtractInput<T> = T extends {
-  __phantom_in?: (input: infer In) => void;
-}
-  ? In
-  : never;
-
-export type ExtractOutput<T> = T extends { __phantom_out?: () => infer Out }
-  ? Out
-  : never;
+type CaseHandler<TIn = unknown, TOut = unknown> = Action & {
+  __phantom?: (input: TIn) => TOut;
+};
 ```
+
+### 5. Update ExtractInput / ExtractOutput
 
 **After:**
 ```ts
@@ -243,15 +193,15 @@ export type ExtractOutput<T> = T extends {
   : never;
 ```
 
-### 5. Update JSDoc comments
+### 6. Update JSDoc comments
 
-Replace the variance explanation in the TypedAction, Pipeable, and CaseHandler JSDoc blocks. The new explanation:
+Replace the variance explanation blocks. New text:
 
 For TypedAction/Pipeable: "A single phantom field `__phantom?: (io: [In, Out]) => [In, Out]` encodes invariance — the tuple appears in both parameter (contravariant) and return (covariant) position."
 
 For CaseHandler: "A single phantom field `__phantom?: (input: TIn) => TOut` encodes contravariant input and covariant output — `TIn` in parameter position, `TOut` in return position."
 
-### 6. Update docs
+### 7. Update docs
 
 Update `docs-website/docs/architecture/typescript-ast.md` if it references the phantom field names.
 
@@ -267,8 +217,9 @@ If the consolidated fields pass the existing type tests, the variance behavior i
 
 ## Execution order
 
-1. Replace phantom fields on TypedAction, Pipeable, CaseHandler
-2. Update ExtractInput / ExtractOutput
-3. Update JSDoc comments
-4. Typecheck + run tests
-5. Update docs
+1. Remove `Refs` from all types and combinators
+2. Replace phantom fields on TypedAction, Pipeable, CaseHandler
+3. Update ExtractInput / ExtractOutput
+4. Update JSDoc comments
+5. Typecheck + run tests
+6. Update docs

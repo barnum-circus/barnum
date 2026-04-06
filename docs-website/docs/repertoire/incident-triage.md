@@ -31,7 +31,7 @@ runPipeline(
    - **Logs** — query your logging system for error spikes around the alert time.
    - **Metrics** — pull latency, error rate, and throughput from your monitoring system.
    - **Recent deploys** — ask an LLM (or query a deploy tracker) for what shipped in the last 24 hours. If the deploy service has an API, this is deterministic. If not, an agent can query it via CLI or chat.
-   - **Business intelligence** — pull relevant data from internal BI tools (revenue impact, affected user count, feature flag states). This is the kind of data that's crucial for triage but often forgotten because it requires logging into a separate system.
+   - **Business intelligence** — pull relevant data from internal BI tools (revenue impact, affected user count, feature flag states). Crucial for triage but often missed because it lives in a separate system.
 2. **Merge** — combine the four data sources into a single context object.
 3. **Parallel analysis** — three focused agents run concurrently:
    - **Correlate events** — find causal links between deploys, metric changes, and log patterns.

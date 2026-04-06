@@ -1,6 +1,6 @@
 # Architecture
 
-Barnum is a TypeScript DSL that compiles to a serializable AST, which is executed by a Rust runtime. This separation lets you author workflows in a language with world-class type inference while executing them on a runtime designed for precise control flow, schema validation, and concurrent subprocess management.
+Barnum is a TypeScript DSL that compiles to a serializable AST, which is executed by a Rust runtime. TypeScript handles authoring and type inference; Rust handles execution, schema validation, and concurrent subprocess management.
 
 ```
 TypeScript DSL
@@ -14,7 +14,7 @@ TypeScript DSL
 
 ### 1. Authoring
 
-You compose handlers and combinators in TypeScript. Phantom types enforce that `pipe(a, b)` only compiles if `a`'s output type matches `b`'s input type. All type information exists purely for the compiler — it's erased before serialization.
+Handlers and combinators are composed in TypeScript. Phantom types enforce that `pipe(a, b)` only compiles if `a`'s output type matches `b`'s input type. All type information exists purely for the compiler — it's erased before serialization.
 
 ### 2. AST serialization
 

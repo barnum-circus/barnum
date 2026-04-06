@@ -1,8 +1,8 @@
 # TypeScript AST
 
-Barnum's TypeScript library is a DSL that produces a serializable AST. When you write `pipe(listFiles, forEach(refactor))`, you're not scheduling work — you're building a JSON-serializable tree that describes the workflow's structure. The Rust runtime receives this tree and executes it.
+Barnum's TypeScript library is a DSL that produces a serializable AST. `pipe(listFiles, forEach(refactor))` builds a JSON tree describing the workflow structure. The Rust runtime receives this tree and executes it.
 
-This page explains how the DSL achieves three properties simultaneously:
+The DSL maintains three properties:
 
 1. **Type safety** — `pipe(a, b)` only compiles if `a`'s output matches `b`'s input
 2. **Clean serialization** — `JSON.stringify()` produces a minimal tree with no type metadata
@@ -29,9 +29,7 @@ type Action =
 
 ## Phantom types
 
-The key design challenge: how do you enforce `In → Out` type matching across pipeline steps without polluting the serialized JSON?
-
-The answer is **phantom types** — type-level fields that exist for the TypeScript compiler but are never set at runtime.
+Enforcing `In → Out` type matching across pipeline steps without polluting the serialized JSON requires **phantom types** — type-level fields that exist for the TypeScript compiler but are never set at runtime.
 
 ```ts
 type TypedAction<In, Out> = Action & {
@@ -47,7 +45,7 @@ These four fields enforce **invariance** on both `In` and `Out`:
 - **Input invariance**: `__phantom_in` (contravariant) + `__in` (covariant) together mean `In` must match exactly. A handler expecting `{ name: string }` won't accept `{ name: string; age: number }` or `string`.
 - **Output invariance**: `__phantom_out` (covariant) + `__phantom_out_check` (contravariant) together mean `Out` must match exactly.
 
-Why invariance? Because data crosses a serialization boundary to handlers that may run in Rust, Python, or any future language. Structural subtyping (TypeScript's default) would let extra fields through — fields the receiving handler doesn't know about. Invariance catches this at compile time.
+Data crosses a serialization boundary to handlers that may run in Rust, Python, or any future language. Structural subtyping (TypeScript's default) would let extra fields through — fields the receiving handler doesn't know about. Invariance catches this at compile time.
 
 ### Why phantom fields need to be optional
 
@@ -133,7 +131,7 @@ type TaggedUnion<TDef extends Record<string, unknown>> = {
 }[keyof TDef & string];
 ```
 
-The phantom `__def` field is the key trick. It carries the full variant map (`{ Ok: string; Err: number }`) as a type, enabling `.branch()` to decompose the union via simple indexing (`keyof ExtractDef<Out>`) instead of complex conditional types. At runtime, `__def` is never set — it's purely compile-time.
+`__def` carries the full variant map (`{ Ok: string; Err: number }`) as a phantom field, so `.branch()` can decompose the union via `keyof ExtractDef<Out>` instead of conditional types. Never set at runtime.
 
 Standard library types build on this:
 

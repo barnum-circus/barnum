@@ -1,6 +1,6 @@
 # Context and Variables
 
-In a pipeline, data flows forward — each step receives the previous step's output. But sometimes you need data from an earlier step in a later step without threading it through every intermediate handler. `bind` and `bindInput` solve this.
+Pipeline data flows forward — each step receives the previous step's output. `bind` and `bindInput` make earlier values available to later steps without threading them through every intermediate handler.
 
 ## The problem
 

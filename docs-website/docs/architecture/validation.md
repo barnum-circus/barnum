@@ -6,7 +6,7 @@ Barnum uses [Zod](https://zod.dev/) as a **single source of truth** for handler 
 2. **Compiles to JSON Schema** — the schema is converted to a language-independent JSON Schema document and embedded in the serialized AST.
 3. **Validates at runtime** — the Rust engine compiles the JSON Schema into a validator at workflow init and checks every handler invocation.
 
-This means you write the schema once and get compile-time type checking, cross-language serialization contracts, and runtime validation — all derived from the same definition.
+One schema definition yields compile-time type checking, cross-language serialization contracts, and runtime validation.
 
 ## Zod as the source of truth
 
@@ -32,7 +32,7 @@ From this single definition:
 - **`zodToCheckedJsonSchema()`** converts the Zod schemas to JSON Schema Draft 7. The resulting schemas are embedded in the AST's `Invoke` node as `input_schema` and `output_schema`.
 - **The Rust runtime** compiles these JSON Schemas into `jsonschema::Validator` instances and checks every handler invocation at both entry and exit.
 
-Without Zod, you'd need to maintain TypeScript types, JSON Schema documents, and validation logic separately — three artifacts that inevitably drift apart. Zod eliminates this entire class of consistency bugs.
+Without this, TypeScript types, JSON Schema documents, and validation logic would be maintained separately — three artifacts that inevitably drift apart.
 
 ## Compile-time: Zod → JSON Schema
 
@@ -67,9 +67,9 @@ const raw = toJSONSchema(schema, {
 
 The `$schema` field is stripped from the result — embedded schemas don't need the draft URI.
 
-### Why not just use Zod at runtime?
+### Why JSON Schema instead of Zod at runtime?
 
-Zod is a TypeScript library. The Rust runtime doesn't have a JavaScript engine. JSON Schema is a language-independent standard with high-quality validators in every major language — including Rust's `jsonschema` crate. Converting to JSON Schema at definition time means validation is a zero-dependency operation on the Rust side.
+Zod is a TypeScript library. The Rust runtime has no JavaScript engine. JSON Schema is a language-independent standard with validators in every major language — including Rust's `jsonschema` crate. Converting at definition time means validation is a zero-dependency operation on the Rust side.
 
 ## Serialization: schema in the AST
 
@@ -127,7 +127,7 @@ struct CompiledSchemas {
 
 Only TypeScript handlers are checked — builtins are framework code with known types and no trust boundary. Handlers without schemas produce no entries in the maps.
 
-If a schema is not valid JSON Schema (malformed, not just a type mismatch), the workflow fails immediately with `RunWorkflowError::InvalidSchema`. This is a fail-fast: you find out at init, not during the first invocation.
+If a schema is not valid JSON Schema (malformed, not just a type mismatch), the workflow fails immediately with `RunWorkflowError::InvalidSchema` — at init, not during the first invocation.
 
 ## Runtime: validation at every boundary
 
@@ -206,7 +206,7 @@ Two error variants cover validation failures:
 
 **`RunWorkflowError::SchemaValidation`** — a value failed validation against a well-formed schema. Caught at dispatch or completion. Includes the handler's module path, function name, direction (input/output), and individual validation error messages.
 
-Both are fatal — the workflow terminates immediately. There is no automatic recovery from validation failures. If you need error recovery, use `tryCatch` around the handler invocation.
+Both are fatal — the workflow terminates immediately. There is no automatic recovery from validation failures. For error recovery, wrap the handler invocation in `tryCatch`.
 
 ## Why validate twice?
 
@@ -214,4 +214,4 @@ Both are fatal — the workflow terminates immediately. There is no automatic re
 
 **Output validation** catches buggy handlers. The handler's implementation doesn't match its declared contract. Without output validation, downstream handlers would receive unexpected data types.
 
-Together, they enforce a contract at every serialization boundary: data entering a handler is valid, and data leaving a handler is valid. This is the same principle as contract programming (preconditions and postconditions), applied at the workflow orchestration layer.
+Together, they enforce a contract at every serialization boundary: data entering a handler is valid, and data leaving a handler is valid.
