@@ -79,7 +79,7 @@ function Features() {
         </p>
         <div className="row" style={{ paddingTop: '1.5rem' }}>
           <div className="col col--4">
-            <h3>A choreographed show</h3>
+            <h3>🦁 A choreographed show</h3>
             <p>
               Workflows are composed from type-safe primitives:{' '}
               <code>pipe</code>, <code>loop</code>, <code>branch</code>,{' '}
@@ -88,7 +88,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>The right performer for each act</h3>
+            <h3>🐘 The right performer for each act</h3>
             <p>
               Handlers are either built-in primitives or TypeScript async
               functions. Agents handle the parts that require judgment.
@@ -97,7 +97,7 @@ function Features() {
             </p>
           </div>
           <div className="col col--4">
-            <h3>No one goes off script</h3>
+            <h3>🐯 No one goes off script</h3>
             <p>
               Each handler runs in its own isolated Node.js subprocess.
               The agent performing a refactor never sees the full workflow —
