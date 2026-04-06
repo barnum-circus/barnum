@@ -36,20 +36,6 @@ The type parameter `<[[number, boolean], [number, boolean]]>` is explicit becaus
 
 The first callback defines the function bodies — `isEven` and `isOdd` call each other via the call tokens. The second callback receives the same tokens and returns the workflow entry point.
 
-## Self-recursion
-
-`defineRecursiveFunction` (singular) is sugar for a single function:
-
-```ts
-defineRecursiveFunction<number, number>(
-  (factorial) =>
-    classifyZero.branch({
-      Zero: constant(1),
-      NonZero: pipe(subtractOne, factorial, multiply),
-    }),
-)((factorial) => factorial)
-```
-
 ## When to use recursion vs. loop
 
 | | `loop` | `defineRecursiveFunctions` |

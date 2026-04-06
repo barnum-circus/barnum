@@ -13,6 +13,6 @@ Patterns are the technical building blocks of Barnum workflows. Each pattern iso
 | [Racing](./racing.md) | `race` | First to finish wins |
 | [Context and variables](./context-and-variables.md) | `bind`, `bindInput` | Share data across pipeline steps |
 | [Early return](./early-return.md) | `earlyReturn` | Exit a scope before it finishes |
-| [Recursion](./recursion.md) | `defineRecursiveFunctions` | Mutual and general recursion *(planned)* |
+| [Recursion](./recursion.md) | `defineRecursiveFunctions` | Mutual and general recursion |
 
 For real-world workflows that combine these patterns, see the [Repertoire](../repertoire/index.md).

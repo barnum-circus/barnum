@@ -6,10 +6,6 @@
  *
  * isEven(7) → isOdd(6) → isEven(5) → isOdd(4)
  *           → isEven(3) → isOdd(2) → isEven(1) → isOdd(0) → false
- *
- * NOTE: This demo requires `defineRecursiveFunctions`, which is not yet
- * implemented. The code below shows the intended API. See:
- *   refactors/pending/DEFINE_RECURSIVE_FUNCTIONS.md
  */
 
 import {
