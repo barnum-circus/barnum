@@ -12,9 +12,73 @@ pnpm init
 pnpm add @barnum/barnum zod
 ```
 
-## Write a Claude helper
+## Write handlers
 
-Barnum handlers call Claude via the CLI. Here's a minimal helper using `child_process.spawn`:
+Handlers are async functions wrapped in `createHandler`. Start with simple stubs — no LLM needed yet.
+
+```ts
+// handlers/steps.ts
+import { createHandler } from "@barnum/barnum";
+import { z } from "zod";
+import { readdirSync, readFileSync, writeFileSync } from "fs";
+
+export const listFiles = createHandler({
+  outputValidator: z.array(z.string()),
+  handle: async () => {
+    return readdirSync("src", { recursive: true })
+      .filter((f): f is string => typeof f === "string" && f.endsWith(".tsx"))
+      .map((f) => `src/${f}`);
+  },
+}, "listFiles");
+
+export const migrateComponent = createHandler({
+  inputValidator: z.string(),
+  outputValidator: z.object({ file: z.string(), migrated: z.boolean() }),
+  handle: async ({ value: file }) => {
+    const content = readFileSync(file, "utf-8");
+    if (!content.includes("class ") || !content.includes("extends React.Component")) {
+      return { file, migrated: false };
+    }
+    // Stub: just log for now, we'll replace this with Claude later
+    console.log(`TODO: migrate ${file}`);
+    return { file, migrated: false };
+  },
+}, "migrateComponent");
+```
+
+Each handler runs in its own isolated subprocess. It only sees its own input — never the full workflow.
+
+## Compose a workflow
+
+```ts
+// run.ts
+import { runPipeline } from "@barnum/barnum";
+import { listFiles, migrateComponent } from "./handlers/steps.js";
+
+runPipeline(
+  listFiles
+    .forEach(migrateComponent)
+    .drop(),
+);
+```
+
+`listFiles` returns an array of file paths. `forEach` fans out — each file flows through `migrateComponent` in parallel.
+
+## Run it
+
+```bash
+pnpm exec tsx run.ts
+```
+
+This runs the full pipeline. Right now `migrateComponent` is a stub, so it just logs `TODO` messages. The structure is in place — handlers, validators, fan-out, parallel execution.
+
+## Add Claude
+
+Replace the stub with a real LLM call. Two options:
+
+### Option A: Claude CLI
+
+Spawn `claude` as a subprocess. No SDK dependency, works with any Claude Code installation.
 
 ```ts
 // handlers/lib.ts
@@ -45,68 +109,58 @@ export function callClaude(args: {
 }
 ```
 
-You can also test prompts directly from the command line:
+### Option B: Anthropic SDK
 
-```bash
-claude -p "Migrate this React class component to a functional component with hooks." \
-  --allowedTools Read Edit
-```
-
-## Write handlers
+Call the API directly. Requires `pnpm add @anthropic-ai/sdk` and an `ANTHROPIC_API_KEY`.
 
 ```ts
-// handlers/steps.ts
-import { createHandler } from "@barnum/barnum";
-import { z } from "zod";
-import { readdirSync } from "fs";
-import { callClaude } from "./lib.js";
+// handlers/lib.ts
+import Anthropic from "@anthropic-ai/sdk";
 
-export const listFiles = createHandler({
-  outputValidator: z.array(z.string()),
-  handle: async () => {
-    return readdirSync("src", { recursive: true })
-      .filter((f): f is string => typeof f === "string" && f.endsWith(".tsx"))
-      .map((f) => `src/${f}`);
-  },
-}, "listFiles");
+const client = new Anthropic();
 
+export async function callClaude(args: {
+  prompt: string;
+}): Promise<string> {
+  const response = await client.messages.create({
+    model: "claude-sonnet-4-20250514",
+    max_tokens: 4096,
+    messages: [{ role: "user", content: args.prompt }],
+  });
+  return response.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("");
+}
+```
+
+### Update the handler
+
+With either option, replace the stub in `migrateComponent`:
+
+```ts
 export const migrateComponent = createHandler({
   inputValidator: z.string(),
   handle: async ({ value: file }) => {
     await callClaude({
       prompt: `Migrate ${file} from class-based React components to functional components using hooks. Preserve all behavior exactly.`,
-      allowedTools: ["Read", "Edit"],
+      allowedTools: ["Read", "Edit"],  // CLI only — SDK doesn't use tools this way
     });
   },
 }, "migrateComponent");
 ```
 
-Each handler is an async function with optional Zod validators for input and output. Handlers run in isolated subprocesses — each one only sees its own input, never the full workflow.
-
-## Compose a workflow
-
-```ts
-// run.ts
-import { runPipeline } from "@barnum/barnum";
-import { listFiles, migrateComponent } from "./handlers/steps.js";
-
-runPipeline(
-  listFiles
-    .forEach(migrateComponent)
-    .drop(),
-);
-```
-
-`listFiles` returns an array of file paths. `forEach` fans out — each file flows through `migrateComponent` in parallel, with a separate Claude instance per file.
-
-## Run it
+Run it again:
 
 ```bash
 pnpm exec tsx run.ts
 ```
 
+Each file gets its own Claude instance, running in parallel.
+
 ## Next steps
 
-- See the [demos](https://github.com/barnum-circus/barnum/tree/master/demos) for complete working examples
-- Read the [introduction](./index.md) for the full narrative on why Barnum exists
-- Check out the [builtins reference](./reference/builtins.md) to see what combinators Barnum gives you
+- [Patterns](./patterns/) — looping, branching, error handling, timeouts, racing, and more
+- [Repertoire](./repertoire/) — real-world workflow examples
+- [Builtins reference](./reference/builtins) — every combinator with type signatures
+- [Demos](https://github.com/barnum-circus/barnum/tree/master/demos) — complete working examples
