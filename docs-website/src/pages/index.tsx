@@ -29,18 +29,16 @@ components with functional components using hooks.\`,
 // ... typeCheck, fix, commit, createPR`;
 
 const workflowExample = `// run.ts
-import { workflowBuilder, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import {
   listFiles, refactor, typeCheck, fix, commit, createPR,
 } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() =>
-    listFiles
-      .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-      .drop()
-  )
-  .run();`;
+runPipeline(
+  listFiles
+    .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
+    .drop(),
+);`;
 
 const advancedExample = `const refactorWithRetry = pipe(
   refactor,
@@ -55,9 +53,9 @@ const advancedExample = `const refactorWithRetry = pipe(
   createPR,
 );
 
-await workflowBuilder()
-  .workflow(() => listFiles.forEach(refactorWithRetry).drop())
-  .run();`;
+runPipeline(
+  listFiles.forEach(refactorWithRetry).drop(),
+);`;
 
 function Features() {
   return (

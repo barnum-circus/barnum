@@ -47,16 +47,14 @@ You compose handlers into a workflow using combinators like `pipe` (sequential) 
 
 ```ts
 // run.ts
-import { workflowBuilder, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() =>
-    listFiles
-      .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-      .drop()
-  )
-  .run();
+runPipeline(
+  listFiles
+    .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
+    .drop(),
+);
 ```
 
 `listFiles` runs once and returns an array of filenames. `forEach` fans out — each filename flows through `refactor → typeCheck → fix → commit → createPR`, with each file processed in parallel.

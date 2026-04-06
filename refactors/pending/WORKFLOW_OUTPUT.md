@@ -4,7 +4,7 @@ How does the caller retrieve the final value when a workflow completes?
 
 ## Current state
 
-`workflowBuilder().workflow(...).run()` calls the Rust CLI via `execFileSync` with `stdio: "inherit"`. The Rust event loop prints the final value to stdout as JSON. The TypeScript side doesn't capture or return it — `run()` returns `void`.
+`runPipeline(pipeline)` calls the Rust CLI via `spawn` with `stdio: ["inherit", "inherit", "pipe"]`. The Rust event loop prints the final value to stdout as JSON. The TypeScript side doesn't capture or return it — `runPipeline()` returns `Promise<void>`.
 
 ```ts
 // run.ts
@@ -96,27 +96,27 @@ The Rust CLI already prints the final result to stdout. We just need to capture 
 
 ```ts
 // Before
-await workflowBuilder().workflow(() => ...).run();  // void
+runPipeline(pipeline);  // Promise<void>
 
 // After
-const result = await workflowBuilder().workflow(() => ...).run();  // typed Out
+const result = await runPipeline(pipeline);  // typed Out
 ```
 
-`RunnableConfig.run()` changes from `Promise<void>` to `Promise<Out>`.
+`runPipeline()` changes from `Promise<void>` to `Promise<Out>`.
 
 ## Testing implications
 
 With a return value, workflows become testable:
 
 ```ts
-const result = await workflowBuilder()
-  .workflow(() => pipe(constant({ x: 1 }), transform))
-  .run();
+const result = await runPipeline(
+  pipe(constant({ x: 1 }), transform),
+);
 expect(result).toEqual({ x: 2 });
 ```
 
 ## Open question: async vs sync
 
-Currently `run()` is sync (`execFileSync`). The `async run()` wrapper exists because the dynamic `import("./run.js")` is async. The actual execution is synchronous — the process blocks until the workflow completes.
+Currently `spawnBarnum()` uses `spawn` (async). `runPipeline()` awaits the child process completion.
 
 For long-running workflows, a truly async `run()` (using `execFile` instead of `execFileSync`) would be better. But that's a separate concern from capturing the result.

@@ -43,16 +43,14 @@ You compose handlers into a workflow using combinators like `pipe` (sequential) 
 
 ```ts
 // run.ts
-import { workflowBuilder, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() =>
-    listFiles
-      .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
-      .drop()
-  )
-  .run();
+runPipeline(
+  listFiles
+    .forEach(pipe(refactor, typeCheck, fix, commit, createPR))
+    .drop(),
+);
 ```
 
 > See the full working version: [`demos/simple-workflow`](https://github.com/barnum-circus/barnum/tree/master/demos/simple-workflow)
@@ -83,9 +81,9 @@ const refactorWithRetry = pipe(
   createPR,
 );
 
-await workflowBuilder()
-  .workflow(() => listFiles.forEach(refactorWithRetry).drop())
-  .run();
+runPipeline(
+  listFiles.forEach(refactorWithRetry).drop(),
+);
 ```
 
 Now type errors are fixed in a loop — the agent keeps fixing until the code is clean. And this is still a simplified version. A real workflow might add review steps, worktree isolation, retry-on-timeout, or error escalation.

@@ -18,7 +18,7 @@ You compose handlers and combinators in TypeScript. Phantom types enforce that `
 
 ### 2. AST serialization
 
-`workflowBuilder().run()` calls `JSON.stringify()` on the composed workflow. Phantom fields and handler implementations are non-enumerable, so they're invisible to serialization. What remains is a clean JSON tree of nine action types: `Invoke`, `Chain`, `All`, `ForEach`, `Branch`, `ResumeHandle`, `ResumePerform`, `RestartHandle`, and `RestartPerform`.
+`runPipeline()` calls `JSON.stringify()` on the composed workflow. Phantom fields and handler implementations are non-enumerable, so they're invisible to serialization. What remains is a clean JSON tree of nine action types: `Invoke`, `Chain`, `All`, `ForEach`, `Branch`, `ResumeHandle`, `ResumePerform`, `RestartHandle`, and `RestartPerform`.
 
 ### 3. Compilation
 

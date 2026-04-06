@@ -87,16 +87,14 @@ Each handler is an async function with optional Zod validators for input and out
 
 ```ts
 // run.ts
-import { workflowBuilder } from "@barnum/barnum";
+import { runPipeline } from "@barnum/barnum";
 import { listFiles, migrateComponent } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() =>
-    listFiles
-      .forEach(migrateComponent)
-      .drop()
-  )
-  .run();
+runPipeline(
+  listFiles
+    .forEach(migrateComponent)
+    .drop(),
+);
 ```
 
 `listFiles` returns an array of file paths. `forEach` fans out — each file flows through `migrateComponent` in parallel, with a separate Claude instance per file.

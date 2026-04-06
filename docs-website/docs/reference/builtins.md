@@ -235,12 +235,12 @@ Like `createHandler`, but also accepts a step-level config object for parameteri
 
 ## Workflow execution
 
-### `workflowBuilder()`
+### `runPipeline(pipeline, input?)`
 
-Create a workflow builder. Chain `.workflow(() => ...)` to define the workflow, then `.run()` to execute.
+Run a pipeline to completion. Optionally provide an input value, which is prepended as a `constant` node.
 
 ```ts
-await workflowBuilder()
-  .workflow(() => listFiles.forEach(processFile).drop())
-  .run();
+runPipeline(
+  listFiles.forEach(processFile).drop(),
+);
 ```

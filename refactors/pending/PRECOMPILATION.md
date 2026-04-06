@@ -4,8 +4,8 @@
 
 Currently, running a workflow involves:
 
-1. TypeScript builds the AST (`workflowBuilder().registerSteps(...).workflow(...)`)
-2. `.run()` serializes the AST to JSON via stdout
+1. TypeScript builds the AST (`runPipeline(pipeline)`)
+2. `runPipeline` serializes the config to JSON and passes it to the Rust CLI
 3. Rust CLI reads JSON, deserializes, flattens, and creates `WorkflowState`
 4. The event loop drives execution
 
