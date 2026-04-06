@@ -3,7 +3,17 @@ import {
   type Pipeable,
   type TypedAction,
   typedAction,
+  branch,
 } from "./ast.js";
+import { all } from "./all.js";
+import { chain } from "./chain.js";
+import {
+  constant,
+  identity,
+  extractField,
+  extractIndex,
+  tag,
+} from "./builtins.js";
 import { allocateResumeHandlerId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
@@ -58,20 +68,15 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
 ) => TypedAction<any, TOut> {
   const resumeHandlerId = allocateResumeHandlerId();
 
-  // Create call tokens: Chain(Tag("CallN"), ResumePerform(resumeHandlerId))
+  const resumePerform: Action = {
+    kind: "ResumePerform",
+    resume_handler_id: resumeHandlerId,
+  };
+
+  // Call tokens: Chain(Tag("CallN"), ResumePerform(resumeHandlerId))
   const fnCount = bodiesFn.length;
   const callTokens = Array.from({ length: fnCount }, (_, i) =>
-    typedAction({
-      kind: "Chain",
-      first: {
-        kind: "Invoke",
-        handler: {
-          kind: "Builtin",
-          builtin: { kind: "Tag", value: `Call${i}` },
-        },
-      },
-      rest: { kind: "ResumePerform", resume_handler_id: resumeHandlerId },
-    }),
+    typedAction(chain(tag(`Call${i}`), resumePerform as any) as Action),
   );
 
   // Get function body ASTs
@@ -79,20 +84,13 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
     ...(callTokens as FunctionRefs<TDefs>),
   ) as Action[];
 
-  // Build Branch cases: CallN → ExtractField("value") → bodyN
+  // Branch cases: CallN → ExtractField("value") → bodyN
   const cases: Record<string, Action> = {};
   for (let i = 0; i < bodyActions.length; i++) {
-    cases[`Call${i}`] = {
-      kind: "Chain",
-      first: {
-        kind: "Invoke",
-        handler: {
-          kind: "Builtin",
-          builtin: { kind: "ExtractField", value: "value" },
-        },
-      },
-      rest: bodyActions[i],
-    };
+    cases[`Call${i}`] = chain(
+      extractField("value"),
+      bodyActions[i] as any,
+    ) as Action;
   }
 
   // Return curried entry-point combinator
@@ -103,62 +101,19 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
       ...(callTokens as FunctionRefs<TDefs>),
     ) as Action;
 
-    return typedAction<any, TOut>({
-      kind: "Chain",
-      first: {
-        kind: "All",
-        actions: [
-          {
-            kind: "Invoke",
-            handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-          },
-          {
-            kind: "Invoke",
-            handler: {
-              kind: "Builtin",
-              builtin: { kind: "Constant", value: UNUSED_STATE },
-            },
-          },
-        ],
-      },
-      rest: {
-        kind: "ResumeHandle",
-        resume_handler_id: resumeHandlerId,
-        body: {
-          kind: "Chain",
-          first: {
-            kind: "Invoke",
-            handler: {
-              kind: "Builtin",
-              builtin: { kind: "ExtractIndex", value: 0 },
-            },
-          },
-          rest: userBody,
-        },
-        handler: {
-          kind: "All",
-          actions: [
-            {
-              kind: "Chain",
-              first: {
-                kind: "Invoke",
-                handler: {
-                  kind: "Builtin",
-                  builtin: { kind: "ExtractIndex", value: 0 },
-                },
-              },
-              rest: { kind: "Branch", cases },
-            },
-            {
-              kind: "Invoke",
-              handler: {
-                kind: "Builtin",
-                builtin: { kind: "Constant", value: UNUSED_STATE },
-              },
-            },
-          ],
-        },
-      },
-    });
+    return typedAction<any, TOut>(
+      chain(
+        all(identity, constant(UNUSED_STATE)),
+        {
+          kind: "ResumeHandle",
+          resume_handler_id: resumeHandlerId,
+          body: chain(extractIndex(0), userBody as any) as Action,
+          handler: all(
+            chain(extractIndex(0), branch(cases) as any),
+            constant(UNUSED_STATE),
+          ) as Action,
+        } as Action,
+      ) as Action,
+    );
   };
 }
