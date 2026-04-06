@@ -160,7 +160,7 @@ Each file gets its own Claude instance, running in parallel.
 
 ## Next steps
 
-- [Patterns](./patterns/) — looping, branching, error handling, timeouts, racing, and more
-- [Repertoire](./repertoire/) — real-world workflow examples
-- [Builtins reference](./reference/builtins) — every combinator with type signatures
+- [Patterns](../patterns/) — looping, branching, error handling, timeouts, racing, and more
+- [Repertoire](../repertoire/) — real-world workflow examples
+- [Builtins reference](../reference/builtins) — every combinator with type signatures
 - [Demos](https://github.com/barnum-circus/barnum/tree/master/demos) — complete working examples
