@@ -273,6 +273,11 @@ pub enum BuiltinKind {
     TagContinue,
     /// Wrap input as `{ kind: "Break", value: <input> }`.
     TagBreak,
+    /// Collect `Some` values from an array of `Option<T>`, discarding `None`s.
+    ///
+    /// Input: array of `{ kind: "Some", value: T }` or `{ kind: "None", value: _ }`.
+    /// Output: array of unwrapped `T` values (only the `Some` entries).
+    CollectSome,
 }
 
 // ---------------------------------------------------------------------------

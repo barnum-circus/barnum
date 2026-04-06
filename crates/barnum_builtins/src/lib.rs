@@ -127,6 +127,28 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
 
         BuiltinKind::TagBreak => Ok(json!({ "kind": "Break", "value": input })),
 
+        BuiltinKind::CollectSome => {
+            let Value::Array(items) = input else {
+                return Err(BuiltinError {
+                    builtin: "CollectSome",
+                    expected: "array",
+                    actual: input.clone(),
+                });
+            };
+            let mut collected = Vec::new();
+            for item in items {
+                let Value::Object(obj) = item else {
+                    // Skip non-object entries (e.g. null from drop)
+                    continue;
+                };
+                if obj.get("kind").and_then(Value::as_str) == Some("Some") {
+                    collected.push(obj.get("value").cloned().unwrap_or(Value::Null));
+                }
+                // Skip None and anything else
+            }
+            Ok(Value::Array(collected))
+        }
+
         BuiltinKind::Pick { value: keys } => {
             let Value::Array(key_values) = keys else {
                 return Err(BuiltinError {
@@ -357,5 +379,49 @@ mod tests {
     fn tag_break_wraps_input() {
         let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done"));
         assert_eq!(result.unwrap(), json!({"kind": "Break", "value": "done"}),);
+    }
+
+    #[test]
+    fn collect_some_extracts_some_values() {
+        let input = json!([
+            {"kind": "Some", "value": 1},
+            {"kind": "None", "value": null},
+            {"kind": "Some", "value": 2},
+        ]);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        assert_eq!(result.unwrap(), json!([1, 2]));
+    }
+
+    #[test]
+    fn collect_some_handles_all_none() {
+        let input = json!([
+            {"kind": "None", "value": null},
+            {"kind": "None", "value": null},
+        ]);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[test]
+    fn collect_some_skips_null_entries() {
+        let input = json!([
+            {"kind": "Some", "value": "a"},
+            null,
+            {"kind": "None", "value": null},
+        ]);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        assert_eq!(result.unwrap(), json!(["a"]));
+    }
+
+    #[test]
+    fn collect_some_empty_array() {
+        let result = execute_builtin(&BuiltinKind::CollectSome, &json!([]));
+        assert_eq!(result.unwrap(), json!([]));
+    }
+
+    #[test]
+    fn collect_some_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::CollectSome, &json!("not array"));
+        assert!(result.is_err());
     }
 }

@@ -2,19 +2,30 @@
  * Babysit-PRs demo: monitor open PRs, fix CI failures, and land when green.
  *
  * Pipeline:
- *   1. For each PR: check status (fake GitHub API, random delay)
+ *   1. For each PR: check status (fake GitHub API)
  *   2. Branch on result:
- *      - ChecksFailed → fix issues (fake LLM), return PR number for retry
- *      - ChecksPassed → land the PR, return null (done)
- *      - Landed → already merged, drop (done)
- *   3. Filter out nulls; if PRs remain, loop back to step 1
+ *      - ChecksFailed → fix issues (side effect), wrap PR as Some
+ *      - ChecksPassed → land the PR (side effect), wrap as None (done)
+ *      - Landed → already merged, wrap as None (done)
+ *   3. Option.collect() gathers remaining PR numbers (the Somes)
+ *   4. If PRs remain, wait 10s then loop back to step 1
  *
- * Demonstrates: loop, forEach, branch, drop.
+ * Demonstrates: loop, forEach, branch, bindInput, Option.some,
+ *               Option.collect, drop.
  *
  * Usage: pnpm run demo
  */
 
-import { runPipeline, pipe, forEach, loop, drop } from "@barnum/barnum";
+import {
+  runPipeline,
+  pipe,
+  forEach,
+  loop,
+  drop,
+  Option,
+  bindInput,
+  type OptionDef,
+} from "@barnum/barnum";
 import {
   checkPR,
   fixIssues,
@@ -29,12 +40,18 @@ runPipeline(
   loop<void, number[]>((recur, done) =>
     pipe(
       forEach(
-        checkPR.branch({
-          ChecksFailed: fixIssues,
-          ChecksPassed: landPR,
-          Landed: drop,
-        }),
+        bindInput<number>((prNumber) =>
+          prNumber.then(checkPR).branch({
+            ChecksFailed: fixIssues
+              .drop()
+              .then(prNumber)
+              .then(Option.some<number>()),
+            ChecksPassed: landPR.tag<OptionDef<number>, "None">("None"),
+            Landed: drop.tag<OptionDef<number>, "None">("None"),
+          }),
+        ),
       ),
+      Option.collect<number>(),
       classifyRemaining.branch({
         HasPRs: recur,
         AllDone: done,

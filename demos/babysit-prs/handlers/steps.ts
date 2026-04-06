@@ -20,12 +20,17 @@ export const checkPR = createHandler(
         kind: z.literal("ChecksFailed"),
         value: z.object({ pr: z.number(), error: z.string() }),
       }),
-      z.object({ kind: z.literal("ChecksPassed"), value: z.number() }),
-      z.object({ kind: z.literal("Landed"), value: z.number() }),
+      z.object({
+        kind: z.literal("ChecksPassed"),
+        value: z.object({ pr: z.number() }),
+      }),
+      z.object({
+        kind: z.literal("Landed"),
+        value: z.object({ pr: z.number() }),
+      }),
     ]),
     handle: async ({ value: pr }) => {
       console.error(`[checkPR] Checking PR #${pr}...`);
-      await sleep(2_000 + Math.random() * 8_000);
 
       const roll = Math.random();
       if (roll < 0.5) {
@@ -36,43 +41,37 @@ export const checkPR = createHandler(
 
       if (roll < 0.8) {
         console.error(`[checkPR] PR #${pr}: checks passed`);
-        return { kind: "ChecksPassed" as const, value: pr };
+        return { kind: "ChecksPassed" as const, value: { pr } };
       }
 
       console.error(`[checkPR] PR #${pr}: already landed`);
-      return { kind: "Landed" as const, value: pr };
+      return { kind: "Landed" as const, value: { pr } };
     },
   },
   "checkPR",
 );
 
-// --- Fix CI failures (fake LLM) ---
+// --- Fix CI failures (fake LLM, side effect only) ---
 
 export const fixIssues = createHandler(
   {
     inputValidator: z.object({ pr: z.number(), error: z.string() }),
-    outputValidator: z.number(),
     handle: async ({ value }) => {
       console.error(`[fixIssues] Fixing PR #${value.pr}: ${value.error}`);
-      await sleep(1_000 + Math.random() * 2_000);
       console.error(`[fixIssues] Fix pushed for PR #${value.pr}`);
-      return value.pr;
     },
   },
   "fixIssues",
 );
 
-// --- Land a PR (fake merge) ---
+// --- Land a PR (fake merge, side effect only) ---
 
 export const landPR = createHandler(
   {
-    inputValidator: z.number(),
-    outputValidator: z.null(),
-    handle: async ({ value: pr }) => {
-      console.error(`[landPR] Merging PR #${pr}...`);
-      await sleep(500 + Math.random() * 1_000);
-      console.error(`[landPR] PR #${pr} merged`);
-      return null;
+    inputValidator: z.object({ pr: z.number() }),
+    handle: async ({ value }) => {
+      console.error(`[landPR] Merging PR #${value.pr}...`);
+      console.error(`[landPR] PR #${value.pr} merged`);
     },
   },
   "landPR",
@@ -82,21 +81,22 @@ export const landPR = createHandler(
 
 export const classifyRemaining = createHandler(
   {
-    inputValidator: z.array(z.union([z.number(), z.null()])),
+    inputValidator: z.array(z.number()),
     outputValidator: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("HasPRs"), value: z.array(z.number()) }),
       z.object({ kind: z.literal("AllDone"), value: z.null() }),
     ]),
     handle: async ({ value }) => {
-      const remaining = value.filter((x): x is number => x !== null);
-      if (remaining.length === 0) {
+      if (value.length === 0) {
         console.error("[classifyRemaining] All PRs resolved");
         return { kind: "AllDone" as const, value: null };
       }
       console.error(
-        `[classifyRemaining] ${remaining.length} PR(s) still need attention: #${remaining.join(", #")}`,
+        `[classifyRemaining] ${value.length} PR(s) still need attention: #${value.join(", #")}`,
       );
-      return { kind: "HasPRs" as const, value: remaining };
+      console.error("[classifyRemaining] Waiting 10s before retry...");
+      await sleep(10_000);
+      return { kind: "HasPRs" as const, value };
     },
   },
   "classifyRemaining",
