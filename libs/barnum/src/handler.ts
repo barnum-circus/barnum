@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
-import { type z, z as zod } from "zod";
+import type { JSONSchema7 } from "json-schema";
+import type { z } from "zod";
 import { type TypedAction, typedAction } from "./ast.js";
 import { zodToCheckedJsonSchema } from "./schema.js";
 
@@ -183,14 +184,27 @@ export function createHandlerWithConfig(
   const funcName = exportName ?? "default";
 
   // The invoke receives [value, config] from All(Identity, Constant(config)).
-  // Build a tuple validator so the Rust engine validates the combined input.
-  const inputSchema = zodToCheckedJsonSchema(
-    zod.tuple([
-      definition.inputValidator ?? zod.unknown(),
-      definition.stepConfigValidator ?? zod.unknown(),
-    ]),
-    `${filePath}:${funcName} input`,
-  );
+  // Build a tuple schema manually — the Rust engine doesn't support draft-07
+  // array-form `items` for tuples, so use `prefixItems` (2020-12 style).
+  const valueSchema = definition.inputValidator
+    ? zodToCheckedJsonSchema(
+        definition.inputValidator,
+        `${filePath}:${funcName} input`,
+      )
+    : {};
+  const configSchema = definition.stepConfigValidator
+    ? zodToCheckedJsonSchema(
+        definition.stepConfigValidator,
+        `${filePath}:${funcName} stepConfig`,
+      )
+    : {};
+  const inputSchema: JSONSchema7 = {
+    type: "array",
+    prefixItems: [valueSchema, configSchema],
+    items: false,
+    minItems: 2,
+    maxItems: 2,
+  } as JSONSchema7;
   const outputSchema = definition.outputValidator
     ? zodToCheckedJsonSchema(
         definition.outputValidator,
