@@ -24,7 +24,6 @@ import {
   drop,
   Option,
   bindInput,
-  type OptionDef,
 } from "@barnum/barnum";
 import {
   checkPR,
@@ -46,8 +45,8 @@ runPipeline(
               .drop()
               .then(prNumber)
               .then(Option.some<number>()),
-            ChecksPassed: landPR.tag<OptionDef<number>, "None">("None"),
-            Landed: drop.tag<OptionDef<number>, "None">("None"),
+            ChecksPassed: landPR.drop().then(Option.none<number>()),
+            Landed: drop.then(Option.none<number>()),
           }),
         ),
       ),

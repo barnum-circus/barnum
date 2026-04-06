@@ -399,11 +399,12 @@ export const Option = {
   },
 
   /**
-   * Produce a None. `void → Option<T>`
+   * Produce a None. `never → Option<T>`
    *
+   * Chain after `.drop()` to discard the current value first.
    * Equivalent to `tag<OptionDef<T>, "None">("None")`.
    */
-  none<T>(): TypedAction<void, OptionT<T>> {
+  none<T>(): TypedAction<never, OptionT<T>> {
     return typedAction(TAG_NONE);
   },
 
