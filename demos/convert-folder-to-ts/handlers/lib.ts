@@ -9,27 +9,43 @@ export const baseDir = path.resolve(__dirname, "..");
 
 const CLAUDE_TIMEOUT_MS = 5 * 60_000; // 5 minutes
 
-/** Send a one-off prompt to Claude via ai-sandbox CLI. Returns the text response. */
-export async function callClaude(prompt: string): Promise<string> {
+/** Spawn Claude CLI in non-interactive mode. Streams output to stderr, returns full stdout. */
+export async function callClaude(args: {
+  prompt: string;
+  allowedTools?: string[];
+  cwd?: string;
+}): Promise<string> {
   const cliArgs = [
     "claude",
     "-p",
-    prompt,
+    args.prompt,
     "--output-format",
     "text",
     "--dangerously-skip-permissions",
   ];
+  if (args.allowedTools && args.allowedTools.length > 0) {
+    cliArgs.push("--allowedTools", ...args.allowedTools);
+  }
 
-  console.error(`[callClaude] Sending prompt (${prompt.length} chars)...`);
+  function shellQuote(arg: string): string {
+    if (/[^a-zA-Z0-9_\-=/:.,@]/.test(arg)) {
+      return `'${arg.replace(/'/g, "'\\''")}'`;
+    }
+    return arg;
+  }
+  console.error(
+    `[callClaude] $ ai-sandbox ${cliArgs.map(shellQuote).join(" ")}`,
+  );
 
   return new Promise<string>((resolve, reject) => {
     let settled = false;
 
     const child = spawn("ai-sandbox", cliArgs, {
-      cwd: baseDir,
+      cwd: args.cwd ?? baseDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        // Prevent "nested session" error if run from within Claude Code
         CLAUDECODE: undefined,
         CLAUDE_CODE_ENTRYPOINT: undefined,
       },
@@ -38,6 +54,7 @@ export async function callClaude(prompt: string): Promise<string> {
     const timeout = setTimeout(() => {
       if (!settled) {
         settled = true;
+        console.error(`[callClaude] timed out after ${CLAUDE_TIMEOUT_MS / 1000}s, killing`);
         child.kill("SIGTERM");
         reject(new Error(`Claude CLI timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
       }
@@ -47,6 +64,7 @@ export async function callClaude(prompt: string): Promise<string> {
 
     child.stdout.on("data", (chunk: Buffer) => {
       stdoutChunks.push(chunk);
+      process.stderr.write(chunk);
     });
 
     child.stderr.on("data", (chunk: Buffer) => {
@@ -68,14 +86,18 @@ export async function callClaude(prompt: string): Promise<string> {
 
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
       if (signal) {
+        console.error(`[callClaude] killed by signal ${signal}`);
         reject(new Error(`Claude CLI killed by ${signal}`));
         return;
       }
       if (code !== 0) {
+        console.error(`[callClaude] exited with code ${code}`);
         reject(new Error(`Claude CLI exited with code ${code}`));
         return;
       }
-      console.error(`[callClaude] Received response (${stdout.length} chars)`);
+      console.error(
+        `[callClaude] completed successfully (${stdout.length} chars)`,
+      );
       resolve(stdout);
     });
   });
