@@ -111,6 +111,24 @@ function Features() {
   );
 }
 
+function DemoVideo() {
+  return (
+    <section>
+      <div className="container">
+        <h2 className={styles.centeredHeading}>See it in action.</h2>
+        <div className={styles.demoVideoWrapper}>
+          <iframe
+            src="https://www.youtube.com/embed/HjVMgBIiwBM?si=xTqJaJa7ZMz5oU5P"
+            title="Barnum demo"
+            allow="encrypted-media; picture-in-picture; web-share"
+            allowFullScreen
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function ExampleSection() {
   return (
     <section>
@@ -287,6 +305,7 @@ export default function Home(): JSX.Element {
       <HomepageHeader />
       <main>
         <Features />
+        <DemoVideo />
         <ExampleSection />
         <AdvancedSection />
         <AgentAuthoring />

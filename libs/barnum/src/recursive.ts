@@ -94,26 +94,19 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
   }
 
   // Return curried entry-point combinator
-  return <TOut>(
-    entryFn: (...fns: FunctionRefs<TDefs>) => BodyResult<TOut>,
-  ) => {
-    const userBody = entryFn(
-      ...(callTokens as FunctionRefs<TDefs>),
-    ) as Action;
+  return <TOut>(entryFn: (...fns: FunctionRefs<TDefs>) => BodyResult<TOut>) => {
+    const userBody = entryFn(...(callTokens as FunctionRefs<TDefs>)) as Action;
 
     return typedAction<any, TOut>(
-      chain(
-        all(identity, constant(UNUSED_STATE)),
-        {
-          kind: "ResumeHandle",
-          resume_handler_id: resumeHandlerId,
-          body: chain(extractIndex(0), userBody as any) as Action,
-          handler: all(
-            chain(extractIndex(0), branch(cases) as any),
-            constant(UNUSED_STATE),
-          ) as Action,
-        } as Action,
-      ) as Action,
+      chain(all(identity, constant(UNUSED_STATE)), {
+        kind: "ResumeHandle",
+        resume_handler_id: resumeHandlerId,
+        body: chain(extractIndex(0), userBody as any) as Action,
+        handler: all(
+          chain(extractIndex(0), branch(cases) as any),
+          constant(UNUSED_STATE),
+        ) as Action,
+      } as Action) as Action,
     );
   };
 }
