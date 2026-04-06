@@ -24,7 +24,7 @@ export type TypeError = {
   message: string;
 };
 
-import type { TaggedUnion } from "@barnum/barnum";
+import type { TaggedUnion, TypedAction } from "@barnum/barnum";
 
 type ClassifyResultDef = {
   HasErrors: TypeError[];
@@ -149,4 +149,4 @@ export const typeCheckFix = loop((recur) =>
     HasErrors: pipe(forEach(fix).drop(), recur),
     Clean: drop,
   }),
-);
+) as TypedAction<never, never>;
