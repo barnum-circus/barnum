@@ -1,6 +1,6 @@
 {
   "scripts": {
     "test": "bash scripts/quiet-test.sh",
-    "typecheck": "bash -c 'set -e; for pkg in libs/barnum demos/*/; do [ -f \"$pkg/tsconfig.json\" ] && echo \"Typechecking $pkg...\" && (cd \"$pkg\" && pnpm run typecheck); done'"
+    "typecheck": "bash -c 'set -e; echo \"Building libs/barnum...\" && (cd libs/barnum && pnpm run build); for pkg in libs/barnum demos/*/; do [ -f \"$pkg/tsconfig.json\" ] && echo \"Typechecking $pkg...\" && (cd \"$pkg\" && pnpm run typecheck); done'"
   }
 }
