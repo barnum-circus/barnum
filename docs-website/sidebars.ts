@@ -18,6 +18,7 @@ const sidebars: SidebarsConfig = {
         'patterns/racing',
         'patterns/context-and-variables',
         'patterns/early-return',
+        'patterns/recursion',
       ],
     },
     {

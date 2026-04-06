@@ -1,0 +1,44 @@
+/**
+ * Peano arithmetic: is-even / is-odd via mutual recursion.
+ *
+ * isEven(0) = true       isOdd(0) = false
+ * isEven(n) = isOdd(n-1) isOdd(n) = isEven(n-1)
+ *
+ * isEven(7) → isOdd(6) → isEven(5) → isOdd(4)
+ *           → isEven(3) → isOdd(2) → isEven(1) → isOdd(0) → false
+ *
+ * NOTE: This demo requires `defineRecursiveFunctions`, which is not yet
+ * implemented. The code below shows the intended API. See:
+ *   refactors/pending/DEFINE_RECURSIVE_FUNCTIONS.md
+ */
+
+import {
+  pipe,
+  constant,
+  runPipeline,
+  defineRecursiveFunctions,
+} from "@barnum/barnum";
+import { classifyZero, subtractOne } from "./handlers/steps.js";
+
+const withFns = defineRecursiveFunctions<[
+  [number, boolean], // isEven: number → boolean
+  [number, boolean], // isOdd:  number → boolean
+]>(
+  (isEven, isOdd) => [
+    // isEven body
+    classifyZero.branch({
+      Zero: constant(true),
+      NonZero: pipe(subtractOne, isOdd),
+    }),
+    // isOdd body
+    classifyZero.branch({
+      Zero: constant(false),
+      NonZero: pipe(subtractOne, isEven),
+    }),
+  ],
+);
+
+runPipeline(
+  withFns((isEven, _isOdd) => isEven),
+  7,
+);
