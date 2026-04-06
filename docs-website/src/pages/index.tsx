@@ -131,7 +131,7 @@ function DemoVideo() {
 
 function ExampleSection() {
   return (
-    <section>
+    <section className="alt-background">
       <div className="container">
         <h2 className={styles.centeredHeading}>A simple example.</h2>
         <p>
@@ -168,7 +168,7 @@ function ExampleSection() {
 
 function AdvancedSection() {
   return (
-    <section className="alt-background">
+    <section>
       <div className="container">
         <h2 className={styles.centeredHeading}>Why not just write this in JavaScript?</h2>
         <p>
@@ -207,7 +207,7 @@ function AdvancedSection() {
 
 function AgentAuthoring() {
   return (
-    <section>
+    <section className="alt-background">
       <div className="container">
         <h2 className={styles.centeredHeading}>Looks complicated? Agents are good at writing this.</h2>
         <p>
@@ -228,7 +228,7 @@ function AgentAuthoring() {
 
 function WhyBarnum() {
   return (
-    <section className="alt-background">
+    <section>
       <div className="container">
         <h2 className={styles.centeredHeading}>What Barnum gives you</h2>
         <div className={`row ${styles.patternList}`}>
@@ -280,7 +280,7 @@ function WhyBarnum() {
 
 function HowItWorks() {
   return (
-    <section>
+    <section className="alt-background">
       <div className="container">
         <h2 className={styles.centeredHeading}>Ladies and gentlemen, the show is about to begin!</h2>
         <div className={styles.ctaContainer}>
