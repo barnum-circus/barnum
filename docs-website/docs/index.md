@@ -10,9 +10,17 @@ Barnum is a programming language for asynchronous programming that is geared tow
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions. You can't rely on them to faithfully execute a complicated, multi-step plan.
 
-Barnum is an attempt to enable LLMs to perform dramatically more complicated, ambitious tasks. With Barnum, you define an asynchronous workflow, which is effectively a state machine. This makes it easy to reason about the possible states and actions that your agents will be asked to perform, and the steps can be independent and small.
+### 🦁 A choreographed show
 
-With Barnum, it's easy to have each agentic step receive only the context it needs. If an agent is asked to both analyze a file for refactoring opportunities *and* implement the refactors, you're forcing it to hold both tasks in context at once. With Barnum, analysis and implementation are separate steps. The implementing agent only sees the refactor description — not the analysis instructions. This progressive disclosure of context means agents can more reliably handle tasks of increasing complexity.
+Barnum workflows are state machines. Transitions are declared up front, steps are independent and small, and the possible states are easy to reason about. No hoping the agent stays on track.
+
+### 🐘 The right performer for each act
+
+Each agentic step receives only the context it needs. If an agent is asked to both analyze a file for refactoring opportunities *and* implement the refactors, it has to hold both tasks in context at once. With Barnum, analysis and implementation are separate steps. The implementing agent only sees the refactor description — not the analysis instructions.
+
+### 🐯 No one goes off script
+
+Each handler executes in its own isolated subprocess. No handler sees another handler's context. The agent performing the refactor has no idea that a type-check step follows — it just receives a filename and a prompt.
 
 ## A simple example
 
