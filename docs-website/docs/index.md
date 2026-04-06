@@ -61,9 +61,18 @@ runPipeline(
 
 Each handler executes in its own isolated Node.js subprocess. The Rust runtime manages the state machine: it tracks which handlers are pending, dispatches them, collects results, and advances the workflow. No handler sees another handler's context. The agent performing the refactor has no idea that a type-check step follows — it just receives a filename and a prompt.
 
-## Getting Started
+## Learn more
 
-Check out the [Quickstart guide](./quickstart) to get up and running, or browse the [demos](https://github.com/barnum-circus/barnum/tree/master/demos) for working examples:
+- [Quickstart](./quickstart) — install, write handlers, compose a workflow, run it
+- [Patterns](./patterns/) — the building blocks: [parallel execution](./patterns/parallel-execution), [branching](./patterns/branching), [looping](./patterns/looping), [error handling](./patterns/error-handling), [timeout](./patterns/timeout), [racing](./patterns/racing), [context and variables](./patterns/context-and-variables), [early return](./patterns/early-return)
+- [Repertoire](./repertoire/) — real-world workflows: [adversarial review](./repertoire/adversarial-review), [code review](./repertoire/code-review), [codebase migration](./repertoire/codebase-migration), [incident triage](./repertoire/incident-triage), and [more](./repertoire/)
+- [Builtins reference](./reference/builtins) — every combinator with its TypeScript type signature and postfix availability
+- [CLI reference](./reference/cli) — how to run workflows, binary resolution, `callClaude()`
+- [Architecture](./architecture/) — the TypeScript AST, Rust compiler, algebraic effect handlers, and validation system
+
+## Demos
+
+Browse the [demos](https://github.com/barnum-circus/barnum/tree/master/demos) for complete working examples:
 
 | Demo | Description |
 |---|---|
