@@ -112,7 +112,7 @@ function buildBinary(): void {
 }
 
 /** Run a pipeline to completion. Returns the workflow's final output value. */
-export async function runPipeline<TPipeline extends Action>(
+export function runPipeline<TPipeline extends Action>(
   pipeline: TPipeline,
   input?: unknown,
 ): Promise<ExtractOutput<TPipeline>> {
@@ -167,7 +167,7 @@ function spawnBarnum<TOut>(config: Config): Promise<TOut> {
       }
       const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
       if (!stdout) {
-        resolve(null as TOut);
+        resolve(undefined as TOut);
         return;
       }
       try {

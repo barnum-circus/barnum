@@ -153,26 +153,16 @@ export type TypedAction<
   __out_contra?: (output: Out) => void;
   __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
-  then<TNext>(
-    next: Pipeable<Out, TNext>,
-  ): TypedAction<In, TNext, Refs>;
+  then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext, Refs>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
-  forEach<
-    TIn,
-    TElement,
-    TNext,
-    TRefs extends string,
-  >(
+  forEach<TIn, TElement, TNext, TRefs extends string>(
     this: TypedAction<TIn, TElement[], TRefs>,
     action: Pipeable<TElement, TNext>,
   ): TypedAction<TIn, TNext[], TRefs>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
   branch<
     TCases extends {
-      [K in BranchKeys<Out>]: CaseHandler<
-        BranchPayload<Out, K>,
-        unknown
-      >;
+      [K in BranchKeys<Out>]: CaseHandler<BranchPayload<Out, K>, unknown>;
     },
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
@@ -265,10 +255,7 @@ export type TypedAction<
  * TypedAction (with methods) is assignable to Pipeable because Pipeable
  * only requires a subset of properties.
  */
-export type Pipeable<
-  In = unknown,
-  Out = unknown,
-> = Action & {
+export type Pipeable<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
@@ -295,10 +282,7 @@ export type Pipeable<
  * TypedAction is assignable to CaseHandler because CaseHandler only
  * requires a subset of TypedAction's phantom fields.
  */
-type CaseHandler<
-  TIn = unknown,
-  TOut = unknown,
-> = Action & {
+type CaseHandler<TIn = unknown, TOut = unknown> = Action & {
   __in?: (input: TIn) => void;
   __out?: () => TOut;
 };
@@ -378,12 +362,7 @@ type BranchPayload<Out, K extends string> = [ExtractDef<Out>] extends [never]
 // ---------------------------------------------------------------------------
 
 // Shared implementations (one closure, not per-instance)
-function thenMethod<
-  TIn,
-  TOut,
-  TRefs extends string,
-  TNext,
->(
+function thenMethod<TIn, TOut, TRefs extends string, TNext>(
   this: TypedAction<TIn, TOut, TRefs>,
   next: Pipeable<TOut, TNext>,
 ): TypedAction<TIn, TNext, TRefs> {
@@ -791,11 +770,7 @@ export function recur<TIn = never, TOut = any>(
  * a Branch. earlyReturn tags with Break and performs — the handler restarts
  * the body, Branch takes the Break path, and the value exits.
  */
-export function earlyReturn<
-  TEarlyReturn = never,
-  TIn = any,
-  TOut = any,
->(
+export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any>(
   bodyFn: (
     earlyReturn: TypedAction<TEarlyReturn, never>,
   ) => Pipeable<TIn, TOut>,

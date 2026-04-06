@@ -259,9 +259,7 @@ export function withResource<
 export function augment<
   TInput extends Record<string, unknown>,
   TOutput extends Record<string, unknown>,
->(
-  action: Pipeable<TInput, TOutput>,
-): TypedAction<TInput, TInput & TOutput> {
+>(action: Pipeable<TInput, TOutput>): TypedAction<TInput, TInput & TOutput> {
   // Build AST directly — chain inference fails because [TOutput, TInput]
   // doesn't match merge()'s Record<string, unknown>[] with invariance.
   return typedAction({
@@ -293,9 +291,9 @@ export function augment<
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
  */
-export function tap<
-  TInput extends Record<string, unknown>,
->(action: Pipeable<TInput, any>): TypedAction<TInput, TInput> {
+export function tap<TInput extends Record<string, unknown>>(
+  action: Pipeable<TInput, any>,
+): TypedAction<TInput, TInput> {
   // Build AST directly — internal plumbing (action → constant → augment)
   // can't go through typed chain/augment with invariant phantom fields.
   // tap: all(chain(action, constant({})), identity()) → merge

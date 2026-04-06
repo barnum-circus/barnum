@@ -7,9 +7,7 @@ import {
 } from "./ast.js";
 import { identity } from "./builtins.js";
 
-export function pipe<T1, T2>(
-  a1: Pipeable<T1, T2>,
-): TypedAction<PipeIn<T1>, T2>;
+export function pipe<T1, T2>(a1: Pipeable<T1, T2>): TypedAction<PipeIn<T1>, T2>;
 export function pipe<T1, T2, T3>(
   a1: Pipeable<T1, T2>,
   a2: Pipeable<T2, T3>,

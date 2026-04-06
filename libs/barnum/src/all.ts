@@ -8,9 +8,7 @@ import { constant } from "./builtins.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function all(): TypedAction<any, []>;
-export function all<In, O1>(
-  a1: Pipeable<In, O1>,
-): TypedAction<In, [O1]>;
+export function all<In, O1>(a1: Pipeable<In, O1>): TypedAction<In, [O1]>;
 export function all<In, O1, O2>(
   a1: Pipeable<In, O1>,
   a2: Pipeable<In, O2>,
