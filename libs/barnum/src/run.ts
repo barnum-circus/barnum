@@ -9,7 +9,7 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Action, Config, Pipeable } from "./ast.js";
+import type { Action, Config, ExtractOutput, Pipeable } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins.js";
 
@@ -111,20 +111,20 @@ function buildBinary(): void {
   });
 }
 
-/** Run a pipeline to completion. Optionally provide input (prepended as a constant node). */
-export async function runPipeline(
-  pipeline: Action,
+/** Run a pipeline to completion. Returns the workflow's final output value. */
+export async function runPipeline<TPipeline extends Action>(
+  pipeline: TPipeline,
   input?: unknown,
-): Promise<void> {
+): Promise<ExtractOutput<TPipeline>> {
   const workflow =
     input === undefined
       ? pipeline
       : (chain(constant(input) as Pipeable, pipeline as Pipeable) as Action);
-  await spawnBarnum({ workflow });
+  return spawnBarnum({ workflow });
 }
 
-/** Spawn the barnum CLI with the given config. */
-function spawnBarnum(config: Config): Promise<void> {
+/** Spawn the barnum CLI with the given config. Returns the parsed final value from stdout. */
+function spawnBarnum<TOut>(config: Config): Promise<TOut> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinary();
@@ -133,7 +133,7 @@ function spawnBarnum(config: Config): Promise<void> {
   const worker = resolveWorker();
   const configJson = JSON.stringify(config);
 
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<TOut>((resolve, reject) => {
     const child = nodeSpawn(
       binaryResolution.path,
       [
@@ -146,15 +146,14 @@ function spawnBarnum(config: Config): Promise<void> {
         worker,
       ],
       {
-        stdio: ["inherit", "inherit", "pipe"],
+        stdio: ["inherit", "pipe", "inherit"],
       },
     );
 
-    const stderrChunks: Buffer[] = [];
+    const stdoutChunks: Buffer[] = [];
 
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderrChunks.push(chunk);
-      process.stderr.write(chunk);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
     });
 
     child.on("error", (error) => {
@@ -163,14 +162,21 @@ function spawnBarnum(config: Config): Promise<void> {
 
     child.on("close", (code) => {
       if (code !== 0) {
-        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
-        const message = stderr
-          ? `barnum exited with code ${code}:\n${stderr}`
-          : `barnum exited with code ${code} (no stderr output)`;
-        reject(new Error(message));
+        reject(new Error(`barnum exited with code ${code}`));
         return;
       }
-      resolve();
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();
+      if (!stdout) {
+        resolve(null as TOut);
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout) as TOut);
+      } catch {
+        reject(
+          new Error(`barnum produced non-JSON output on stdout: ${stdout}`),
+        );
+      }
     });
   });
 }
