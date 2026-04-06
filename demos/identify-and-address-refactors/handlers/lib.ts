@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const baseDir = path.resolve(__dirname, "..");
 
+const CLAUDE_TIMEOUT_MS = 5 * 60_000; // 5 minutes
+
 /** Spawn Claude CLI in non-interactive mode. Streams output to stderr, returns full stdout. */
 export async function callClaude(args: {
   prompt: string;
@@ -36,6 +38,8 @@ export async function callClaude(args: {
   );
 
   return new Promise<string>((resolve, reject) => {
+    let settled = false;
+
     const child = spawn("ai-sandbox", cliArgs, {
       cwd: args.cwd ?? baseDir,
       stdio: ["ignore", "pipe", "pipe"],
@@ -46,6 +50,15 @@ export async function callClaude(args: {
         CLAUDE_CODE_ENTRYPOINT: undefined,
       },
     });
+
+    const timeout = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        console.error(`[callClaude] timed out after ${CLAUDE_TIMEOUT_MS / 1000}s, killing`);
+        child.kill("SIGTERM");
+        reject(new Error(`Claude CLI timed out after ${CLAUDE_TIMEOUT_MS / 1000}s`));
+      }
+    }, CLAUDE_TIMEOUT_MS);
 
     const stdoutChunks: Buffer[] = [];
 
@@ -59,10 +72,18 @@ export async function callClaude(args: {
     });
 
     child.on("error", (error) => {
-      reject(new Error(`Claude CLI failed: ${error.message}`));
+      if (!settled) {
+        settled = true;
+        clearTimeout(timeout);
+        reject(new Error(`Claude CLI failed: ${error.message}`));
+      }
     });
 
     child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+
       const stdout = Buffer.concat(stdoutChunks).toString("utf-8");
       if (signal) {
         console.error(`[callClaude] killed by signal ${signal}`);
