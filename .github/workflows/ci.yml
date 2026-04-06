@@ -551,6 +551,14 @@ jobs:
           chmod +x libs/barnum/artifacts/linux-x64/barnum
           chmod +x libs/barnum/artifacts/linux-arm64/barnum
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies and build TypeScript
+        run: pnpm install --frozen-lockfile && pnpm run build
+        working-directory: libs/barnum
+
       - name: Set version and npm tag
         id: version
         run: |
@@ -570,7 +578,7 @@ jobs:
           npm version $VERSION --no-git-tag-version
 
       - name: Publish barnum to npm
-        run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }}
+        run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }} --ignore-scripts
         working-directory: libs/barnum
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
