@@ -9,6 +9,7 @@ const sidebars: SidebarsConfig = {
       label: 'Patterns',
       items: [
         'patterns/index',
+        'patterns/serial-execution',
         'patterns/parallel-execution',
         'patterns/branching',
         'patterns/looping',
