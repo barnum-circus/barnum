@@ -18,6 +18,7 @@
     "barnum": "cli.cjs"
   },
   "scripts": {
+    "prepack": "tsc -p tsconfig.build.json",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
