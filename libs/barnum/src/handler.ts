@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import type { z } from "zod";
+import { type z, z as zod } from "zod";
 import { type TypedAction, typedAction } from "./ast.js";
 import { zodToCheckedJsonSchema } from "./schema.js";
 
@@ -182,12 +182,15 @@ export function createHandlerWithConfig(
   const filePath = getCallerFilePath();
   const funcName = exportName ?? "default";
 
-  const inputSchema = definition.inputValidator
-    ? zodToCheckedJsonSchema(
-        definition.inputValidator,
-        `${filePath}:${funcName} input`,
-      )
-    : undefined;
+  // The invoke receives [value, config] from All(Identity, Constant(config)).
+  // Build a tuple validator so the Rust engine validates the combined input.
+  const inputSchema = zodToCheckedJsonSchema(
+    zod.tuple([
+      definition.inputValidator ?? zod.unknown(),
+      definition.stepConfigValidator ?? zod.unknown(),
+    ]),
+    `${filePath}:${funcName} input`,
+  );
   const outputSchema = definition.outputValidator
     ? zodToCheckedJsonSchema(
         definition.outputValidator,
@@ -209,7 +212,7 @@ export function createHandlerWithConfig(
       kind: "TypeScript",
       module: filePath,
       func: funcName,
-      ...(inputSchema && { input_schema: inputSchema }),
+      input_schema: inputSchema,
       ...(outputSchema && { output_schema: outputSchema }),
     },
   });
