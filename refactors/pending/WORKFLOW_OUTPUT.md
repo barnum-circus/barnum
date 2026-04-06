@@ -57,7 +57,7 @@ function spawnBarnum(config: Config): Promise<void> {
 
 Flip stdio: capture stdout (the result), let stderr flow through (handler logs).
 
-No Rust changes needed. The Rust CLI already writes the final value to stdout. Handlers use stderr for logging (`console.error`). The worker protocol uses per-handler stdout capture — the Rust CLI's own stdout is separate.
+No Rust changes needed. The Rust CLI already writes the final value to stdout. The worker protocol already requires that handler stdout is exclusively the JSON return value — `console.log` inside a handler corrupts the worker protocol today, regardless of this change. All handler logging must use `console.error` (all demos already do). Each handler runs in a separate subprocess whose stdout the Rust engine captures; the Rust CLI's own stdout is a separate fd used only for the final result.
 
 ### Typing
 
