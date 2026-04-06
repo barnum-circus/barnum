@@ -686,8 +686,8 @@ export const Result = {
    */
   unwrapOr<TValue, TError>(
     defaultAction: Action & {
-      __phantom_in?: (input: TError) => void;
-      __phantom_out?: () => TValue;
+      __in?: (input: TError) => void;
+      __out?: () => TValue;
     },
   ): TypedAction<ResultT<TValue, TError>, TValue> {
     return typedAction(resultBranch(IDENTITY, defaultAction as Action));

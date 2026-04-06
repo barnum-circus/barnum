@@ -134,29 +134,23 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
  * An action with tracked input/output types. Phantom fields enforce invariance
  * and are never set at runtime — they exist only for the TypeScript compiler.
  *
- * Invariance is enforced through paired covariant/contravariant phantom fields:
- *
- *   In:  __phantom_in (contravariant) + __in (covariant) → invariant
- *   Out: __phantom_out (covariant) + __phantom_out_check (contravariant) → invariant
+ * Each type variable gets a contravariant + covariant field pair:
+ *   In:  __in (contravariant) + __in_co (covariant) → invariant
+ *   Out: __out (covariant) + __out_contra (contravariant) → invariant
  *
  * This ensures exact type matching at every pipeline connection point.
  * Data crosses serialization boundaries to handlers in arbitrary languages
  * (Rust, Python, etc.), so extra/missing fields are runtime errors.
- *
- * __in also enables config() to reject workflows that expect input
- * (the contravariant __phantom_in makes never the most permissive input,
- * so the covariant __in is needed for the entry point check).
- *
  */
 export type TypedAction<
   In = unknown,
   Out = unknown,
   Refs extends string = never,
 > = Action & {
-  __phantom_in?: (input: In) => void;
-  __phantom_out?: () => Out;
-  __phantom_out_check?: (output: Out) => void;
-  __in?: In;
+  __in?: (input: In) => void;
+  __in_co?: In;
+  __out?: () => Out;
+  __out_contra?: (output: Out) => void;
   __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext, TRefs2 extends string = never>(
@@ -260,8 +254,8 @@ export type TypedAction<
  * as TypedAction but without methods.
  *
  * Invariance: Both In and Out are invariant, matching TypedAction:
- *   In:  __phantom_in (contravariant) + __in (covariant) → invariant
- *   Out: __phantom_out (covariant) + __phantom_out_check (contravariant) → invariant
+ *   In:  __in (contravariant) + __in_co (covariant) → invariant
+ *   Out: __out (covariant) + __out_contra (contravariant) → invariant
  *
  * Why no methods: TypedAction's methods (then, branch, etc.) participate in
  * TS assignability checks in complex, recursive ways that interfere with
@@ -278,20 +272,20 @@ export type Pipeable<
   Out = unknown,
   Refs extends string = never,
 > = Action & {
-  __phantom_in?: (input: In) => void;
-  __phantom_out?: () => Out;
-  __phantom_out_check?: (output: Out) => void;
-  __in?: In;
+  __in?: (input: In) => void;
+  __in_co?: In;
+  __out?: () => Out;
+  __out_contra?: (output: Out) => void;
   __refs?: { _brand: Refs };
 };
 
 /**
  * Contravariant-only input checking for branch case handler positions.
  *
- * Omits __in (covariant input) and __phantom_out_check (contravariant output)
+ * Omits __in_co (covariant input) and __out_contra (contravariant output)
  * compared to TypedAction/Pipeable. This gives:
- *   In:  contravariant only (via __phantom_in)
- *   Out: covariant only (via __phantom_out)
+ *   In:  contravariant only (via __in)
+ *   Out: covariant only (via __out)
  *
  * Why contravariant input: a handler that accepts `unknown` (like drop)
  * can handle any variant. (input: unknown) => void is assignable to
@@ -299,7 +293,7 @@ export type Pipeable<
  *
  * Why covariant output: the constraint doesn't restrict output types —
  * they're inferred from the actual case handlers via ExtractOutput.
- * TypedAction's invariant __phantom_out_check with Out=unknown would
+ * TypedAction's invariant __out_contra with Out=unknown would
  * reject any handler with a specific output type, so we omit it.
  *
  * TypedAction is assignable to CaseHandler because CaseHandler only
@@ -310,8 +304,8 @@ type CaseHandler<
   TOut = unknown,
   TRefs extends string = never,
 > = Action & {
-  __phantom_in?: (input: TIn) => void;
-  __phantom_out?: () => TOut;
+  __in?: (input: TIn) => void;
+  __out?: () => TOut;
   __refs?: { _brand: TRefs };
 };
 
@@ -629,10 +623,10 @@ export function typedAction<
  *
  * Uses direct phantom field extraction (not full TypedAction matching) to
  * avoid the `TypedAction<any, any, any>` constraint which fails for In=never
- * due to __phantom_in contravariance.
+ * due to __in contravariance.
  */
 export type ExtractInput<T> = T extends {
-  __phantom_in?: (input: infer In) => void;
+  __in?: (input: infer In) => void;
 }
   ? In
   : never;
@@ -642,7 +636,7 @@ export type ExtractInput<T> = T extends {
  *
  * Uses direct phantom field extraction to avoid constraint issues.
  */
-export type ExtractOutput<T> = T extends { __phantom_out?: () => infer Out }
+export type ExtractOutput<T> = T extends { __out?: () => infer Out }
   ? Out
   : never;
 
@@ -654,6 +648,7 @@ export { pipe } from "./pipe.js";
 export { chain } from "./chain.js";
 export { all } from "./all.js";
 export { bind, bindInput, type VarRef, type InferVarRefs } from "./bind.js";
+export { defineRecursiveFunctions } from "./recursive.js";
 export { resetEffectIdCounter } from "./effect-id.js";
 import {
   allocateRestartHandlerId,
