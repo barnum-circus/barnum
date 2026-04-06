@@ -20,6 +20,7 @@ const sidebars: SidebarsConfig = {
         'architecture/typescript-ast',
         'architecture/compiler',
         'architecture/algebraic-effect-handlers',
+        'architecture/validation',
       ],
     },
     {

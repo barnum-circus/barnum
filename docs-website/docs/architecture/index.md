@@ -1,21 +1,40 @@
 # Architecture
 
-How Barnum works under the hood.
-
-## Overview
+Barnum is a TypeScript DSL that compiles to a serializable AST, which is executed by a Rust runtime. This separation lets you author workflows in a language with world-class type inference while executing them on a runtime designed for precise control flow, schema validation, and concurrent subprocess management.
 
 ```
-TypeScript DSL (libs/barnum)
+TypeScript DSL
   → Serializable AST (JSON)
-    → Rust engine (crates/barnum_engine)
-      → Event loop + scheduler (crates/barnum_event_loop)
-        → Handler subprocess execution (crates/barnum_typescript_handler)
+    → Rust compiler (flatten tree → FlatConfig)
+      → Event loop (advance / dispatch / complete)
+        → Isolated handler subprocesses
 ```
 
-The TypeScript library defines the workflow. `workflowBuilder().run()` serializes the AST to JSON and spawns the Rust binary, which flattens the AST into a `FlatConfig`, manages frames and task dispatch, and executes each handler as an isolated subprocess. Input and output schemas (defined via Zod) are compiled into JSON Schema validators at init and enforced at every handler boundary.
+## The pipeline
+
+### 1. Authoring
+
+You compose handlers and combinators in TypeScript. Phantom types enforce that `pipe(a, b)` only compiles if `a`'s output type matches `b`'s input type. All type information exists purely for the compiler — it's erased before serialization.
+
+### 2. AST serialization
+
+`workflowBuilder().run()` calls `JSON.stringify()` on the composed workflow. Phantom fields and handler implementations are non-enumerable, so they're invisible to serialization. What remains is a clean JSON tree of nine action types: `Invoke`, `Chain`, `All`, `ForEach`, `Branch`, `ResumeHandle`, `ResumePerform`, `RestartHandle`, and `RestartPerform`.
+
+### 3. Compilation
+
+The Rust binary receives the JSON AST and flattens it into a `FlatConfig`: a linear array of 8-byte entries with index-based cross-references. No pointers, no heap allocation per entry. Identical handlers are interned — a handler used in 100 `forEach` iterations is stored once.
+
+### 4. Execution
+
+The event loop drives a pure state machine. `advance()` expands actions into frames (the runtime stack). `complete()` delivers results upward — Chain trampolines to the next step, All/ForEach collect results, RestartHandle re-advances the body. Effects (loop, tryCatch, earlyReturn) are implemented as algebraic effect handlers with deferred restart semantics.
+
+### 5. Validation
+
+Zod schemas on handlers are compiled to JSON Schema at definition time, embedded in the AST, and compiled into `jsonschema::Validator` instances at workflow init. Every handler invocation is validated twice: input before dispatch, output after completion.
 
 ## Sections
 
-- [TypeScript AST](./typescript-ast.md) — how the TypeScript DSL produces a serializable AST
-- [Compiler](./compiler.md) — how the Rust compiler flattens the AST into an executable form
-- [Algebraic effect handlers](./algebraic-effect-handlers.md) — how `loop`, `tryCatch`, and `earlyReturn` work under the hood
+- [TypeScript AST](./typescript-ast.md) — how the DSL produces a serializable, type-safe AST
+- [Compiler and execution model](./compiler.md) — how the tree is flattened and executed
+- [Algebraic effect handlers](./algebraic-effect-handlers.md) — how `loop`, `tryCatch`, and `earlyReturn` work
+- [Validation](./validation.md) — how Zod serves as the single source of truth for types and runtime checks

@@ -114,5 +114,7 @@ The [Repertoire](https://barnum-circus.github.io/docs/repertoire/) showcases adv
 ## How Barnum works
 
 - [Architecture overview](https://barnum-circus.github.io/docs/architecture/)
-- [How the compiler works](https://barnum-circus.github.io/docs/architecture/compiler)
+- [TypeScript AST](https://barnum-circus.github.io/docs/architecture/typescript-ast)
+- [Compiler and execution model](https://barnum-circus.github.io/docs/architecture/compiler)
 - [Algebraic effect handlers](https://barnum-circus.github.io/docs/architecture/algebraic-effect-handlers)
+- [Validation](https://barnum-circus.github.io/docs/architecture/validation)
