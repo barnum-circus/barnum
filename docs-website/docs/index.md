@@ -6,6 +6,8 @@ image: /img/og/index.png
 
 Barnum is a programming language for asynchronous programming that is geared towards making it easy to precisely orchestrate agents.
 
+<iframe width="560" height="315" src="https://www.youtube.com/embed/sNRp7hQub8Y" title="Barnum" frameBorder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen></iframe>
+
 ## Why?
 
 LLMs are incredibly powerful tools. They are being asked to perform increasingly complicated, long-lived tasks. Unfortunately, the naive way to work with agents quickly hits limits. When their context becomes too full, they become forgetful and make the wrong decisions. You can't rely on them to faithfully execute a complicated, multi-step plan.
