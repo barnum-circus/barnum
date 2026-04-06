@@ -109,10 +109,10 @@ pnpm run demo
 
 ## Repertoire
 
-The [Repertoire](https://barnum-circus.github.io/barnum/repertoire) showcases advanced patterns — `tryCatch` with retry, `withTimeout`, worktree isolation, LLM-powered code review loops, and more.
+The [Repertoire](https://barnum-circus.github.io/docs/repertoire/) showcases advanced patterns — `tryCatch` with retry, `withTimeout`, worktree isolation, LLM-powered code review loops, and more.
 
 ## How Barnum works
 
-- [How Barnum works](https://barnum-circus.github.io/barnum/how-it-works)
-- [How the compiler works](https://barnum-circus.github.io/barnum/compiler)
-- [Algebraic event handlers](https://barnum-circus.github.io/barnum/algebraic-event-handlers)
+- [Architecture overview](https://barnum-circus.github.io/docs/architecture/)
+- [How the compiler works](https://barnum-circus.github.io/docs/architecture/compiler)
+- [Algebraic effect handlers](https://barnum-circus.github.io/docs/architecture/algebraic-effect-handlers)

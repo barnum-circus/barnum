@@ -14,6 +14,16 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Architecture',
+      items: [
+        'architecture/index',
+        'architecture/typescript-ast',
+        'architecture/compiler',
+        'architecture/algebraic-effect-handlers',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Repertoire',
       items: [
         'repertoire/index',
