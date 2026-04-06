@@ -2,233 +2,72 @@
 image: /img/og/repertoire-commands.png
 ---
 
-# Local Commands
+# Deterministic Steps
 
-Use shell commands instead of agents for deterministic or system-level operations.
+Not every step needs an LLM. Use regular TypeScript handlers for deterministic operations: listing files, running builds, calling APIs, committing changes. Save the agent for the parts that require judgment.
 
-## When to Use Commands
+## Pattern
 
-An agent *can* do anything a command does (list files, call APIs, run builds). But agents are expensive: they consume an LLM call, need time to reason, and can hallucinate. Commands are instant, deterministic, and free.
+```ts
+export const listFiles = createHandler({
+  outputValidator: z.array(z.string()),
+  handle: async () => {
+    return readdirSync("src", { recursive: true })
+      .filter((f): f is string => typeof f === "string" && f.endsWith(".ts"))
+      .map((f) => `src/${f}`);
+  },
+}, "listFiles");
+```
 
-Use commands when:
+## Examples
 
-- **The logic is deterministic**: listing files, parsing JSON, calling an API with known parameters. There's no judgment involved, so there's nothing for an LLM to add.
-- **Precision matters more than flexibility**: a `jq` pipeline that reshapes data will get it right every time. An agent doing the same transformation might subtly alter values or miss edge cases.
-- **The operation is a building block, not a decision**: fan-out (splitting a list into tasks), fan-in (aggregating results), and data plumbing are mechanical. Save the agent for the step that requires reasoning.
+### Run a type-checker
 
-Use agents when the task requires judgment, creativity, or understanding natural language. A good workflow mixes both: commands handle the plumbing, agents handle the thinking.
-
-## Basic Command
-
-```jsonc
-{
-  "entrypoint": "ListFiles",
-  "steps": [
-    {
-      "name": "ListFiles",
-      "value_schema": { "type": "object" },
-      "action": {
-        "kind": "Command",
-        "script": "find . -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(. != \"\")) | map({kind: \"Analyze\", value: {file: .}})'"
-      },
-      "next": ["Analyze"]
-    },
-    {
-      "name": "Analyze",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Analyze this file. Return `[]`." }
-      },
-      "next": []
+```ts
+export const typeCheck = createHandler({
+  inputValidator: z.string(),
+  outputValidator: z.object({ success: z.boolean(), errors: z.string() }),
+  handle: async ({ value: file }) => {
+    const { execSync } = await import("child_process");
+    try {
+      execSync(`pnpm exec tsc --noEmit ${file}`, { stdio: "pipe" });
+      return { success: true, errors: "" };
+    } catch (e: any) {
+      return { success: false, errors: e.stdout?.toString() ?? "" };
     }
-  ]
-}
+  },
+}, "typeCheck");
 ```
 
-## Running
+### Commit changes
 
-```js
-import { BarnumConfig } from "@barnum/barnum";
-
-BarnumConfig.fromConfig({
-  entrypoint: "ListFiles",
-  steps: [
-    {
-      name: "ListFiles",
-      value_schema: { type: "object" },
-      action: {
-        kind: "Command",
-        script: "find . -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(. != \"\")) | map({kind: \"Analyze\", value: {file: .}})'"
-      },
-      next: ["Analyze"]
-    },
-    {
-      name: "Analyze",
-      value_schema: {
-        type: "object",
-        required: ["file"],
-        properties: {
-          file: { type: "string" }
-        }
-      },
-      action: {
-        kind: "Pool",
-        instructions: { kind: "Inline", value: "Analyze this file. Return `[]`." }
-      },
-      next: []
-    }
-  ]
-}).run()
-  .on("exit", (code) => process.exit(code ?? 1));
+```ts
+export const commitChanges = createHandler({
+  inputValidator: z.object({ file: z.string(), message: z.string() }),
+  handle: async ({ value }) => {
+    const { execSync } = await import("child_process");
+    execSync(`git add ${value.file} && git commit -m "${value.message}"`, { stdio: "pipe" });
+  },
+}, "commitChanges");
 ```
 
-## Command Contract
+### Call an API
 
-- **stdin**: Task JSON (`{"kind": "StepName", "value": {"key": "value"}}`)
-- **stdout**: Response JSON (array of next tasks)
-- **exit 0**: Success
-- **exit non-zero**: Error, triggers retry
-
-## Use Cases
-
-**File operations:**
-```jsonc
-{
-  "kind": "Command",
-  "script": "jq -r '.value.path' | xargs cat | jq -Rs '{kind: \"Process\", value: {contents: .}}'"
-}
+```ts
+export const fetchPRComments = createHandler({
+  inputValidator: z.number(),
+  outputValidator: z.array(z.object({ body: z.string(), author: z.string() })),
+  handle: async ({ value: prNumber }) => {
+    const response = await fetch(
+      `https://api.github.com/repos/owner/repo/pulls/${prNumber}/comments`,
+    );
+    return response.json();
+  },
+}, "fetchPRComments");
 ```
 
-**API calls:**
-```jsonc
-{
-  "kind": "Command",
-  "script": "jq -r '.value.url' | xargs curl -s | jq '{kind: \"Parse\", value: .}' | jq -s"
-}
-```
+## Key points
 
-**Build/test:**
-```jsonc
-{
-  "kind": "Command",
-  "script": "cargo test --json 2>&1 | jq -s 'map(select(.type == \"test\")) | map({kind: \"Report\", value: .})'"
-}
-```
-
-## Mixing Commands and Agents
-
-Commands and agents work together naturally:
-
-```jsonc
-{
-  "entrypoint": "Plan",
-  "steps": [
-    {
-      "name": "Plan",
-      "value_schema": {
-        "type": "object",
-        "required": ["task"],
-        "properties": {
-          "task": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"echo hello\"}}]`" }
-      },
-      "next": ["Execute"]
-    },
-    {
-      "name": "Execute",
-      "value_schema": {
-        "type": "object",
-        "required": ["command"],
-        "properties": {
-          "command": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Command",
-        "script": "jq -r '.value.command' | sh && echo '[{\"kind\": \"Verify\", \"value\": {}}]'"
-      },
-      "next": ["Verify"]
-    },
-    {
-      "name": "Verify",
-      "value_schema": { "type": "object" },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Verify the changes. Return `[]`." }
-      },
-      "next": []
-    }
-  ]
-}
-```
-
-## Running
-
-```js
-import { BarnumConfig } from "@barnum/barnum";
-
-BarnumConfig.fromConfig({
-  entrypoint: "Plan",
-  steps: [
-    {
-      name: "Plan",
-      value_schema: {
-        type: "object",
-        required: ["task"],
-        properties: {
-          task: { type: "string" }
-        }
-      },
-      action: {
-        kind: "Pool",
-        instructions: { kind: "Inline", value: "Plan the implementation. Return `[{\"kind\": \"Execute\", \"value\": {\"command\": \"echo hello\"}}]`" }
-      },
-      next: ["Execute"]
-    },
-    {
-      name: "Execute",
-      value_schema: {
-        type: "object",
-        required: ["command"],
-        properties: {
-          command: { type: "string" }
-        }
-      },
-      action: {
-        kind: "Command",
-        script: "jq -r '.value.command' | sh && echo '[{\"kind\": \"Verify\", \"value\": {}}]'"
-      },
-      next: ["Verify"]
-    },
-    {
-      name: "Verify",
-      value_schema: { type: "object" },
-      action: {
-        kind: "Pool",
-        instructions: { kind: "Inline", value: "Verify the changes. Return `[]`." }
-      },
-      next: []
-    }
-  ]
-}).run({ entrypointValue: '{"task": "Add logging"}' })
-  .on("exit", (code) => process.exit(code ?? 1));
-```
-
-## Key Points
-
-- Commands run locally on the host machine
-- Commands are async (don't block other tasks)
-- Commands respect `max_concurrency`
-- Use `jq` for JSON manipulation
-- Always output valid JSON array
+- Deterministic handlers are fast, cheap, and reliable. No token costs, no LLM variability.
+- Use agents for analysis, judgment, and creative work. Use handlers for everything else.
+- Handlers run in isolated subprocesses, so they can safely use `execSync` without blocking other handlers.

@@ -4,146 +4,69 @@ image: /img/og/repertoire-branching.png
 
 # Branching
 
-Branching allows agents to choose different paths based on their analysis.
+Route to different actions based on a tagged union output. An analyzer handler classifies the input, then `branch` dispatches to the appropriate handler.
 
-## Example: Approval Workflow
+## Pattern
 
-```jsonc
-{
-  "entrypoint": "Review",
-  "steps": [
-    {
-      "name": "Review",
-      "value_schema": {
-        "type": "object",
-        "required": ["pr_number"],
-        "properties": {
-          "pr_number": { "type": "integer" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Review this PR. If it looks good, return `[{\"kind\": \"Approve\", \"value\": {\"pr_number\": 123}}]`. If changes are needed, return `[{\"kind\": \"RequestChanges\", \"value\": {\"pr_number\": 123, \"comments\": [\"fix typo\"]}}]`." }
-      },
-      "next": ["Approve", "RequestChanges"]
-    },
-    {
-      "name": "Approve",
-      "value_schema": {
-        "type": "object",
-        "required": ["pr_number"],
-        "properties": {
-          "pr_number": { "type": "integer" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Merge the PR. Return `[]`." }
-      },
-      "next": []
-    },
-    {
-      "name": "RequestChanges",
-      "value_schema": {
-        "type": "object",
-        "required": ["pr_number", "comments"],
-        "properties": {
-          "pr_number": { "type": "integer" },
-          "comments": { "type": "array" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Comment on the PR with requested changes. Return `[]`." }
-      },
-      "next": []
-    }
-  ]
-}
+```ts
+pipe(
+  classify,
+  branch({
+    NeedsWork: fix,
+    LooksGood: drop,
+  }),
+)
 ```
 
-## Running
+## Example
 
-```js
-import { BarnumConfig } from "@barnum/barnum";
+Review a PR and either approve it or request changes:
 
-BarnumConfig.fromConfig({
-  entrypoint: "Review",
-  steps: [
-    {
-      name: "Review",
-      value_schema: {
-        type: "object",
-        required: ["pr_number"],
-        properties: {
-          pr_number: { type: "integer" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value:
-            'Review this PR. If it looks good, return `[{"kind": "Approve", "value": {"pr_number": 123}}]`. If changes are needed, return `[{"kind": "RequestChanges", "value": {"pr_number": 123, "comments": ["fix typo"]}}]`.',
-        },
-      },
-      next: ["Approve", "RequestChanges"],
-    },
-    {
-      name: "Approve",
-      value_schema: {
-        type: "object",
-        required: ["pr_number"],
-        properties: {
-          pr_number: { type: "integer" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value: "Merge the PR. Return `[]`.",
-        },
-      },
-      next: [],
-    },
-    {
-      name: "RequestChanges",
-      value_schema: {
-        type: "object",
-        required: ["pr_number", "comments"],
-        properties: {
-          pr_number: { type: "integer" },
-          comments: { type: "array" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value:
-            "Comment on the PR with requested changes. Return `[]`.",
-        },
-      },
-      next: [],
-    },
-  ],
-})
-  .run({ entrypointValue: '{"pr_number": 123}' })
-  .on("exit", (code) => process.exit(code ?? 1));
+```ts
+const ReviewDecision = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("Approve"), value: z.object({ summary: z.string() }) }),
+  z.object({ kind: z.literal("RequestChanges"), value: z.object({ feedback: z.string() }) }),
+]);
+
+export const reviewPR = createHandler({
+  inputValidator: z.string(),
+  outputValidator: ReviewDecision,
+  handle: async ({ value: prUrl }) => {
+    const response = await callClaude({
+      prompt: `Review the PR at ${prUrl}. Return JSON: either { "kind": "Approve", "value": { "summary": "..." } } or { "kind": "RequestChanges", "value": { "feedback": "..." } }`,
+      allowedTools: ["Bash"],
+    });
+    return JSON.parse(response);
+  },
+}, "reviewPR");
+
+export const applyFeedback = createHandler({
+  inputValidator: z.object({ feedback: z.string() }),
+  handle: async ({ value }) => {
+    await callClaude({
+      prompt: `Address this PR feedback: ${value.feedback}`,
+      allowedTools: ["Read", "Edit"],
+    });
+  },
+}, "applyFeedback");
 ```
 
-## Flow
-
+```ts
+await workflowBuilder()
+  .workflow(() =>
+    pipe(
+      reviewPR,
+      branch({
+        Approve: drop,
+        RequestChanges: applyFeedback,
+      }),
+    )
+  )
+  .run();
 ```
-        ┌─→ Approve → (done)
-Review ─┤
-        └─→ RequestChanges → (done)
-```
 
-## Key Points
+## Key points
 
-- The `next` array lists ALL valid transitions from a step
-- The agent's response determines which path is taken
-- Agents can only transition to steps listed in `next`
-- Invalid transitions cause retries (configurable)
+- The classifier handler must return a tagged union: `{ kind: string, value: T }`.
+- `branch` auto-unwraps — each branch handler receives the `value`, not the full tagged union.
+- TypeScript enforces exhaustive matching: every variant must have a corresponding branch.

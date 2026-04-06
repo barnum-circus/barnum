@@ -2,98 +2,46 @@
 image: /img/og/repertoire-hooks.png
 ---
 
-# Finally Hooks
+# Side Effects
 
-The `finally` hook runs after a task **and all its descendants** complete (not just direct children).
+Run actions for side effects without changing the pipeline value. Use `tap` to log progress, write metrics, or perform cleanup while passing the original input through.
 
-## When It Runs
+## Pattern
 
+```ts
+tap(sideEffect)
 ```
-Task A runs → spawns children B, C
-  B completes
-  C completes
-  → A's finally hook runs
-```
-
-The finally hook waits for the entire subtree to finish — including grandchildren, retried tasks, and tasks spawned by other finally hooks.
 
 ## Example
 
-```jsonc
-{
-  "entrypoint": "AnalyzeAll",
-  "steps": [
-    {
-      "name": "AnalyzeAll",
-      "value_schema": {
-        "type": "object",
-        "required": ["files"],
-        "properties": {
-          "files": { "type": "array", "items": { "type": "string" } }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Fan out to analyze each file. Return `[{\"kind\": \"AnalyzeFile\", \"value\": {\"file\": \"src/main.rs\"}}]`" }
-      },
-      "next": ["AnalyzeFile"],
-      // After all analyses complete, emit a summary task.
-      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"Summarize\", \"value\": {\"status\": \"all files analyzed\"}}]'" }
-    },
-    {
-      "name": "AnalyzeFile",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Analyze this file. Return `[]`." }
-      },
-      "next": []
-    },
-    {
-      "name": "Summarize",
-      "value_schema": {
-        "type": "object",
-        "required": ["status"],
-        "properties": {
-          "status": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Summarize the analysis results. Return `[]`." }
-      },
-      "next": []
-    }
-  ]
-}
+Log progress between pipeline steps:
+
+```ts
+export const logProgress = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    console.error(`[progress] Processing ${file}`);
+  },
+}, "logProgress");
 ```
 
-## Contract
+```ts
+await workflowBuilder()
+  .workflow(() =>
+    listFiles.forEach(
+      pipe(
+        tap(logProgress),
+        refactor,
+        tap(logProgress),
+        typeCheck,
+      )
+    ).drop()
+  )
+  .run();
+```
 
-- **stdin**: Task JSON (`{"kind": "StepName", "value": {...}}`) — same envelope format as command actions
-- **stdout**: JSON array of follow-up tasks to spawn: `[{"kind": "StepName", "value": {...}}, ...]`
-- Return `[]` to spawn no follow-ups
-- Runs even if some descendants failed
-- Failure is logged but doesn't prevent the workflow from continuing
+## Key points
 
-## Use Cases
-
-- Aggregate results after fan-out completes
-- Cleanup temp directories created for a batch
-- Trigger follow-up work (categorization, prioritization)
-- Send completion notifications
-
-See [fan-out-finally.md](fan-out-finally.md) for a complete pattern.
-
-## Key Points
-
-- `finally` runs after **all descendants** complete, not just direct children
-- `finally` can spawn follow-up tasks (which themselves can have `finally` hooks)
-- Tasks spawned by `finally` are tracked under the grandparent
-- All hooks have access to environment variables
+- `tap` runs the action but discards its output, passing the original input through unchanged.
+- Use `tap` for logging, metrics, notifications, or any side effect that shouldn't affect the pipeline value.
+- `augment` is the related combinator that merges the action's output back into the input instead of discarding it.

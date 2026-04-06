@@ -2,158 +2,67 @@
 image: /img/og/repertoire-fan-out-finally.png
 ---
 
-# Fan-Out with Finally
+# Fan-Out with Aggregation
 
-Use `finally` to run a follow-up step after all parallel work completes.
+Run work in parallel, then follow up with a single step after everything completes. In Barnum, this is just a `pipe` — the step after `forEach` waits for all parallel work to finish.
 
-## The Pattern
+## Pattern
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  ListFiles (with finally)                                │
-│                                                          │
-│  ListFiles ──┬──→ Refactor(main.rs)                      │
-│              ├──→ Refactor(lib.rs)                        │
-│              └──→ Refactor(utils.rs)                      │
-│                                                          │
-│  ═══════════════════════════════════════════════════════  │
-│  After ALL descendants complete:                         │
-│                                                          │
-│  finally ──→ Commit ──→ Done                             │
-└──────────────────────────────────────────────────────────┘
+```ts
+pipe(
+  listFiles.forEach(convertFile).drop(),
+  fixTypeErrors,
+)
 ```
 
-## Example: Parallel Refactoring with Commit
+## Example
 
-List files, refactor them all in parallel, then commit the changes.
+Convert JavaScript files to TypeScript in parallel, then fix any type errors across the whole project:
 
-```jsonc
-{
-  "entrypoint": "ListFiles",
-  "steps": [
-    {
-      "name": "ListFiles",
-      "value_schema": {
-        "type": "object",
-        "required": ["directory"],
-        "properties": {
-          "directory": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Command",
-        // Find all Rust files and emit one Refactor task per file.
-        "script": "jq -r '.value.directory' | xargs -I{} find {} -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map({kind: \"Refactor\", value: {file: .}})'"
-      },
-      // After all Refactor tasks finish, transition to Commit.
-      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'" },
-      "next": ["Refactor"]
-    },
-    {
-      "name": "Refactor",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Read the file at the path provided. Refactor it to improve readability and remove dead code. Write the changes back to disk. Return `[]`." }
-      },
-      "next": []
-    },
-    {
-      "name": "Commit",
-      "value_schema": {
-        "type": "object",
-        "required": ["message"],
-        "properties": {
-          "message": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Command",
-        // Stage all changes and commit.
-        "script": "MSG=$(jq -r '.value.message') && git add -A && git commit -m \"$MSG\" && echo '[]'"
-      },
-      "next": []
-    }
-  ]
-}
+```ts
+export const listJsFiles = createHandler({
+  outputValidator: z.array(z.string()),
+  handle: async () => {
+    return readdirSync("src", { recursive: true })
+      .filter((f): f is string => typeof f === "string" && f.endsWith(".js"))
+      .map((f) => `src/${f}`);
+  },
+}, "listJsFiles");
+
+export const convertFile = createHandler({
+  inputValidator: z.string(),
+  handle: async ({ value: file }) => {
+    await callClaude({
+      prompt: `Convert ${file} from JavaScript to TypeScript. Add type annotations. Rename to .ts.`,
+      allowedTools: ["Read", "Edit"],
+    });
+  },
+}, "convertFile");
+
+export const fixTypeErrors = createHandler({
+  handle: async () => {
+    await callClaude({
+      prompt: "Run tsc --noEmit and fix all type errors across the project.",
+      allowedTools: ["Read", "Edit", "Bash"],
+    });
+  },
+}, "fixTypeErrors");
 ```
 
-## Running
-
-```js
-import { BarnumConfig } from "@barnum/barnum";
-
-BarnumConfig.fromConfig({
-  "entrypoint": "ListFiles",
-  "steps": [
-    {
-      "name": "ListFiles",
-      "value_schema": {
-        "type": "object",
-        "required": ["directory"],
-        "properties": {
-          "directory": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Command",
-        "script": "jq -r '.value.directory' | xargs -I{} find {} -name '*.rs' | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map({kind: \"Refactor\", value: {file: .}})'"
-      },
-      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"Commit\", \"value\": {\"message\": \"Apply refactors\"}}]'" },
-      "next": ["Refactor"]
-    },
-    {
-      "name": "Refactor",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": {
-          "file": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Read the file at the path provided. Refactor it to improve readability and remove dead code. Write the changes back to disk. Return `[]`." }
-      },
-      "next": []
-    },
-    {
-      "name": "Commit",
-      "value_schema": {
-        "type": "object",
-        "required": ["message"],
-        "properties": {
-          "message": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Command",
-        "script": "MSG=$(jq -r '.value.message') && git add -A && git commit -m \"$MSG\" && echo '[]'"
-      },
-      "next": []
-    }
-  ]
-}).run({ entrypointValue: '{"directory": "src"}' })
-  .on("exit", (code) => process.exit(code ?? 1));
+```ts
+await workflowBuilder()
+  .workflow(() =>
+    pipe(
+      listJsFiles.forEach(convertFile).drop(),
+      fixTypeErrors,
+    )
+  )
+  .run();
 ```
 
-## How It Works
+## Key points
 
-1. **ListFiles** runs `find` to discover `.rs` files and fans out one `Refactor` task per file.
-2. **Refactor** tasks run in parallel (up to `max_concurrency`). Each agent reads a file, makes changes, and writes it back.
-3. **finally** fires after every `Refactor` descendant completes. It emits a single `Commit` task.
-4. **Commit** stages and commits all the changes.
-
-## Key Points
-
-- `finally` runs after ALL descendants complete (not just direct children)
-- `finally` receives the task JSON on stdin (`{"kind": "StepName", "value": {...}}`) — same as command actions
-- `finally` outputs a JSON array of next tasks to spawn follow-up work
-- The finally hook here is an inline script, no external file needed
-- The pattern enables fan-out, then parallel work, then a single follow-up action
+- `forEach(convertFile)` processes all files in parallel and returns an array of results.
+- `.drop()` discards the array (since `convertFile` returns void).
+- `fixTypeErrors` runs only after all parallel conversions complete.
+- This pattern replaces the old `finally` hook — in Barnum, sequencing after parallel work is just `pipe`.

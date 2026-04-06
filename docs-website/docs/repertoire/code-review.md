@@ -2,190 +2,68 @@
 image: /img/og/repertoire-code-review.png
 ---
 
-# Code review
+# Code Review
 
-Run a structured code review on every changed file in a PR, in parallel, for under a dollar.
+Review changed files in parallel with multiple checks per file: coding standards, security, performance. Each check runs independently with focused instructions.
 
-## The pattern
+## Pattern
 
-```
-                    ┌──→ CheckStandards(src/main.ts)
-                    ├──→ CheckSecurity(src/main.ts)
-ListChanges ────────┼──→ CheckStandards(src/utils.ts)
-                    ├──→ CheckSecurity(src/utils.ts)
-                    └──→ ...
-
-After all checks complete:
-finally ──→ CompileReport
+```ts
+listChangedFiles.forEach(
+  all(checkStandards, checkSecurity, checkPerformance)
+)
 ```
 
-## Why this pattern?
+## Example
 
-Some tools charge $25 per code review. Barnum runs the same checks (coding standards, security, JIRA compliance) in parallel across every changed file, each with focused context. The reviewing agent only sees its file and the relevant standards doc. No bloated context, no wasted tokens.
+```ts
+export const listChangedFiles = createHandler({
+  outputValidator: z.array(z.string()),
+  handle: async () => {
+    const { execSync } = await import("child_process");
+    const output = execSync("git diff --name-only HEAD~1", { encoding: "utf-8" });
+    return output.trim().split("\n").filter(Boolean);
+  },
+}, "listChangedFiles");
 
-## Example: PR review with standards and security checks
+export const checkStandards = createHandler({
+  inputValidator: z.string(),
+  outputValidator: z.object({ file: z.string(), issues: z.array(z.string()) }),
+  handle: async ({ value: file }) => {
+    const response = await callClaude({
+      prompt: `Review ${file} for coding standards violations: naming conventions, documentation, error handling. Return JSON: { "file": "...", "issues": ["..."] }`,
+      allowedTools: ["Read"],
+    });
+    return JSON.parse(response);
+  },
+}, "checkStandards");
 
-```jsonc
-{
-  "entrypoint": "ListChanges",
-  "steps": [
-    {
-      "name": "ListChanges",
-      // Two review tasks per changed file
-      "action": {
-        "kind": "Command",
-        "script": "git diff --name-only origin/main | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map([{kind: \"CheckStandards\", value: {file: .}}, {kind: \"CheckSecurity\", value: {file: .}}]) | flatten'"
-      },
-      "next": ["CheckStandards", "CheckSecurity"],
-      // After all checks: compile a summary
-      "finally": { "kind": "Command", "script": "echo '[{\"kind\": \"CompileReport\", \"value\": {}}]'" }
-    },
-    {
-      "name": "CheckStandards",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": { "file": { "type": "string" } }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Link", "path": "instructions/check-standards.md" }
-      },
-      "next": []
-    },
-    {
-      "name": "CheckSecurity",
-      "value_schema": {
-        "type": "object",
-        "required": ["file"],
-        "properties": { "file": { "type": "string" } }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Link", "path": "instructions/check-security.md" }
-      },
-      "next": []
-    },
-    {
-      "name": "CompileReport",
-      "action": {
-        "kind": "Pool",
-        "instructions": {
-          "kind": "Inline", "value": "Review all findings from the code review. Compile a summary: files reviewed, standards violations, security issues. Post a GitHub comment with the results. Return []."
-        }
-      },
-      "next": []
-    }
-  ]
-}
+export const checkSecurity = createHandler({
+  inputValidator: z.string(),
+  outputValidator: z.object({ file: z.string(), issues: z.array(z.string()) }),
+  handle: async ({ value: file }) => {
+    const response = await callClaude({
+      prompt: `Review ${file} for security issues: injection, XSS, secrets, unsafe patterns. Return JSON: { "file": "...", "issues": ["..."] }`,
+      allowedTools: ["Read"],
+    });
+    return JSON.parse(response);
+  },
+}, "checkSecurity");
 ```
 
-## Instructions files
-
-The linked instruction files keep each reviewer focused:
-
-**instructions/check-standards.md:**
-```markdown
-Read the file at the given path. Check it against the project's coding standards:
-
-1. Read `coding-standards.md` from the repo root.
-2. Compare every function, type, and import against the rules.
-3. Flag any violations with line numbers and the specific rule broken.
-4. Write your findings to `reviews/{file}.standards.json`.
-
-Return `[]`.
+```ts
+await workflowBuilder()
+  .workflow(() =>
+    listChangedFiles.forEach(
+      all(checkStandards, checkSecurity)
+    ).drop()
+  )
+  .run();
 ```
-
-**instructions/check-security.md:**
-```markdown
-Read the file at the given path. Review it for security issues:
-
-1. Check for hardcoded secrets, credentials, or API keys.
-2. Look for SQL injection, XSS, command injection, and path traversal.
-3. Verify input validation on any user-facing functions.
-4. Check for unsafe deserialization or eval usage.
-5. Write your findings to `reviews/{file}.security.json`.
-
-Return `[]`.
-```
-
-## Running
-
-```js
-import { BarnumConfig } from "@barnum/barnum";
-
-BarnumConfig.fromConfig({
-  entrypoint: "ListChanges",
-  steps: [
-    {
-      name: "ListChanges",
-      // Two review tasks per changed file
-      action: {
-        kind: "Command",
-        script: "git diff --name-only origin/main | jq -R -s 'split(\"\\n\") | map(select(length > 0)) | map([{kind: \"CheckStandards\", value: {file: .}}, {kind: \"CheckSecurity\", value: {file: .}}]) | flatten'",
-      },
-      next: ["CheckStandards", "CheckSecurity"],
-      // After all checks: compile a summary
-      finally: { kind: "Command", script: "echo '[{\"kind\": \"CompileReport\", \"value\": {}}]'" },
-    },
-    {
-      name: "CheckStandards",
-      value_schema: {
-        type: "object",
-        required: ["file"],
-        properties: { file: { type: "string" } },
-      },
-      action: {
-        kind: "Pool",
-        instructions: { kind: "Link", path: "instructions/check-standards.md" },
-      },
-      next: [],
-    },
-    {
-      name: "CheckSecurity",
-      value_schema: {
-        type: "object",
-        required: ["file"],
-        properties: { file: { type: "string" } },
-      },
-      action: {
-        kind: "Pool",
-        instructions: { kind: "Link", path: "instructions/check-security.md" },
-      },
-      next: [],
-    },
-    {
-      name: "CompileReport",
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value: "Review all findings from the code review. Compile a summary: files reviewed, standards violations, security issues. Post a GitHub comment with the results. Return [].",
-        },
-      },
-      next: [],
-    },
-  ],
-}).run()
-  .on("exit", (code) => process.exit(code ?? 1));
-```
-
-## How it works
-
-1. **ListChanges** runs `git diff --name-only` and emits two tasks per changed file: one for standards, one for security.
-2. **CheckStandards** and **CheckSecurity** run in parallel across all files. Each agent sees only its file and its specific instructions.
-3. When every check completes, the **finally** hook fires and dispatches **CompileReport**.
-4. **CompileReport** reads all the review findings and posts a summary.
-
-## Extending this
-
-- **Add more checks**: JIRA ticket verification, test coverage, documentation completeness. Each one is just another step and another entry in the ListChanges jq script.
-- **Enrich context**: Use a command step to add git blame or recent commit history before the review step.
-- **Post to GitHub**: The CompileReport agent can use `gh pr comment` to post findings directly on the PR.
 
 ## Key points
 
-- Each reviewer agent sees only one file and one concern, with minimal context and maximum focus
-- All checks run in parallel. 20 files with 2 checks each = 40 tasks, all concurrent
-- Linked instructions keep the config clean and let you version-control your review rules separately
-- The finally hook guarantees the report only runs after every check completes
+- `all` runs multiple checks on the same input concurrently. Each check is independent.
+- `forEach` + `all` gives you parallelism at two levels: across files and across check types.
+- Each reviewer has narrow, focused instructions. The security reviewer doesn't see the standards criteria and vice versa.
+- Add more checks by adding more arguments to `all` — no structural changes needed.

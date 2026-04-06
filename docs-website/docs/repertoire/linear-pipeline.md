@@ -4,148 +4,73 @@ image: /img/og/repertoire-linear-pipeline.png
 
 # Linear Pipeline
 
-A linear pipeline processes data through a sequence of steps.
+Process data through a sequence of steps, where each step's output becomes the next step's input.
 
-## Example: Code Review Pipeline
+## Pattern
 
-```jsonc
-{
-  "entrypoint": "Analyze",
-  "steps": [
-    {
-      "name": "Analyze",
-      "value_schema": {
-        "type": "object",
-        "required": ["file", "contents"],
-        "properties": {
-          "file": { "type": "string" },
-          "contents": { "type": "string" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Analyze this code for potential issues. Return `[{\"kind\": \"Review\", \"value\": {\"issues\": [\"unused variable\", \"missing error handling\"]}}]`" }
-      },
-      "next": ["Review"]
-    },
-    {
-      "name": "Review",
-      "value_schema": {
-        "type": "object",
-        "required": ["issues"],
-        "properties": {
-          "issues": { "type": "array" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Review these issues and suggest fixes. Return `[{\"kind\": \"Implement\", \"value\": {\"fixes\": [\"remove unused var x\", \"add try-catch\"]}}]`" }
-      },
-      "next": ["Implement"]
-    },
-    {
-      "name": "Implement",
-      "value_schema": {
-        "type": "object",
-        "required": ["fixes"],
-        "properties": {
-          "fixes": { "type": "array" }
-        }
-      },
-      "action": {
-        "kind": "Pool",
-        "instructions": { "kind": "Inline", "value": "Implement these fixes. Return `[]` when done." }
-      },
-      "next": []
-    }
-  ]
-}
+```ts
+pipe(analyze, review, implement)
 ```
 
-## Running
+## Example
 
-```js
-import { BarnumConfig } from "@barnum/barnum";
+Analyze a file for refactoring opportunities, review the suggestions, then implement the chosen refactor:
 
-BarnumConfig.fromConfig({
-  entrypoint: "Analyze",
-  steps: [
-    {
-      name: "Analyze",
-      value_schema: {
-        type: "object",
-        required: ["file", "contents"],
-        properties: {
-          file: { type: "string" },
-          contents: { type: "string" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value:
-            'Analyze this code for potential issues. Return `[{"kind": "Review", "value": {"issues": ["unused variable", "missing error handling"]}}]`',
-        },
-      },
-      next: ["Review"],
-    },
-    {
-      name: "Review",
-      value_schema: {
-        type: "object",
-        required: ["issues"],
-        properties: {
-          issues: { type: "array" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value:
-            'Review these issues and suggest fixes. Return `[{"kind": "Implement", "value": {"fixes": ["remove unused var x", "add try-catch"]}}]`',
-        },
-      },
-      next: ["Implement"],
-    },
-    {
-      name: "Implement",
-      value_schema: {
-        type: "object",
-        required: ["fixes"],
-        properties: {
-          fixes: { type: "array" },
-        },
-      },
-      action: {
-        kind: "Pool",
-        instructions: {
-          kind: "Inline",
-          value: "Implement these fixes. Return `[]` when done.",
-        },
-      },
-      next: [],
-    },
-  ],
-})
-  .run({
-    entrypointValue:
-      '{"file": "src/main.rs", "contents": "fn main() { println!(\\"hello\\"); }"}',
-  })
-  .on("exit", (code) => process.exit(code ?? 1));
+```ts
+import { createHandler } from "@barnum/barnum";
+import { z } from "zod";
+
+const RefactorSuggestion = z.object({
+  description: z.string(),
+  file: z.string(),
+});
+
+export const analyze = createHandler({
+  inputValidator: z.string(),
+  outputValidator: RefactorSuggestion,
+  handle: async ({ value: file }) => {
+    const response = await callClaude({
+      prompt: `Analyze ${file} for one refactoring opportunity. Return JSON: { "description": "...", "file": "..." }`,
+      allowedTools: ["Read"],
+    });
+    return JSON.parse(response);
+  },
+}, "analyze");
+
+export const review = createHandler({
+  inputValidator: RefactorSuggestion,
+  outputValidator: RefactorSuggestion,
+  handle: async ({ value }) => {
+    const response = await callClaude({
+      prompt: `Review this refactor suggestion and refine it:\n${JSON.stringify(value)}`,
+    });
+    return JSON.parse(response);
+  },
+}, "review");
+
+export const implement = createHandler({
+  inputValidator: RefactorSuggestion,
+  handle: async ({ value }) => {
+    await callClaude({
+      prompt: `Implement this refactor: ${value.description}\nFile: ${value.file}`,
+      allowedTools: ["Read", "Edit"],
+    });
+  },
+}, "implement");
 ```
 
-## Flow
+```ts
+// run.ts
+import { workflowBuilder, pipe } from "@barnum/barnum";
+import { analyze, review, implement } from "./handlers/steps.js";
 
+await workflowBuilder()
+  .workflow(() => pipe(analyze, review, implement))
+  .run();
 ```
-Analyze → Review → Implement → (done)
-```
 
-Each step receives the output from the previous step as its input value.
+## Key points
 
-## Key Points
-
-- Terminal steps have `"next": []`
-- Each agent response is an array of next tasks
-- Return `[]` to end the workflow
+- Each handler only sees its immediate input — not the full pipeline.
+- Zod validators enforce the contract between steps. If `analyze` returns something that doesn't match `RefactorSuggestion`, the workflow fails fast.
+- `pipe` is type-safe: TypeScript verifies that each step's output matches the next step's input.

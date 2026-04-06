@@ -8,15 +8,8 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Reference',
       items: [
+        'reference/builtins',
         'reference/cli',
-        'reference/config-schema',
-        'reference/task-format',
-        'reference/agent-protocol',
-        'reference/submission-protocol',
-        'reference/retry',
-        'reference/resume',
-        'reference/visualization',
-        'reference/file-extraction',
       ],
     },
     {
