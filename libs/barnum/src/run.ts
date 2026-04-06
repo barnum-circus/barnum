@@ -9,7 +9,9 @@ import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Config } from "./ast.js";
+import type { Action, Config, Pipeable } from "./ast.js";
+import { chain } from "./chain.js";
+import { constant } from "./builtins.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -109,8 +111,20 @@ function buildBinary(): void {
   });
 }
 
-/** Run a workflow config to completion. Prints result to stdout. */
-export function run(config: Config): Promise<void> {
+/** Run a pipeline to completion. Optionally provide input (prepended as a constant node). */
+export async function runPipeline(
+  pipeline: Action,
+  input?: unknown,
+): Promise<void> {
+  const workflow =
+    input === undefined
+      ? pipeline
+      : (chain(constant(input) as Pipeable, pipeline as Pipeable) as Action);
+  await spawnBarnum({ workflow });
+}
+
+/** Spawn the barnum CLI with the given config. */
+function spawnBarnum(config: Config): Promise<void> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinary();

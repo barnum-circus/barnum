@@ -22,7 +22,7 @@ import {
   forEach,
   branch,
   loop,
-  workflowBuilder,
+  config,
   bind,
   bindInput,
   resetEffectIdCounter,
@@ -535,14 +535,8 @@ describe("pipe type safety", () => {
 // ---------------------------------------------------------------------------
 
 describe("config entry point", () => {
-  it("rejects workflows that expect input", () => {
-    // verify expects { artifact: string } input — can't be a workflow entry point
-    // @ts-expect-error — workflow entry point must accept never input
-    workflowBuilder().workflow(() => verify);
-  });
-
   it("accepts workflows starting with constant", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(constant({ artifact: "test" }), verify),
     );
     expect(cfg.workflow.kind).toBe("Chain");
@@ -1379,28 +1373,11 @@ describe("optional handler types: createHandler", () => {
 
   // --- source handlers in workflows ---
 
-  it("source handler is accepted as workflow entry point", () => {
+  it("source handler is accepted as config entry point", () => {
     const h = createHandler({
       handle: async () => "result",
     }, "h");
-    workflowBuilder().workflow(() => h);
-  });
-
-  it("typed handler is rejected as workflow entry point", () => {
-    const h = createHandler({
-      inputValidator: z.string(),
-      handle: async ({ value }) => value,
-    }, "h");
-    // @ts-expect-error — Handler<string, string> can't be a workflow entry point
-    workflowBuilder().workflow(() => h);
-  });
-
-  it("explicit-typed handler is rejected as workflow entry point", () => {
-    const h = createHandler<string, string>({
-      handle: async ({ value }) => value,
-    }, "h");
-    // @ts-expect-error — Handler<string, string> can't be a workflow entry point
-    workflowBuilder().workflow(() => h);
+    config(h);
   });
 
   // --- pipeline composition ---

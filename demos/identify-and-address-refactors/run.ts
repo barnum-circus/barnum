@@ -23,7 +23,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  workflowBuilder,
+  runPipeline,
   pipe,
   forEach,
   constant,
@@ -45,26 +45,24 @@ import { deleteWorktree } from "./handlers/git.js";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      constant({ folder: srcDir }),
-      listTargetFiles,
+runPipeline(
+  pipe(
+    constant({ folder: srcDir }),
+    listTargetFiles,
 
-      // Analyze each file for refactoring opportunities.
-      forEach(analyze).flatten(),
+    // Analyze each file for refactoring opportunities.
+    forEach(analyze).flatten(),
 
-      // Keep only worthwhile refactors (Option.collect filters out Nones).
-      forEach(assessWorthiness).then(Option.collect()),
+    // Keep only worthwhile refactors (Option.collect filters out Nones).
+    forEach(assessWorthiness).then(Option.collect()),
 
-      // For each refactor: create a worktree, do the work, open a PR, clean up.
-      forEach(
-        withResource({
-          create: createBranchWorktree,
-          action: implementAndReview,
-          dispose: deleteWorktree,
-        }),
-      ),
+    // For each refactor: create a worktree, do the work, open a PR, clean up.
+    forEach(
+      withResource({
+        create: createBranchWorktree,
+        action: implementAndReview,
+        dispose: deleteWorktree,
+      }),
     ),
-  )
-  .run();
+  ),
+);

@@ -4,7 +4,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { workflowBuilder, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import {
   listFiles,
   implementRefactor,
@@ -14,18 +14,16 @@ import {
   createPullRequest,
 } from "./handlers/steps.js";
 
-await workflowBuilder()
-  .workflow(() =>
-    listFiles
-      .forEach(
-        pipe(
-          implementRefactor,
-          typeCheckFiles,
-          fixTypeErrors,
-          commitChanges,
-          createPullRequest,
-        ),
-      )
-      .drop(),
-  )
-  .run();
+runPipeline(
+  listFiles
+    .forEach(
+      pipe(
+        implementRefactor,
+        typeCheckFiles,
+        fixTypeErrors,
+        commitChanges,
+        createPullRequest,
+      ),
+    )
+    .drop(),
+);

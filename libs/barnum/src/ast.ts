@@ -96,32 +96,6 @@ export type BuiltinKind =
   | { kind: "Pick"; value: string[] }
   | { kind: "CollectSome" };
 
-// ---------------------------------------------------------------------------
-// WorkflowAction — loosened input constraint for workflow entry points
-// ---------------------------------------------------------------------------
-
-/**
- * A TypedAction suitable as a workflow entry point. Workflows start with
- * no input data, so the action must not require specific input.
- *
- * Uses `__in?: void` to accept both:
- *   - `TypedAction<any, Out>` — combinators that ignore input (constant, sleep)
- *   - `TypedAction<never, Out>` — handlers that genuinely take no params
- *
- * Rejects `TypedAction<{ artifact: string }, Out>` etc. because
- * `{ artifact: string }` is not assignable to `void`.
- *
- * Only `__in` is checked (no `__phantom_in`) — the contravariant phantom
- * field would accept anything due to `void`'s permissiveness, so omitting
- * it is harmless and avoids deep method signature comparison.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type WorkflowAction<Out = any> = Action & {
-  __in?: void;
-  __phantom_out?: () => Out;
-  __phantom_out_check?: (output: Out) => void;
-};
-
 /**
  * When TIn is `never` (handler ignores input), produce `any` so the
  * combinator/pipe can sit in any pipeline position.
@@ -132,9 +106,8 @@ export type PipeIn<T> = [T] extends [never] ? any : T;
 // Config
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export interface Config<Out = any> {
-  workflow: WorkflowAction<Out>;
+export interface Config {
+  workflow: Action;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,8 +326,9 @@ type CaseHandler<
  * (`keyof ExtractDef<Out>` and `ExtractDef<Out>[K]`) instead of
  * conditional types (`KindOf<Out>` and `Extract<Out, { kind: K }>`).
  */
+// 0 extends 1 & T detects `any` — preserve as-is to avoid collapsing.
 type VoidToNull<T> = 0 extends 1 & T
-  ? T // any — preserve as-is
+  ? T
   : [T] extends [never]
     ? never
     : [T] extends [void]
@@ -935,49 +909,7 @@ export function loop<TBreak = never, TIn = never, TRefs extends string = never>(
 // Config builders
 // ---------------------------------------------------------------------------
 
-/** Simple config with no named steps. */
-export function config<Out>(workflow: WorkflowAction<Out>): Config<Out> {
+/** Simple config factory. */
+export function config(workflow: Action): Config {
   return { workflow };
-}
-
-/**
- * A workflow config with a `.run()` method for execution.
- *
- * Serializes to the same JSON shape as `Config` via `toJSON()`, so it
- * works with `JSON.stringify` and round-trip tests.
- */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export class RunnableConfig<Out = any> {
-  readonly workflow: WorkflowAction<Out>;
-
-  constructor(workflow: WorkflowAction<Out>) {
-    this.workflow = workflow;
-  }
-
-  /** Run this workflow to completion. Prints result to stdout. */
-  async run(): Promise<void> {
-    // Dynamic import to avoid pulling in Node.js APIs at module load time
-    // (keeps ast.ts importable in non-Node environments for type checking).
-    const { run } = await import("./run.js");
-    await run(this.toJSON());
-  }
-
-  /** Serialize to the same shape as Config. */
-  toJSON(): Config<Out> {
-    return { workflow: this.workflow };
-  }
-}
-
-export interface WorkflowBuilder {
-  /** Define the workflow entry point. */
-  workflow<Out>(build: () => WorkflowAction<Out>): RunnableConfig<Out>;
-}
-
-/** Create a workflow builder. */
-export function workflowBuilder(): WorkflowBuilder {
-  return {
-    workflow<Out>(build: () => WorkflowAction<Out>): RunnableConfig<Out> {
-      return new RunnableConfig(build());
-    },
-  };
 }

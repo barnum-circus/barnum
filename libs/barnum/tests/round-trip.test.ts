@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   all,
-  workflowBuilder,
+  config,
   loop,
   branch,
   pipe,
@@ -41,28 +41,28 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   });
 
   it("Invoke", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(constant({ project: "test" }), setup),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("Pipe", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(constant({ project: "test" }), setup, build),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("All", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(constant({ artifact: "test" }), all(verify, verify)),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
   });
 
   it("ForEach", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(constant([{ artifact: "test" }]), forEach(verify)),
     );
     expect(roundTrip(cfg)).toEqual(cfg);
@@ -72,7 +72,7 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
     type BranchIn =
       | { kind: "Yes"; value: { verified: boolean } }
       | { kind: "No"; value: { verified: boolean } };
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       pipe(
         constant<BranchIn>({ kind: "Yes", value: { verified: true } }),
         branch({ Yes: deploy, No: deploy }),
@@ -82,7 +82,7 @@ describe.skipIf(!HAS_BINARY)("barnum round-trip", () => {
   });
 
   it("Loop", () => {
-    const cfg = workflowBuilder().workflow(() =>
+    const cfg = config(
       constant({ deployed: true }).then(
         loop<{ stable: true }, { deployed: boolean }>((recur, done) =>
           healthCheck.branch({ Continue: recur, Break: done }),

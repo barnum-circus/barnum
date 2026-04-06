@@ -13,23 +13,18 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import {
-  workflowBuilder,
-  pipe,
-} from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum";
 import { setup, listFiles, migrate } from "./handlers/convert.js";
 import { typeCheckFix } from "./handlers/type-check-fix.js";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 
-await workflowBuilder()
-  .workflow(() =>
-    pipe(
-      setup,
-      listFiles
-        .forEach(migrate({ to: "Typescript" }))
-        .drop(),
-      typeCheckFix,
-    ),
-  )
-  .run();
+runPipeline(
+  pipe(
+    setup,
+    listFiles
+      .forEach(migrate({ to: "Typescript" }))
+      .drop(),
+    typeCheckFix,
+  ),
+);

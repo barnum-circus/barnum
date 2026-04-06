@@ -8,7 +8,7 @@
  */
 
 import {
-  workflowBuilder,
+  runPipeline,
   pipe,
   loop,
   tryCatch,
@@ -20,28 +20,26 @@ import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
 
 console.error("=== Retry-on-error demo ===\n");
 
-await workflowBuilder()
-  .workflow(() =>
-    loop((recur, done) =>
-      tryCatch(
-        (throwError) =>
-          pipe(
-            // stepA may fail catastrophically — exit the loop immediately
-            stepA.mapErr(drop).unwrapOr(done).drop(),
+runPipeline(
+  loop((recur, done) =>
+    tryCatch(
+      (throwError) =>
+        pipe(
+          // stepA may fail catastrophically — exit the loop immediately
+          stepA.mapErr(drop).unwrapOr(done).drop(),
 
-            // stepB may fail and may take unreasonably long
-            withTimeout(constant(2_000), stepB.unwrapOr(throwError))
-              .mapErr(constant("stepB: timed out"))
-              .unwrapOr(throwError)
-              .drop(),
+          // stepB may fail and may take unreasonably long
+          withTimeout(constant(2_000), stepB.unwrapOr(throwError))
+            .mapErr(constant("stepB: timed out"))
+            .unwrapOr(throwError)
+            .drop(),
 
-            // stepC may fail — retry via catch
-            stepC.unwrapOr(throwError).drop(),
-          ),
+          // stepC may fail — retry via catch
+          stepC.unwrapOr(throwError).drop(),
+        ),
 
-        // An error occurred — log it and retry the loop
-        logError.then(recur),
-      ),
+      // An error occurred — log it and retry the loop
+      logError.then(recur),
     ),
-  )
-  .run();
+  ),
+);
