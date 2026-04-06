@@ -7,10 +7,23 @@ set -e
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
 TS_FILES=$(echo "$STAGED_FILES" | grep -E '\.(ts|tsx)$' || true)
 RUST_FILES=$(echo "$STAGED_FILES" | grep -E '\.(rs|toml)$' || true)
+DOCS_FILES=$(echo "$STAGED_FILES" | grep -E '^docs-website/' || true)
 
-if [ -z "$TS_FILES" ] && [ -z "$RUST_FILES" ]; then
+if [ -z "$TS_FILES" ] && [ -z "$RUST_FILES" ] && [ -z "$DOCS_FILES" ]; then
     exit 0
 fi
+
+# -- Lockfile check: every package.json with a tsconfig must have a committed lockfile --
+
+echo "Checking lockfiles..."
+for demo in demos/*/; do
+    if [ -f "$demo/package.json" ]; then
+        if ! git ls-files --error-unmatch "$demo/pnpm-lock.yaml" > /dev/null 2>&1; then
+            echo "Missing committed pnpm-lock.yaml in $demo (run: cd $demo && pnpm install)"
+            exit 1
+        fi
+    fi
+done
 
 # -- TypeScript checks (if TS files staged) --
 
@@ -30,6 +43,13 @@ if [ -n "$TS_FILES" ]; then
             (cd "$demo" && pnpm exec tsc --noEmit) || { echo "tsc --noEmit failed ($demo)"; exit 1; }
         fi
     done
+fi
+
+# -- Docs website checks (if docs-website files staged) --
+
+if [ -n "$DOCS_FILES" ]; then
+    echo "Running docs-website typecheck..."
+    (cd docs-website && pnpm exec tsc) || { echo "tsc failed (docs-website)"; exit 1; }
 fi
 
 # -- Rust checks (if Rust files staged) --
