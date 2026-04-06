@@ -305,11 +305,10 @@ export const implementAndReview = bindInput<ImplementAndReviewParams>((implement
 
   // Judge quality; revise and re-check if needed.
   loop((recur) =>
-    pipe(judgeRefactor, classifyJudgment).branch({
-      NeedsWork: pipe(
-        applyFeedback.drop(),
-        implementAndReviewParams.pick("worktreePath").then(typeCheckFix),
-      ).drop().then(recur),
+    judgeRefactor.then(classifyJudgment).branch({
+      NeedsWork: applyFeedback.drop()
+        .then(implementAndReviewParams.pick("worktreePath")).then(typeCheckFix)
+        .drop().then(recur),
       Approved: drop,
     }),
   ).drop(),
@@ -325,4 +324,4 @@ export const createBranchWorktree = pipe(
   createWorktree,
 );
 
-export const openPR = pipe(preparePRInput, createPR);
+export const openPR = preparePRInput.then(createPR);

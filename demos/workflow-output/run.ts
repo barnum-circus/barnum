@@ -18,7 +18,7 @@ async function main() {
   assert(number === 42, `expected 42, got ${JSON.stringify(number)}`);
 
   // 2. Handler output is captured
-  const doubled = await runPipeline(pipe(constant(21), double));
+  const doubled = await runPipeline(constant(21).then(double));
   console.error(`[assert] double(21) returned: ${JSON.stringify(doubled)}`);
   assert(doubled === 42, `expected 42, got ${JSON.stringify(doubled)}`);
 

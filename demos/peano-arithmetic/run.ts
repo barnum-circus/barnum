@@ -9,7 +9,6 @@
  */
 
 import {
-  pipe,
   constant,
   runPipeline,
   defineRecursiveFunctions,
@@ -25,12 +24,12 @@ runPipeline(
       // isEven body
       classifyZero.branch({
         Zero: constant(true),
-        NonZero: pipe(subtractOne, isOdd),
+        NonZero: subtractOne.then(isOdd),
       }),
       // isOdd body
       classifyZero.branch({
         Zero: constant(false),
-        NonZero: pipe(subtractOne, isEven),
+        NonZero: subtractOne.then(isEven),
       }),
     ],
   )((isEven, _isOdd) => isEven),

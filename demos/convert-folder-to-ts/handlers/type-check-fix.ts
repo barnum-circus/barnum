@@ -6,7 +6,6 @@
 
 import {
   createHandler,
-  pipe,
   forEach,
   loop,
   drop,
@@ -24,7 +23,7 @@ export type TypeError = {
   message: string;
 };
 
-import type { TaggedUnion, TypedAction } from "@barnum/barnum";
+import type { TaggedUnion } from "@barnum/barnum";
 
 type ClassifyResultDef = {
   HasErrors: TypeError[];
@@ -145,8 +144,8 @@ export const fix = createHandler({
 // --- Pipeline ---
 
 export const typeCheckFix = loop<never, never>((recur) =>
-  pipe(typeCheck, classifyErrors).branch({
-    HasErrors: pipe(forEach(fix).drop(), recur),
+  typeCheck.then(classifyErrors).branch({
+    HasErrors: forEach(fix).drop().then(recur),
     Clean: drop,
   }),
 );
