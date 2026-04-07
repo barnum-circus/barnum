@@ -194,7 +194,7 @@ pub async fn execute_builtin(
                 });
             };
             tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-            Ok(input.clone())
+            Ok(Value::Null)
         }
     }
 }
@@ -453,10 +453,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sleep_passes_input_through() {
+    async fn sleep_returns_null() {
         let result =
             execute_builtin(&BuiltinKind::Sleep { value: json!(0) }, &json!({"x": 1})).await;
-        assert_eq!(result.unwrap(), json!({"x": 1}));
+        assert_eq!(result.unwrap(), Value::Null);
     }
 
     #[tokio::test]

@@ -1066,14 +1066,10 @@ describe("race types", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it("sleep: passthrough with build-time ms", () => {
+  it("sleep: any → never (like drop)", () => {
     const action = sleep(1000);
-    assertExact<IsExact<ExtractInput<typeof action>, void>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, void>>();
-
-    const action2 = sleep<string>(500);
-    assertExact<IsExact<ExtractInput<typeof action2>, string>>();
-    assertExact<IsExact<ExtractOutput<typeof action2>, string>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
   });
 
   it("sleep produces Invoke AST", () => {

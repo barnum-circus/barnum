@@ -86,13 +86,15 @@ export function race<TIn, TOut>(
 // ---------------------------------------------------------------------------
 
 /**
- * Sleep for a fixed duration, then pass input through unchanged.
+ * Sleep for a fixed duration, ignoring input and returning void.
  *
  * `ms` is baked into the AST at construction time. Executed by the Rust
  * scheduler via `tokio::time::sleep` — no subprocess spawned.
+ *
+ * To preserve data across a sleep, use `bindInput`.
  */
-export function sleep<TIn = void>(ms: number): TypedAction<TIn, TIn> {
-  return typedAction<TIn, TIn>({
+export function sleep(ms: number): TypedAction<any, never> {
+  return typedAction<any, never>({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Sleep", value: ms } },
   });

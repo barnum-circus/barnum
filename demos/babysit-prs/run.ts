@@ -53,7 +53,9 @@ runPipeline(
       ),
       Option.collect<number>(),
       classifyRemaining.branch({
-        HasPRs: sleep<number[]>(10_000).then(recur),
+        HasPRs: bindInput<number[], never>((prs) =>
+          sleep(10_000).then(prs).then(recur),
+        ),
         AllDone: done,
       }),
     ),
