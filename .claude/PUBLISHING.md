@@ -5,7 +5,7 @@
 Bump the version in all of these:
 
 1. **`Cargo.toml`** — `[workspace.package] version`
-2. **`crates/string_id/Cargo.toml`** — has its own `version` (not workspace)
+2. **`crates/intern/Cargo.toml`** — has its own `version` (not workspace, forked crate — only bump if changed)
 3. **`libs/barnum/package.json`** — `@barnum/barnum` npm package
 
 **Do NOT bump `docs-website/package.json`** — it stays at `0.0.0` (not published).

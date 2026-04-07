@@ -1,6 +1,6 @@
 {
   "name": "@barnum/barnum",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Barnum workflow engine",
   "type": "module",
   "main": "dist/index.js",
