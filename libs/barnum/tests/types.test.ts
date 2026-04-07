@@ -14,7 +14,6 @@ import {
   type Option,
   type OptionDef,
   type Result,
-  type ResultDef,
   type VarRef,
   typedAction,
   pipe,
@@ -39,7 +38,6 @@ import {
   merge,
   flatten,
   extractField,
-  extractIndex,
   range,
   tag,
   Option as O,
@@ -59,9 +57,6 @@ import {
   type TypeError,
   type ClassifyResult,
 } from "./handlers.js";
-
-type HasErrors = Extract<ClassifyResult, { kind: "HasErrors" }>;
-type Clean = Extract<ClassifyResult, { kind: "Clean" }>;
 
 // ---------------------------------------------------------------------------
 // Type assertion helpers (compile-time only)
@@ -937,7 +932,7 @@ describe("tryCatch types", () => {
 
   it("recovery input type matches throwError payload type", () => {
     const action = tryCatch(
-      (throwError: TypedAction<{ code: number; msg: string }, never>) =>
+      (_throwError: TypedAction<{ code: number; msg: string }, never>) =>
         pipe(drop, constant("ok")),
       // Recovery receives { code: number; msg: string }, extracts msg
       extractField<{ code: number; msg: string }, "msg">("msg"),
@@ -1511,7 +1506,7 @@ describe("optional handler types: createHandlerWithConfig", () => {
 
   it("without inputValidator: input defaults to never", () => {
     const factory = createHandlerWithConfig({
-      handle: async ({ value, stepConfig }) => String(value),
+      handle: async ({ value, stepConfig: _stepConfig }) => String(value),
     }, "h");
     const action = factory("anything");
     assertExact<IsExact<ExtractInput<typeof action>, never>>();

@@ -6,6 +6,8 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true
   },
   "include": ["src", "tests"]

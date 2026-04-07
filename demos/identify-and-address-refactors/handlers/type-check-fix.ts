@@ -10,7 +10,6 @@ import {
   pipe,
   forEach,
   loop,
-  drop,
 } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";

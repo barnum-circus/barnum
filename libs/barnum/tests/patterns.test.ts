@@ -16,7 +16,6 @@ import {
   drop,
   identity,
   merge,
-  tag,
   Option as O,
   Result as R,
 } from "../src/builtins.js";
