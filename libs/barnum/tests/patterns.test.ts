@@ -168,7 +168,7 @@ describe("loop", () => {
     expect(typeof chain.rest.restart_handler_id).toBe("number");
     // RestartHandle body: Branch with Continue/Break cases
     expect(chain.rest.body.kind).toBe("Branch");
-    expect(Object.keys(chain.rest.body.cases).sort()).toEqual(["Break", "Continue"]);
+    expect(Object.keys(chain.rest.body.cases).toSorted()).toEqual(["Break", "Continue"]);
     // RestartHandle handler: Invoke(ExtractIndex(0))
     expect(chain.rest.handler.kind).toBe("Invoke");
     expect(chain.rest.handler.handler.builtin.kind).toBe("ExtractIndex");
@@ -296,15 +296,15 @@ describe("Option namespace", () => {
   it("Option.map() produces Branch with Some and None cases", () => {
     const action = O.map(verify);
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
-    expect(Object.keys(branch.cases).sort()).toEqual(["None", "Some"]);
+    const branchNode =action as { kind: "Branch"; cases: any };
+    expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
     // Some case: ExtractField("value") → Chain(verify, Tag("Some"))
-    const someCase = branch.cases["Some"];
+    const someCase = branchNode.cases["Some"];
     expect(someCase.kind).toBe("Chain");
     expect(someCase.first.handler.builtin.kind).toBe("ExtractField");
     expect(someCase.rest.kind).toBe("Chain");
     // None case: ExtractField("value") → Tag("None")
-    const noneCase = branch.cases["None"];
+    const noneCase = branchNode.cases["None"];
     expect(noneCase.kind).toBe("Chain");
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
     expect(noneCase.rest.handler.builtin.value).toBe("None");
@@ -313,14 +313,14 @@ describe("Option namespace", () => {
   it("Option.andThen() produces Branch with action Some and Tag None", () => {
     const action = O.andThen(pipe(verify, O.some<{ verified: boolean }>()));
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
-    expect(Object.keys(branch.cases).sort()).toEqual(["None", "Some"]);
+    const branchNode =action as { kind: "Branch"; cases: any };
+    expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
     // Some case: ExtractField("value") → Chain(verify, Tag("Some"))
-    const someCase = branch.cases["Some"];
+    const someCase = branchNode.cases["Some"];
     expect(someCase.kind).toBe("Chain");
     expect(someCase.first.handler.builtin.kind).toBe("ExtractField");
     // None case: ExtractField("value") → Tag("None")
-    const noneCase = branch.cases["None"];
+    const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
     expect(noneCase.rest.handler.builtin.value).toBe("None");
   });
@@ -328,12 +328,12 @@ describe("Option namespace", () => {
   it("Option.unwrapOr() produces Branch with identity Some and drop+default None", () => {
     const action = O.unwrapOr(constant("fallback"));
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
+    const branchNode =action as { kind: "Branch"; cases: any };
     // Some case: ExtractField("value") → Identity
-    const someCase = branch.cases["Some"];
+    const someCase = branchNode.cases["Some"];
     expect(someCase.rest.handler.builtin.kind).toBe("Identity");
     // None case: ExtractField("value") → Chain(Drop, Constant("fallback"))
-    const noneCase = branch.cases["None"];
+    const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.kind).toBe("Chain");
     expect(noneCase.rest.first.handler.builtin.kind).toBe("Drop");
     expect(noneCase.rest.rest.handler.builtin.kind).toBe("Constant");
@@ -343,20 +343,20 @@ describe("Option namespace", () => {
   it("Option.flatten() produces Branch with identity Some and Tag None", () => {
     const action = O.flatten<string>();
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
-    expect(branch.cases["Some"].rest.handler.builtin.kind).toBe("Identity");
-    expect(branch.cases["None"].rest.handler.builtin.kind).toBe("Tag");
-    expect(branch.cases["None"].rest.handler.builtin.value).toBe("None");
+    const branchNode =action as { kind: "Branch"; cases: any };
+    expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Identity");
+    expect(branchNode.cases["None"].rest.handler.builtin.kind).toBe("Tag");
+    expect(branchNode.cases["None"].rest.handler.builtin.value).toBe("None");
   });
 
   it("Option.filter() produces Branch with predicate Some and Tag None", () => {
     const predicate = O.some<string>();
     const action = O.filter(predicate);
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
+    const branchNode =action as { kind: "Branch"; cases: any };
     // Some case body is the predicate (Tag "Some")
-    expect(branch.cases["Some"].rest.handler.builtin.kind).toBe("Tag");
-    expect(branch.cases["Some"].rest.handler.builtin.value).toBe("Some");
+    expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Tag");
+    expect(branchNode.cases["Some"].rest.handler.builtin.value).toBe("Some");
   });
 
   it("Option.collect() produces CollectSome builtin", () => {
@@ -369,14 +369,14 @@ describe("Option namespace", () => {
   it("Option.isSome() produces Branch with Constant(true) and Constant(false)", () => {
     const action = O.isSome<string>();
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
+    const branchNode =action as { kind: "Branch"; cases: any };
     // Some → Drop → Constant(true)
-    const someChain = branch.cases["Some"].rest;
+    const someChain = branchNode.cases["Some"].rest;
     expect(someChain.kind).toBe("Chain");
     expect(someChain.rest.handler.builtin.kind).toBe("Constant");
     expect(someChain.rest.handler.builtin.value).toBe(true);
     // None → Drop → Constant(false)
-    const noneChain = branch.cases["None"].rest;
+    const noneChain = branchNode.cases["None"].rest;
     expect(noneChain.kind).toBe("Chain");
     expect(noneChain.rest.handler.builtin.kind).toBe("Constant");
     expect(noneChain.rest.handler.builtin.value).toBe(false);
@@ -385,11 +385,11 @@ describe("Option namespace", () => {
   it("Option.isNone() is the inverse of isSome", () => {
     const action = O.isNone<string>();
     expect(action.kind).toBe("Branch");
-    const branch = action as { kind: "Branch"; cases: any };
+    const branchNode =action as { kind: "Branch"; cases: any };
     // Some → Drop → Constant(false)
-    expect(branch.cases["Some"].rest.rest.handler.builtin.value).toBe(false);
+    expect(branchNode.cases["Some"].rest.rest.handler.builtin.value).toBe(false);
     // None → Drop → Constant(true)
-    expect(branch.cases["None"].rest.rest.handler.builtin.value).toBe(true);
+    expect(branchNode.cases["None"].rest.rest.handler.builtin.value).toBe(true);
   });
 
   it("postfix .mapOption() produces Chain → Branch AST", () => {
@@ -399,7 +399,7 @@ describe("Option namespace", () => {
     const chain = mapped as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Chain");
     expect(chain.rest.kind).toBe("Branch");
-    expect(Object.keys(chain.rest.cases).sort()).toEqual(["None", "Some"]);
+    expect(Object.keys(chain.rest.cases).toSorted()).toEqual(["None", "Some"]);
   });
 });
 
@@ -518,9 +518,7 @@ describe("bind", () => {
 
   it("resume_handler_ids are unique across separate bind calls", () => {
     const resumeHandlerIds: number[] = [];
-    bind([constant(1), constant(2)], ([_a, _b]) => {
-      return identity;
-    });
+    bind([constant(1), constant(2)], ([_a, _b]) => identity);
     // First bind uses resume_handler_ids 0, 1
 
     let ref1: any, ref2: any;
@@ -678,31 +676,31 @@ describe("Result combinators", () => {
   it("Result.andThen(action) desugars to Branch(Ok: action, Err: Tag(Err))", () => {
     const inner = R.ok<string, string>();
     const result = R.andThen(inner);
-    const branch = result as any;
-    expect(branch.kind).toBe("Branch");
+    const branchNode =result as any;
+    expect(branchNode.kind).toBe("Branch");
     // Ok case: ExtractValue → action
-    expect(branch.cases.Ok.rest).toBe(inner);
+    expect(branchNode.cases.Ok.rest).toBe(inner);
     // Err case: ExtractValue → Tag(Err)
-    expect(branch.cases.Err.rest.handler.builtin.kind).toBe("Tag");
-    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Err");
+    expect(branchNode.cases.Err.rest.handler.builtin.kind).toBe("Tag");
+    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Err");
   });
 
   it("Result.or(fallback) desugars to Branch(Ok: Tag(Ok), Err: fallback)", () => {
     const fallback = R.ok<string, string>();
     const result = R.or(fallback);
-    const branch = result as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.handler.builtin.value).toBe("Ok");
-    expect(branch.cases.Err.rest).toBe(fallback);
+    const branchNode =result as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.handler.builtin.value).toBe("Ok");
+    expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
   it("Result.and(other) desugars to Branch(Ok: Chain(Drop, other), Err: Tag(Err))", () => {
     const other = pipe(constant("replacement"), R.ok<string, string>());
     const result = R.and(other);
-    const branch = result as any;
-    expect(branch.kind).toBe("Branch");
+    const branchNode =result as any;
+    expect(branchNode.kind).toBe("Branch");
     // Ok case: ExtractValue → Chain(Drop, other)
-    const okBody = branch.cases.Ok.rest;
+    const okBody = branchNode.cases.Ok.rest;
     expect(okBody.kind).toBe("Chain");
     expect(okBody.first.handler.builtin.kind).toBe("Drop");
     expect(okBody.rest).toBe(other);
@@ -711,65 +709,65 @@ describe("Result combinators", () => {
   it("Result.unwrapOr(default) desugars to Branch(Ok: Identity, Err: default)", () => {
     const fallback = constant("default");
     const action = R.unwrapOr(fallback);
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
-    expect(branch.cases.Err.rest).toBe(fallback);
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
+    expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
   it("Result.flatten() desugars to Branch(Ok: Identity, Err: Tag(Err))", () => {
     const action = R.flatten();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
-    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Err");
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
+    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Err");
   });
 
   it("Result.toOption() desugars to Branch(Ok: Tag(Some), Err: Chain(Drop, Tag(None)))", () => {
     const action = R.toOption();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.handler.builtin.value).toBe("Some");
-    expect(branch.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe("None");
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.handler.builtin.value).toBe("Some");
+    expect(branchNode.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
+    expect(branchNode.cases.Err.rest.rest.handler.builtin.value).toBe("None");
   });
 
   it("Result.toOptionErr() desugars to Branch(Ok: Chain(Drop, Tag(None)), Err: Tag(Some))", () => {
     const action = R.toOptionErr();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe("None");
-    expect(branch.cases.Err.rest.handler.builtin.value).toBe("Some");
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
+    expect(branchNode.cases.Ok.rest.rest.handler.builtin.value).toBe("None");
+    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Some");
   });
 
   it("Result.isOk() desugars to Branch(Ok: Constant(true), Err: Constant(false))", () => {
     const action = R.isOk();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe(true);
-    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe(false);
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.rest.handler.builtin.value).toBe(true);
+    expect(branchNode.cases.Err.rest.rest.handler.builtin.value).toBe(false);
   });
 
   it("Result.isErr() desugars to Branch(Ok: Constant(false), Err: Constant(true))", () => {
     const action = R.isErr();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
-    expect(branch.cases.Ok.rest.rest.handler.builtin.value).toBe(false);
-    expect(branch.cases.Err.rest.rest.handler.builtin.value).toBe(true);
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
+    expect(branchNode.cases.Ok.rest.rest.handler.builtin.value).toBe(false);
+    expect(branchNode.cases.Err.rest.rest.handler.builtin.value).toBe(true);
   });
 
   it("Result.transpose() desugars to nested branches", () => {
     const action = R.transpose();
-    const branch = action as any;
-    expect(branch.kind).toBe("Branch");
+    const branchNode =action as any;
+    expect(branchNode.kind).toBe("Branch");
     // Ok case: receives Option, branches on Some/None
-    const okBody = branch.cases.Ok.rest;
+    const okBody = branchNode.cases.Ok.rest;
     expect(okBody.kind).toBe("Branch");
     expect(okBody.cases.Some).toBeDefined();
     expect(okBody.cases.None).toBeDefined();
     // Err case: Tag(Err) → Tag(Some)
-    const errBody = branch.cases.Err.rest;
+    const errBody = branchNode.cases.Err.rest;
     expect(errBody.kind).toBe("Chain");
     expect(errBody.first.handler.builtin.value).toBe("Err");
     expect(errBody.rest.handler.builtin.value).toBe("Some");

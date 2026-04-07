@@ -713,19 +713,19 @@ describe("bind types", () => {
 
   it("VarRef pipes into action expecting matching input", () => {
     // verify expects { artifact: string }
-    bind([constant({ artifact: "test" })], ([artifact]) => {
-      // artifact: VarRef<{ artifact: string }>
-      // Piping into verify should compile
-      return pipe(artifact, verify);
-    });
+    // artifact: VarRef<{ artifact: string }>
+    // Piping into verify should compile
+    bind([constant({ artifact: "test" })], ([artifact]) =>
+      pipe(artifact, verify),
+    );
   });
 
   it("VarRef rejects piping into action expecting wrong input", () => {
-    bind([constant("a string")], ([s]) => {
-      // s: VarRef<string>, verify expects { artifact: string }
+    // s: VarRef<string>, verify expects { artifact: string }
+    bind([constant("a string")], ([s]) =>
       // @ts-expect-error — string is not { artifact: string }
-      return pipe(s, verify);
-    });
+      pipe(s, verify),
+    );
   });
 
   it("multiple bindings infer distinct VarRef types", () => {
@@ -1306,10 +1306,8 @@ describe("optional handler types: createHandler", () => {
 
   it("rejects handle that uses wrong type for explicit TValue", () => {
     createHandler<string, number>({
-      handle: async ({ value }) => {
-        // @ts-expect-error — value is string, not number; .toFixed doesn't exist
-        return value.toFixed(2);
-      },
+      // @ts-expect-error — value is string, not number; .toFixed doesn't exist
+      handle: async ({ value }) => value.toFixed(2),
     }, "h");
   });
 
@@ -1546,10 +1544,8 @@ describe("optional handler types: createHandlerWithConfig", () => {
   it("rejects handle that lies about stepConfig shape", () => {
     createHandlerWithConfig({
       stepConfigValidator: z.object({ retries: z.number() }),
-      handle: async ({ stepConfig }) => {
-        // @ts-expect-error — stepConfig.retries is number, not string method
-        return stepConfig.retries.toUpperCase();
-      },
+      // @ts-expect-error — stepConfig.retries is number, not string method
+      handle: async ({ stepConfig }) => stepConfig.retries.toUpperCase(),
     }, "h");
   });
 

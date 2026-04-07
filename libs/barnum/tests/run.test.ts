@@ -1,6 +1,5 @@
-import { existsSync } from "fs";
-import { fileURLToPath } from "url";
-import path from "path";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { pipe } from "../src/ast.js";
@@ -8,7 +7,7 @@ import { constant, identity } from "../src/builtins.js";
 import { runPipeline } from "../src/run.js";
 import { setup, build } from "./handlers.js";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+const HERE = import.meta.dirname;
 const BINARY = path.resolve(HERE, "../../../target/debug/barnum");
 const HAS_BINARY = existsSync(BINARY);
 

@@ -48,6 +48,17 @@
     "typescript/unified-signatures": "off",
 
     "eslint/max-lines-per-function": "off",
-    "eslint/no-promise-executor-return": "off"
+    "eslint/no-promise-executor-return": "off",
+
+    "eslint/require-await": "off",
+    "eslint/no-empty-function": "off",
+    "eslint/no-inline-comments": "off",
+    "eslint/no-unused-vars": "off",
+    "unicorn/no-array-callback-reference": "off",
+    "unicorn/no-null": "off",
+    "unicorn/numeric-separators-style": "off",
+    "unicorn/text-encoding-identifier-case": "off",
+    "unicorn/prefer-number-properties": "off",
+    "typescript/explicit-function-return-type": "off"
   }
 }

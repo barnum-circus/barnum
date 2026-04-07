@@ -22,7 +22,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "oxlint src/"
+    "lint": "oxlint src/ tests/"
   },
   "author": "Robert Balicki",
   "license": "MIT",
