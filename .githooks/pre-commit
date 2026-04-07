@@ -29,55 +29,24 @@ done
 
 if [ -n "$TS_FILES" ]; then
     echo "Running oxlint..."
-    pnpm --filter barnum run lint || { echo "oxlint failed"; exit 1; }
+    pnpm --filter @barnum/barnum run lint || { echo "oxlint failed"; exit 1; }
 
     echo "Running prettier --check..."
-    pnpm --filter barnum exec prettier --check 'src/**/*.ts' || { echo "prettier check failed (run: pnpm --filter barnum exec prettier --write 'src/**/*.ts')"; exit 1; }
+    pnpm --filter @barnum/barnum exec prettier --check 'src/**/*.ts' || { echo "prettier check failed (run: pnpm --filter @barnum/barnum exec prettier --write 'src/**/*.ts')"; exit 1; }
 
-    TSC_BARNUM="$(pwd)/libs/barnum/node_modules/.bin/tsc"
-    TSC_DOCS="$(pwd)/docs-website/node_modules/.bin/tsc"
-
-    echo "Running TypeScript type-check (barnum)..."
-    $TSC_BARNUM --noEmit -p libs/barnum/tsconfig.json || { echo "tsc --noEmit failed (barnum)"; exit 1; }
-
-    # Typecheck demos + docs-website in parallel
-    TMPDIR_TC=$(mktemp -d)
-    PIDS=""
-
-    for demo in demos/*/; do
-        if [ -f "$demo/tsconfig.json" ]; then
-            echo "Running TypeScript type-check ($demo)..."
-            ( $TSC_BARNUM --noEmit -p "$demo/tsconfig.json" > "$TMPDIR_TC/$(basename $demo).out" 2>&1 || echo "FAIL:$demo" >> "$TMPDIR_TC/failures" ) &
-            PIDS="$PIDS $!"
-        fi
-    done
-
+    echo "Running turbo typecheck..."
     if [ -n "$DOCS_FILES" ]; then
-        echo "Running docs-website typecheck..."
-        ( $TSC_DOCS --noEmit -p docs-website/tsconfig.json > "$TMPDIR_TC/docs-website.out" 2>&1 || echo "FAIL:docs-website" >> "$TMPDIR_TC/failures" ) &
-        PIDS="$PIDS $!"
+        pnpm exec turbo run typecheck || { echo "turbo typecheck failed"; exit 1; }
+    else
+        pnpm exec turbo run typecheck --filter='@barnum/barnum' --filter='./demos/*' || { echo "turbo typecheck failed"; exit 1; }
     fi
+fi
 
-    for pid in $PIDS; do wait "$pid" || true; done
+# -- Docs-only checks (no TS library/demo files staged) --
 
-    if [ -f "$TMPDIR_TC/failures" ]; then
-        echo ""
-        echo "TypeScript type-check failures:"
-        while IFS= read -r line; do
-            name="${line#FAIL:}"
-            echo "--- $name ---"
-            cat "$TMPDIR_TC/$(basename $name).out"
-        done < "$TMPDIR_TC/failures"
-        rm -rf "$TMPDIR_TC"
-        exit 1
-    fi
-    rm -rf "$TMPDIR_TC"
-
-elif [ -n "$DOCS_FILES" ]; then
-    # Only docs files staged, no TS library/demo files
+if [ -z "$TS_FILES" ] && [ -n "$DOCS_FILES" ]; then
     echo "Running docs-website typecheck..."
-    TSC_DOCS="$(pwd)/docs-website/node_modules/.bin/tsc"
-    $TSC_DOCS --noEmit -p docs-website/tsconfig.json || { echo "tsc failed (docs-website)"; exit 1; }
+    pnpm exec turbo run typecheck --filter=barnum-docs || { echo "turbo typecheck failed (docs-website)"; exit 1; }
 fi
 
 # -- Rust checks (if Rust files staged) --
@@ -108,6 +77,6 @@ fi
 # -- Tests (if any code changed) --
 
 echo "Running tests..."
-pnpm test || { echo "pnpm test failed"; exit 1; }
+pnpm exec turbo run test --filter='@barnum/barnum' || { echo "turbo test failed"; exit 1; }
 
 echo "Pre-commit checks passed!"

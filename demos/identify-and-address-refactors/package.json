@@ -8,7 +8,7 @@
     "demo": "if [ -f ../../Cargo.toml ]; then pnpm -C ../../libs/barnum run build; fi && tsx run.ts"
   },
   "dependencies": {
-    "@barnum/barnum": "link:../../libs/barnum",
+    "@barnum/barnum": "workspace:*",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

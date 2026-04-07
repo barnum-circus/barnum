@@ -1,6 +1,12 @@
 {
+  "packageManager": "pnpm@10.27.0",
   "scripts": {
-    "test": "bash scripts/quiet-test.sh",
-    "typecheck": "bash -c 'set -e; echo \"Building libs/barnum...\" && (cd libs/barnum && pnpm run build); for pkg in libs/barnum demos/*/; do [ -f \"$pkg/tsconfig.json\" ] && echo \"Typechecking $pkg...\" && (cd \"$pkg\" && pnpm run typecheck); done'"
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "^2.9.4"
   }
 }
