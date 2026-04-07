@@ -567,7 +567,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "npm_tag=$NPM_TAG" >> $GITHUB_OUTPUT
           cd libs/barnum
-          npm version $VERSION --no-git-tag-version
+          npm version $VERSION --no-git-tag-version --allow-same-version
 
       - name: Publish barnum to npm
         run: npm publish --access public --tag ${{ steps.version.outputs.npm_tag }} --ignore-scripts
