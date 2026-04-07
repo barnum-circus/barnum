@@ -8,7 +8,7 @@
  *      - ChecksPassed → land the PR (side effect), wrap as None (done)
  *      - Landed → already merged, wrap as None (done)
  *   3. Option.collect() gathers remaining PR numbers (the Somes)
- *   4. If PRs remain, wait 10s then loop back to step 1
+ *   4. If PRs remain, delay 10s then loop back to step 1
  *
  * Demonstrates: loop, forEach, branch, bindInput, Option.some,
  *               Option.collect, drop.
@@ -30,6 +30,7 @@ import {
   fixIssues,
   landPR,
   classifyRemaining,
+  delay,
 } from "./handlers/steps.js";
 
 console.error("=== Babysit PRs demo ===\n");
@@ -52,7 +53,7 @@ runPipeline(
       ),
       Option.collect<number>(),
       classifyRemaining.branch({
-        HasPRs: recur,
+        HasPRs: delay(10_000).then(recur),
         AllDone: done,
       }),
     ),

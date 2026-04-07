@@ -1,7 +1,5 @@
-import { createHandler } from "@barnum/barnum";
+import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
 import { z } from "zod";
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const ciErrors = [
   "Type error in src/index.ts:42 — Property 'name' does not exist on type '{}'",
@@ -94,10 +92,24 @@ export const classifyRemaining = createHandler(
       console.error(
         `[classifyRemaining] ${value.length} PR(s) still need attention: #${value.join(", #")}`,
       );
-      console.error("[classifyRemaining] Waiting 10s before retry...");
-      await sleep(10_000);
       return { kind: "HasPRs" as const, value };
     },
   },
   "classifyRemaining",
+);
+
+// --- Delay (pass-through sleep) ---
+
+export const delay = createHandlerWithConfig(
+  {
+    stepConfigValidator: z.number(),
+    inputValidator: z.array(z.number()),
+    outputValidator: z.array(z.number()),
+    handle: async ({ value, stepConfig: ms }) => {
+      console.error(`[delay] Waiting ${ms / 1000}s before retry...`);
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      return value;
+    },
+  },
+  "delay",
 );
