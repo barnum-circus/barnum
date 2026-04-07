@@ -129,6 +129,7 @@ dependencies = [
  "barnum_ast",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -156,6 +157,7 @@ dependencies = [
  "string_key_newtype",
  "thiserror",
  "thunderdome",
+ "tokio",
  "u32_newtype",
 ]
 

@@ -94,7 +94,8 @@ export type BuiltinKind =
   | { kind: "ExtractField"; value: string }
   | { kind: "ExtractIndex"; value: number }
   | { kind: "Pick"; value: string[] }
-  | { kind: "CollectSome" };
+  | { kind: "CollectSome" }
+  | { kind: "Sleep"; value: number };
 
 /**
  * When TIn is `never` (handler ignores input), produce `any` so the

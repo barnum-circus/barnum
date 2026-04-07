@@ -108,7 +108,9 @@ impl Scheduler {
                 let builtin_kind = builtin_handler.builtin.clone();
                 let value = dispatch_event.value.clone();
                 tokio::spawn(async move {
-                    let result = execute_builtin(&builtin_kind, &value).map_err(HandlerError::from);
+                    let result = execute_builtin(&builtin_kind, &value)
+                        .await
+                        .map_err(HandlerError::from);
                     let _ = result_tx.send((task_id, result));
                 });
             }

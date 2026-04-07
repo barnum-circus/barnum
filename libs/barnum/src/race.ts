@@ -82,40 +82,44 @@ export function race<TIn, TOut>(
 }
 
 // ---------------------------------------------------------------------------
-// sleep — TypeScript handler that resolves after N milliseconds
+// sleep — Rust builtin that delays for a fixed duration (passthrough)
 // ---------------------------------------------------------------------------
 
-/** The raw Invoke node for the sleep handler. */
-const SLEEP_INVOKE: Action = {
+/**
+ * Sleep for a fixed duration, then pass input through unchanged.
+ *
+ * `ms` is baked into the AST at construction time. Executed by the Rust
+ * scheduler via `tokio::time::sleep` — no subprocess spawned.
+ */
+export function sleep<TIn = void>(ms: number): TypedAction<TIn, TIn> {
+  return typedAction<TIn, TIn>({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Sleep", value: ms } },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// dynamicSleep — TypeScript handler for withTimeout (takes ms as input)
+// ---------------------------------------------------------------------------
+
+/** The raw Invoke node for the dynamic sleep handler. */
+const DYNAMIC_SLEEP_INVOKE: Action = {
   kind: "Invoke",
   handler: {
     kind: "TypeScript",
     module: import.meta.url,
-    func: "sleep",
+    func: "dynamicSleep",
   },
 };
 
 /**
- * Delay for a specified duration. Takes the number of milliseconds as
- * pipeline input and returns `void` after the timer fires.
- *
- * `number → void`
- *
- * When the engine cancels the sleep during race teardown, the worker
- * subprocess is killed. The sleep never resolves. Standard cancellation.
- *
- * This is defined inline rather than via `createHandler` to avoid
- * a circular dependency (handler.ts → ast.ts → builtins.ts → handler.ts).
- * The handler definition is attached for the worker to find at runtime.
+ * @internal TypeScript handler that takes ms as pipeline input and returns
+ * void after the timer fires. Used by `withTimeout` where the duration
+ * comes from a runtime pipeline, not a build-time constant.
  */
-export function sleep(): TypedAction<number, void> {
-  return typedAction<number, void>(SLEEP_INVOKE);
-}
-
-// Attach __definition on the sleep function for the worker to find at runtime.
-// The handler receives the ms value as input and returns a Promise that
-// resolves after that duration.
-Object.defineProperty(sleep, "__definition", {
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+export function dynamicSleep(): void {}
+Object.defineProperty(dynamicSleep, "__definition", {
   value: {
     handle: ({ value }: { value: number }) =>
       new Promise<void>((resolve) => setTimeout(resolve, value)),
@@ -163,7 +167,7 @@ export function withTimeout<TIn, TOut>(
     kind: "Chain",
     first: {
       kind: "Chain",
-      first: { kind: "Chain", first: ms as Action, rest: SLEEP_INVOKE },
+      first: { kind: "Chain", first: ms as Action, rest: DYNAMIC_SLEEP_INVOKE },
       rest: TAG_ERR,
     },
     rest: perform,

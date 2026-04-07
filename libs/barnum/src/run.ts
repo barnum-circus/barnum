@@ -8,12 +8,11 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { Action, Config, ExtractOutput, Pipeable } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = import.meta.dirname;
 
 /** Resolve the TypeScript executor. Uses bun if the workflow was launched with bun, otherwise tsx. */
 function resolveExecutor(): string {

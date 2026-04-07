@@ -278,6 +278,14 @@ pub enum BuiltinKind {
     /// Input: array of `{ kind: "Some", value: T }` or `{ kind: "None", value: _ }`.
     /// Output: array of unwrapped `T` values (only the `Some` entries).
     CollectSome,
+    /// Sleep for a fixed duration, then pass input through unchanged.
+    ///
+    /// Unlike other builtins, execution is async — the scheduler awaits
+    /// `tokio::time::sleep` before returning the input.
+    Sleep {
+        /// Duration in milliseconds (must be a non-negative integer).
+        value: Value,
+    },
 }
 
 // ---------------------------------------------------------------------------

@@ -192,7 +192,7 @@ pub fn pop_dispatch(engine: &mut WorkflowState) -> Option<DispatchEvent> {
 /// Process all pending builtin dispatches. Returns TypeScript dispatches
 /// for manual completion and workflow result (if the workflow terminated).
 #[allow(clippy::unwrap_used, clippy::type_complexity)]
-pub fn drive_builtins(
+pub async fn drive_builtins(
     engine: &mut WorkflowState,
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
     let mut ts_dispatches: Vec<DispatchEvent> = Vec::new();
@@ -214,6 +214,7 @@ pub fn drive_builtins(
                             &builtin_handler.builtin,
                             &dispatch_event.value,
                         )
+                        .await
                         .unwrap();
                         let completion_event = CompletionEvent {
                             task_id: dispatch_event.task_id,
@@ -235,7 +236,7 @@ pub fn drive_builtins(
 
 /// Complete a task and then drive all resulting builtins.
 #[allow(clippy::unwrap_used)]
-pub fn complete_and_drive(
+pub async fn complete_and_drive(
     engine: &mut WorkflowState,
     completion_event: CompletionEvent,
 ) -> Result<(Option<Value>, Vec<DispatchEvent>), CompleteError> {
@@ -246,5 +247,5 @@ pub fn complete_and_drive(
     if result.is_some() {
         return Ok((result, Vec::new()));
     }
-    drive_builtins(engine)
+    drive_builtins(engine).await
 }

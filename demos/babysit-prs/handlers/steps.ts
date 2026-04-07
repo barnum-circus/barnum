@@ -1,4 +1,4 @@
-import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum";
 import { z } from "zod";
 
 const ciErrors = [
@@ -98,18 +98,3 @@ export const classifyRemaining = createHandler(
   "classifyRemaining",
 );
 
-// --- Delay (pass-through sleep) ---
-
-export const delay = createHandlerWithConfig(
-  {
-    stepConfigValidator: z.number(),
-    inputValidator: z.array(z.number()),
-    outputValidator: z.array(z.number()),
-    handle: async ({ value, stepConfig: ms }) => {
-      console.error(`[delay] Waiting ${ms / 1000}s before retry...`);
-      await new Promise((resolve) => setTimeout(resolve, ms));
-      return value;
-    },
-  },
-  "delay",
-);

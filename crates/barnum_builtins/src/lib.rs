@@ -1,8 +1,10 @@
 //! Builtin handler implementations.
 //!
-//! Each [`BuiltinKind`] variant maps to a pure data transformation executed
-//! inline by the scheduler (no subprocess). All builtins are infallible
-//! except for type mismatches, which produce [`BuiltinError`].
+//! Each [`BuiltinKind`] variant is executed inline by the scheduler (no
+//! subprocess). Most are pure data transformations. [`BuiltinKind::Sleep`]
+//! is the exception — it awaits a tokio timer before returning.
+//! All builtins are infallible except for type mismatches, which produce
+//! [`BuiltinError`].
 
 use barnum_ast::BuiltinKind;
 use serde_json::{Value, json};
@@ -26,7 +28,10 @@ pub struct BuiltinError {
 /// Returns [`BuiltinError`] if the input doesn't match the builtin's
 /// expected type (e.g., `Merge` on a non-array).
 #[allow(clippy::too_many_lines)]
-pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Value, BuiltinError> {
+pub async fn execute_builtin(
+    builtin_kind: &BuiltinKind,
+    input: &Value,
+) -> Result<Value, BuiltinError> {
     match builtin_kind {
         BuiltinKind::Constant { value } => Ok(value.clone()),
 
@@ -179,6 +184,18 @@ pub fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Valu
             }
             Ok(Value::Object(picked))
         }
+
+        BuiltinKind::Sleep { value: ms_value } => {
+            let Some(ms) = ms_value.as_u64() else {
+                return Err(BuiltinError {
+                    builtin: "Sleep",
+                    expected: "non-negative integer milliseconds",
+                    actual: ms_value.clone(),
+                });
+            };
+            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+            Ok(input.clone())
+        }
     }
 }
 
@@ -188,240 +205,269 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn constant_ignores_input() {
+    #[tokio::test]
+    async fn constant_ignores_input() {
         let result = execute_builtin(
             &BuiltinKind::Constant { value: json!(42) },
             &json!("ignored"),
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), json!(42));
     }
 
-    #[test]
-    fn identity_returns_input() {
-        let result = execute_builtin(&BuiltinKind::Identity, &json!({"x": 1}));
+    #[tokio::test]
+    async fn identity_returns_input() {
+        let result = execute_builtin(&BuiltinKind::Identity, &json!({"x": 1})).await;
         assert_eq!(result.unwrap(), json!({"x": 1}));
     }
 
-    #[test]
-    fn drop_returns_null() {
-        let result = execute_builtin(&BuiltinKind::Drop, &json!("anything"));
+    #[tokio::test]
+    async fn drop_returns_null() {
+        let result = execute_builtin(&BuiltinKind::Drop, &json!("anything")).await;
         assert_eq!(result.unwrap(), Value::Null);
     }
 
-    #[test]
-    fn tag_wraps_input() {
+    #[tokio::test]
+    async fn tag_wraps_input() {
         let result = execute_builtin(
             &BuiltinKind::Tag {
                 value: json!("Continue"),
             },
             &json!(42),
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), json!({"kind": "Continue", "value": 42}));
     }
 
-    #[test]
-    fn merge_combines_objects() {
+    #[tokio::test]
+    async fn merge_combines_objects() {
         let input = json!([{"a": 1}, {"b": 2}, {"a": 3}]);
-        let result = execute_builtin(&BuiltinKind::Merge, &input);
+        let result = execute_builtin(&BuiltinKind::Merge, &input).await;
         assert_eq!(result.unwrap(), json!({"a": 3, "b": 2}));
     }
 
-    #[test]
-    fn merge_rejects_non_array() {
-        let result = execute_builtin(&BuiltinKind::Merge, &json!("not array"));
+    #[tokio::test]
+    async fn merge_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::Merge, &json!("not array")).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn merge_rejects_non_object_element() {
-        let result = execute_builtin(&BuiltinKind::Merge, &json!([{"a": 1}, "bad"]));
+    #[tokio::test]
+    async fn merge_rejects_non_object_element() {
+        let result = execute_builtin(&BuiltinKind::Merge, &json!([{"a": 1}, "bad"])).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn flatten_one_level() {
+    #[tokio::test]
+    async fn flatten_one_level() {
         let input = json!([[1, 2], [3], [4, 5, 6]]);
-        let result = execute_builtin(&BuiltinKind::Flatten, &input);
+        let result = execute_builtin(&BuiltinKind::Flatten, &input).await;
         assert_eq!(result.unwrap(), json!([1, 2, 3, 4, 5, 6]));
     }
 
-    #[test]
-    fn flatten_rejects_non_array() {
-        let result = execute_builtin(&BuiltinKind::Flatten, &json!("not array"));
+    #[tokio::test]
+    async fn flatten_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::Flatten, &json!("not array")).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn flatten_rejects_non_array_element() {
-        let result = execute_builtin(&BuiltinKind::Flatten, &json!([[1], "bad"]));
+    #[tokio::test]
+    async fn flatten_rejects_non_array_element() {
+        let result = execute_builtin(&BuiltinKind::Flatten, &json!([[1], "bad"])).await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn extract_field_gets_value() {
+    #[tokio::test]
+    async fn extract_field_gets_value() {
         let input = json!({"name": "Alice", "age": 30});
         let result = execute_builtin(
             &BuiltinKind::ExtractField {
                 value: json!("name"),
             },
             &input,
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), json!("Alice"));
     }
 
-    #[test]
-    fn extract_field_missing_returns_null() {
+    #[tokio::test]
+    async fn extract_field_missing_returns_null() {
         let input = json!({"name": "Alice"});
         let result = execute_builtin(
             &BuiltinKind::ExtractField {
                 value: json!("missing"),
             },
             &input,
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), Value::Null);
     }
 
-    #[test]
-    fn extract_field_rejects_non_object() {
+    #[tokio::test]
+    async fn extract_field_rejects_non_object() {
         let result = execute_builtin(
             &BuiltinKind::ExtractField {
                 value: json!("field"),
             },
             &json!("not object"),
-        );
+        )
+        .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn extract_index_gets_value() {
+    #[tokio::test]
+    async fn extract_index_gets_value() {
         let input = json!(["a", "b", "c"]);
-        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(1) }, &input);
+        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(1) }, &input).await;
         assert_eq!(result.unwrap(), json!("b"));
     }
 
-    #[test]
-    fn extract_index_out_of_bounds_returns_null() {
+    #[tokio::test]
+    async fn extract_index_out_of_bounds_returns_null() {
         let input = json!(["a"]);
-        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(5) }, &input);
+        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(5) }, &input).await;
         assert_eq!(result.unwrap(), Value::Null);
     }
 
-    #[test]
-    fn extract_index_rejects_non_array() {
+    #[tokio::test]
+    async fn extract_index_rejects_non_array() {
         let result = execute_builtin(
             &BuiltinKind::ExtractIndex { value: json!(0) },
             &json!("not array"),
-        );
+        )
+        .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn extract_index_rejects_non_integer() {
+    #[tokio::test]
+    async fn extract_index_rejects_non_integer() {
         let result = execute_builtin(
             &BuiltinKind::ExtractIndex {
                 value: json!("bad"),
             },
             &json!([1, 2]),
-        );
+        )
+        .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn pick_selects_fields() {
+    #[tokio::test]
+    async fn pick_selects_fields() {
         let input = json!({"name": "Alice", "age": 30, "email": "a@b.com"});
         let result = execute_builtin(
             &BuiltinKind::Pick {
                 value: json!(["name", "age"]),
             },
             &input,
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), json!({"name": "Alice", "age": 30}));
     }
 
-    #[test]
-    fn pick_ignores_missing_fields() {
+    #[tokio::test]
+    async fn pick_ignores_missing_fields() {
         let input = json!({"name": "Alice"});
         let result = execute_builtin(
             &BuiltinKind::Pick {
                 value: json!(["name", "missing"]),
             },
             &input,
-        );
+        )
+        .await;
         assert_eq!(result.unwrap(), json!({"name": "Alice"}));
     }
 
-    #[test]
-    fn pick_rejects_non_object() {
+    #[tokio::test]
+    async fn pick_rejects_non_object() {
         let result = execute_builtin(
             &BuiltinKind::Pick {
                 value: json!(["name"]),
             },
             &json!("not object"),
-        );
+        )
+        .await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn pick_empty_keys_returns_empty_object() {
+    #[tokio::test]
+    async fn pick_empty_keys_returns_empty_object() {
         let input = json!({"name": "Alice", "age": 30});
-        let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input);
+        let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input).await;
         assert_eq!(result.unwrap(), json!({}));
     }
 
-    #[test]
-    fn tag_continue_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagContinue, &json!(5));
+    #[tokio::test]
+    async fn tag_continue_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagContinue, &json!(5)).await;
         assert_eq!(result.unwrap(), json!({"kind": "Continue", "value": 5}));
     }
 
-    #[test]
-    fn tag_break_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done"));
+    #[tokio::test]
+    async fn tag_break_wraps_input() {
+        let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done")).await;
         assert_eq!(result.unwrap(), json!({"kind": "Break", "value": "done"}),);
     }
 
-    #[test]
-    fn collect_some_extracts_some_values() {
+    #[tokio::test]
+    async fn collect_some_extracts_some_values() {
         let input = json!([
             {"kind": "Some", "value": 1},
             {"kind": "None", "value": null},
             {"kind": "Some", "value": 2},
         ]);
-        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!([1, 2]));
     }
 
-    #[test]
-    fn collect_some_handles_all_none() {
+    #[tokio::test]
+    async fn collect_some_handles_all_none() {
         let input = json!([
             {"kind": "None", "value": null},
             {"kind": "None", "value": null},
         ]);
-        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!([]));
     }
 
-    #[test]
-    fn collect_some_skips_null_entries() {
+    #[tokio::test]
+    async fn collect_some_skips_null_entries() {
         let input = json!([
             {"kind": "Some", "value": "a"},
             null,
             {"kind": "None", "value": null},
         ]);
-        let result = execute_builtin(&BuiltinKind::CollectSome, &input);
+        let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!(["a"]));
     }
 
-    #[test]
-    fn collect_some_empty_array() {
-        let result = execute_builtin(&BuiltinKind::CollectSome, &json!([]));
+    #[tokio::test]
+    async fn collect_some_empty_array() {
+        let result = execute_builtin(&BuiltinKind::CollectSome, &json!([])).await;
         assert_eq!(result.unwrap(), json!([]));
     }
 
-    #[test]
-    fn collect_some_rejects_non_array() {
-        let result = execute_builtin(&BuiltinKind::CollectSome, &json!("not array"));
+    #[tokio::test]
+    async fn collect_some_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::CollectSome, &json!("not array")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn sleep_passes_input_through() {
+        let result =
+            execute_builtin(&BuiltinKind::Sleep { value: json!(0) }, &json!({"x": 1})).await;
+        assert_eq!(result.unwrap(), json!({"x": 1}));
+    }
+
+    #[tokio::test]
+    async fn sleep_rejects_non_integer() {
+        let result = execute_builtin(
+            &BuiltinKind::Sleep {
+                value: json!("bad"),
+            },
+            &json!(null),
+        )
+        .await;
         assert!(result.is_err());
     }
 }

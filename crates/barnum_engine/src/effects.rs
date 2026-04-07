@@ -203,8 +203,8 @@ mod tests {
 
     /// Test 3: restart+Branch where Break+RestartPerform fires before Invoke(unreachable).
     /// Handler restarts body, Branch takes Break arm, Invoke never runs.
-    #[test]
-    fn restart_branch_break_skips_rest_of_chain() {
+    #[tokio::test]
+    async fn restart_branch_break_skips_rest_of_chain() {
         let mut engine = engine_from(restart_branch(
             1,
             chain(break_restart_perform(1), invoke("./unreachable.ts", "nope")),
@@ -213,15 +213,15 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, Some(json!("input")));
         // No TypeScript dispatches — unreachable invoke never ran.
         assert!(ts.is_empty());
     }
 
     /// Test 5: `RestartPerform(1)` skips inner `RestartHandle(2)`, caught by outer `RestartHandle(1)`.
-    #[test]
-    fn restart_perform_skips_non_matching_handle() {
+    #[tokio::test]
+    async fn restart_perform_skips_non_matching_handle() {
         // Outer RestartHandle(1) wraps inner RestartHandle(2).
         // Body invokes, then RestartPerform(1) fires — should skip inner(2), reach outer(1).
         let mut engine = engine_from(restart_handle(
@@ -237,7 +237,7 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Body dispatches invoke.
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 1);
 
         // Complete invoke → Chain trampoline → RestartPerform(1) fires.
@@ -251,6 +251,7 @@ mod tests {
                 value: json!("body_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, None);
         assert_eq!(ts2.len(), 1);
@@ -259,8 +260,8 @@ mod tests {
 
     /// Test 8: After restart+Branch Break, body frames removed from arena, task_to_parent
     /// entries removed. Chain(Invoke(A), break_restart_perform) in Continue arm.
-    #[test]
-    fn restart_branch_break_cleans_up_frames_and_tasks() {
+    #[tokio::test]
+    async fn restart_branch_break_cleans_up_frames_and_tasks() {
         let mut engine = engine_from(restart_branch(
             1,
             chain(invoke("./a.ts", "a"), break_restart_perform(1)),
@@ -270,7 +271,7 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // A dispatched.
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 1);
 
         // Complete A → break_restart_perform → handler restarts → Branch(Break) → identity → exits.
@@ -281,6 +282,7 @@ mod tests {
                 value: json!("a_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, Some(json!("a_out")));
 
@@ -291,8 +293,8 @@ mod tests {
 
     /// Test 10: RestartBody multiple times via Continue, then exit via Break.
     /// The invoke's output is the tagged routing value — Continue or Break.
-    #[test]
-    fn restart_branch_multiple_then_break() {
+    #[tokio::test]
+    async fn restart_branch_multiple_then_break() {
         let mut engine = engine_from(restart_branch(
             1,
             chain(invoke("./body.ts", "step"), restart_perform(1)),
@@ -301,7 +303,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("init"), None).unwrap();
 
-        let (_, mut body_dispatches) = drive_builtins(&mut engine).unwrap();
+        let (_, mut body_dispatches) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(body_dispatches.len(), 1);
 
         let frame_count_before = engine.frames.len();
@@ -314,6 +316,7 @@ mod tests {
                     value: json!({"kind": "Continue", "value": "restarted"}),
                 },
             )
+            .await
             .unwrap();
             assert_eq!(result, None);
 
@@ -338,14 +341,15 @@ mod tests {
                 value: json!({"kind": "Break", "value": "gave_up"}),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, Some(json!("gave_up")));
         assert_eq!(engine.frames.len(), 0);
     }
 
     /// Test 14: Body runs without RestartPerforming. RestartHandle exits normally.
-    #[test]
-    fn restart_handle_body_no_perform_exits_normally() {
+    #[tokio::test]
+    async fn restart_handle_body_no_perform_exits_normally() {
         let mut engine = engine_from(restart_handle(
             1,
             extract_index(0), // handler (never invoked)
@@ -354,7 +358,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 1); // body invoke dispatched
 
         let result = complete(
@@ -371,8 +375,8 @@ mod tests {
 
     /// Test 16: restart+Branch with concurrent tasks. A completes → break_restart_perform → restart →
     /// Branch(Break) → exits. B's in-flight task is torn down with the body.
-    #[test]
-    fn teardown_cleans_up_concurrent_tasks() {
+    #[tokio::test]
+    async fn teardown_cleans_up_concurrent_tasks() {
         let mut engine = engine_from(restart_branch(
             1,
             parallel(vec![
@@ -384,7 +388,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 2);
 
         // Complete A → break_restart_perform → handler (builtin) → restart → Branch(Break) → exits.
@@ -396,6 +400,7 @@ mod tests {
                 value: json!("a_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, Some(json!("a_out")));
         assert_eq!(engine.frames.len(), 0);
@@ -404,8 +409,8 @@ mod tests {
 
     /// Completing a task that was torn down during body teardown should
     /// return Ok(None), not panic.
-    #[test]
-    fn completing_torn_down_task_is_noop() {
+    #[tokio::test]
+    async fn completing_torn_down_task_is_noop() {
         let mut engine = engine_from(restart_branch(
             1,
             parallel(vec![
@@ -417,7 +422,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 2);
         let b_task_id = ts[1].task_id;
 
@@ -429,6 +434,7 @@ mod tests {
                 value: json!("a_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, Some(json!("a_out")));
 
@@ -440,6 +446,7 @@ mod tests {
                 value: json!("b_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, None);
     }
@@ -449,8 +456,8 @@ mod tests {
     /// produce effects). The restart is processed by `drive_builtins`, which
     /// tears down the body (including sibling b's Invoke frame). The stale
     /// dispatch for b is then dropped by the liveness check.
-    #[test]
-    fn restart_perform_non_terminal_in_all() {
+    #[tokio::test]
+    async fn restart_perform_non_terminal_in_all() {
         let mut engine = engine_from(restart_handle(
             1,
             invoke("./handler.ts", "handler"),
@@ -461,14 +468,14 @@ mod tests {
 
         // Restart effect processed first: body torn down (including b's frame).
         // b's stale dispatch dropped by liveness check. Handler dispatched.
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1); // Only handler.ts — b was torn down.
     }
 
     /// Effect shadowing — inner RestartHandle intercepts same restart_handler_id.
-    #[test]
-    fn restart_effect_shadowing_inner_catches() {
+    #[tokio::test]
+    async fn restart_effect_shadowing_inner_catches() {
         // RestartHandle(1, h_outer, RestartHandle(1, h_inner, RestartPerform(1)))
         // Inner catches the RestartPerform. Body torn down, handler runs.
         // Handler output becomes new body input. Body re-advances.
@@ -496,8 +503,8 @@ mod tests {
     }
 
     /// Test 21: Multi-step restart handler Chain. Handler side completes, body restarts.
-    #[test]
-    fn multi_step_restart_handler_chain() {
+    #[tokio::test]
+    async fn multi_step_restart_handler_chain() {
         // RestartHandle(1, Chain(step1, step2), Perform(1))
         let mut engine = engine_from(restart_handle(
             1,
@@ -508,7 +515,7 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // Body dispatches body.ts. No RestartPerform yet.
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 1);
 
         // Complete body → Chain trampolines to RestartPerform → Restart enqueued.
@@ -520,6 +527,7 @@ mod tests {
                 value: json!("body_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1); // step1
@@ -560,8 +568,8 @@ mod tests {
 
     /// Resume handler with async handler DAG should not block sibling
     /// completions.
-    #[test]
-    fn resume_handler_does_not_block_sibling_completion() {
+    #[tokio::test]
+    async fn resume_handler_does_not_block_sibling_completion() {
         let mut engine = engine_from(resume_handle(
             1,
             invoke("./handler.ts", "handler"),
@@ -573,7 +581,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 2); // A and B
 
         // Complete A → ResumePerform → handler dispatched (async TS handler).
@@ -584,6 +592,7 @@ mod tests {
                 value: json!("a_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
@@ -602,8 +611,8 @@ mod tests {
 
     /// Two concurrent resume Performs should both dispatch their handlers
     /// without serialization.
-    #[test]
-    fn concurrent_resume_performs_not_serialized() {
+    #[tokio::test]
+    async fn concurrent_resume_performs_not_serialized() {
         let mut engine = engine_from(resume_handle(
             1,
             invoke("./handler.ts", "handler"),
@@ -621,8 +630,8 @@ mod tests {
 
     /// A throw (to an outer restart+Branch) should proceed even while a resume
     /// handler is in flight in a sibling branch.
-    #[test]
-    fn throw_proceeds_while_resume_handler_in_flight() {
+    #[tokio::test]
+    async fn throw_proceeds_while_resume_handler_in_flight() {
         let inner_e = 1; // resume-style
         let outer_e = 2; // restart-style (tryCatch)
 
@@ -643,7 +652,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (_, ts) = drive_builtins(&mut engine).unwrap();
+        let (_, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(ts.len(), 2); // A and B
 
         // Complete A → ResumePerform(inner_e) → resume handler dispatched.
@@ -654,6 +663,7 @@ mod tests {
                 value: json!("a_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, None);
         assert_eq!(handler_ts.len(), 1);
@@ -667,6 +677,7 @@ mod tests {
                 value: json!("b_out"),
             },
         )
+        .await
         .unwrap();
 
         // Outer handler restarts body, Branch takes Break arm, RestartHandle exits.
@@ -680,8 +691,8 @@ mod tests {
     // -- Bind-shaped AST tests (ResumeHandle/ResumePerform) --
 
     /// Bind test 1: Single binding, single read.
-    #[test]
-    fn bind_single_binding_single_read() {
+    #[tokio::test]
+    async fn bind_single_binding_single_read() {
         let e0 = 10;
         let mut engine = engine_from(chain(
             parallel(vec![
@@ -697,7 +708,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!(42)); // echo receives 42
@@ -714,8 +725,8 @@ mod tests {
     }
 
     /// Bind test 2: Single binding, body ignores VarRef.
-    #[test]
-    fn bind_single_binding_body_ignores_varref() {
+    #[tokio::test]
+    async fn bind_single_binding_body_ignores_varref() {
         let e0 = 10;
         let mut engine = engine_from(chain(
             parallel(vec![
@@ -734,7 +745,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("input")); // echo receives pipeline_input
@@ -751,8 +762,8 @@ mod tests {
     }
 
     /// Bind test 3: Two bindings, two reads.
-    #[test]
-    fn bind_two_bindings_two_reads() {
+    #[tokio::test]
+    async fn bind_two_bindings_two_reads() {
         let e0 = 10;
         let e1 = 11;
         let mut engine = engine_from(chain(
@@ -779,7 +790,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("alice"));
@@ -791,14 +802,15 @@ mod tests {
                 value: json!("mid_out"),
             },
         )
+        .await
         .unwrap();
         assert_eq!(result, Some(json!(99)));
         assert!(ts2.is_empty());
     }
 
     /// Bind test 4: Two bindings, reads in reverse order.
-    #[test]
-    fn bind_two_bindings_reverse_order() {
+    #[tokio::test]
+    async fn bind_two_bindings_reverse_order() {
         let e0 = 10;
         let e1 = 11;
         let mut engine = engine_from(chain(
@@ -822,14 +834,14 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, Some(json!("alice")));
         assert!(ts.is_empty());
     }
 
     /// Bind test 5: Nested binds.
-    #[test]
-    fn bind_nested() {
+    #[tokio::test]
+    async fn bind_nested() {
         let e_outer = 10;
         let e_inner = 11;
         let mut engine = engine_from(chain(
@@ -866,14 +878,14 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, Some(json!("inner")));
         assert!(ts.is_empty());
     }
 
     /// Bind test 6: Bind inside ForEach.
-    #[test]
-    fn bind_inside_foreach() {
+    #[tokio::test]
+    async fn bind_inside_foreach() {
         let e0 = 10;
         let mut engine = engine_from(for_each(chain(
             parallel(vec![
@@ -889,7 +901,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!([10, 20]), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 2);
 
@@ -918,8 +930,8 @@ mod tests {
     }
 
     /// Bind test 7: Handler receives correct state shape.
-    #[test]
-    fn bind_handler_receives_correct_state() {
+    #[tokio::test]
+    async fn bind_handler_receives_correct_state() {
         let e0 = 10;
         let mut engine = engine_from(chain(
             parallel(vec![
@@ -938,7 +950,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         // Handler receives [payload, state] = ["input", [42, "input"]]
@@ -946,8 +958,8 @@ mod tests {
     }
 
     /// Bind test 8: resume_read_var(1) produces correct [value, state] tuple.
-    #[test]
-    fn bind_read_var_produces_correct_resume() {
+    #[tokio::test]
+    async fn bind_read_var_produces_correct_resume() {
         let e0 = 10;
         let mut engine = engine_from(chain(
             parallel(vec![
@@ -968,7 +980,7 @@ mod tests {
         let root = engine.workflow_root();
         advance(&mut engine, root, json!("input"), None).unwrap();
 
-        let (result, ts) = drive_builtins(&mut engine).unwrap();
+        let (result, ts) = drive_builtins(&mut engine).await.unwrap();
         assert_eq!(result, None);
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0].value, json!("b"));

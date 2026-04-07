@@ -24,13 +24,13 @@ import {
   drop,
   Option,
   bindInput,
+  sleep,
 } from "@barnum/barnum";
 import {
   checkPR,
   fixIssues,
   landPR,
   classifyRemaining,
-  delay,
 } from "./handlers/steps.js";
 
 console.error("=== Babysit PRs demo ===\n");
@@ -53,7 +53,7 @@ runPipeline(
       ),
       Option.collect<number>(),
       classifyRemaining.branch({
-        HasPRs: delay(10_000).then(recur),
+        HasPRs: sleep<number[]>(10_000).then(recur),
         AllDone: done,
       }),
     ),
