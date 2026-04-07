@@ -31,8 +31,6 @@ jobs:
         with:
           node-version: '22'
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - name: Install dependencies (barnum)
         run: pnpm install --frozen-lockfile
         working-directory: libs/barnum
@@ -64,8 +62,6 @@ jobs:
         with:
           node-version: '22'
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: dtolnay/rust-toolchain@1.93.1
       - uses: Swatinem/rust-cache@v2
       - name: Install library dependencies
@@ -448,8 +444,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - name: Use Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -552,8 +546,6 @@ jobs:
           chmod +x libs/barnum/artifacts/linux-arm64/barnum
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Install dependencies and build TypeScript
         run: pnpm install --frozen-lockfile && pnpm run build
