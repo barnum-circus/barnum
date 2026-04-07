@@ -29,6 +29,9 @@
     "@docusaurus/theme-classic": "3.0.1",
     "@docusaurus/tsconfig": "3.0.1",
     "@docusaurus/types": "3.0.1",
+    "@types/node": "^25.5.2",
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
     "typescript": "5.6.3"
   },
   "browserslist": {
