@@ -16,12 +16,12 @@ struct Cli {
 /// Log verbosity level for the `run` subcommand.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum LogLevel {
-    /// No engine output (default). Only handler stderr is visible.
-    #[default]
+    /// No engine output. Only handler stderr is visible.
     Off,
     /// Fatal errors only.
     Error,
-    /// Errors and warnings.
+    /// Errors and warnings (default).
+    #[default]
     Warn,
     /// High-level workflow progress: handler dispatch and completion.
     Info,
@@ -68,8 +68,8 @@ enum Command {
         #[arg(long)]
         worker: String,
 
-        /// Engine log verbosity. Default: off (only handler stderr is visible).
-        #[arg(long, value_enum, default_value_t = LogLevel::Off)]
+        /// Engine log verbosity. Default: warn.
+        #[arg(long, value_enum, default_value_t = LogLevel::Warn)]
         log_level: LogLevel,
     },
 }
