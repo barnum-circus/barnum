@@ -22,6 +22,7 @@ use intern::Lookup;
 use jsonschema::Validator;
 use serde_json::Value;
 use tokio::sync::mpsc;
+use tracing::{debug, info, trace, warn};
 
 // =============================================================================
 // HandlerError
@@ -105,6 +106,8 @@ impl Scheduler {
 
         match handler {
             HandlerKind::Builtin(builtin_handler) => {
+                debug!(task = %task_id, builtin = ?builtin_handler.builtin, "dispatching builtin handler");
+                trace!(task = %task_id, value = %dispatch_event.value, "builtin input");
                 let builtin_kind = builtin_handler.builtin.clone();
                 let value = dispatch_event.value.clone();
                 tokio::spawn(async move {
@@ -117,6 +120,8 @@ impl Scheduler {
             HandlerKind::TypeScript(ts) => {
                 let module = ts.module.lookup().to_owned();
                 let func = ts.func.lookup().to_owned();
+                info!(task = %task_id, module = %module, func = %func, "dispatching TypeScript handler");
+                trace!(task = %task_id, value = %dispatch_event.value, "handler input");
                 let value = dispatch_event.value.clone();
                 let executor = self.executor.clone();
                 let worker_path = self.worker_path.clone();
@@ -300,6 +305,7 @@ pub async fn run_workflow(
     let compiled_schemas = compile_schemas(workflow_state)?;
 
     let root = workflow_state.workflow_root();
+    info!("starting workflow");
     advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
 
     loop {
@@ -307,12 +313,14 @@ pub async fn run_workflow(
             if let Some((frame_id, pending_kind)) = workflow_state.pop_pending_effect() {
                 (frame_id, EventKind::from(pending_kind))
             } else {
+                debug!("waiting for handler completion");
                 let (task_id, result) = scheduler
                     .recv()
                     .await
                     .expect("scheduler channel closed unexpectedly");
                 let Some(frame_id) = workflow_state.task_frame_id(task_id) else {
-                    continue; // stale completion — task was torn down
+                    debug!(task = %task_id, "ignoring stale completion (task torn down)");
+                    continue;
                 };
                 (
                     frame_id,
@@ -324,6 +332,7 @@ pub async fn run_workflow(
             };
 
         if !workflow_state.is_frame_live(frame_id) {
+            debug!("ignoring event for dead frame");
             continue;
         }
 
@@ -342,12 +351,34 @@ pub async fn run_workflow(
                 scheduler.dispatch(&dispatch_event, handler);
             }
             EventKind::Restart(restart_event) => {
+                info!("processing restart effect");
                 process_restart(workflow_state, restart_event)?;
             }
             EventKind::Completion(completion_event) => {
-                // Validate output before delivering the completion.
-                // Read handler_id BEFORE complete() removes the frame.
                 let handler_id = workflow_state.handler_id_for_task(completion_event.task_id);
+
+                // Log the completion with handler info.
+                match workflow_state.handler(handler_id) {
+                    HandlerKind::TypeScript(ts) => {
+                        info!(
+                            task = %completion_event.task_id,
+                            module = %ts.module.lookup(),
+                            func = %ts.func.lookup(),
+                            "handler completed"
+                        );
+                        trace!(task = %completion_event.task_id, value = %completion_event.value, "handler output");
+                    }
+                    HandlerKind::Builtin(builtin) => {
+                        debug!(
+                            task = %completion_event.task_id,
+                            builtin = ?builtin.builtin,
+                            "builtin completed"
+                        );
+                        trace!(task = %completion_event.task_id, value = %completion_event.value, "builtin output");
+                    }
+                }
+
+                // Validate output before delivering the completion.
                 validate_value(
                     &compiled_schemas.output,
                     handler_id,
@@ -357,6 +388,8 @@ pub async fn run_workflow(
                 )?;
 
                 if let Some(terminal_value) = complete(workflow_state, completion_event)? {
+                    info!("workflow completed");
+                    trace!(value = %terminal_value, "workflow result");
                     return Ok(terminal_value);
                 }
             }
@@ -388,11 +421,19 @@ fn validate_value(
         return Ok(());
     };
 
+    let formatted_errors = format_validation_errors(&errors);
+    warn!(
+        module = %ts_handler.module.lookup(),
+        func = %ts_handler.func.lookup(),
+        direction = %direction,
+        errors = ?formatted_errors,
+        "schema validation failed"
+    );
     Err(RunWorkflowError::SchemaValidation {
         module: ts_handler.module.lookup().to_owned(),
         func: ts_handler.func.lookup().to_owned(),
         direction,
-        errors: format_validation_errors(&errors),
+        errors: formatted_errors,
     })
 }
 

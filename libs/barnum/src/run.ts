@@ -12,6 +12,14 @@ import type { Action, Config, ExtractOutput, Pipeable } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins.js";
 
+/** Log verbosity for the barnum engine runtime. Passed to the CLI's `--log-level`. */
+export type LogLevel = "off" | "error" | "warn" | "info" | "debug" | "trace";
+
+export interface RunPipelineOptions {
+  /** Engine log verbosity. Default: "off" (only handler stderr is visible). */
+  logLevel?: LogLevel;
+}
+
 const __dirname = import.meta.dirname;
 
 /** Resolve the TypeScript executor. Uses bun if the workflow was launched with bun, otherwise tsx. */
@@ -114,16 +122,17 @@ function buildBinary(): void {
 export function runPipeline<TPipeline extends Action>(
   pipeline: TPipeline,
   input?: unknown,
+  options?: RunPipelineOptions,
 ): Promise<ExtractOutput<TPipeline>> {
   const workflow =
     input === undefined
       ? pipeline
       : (chain(constant(input) as Pipeable, pipeline as Pipeable) as Action);
-  return spawnBarnum({ workflow });
+  return spawnBarnum({ workflow }, options?.logLevel);
 }
 
 /** Spawn the barnum CLI with the given config. Returns the parsed final value from stdout. */
-function spawnBarnum<TOut>(config: Config): Promise<TOut> {
+function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
   const binaryResolution = resolveBinary();
   if (binaryResolution.kind === "Local") {
     buildBinary();
@@ -132,22 +141,23 @@ function spawnBarnum<TOut>(config: Config): Promise<TOut> {
   const worker = resolveWorker();
   const configJson = JSON.stringify(config);
 
+  const cliArgs = [
+    "run",
+    "--config",
+    configJson,
+    "--executor",
+    executor,
+    "--worker",
+    worker,
+  ];
+  if (logLevel) {
+    cliArgs.push("--log-level", logLevel);
+  }
+
   return new Promise<TOut>((resolve, reject) => {
-    const child = nodeSpawn(
-      binaryResolution.path,
-      [
-        "run",
-        "--config",
-        configJson,
-        "--executor",
-        executor,
-        "--worker",
-        worker,
-      ],
-      {
-        stdio: ["inherit", "pipe", "inherit"],
-      },
-    );
+    const child = nodeSpawn(binaryResolution.path, cliArgs, {
+      stdio: ["inherit", "pipe", "inherit"],
+    });
 
     const stdoutChunks: Buffer[] = [];
 

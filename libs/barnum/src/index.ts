@@ -20,7 +20,7 @@ export {
   Result,
 } from "./builtins.js";
 export * from "./handler.js";
-export { runPipeline } from "./run.js";
+export { runPipeline, type RunPipelineOptions, type LogLevel } from "./run.js";
 export { zodToCheckedJsonSchema } from "./schema.js";
 
 // Declaration merge: the explicit value exports of Option/Result from builtins

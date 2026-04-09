@@ -3,13 +3,45 @@
 use barnum_ast::flat::flatten;
 use barnum_engine::WorkflowState;
 use barnum_event_loop::{Scheduler, run_workflow};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "barnum", about = "Barnum workflow engine")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+/// Log verbosity level for the `run` subcommand.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum LogLevel {
+    /// No engine output (default). Only handler stderr is visible.
+    #[default]
+    Off,
+    /// Fatal errors only.
+    Error,
+    /// Errors and warnings.
+    Warn,
+    /// High-level workflow progress: handler dispatch and completion.
+    Info,
+    /// Detailed engine internals: advance steps, state transitions.
+    Debug,
+    /// Maximum verbosity.
+    Trace,
+}
+
+impl LogLevel {
+    const fn to_tracing_filter(self) -> &'static str {
+        match self {
+            LogLevel::Off => "off",
+            LogLevel::Error => "barnum=error",
+            LogLevel::Warn => "barnum=warn",
+            LogLevel::Info => "barnum=info",
+            LogLevel::Debug => "barnum=debug",
+            LogLevel::Trace => "barnum=trace",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -35,6 +67,10 @@ enum Command {
         /// Path to worker.ts.
         #[arg(long)]
         worker: String,
+
+        /// Engine log verbosity. Default: off (only handler stderr is visible).
+        #[arg(long, value_enum, default_value_t = LogLevel::Off)]
+        log_level: LogLevel,
     },
 }
 
@@ -47,7 +83,11 @@ async fn main() {
             config,
             executor,
             worker,
-        } => run(&config, &executor, &worker).await,
+            log_level,
+        } => {
+            init_tracing(log_level);
+            run(&config, &executor, &worker).await
+        }
     };
     if let Err(e) = result {
         #[expect(clippy::print_stderr)]
@@ -56,6 +96,15 @@ async fn main() {
         }
         std::process::exit(1);
     }
+}
+
+fn init_tracing(log_level: LogLevel) {
+    let filter = EnvFilter::new(log_level.to_tracing_filter());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(false)
+        .init();
 }
 
 fn check(input: &str) -> Result<(), Box<dyn std::error::Error>> {

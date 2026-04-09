@@ -16,6 +16,7 @@ jsonschema = "0.28"
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
