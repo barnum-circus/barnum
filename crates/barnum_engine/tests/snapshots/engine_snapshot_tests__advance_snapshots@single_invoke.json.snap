@@ -81,4 +81,5 @@ WorkflowState {
         ),
     ],
     next_task_id: 1,
+    terminal_value: None,
 }

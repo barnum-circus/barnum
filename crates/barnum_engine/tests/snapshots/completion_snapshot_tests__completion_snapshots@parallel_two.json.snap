@@ -137,6 +137,7 @@ WorkflowState {
     },
     pending_effects: [],
     next_task_id: 2,
+    terminal_value: None,
 }
 Pending: [
     DispatchEvent {
@@ -277,6 +278,7 @@ WorkflowState {
     },
     pending_effects: [],
     next_task_id: 2,
+    terminal_value: None,
 }
 Pending: []
 
@@ -370,5 +372,6 @@ WorkflowState {
     task_to_frame: {},
     pending_effects: [],
     next_task_id: 2,
+    terminal_value: None,
 }
 Pending: []

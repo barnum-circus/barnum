@@ -173,6 +173,11 @@ pub struct WorkflowState {
     task_to_frame: BTreeMap<TaskId, FrameId>,
     pending_effects: VecDeque<PendingEffect>,
     next_task_id: u32,
+    /// Terminal value produced when a synchronous completion (e.g., empty
+    /// `ForEach`) reaches the workflow root during an [`advance::advance`]
+    /// call. The event loop must check this after any operation that may
+    /// trigger an advance (initial advance, complete, `process_restart`).
+    terminal_value: Option<Value>,
 }
 
 impl WorkflowState {
@@ -186,6 +191,7 @@ impl WorkflowState {
             task_to_frame: BTreeMap::new(),
             pending_effects: VecDeque::new(),
             next_task_id: 0,
+            terminal_value: None,
         }
     }
 
@@ -200,6 +206,15 @@ impl WorkflowState {
     #[must_use]
     pub const fn workflow_root(&self) -> ActionId {
         self.flat_config.workflow_root()
+    }
+
+    /// Take the terminal value if the workflow completed during an advance.
+    ///
+    /// Returns `Some(value)` exactly once per terminal event. Subsequent
+    /// calls return `None` until a new terminal is produced.
+    #[allow(clippy::missing_const_for_fn)] // Option::take is not const-stable for all types
+    pub fn take_terminal_value(&mut self) -> Option<Value> {
+        self.terminal_value.take()
     }
 
     /// Pop the next pending effect, or `None` if the queue is empty.

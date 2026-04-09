@@ -308,6 +308,12 @@ pub async fn run_workflow(
     info!("starting workflow");
     advance(workflow_state, root, Value::Null, None).expect("initial advance failed");
 
+    if let Some(terminal_value) = workflow_state.take_terminal_value() {
+        info!("workflow completed");
+        trace!(value = %terminal_value, "workflow result");
+        return Ok(terminal_value);
+    }
+
     loop {
         let (frame_id, event_kind) =
             if let Some((frame_id, pending_kind)) = workflow_state.pop_pending_effect() {
@@ -353,6 +359,11 @@ pub async fn run_workflow(
             EventKind::Restart(restart_event) => {
                 info!("processing restart effect");
                 process_restart(workflow_state, restart_event)?;
+                if let Some(terminal_value) = workflow_state.take_terminal_value() {
+                    info!("workflow completed");
+                    trace!(value = %terminal_value, "workflow result");
+                    return Ok(terminal_value);
+                }
             }
             EventKind::Completion(completion_event) => {
                 let handler_id = workflow_state.handler_id_for_task(completion_event.task_id);
@@ -388,6 +399,11 @@ pub async fn run_workflow(
                 )?;
 
                 if let Some(terminal_value) = complete(workflow_state, completion_event)? {
+                    info!("workflow completed");
+                    trace!(value = %terminal_value, "workflow result");
+                    return Ok(terminal_value);
+                }
+                if let Some(terminal_value) = workflow_state.take_terminal_value() {
                     info!("workflow completed");
                     trace!(value = %terminal_value, "workflow result");
                     return Ok(terminal_value);
@@ -546,6 +562,44 @@ mod tests {
 
         // All collects results into an array
         assert_eq!(result, serde_json::json!([{"a": 1}, {"b": 2}]));
+    }
+
+    /// Chain(Constant([]), ForEach(handler)): handler returns empty array,
+    /// ForEach resolves vacuously. Workflow must complete, not hang.
+    #[tokio::test]
+    async fn foreach_empty_array_completes() {
+        let flat_config = flatten(config(Action::Chain(barnum_ast::ChainAction {
+            first: Box::new(constant(serde_json::json!([]))),
+            rest: Box::new(Action::ForEach(barnum_ast::ForEachAction {
+                action: Box::new(ts_invoke("./handler.ts", "run")),
+            })),
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = test_scheduler();
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!([]));
+    }
+
+    /// All with no children: vacuous completion, workflow must not hang.
+    #[tokio::test]
+    async fn all_empty_completes() {
+        let flat_config = flatten(config(Action::All(barnum_ast::AllAction {
+            actions: vec![],
+        })))
+        .unwrap();
+        let mut workflow_state = WorkflowState::new(flat_config);
+        let mut scheduler = test_scheduler();
+
+        let result = run_workflow(&mut workflow_state, &mut scheduler)
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!([]));
     }
 
     // =========================================================================

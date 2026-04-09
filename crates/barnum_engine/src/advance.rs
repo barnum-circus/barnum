@@ -66,8 +66,9 @@ pub fn advance(
         FlatAction::All { count } => {
             if count.0 == 0 {
                 // No children — vacuously complete with empty array.
-                super::complete::deliver(workflow_state, parent, Value::Array(vec![]))
-                    .expect("vacuous empty-parallel completion should not fail");
+                workflow_state.terminal_value =
+                    super::complete::deliver(workflow_state, parent, Value::Array(vec![]))
+                        .expect("vacuous empty-parallel completion should not fail");
                 return Ok(());
             }
             // Collect to a Vec to release the immutable borrow on
@@ -105,8 +106,9 @@ pub fn advance(
             };
             if elements.is_empty() {
                 // No elements — vacuously complete with empty array.
-                super::complete::deliver(workflow_state, parent, Value::Array(vec![]))
-                    .expect("vacuous empty-foreach completion should not fail");
+                workflow_state.terminal_value =
+                    super::complete::deliver(workflow_state, parent, Value::Array(vec![]))
+                        .expect("vacuous empty-foreach completion should not fail");
                 return Ok(());
             }
             let frame_id = workflow_state.insert_frame(Frame {
@@ -373,6 +375,7 @@ mod tests {
         super::advance(&mut engine, root, json!([]), None).unwrap();
 
         assert!(pop_dispatch(&mut engine).is_none());
+        assert_eq!(engine.take_terminal_value(), Some(json!([])));
     }
 
     /// All with empty children: no dispatches, immediate completion.
@@ -383,6 +386,7 @@ mod tests {
         super::advance(&mut engine, root, json!(null), None).unwrap();
 
         assert!(pop_dispatch(&mut engine).is_none());
+        assert_eq!(engine.take_terminal_value(), Some(json!([])));
     }
 
     // Bare RestartPerform with no enclosing RestartHandle → UnhandledRestartEffect.
