@@ -327,6 +327,22 @@ export function tap<TInput extends Record<string, unknown>>(
 }
 
 // ---------------------------------------------------------------------------
+// WrapInField — wrap input as { <field>: <input> }
+// ---------------------------------------------------------------------------
+
+export function wrapInField<TField extends string, TValue>(
+  field: TField,
+): TypedAction<TValue, Record<TField, TValue>> {
+  return typedAction({
+    kind: "Invoke",
+    handler: {
+      kind: "Builtin",
+      builtin: { kind: "WrapInField", value: field },
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Range — produce an integer array [start, start+1, ..., end-1]
 // ---------------------------------------------------------------------------
 

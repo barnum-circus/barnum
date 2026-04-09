@@ -278,6 +278,11 @@ pub enum BuiltinKind {
     /// Input: array of `{ kind: "Some", value: T }` or `{ kind: "None", value: _ }`.
     /// Output: array of unwrapped `T` values (only the `Some` entries).
     CollectSome,
+    /// Wrap input as `{ <field>: <input> }`.
+    WrapInField {
+        /// The field name (must be a JSON string).
+        value: Value,
+    },
     /// Sleep for a fixed duration, then pass input through unchanged.
     ///
     /// Unlike other builtins, execution is async — the scheduler awaits

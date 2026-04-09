@@ -185,6 +185,17 @@ pub async fn execute_builtin(
             Ok(Value::Object(picked))
         }
 
+        BuiltinKind::WrapInField { value: field } => {
+            let Value::String(field_name) = field else {
+                return Err(BuiltinError {
+                    builtin: "WrapInField",
+                    expected: "string field name",
+                    actual: field.clone(),
+                });
+            };
+            Ok(json!({ field_name.as_str(): input }))
+        }
+
         BuiltinKind::Sleep { value: ms_value } => {
             let Some(ms) = ms_value.as_u64() else {
                 return Err(BuiltinError {

@@ -16,6 +16,7 @@ export {
   augment,
   tap,
   range,
+  wrapInField,
   Option,
   Result,
 } from "./builtins.js";
