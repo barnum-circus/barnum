@@ -416,7 +416,7 @@ describe("reader monad pattern", () => {
       pipe(
         constant({ initialized: true, project: "test" }),
         all(identity, build),
-        merge<{ initialized: boolean; project: string }, { artifact: string }>(),
+        merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
       ),
     );
     expect(cfg.workflow.kind).toBe("Chain");

@@ -1,5 +1,6 @@
 import {
   type Action,
+  type MergeTuple,
   type Option as OptionT,
   type Pipeable,
   type Result as ResultT,
@@ -70,87 +71,10 @@ export function tag<
 // Merge — merge a tuple of objects into a single object
 // ---------------------------------------------------------------------------
 
-type Obj = Record<string, unknown>;
-
-export function merge<A extends Obj, B extends Obj>(): TypedAction<
-  [A, B],
-  A & B
->;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
->(): TypedAction<[A, B, C], A & B & C>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
->(): TypedAction<[A, B, C, D], A & B & C & D>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
->(): TypedAction<[A, B, C, D, E], A & B & C & D & E>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
-  F extends Obj,
->(): TypedAction<[A, B, C, D, E, F], A & B & C & D & E & F>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
-  F extends Obj,
-  G extends Obj,
->(): TypedAction<[A, B, C, D, E, F, G], A & B & C & D & E & F & G>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
-  F extends Obj,
-  G extends Obj,
-  H extends Obj,
->(): TypedAction<[A, B, C, D, E, F, G, H], A & B & C & D & E & F & G & H>;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
-  F extends Obj,
-  G extends Obj,
-  H extends Obj,
-  I extends Obj,
->(): TypedAction<
-  [A, B, C, D, E, F, G, H, I],
-  A & B & C & D & E & F & G & H & I
->;
-export function merge<
-  A extends Obj,
-  B extends Obj,
-  C extends Obj,
-  D extends Obj,
-  E extends Obj,
-  F extends Obj,
-  G extends Obj,
-  H extends Obj,
-  I extends Obj,
-  J extends Obj,
->(): TypedAction<
-  [A, B, C, D, E, F, G, H, I, J],
-  A & B & C & D & E & F & G & H & I & J
->;
-export function merge(): Action {
+export function merge<TTuple extends Record<string, unknown>[]>(): TypedAction<
+  TTuple,
+  MergeTuple<TTuple>
+> {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },
