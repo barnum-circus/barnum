@@ -1,8 +1,28 @@
 #!/bin/bash
 # Pre-commit hook: only runs checks relevant to staged file types.
 # Markdown-only commits skip everything.
+# Output is suppressed on success — only shown on failure.
 
 set -e
+
+# Run a command quietly. Shows label, suppresses output on success,
+# dumps full output on failure.
+run_quiet() {
+    local label="$1"
+    shift
+    echo "$label..."
+    local tmpfile
+    tmpfile=$(mktemp)
+    if "$@" > "$tmpfile" 2>&1; then
+        rm -f "$tmpfile"
+    else
+        local exit_code=$?
+        echo "FAILED: $label"
+        cat "$tmpfile"
+        rm -f "$tmpfile"
+        exit $exit_code
+    fi
+}
 
 STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
 TS_FILES=$(echo "$STAGED_FILES" | grep -E '\.(ts|tsx)$' || true)
@@ -28,55 +48,47 @@ done
 # -- TypeScript checks (if TS files staged) --
 
 if [ -n "$TS_FILES" ]; then
-    echo "Running oxlint..."
-    pnpm --filter @barnum/barnum run lint || { echo "oxlint failed"; exit 1; }
+    run_quiet "Running oxlint" pnpm --filter @barnum/barnum run lint
 
-    echo "Running prettier --check..."
-    pnpm --filter @barnum/barnum exec prettier --check 'src/**/*.ts' || { echo "prettier check failed (run: pnpm --filter @barnum/barnum exec prettier --write 'src/**/*.ts')"; exit 1; }
+    run_quiet "Running prettier --check" pnpm --filter @barnum/barnum exec prettier --check 'src/**/*.ts'
 
-    echo "Running turbo typecheck..."
     if [ -n "$DOCS_FILES" ]; then
-        pnpm exec turbo run typecheck || { echo "turbo typecheck failed"; exit 1; }
+        run_quiet "Running turbo typecheck" pnpm exec turbo run typecheck
     else
-        pnpm exec turbo run typecheck --filter='@barnum/barnum' --filter='./demos/*' || { echo "turbo typecheck failed"; exit 1; }
+        run_quiet "Running turbo typecheck" pnpm exec turbo run typecheck --filter='@barnum/barnum' --filter='./demos/*'
     fi
 fi
 
 # -- Docs-only checks (no TS library/demo files staged) --
 
 if [ -z "$TS_FILES" ] && [ -n "$DOCS_FILES" ]; then
-    echo "Running docs-website typecheck..."
-    pnpm exec turbo run typecheck --filter=barnum-docs || { echo "turbo typecheck failed (docs-website)"; exit 1; }
+    run_quiet "Running docs-website typecheck" pnpm exec turbo run typecheck --filter=barnum-docs
 fi
 
 # -- Rust checks (if Rust files staged) --
 
 if [ -n "$RUST_FILES" ]; then
+    # cargo fmt modifies files in place — run directly (no output to suppress)
     echo "Running cargo fmt..."
-    cargo fmt --all
+    cargo fmt --all 2>/dev/null
 
     # Re-stage only files that were already staged (not unrelated unstaged changes)
     echo "$STAGED_FILES" | xargs git add
 
-    echo "Building CLI binaries..."
-    cargo build -p barnum_cli || { echo "cargo build failed"; exit 1; }
+    run_quiet "Building CLI binaries" cargo build -p barnum_cli
 
-    echo "Running cargo check..."
-    cargo check --workspace --all-targets || { echo "cargo check failed"; exit 1; }
+    run_quiet "Running cargo check" cargo check --workspace --all-targets
 
-    echo "Running cargo clippy..."
-    cargo clippy --workspace --all-targets -- -D warnings || { echo "cargo clippy failed"; exit 1; }
+    run_quiet "Running cargo clippy" cargo clippy --workspace --all-targets -- -D warnings
 
     # udeps is optional
     if rustup run nightly cargo udeps --help > /dev/null 2>&1; then
-        echo "Running cargo udeps..."
-        cargo +nightly udeps --workspace --all-targets || { echo "cargo udeps failed"; exit 1; }
+        run_quiet "Running cargo udeps" cargo +nightly udeps --workspace --all-targets
     fi
 fi
 
 # -- Tests (if any code changed) --
 
-echo "Running tests..."
-pnpm exec turbo run test --filter='@barnum/barnum' || { echo "turbo test failed"; exit 1; }
+run_quiet "Running tests" pnpm exec turbo run test --filter='@barnum/barnum'
 
 echo "Pre-commit checks passed!"
