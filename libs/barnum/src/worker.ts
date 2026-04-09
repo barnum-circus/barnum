@@ -46,8 +46,13 @@ async function main(): Promise<void> {
 
   const result = await handler.__definition.handle({ value: input.value });
 
-  // Write result to stdout
-  process.stdout.write(JSON.stringify(result) ?? "null");
+  // Write result to stdout, then exit. Explicit exit is required because
+  // importing the handler module may leave open handles (timers, servers,
+  // etc.) that keep the Node event loop alive indefinitely.
+  const json = JSON.stringify(result) ?? "null";
+  process.stdout.write(json, () => {
+    process.exit(0);
+  });
 }
 
 main().catch((error) => {
