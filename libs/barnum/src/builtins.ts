@@ -244,38 +244,6 @@ export function withResource<
 }
 
 // ---------------------------------------------------------------------------
-// Augment — run a transform, merge its output back into the original input
-// ---------------------------------------------------------------------------
-
-/**
- * Run `action` on the input, then merge the action's output fields back
- * into the original input object. The action must accept exactly `TInput`.
- * Use `pick` inside the action's pipe if the inner handler needs a subset.
- *
- * Example:
- *   augment(pipe(pick("file"), migrate))
- *   // { file, outputPath } → { file, outputPath, content, migrated }
- */
-export function augment<
-  TInput extends Record<string, unknown>,
-  TOutput extends Record<string, unknown>,
->(action: Pipeable<TInput, TOutput>): TypedAction<TInput, TInput & TOutput> {
-  // Build AST directly — chain inference fails because [TOutput, TInput]
-  // doesn't match merge()'s Record<string, unknown>[] with invariance.
-  return typedAction({
-    kind: "Chain",
-    first: {
-      kind: "All",
-      actions: [action as Action, identity as Action],
-    },
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Tap — run an action for side effects, preserve original input
 // ---------------------------------------------------------------------------
 
@@ -285,8 +253,7 @@ export function augment<
  * exactly `TInput`. Use `pick` inside the action's pipe if the inner
  * handler needs a subset.
  *
- * Constraint: input must be an object (uses augment internally, which
- * relies on all + merge).
+ * Constraint: input must be an object (uses all + merge internally).
  *
  * Example:
  *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
@@ -294,9 +261,7 @@ export function augment<
 export function tap<TInput extends Record<string, unknown>>(
   action: Pipeable<TInput, any>,
 ): TypedAction<TInput, TInput> {
-  // Build AST directly — internal plumbing (action → constant → augment)
-  // can't go through typed chain/augment with invariant phantom fields.
-  // tap: all(chain(action, constant({})), identity()) → merge
+  // all(chain(action, constant({})), identity) → merge
   return typedAction({
     kind: "Chain",
     first: {

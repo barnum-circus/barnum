@@ -185,15 +185,6 @@ export type TypedAction<
   get<TField extends keyof Out & string>(
     field: TField,
   ): TypedAction<In, Out[TField], Refs>;
-  /**
-   * Run this sub-pipeline, then merge its output back into the original input.
-   * `pipe(extractField("x"), transform).augment()` takes `In`, runs the
-   * sub-pipeline to get `Out`, and returns `In & Out`.
-   *
-   * Unlike the standalone `augment()` function, the postfix form has access
-   * to `In` so the intersection types correctly.
-   */
-  augment(): TypedAction<In, In & Out, Refs>;
   /** Merge a tuple of objects into a single object. `a.merge()` ≡ `pipe(a, merge())`. */
   merge(): TypedAction<In, MergeTuple<Out>, Refs>;
   /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
@@ -437,29 +428,6 @@ function getMethod(this: TypedAction, field: string): TypedAction {
   });
 }
 
-function augmentMethod(this: TypedAction): TypedAction {
-  // Construct: All(this, identity) → Merge
-  // "this" is the sub-pipeline. augment() wraps it so the original input
-  // flows through identity alongside the sub-pipeline, then merges the results.
-  return typedAction({
-    kind: "Chain",
-    first: {
-      kind: "All",
-      actions: [
-        this as Action,
-        {
-          kind: "Invoke",
-          handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-        },
-      ],
-    },
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
-    },
-  });
-}
-
 function mergeMethod(this: TypedAction): TypedAction {
   return typedAction({
     kind: "Chain",
@@ -577,7 +545,6 @@ export function typedAction<
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
-      augment: { value: augmentMethod, configurable: true },
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },

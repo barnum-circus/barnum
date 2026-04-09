@@ -13,7 +13,6 @@ export {
   pick,
   dropResult,
   withResource,
-  augment,
   tap,
   range,
   wrapInField,
