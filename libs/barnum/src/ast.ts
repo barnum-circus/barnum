@@ -185,6 +185,10 @@ export type TypedAction<
   get<TField extends keyof Out & string>(
     field: TField,
   ): TypedAction<In, Out[TField], Refs>;
+  /** Wrap output in an object under a field name. `a.wrapInField("foo")` ≡ `pipe(a, wrapInField("foo"))`. */
+  wrapInField<TField extends string>(
+    field: TField,
+  ): TypedAction<In, Record<TField, Out>, Refs>;
   /** Merge a tuple of objects into a single object. `a.merge()` ≡ `pipe(a, merge())`. */
   merge(): TypedAction<In, MergeTuple<Out>, Refs>;
   /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
@@ -428,6 +432,20 @@ function getMethod(this: TypedAction, field: string): TypedAction {
   });
 }
 
+function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Invoke",
+      handler: {
+        kind: "Builtin",
+        builtin: { kind: "WrapInField", value: field },
+      },
+    },
+  });
+}
+
 function mergeMethod(this: TypedAction): TypedAction {
   return typedAction({
     kind: "Chain",
@@ -545,6 +563,7 @@ export function typedAction<
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
+      wrapInField: { value: wrapInFieldMethod, configurable: true },
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },
