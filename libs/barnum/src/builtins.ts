@@ -70,16 +70,87 @@ export function tag<
 // Merge — merge a tuple of objects into a single object
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type UnionToIntersection<U> = (U extends any ? (x: U) => void : never) extends (
-  x: infer I,
-) => void
-  ? I
-  : never;
+type Obj = Record<string, unknown>;
 
+export function merge<A extends Obj, B extends Obj>(): TypedAction<
+  [A, B],
+  A & B
+>;
 export function merge<
-  TObjects extends Record<string, unknown>[],
->(): TypedAction<TObjects, UnionToIntersection<TObjects[number]>> {
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+>(): TypedAction<[A, B, C], A & B & C>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+>(): TypedAction<[A, B, C, D], A & B & C & D>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+>(): TypedAction<[A, B, C, D, E], A & B & C & D & E>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+  F extends Obj,
+>(): TypedAction<[A, B, C, D, E, F], A & B & C & D & E & F>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+  F extends Obj,
+  G extends Obj,
+>(): TypedAction<[A, B, C, D, E, F, G], A & B & C & D & E & F & G>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+  F extends Obj,
+  G extends Obj,
+  H extends Obj,
+>(): TypedAction<[A, B, C, D, E, F, G, H], A & B & C & D & E & F & G & H>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+  F extends Obj,
+  G extends Obj,
+  H extends Obj,
+  I extends Obj,
+>(): TypedAction<
+  [A, B, C, D, E, F, G, H, I],
+  A & B & C & D & E & F & G & H & I
+>;
+export function merge<
+  A extends Obj,
+  B extends Obj,
+  C extends Obj,
+  D extends Obj,
+  E extends Obj,
+  F extends Obj,
+  G extends Obj,
+  H extends Obj,
+  I extends Obj,
+  J extends Obj,
+>(): TypedAction<
+  [A, B, C, D, E, F, G, H, I, J],
+  A & B & C & D & E & F & G & H & I & J
+>;
+export function merge(): Action {
   return typedAction({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Merge" } },

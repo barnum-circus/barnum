@@ -230,7 +230,7 @@ describe("builtin types", () => {
   });
 
   it("merge: [A, B] -> A & B", () => {
-    const action = merge<[{ a: number }, { b: string }]>();
+    const action = merge<{ a: number }, { b: string }>();
     assertExact<
       IsExact<ExtractInput<typeof action>, [{ a: number }, { b: string }]>
     >();
