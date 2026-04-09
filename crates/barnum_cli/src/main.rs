@@ -68,8 +68,8 @@ enum Command {
         #[arg(long)]
         worker: String,
 
-        /// Engine log verbosity. Default: warn.
-        #[arg(long, value_enum, default_value_t = LogLevel::Warn)]
+        /// Engine log verbosity. Reads `BARNUM_LOG_LEVEL` env var, or defaults to warn.
+        #[arg(long, value_enum, env = "BARNUM_LOG_LEVEL", default_value_t = LogLevel::Warn)]
         log_level: LogLevel,
     },
 }
