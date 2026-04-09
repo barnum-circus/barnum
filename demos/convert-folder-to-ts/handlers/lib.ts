@@ -9,6 +9,16 @@ export const baseDir = path.resolve(__dirname, "..");
 
 const CLAUDE_TIMEOUT_MS = 5 * 60_000; // 5 minutes
 
+// === AI Sandbox mode (used at the demo) ===
+const CLAUDE_COMMAND = "ai-sandbox";
+const CLAUDE_COMMAND_PREFIX_ARGS = ["claude"];
+
+// === Direct Claude CLI mode ===
+// If you're running Claude Code directly (not through ai-sandbox),
+// uncomment the two lines below and comment out the two above.
+// const CLAUDE_COMMAND = "claude";
+// const CLAUDE_COMMAND_PREFIX_ARGS: string[] = [];
+
 /** Spawn Claude CLI in non-interactive mode. Streams output to stderr, returns full stdout. */
 export async function callClaude(args: {
   prompt: string;
@@ -16,7 +26,7 @@ export async function callClaude(args: {
   cwd?: string;
 }): Promise<string> {
   const cliArgs = [
-    "claude",
+    ...CLAUDE_COMMAND_PREFIX_ARGS,
     "-p",
     args.prompt,
     "--output-format",
@@ -34,13 +44,13 @@ export async function callClaude(args: {
     return arg;
   }
   console.error(
-    `[callClaude] $ ai-sandbox ${cliArgs.map(shellQuote).join(" ")}`,
+    `[callClaude] $ ${CLAUDE_COMMAND} ${cliArgs.map(shellQuote).join(" ")}`,
   );
 
   return new Promise<string>((resolve, reject) => {
     let settled = false;
 
-    const child = spawn("ai-sandbox", cliArgs, {
+    const child = spawn(CLAUDE_COMMAND, cliArgs, {
       cwd: args.cwd ?? baseDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: {

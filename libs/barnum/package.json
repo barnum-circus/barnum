@@ -51,7 +51,7 @@
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"
   },
-  "dependencies": {
+  "peerDependencies": {
     "zod": "^4.3.6"
   }
 }
