@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Reference',
       items: [
+        'reference/handlers',
         'reference/builtins',
         'reference/cli',
       ],
