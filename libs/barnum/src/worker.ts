@@ -5,9 +5,19 @@
  *   Rust → stdin:  JSON `{ "value": <any> }`
  *   stdout → Rust: JSON result (handler return value)
  *
+ * stdout is reserved for the protocol. All console output is redirected to
+ * stderr so that handler code can freely use console.log for debugging.
+ *
  * If the handler throws or the module/export can't be resolved, the
  * process exits non-zero. Rust interprets that as a fatal workflow error.
  */
+
+// Redirect all console output to stderr — stdout is the protocol channel.
+// This must happen before any handler code is imported or executed.
+import { Console } from "node:console";
+
+const stderrConsole = new Console({ stdout: process.stderr });
+globalThis.console = stderrConsole;
 
 // Suppress EPIPE — when the Rust binary exits (e.g., a race was resolved),
 // orphan workers get broken pipe on stdout. This is expected, not an error.
