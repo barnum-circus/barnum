@@ -22,7 +22,7 @@ use intern::Lookup;
 use jsonschema::Validator;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 // =============================================================================
 // HandlerError
@@ -107,7 +107,7 @@ impl Scheduler {
         match handler {
             HandlerKind::Builtin(builtin_handler) => {
                 info!(task = %task_id, builtin = ?builtin_handler.builtin, "dispatching builtin handler");
-                trace!(task = %task_id, value = %dispatch_event.value, "builtin input");
+                debug!(task = %task_id, value = %dispatch_event.value, "builtin input");
                 let builtin_kind = builtin_handler.builtin.clone();
                 let value = dispatch_event.value.clone();
                 tokio::spawn(async move {
@@ -121,7 +121,7 @@ impl Scheduler {
                 let module = ts.module.lookup().to_owned();
                 let func = ts.func.lookup().to_owned();
                 info!(task = %task_id, module = %module, func = %func, "dispatching TypeScript handler");
-                trace!(task = %task_id, value = %dispatch_event.value, "handler input");
+                debug!(task = %task_id, value = %dispatch_event.value, "handler input");
                 let value = dispatch_event.value.clone();
                 let executor = self.executor.clone();
                 let worker_path = self.worker_path.clone();
@@ -310,7 +310,7 @@ pub async fn run_workflow(
 
     if let Some(terminal_value) = workflow_state.take_terminal_value() {
         info!("workflow completed");
-        trace!(value = %terminal_value, "workflow result");
+        debug!(value = %terminal_value, "workflow result");
         return Ok(terminal_value);
     }
 
@@ -361,7 +361,7 @@ pub async fn run_workflow(
                 process_restart(workflow_state, restart_event)?;
                 if let Some(terminal_value) = workflow_state.take_terminal_value() {
                     info!("workflow completed");
-                    trace!(value = %terminal_value, "workflow result");
+                    debug!(value = %terminal_value, "workflow result");
                     return Ok(terminal_value);
                 }
             }
@@ -377,7 +377,7 @@ pub async fn run_workflow(
                             func = %ts.func.lookup(),
                             "handler completed"
                         );
-                        trace!(task = %completion_event.task_id, value = %completion_event.value, "handler output");
+                        debug!(task = %completion_event.task_id, value = %completion_event.value, "handler output");
                     }
                     HandlerKind::Builtin(builtin) => {
                         info!(
@@ -385,7 +385,7 @@ pub async fn run_workflow(
                             builtin = ?builtin.builtin,
                             "builtin completed"
                         );
-                        trace!(task = %completion_event.task_id, value = %completion_event.value, "builtin output");
+                        debug!(task = %completion_event.task_id, value = %completion_event.value, "builtin output");
                     }
                 }
 
@@ -400,12 +400,12 @@ pub async fn run_workflow(
 
                 if let Some(terminal_value) = complete(workflow_state, completion_event)? {
                     info!("workflow completed");
-                    trace!(value = %terminal_value, "workflow result");
+                    debug!(value = %terminal_value, "workflow result");
                     return Ok(terminal_value);
                 }
                 if let Some(terminal_value) = workflow_state.take_terminal_value() {
                     info!("workflow completed");
-                    trace!(value = %terminal_value, "workflow result");
+                    debug!(value = %terminal_value, "workflow result");
                     return Ok(terminal_value);
                 }
             }

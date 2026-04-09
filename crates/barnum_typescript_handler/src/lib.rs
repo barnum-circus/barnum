@@ -5,7 +5,7 @@
 //! the handler result as JSON.
 
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 // =============================================================================
@@ -82,17 +82,29 @@ pub async fn execute_typescript(
     stdin.write_all(&input).await.expect("stdin write failed");
     drop(stdin);
 
+    // Stream stderr to the parent process in real-time (so handler console.log
+    // is visible), while also capturing it for error reporting on failure.
+    let mut stderr_handle = child.stderr.take().expect("no stderr");
+    let stderr_task = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = stderr_handle.read(&mut buf).await.unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            collected.extend_from_slice(&buf[..n]);
+            tokio::io::stderr().write_all(&buf[..n]).await.ok();
+        }
+        collected
+    });
+
     // Read stdout + wait for exit
     let output = child.wait_with_output().await.expect("wait failed");
+    let stderr_bytes = stderr_task.await.expect("stderr forwarding task failed");
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        // Still print stderr so it's visible in the terminal stream.
-        if !stderr.is_empty() {
-            #[expect(clippy::print_stderr)]
-            {
-                eprintln!("{stderr}");
-            }
-        }
+        let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_owned();
         return Err(TypeScriptHandlerError::SubprocessFailed {
             module: module.to_owned(),
             func: func.to_owned(),
