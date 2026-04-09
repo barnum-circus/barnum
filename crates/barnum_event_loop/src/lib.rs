@@ -106,7 +106,7 @@ impl Scheduler {
 
         match handler {
             HandlerKind::Builtin(builtin_handler) => {
-                debug!(task = %task_id, builtin = ?builtin_handler.builtin, "dispatching builtin handler");
+                info!(task = %task_id, builtin = ?builtin_handler.builtin, "dispatching builtin handler");
                 trace!(task = %task_id, value = %dispatch_event.value, "builtin input");
                 let builtin_kind = builtin_handler.builtin.clone();
                 let value = dispatch_event.value.clone();
@@ -369,7 +369,7 @@ pub async fn run_workflow(
                         trace!(task = %completion_event.task_id, value = %completion_event.value, "handler output");
                     }
                     HandlerKind::Builtin(builtin) => {
-                        debug!(
+                        info!(
                             task = %completion_event.task_id,
                             builtin = ?builtin.builtin,
                             "builtin completed"
