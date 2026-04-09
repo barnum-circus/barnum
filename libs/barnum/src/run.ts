@@ -112,9 +112,11 @@ function resolveWorker(): string {
 /** Build the barnum binary if using the local dev path. */
 function buildBinary(): void {
   const repoRoot = path.resolve(__dirname, "../../..");
+  // eslint-disable-next-line no-console
+  console.error("[barnum] building CLI binary (cargo build -p barnum_cli)...");
   execFileSync("cargo", ["build", "-p", "barnum_cli"], {
     cwd: repoRoot,
-    stdio: "ignore",
+    stdio: "inherit",
   });
 }
 
