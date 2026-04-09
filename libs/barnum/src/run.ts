@@ -156,13 +156,19 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
 
   return new Promise<TOut>((resolve, reject) => {
     const child = nodeSpawn(binaryResolution.path, cliArgs, {
-      stdio: ["inherit", "pipe", "inherit"],
+      stdio: ["inherit", "pipe", "pipe"],
     });
 
     const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
 
     child.stdout?.on("data", (chunk: Buffer) => {
       stdoutChunks.push(chunk);
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk);
+      process.stderr.write(chunk);
     });
 
     child.on("error", (error) => {
@@ -171,7 +177,9 @@ function spawnBarnum<TOut>(config: Config, logLevel?: LogLevel): Promise<TOut> {
 
     child.on("close", (code) => {
       if (code !== 0) {
-        reject(new Error(`barnum exited with code ${code}`));
+        const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+        const detail = stderr ? `\n${stderr}` : "";
+        reject(new Error(`barnum exited with code ${code}${detail}`));
         return;
       }
       const stdout = Buffer.concat(stdoutChunks).toString("utf8").trim();

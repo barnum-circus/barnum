@@ -16,8 +16,7 @@ use tokio::process::Command;
 #[derive(Debug, thiserror::Error)]
 pub enum TypeScriptHandlerError {
     /// The subprocess exited with a non-zero exit code.
-    /// Stderr is inherited (printed to terminal), not captured.
-    #[error("handler {module}:{func} failed (exit {exit_code})")]
+    #[error("handler {module}:{func} failed (exit {exit_code})\n{stderr}")]
     SubprocessFailed {
         /// Module path of the failed handler.
         module: String,
@@ -25,6 +24,8 @@ pub enum TypeScriptHandlerError {
         func: String,
         /// Process exit code.
         exit_code: i32,
+        /// Captured stderr from the failed subprocess.
+        stderr: String,
     },
     /// The subprocess returned invalid JSON on stdout.
     #[error("handler {module}:{func} returned invalid JSON: {source}")]
@@ -70,7 +71,7 @@ pub async fn execute_typescript(
         .arg(format!("{executor} {worker_path} {module} {func}"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("failed to spawn handler process");
 
@@ -84,10 +85,19 @@ pub async fn execute_typescript(
     // Read stdout + wait for exit
     let output = child.wait_with_output().await.expect("wait failed");
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        // Still print stderr so it's visible in the terminal stream.
+        if !stderr.is_empty() {
+            #[expect(clippy::print_stderr)]
+            {
+                eprintln!("{stderr}");
+            }
+        }
         return Err(TypeScriptHandlerError::SubprocessFailed {
             module: module.to_owned(),
             func: func.to_owned(),
             exit_code: output.status.code().unwrap_or(-1),
+            stderr,
         });
     }
 
