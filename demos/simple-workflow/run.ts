@@ -12,7 +12,7 @@ import {
   fixTypeErrors,
   commitChanges,
   createPullRequest,
-} from "./handlers/steps.js";
+} from "./handlers/steps";
 
 runPipeline(
   listFiles.forEach(

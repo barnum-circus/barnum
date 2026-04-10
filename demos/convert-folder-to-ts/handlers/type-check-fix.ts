@@ -14,7 +14,8 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { baseDir, callClaude } from "./lib.js";
+import { baseDir } from "./lib";
+import { callClaude } from "./call-claude";
 
 // --- Types ---
 

@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { callClaude } from "./lib.js";
+import { callClaude } from "./call-claude";
 
 // --- Types ---
 
@@ -294,8 +294,8 @@ export const applyFeedback = createHandler({
 
 // --- Pipelines ---
 
-import { typeCheckFix } from "./type-check-fix.js";
-import { createWorktree, createPR } from "./git.js";
+import { typeCheckFix } from "./type-check-fix";
+import { createWorktree, createPR } from "./git";
 
 export type ImplementAndReviewParams = Refactor & { worktreePath: string; branch: string };
 

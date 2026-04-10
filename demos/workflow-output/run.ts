@@ -9,7 +9,7 @@
  */
 
 import { runPipeline, pipe, constant } from "@barnum/barnum";
-import { double, addLabel } from "./handlers/steps.js";
+import { double, addLabel } from "./handlers/steps";
 
 async function main() {
   // 1. Constant value round-trips through the engine

@@ -11,7 +11,7 @@ import {
   analyzeClassComponents,
   analyzeImpossibleStates,
   analyzeErrorHandling,
-} from "./handlers/analyze.js";
+} from "./handlers/analyze";
 
 runPipeline(
   all(analyzeClassComponents, analyzeImpossibleStates, analyzeErrorHandling),

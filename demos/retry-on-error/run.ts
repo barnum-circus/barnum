@@ -17,7 +17,7 @@ import {
   drop,
 } from "@barnum/barnum";
 import type { TypedAction } from "@barnum/barnum";
-import { stepA, stepB, stepC, logError } from "./handlers/steps.js";
+import { stepA, stepB, stepC, logError } from "./handlers/steps";
 
 console.error("=== Retry-on-error demo ===\n");
 

@@ -7,7 +7,7 @@
 import { createHandler } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
-import { baseDir } from "./lib.js";
+import { baseDir } from "./lib";
 
 /** Run a git command in the repo root. Returns stdout. */
 function git(args: string[], cwd?: string): string {

@@ -14,8 +14,8 @@
  */
 
 import { runPipeline, pipe } from "@barnum/barnum";
-import { setup, listFiles, migrate } from "./handlers/convert.js";
-import { typeCheckFix } from "./handlers/type-check-fix.js";
+import { setup, listFiles, migrate } from "./handlers/convert";
+import { typeCheckFix } from "./handlers/type-check-fix";
 
 console.error("=== Running JS → TypeScript migration workflow ===\n");
 

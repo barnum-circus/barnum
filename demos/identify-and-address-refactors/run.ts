@@ -40,8 +40,8 @@ import {
   assessWorthiness,
   implementAndReview,
   createBranchWorktree,
-} from "./handlers/refactor.js";
-import { deleteWorktree } from "./handlers/git.js";
+} from "./handlers/refactor";
+import { deleteWorktree } from "./handlers/git";
 
 console.error("=== Running identify-and-address-refactors workflow ===\n");
 

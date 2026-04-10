@@ -13,7 +13,7 @@ import {
   runPipeline,
   defineRecursiveFunctions,
 } from "@barnum/barnum";
-import { classifyZero, subtractOne } from "./handlers/steps.js";
+import { classifyZero, subtractOne } from "./handlers/steps";
 
 runPipeline(
   defineRecursiveFunctions<[

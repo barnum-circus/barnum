@@ -31,7 +31,7 @@ import {
   fixIssues,
   landPR,
   classifyRemaining,
-} from "./handlers/steps.js";
+} from "./handlers/steps";
 
 console.error("=== Babysit PRs demo ===\n");
 console.error("Monitoring PRs: #101, #102, #103\n");
