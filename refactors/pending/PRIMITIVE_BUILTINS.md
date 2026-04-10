@@ -233,6 +233,23 @@ The Rust implementation substitutes `${field}` placeholders from the input objec
 
 Array builtins operate on `T[]`.
 
+#### Already implemented
+
+These array builtins already exist in `builtins.ts` / `BuiltinKind`:
+
+| TypeScript API | Signature | BuiltinKind |
+|---|---|---|
+| `flatten()` | `T[][] → T[]` | `{ kind: "Flatten" }` |
+| `extractIndex(n)` | `TTuple → TTuple[n]` | `{ kind: "ExtractIndex", value: n }` |
+| `range(start, end)` | `any → number[]` | Desugars to `Constant` |
+| `Option.collect()` | `Option<T>[] → T[]` | `{ kind: "CollectSome" }` |
+| `splitFirst()` | `T[] → Option<[T, T[]]>` | `{ kind: "SplitFirst" }` |
+| `splitLast()` | `T[] → Option<[T[], T]>` | `{ kind: "SplitLast" }` |
+
+`splitFirst` and `splitLast` also have postfix methods (`.splitFirst()`, `.splitLast()`) gated via `this`-parameter constraint to array-typed outputs.
+
+#### Proposed
+
 | TypeScript API | Signature | BuiltinKind |
 |---|---|---|
 | `Arr.length()` | `T[] → number` | `{ kind: "ArrayLength" }` |
@@ -250,7 +267,7 @@ Array builtins operate on `T[]`.
 | `Arr.join(sep)` | `string[] → string` | `{ kind: "Join", value: sep }` |
 | `Arr.append()` | `[T[], T[]] → T[]` | `{ kind: "ArrayAppend" }` |
 
-`Arr.first()` and `Arr.last()` panic on empty arrays — this is a Byzantine fault, same as indexing out of bounds. Use `Arr.isEmpty()` + `Bool.branch()` if the array might be empty.
+`Arr.first()` and `Arr.last()` panic on empty arrays — this is a Byzantine fault, same as indexing out of bounds. Use `splitFirst()`/`splitLast()` for safe head/tail decomposition, or `Arr.isEmpty()` + `Bool.branch()` if the array might be empty.
 
 `Arr.sortBy(field)` sorts objects by a string or number field. For simple values, `Arr.sort()` (no field) sorts by natural ordering.
 

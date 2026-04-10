@@ -76,11 +76,14 @@ Don't care. No one is using this. Break freely. No dead code.
 
 ## Typechecking
 
-Run `pnpm run typecheck` from the repo root. This typechecks the library and all demos. Run this after any code change to catch type errors early.
+Run `pnpm run typecheck --output-logs=errors-only` from the repo root. This typechecks the library and all demos. Run this after any code change to catch type errors early. The `--output-logs=errors-only` flag suppresses turbo's verbose output — it only prints if something fails.
 
 ## Tests
 
-See claude.local.md. Always run the full suite — isolated test runs are unreliable.
+- **Use `pnpm test --output-logs=errors-only` from the repo root.** This runs the full test suite via turbo (TypeScript vitest + Rust cargo test). Never run `cargo test` or `vitest` directly — always go through pnpm.
+- Always run the full suite — isolated test runs are unreliable.
+- **Suppress turbo noise.** Always pass `--output-logs=errors-only` to turbo commands (`pnpm run typecheck`, `pnpm test`, `pnpm run build`, etc.) so output is silent on success.
+- See claude.local.md for additional details.
 
 ## Commits
 
