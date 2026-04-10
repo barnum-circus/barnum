@@ -47,6 +47,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Reference',
       items: [
+        'reference/best-practices',
         'reference/handlers',
         'reference/builtins',
         'reference/cli',

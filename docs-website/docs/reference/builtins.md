@@ -2,7 +2,7 @@
 
 Barnum provides typed combinators for composing workflows. TypeScript tracks input and output types through the entire pipeline via phantom types.
 
-Every combinator is either a **standalone function** (imported from `barnum`) or a **postfix method** on `TypedAction` (chained via `.method()`), or both. The tables below note availability.
+Every combinator is either a **standalone function** (imported from `barnum`) or a **postfix method** on `TypedAction` (chained via `.method()`), or both. **When both exist, prefer the postfix form** — it infers all types from the preceding action's output, eliminating explicit type parameters. See [Best Practices](./best-practices.md) for details.
 
 ## Control flow
 
@@ -76,7 +76,7 @@ function forEach<TIn, TOut>(
 ): TypedAction<TIn[], TOut[]>
 ```
 
-**Postfix:** Yes — `.forEach(action)` on an action that outputs an array.
+**Postfix:** Yes — `.forEach(action)`. **Prefer postfix** — it infers the element type from the preceding action's array output.
 
 ```ts
 listFiles.forEach(processFile)
@@ -97,7 +97,7 @@ function branch<TCases extends Record<string, Action>>(
 
 All case handlers must produce the same output type.
 
-**Postfix:** Yes — `.branch(cases)` on an action that outputs a tagged union.
+**Postfix:** Yes — `.branch(cases)`. **Prefer postfix** — it infers variant keys and payload types from the preceding action's tagged union output.
 
 ```ts
 classify.branch({
@@ -337,12 +337,12 @@ constant("hello")
 
 ---
 
-### `identity`
+### `identity()`
 
-Pass input through unchanged. A value, not a function.
+Pass input through unchanged.
 
 ```ts
-const identity: TypedAction<any, any>
+function identity<TValue = any>(): TypedAction<TValue, TValue>
 ```
 
 **Postfix:** No.
@@ -357,7 +357,7 @@ Discard the pipeline value. Produces `never`. A value, not a function.
 const drop: TypedAction<any, never>
 ```
 
-**Postfix:** Yes — `.drop()`.
+**Postfix:** Yes — `.drop()`. **Prefer postfix** — no `pipe` wrapper needed.
 
 ```ts
 sideEffect.drop()
@@ -377,11 +377,14 @@ function tag<
 >(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>>
 ```
 
-**Postfix:** Yes — `.tag(kind)`.
+**Postfix:** Yes — `.tag(kind)`. **Prefer postfix** — it infers the full variant map from the preceding action's type context, avoiding the verbose `tag<TDef, TKind>` type parameters.
 
 ```ts
+// Standalone requires explicit type parameters
 tag<{ NeedsRefactor: FileInfo; Clean: FileInfo }, "NeedsRefactor">("NeedsRefactor")
-// Input: FileInfo → Output: TaggedUnion<{ NeedsRefactor: FileInfo; Clean: FileInfo }>
+
+// Postfix infers from context
+analyzeFile.tag("NeedsRefactor")
 ```
 
 ---
@@ -396,7 +399,7 @@ function merge<
 >(): TypedAction<TObjects, UnionToIntersection<TObjects[number]>>
 ```
 
-**Postfix:** Yes — `.merge()`.
+**Postfix:** Yes — `.merge()`. **Prefer postfix** — it infers the tuple element types from the preceding action's output.
 
 ```ts
 all(getUser, getSettings).merge()
@@ -413,7 +416,7 @@ Flatten a nested array one level.
 function flatten<TElement>(): TypedAction<TElement[][], TElement[]>
 ```
 
-**Postfix:** Yes — `.flatten()`.
+**Postfix:** Yes — `.flatten()`. **Prefer postfix** — it infers the element type from the preceding action's nested array output.
 
 ---
 
@@ -428,7 +431,7 @@ function getField<
 >(field: TField): TypedAction<TObj, TObj[TField]>
 ```
 
-**Postfix:** Yes — `.getField(field)`.
+**Postfix:** Yes — `.getField(field)`. **Prefer postfix** — it infers the object type and valid field names from the preceding action's output.
 
 ```ts
 getUserProfile.getField("email")
@@ -437,7 +440,7 @@ getUserProfile.getField("email")
 
 ---
 
-### `getIndex(index)`
+### `getIndex(index)` / `.getIndex(index)`
 
 Extract a single element from a tuple by index.
 
@@ -447,7 +450,12 @@ function getIndex<TTuple extends unknown[], TIndex extends number>(
 ): TypedAction<TTuple, TTuple[TIndex]>
 ```
 
-**Postfix:** No.
+**Postfix:** Yes — `.getIndex(index)`. **Prefer postfix** — it infers the tuple type and valid indices from the preceding action's output.
+
+```ts
+all(getUser, getSettings).getIndex(0)
+// equivalent to pipe(all(getUser, getSettings), getIndex(0))
+```
 
 ---
 
@@ -462,7 +470,7 @@ function pick<
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>>
 ```
 
-**Postfix:** Yes — `.pick(...keys)`.
+**Postfix:** Yes — `.pick(...keys)`. **Prefer postfix** — it infers the object type and valid keys from the preceding action's output.
 
 ```ts
 getUserProfile.pick("name", "email")
@@ -494,12 +502,68 @@ function augment<
 >(action: Pipeable<TInput, TOutput>): TypedAction<TInput, TInput & TOutput>
 ```
 
-**Postfix:** Yes — `.augment()` (no arguments; wraps the preceding action).
+**Postfix:** Yes — `.augment()` (no arguments; wraps the preceding action). **Prefer postfix** — it infers the input/output intersection type from the preceding action.
 
 ```ts
-augment(computeHash)
+computeHash.augment()
 // Input: { file: string } → Output: { file: string, hash: string }
 ```
+
+---
+
+### `wrapInField(field)` / `.wrapInField(field)`
+
+Wrap the input as `{ <field>: <input> }`.
+
+```ts
+function wrapInField<TField extends string, TValue>(
+  field: TField,
+): TypedAction<TValue, Record<TField, TValue>>
+```
+
+**Postfix:** Yes — `.wrapInField(field)`. **Prefer postfix** — it infers the value type from the preceding action's output.
+
+```ts
+computeHash.wrapInField("hash")
+// Input: string → Output: { hash: string }
+```
+
+---
+
+### `splitFirst()` / `.splitFirst()`
+
+Head/tail decomposition. Returns `Some([first, rest])` for non-empty arrays, `None` for empty arrays.
+
+```ts
+function splitFirst<TElement>(): TypedAction<
+  TElement[],
+  Option<[TElement, TElement[]]>
+>
+```
+
+**Postfix:** Yes — `.splitFirst()`. **Prefer postfix** — it infers the element type from the preceding action's array output.
+
+```ts
+listFiles.splitFirst().branch({
+  Some: processFirstFile,
+  None: handleEmpty,
+})
+```
+
+---
+
+### `splitLast()` / `.splitLast()`
+
+Init/last decomposition. Returns `Some([init, last])` for non-empty arrays, `None` for empty arrays.
+
+```ts
+function splitLast<TElement>(): TypedAction<
+  TElement[],
+  Option<[TElement[], TElement]>
+>
+```
+
+**Postfix:** Yes — `.splitLast()`. **Prefer postfix** — it infers the element type from the preceding action's array output.
 
 ---
 
@@ -540,8 +604,16 @@ All combinators desugar to `branch` + builtins at the AST level.
 | `Option.collect()` | `Option<T>[] → T[]` | Collect Some values, discard Nones |
 | `Option.isSome()` | `Option<T> → boolean` | Test for Some |
 | `Option.isNone()` | `Option<T> → boolean` | Test for None |
+| `Option.schema(valueSchema)` | — | Build a Zod validator for `Option<T>` |
 
-**Postfix:** `.mapOption(action)` transforms the Some value of an `Option` output.
+**Postfix:** `.mapOption(action)` transforms the Some value of an `Option` output. **Prefer postfix** — it infers `T` from the preceding action's `Option<T>` output.
+
+**Zod schemas:**
+
+```ts
+Option.schema(z.string())
+// validates: { kind: "Some", value: "hello" } | { kind: "None", value: null }
+```
 
 ---
 
@@ -567,8 +639,40 @@ All combinators desugar to `branch` + builtins at the AST level.
 | `Result.transpose()` | `Result<Option<V>, E> → Option<Result<V, E>>` | Swap Result/Option nesting |
 | `Result.isOk()` | `Result<V, E> → boolean` | Test for Ok |
 | `Result.isErr()` | `Result<V, E> → boolean` | Test for Err |
+| `Result.schema(okSchema, errSchema)` | — | Build a Zod validator for `Result<V, E>` |
 
-**Postfix:** `.mapErr(action)` transforms the Err value; `.unwrapOr(default)` extracts Ok or applies default to Err.
+**Postfix:** `.mapErr(action)` transforms the Err value; `.unwrapOr(default)` extracts Ok or applies default to Err. **Prefer postfix** — both infer `TValue` and `TError` from the preceding action's `Result<TValue, TError>` output.
+
+**Zod schemas:**
+
+```ts
+Result.schema(z.string(), z.number())
+// validates: { kind: "Ok", value: "hello" } | { kind: "Err", value: 42 }
+```
+
+---
+
+## Zod schema constructors
+
+### `taggedUnionSchema(cases)`
+
+Build a Zod schema for any `TaggedUnion<TDef>`. Each key becomes a variant; the value schema validates the `value` field. Use `z.null()` for void variants.
+
+```ts
+function taggedUnionSchema<TDef extends Record<string, z.ZodTypeAny>>(
+  cases: TDef,
+): z.ZodType<TaggedUnion<TDef>>
+```
+
+```ts
+const classifySchema = taggedUnionSchema({
+  HasErrors: z.array(errorSchema),
+  Clean: z.null(),
+});
+// validates: { kind: "HasErrors", value: [...] } | { kind: "Clean", value: null }
+```
+
+For `Option` and `Result`, use the dedicated `Option.schema()` and `Result.schema()` methods instead — they provide tighter type inference.
 
 ---
 
@@ -647,7 +751,7 @@ await runPipeline(
 
 ## Postfix method summary
 
-These methods are available on any `TypedAction` via dot-chaining:
+These methods are available on any `TypedAction` via dot-chaining. **Always prefer the postfix form** — it infers all types from the preceding action's output, eliminating explicit type parameters.
 
 | Method | Standalone equivalent | Notes |
 |---|---|---|
@@ -659,7 +763,11 @@ These methods are available on any `TypedAction` via dot-chaining:
 | `.merge()` | `chain(a, merge())` | Requires tuple-of-objects output |
 | `.flatten()` | `chain(a, flatten())` | Requires nested array output |
 | `.getField(field)` | `chain(a, getField(field))` | |
+| `.getIndex(index)` | `chain(a, getIndex(index))` | Requires tuple output |
 | `.pick(...keys)` | `chain(a, pick(...keys))` | |
+| `.wrapInField(field)` | `chain(a, wrapInField(field))` | |
+| `.splitFirst()` | `chain(a, splitFirst())` | Requires array output |
+| `.splitLast()` | `chain(a, splitLast())` | Requires array output |
 | `.augment()` | `augment(a)` | Merges output back into input |
 | `.mapOption(action)` | `chain(a, Option.map(action))` | Requires `Option` output |
 | `.mapErr(action)` | `chain(a, Result.mapErr(action))` | Requires `Result` output |
