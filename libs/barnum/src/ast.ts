@@ -187,6 +187,16 @@ export type TypedAction<
   get<TField extends keyof Out & string>(
     field: TField,
   ): TypedAction<In, Out[TField], Refs>;
+  /** Extract an element from the output tuple by index. `a.getIndex(0)` ≡ `pipe(a, extractIndex(0))`. */
+  getIndex<
+    TIn,
+    TTuple extends unknown[],
+    TIndex extends number,
+    TRefs extends string,
+  >(
+    this: TypedAction<TIn, TTuple, TRefs>,
+    index: TIndex,
+  ): TypedAction<TIn, TTuple[TIndex], TRefs>;
   /** Wrap output in an object under a field name. `a.wrapInField("foo")` ≡ `pipe(a, wrapInField("foo"))`. */
   wrapInField<TField extends string>(
     field: TField,
@@ -442,6 +452,20 @@ function getMethod(this: TypedAction, field: string): TypedAction {
   });
 }
 
+function getIndexMethod(this: TypedAction, index: number): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Invoke",
+      handler: {
+        kind: "Builtin",
+        builtin: { kind: "ExtractIndex", value: index },
+      },
+    },
+  });
+}
+
 function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
   return typedAction({
     kind: "Chain",
@@ -595,6 +619,7 @@ export function typedAction<
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
       get: { value: getMethod, configurable: true },
+      getIndex: { value: getIndexMethod, configurable: true },
       wrapInField: { value: wrapInFieldMethod, configurable: true },
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
