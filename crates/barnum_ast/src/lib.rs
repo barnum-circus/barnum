@@ -284,6 +284,12 @@ pub enum BuiltinKind {
     /// Output: `{ kind: "Some", value: [first, rest] }` for non-empty arrays,
     ///         `{ kind: "None", value: null }` for empty arrays.
     SplitFirst,
+    /// Init/last decomposition of an array.
+    ///
+    /// Input: array of values.
+    /// Output: `{ kind: "Some", value: [init, last] }` for non-empty arrays,
+    ///         `{ kind: "None", value: null }` for empty arrays.
+    SplitLast,
     /// Wrap input as `{ <field>: <input> }`.
     WrapInField {
         /// The field name (must be a JSON string).

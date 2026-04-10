@@ -149,6 +149,23 @@ pub async fn execute_builtin(
             }
         }
 
+        BuiltinKind::SplitLast => {
+            let Value::Array(items) = input else {
+                return Err(BuiltinError {
+                    builtin: "SplitLast",
+                    expected: "array",
+                    actual: input.clone(),
+                });
+            };
+            if items.is_empty() {
+                Ok(json!({ "kind": "None", "value": null }))
+            } else {
+                let last = items[items.len() - 1].clone();
+                let init = Value::Array(items[..items.len() - 1].to_vec());
+                Ok(json!({ "kind": "Some", "value": [init, last] }))
+            }
+        }
+
         BuiltinKind::CollectSome => {
             let Value::Array(items) = input else {
                 return Err(BuiltinError {
@@ -509,6 +526,38 @@ mod tests {
     #[tokio::test]
     async fn split_first_rejects_non_array() {
         let result = execute_builtin(&BuiltinKind::SplitFirst, &json!("not array")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn split_last_non_empty() {
+        let input = json!([1, 2, 3]);
+        let result = execute_builtin(&BuiltinKind::SplitLast, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Some", "value": [[1, 2], 3]})
+        );
+    }
+
+    #[tokio::test]
+    async fn split_last_single_element() {
+        let input = json!(["only"]);
+        let result = execute_builtin(&BuiltinKind::SplitLast, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Some", "value": [[], "only"]})
+        );
+    }
+
+    #[tokio::test]
+    async fn split_last_empty() {
+        let result = execute_builtin(&BuiltinKind::SplitLast, &json!([])).await;
+        assert_eq!(result.unwrap(), json!({"kind": "None", "value": null}));
+    }
+
+    #[tokio::test]
+    async fn split_last_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::SplitLast, &json!("not array")).await;
         assert!(result.is_err());
     }
 

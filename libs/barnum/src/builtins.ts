@@ -343,6 +343,30 @@ export function splitFirst<TElement>(): TypedAction<
 }
 
 // ---------------------------------------------------------------------------
+// SplitLast — init/last decomposition of an array
+// ---------------------------------------------------------------------------
+
+/**
+ * Deconstruct an array into the leading elements and the last element.
+ * `TElement[] → Option<[TElement[], TElement]>`
+ *
+ * Returns `Some([init, last])` for non-empty arrays, `None` for empty arrays.
+ * Mirror of `splitFirst` — enables processing from the tail end.
+ *
+ * This is a builtin (SplitLast) because it requires array-length branching
+ * that can't be composed from existing AST nodes.
+ */
+export function splitLast<TElement>(): TypedAction<
+  TElement[],
+  OptionT<[TElement[], TElement]>
+> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Option namespace — combinators for Option<T> tagged unions
 // ---------------------------------------------------------------------------
 

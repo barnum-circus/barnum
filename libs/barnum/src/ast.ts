@@ -96,6 +96,7 @@ export type BuiltinKind =
   | { kind: "Pick"; value: string[] }
   | { kind: "CollectSome" }
   | { kind: "SplitFirst" }
+  | { kind: "SplitLast" }
   | { kind: "WrapInField"; value: string }
   | { kind: "Sleep"; value: number };
 
@@ -196,6 +197,14 @@ export type TypedAction<
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
   ): TypedAction<In, Pick<Out, TKeys[number]>, Refs>;
+  /** Head/tail decomposition. Only callable when Out is TElement[]. */
+  splitFirst<TIn, TElement, TRefs extends string>(
+    this: TypedAction<TIn, TElement[], TRefs>,
+  ): TypedAction<TIn, Option<[TElement, TElement[]]>, TRefs>;
+  /** Init/last decomposition. Only callable when Out is TElement[]. */
+  splitLast<TIn, TElement, TRefs extends string>(
+    this: TypedAction<TIn, TElement[], TRefs>,
+  ): TypedAction<TIn, Option<[TElement[], TElement]>, TRefs>;
   /**
    * Transform the Some value inside an Option output. Only callable when
    * Out is Option<T>. Uses `this` parameter constraint to gate availability.
@@ -469,6 +478,28 @@ function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
   });
 }
 
+function splitFirstMethod(this: TypedAction): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
+    },
+  });
+}
+
+function splitLastMethod(this: TypedAction): TypedAction {
+  return typedAction({
+    kind: "Chain",
+    first: this,
+    rest: {
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
+    },
+  });
+}
+
 function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
   // Desugars to: self.then(branch({ Some: pipe(action, tag("Some")), None: tag("None") }))
   // But branch auto-unwraps value, so:
@@ -567,6 +598,8 @@ export function typedAction<
       wrapInField: { value: wrapInFieldMethod, configurable: true },
       merge: { value: mergeMethod, configurable: true },
       pick: { value: pickMethod, configurable: true },
+      splitFirst: { value: splitFirstMethod, configurable: true },
+      splitLast: { value: splitLastMethod, configurable: true },
       mapOption: { value: mapOptionMethod, configurable: true },
       mapErr: { value: mapErrMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },

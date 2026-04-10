@@ -16,6 +16,7 @@ export {
   tap,
   range,
   splitFirst,
+  splitLast,
   wrapInField,
   Option,
   Result,
