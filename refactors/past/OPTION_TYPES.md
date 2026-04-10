@@ -209,7 +209,7 @@ These operate on `Option<T>[]`. Cannot be postfix — see note above.
 Option.collect<T>(): TypedAction<Option<T>[], T[]>
 ```
 
-Drop `None` values, unwrap `Some` values. New **builtin handler** (`CollectSome`), same category as `Flatten`/`ExtractField`/`Tag`. Pure data transformation, no AST changes.
+Drop `None` values, unwrap `Some` values. New **builtin handler** (`CollectSome`), same category as `Flatten`/`GetField`/`Tag`. Pure data transformation, no AST changes.
 
 ### `Option.filterMap` — map + collect
 

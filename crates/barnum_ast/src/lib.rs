@@ -255,12 +255,12 @@ pub enum BuiltinKind {
     /// Flatten a nested array one level.
     Flatten,
     /// Extract a named field from an object.
-    ExtractField {
+    GetField {
         /// The field name to extract (must be a JSON string).
         value: Value,
     },
     /// Extract an element from an array by index.
-    ExtractIndex {
+    GetIndex {
         /// The zero-based index to extract (must be a JSON number).
         value: Value,
     },

@@ -169,9 +169,9 @@ describe("loop", () => {
     // RestartHandle body: Branch with Continue/Break cases
     expect(chain.rest.body.kind).toBe("Branch");
     expect(Object.keys(chain.rest.body.cases).toSorted()).toEqual(["Break", "Continue"]);
-    // RestartHandle handler: Invoke(ExtractIndex(0))
+    // RestartHandle handler: Invoke(GetIndex(0))
     expect(chain.rest.handler.kind).toBe("Invoke");
-    expect(chain.rest.handler.handler.builtin.kind).toBe("ExtractIndex");
+    expect(chain.rest.handler.handler.builtin.kind).toBe("GetIndex");
     expect(chain.rest.handler.handler.builtin.value).toBe(0);
   });
 
@@ -241,13 +241,13 @@ describe("postfix operators", () => {
     expect(chain.rest.handler.builtin.value).toBe("Ok");
   });
 
-  it(".get() produces Chain → ExtractField AST", () => {
-    const action = setup.get("project");
+  it(".getField() produces Chain → GetField AST", () => {
+    const action = setup.getField("project");
     expect(action.kind).toBe("Chain");
     const chain = action as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Invoke");
     expect(chain.rest.kind).toBe("Invoke");
-    expect(chain.rest.handler.builtin.kind).toBe("ExtractField");
+    expect(chain.rest.handler.builtin.kind).toBe("GetField");
     expect(chain.rest.handler.builtin.value).toBe("project");
   });
 
@@ -298,12 +298,12 @@ describe("Option namespace", () => {
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
-    // Some case: ExtractField("value") → Chain(verify, Tag("Some"))
+    // Some case: GetField("value") → Chain(verify, Tag("Some"))
     const someCase = branchNode.cases["Some"];
     expect(someCase.kind).toBe("Chain");
-    expect(someCase.first.handler.builtin.kind).toBe("ExtractField");
+    expect(someCase.first.handler.builtin.kind).toBe("GetField");
     expect(someCase.rest.kind).toBe("Chain");
-    // None case: ExtractField("value") → Tag("None")
+    // None case: GetField("value") → Tag("None")
     const noneCase = branchNode.cases["None"];
     expect(noneCase.kind).toBe("Chain");
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
@@ -315,11 +315,11 @@ describe("Option namespace", () => {
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
-    // Some case: ExtractField("value") → Chain(verify, Tag("Some"))
+    // Some case: GetField("value") → Chain(verify, Tag("Some"))
     const someCase = branchNode.cases["Some"];
     expect(someCase.kind).toBe("Chain");
-    expect(someCase.first.handler.builtin.kind).toBe("ExtractField");
-    // None case: ExtractField("value") → Tag("None")
+    expect(someCase.first.handler.builtin.kind).toBe("GetField");
+    // None case: GetField("value") → Tag("None")
     const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
     expect(noneCase.rest.handler.builtin.value).toBe("None");
@@ -329,10 +329,10 @@ describe("Option namespace", () => {
     const action = O.unwrapOr(constant("fallback"));
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
-    // Some case: ExtractField("value") → Identity
+    // Some case: GetField("value") → Identity
     const someCase = branchNode.cases["Some"];
     expect(someCase.rest.handler.builtin.kind).toBe("Identity");
-    // None case: ExtractField("value") → Chain(Drop, Constant("fallback"))
+    // None case: GetField("value") → Chain(Drop, Constant("fallback"))
     const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.kind).toBe("Chain");
     expect(noneCase.rest.first.handler.builtin.kind).toBe("Drop");
@@ -432,7 +432,7 @@ describe("bind", () => {
     resetEffectIdCounter();
   });
 
-  it("single binding produces Chain(All(..., Identity), ResumeHandle(readVar, Chain(ExtractIndex, body)))", () => {
+  it("single binding produces Chain(All(..., Identity), ResumeHandle(readVar, Chain(GetIndex, body)))", () => {
     const exprA = constant(42);
     const bodyAction = identity;
     const result = bind([exprA], ([_a]) => bodyAction);
@@ -452,22 +452,22 @@ describe("bind", () => {
     const handle = outer.rest as { kind: "ResumeHandle"; resume_handler_id: number; handler: any; body: any };
     expect(typeof handle.resume_handler_id).toBe("number");
 
-    // ResumeHandle handler: readVar(0) = All(Chain(ExtractIndex(1), ExtractIndex(0)), ExtractIndex(1))
+    // ResumeHandle handler: readVar(0) = All(Chain(GetIndex(1), GetIndex(0)), GetIndex(1))
     expect(handle.handler.kind).toBe("All");
     expect(handle.handler.actions).toHaveLength(2);
-    // First action: Chain(ExtractIndex(1), ExtractIndex(0))
+    // First action: Chain(GetIndex(1), GetIndex(0))
     expect(handle.handler.actions[0].kind).toBe("Chain");
-    expect(handle.handler.actions[0].first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.actions[0].first.handler.builtin.kind).toBe("GetIndex");
     expect(handle.handler.actions[0].first.handler.builtin.value).toBe(1);
-    expect(handle.handler.actions[0].rest.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.handler.actions[0].rest.handler.builtin.kind).toBe("GetIndex");
     expect(handle.handler.actions[0].rest.handler.builtin.value).toBe(0);
-    // Second action: ExtractIndex(1)
-    expect(handle.handler.actions[1].handler.builtin.kind).toBe("ExtractIndex");
+    // Second action: GetIndex(1)
+    expect(handle.handler.actions[1].handler.builtin.kind).toBe("GetIndex");
     expect(handle.handler.actions[1].handler.builtin.value).toBe(1);
 
-    // ResumeHandle body: Chain(ExtractIndex(1), bodyAction)
+    // ResumeHandle body: Chain(GetIndex(1), bodyAction)
     expect(handle.body.kind).toBe("Chain");
-    expect(handle.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
     expect(handle.body.first.handler.builtin.value).toBe(1);
   });
 
@@ -498,9 +498,9 @@ describe("bind", () => {
     expect(handle0.handler.actions[0].rest.handler.builtin.value).toBe(0);
     expect(handle1.handler.actions[0].rest.handler.builtin.value).toBe(1);
 
-    // Innermost body: Chain(ExtractIndex(2), bodyAction) — pipeline_input at index 2
+    // Innermost body: Chain(GetIndex(2), bodyAction) — pipeline_input at index 2
     expect(handle1.body.kind).toBe("Chain");
-    expect(handle1.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle1.body.first.handler.builtin.kind).toBe("GetIndex");
     expect(handle1.body.first.handler.builtin.value).toBe(2);
   });
 
@@ -538,7 +538,7 @@ describe("bind", () => {
     expect(ref1.resume_handler_id).not.toBe(ref2.resume_handler_id);
   });
 
-  it("readVar(n) structure is All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))", () => {
+  it("readVar(n) structure is All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
@@ -554,16 +554,16 @@ describe("bind", () => {
       const handler = handle.handler;
       expect(handler.kind).toBe("All");
       expect(handler.actions).toHaveLength(2);
-      // First action: Chain(ExtractIndex(1), ExtractIndex(n))
+      // First action: Chain(GetIndex(1), GetIndex(n))
       const chainAction = handler.actions[0];
       expect(chainAction.kind).toBe("Chain");
-      expect(chainAction.first.handler.builtin.kind).toBe("ExtractIndex");
+      expect(chainAction.first.handler.builtin.kind).toBe("GetIndex");
       expect(chainAction.first.handler.builtin.value).toBe(1);
-      expect(chainAction.rest.handler.builtin.kind).toBe("ExtractIndex");
+      expect(chainAction.rest.handler.builtin.kind).toBe("GetIndex");
       expect(chainAction.rest.handler.builtin.value).toBe(expectedIndex);
-      // Second action: ExtractIndex(1)
+      // Second action: GetIndex(1)
       const extractAction = handler.actions[1];
-      expect(extractAction.handler.builtin.kind).toBe("ExtractIndex");
+      expect(extractAction.handler.builtin.kind).toBe("GetIndex");
       expect(extractAction.handler.builtin.value).toBe(1);
     }
   });
@@ -591,9 +591,9 @@ describe("bindInput", () => {
     expect(outer.rest.kind).toBe("ResumeHandle");
     const handle = outer.rest;
 
-    // Handle body: Chain(ExtractIndex(1), Chain(Drop, bodyAction))
+    // Handle body: Chain(GetIndex(1), Chain(Drop, bodyAction))
     expect(handle.body.kind).toBe("Chain");
-    expect(handle.body.first.handler.builtin.kind).toBe("ExtractIndex");
+    expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
     expect(handle.body.first.handler.builtin.value).toBe(1);
 
     // The rest of the body is Chain(Drop, bodyAction)
@@ -642,12 +642,12 @@ describe("Result combinators", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
           rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } } },
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
           rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } },
         },
       },
@@ -661,12 +661,12 @@ describe("Result combinators", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
           rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
           rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
         },
       },

@@ -30,7 +30,7 @@ This is the first effect where the continuation is not resolved within a single 
 // User writes:
 pipe(
   createPR,
-  pause({ event: "pr-approved", key: extractField("prUrl") }),
+  pause({ event: "pr-approved", key: getField("prUrl") }),
   deploy,
 )
 

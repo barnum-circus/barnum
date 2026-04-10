@@ -5,7 +5,7 @@
 
 ## Motivation
 
-Builtins are pure synchronous data transformations (`Constant`, `Identity`, `ExtractField`, `Tag`, etc.). They have no I/O, no async, no side effects. Despite this, the engine models them identically to TypeScript subprocess handlers: `advance` creates an Invoke frame, assigns a TaskId, pushes a DispatchEvent onto the pending effects queue, and waits for an external caller to execute the builtin and deliver a CompletionEvent back through `complete()`.
+Builtins are pure synchronous data transformations (`Constant`, `Identity`, `GetField`, `Tag`, etc.). They have no I/O, no async, no side effects. Despite this, the engine models them identically to TypeScript subprocess handlers: `advance` creates an Invoke frame, assigns a TaskId, pushes a DispatchEvent onto the pending effects queue, and waits for an external caller to execute the builtin and deliver a CompletionEvent back through `complete()`.
 
 This forces two execution models:
 

@@ -84,7 +84,7 @@ pipe(
   loop(
     pipe(
       augment(pipe(
-        extractField("attempt"),
+        getField("attempt"),
         increment,
       )),
       // ... this gets ugly fast

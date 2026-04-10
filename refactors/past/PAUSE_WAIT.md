@@ -178,7 +178,7 @@ loop(
       Ok: done(),          // receives success value, breaks the loop
       Err: pipe(
         computeBackoff(),  // receives error value, produces { delayMs: number }
-        extractField("delayMs"),
+        getField("delayMs"),
         delay(???),        // dynamic duration — see open question
         recur(),           // Continue the loop
       ),

@@ -2,7 +2,7 @@
 
 ## Motivation
 
-`bind` and `bindInput` are standalone functions today. Every other major combinator has a postfix form on TypedAction (`.then()`, `.branch()`, `.forEach()`, `.flatten()`, `.drop()`, `.get()`, `.pick()`, `.mapOption()`). A postfix `.bind()` and `.bindInput()` would complete the pattern:
+`bind` and `bindInput` are standalone functions today. Every other major combinator has a postfix form on TypedAction (`.then()`, `.branch()`, `.forEach()`, `.flatten()`, `.drop()`, `.getField()`, `.pick()`, `.mapOption()`). A postfix `.bind()` and `.bindInput()` would complete the pattern:
 
 ```ts
 // Today
@@ -98,7 +98,7 @@ The barrel export must import bind.ts so registration runs before any user code.
 
 ### Option B: Inline AST construction
 
-The postfix methods construct the bind AST directly, without calling the standalone `bind()`. They duplicate the Handle/All/ExtractIndex assembly.
+The postfix methods construct the bind AST directly, without calling the standalone `bind()`. They duplicate the Handle/All/GetIndex assembly.
 
 ```ts
 // Inside typedAction():

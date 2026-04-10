@@ -19,7 +19,7 @@ ResumeHandle(invokeEffect,
 
 The Perform payload is `{ handler_id, value }`. The root handler is the syscall boundary. Invoke and resume Perform have identical semantics: send a value out, get a value back, continue. The only difference is that Invoke statically names its handler (HandlerId in the flat table) while Perform carries the handler identity in its payload. The flattener would pack the HandlerId into the Perform payload at compile time.
 
-What we gain: a unified model. "Getting a value from somewhere" is always Perform. Whether "somewhere" is a resume handler's state (bind), a Rust builtin (extractField), or an external TypeScript process (current Invoke), it's the same mechanism. The root handler is the interpreter for external effects.
+What we gain: a unified model. "Getting a value from somewhere" is always Perform. Whether "somewhere" is a resume handler's state (bind), a Rust builtin (getField), or an external TypeScript process (current Invoke), it's the same mechanism. The root handler is the interpreter for external effects.
 
 What we lose: nothing significant. Dispatch overhead is one frame-tree walk per Invoke, but the root Handle is the outermost frame, so the walk is O(depth) where depth is the number of nested Handles.
 
@@ -197,7 +197,7 @@ The Handle frame would:
 2. Run the body -- `resource.get()` is a resume Perform that reads from state
 3. On body completion OR on body teardown (Break from an outer restart handler), run `dispose`
 
-Step 3 is the RAII guarantee: cleanup runs regardless of exit path. The current `withResource` combinator (in builtins.ts) desugars to a chain of All + Merge + extractIndex, which doesn't handle the teardown-on-Break case. A resume handler with a cleanup action would handle it naturally because the Handle frame's teardown hook fires whenever the frame is removed.
+Step 3 is the RAII guarantee: cleanup runs regardless of exit path. The current `withResource` combinator (in builtins.ts) desugars to a chain of All + Merge + getIndex, which doesn't handle the teardown-on-Break case. A resume handler with a cleanup action would handle it naturally because the Handle frame's teardown hook fires whenever the frame is removed.
 
 This would require an optional `on_teardown: ActionId` on HandleFrame that the engine advances (with the state as input) during `teardown_body` or when the Handle frame itself is removed.
 

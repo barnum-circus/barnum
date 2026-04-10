@@ -10,7 +10,7 @@ Pre-refactor: rewrite tryCatch and race to use restart+Branch instead of Discard
 
 ```ts
 // throwError = Perform(effectId)
-// handler = Chain(ExtractField("payload"), Chain(recovery, Tag("Discard")))
+// handler = Chain(GetField("payload"), Chain(recovery, Tag("Discard")))
 Handle(effectId, body, handler)
 ```
 
@@ -32,7 +32,7 @@ Need a generalized version of `buildLoopAction` that accepts a custom Break arm 
 
 ```ts
 // Each branch: Chain(action, Perform(effectId))
-// Handler: Chain(ExtractField("payload"), Tag("Discard"))
+// Handler: Chain(GetField("payload"), Tag("Discard"))
 Handle(effectId, All(branches...), handler)
 ```
 

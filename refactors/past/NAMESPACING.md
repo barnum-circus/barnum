@@ -27,8 +27,8 @@ Everything is currently a flat top-level export. Full inventory:
 | `done()` | `builtins.ts` | `Tag("Break")` | Loop break signal |
 | `merge()` | `builtins.ts` | `Merge` | Merge tuple of objects |
 | `flatten()` | `builtins.ts` | `Flatten` | Flatten nested array |
-| `extractField(field)` | `builtins.ts` | `ExtractField` | Get object field |
-| `extractIndex(index)` | `builtins.ts` | `ExtractIndex` | Get array element |
+| `getField(field)` | `builtins.ts` | `GetField` | Get object field |
+| `getIndex(index)` | `builtins.ts` | `GetIndex` | Get array element |
 | `pick(...keys)` | `builtins.ts` | `Pick` | Select object fields |
 
 ### TypeScript-only combinators (compose AST, no dedicated node)
@@ -43,7 +43,7 @@ Everything is currently a flat top-level export. Full inventory:
 
 ### Postfix methods on TypedAction
 
-`.then()`, `.forEach()`, `.branch()`, `.flatten()`, `.drop()`, `.tag()`, `.get()`, `.augment()`, `.pick()`
+`.then()`, `.forEach()`, `.branch()`, `.flatten()`, `.drop()`, `.tag()`, `.getField()`, `.augment()`, `.pick()`
 
 ## What should be namespaced?
 
@@ -81,23 +81,23 @@ Long-term: remove top-level `recur`/`done` entirely. They only make sense inside
 
 #### Object operations → namespace?
 
-`extractField`, `pick`, `merge`, `augment` are all object data-shaping operations. Could live under an `Obj` or `Object` namespace:
+`getField`, `pick`, `merge`, `augment` are all object data-shaping operations. Could live under an `Obj` or `Object` namespace:
 
 ```ts
 // Before:
-pipe(extractField("name"), pick("first", "last"))
+pipe(getField("name"), pick("first", "last"))
 
 // After:
-pipe(Obj.get("name"), Obj.pick("first", "last"))
+pipe(Obj.getField("name"), Obj.pick("first", "last"))
 ```
 
-**Probably not worth it.** These are used constantly and would add verbosity for no clarity. `extractField("name")` is already unambiguous. The postfix forms (`.get()`, `.pick()`, `.augment()`) are even clearer.
+**Probably not worth it.** These are used constantly and would add verbosity for no clarity. `getField("name")` is already unambiguous. The postfix forms (`.getField()`, `.pick()`, `.augment()`) are even clearer.
 
 Exception: `merge()` is confusing as a top-level name. What does it merge? It takes a tuple of objects from `parallel()`. Could argue it belongs under a `Tuple` namespace or just stays as-is since it's rarely used directly (postfix `.augment()` is the common pattern).
 
 #### Array operations → namespace?
 
-`flatten`, `forEach`, `extractIndex` plus future `take`, `skip`, `enumerate`, `count`.
+`flatten`, `forEach`, `getIndex` plus future `take`, `skip`, `enumerate`, `count`.
 
 ```ts
 // Hypothetical:
@@ -137,12 +137,12 @@ These are the primitives everyone learns first. They should be the shortest impo
 ### Top-level but could deprecate
 
 ```ts
-import { tag, extractField, extractIndex, pick, merge, flatten } from "@barnum/barnum";
+import { tag, getField, getIndex, pick, merge, flatten } from "@barnum/barnum";
 ```
 
 These are builtin handlers exposed directly. They work fine as top-level. `tag` is the generic escape hatch for ad-hoc unions. The rest are data-shaping utilities.
 
-Rename `extractField` → `get` for consistency with postfix `.get()`. This is already proposed in POSTFIX_OPERATORS.md.
+Rename `getField` → `get` for consistency with postfix `.getField()`. This is already proposed in POSTFIX_OPERATORS.md.
 
 ### Top-level composition patterns
 
@@ -184,7 +184,7 @@ These are the only ones that clearly belong in a namespace. Everything else is f
 
 ## Postfix methods: namespace interaction
 
-Postfix methods on TypedAction (`.branch()`, `.get()`, `.drop()`, etc.) are always available regardless of namespacing. They're the preferred API for chaining.
+Postfix methods on TypedAction (`.branch()`, `.getField()`, `.drop()`, etc.) are always available regardless of namespacing. They're the preferred API for chaining.
 
 Option/Result/LoopResult-specific postfix methods (`.mapOption()`, `.unwrapOr()`, etc.) are gated by `this` constraints and only visible when `Out` matches the expected type.
 

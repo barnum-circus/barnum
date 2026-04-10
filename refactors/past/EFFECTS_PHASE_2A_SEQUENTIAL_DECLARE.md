@@ -68,16 +68,16 @@ bind([
 
 // Pseudo-AST notation (same as Phase 2):
 //   Handle(effectId, handler, body)
-//   readVar(n) = Chain(ExtractField("state"), ExtractIndex(n), Tag("Resume"))
+//   readVar(n) = Chain(GetField("state"), GetIndex(n), Tag("Resume"))
 
 // Compiles to:
 Chain(
   All(exprA, Identity),                                            // → [valA, pipeline_input]
   Handle(effectId_a, readVar(0),
     Chain(
-      All(Chain(ExtractIndex(1), exprB_using_a), Identity),        // → [valB, [valA, pipeline_input]]
+      All(Chain(GetIndex(1), exprB_using_a), Identity),        // → [valB, [valA, pipeline_input]]
       Handle(effectId_b, readVar(0),
-        Chain(ExtractIndex(1), Chain(ExtractIndex(1), body))        // body gets pipeline_input
+        Chain(GetIndex(1), Chain(GetIndex(1), body))        // body gets pipeline_input
       )
     )
   )

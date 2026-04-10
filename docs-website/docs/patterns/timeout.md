@@ -37,8 +37,8 @@ The timeout duration doesn't have to be constant. It can come from the pipeline:
 pipe(
   getConfig,                           // { timeout: 10000, ... }
   withTimeout(
-    extractField("timeout"),           // extract the timeout from the config
-    extractField("payload").then(work) // extract the payload and process it
+    getField("timeout"),           // extract the timeout from the config
+    getField("payload").then(work) // extract the payload and process it
   ),
 )
 ```

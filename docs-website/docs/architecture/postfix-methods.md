@@ -200,7 +200,7 @@ Each postfix method transforms the type signature in a specific way:
 | `.branch(cases)` | preserved | union of case outputs | |
 | `.drop()` | preserved | `never` | |
 | `.tag(kind)` | preserved | `TaggedUnion<TDef>` | |
-| `.get(field)` | preserved | `Out[TField]` | |
+| `.getField(field)` | preserved | `Out[TField]` | |
 | `.pick(...keys)` | preserved | `Pick<Out, TKeys>` | |
 | `.flatten()` | preserved | `T[][]` → `T[]` | conditional type |
 | `.merge()` | preserved | `MergeTuple<Out>` | |

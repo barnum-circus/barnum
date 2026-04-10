@@ -45,7 +45,7 @@ Option 2 works as documentation but has no type-level effect. TypeScript will di
 The real problem isn't `never` vs `void` vs a symbol — it's that `pipe()` can't propagate type context backwards through generic arguments. When you write `pipe(get(), someAction)`, TypeScript resolves `get()`'s output type first, then checks if it matches `someAction`'s input. This works. But when `get()` appears in a position where its input type should be inferred from context (e.g., as the second argument in a pipe where the first argument's output is known), the backwards propagation doesn't happen for invariant types.
 
 No choice of input type fixes this. The fix is either:
-1. Postfix methods (`.then()`, `.get()`) where `this` provides the type context
+1. Postfix methods (`.then()`, `.getField()`) where `this` provides the type context
 2. Explicit type annotations at call sites
 3. HOAS patterns where the callback provides the typed tokens
 

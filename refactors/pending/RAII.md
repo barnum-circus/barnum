@@ -2,7 +2,7 @@
 
 ## Motivation
 
-`withResource` currently handles the create/use/dispose pattern as a combinator — a TypeScript function that desugars into `all + merge + extractIndex` nodes. It works, but it's a complex encoding of a simple idea: "run cleanup when this scope exits."
+`withResource` currently handles the create/use/dispose pattern as a combinator — a TypeScript function that desugars into `all + merge + getIndex` nodes. It works, but it's a complex encoding of a simple idea: "run cleanup when this scope exits."
 
 What if RAII were a first-class AST primitive instead of a combinator-level encoding? What if handlers themselves could declare cleanup behavior?
 
@@ -17,7 +17,7 @@ TIn → all(create, identity) → merge → action → all(extractResult, dispos
 This encoding has several properties:
 - Dispose runs after action completes successfully
 - Dispose does NOT run if action fails (no error handling yet)
-- The encoding is complex: 4 intermediate steps, multiple all nodes, extractIndex gymnastics
+- The encoding is complex: 4 intermediate steps, multiple all nodes, getIndex gymnastics
 - Every user of RAII pays this AST complexity tax
 
 ## Proposal: RAII as an AST node
@@ -39,7 +39,7 @@ The scheduler handles the create/merge/action/dispose lifecycle internally. Disp
 
 This is what `withResource` already does, but as a scheduler primitive instead of a combinator encoding. The benefits:
 
-1. **Simpler AST**: One node instead of nested Chain/All/Merge/ExtractIndex
+1. **Simpler AST**: One node instead of nested Chain/All/Merge/GetIndex
 2. **Guaranteed cleanup**: The scheduler can enforce dispose-on-exit, including on error paths
 3. **Debuggability**: The scheduler sees "WithResource" in the frame tree, not an opaque chain of all+extract nodes
 4. **Optimization**: The scheduler can special-case the lifecycle instead of executing the generic all/merge machinery

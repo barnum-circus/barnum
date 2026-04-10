@@ -87,17 +87,17 @@ pub async fn execute_builtin(
             Ok(Value::Array(result))
         }
 
-        BuiltinKind::ExtractField { value: field } => {
+        BuiltinKind::GetField { value: field } => {
             let Value::String(field_name) = field else {
                 return Err(BuiltinError {
-                    builtin: "ExtractField",
+                    builtin: "GetField",
                     expected: "string field name",
                     actual: field.clone(),
                 });
             };
             let Value::Object(obj) = input else {
                 return Err(BuiltinError {
-                    builtin: "ExtractField",
+                    builtin: "GetField",
                     expected: "object",
                     actual: input.clone(),
                 });
@@ -105,23 +105,23 @@ pub async fn execute_builtin(
             Ok(obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null))
         }
 
-        BuiltinKind::ExtractIndex { value: index } => {
+        BuiltinKind::GetIndex { value: index } => {
             let Some(index_number) = index.as_u64() else {
                 return Err(BuiltinError {
-                    builtin: "ExtractIndex",
+                    builtin: "GetIndex",
                     expected: "non-negative integer index",
                     actual: index.clone(),
                 });
             };
             let Value::Array(arr) = input else {
                 return Err(BuiltinError {
-                    builtin: "ExtractIndex",
+                    builtin: "GetIndex",
                     expected: "array",
                     actual: input.clone(),
                 });
             };
             let index = usize::try_from(index_number).map_err(|_| BuiltinError {
-                builtin: "ExtractIndex",
+                builtin: "GetIndex",
                 expected: "index within usize range",
                 actual: index.clone(),
             })?;
@@ -323,10 +323,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_field_gets_value() {
+    async fn get_field_gets_value() {
         let input = json!({"name": "Alice", "age": 30});
         let result = execute_builtin(
-            &BuiltinKind::ExtractField {
+            &BuiltinKind::GetField {
                 value: json!("name"),
             },
             &input,
@@ -336,10 +336,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_field_missing_returns_null() {
+    async fn get_field_missing_returns_null() {
         let input = json!({"name": "Alice"});
         let result = execute_builtin(
-            &BuiltinKind::ExtractField {
+            &BuiltinKind::GetField {
                 value: json!("missing"),
             },
             &input,
@@ -349,9 +349,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_field_rejects_non_object() {
+    async fn get_field_rejects_non_object() {
         let result = execute_builtin(
-            &BuiltinKind::ExtractField {
+            &BuiltinKind::GetField {
                 value: json!("field"),
             },
             &json!("not object"),
@@ -361,23 +361,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_index_gets_value() {
+    async fn get_index_gets_value() {
         let input = json!(["a", "b", "c"]);
-        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(1) }, &input).await;
+        let result = execute_builtin(&BuiltinKind::GetIndex { value: json!(1) }, &input).await;
         assert_eq!(result.unwrap(), json!("b"));
     }
 
     #[tokio::test]
-    async fn extract_index_out_of_bounds_returns_null() {
+    async fn get_index_out_of_bounds_returns_null() {
         let input = json!(["a"]);
-        let result = execute_builtin(&BuiltinKind::ExtractIndex { value: json!(5) }, &input).await;
+        let result = execute_builtin(&BuiltinKind::GetIndex { value: json!(5) }, &input).await;
         assert_eq!(result.unwrap(), Value::Null);
     }
 
     #[tokio::test]
-    async fn extract_index_rejects_non_array() {
+    async fn get_index_rejects_non_array() {
         let result = execute_builtin(
-            &BuiltinKind::ExtractIndex { value: json!(0) },
+            &BuiltinKind::GetIndex { value: json!(0) },
             &json!("not array"),
         )
         .await;
@@ -385,9 +385,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn extract_index_rejects_non_integer() {
+    async fn get_index_rejects_non_integer() {
         let result = execute_builtin(
-            &BuiltinKind::ExtractIndex {
+            &BuiltinKind::GetIndex {
                 value: json!("bad"),
             },
             &json!([1, 2]),

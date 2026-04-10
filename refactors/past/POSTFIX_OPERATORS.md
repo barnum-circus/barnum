@@ -28,7 +28,7 @@ A postfix operator should NOT:
 
 ```ts
 classifyErrors.branch({
-  HasErrors: pipe(extractField("errors"), fix),
+  HasErrors: pipe(getField("errors"), fix),
   Clean: drop(),
 })
 // equivalent to: pipe(classifyErrors, branch({ HasErrors: ..., Clean: ... }))
@@ -59,14 +59,14 @@ value.tag("Ok")
 // equivalent to: pipe(value, tag("Ok"))
 ```
 
-### `.get(field)` — extract field from output
+### `.getField(field)` — extract field from output
 
 ```ts
-handler.get("name")
-// equivalent to: pipe(handler, extractField("name"))
+handler.getField("name")
+// equivalent to: pipe(handler, getField("name"))
 ```
 
-Renamed from `.extractField()` — shorter, reads well as postfix.
+Renamed from `.getField()` — shorter, reads well as postfix.
 
 ## Deferred
 

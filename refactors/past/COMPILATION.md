@@ -22,7 +22,7 @@ This eliminates the per-step overhead of crossing the Rust↔TypeScript boundary
 
 ### Builtin placement heuristic
 
-Builtins (identity, merge, extractField, tag, etc.) can execute in any language. The compiler should choose based on context:
+Builtins (identity, merge, getField, tag, etc.) can execute in any language. The compiler should choose based on context:
 
 - **At the start of a pipe**: prefer Rust (host language). The engine is already in Rust; executing the builtin natively avoids an unnecessary language boundary crossing.
 - **Between two same-language steps**: prefer that language. If the preceding and following steps are both TypeScript, executing the builtin in TypeScript avoids two boundary crossings (Rust→TS→Rust→TS) in favor of zero (stays in TS).
@@ -70,7 +70,7 @@ If a pipe starts with `constant(v)` followed by a chain of builtins, the builtin
 
 ```
 // Before
-Pipe([constant({x: 1}), extractField("x"), tag("Num")])
+Pipe([constant({x: 1}), getField("x"), tag("Num")])
 
 // After
 constant({kind: "Num", value: 1})

@@ -240,7 +240,7 @@ All bindings evaluate concurrently. Each receives the pipeline input. Bindings c
 
 ```ts
 declare({
-  branch: pipe(extractField("description"), deriveBranch),
+  branch: pipe(getField("description"), deriveBranch),
   image: pipe(pick("repo", "sha"), buildImage),
 }, ({ branch, image }) =>
   pipe(
@@ -297,8 +297,8 @@ Both forms compile to nested single-binding `DeclareAction` nodes. The differenc
 
 ```
 Parallel(exprA, exprB)
-  → Declare(id_a, ExtractIndex(0, parallel_result),
-      Declare(id_b, ExtractIndex(1, parallel_result),
+  → Declare(id_a, GetIndex(0, parallel_result),
+      Declare(id_b, GetIndex(1, parallel_result),
         body))
 ```
 
@@ -354,7 +354,7 @@ See the collapsed section below. Short version: the AST blowup is only ~3x (a co
 
 Closure conversion is a standard compiler technique. When a language has variables accessible from arbitrary positions in the AST and the target runtime only supports linear data flow, the compiler eliminates the free variables by threading them as an explicit environment parameter.
 
-Each step `f: A → B` in the body becomes `parallel(pipe(extractIndex(0), f), extractIndex(1))`, transforming it to `[A, Env] → [B, Env]`. VarRef sentinels are replaced with `extractIndex` into the environment.
+Each step `f: A → B` in the body becomes `parallel(pipe(getIndex(0), f), getIndex(1))`, transforming it to `[A, Env] → [B, Env]`. VarRef sentinels are replaced with `getIndex` into the environment.
 
 ### Why it was rejected
 

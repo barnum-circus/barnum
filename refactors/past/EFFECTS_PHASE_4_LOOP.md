@@ -25,7 +25,7 @@ Chain(
 The handler receives `{ payload, state }` from the engine, extracts payload, and tags as `RestartBody`:
 
 ```ts
-const RESTART_BODY_HANDLER: Action = Chain(ExtractField("payload"), Tag("RestartBody"));
+const RESTART_BODY_HANDLER: Action = Chain(GetField("payload"), Tag("RestartBody"));
 ```
 
 Effects (recur/done/jump) are `Chain(Tag(<variant>), Perform(effectId))`. They tag the value as a LoopResult variant, then Perform sends it to the handler. The handler RestartBody's it back to the Branch, which dispatches Continue (rerun body) or Break (exit via identity).

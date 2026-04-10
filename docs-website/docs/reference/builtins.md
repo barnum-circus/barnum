@@ -417,32 +417,32 @@ function flatten<TElement>(): TypedAction<TElement[][], TElement[]>
 
 ---
 
-### `extractField(field)` / `.get(field)`
+### `getField(field)` / `.getField(field)`
 
 Extract a single field from an object.
 
 ```ts
-function extractField<
+function getField<
   TObj extends Record<string, unknown>,
   TField extends keyof TObj & string,
 >(field: TField): TypedAction<TObj, TObj[TField]>
 ```
 
-**Postfix:** Yes — `.get(field)`.
+**Postfix:** Yes — `.getField(field)`.
 
 ```ts
-getUserProfile.get("email")
-// equivalent to pipe(getUserProfile, extractField("email"))
+getUserProfile.getField("email")
+// equivalent to pipe(getUserProfile, getField("email"))
 ```
 
 ---
 
-### `extractIndex(index)`
+### `getIndex(index)`
 
 Extract a single element from a tuple by index.
 
 ```ts
-function extractIndex<TTuple extends unknown[], TIndex extends number>(
+function getIndex<TTuple extends unknown[], TIndex extends number>(
   index: TIndex,
 ): TypedAction<TTuple, TTuple[TIndex]>
 ```
@@ -658,7 +658,7 @@ These methods are available on any `TypedAction` via dot-chaining:
 | `.tag(kind)` | `chain(a, tag(kind))` | |
 | `.merge()` | `chain(a, merge())` | Requires tuple-of-objects output |
 | `.flatten()` | `chain(a, flatten())` | Requires nested array output |
-| `.get(field)` | `chain(a, extractField(field))` | |
+| `.getField(field)` | `chain(a, getField(field))` | |
 | `.pick(...keys)` | `chain(a, pick(...keys))` | |
 | `.augment()` | `augment(a)` | Merges output back into input |
 | `.mapOption(action)` | `chain(a, Option.map(action))` | Requires `Option` output |

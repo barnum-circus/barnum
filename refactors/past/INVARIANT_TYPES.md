@@ -223,7 +223,7 @@ The action must accept exactly `TInput`. Usage:
 
 ```ts
 // Before (tolerant)
-augment(pipe(extractField("file"), migrate))
+augment(pipe(getField("file"), migrate))
 
 // After (invariant) — action must accept the full input type
 augment(pipe(pick("file"), migrate))
@@ -264,7 +264,7 @@ No more `any` in the output position. TOutput is inferred but unused.
 
 ### 8. Update tests
 
-Several type tests use explicit type parameters on builtins like `extractField<..., "errors">("errors")`. With invariance, pipe will enforce exact matches, so some tests may need `pick` inserted.
+Several type tests use explicit type parameters on builtins like `getField<..., "errors">("errors")`. With invariance, pipe will enforce exact matches, so some tests may need `pick` inserted.
 
 The `@ts-expect-error` tests for mismatched types should continue to work (they already test that mismatches are rejected — invariance makes this stricter).
 
@@ -315,6 +315,6 @@ Variables don't carry extra fields because they're individually bound. This may 
 
 2. **`stepRef` return type**: Currently `TypedAction<any, any, N>`. Since step references are for mutual recursion (types unknown at definition time), they may need to remain `any`. This is a deliberate escape hatch, not a variance workaround.
 
-3. **Inference regression**: The `__in` covariant field helps TypeScript infer intermediate types in pipe chains (e.g., `extractField("errors")` without explicit type params). With Out also invariant, inference may actually improve in some cases (more constraints = more inference sites) or regress in others. Needs testing.
+3. **Inference regression**: The `__in` covariant field helps TypeScript infer intermediate types in pipe chains (e.g., `getField("errors")` without explicit type params). With Out also invariant, inference may actually improve in some cases (more constraints = more inference sites) or regress in others. Needs testing.
 
 4. **Engine-level Pick**: Deferred to DEFERRED_FEATURES.md. The engine could enforce schema-based input filtering at handler boundaries as defense-in-depth, but the type system should be the primary enforcement mechanism.

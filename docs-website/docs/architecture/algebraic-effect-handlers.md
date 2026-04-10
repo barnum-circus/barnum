@@ -64,10 +64,10 @@ Chain(
   Tag("Continue"),                        // tag input as Continue
   RestartHandle(id,
     Branch({
-      Continue: Chain(ExtractField("value"), body),  // loop body
-      Break: Chain(ExtractField("value"), Identity),  // exit path
+      Continue: Chain(GetField("value"), body),  // loop body
+      Break: Chain(GetField("value"), Identity),  // exit path
     }),
-    ExtractIndex(0),                      // handler: extract payload from [payload, state]
+    GetIndex(0),                      // handler: extract payload from [payload, state]
   )
 )
 ```
@@ -99,10 +99,10 @@ Chain(
   Tag("Continue"),
   RestartHandle(id,
     Branch({
-      Continue: Chain(ExtractField("value"), body),
-      Break: Chain(ExtractField("value"), recovery),
+      Continue: Chain(GetField("value"), body),
+      Break: Chain(GetField("value"), recovery),
     }),
-    ExtractIndex(0),
+    GetIndex(0),
   )
 )
 ```
@@ -141,7 +141,7 @@ Chain(
       ),
       Break: Identity,
     }),
-    ExtractIndex(0),
+    GetIndex(0),
   )
 )
 ```

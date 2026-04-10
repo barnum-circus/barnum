@@ -77,14 +77,14 @@ pub fn tag_builtin(kind: &str) -> Action {
     invoke_builtin(BuiltinKind::Tag { value: json!(kind) })
 }
 
-pub fn extract_field(field: &str) -> Action {
-    invoke_builtin(BuiltinKind::ExtractField {
+pub fn get_field(field: &str) -> Action {
+    invoke_builtin(BuiltinKind::GetField {
         value: json!(field),
     })
 }
 
-pub fn extract_index(index: u64) -> Action {
-    invoke_builtin(BuiltinKind::ExtractIndex {
+pub fn get_index(index: u64) -> Action {
+    invoke_builtin(BuiltinKind::GetIndex {
         value: json!(index),
     })
 }
@@ -111,15 +111,12 @@ pub fn resume_perform(resume_handler_id: u16) -> Action {
     })
 }
 
-/// `readVar(n)` for `ResumePerform`: `All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))`
+/// `readVar(n)` for `ResumePerform`: `All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))`
 ///
 /// Input: `[payload, state]`. Output: `[state[n], state]`.
 /// Value is `state[n]`, state is unchanged.
 pub fn resume_read_var(n: u64) -> Action {
-    parallel(vec![
-        chain(extract_index(1), extract_index(n)),
-        extract_index(1),
-    ])
+    parallel(vec![chain(get_index(1), get_index(n)), get_index(1)])
 }
 
 // ---------------------------------------------------------------------------
@@ -149,13 +146,13 @@ pub fn break_restart_perform(restart_handler_id: u16) -> Action {
 /// Handler for restart+Branch: extract payload (index 0) from `[payload, state]`.
 /// The raw payload is the new body input.
 pub fn restart_extract_payload_handler() -> Action {
-    extract_index(0)
+    get_index(0)
 }
 
 /// Build restart+Branch compiled form:
-/// `Chain(Tag("Continue"), RestartHandle(id, ExtractIndex(0), Branch({`
-///   `Continue: Chain(ExtractField("value"), continueArm),`
-///   `Break: Chain(ExtractField("value"), breakArm),`
+/// `Chain(Tag("Continue"), RestartHandle(id, GetIndex(0), Branch({`
+///   `Continue: Chain(GetField("value"), continueArm),`
+///   `Break: Chain(GetField("value"), breakArm),`
 /// `})))`
 pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Action) -> Action {
     chain(
@@ -164,8 +161,8 @@ pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: 
             restart_handler_id,
             restart_extract_payload_handler(),
             branch(vec![
-                ("Continue", chain(extract_field("value"), continue_arm)),
-                ("Break", chain(extract_field("value"), break_arm)),
+                ("Continue", chain(get_field("value"), continue_arm)),
+                ("Break", chain(get_field("value"), break_arm)),
             ]),
         ),
     )

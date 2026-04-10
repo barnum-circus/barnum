@@ -74,13 +74,13 @@ Each combinator calls `resolve()` on its arguments before constructing the AST n
 | `done`        | `<T>`   | —           | Yes               |
 | `merge`       | `<T>`   | —           | Yes               |
 | `flatten`     | `<T>`   | —           | Yes               |
-| `extractField`| `<O,F>` | `field`     | No (has arg)      |
+| `getField`| `<O,F>` | `field`     | No (has arg)      |
 
 ## Risk: `branch` inference across mixed thunks
 
 ```ts
 branch({
-  HasErrors: pipe(extractField("errors"), forEach(fix), recur),
+  HasErrors: pipe(getField("errors"), forEach(fix), recur),
   Clean: done,
 })
 ```

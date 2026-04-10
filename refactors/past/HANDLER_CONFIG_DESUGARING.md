@@ -80,7 +80,7 @@ The worker already ignores `stepConfig`. It calls `handler.__definition.handle({
 
 ### `__builtin__` module convention
 
-Builtins like `identity()`, `tag()`, `merge()`, `flatten()`, `extractField()` use `module: "__builtin__"` in their Invoke nodes. This is a synthetic path — `__builtin__` is not a real file. The scheduler would try to import it as a TypeScript module and fail. These builtins only work in the noop scheduler (tests) and are broken in real subprocess execution.
+Builtins like `identity()`, `tag()`, `merge()`, `flatten()`, `getField()` use `module: "__builtin__"` in their Invoke nodes. This is a synthetic path — `__builtin__` is not a real file. The scheduler would try to import it as a TypeScript module and fail. These builtins only work in the noop scheduler (tests) and are broken in real subprocess execution.
 
 ## Design
 

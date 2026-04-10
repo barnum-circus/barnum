@@ -17,7 +17,7 @@ import { pipe } from "./pipe.js";
  * A typed reference to a bound value. Output is `TValue`.
  *
  * Use `.then()` (not `pipe()`) when chaining a VarRef into a generic
- * action like `pick` or `extractField` — pipe overloads can't infer
+ * action like `pick` or `getField` — pipe overloads can't infer
  * the generic's type parameter from the VarRef's output.
  */
 export type VarRef<TValue> = TypedAction<never, TValue>;
@@ -61,7 +61,7 @@ export type InferVarRefs<TBindings extends Action[]> = {
  * `state` (index 1) is the full All output tuple. The handler produces
  * `[state[n], state]` — value is state[n], new_state is state (unchanged).
  *
- * Expanded AST: All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))
+ * Expanded AST: All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))
  */
 function readVar(n: number): Action {
   return {
@@ -73,14 +73,14 @@ function readVar(n: number): Action {
           kind: "Invoke",
           handler: {
             kind: "Builtin",
-            builtin: { kind: "ExtractIndex", value: 1 },
+            builtin: { kind: "GetIndex", value: 1 },
           },
         },
         rest: {
           kind: "Invoke",
           handler: {
             kind: "Builtin",
-            builtin: { kind: "ExtractIndex", value: n },
+            builtin: { kind: "GetIndex", value: n },
           },
         },
       },
@@ -88,7 +88,7 @@ function readVar(n: number): Action {
         kind: "Invoke",
         handler: {
           kind: "Builtin",
-          builtin: { kind: "ExtractIndex", value: 1 },
+          builtin: { kind: "GetIndex", value: 1 },
         },
       },
     ],
@@ -111,7 +111,7 @@ function readVar(n: number): Action {
  *     All(...bindings, Identity),
  *     ResumeHandle(r0, readVar(0),
  *       ResumeHandle(r1, readVar(1),
- *         Chain(ExtractIndex(N), body)
+ *         Chain(GetIndex(N), body)
  *       )
  *     )
  *   )
@@ -148,7 +148,7 @@ export function bind<TBindings extends Action[], TOut>(
       kind: "Invoke",
       handler: {
         kind: "Builtin",
-        builtin: { kind: "ExtractIndex", value: pipelineInputIndex },
+        builtin: { kind: "GetIndex", value: pipelineInputIndex },
       },
     },
     rest: bodyAction,

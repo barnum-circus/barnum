@@ -85,10 +85,10 @@ The pipeline is the basic unit of composition. Every workflow is a pipeline.
 Builtins are the ALU operations that run inline in Rust. In the native syntax, most have dedicated syntax rather than function calls.
 
 ```barnum
-// Field access — desugars to ExtractField
+// Field access — desugars to GetField
 value |> .name              // extract "name" from the pipeline value
 
-// Indexing — desugars to ExtractIndex
+// Indexing — desugars to GetIndex
 value |> .[0]               // extract index 0
 
 // Pick — desugars to Pick
@@ -113,7 +113,7 @@ all(a, b) |> merge          // merge tuple of objects into one
 nested_lists |> flatten     // flatten nested arrays
 ```
 
-The `.field`, `.[index]`, `.{fields}` syntax replaces the TS DSL's `.get("field")`, `extractIndex(n)`, `.pick("a", "b")`. The `@Variant` syntax replaces `.tag("Variant")`. The `_` discard replaces `.drop()`.
+The `.field`, `.[index]`, `.{fields}` syntax replaces the TS DSL's `.getField("field")`, `getIndex(n)`, `.pick("a", "b")`. The `@Variant` syntax replaces `.tag("Variant")`. The `_` discard replaces `.drop()`.
 
 ### Pattern matching (Branch)
 
@@ -372,12 +372,12 @@ Most surface syntax is sugar over Handle/Perform:
 
 | Surface syntax | Desugars to |
 |---|---|
-| `try (t) { body } catch { recovery }` | `Handle(eid, body, Chain(ExtractField("payload"), Chain(recovery, Tag("Discard"))))` |
+| `try (t) { body } catch { recovery }` | `Handle(eid, body, Chain(GetField("payload"), Chain(recovery, Tag("Discard"))))` |
 | `loop (r, d) { body }` | `Chain(Tag("Continue"), Handle(eid, Branch({ Continue: body, Break: Identity }), RestartBodyHandler))` |
 | `earlyReturn (e) { body }` | Same as loop but the body is wrapped differently |
-| `let x = a, y = b in { body }` | `Chain(All(a, b, Identity), Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(ExtractIndex(2), body))))` |
-| `match { A => x, B => y }` | `Branch({ A: Chain(ExtractField("value"), x), B: Chain(ExtractField("value"), y) })` |
-| `.field` | `Invoke(Builtin(ExtractField("field")))` |
+| `let x = a, y = b in { body }` | `Chain(All(a, b, Identity), Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(GetIndex(2), body))))` |
+| `match { A => x, B => y }` | `Branch({ A: Chain(GetField("value"), x), B: Chain(GetField("value"), y) })` |
+| `.field` | `Invoke(Builtin(GetField("field")))` |
 | `@Variant` | `Invoke(Builtin(Tag("Variant")))` |
 | `_` | `Invoke(Builtin(Drop))` |
 | `42` (literal) | `Invoke(Builtin(Constant(42)))` |

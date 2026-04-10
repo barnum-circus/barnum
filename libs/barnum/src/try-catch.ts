@@ -25,7 +25,7 @@ import { allocateRestartHandlerId } from "./effect-id.js";
  *
  * Compiled form (restart+Branch, same substrate as loop/earlyReturn):
  *   `Chain(Tag("Continue"),`
- *     `RestartHandle(id, ExtractIndex(0),`
+ *     `RestartHandle(id, GetIndex(0),`
  *       `Branch({ Continue: body, Break: recovery })))`
  *
  * throwError = `Chain(Tag("Break"), RestartPerform(id))`

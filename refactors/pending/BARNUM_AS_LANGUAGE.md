@@ -82,7 +82,7 @@ This maps directly to the **syscall boundary** in an operating system. User-mode
 
 The engine's purity — no I/O, no scheduling, no timers — is the equivalent of a user-mode process that can only interact with the world through syscalls. The runtime is the kernel.
 
-The one exception: **builtins**. `HandlerKind::Builtin` variants (Identity, Tag, Merge, ExtractField, etc.) are executed inline by the Rust runtime without spawning a subprocess. These are the CPU's built-in instructions — `mov`, `lea`, field projection — as opposed to syscalls. They don't cross the engine/runtime boundary in the same way TypeScript handlers do.
+The one exception: **builtins**. `HandlerKind::Builtin` variants (Identity, Tag, Merge, GetField, etc.) are executed inline by the Rust runtime without spawning a subprocess. These are the CPU's built-in instructions — `mov`, `lea`, field projection — as opposed to syscalls. They don't cross the engine/runtime boundary in the same way TypeScript handlers do.
 
 ## ParentRef is a continuation
 
@@ -170,7 +170,7 @@ Deliveries (values being returned to parent frames) can also be stashed — if a
 
 Handle frames carry optional mutable state that persists across handler invocations. The handler receives `{ payload, state }` and can return a `state_update` with Resume or RestartBody. This is a **mutable cell scoped to the handler's lifetime** — the only form of mutable state in the engine.
 
-`bind` uses this: the Handle's state holds the bound values (the All output tuple). Each Perform (VarRef access) reads from state via `ExtractField("state")` + `ExtractIndex(n)` and Resumes with the extracted value.
+`bind` uses this: the Handle's state holds the bound values (the All output tuple). Each Perform (VarRef access) reads from state via `GetField("state")` + `GetIndex(n)` and Resumes with the extracted value.
 
 ## Builtins are the ALU
 
@@ -181,8 +181,8 @@ Handle frames carry optional mutable state that persists across handler invocati
 | Identity | Pass through | `mov` (register copy) |
 | Constant(v) | Produce fixed value | Immediate operand |
 | Tag(k) | Wrap as `{ kind: k, value: v }` | Constructor / tag bits |
-| ExtractField(f) | Read object field | `lea` / field projection |
-| ExtractIndex(n) | Read array element | Indexed load |
+| GetField(f) | Read object field | `lea` / field projection |
+| GetIndex(n) | Read array element | Indexed load |
 | Pick(keys) | Select object fields | Struct projection |
 | Merge | Merge tuple of objects | Struct concatenation |
 | Flatten | Flatten nested array | Memcpy |
@@ -269,7 +269,7 @@ The functional programming analogy: `bind` is Haskell's `do`-notation — it des
 
 ### Builtins (the ALU)
 
-Identity, Constant, Tag, Merge, Flatten, ExtractField, ExtractIndex, Pick, Drop, and CollectSome all execute inline in Rust. See "Builtins are the ALU" above.
+Identity, Constant, Tag, Merge, Flatten, GetField, GetIndex, Pick, Drop, and CollectSome all execute inline in Rust. See "Builtins are the ALU" above.
 
 ### Typed error handling (via tryCatch)
 

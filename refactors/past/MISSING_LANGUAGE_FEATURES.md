@@ -8,11 +8,11 @@ Speculative analysis of programming features Barnum lacks and how they might be 
 
 **How it might work**: A context/environment that flows implicitly alongside the pipeline value. Each step can read from context without declaring it as input. Steps can write to context, and the writes are visible to downstream steps.
 
-**Implementation sketch**: The scheduler maintains a `context: Map<string, Value>` alongside each frame's value. Builtins like `setContext("key", extractField("key"))` and `getContext("key")` read/write it. The AST has `WithContext` nodes that scope context additions.
+**Implementation sketch**: The scheduler maintains a `context: Map<string, Value>` alongside each frame's value. Builtins like `setContext("key", getField("key"))` and `getContext("key")` read/write it. The AST has `WithContext` nodes that scope context additions.
 
 ```ts
 pipe(
-  withContext({ branch: extractField("branch") },
+  withContext({ branch: getField("branch") },
     pipe(
       implement,   // can read "branch" from context
       commit,      // can read "branch" from context
@@ -103,7 +103,7 @@ scope(({ exit, defer }) =>
 ```ts
 pipe(
   createPR,
-  pause({ event: "pr-approved", key: extractField("prUrl") }),
+  pause({ event: "pr-approved", key: getField("prUrl") }),
   // execution resumes here when the event fires
   deploy,
 )
@@ -185,7 +185,7 @@ match({
 })
 ```
 
-This is complex to implement in the AST. Simpler: chain of `branch` + `extractField` operations. Not worth a new primitive.
+This is complex to implement in the AST. Simpler: chain of `branch` + `getField` operations. Not worth a new primitive.
 
 ### Conditional (if/else without tagging)
 
@@ -193,7 +193,7 @@ This is complex to implement in the AST. Simpler: chain of `branch` + `extractFi
 
 ```ts
 when(
-  extractField("count").greaterThan(10),
+  getField("count").greaterThan(10),
   truncate,
   identity(),
 )
@@ -207,7 +207,7 @@ This requires expression evaluation in the AST — a slippery slope toward a ful
 
 `all` sends the same input to all branches. What about sending different data to each?
 
-Already solved: `all(pipe(extractField("a"), actionA), pipe(extractField("b"), actionB))`.
+Already solved: `all(pipe(getField("a"), actionA), pipe(getField("b"), actionB))`.
 
 ## Feature Priority Summary
 

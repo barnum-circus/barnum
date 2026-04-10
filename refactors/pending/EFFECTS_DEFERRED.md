@@ -134,7 +134,7 @@ Not worth building until the parent walk logic is needed in more places or the f
 
 ## Typed Internal Data Representation
 
-The engine currently uses `serde_json::Value` uniformly for all data flowing through the DAG. When `dispatch_to_handler` constructs `json!({"payload": payload, "state": state})` and the handler is entirely builtins (Constant, ExtractField, Tag), the data never leaves Rust — building a `serde_json::Value` just to destructure it in the next builtin is pure overhead.
+The engine currently uses `serde_json::Value` uniformly for all data flowing through the DAG. When `dispatch_to_handler` constructs `json!({"payload": payload, "state": state})` and the handler is entirely builtins (Constant, GetField, Tag), the data never leaves Rust — building a `serde_json::Value` just to destructure it in the next builtin is pure overhead.
 
 Possible approaches:
 

@@ -1,7 +1,7 @@
 # Tagged Union Convention: `{ kind, value }`
 
 **Blocks:** nothing
-**Blocked by:** CONTRAVARIANT_CASE_HANDLERS.md (branch validates handler types, so removing `extractField` actually changes behavior)
+**Blocked by:** CONTRAVARIANT_CASE_HANDLERS.md (branch validates handler types, so removing `getField` actually changes behavior)
 
 ## Motivation
 
@@ -14,7 +14,7 @@ type ClassifyResult =
 ```
 
 HasErrors has `errors`, Clean has nothing. Each variant is a different shape. This means:
-- Branch case handlers must know the variant structure to extract fields (`extractField<HasErrors, "errors">("errors")`)
+- Branch case handlers must know the variant structure to extract fields (`getField<HasErrors, "errors">("errors")`)
 - Every union has a unique structure — no standard way to interact with variants
 
 ## Proposed convention
@@ -30,7 +30,7 @@ type ClassifyResult =
 ### Two things this enables
 
 1. **Standardized structure** — every variant has `kind` and `value`, nothing else
-2. **Branch auto-unwraps `value`** — branch extracts `value` before passing to the case handler, so handlers receive the payload directly. No more `extractField`.
+2. **Branch auto-unwraps `value`** — branch extracts `value` before passing to the case handler, so handlers receive the payload directly. No more `getField`.
 
 ### Precedent already in the codebase
 
@@ -134,7 +134,7 @@ return { kind: "NeedsWork", value: judgment.instructions };
 
 **File:** `libs/barnum/src/ast.ts` — standalone `branch()` and postfix `.branch()` runtime implementations
 
-The TypeScript-side branch inserts `ExtractField("value")` before each case handler in the AST. No Rust executor changes needed initially. Long-term, auto-unwrapping should move into the Rust executor as a fundamental language feature — branch should work like Rust `match`, unwrapping the payload before entering the arm.
+The TypeScript-side branch inserts `GetField("value")` before each case handler in the AST. No Rust executor changes needed initially. Long-term, auto-unwrapping should move into the Rust executor as a fundamental language feature — branch should work like Rust `match`, unwrapping the payload before entering the arm.
 
 Before (runtime implementation):
 ```ts
@@ -146,12 +146,12 @@ function branchMethod(this: TypedAction, cases: Record<string, Action>): TypedAc
 After:
 ```ts
 function branchMethod(this: TypedAction, cases: Record<string, Action>): TypedAction {
-  // Auto-unwrap: insert ExtractField("value") before each case handler
+  // Auto-unwrap: insert GetField("value") before each case handler
   const unwrappedCases: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
     unwrappedCases[key] = {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } } },
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
       rest: cases[key],
     };
   }
@@ -202,9 +202,9 @@ type BranchInput<TCases> = {
 
 Note: `drop()` cases produce `{ kind: K; value: unknown }`. Under invariance, this doesn't match `{ kind: K; value: void }`. Standalone `branch()` with `drop()` cases still needs explicit type params. This is a known limitation — use postfix `.branch()` to avoid it.
 
-### 5. Remove `extractField` from branch case handlers
+### 5. Remove `getField` from branch case handlers
 
-Since branch auto-unwraps `value`, case handlers receive the payload directly. No more `extractField("errors")`.
+Since branch auto-unwraps `value`, case handlers receive the payload directly. No more `getField("errors")`.
 
 #### `libs/barnum/tests/types.test.ts`
 
@@ -212,7 +212,7 @@ Before:
 ```ts
 classifyErrors.branch({
   HasErrors: pipe(
-    extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+    getField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
     forEach(fix),
   ),
   Clean: drop(),
@@ -233,7 +233,7 @@ Before:
 ```ts
 branch({
   HasErrors: pipe(
-    extractField<HasErrors, "errors">("errors"),
+    getField<HasErrors, "errors">("errors"),
     forEach(fix),
     recur<any>(),
   ),
@@ -255,7 +255,7 @@ Before:
 ```ts
 pipe(typeCheck, classifyErrors).branch({
   HasErrors: pipe(
-    extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+    getField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
     forEach(fix).drop(),
     recur<any>(),
   ),
@@ -277,7 +277,7 @@ Before:
 ```ts
 pipe(drop<any>(), judgeRefactor, classifyJudgment).branch({
   NeedsWork: pipe(
-    extractField<Extract<ClassifyJudgmentResult, { kind: "NeedsWork" }>, "instructions">("instructions"),
+    getField<Extract<ClassifyJudgmentResult, { kind: "NeedsWork" }>, "instructions">("instructions"),
     applyFeedback.drop(), stepRef("TypeCheck"), recur<any>(),
   ),
   Approved: done<any>(),
@@ -309,7 +309,7 @@ describe("{ kind, value } convention", () => {
   });
 
   it("branch auto-unwraps: HasErrors handler receives TypeError[] directly", () => {
-    // After auto-unwrap, forEach(fix) receives TypeError[] directly — no extractField needed.
+    // After auto-unwrap, forEach(fix) receives TypeError[] directly — no getField needed.
     // @ts-expect-error — remove after implementing: forEach(fix) input doesn't match HasErrors variant
     classifyErrors.branch({
       HasErrors: forEach(fix),
@@ -329,7 +329,7 @@ Test 2: After CONTRAVARIANT_CASE_HANDLERS, `.branch()` validates handler types. 
 2. Update branch to auto-unwrap `value`
 3. Update postfix `.branch()` type signature for unwrapped payloads
 4. Update `BranchInput` for auto-unwrap
-5. Remove `extractField` from branch cases
+5. Remove `getField` from branch cases
 6. **Remove `@ts-expect-error`** from the tests added in commit 1 — they now compile, proving the fix works.
 
 ## Files to change
@@ -339,17 +339,17 @@ Test 2: After CONTRAVARIANT_CASE_HANDLERS, `.branch()` validates handler types. 
 | `libs/barnum/src/ast.ts` | Add `UnwrapVariant`; update `.branch()` signature; update `BranchInput`; branch auto-unwraps `value` in runtime impls |
 | `libs/barnum/src/builtins.ts` | No changes — `tag()`, `recur()`, `done()` already produce `{ kind, value }` |
 | `libs/barnum/tests/handlers.ts` | `ClassifyResult` uses `{ kind, value }` form; handler returns `{ kind, value }` |
-| `libs/barnum/tests/types.test.ts` | Add failing tests (commit 1); remove `extractField` from branch cases; update type assertions; remove `@ts-expect-error` (commit 2) |
+| `libs/barnum/tests/types.test.ts` | Add failing tests (commit 1); remove `getField` from branch cases; update type assertions; remove `@ts-expect-error` (commit 2) |
 | `libs/barnum/tests/patterns.test.ts` | Update branch test cases for auto-unwrapping |
-| `libs/barnum/tests/steps.test.ts` | Remove `extractField` from branch cases |
+| `libs/barnum/tests/steps.test.ts` | Remove `getField` from branch cases |
 | `libs/barnum/tests/round-trip.test.ts` | Update Branch test constant to use `{ kind, value }` shape |
 | `demos/convert-folder-to-ts/handlers/type-check-fix.ts` | Handler returns `{ kind, value }` |
-| `demos/convert-folder-to-ts/run.ts` | Remove `extractField` from branch cases |
+| `demos/convert-folder-to-ts/run.ts` | Remove `getField` from branch cases |
 | `demos/identify-and-address-refactors/handlers/refactor.ts` | Handler returns `{ kind, value }` |
-| `demos/identify-and-address-refactors/run.ts` | Remove `extractField` from branch cases |
+| `demos/identify-and-address-refactors/run.ts` | Remove `getField` from branch cases |
 
 ## Open questions
 
-1. **Rust executor** — Auto-unwrap starts as `ExtractField("value")` inserted in the TS AST. Long-term, this should be a fundamental part of the Rust executor's branch semantics (like Rust `match`). Separate follow-up.
+1. **Rust executor** — Auto-unwrap starts as `GetField("value")` inserted in the TS AST. Long-term, this should be a fundamental part of the Rust executor's branch semantics (like Rust `match`). Separate follow-up.
 
 2. **`void` vs `undefined` vs `null` for empty variants** — `{ kind: "Clean"; value: void }` — at runtime, `value` is `undefined`. The Rust executor sees `"value": null` in JSON. Need to verify serde handles this. Hopefully nothing breaks.

@@ -71,7 +71,7 @@ Chain(
   All(Constant(initialValue), Identity),     // state slot + pipeline input
   Handle(getEffect, getHandler,
     Handle(setEffect, setHandler,
-      Chain(ExtractIndex(1), body)            // body receives pipeline input
+      Chain(GetIndex(1), body)            // body receives pipeline input
     )
   )
 )
@@ -88,9 +88,9 @@ Input: { payload: void, state: [TState, TIn] }
 Output: { kind: "Resume", value: state[0], state_update: { kind: "Unchanged" } }
 ```
 
-AST: `ExtractField("state") → ExtractIndex(0) → Tag("Resume")`
+AST: `GetField("state") → GetIndex(0) → Tag("Resume")`
 
-Wait — this needs to produce `{ kind: "Resume", value: <V>, state_update: { kind: "Unchanged" } }`. The handler DAG needs to construct this object. In bind, the handler is `ExtractField("state") → ExtractIndex(n) → Tag("Resume")` which produces `{ kind: "Resume", value: state[n] }`. The engine interprets a missing `state_update` as `Unchanged`.
+Wait — this needs to produce `{ kind: "Resume", value: <V>, state_update: { kind: "Unchanged" } }`. The handler DAG needs to construct this object. In bind, the handler is `GetField("state") → GetIndex(n) → Tag("Resume")` which produces `{ kind: "Resume", value: state[n] }`. The engine interprets a missing `state_update` as `Unchanged`.
 
 **setHandler** — writes `payload` as the new `state[0]`, resumes with void:
 
@@ -105,7 +105,7 @@ This is more involved. The handler must:
 3. Construct `[payload, state[1]]` as the new state
 4. Tag as Resume with Updated state
 
-AST: `All(ExtractField("payload"), Chain(ExtractField("state"), ExtractIndex(1))) → Tag("Resume")` with `state_update` constructed from the All output.
+AST: `All(GetField("payload"), Chain(GetField("state"), GetIndex(1))) → Tag("Resume")` with `state_update` constructed from the All output.
 
 The exact AST depends on how `state_update` is wired. If the engine convention is that Resume's value is delivered to the body and the state_update is a separate field, the handler needs to produce the full `{ kind, value, state_update }` object. This is an implementation detail for the engine integration.
 

@@ -2,7 +2,7 @@
 
 ## Problem
 
-Barnum's builtins cover structural data transformations (identity, drop, merge, flatten, extractField, pick, tag) and collection-level operations (CollectSome). But it has no primitives for arithmetic, boolean logic, string manipulation, comparisons, or common array/object reshaping.
+Barnum's builtins cover structural data transformations (identity, drop, merge, flatten, getField, pick, tag) and collection-level operations (CollectSome). But it has no primitives for arithmetic, boolean logic, string manipulation, comparisons, or common array/object reshaping.
 
 Without these, trivial operations like "increment a counter", "check if a string is empty", or "concatenate two arrays" require spawning a handler subprocess. That's disproportionate overhead for a one-line computation.
 
@@ -240,7 +240,7 @@ These array builtins already exist in `builtins.ts` / `BuiltinKind`:
 | TypeScript API | Signature | BuiltinKind |
 |---|---|---|
 | `flatten()` | `T[][] → T[]` | `{ kind: "Flatten" }` |
-| `extractIndex(n)` | `TTuple → TTuple[n]` | `{ kind: "ExtractIndex", value: n }` |
+| `getIndex(n)` | `TTuple → TTuple[n]` | `{ kind: "GetIndex", value: n }` |
 | `range(start, end)` | `any → number[]` | Desugars to `Constant` |
 | `Option.collect()` | `Option<T>[] → T[]` | `{ kind: "CollectSome" }` |
 | `splitFirst()` | `T[] → Option<[T, T[]]>` | `{ kind: "SplitFirst" }` |
@@ -311,7 +311,7 @@ import { Math, Bool, Cmp, Str, Arr, Obj, Convert } from "@barnum/barnum/builtins
 
 pipe(
   constant({ items: [1, 2, 3] }),
-  extractField("items"),
+  getField("items"),
   Arr.length(),             // 3
   Math.mul(2),              // 6
   Cmp.gt(5),                // true
@@ -343,7 +343,7 @@ pipe(handler, Num.add(1))
 handler.add(1)
 ```
 
-**Recommendation**: Defer postfix methods for primitive builtins. The namespace form is clear and discoverable. Postfix methods on TypedAction are already used for structural operations (`.branch()`, `.flatten()`, `.drop()`, `.get()`, `.pick()`). Adding math/string/boolean postfix methods would bloat the TypedAction interface and blur the line between structural and computational.
+**Recommendation**: Defer postfix methods for primitive builtins. The namespace form is clear and discoverable. Postfix methods on TypedAction are already used for structural operations (`.branch()`, `.flatten()`, `.drop()`, `.getField()`, `.pick()`). Adding math/string/boolean postfix methods would bloat the TypedAction interface and blur the line between structural and computational.
 
 ## Error handling in builtins
 
@@ -375,7 +375,7 @@ Many of these builtins become more useful with let-bindings (LET_BINDINGS.md). W
 ```ts
 // "total = price * quantity" without let-bindings:
 pipe(
-  all(extractField("price"), extractField("quantity")),
+  all(getField("price"), getField("quantity")),
   Num.mul(),  // binary form
 )
 
@@ -446,7 +446,7 @@ The `expect` calls produce Byzantine fault panics — the workflow dies with a c
 
 ### Should binary forms exist?
 
-Binary forms (`Num.add()` operating on `[number, number]`) add API surface. The same thing is achievable with `all(a, b)` → parameterized form. But that requires an intermediate `extractIndex` step. Binary forms are cleaner for the `all(a, b) → combine` pattern.
+Binary forms (`Num.add()` operating on `[number, number]`) add API surface. The same thing is achievable with `all(a, b)` → parameterized form. But that requires an intermediate `getIndex` step. Binary forms are cleaner for the `all(a, b) → combine` pattern.
 
 ### Should `Obj.set` exist?
 

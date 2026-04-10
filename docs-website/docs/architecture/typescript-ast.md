@@ -25,7 +25,7 @@ type Action =
   | RestartPerformAction; // Raise a restart-style effect
 ```
 
-`Invoke` is the only leaf — it calls either a TypeScript handler (subprocess) or a builtin (inline data transform like `Identity`, `Drop`, `Tag`, `Merge`, `ExtractField`). Every other node is structural: it composes children into larger workflows.
+`Invoke` is the only leaf — it calls either a TypeScript handler (subprocess) or a builtin (inline data transform like `Identity`, `Drop`, `Tag`, `Merge`, `GetField`). Every other node is structural: it composes children into larger workflows.
 
 ## Phantom types
 
@@ -107,11 +107,11 @@ All children receive the same input and run concurrently. The output is a tuple 
 
 ```ts
 branch({ Ok: handleOk, Err: handleErr })
-// Produces: { kind: "Branch", cases: { Ok: Chain(ExtractField("value"), handleOk), ... } }
+// Produces: { kind: "Branch", cases: { Ok: Chain(GetField("value"), handleOk), ... } }
 // Type: TypedAction<TaggedUnion<{ Ok: TOk; Err: TErr }>, OutOk | OutErr>
 ```
 
-Branch dispatches on the `kind` field of a tagged union. Each case handler receives the unwrapped `value` — the `ExtractField("value")` is inserted automatically. This auto-unwrapping means case handlers work with payloads directly, not the full `{ kind, value }` wrapper.
+Branch dispatches on the `kind` field of a tagged union. Each case handler receives the unwrapped `value` — the `GetField("value")` is inserted automatically. This auto-unwrapping means case handlers work with payloads directly, not the full `{ kind, value }` wrapper.
 
 ### loop, tryCatch, earlyReturn
 

@@ -122,7 +122,7 @@ forEach(
 
 ## From / Into (type conversions)
 
-Rust's `From`/`Into` traits enable implicit conversions. In Barnum, there are no implicit conversions — everything is explicit `pipe(extractField(...), tag(...))`. This is correct for a workflow DSL. Implicit conversions would be confusing.
+Rust's `From`/`Into` traits enable implicit conversions. In Barnum, there are no implicit conversions — everything is explicit `pipe(getField(...), tag(...))`. This is correct for a workflow DSL. Implicit conversions would be confusing.
 
 **Skip this.** Explicit data shaping is a feature, not a bug.
 

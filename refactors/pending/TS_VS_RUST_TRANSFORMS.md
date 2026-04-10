@@ -21,7 +21,7 @@ Every combinator in Barnum implicitly makes this choice. Some are clearly in one
 | `pipe(a, b, c)` | `Chain(a, Chain(b, c))` | Syntactic sugar for nested Chain. Trivial expansion. |
 | `augment(action)` | `Chain(Parallel(action, Identity), Merge)` | Convenience pattern built from existing primitives. |
 | `tap(action)` | `Chain(Parallel(Chain(action, Constant({})), Identity), Merge)` | Same — composition of existing primitives. |
-| `withResource(...)` | ~30 lines of Chain/Parallel/ExtractIndex assembly | Resource lifecycle pattern. |
+| `withResource(...)` | ~30 lines of Chain/Parallel/GetIndex assembly | Resource lifecycle pattern. |
 | `dropResult(action)` | `Chain(action, Drop)` | Trivial two-node chain. |
 | `range(start, end)` | `Constant([start, ..., end-1])` | Computed at definition time, emitted as constant. |
 
@@ -45,13 +45,13 @@ Every combinator in Barnum implicitly makes this choice. Some are clearly in one
 
 **Smaller AST grammar.** Fewer node types means fewer match arms everywhere — flattener, engine `advance`, engine `deliver`, serialization, schema generation. Every new AST node is O(N) code additions across M consumers. TS-side transforms keep the grammar small.
 
-**Composability.** TS-side transforms compose freely. `augment` uses `parallel` and `merge`. `tap` uses `augment`. `withResource` uses `augment`, `extractIndex`, and `chain`. These compositions just work because they produce standard AST nodes. There's no need for the scheduler to understand the higher-level pattern — it executes the primitives.
+**Composability.** TS-side transforms compose freely. `augment` uses `parallel` and `merge`. `tap` uses `augment`. `withResource` uses `augment`, `getIndex`, and `chain`. These compositions just work because they produce standard AST nodes. There's no need for the scheduler to understand the higher-level pattern — it executes the primitives.
 
 **TypeScript is expressive.** Pattern construction in TypeScript is straightforward — you're building an object graph. In Rust, the same construction would be runtime AST manipulation, which is more cumbersome and would duplicate the type safety that TypeScript provides at definition time.
 
 ### Arguments for Rust-side (native AST nodes)
 
-**Error messages.** When something fails inside a `withResource`, the error references synthetic `Parallel`/`ExtractIndex` nodes that the user never wrote. If `withResource` were a native node, the error would say "resource disposal failed in withResource" instead of "handler at parallel branch 1, chain position 2 failed." This is the strongest argument for native nodes.
+**Error messages.** When something fails inside a `withResource`, the error references synthetic `Parallel`/`GetIndex` nodes that the user never wrote. If `withResource` were a native node, the error would say "resource disposal failed in withResource" instead of "handler at parallel branch 1, chain position 2 failed." This is the strongest argument for native nodes.
 
 **Debugging and visualization.** If you ever build a workflow visualizer, TS-expanded nodes are opaque. A `tap` looks like a Parallel-Chain-Constant-Identity-Merge tree. A native `Tap` node would render as a single labeled box. The scheduler's view of the AST doesn't match the user's intent.
 

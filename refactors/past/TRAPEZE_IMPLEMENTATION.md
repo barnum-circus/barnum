@@ -240,7 +240,7 @@ export const mergeHandler = createHandler({ handle: async (input) => Object.assi
 // Extracts a field from an object
 // Used via stepConfig: { field: "errors" }
 // { errors: [...], other: ... } => [...]
-export const extractFieldHandler = createHandler({
+export const getFieldHandler = createHandler({
   handle: async (input, config) => input[config.field],
 });
 ```

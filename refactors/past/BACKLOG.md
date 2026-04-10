@@ -8,7 +8,7 @@
 
 - Pre-compilation / serialization — PRECOMPILATION.md
 - Loop with closure providing scoped recur/done — LOOP_WITH_CLOSURE.md
-- Future combinators (extractIndex, option-returning extractField, unwrap, pick, withResource redesign) — FUTURE_COMBINATORS.md
+- Future combinators (getIndex, option-returning getField, unwrap, pick, withResource redesign) — FUTURE_COMBINATORS.md
 
 ## Fixes
 

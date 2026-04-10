@@ -363,7 +363,7 @@ Operations:
 - **Identity:** Passes input through unchanged. Used for the Arrow problem (preserving context across destructive nodes).
 - **Merge:** Merges an array of objects into a single object. `[{a:1}, {b:2}]` becomes `{a:1, b:2}`.
 - **Flatten:** Flattens a nested array one level. `[[1,2], [3]]` becomes `[1,2,3]`.
-- **ExtractField(field):** Extracts a field from an object. `{a:1, b:2}` with field "a" becomes `1`.
+- **GetField(field):** Extracts a field from an object. `{a:1, b:2}` with field "a" becomes `1`.
 
 **TS builders:**
 
@@ -371,7 +371,7 @@ Operations:
 identity()                           // Builtin Identity
 merge()                              // Builtin Merge
 flatten()                            // Builtin Flatten
-extractField("errors")               // Builtin ExtractField
+getField("errors")               // Builtin GetField
 tag("Continue")                      // Builtin Tag
 recur()                              // tag("Continue")
 done()                               // tag("Break")
@@ -384,7 +384,7 @@ done()                               // tag("Break")
 { "kind": "Builtin", "op": { "type": "Identity" } }
 { "kind": "Builtin", "op": { "type": "Merge" } }
 { "kind": "Builtin", "op": { "type": "Flatten" } }
-{ "kind": "Builtin", "op": { "type": "ExtractField", "field": "errors" } }
+{ "kind": "Builtin", "op": { "type": "GetField", "field": "errors" } }
 ```
 
 **Rust evaluation:**
@@ -395,7 +395,7 @@ Action::Builtin(BuiltinAction { op }) => match op {
     BuiltinOp::Identity => Ok(input),
     BuiltinOp::Merge => { /* Object.assign({}, ...input) */ },
     BuiltinOp::Flatten => { /* input.flat(1) */ },
-    BuiltinOp::ExtractField(ExtractFieldOp { field }) => { /* input[field] */ },
+    BuiltinOp::GetField(GetFieldOp { field }) => { /* input[field] */ },
 }
 ```
 
@@ -413,7 +413,7 @@ type BuiltinOp =
   | { type: "Identity" }
   | { type: "Merge" }
   | { type: "Flatten" }
-  | { type: "ExtractField"; field: string }
+  | { type: "GetField"; field: string }
 
 type Action =
   | { kind: "Call"; handler: HandlerKind }

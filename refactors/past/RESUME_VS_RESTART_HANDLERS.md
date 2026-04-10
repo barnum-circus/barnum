@@ -267,7 +267,7 @@ let (value, state): (Value, Value) = serde_json::from_value(value)?;
 
 **Before** (`lib.rs:440`): `dispatch_to_handler` suspends the Handle and runs the handler DAG as a child of the Handle frame with `ParentRef::Handle { side: Handler }`.
 
-**After for ResumeHandle/ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never suspended. State is initialized from the input value (same as current Handle). Combinators embed state into the input tuple alongside the pipeline input (bind: `All(...bindings, Identity)`, counter: `All(Constant(0), Identity)`). The body does `ExtractIndex(N)` to retrieve the pipeline input.
+**After for ResumeHandle/ResumePerform:** The handler DAG runs at the Perform site, not at the Handle. The ResumeHandle frame is never suspended. State is initialized from the input value (same as current Handle). Combinators embed state into the input tuple alongside the pipeline input (bind: `All(...bindings, Identity)`, counter: `All(Constant(0), Identity)`). The body does `GetIndex(N)` to retrieve the pipeline input.
 
 #### 6a. `advance` match arm for `FlatAction::ResumeHandle`
 
@@ -432,16 +432,16 @@ All handler DAGs drop their `Tag("Resume")`/`Tag("RestartBody")` wrapping.
 
 | Combinator | Before | After |
 |-----------|--------|-------|
-| `tryCatch` | `Chain(ExtractField("payload"), Tag("RestartBody"))` | `ExtractIndex(0)` |
-| `race` | `Chain(ExtractField("payload"), Tag("RestartBody"))` | `ExtractIndex(0)` |
-| `loop` | `Tag("RestartBody")` wrapper | `ExtractIndex(0)` |
-| `scope`/`jump` | `Tag("RestartBody")` wrapper | `ExtractIndex(0)` |
+| `tryCatch` | `Chain(GetField("payload"), Tag("RestartBody"))` | `GetIndex(0)` |
+| `race` | `Chain(GetField("payload"), Tag("RestartBody"))` | `GetIndex(0)` |
+| `loop` | `Tag("RestartBody")` wrapper | `GetIndex(0)` |
+| `scope`/`jump` | `Tag("RestartBody")` wrapper | `GetIndex(0)` |
 
 **ResumeHandle handlers** receive `[payload, state]` and produce `[value, new_state]`. Handlers that don't mutate state pass state through unchanged.
 
 | Combinator | Before | After |
 |-----------|--------|-------|
-| `bind` (readVar) | `Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))` | `All(Chain(ExtractIndex(1), ExtractIndex(n)), ExtractIndex(1))` — value = state[n], new_state = state (unchanged) |
+| `bind` (readVar) | `Chain(GetIndex(1), Chain(GetIndex(n), Tag("Resume")))` | `All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))` — value = state[n], new_state = state (unchanged) |
 | `counter` | N/A | TypeScript Invoke: `([payload, state]) => [state, state + 1]` — value = current count, new_state = incremented. Concurrent calls may race on state (lost update). |
 
 The `All` node constructs the `[value, state]` tuple that the engine destructures (by convention, index 0 = value, index 1 = new state).
@@ -456,10 +456,10 @@ The `All` node constructs the `[value, state]` tuple that the engine destructure
 Chain(Tag("Continue"),
   Handle(effectId,
     Branch({
-      Continue: Chain(ExtractField("value"), body),
-      Break: Chain(ExtractField("value"), recovery),
+      Continue: Chain(GetField("value"), body),
+      Break: Chain(GetField("value"), recovery),
     }),
-    Chain(ExtractField("payload"), Tag("RestartBody"))
+    Chain(GetField("payload"), Tag("RestartBody"))
   )
 )
 // throwError = Chain(Tag("Break"), Perform(effectId))
@@ -471,8 +471,8 @@ Chain(Tag("Continue"),
 Chain(Tag("Continue"),
   RestartHandle(restartHandlerId,
     Branch({
-      Continue: Chain(ExtractField("value"), body),
-      Break: Chain(ExtractField("value"), recovery),
+      Continue: Chain(GetField("value"), body),
+      Break: Chain(GetField("value"), recovery),
     }),
     ExtractPayloadHandler
   )
@@ -486,15 +486,15 @@ Chain(Tag("Continue"),
 Chain(Tag("Continue"),
   Handle(effectId,
     Branch({
-      Continue: Chain(ExtractField("value"),
+      Continue: Chain(GetField("value"),
         All(
           Chain(a, Chain(Tag("Break"), Perform(effectId))),
           Chain(b, Chain(Tag("Break"), Perform(effectId))),
         )
       ),
-      Break: Chain(ExtractField("value"), identity()),
+      Break: Chain(GetField("value"), identity()),
     }),
-    Chain(ExtractField("payload"), Tag("RestartBody"))
+    Chain(GetField("payload"), Tag("RestartBody"))
   )
 )
 ```
@@ -505,20 +505,20 @@ Chain(Tag("Continue"),
 Chain(Tag("Continue"),
   RestartHandle(restartHandlerId,
     Branch({
-      Continue: Chain(ExtractField("value"),
+      Continue: Chain(GetField("value"),
         All(
           Chain(a, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
           Chain(b, Chain(Tag("Break"), RestartPerform(restartHandlerId))),
         )
       ),
-      Break: Chain(ExtractField("value"), identity()),
+      Break: Chain(GetField("value"), identity()),
     }),
     ExtractPayloadHandler
   )
 )
 ```
 
-Structurally identical. The only differences: `Handle` → `RestartHandle`, `Perform` → `RestartPerform`, `Chain(ExtractField("payload"), Tag("RestartBody"))` → `ExtractPayloadHandler`.
+Structurally identical. The only differences: `Handle` → `RestartHandle`, `Perform` → `RestartPerform`, `Chain(GetField("payload"), Tag("RestartBody"))` → `ExtractPayloadHandler`.
 
 ### 11. All restart handlers share the same handler DAG
 
@@ -527,7 +527,7 @@ Every restart handler's DAG is now: extract the payload (index 0) from `[payload
 ```ts
 const EXTRACT_PAYLOAD_HANDLER: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+  handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
 };
 ```
 
@@ -1061,10 +1061,10 @@ Update `readVar` — handler now produces `[value, new_state]` via `All`:
 function readVar(n: number): Action {
   return {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 1 } } },
     rest: {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: n } } },
       rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
     },
   };
@@ -1077,16 +1077,16 @@ function readVar(n: number): Action {
     actions: [
       {
         kind: "Chain",
-        first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
-        rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
+        first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 1 } } },
+        rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: n } } },
       },
-      { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
+      { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 1 } } },
     ],
   };
 }
 ```
 
-Handler receives `[payload, state]`. First All branch: `ExtractIndex(1)` → state, `ExtractIndex(n)` → state[n] = value. Second All branch: `ExtractIndex(1)` → state = new_state (unchanged). Result: `[state[n], state]`.
+Handler receives `[payload, state]`. First All branch: `GetIndex(1)` → state, `GetIndex(n)` → state[n] = value. Second All branch: `GetIndex(1)` → state = new_state (unchanged). Result: `[state[n], state]`.
 
 Update `bind` function — replace `Handle`/`Perform` with `ResumeHandle`/`ResumePerform`:
 
@@ -1154,9 +1154,9 @@ Update `read_var` test helper:
 // Before:
 fn read_var(n: u64) -> Action {
     chain(
-        invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+        invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
         chain(
-            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(n) }),
+            invoke_builtin(BuiltinKind::GetIndex { value: json!(n) }),
             invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
         ),
     )
@@ -1166,10 +1166,10 @@ fn read_var(n: u64) -> Action {
 fn read_var(n: u64) -> Action {
     parallel(vec![
         chain(
-            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
-            invoke_builtin(BuiltinKind::ExtractIndex { value: json!(n) }),
+            invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
+            invoke_builtin(BuiltinKind::GetIndex { value: json!(n) }),
         ),
-        invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+        invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
     ])
 }
 ```
@@ -1187,8 +1187,8 @@ resume_handle(e0, read_var(0), chain(resume_perform(e0), invoke("./echo.ts", "ec
 Update `resume_with_state` test — handler now returns `[value, state]` instead of `{"kind": "Resume", "value": V}`:
 
 ```rust
-// Before: handler DAG is Chain(ExtractIndex(1), Tag("Resume"))
-// After: handler DAG is All(ExtractIndex(1), ExtractIndex(1))
+// Before: handler DAG is Chain(GetIndex(1), Tag("Resume"))
+// After: handler DAG is All(GetIndex(1), GetIndex(1))
 //   — value = state, new_state = state
 ```
 
@@ -1472,7 +1472,7 @@ ParentRef::RestartHandle { frame_id, side } => match side {
     RestartHandleSide::Handler => {
         // Handler completed. Value is the new body input.
         // Extract payload from [payload, state].
-        // (The handler DAG is ExtractIndex(0), so value IS the payload.)
+        // (The handler DAG is GetIndex(0), so value IS the payload.)
         super::effects::restart_body(workflow_state, frame_id, value)
     }
 }
@@ -1593,7 +1593,7 @@ const RESTART_BODY_HANDLER: Action = {
 // After:
 const EXTRACT_PAYLOAD_HANDLER: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+  handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
 };
 ```
 
@@ -1720,7 +1720,7 @@ Update test helpers:
 // Before:
 fn handle(effect_id: u16, handler: Action, body: Action) -> Action { ... }
 fn perform(effect_id: u16) -> Action { ... }
-fn restart_body_handler() -> Action { chain(extract_index(0), tag_builtin("RestartBody")) }
+fn restart_body_handler() -> Action { chain(get_index(0), tag_builtin("RestartBody")) }
 fn restart_branch(...) -> Action { ... }
 fn break_perform(effect_id: u16) -> Action { chain(tag_builtin("Break"), perform(effect_id)) }
 
@@ -1738,7 +1738,7 @@ fn restart_perform(restart_handler_id: u16) -> Action {
     })
 }
 fn extract_payload_handler() -> Action {
-    extract_index(0)
+    get_index(0)
 }
 fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Action) -> Action {
     chain(
@@ -1747,8 +1747,8 @@ fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Acti
             restart_handler_id,
             extract_payload_handler(),
             branch(vec![
-                ("Continue", chain(extract_field("value"), continue_arm)),
-                ("Break", chain(extract_field("value"), break_arm)),
+                ("Continue", chain(get_field("value"), continue_arm)),
+                ("Break", chain(get_field("value"), break_arm)),
             ]),
         ),
     )

@@ -62,11 +62,11 @@ This requires a `tee` builtin in the Rust scheduler that clones the value, runs 
 ```ts
 chain(create, chain(action, chain(
   parallel(identity(), dispose),
-  extractIndex(0),  // doesn't exist yet
+  getIndex(0),  // doesn't exist yet
 )))
 ```
 
-This requires an `extractIndex` builtin (or a more general tuple destructuring combinator).
+This requires an `getIndex` builtin (or a more general tuple destructuring combinator).
 
 ### Option C: higher-order combinator in the scheduler
 

@@ -51,7 +51,7 @@ const babysitPr: TypedAction<PrUrl, PrResult> = pipe(
     pipe(
       bindInput<LoopState>((state) =>
         pipe(
-          state.get("pr_url"),
+          state.getField("pr_url"),
           waitForPrEvent,
           branch({
             CiCompleted: pipe(

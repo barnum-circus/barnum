@@ -65,13 +65,13 @@ produces:
 Chain(
   All(Identity, Constant(null)),            // [value, null] — state is unused
   ResumeHandle(resumeHandlerId,
-    body: Chain(ExtractIndex(0), workflow),  // extract value, run workflow body
+    body: Chain(GetIndex(0), workflow),  // extract value, run workflow body
     handler: All(                           // return [result, null]
       Chain(
-        ExtractIndex(0),                    // payload from [payload, state]
+        GetIndex(0),                    // payload from [payload, state]
         Branch({
-          Call0: Chain(ExtractField("value"), bodyA),
-          Call1: Chain(ExtractField("value"), bodyB),
+          Call0: Chain(GetField("value"), bodyA),
+          Call1: Chain(GetField("value"), bodyB),
         })
       ),
       Constant(null)                        // state passthrough (unused)
@@ -80,7 +80,7 @@ Chain(
 )
 ```
 
-`All(Identity, Constant(null))` creates the `[value, null]` tuple that ResumeHandle expects — same pattern as `bind`'s `All(...bindings, Identity)`. State is null (unused). Body extracts the original value with `ExtractIndex(0)`. Handler dispatches to function bodies by tag, returns `[result, null]` — engine delivers `result` to the perform site and writes `null` to state.
+`All(Identity, Constant(null))` creates the `[value, null]` tuple that ResumeHandle expects — same pattern as `bind`'s `All(...bindings, Identity)`. State is null (unused). Body extracts the original value with `GetIndex(0)`. Handler dispatches to function bodies by tag, returns `[result, null]` — engine delivers `result` to the perform site and writes `null` to state.
 
 ### Call tokens
 
@@ -129,7 +129,7 @@ New file. Follows the same pattern as `bind.ts`:
 1. Allocate one `ResumeHandlerId` (shared across all functions).
 2. Create call tokens: `Chain(Tag("CallN"), ResumePerform(resumeHandlerId))` for each function.
 3. Invoke the bodies callback with the call tokens to get function body ASTs.
-4. Build the handler Branch: `Branch({ Call0: bodyA, Call1: bodyB, ... })` with `ExtractField("value")` auto-unwrap.
+4. Build the handler Branch: `Branch({ Call0: bodyA, Call1: bodyB, ... })` with `GetField("value")` auto-unwrap.
 5. Return a function that takes the workflow body callback and produces the full AST.
 
 ```ts
@@ -161,7 +161,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
       kind: "Chain",
       first: {
         kind: "Invoke",
-        handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "value" } },
+        handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } },
       },
       rest: bodyActions[i] as Action,
     };
@@ -187,7 +187,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
           kind: "Chain",
           first: {
             kind: "Invoke",
-            handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+            handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
           },
           rest: userBody,
         },
@@ -198,7 +198,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
               kind: "Chain",
               first: {
                 kind: "Invoke",
-                handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+                handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
               },
               rest: { kind: "Branch", cases },
             },

@@ -54,7 +54,7 @@ The handler DAG receives `{ payload, state }` from the engine. State is unused f
 ```ts
 // Handler DAG (constructed by the tryCatch combinator, not user-written):
 Chain(
-  ExtractField("payload"),
+  GetField("payload"),
   Chain(recovery, Tag("Discard")),
 )
 ```
@@ -74,7 +74,7 @@ export function tryCatch<TIn, TOut, TError>(
 
   const handlerDag: Action = {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "payload" } } },
     rest: {
       kind: "Chain",
       first: recovery as Action,
@@ -212,7 +212,7 @@ The demo handlers are simple mocks: they randomly succeed or return an error. Th
 ### TypeScript compilation tests
 
 1. `tryCatch(body, recovery)` produces correct Handle/Perform AST.
-2. Handler DAG: `ExtractField("payload") → recovery → Tag("Discard")`.
+2. Handler DAG: `GetField("payload") → recovery → Tag("Discard")`.
 3. `invokeWithThrow` produces correct Chain/Branch AST.
 
 ### Rust engine tests (using existing substrate)

@@ -977,7 +977,7 @@ Loop (before Phase 4 migration): still exists as a separate frame kind. Doesn't 
 
 ## Test strategy
 
-Tests use synthetic effects — trivial handler DAGs built from existing builtins (Constant, ExtractField, Tag). No TypeScript handlers needed.
+Tests use synthetic effects — trivial handler DAGs built from existing builtins (Constant, GetField, Tag). No TypeScript handlers needed.
 
 ### Test helpers
 
@@ -998,7 +998,7 @@ fn always_resume_handler(value: Value) -> Action {
 
 fn echo_resume_handler() -> Action {
     chain(
-        invoke_builtin(BuiltinKind::ExtractField { value: json!("payload") }),
+        invoke_builtin(BuiltinKind::GetField { value: json!("payload") }),
         invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
     )
 }
@@ -1015,14 +1015,14 @@ fn always_discard_handler(value: Value) -> Action {
 
 fn always_restart_body_handler() -> Action {
     chain(
-        invoke_builtin(BuiltinKind::ExtractField { value: json!("payload") }),
+        invoke_builtin(BuiltinKind::GetField { value: json!("payload") }),
         invoke_builtin(BuiltinKind::Tag { value: json!("RestartBody") }),
     )
 }
 
 fn resume_with_state_handler() -> Action {
     chain(
-        invoke_builtin(BuiltinKind::ExtractField { value: json!("state") }),
+        invoke_builtin(BuiltinKind::GetField { value: json!("state") }),
         invoke_builtin(BuiltinKind::Tag { value: json!("Resume") }),
     )
 }
@@ -1032,7 +1032,7 @@ fn resume_with_state_handler() -> Action {
 /// If counter == 0: Discard with "gave up".
 /// (Implemented as a Branch on counter == 0.)
 fn retry_handler(give_up_value: Value) -> Action {
-    // In practice this would be a Branch on ExtractField("state") == 0.
+    // In practice this would be a Branch on GetField("state") == 0.
     // Pseudo-handler — exact AST depends on Branch/comparison builtins.
     // The test should construct this using the real Branch combinator.
     todo!("construct from Branch + decrement builtins")

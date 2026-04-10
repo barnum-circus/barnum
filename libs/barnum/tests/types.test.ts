@@ -37,7 +37,7 @@ import {
   drop,
   merge,
   flatten,
-  extractField,
+  getField,
   range,
   tag,
   Option as O,
@@ -220,8 +220,8 @@ describe("builtin types", () => {
     expect(action.kind).toBe("Invoke");
   });
 
-  it("extractField: { key: V } -> V", () => {
-    const action = extractField<{ name: string; age: number }, "name">("name");
+  it("getField: { key: V } -> V", () => {
+    const action = getField<{ name: string; age: number }, "name">("name");
     assertExact<
       IsExact<ExtractInput<typeof action>, { name: string; age: number }>
     >();
@@ -392,19 +392,19 @@ describe("postfix operator types", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it(".get(): extracts field from output", () => {
+  it(".getField(): extracts field from output", () => {
     const action = pipe(
       constant({ name: "test", age: 42 }),
-    ).get("name");
+    ).getField("name");
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
     expect(action.kind).toBe("Chain");
   });
 
-  it(".get() chains with .then()", () => {
+  it(".getField() chains with .then()", () => {
     const action = pipe(
       constant({ result: { data: [1, 2, 3] } }),
-    ).get("result").get("data");
+    ).getField("result").getField("data");
     assertExact<IsExact<ExtractOutput<typeof action>, number[]>>();
     expect(action.kind).toBe("Chain");
   });
@@ -700,7 +700,7 @@ describe("bind types", () => {
 
   it("VarRef output type matches binding output", () => {
     // computeName: Pipeable<{ project: string }, string>
-    const computeName = pipe(setup, extractField<{ initialized: boolean; project: string }, "project">("project"));
+    const computeName = pipe(setup, getField<{ initialized: boolean; project: string }, "project">("project"));
 
     bind([computeName], ([name]) => {
       // name should be VarRef<string> = TypedAction<never, string>
@@ -935,7 +935,7 @@ describe("tryCatch types", () => {
       (_throwError: TypedAction<{ code: number; msg: string }, never>) =>
         pipe(drop, constant("ok")),
       // Recovery receives { code: number; msg: string }, extracts msg
-      extractField<{ code: number; msg: string }, "msg">("msg"),
+      getField<{ code: number; msg: string }, "msg">("msg"),
     );
     assertExact<IsExact<ExtractOutput<typeof action>, string>>();
   });

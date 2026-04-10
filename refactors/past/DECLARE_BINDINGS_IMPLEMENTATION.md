@@ -84,8 +84,8 @@ pub enum BuiltinKind {
     Tag { value: Value },
     Merge,
     Flatten,
-    ExtractField { value: Value },
-    ExtractIndex { value: Value },
+    GetField { value: Value },
+    GetIndex { value: Value },
     Pick { value: Value },
 }
 
@@ -97,8 +97,8 @@ pub enum BuiltinKind {
     Tag { value: Value },
     Merge,
     Flatten,
-    ExtractField { value: Value },
-    ExtractIndex { value: Value },
+    GetField { value: Value },
+    GetIndex { value: Value },
     Pick { value: Value },
     /// Resolve a declared variable from the environment.
     /// The `id` is the unique DeclareId assigned at definition time.
@@ -653,8 +653,8 @@ export type BuiltinKind =
   | { kind: "Tag"; value: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "ExtractField"; value: string }
-  | { kind: "ExtractIndex"; value: number }
+  | { kind: "GetField"; value: string }
+  | { kind: "GetIndex"; value: number }
   | { kind: "Pick"; value: string[] };
 
 // AFTER:
@@ -665,8 +665,8 @@ export type BuiltinKind =
   | { kind: "Tag"; value: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "ExtractField"; value: string }
-  | { kind: "ExtractIndex"; value: number }
+  | { kind: "GetField"; value: string }
+  | { kind: "GetIndex"; value: number }
   | { kind: "Pick"; value: string[] }
   | { kind: "VarRef"; id: string };
 ```
@@ -706,7 +706,7 @@ let nextDeclareId = 0;
  * @example
  * ```ts
  * declare({
- *   branch: pipe(extractField("description"), deriveBranch),
+ *   branch: pipe(getField("description"), deriveBranch),
  * }, ({ branch }) =>
  *   pipe(
  *     implement,
@@ -1110,7 +1110,7 @@ it("Declare", () => {
 it("Declare with body pipeline", () => {
   const cfg = workflowBuilder().workflow(() =>
     declare({
-      branch: pipe(constant("main"), extractField<{ name: string }, "name">("name")),
+      branch: pipe(constant("main"), getField<{ name: string }, "name">("name")),
     }, ({ branch }) =>
       pipe(
         constant({ artifact: "test" }),
@@ -1152,7 +1152,7 @@ describe("declare binding types", () => {
 
   it("body receives pipeline input type", () => {
     const action = declare({
-      x: pipe(extractField<{ project: string }, "project">("project"), setup),
+      x: pipe(getField<{ project: string }, "project">("project"), setup),
     }, ({ x }) =>
       // Body's input is { project: string } (same as declare's input).
       // x is TypedAction<never, { initialized: boolean; project: string }>.

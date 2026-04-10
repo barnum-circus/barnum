@@ -7,13 +7,7 @@ import {
 } from "./ast.js";
 import { all } from "./all.js";
 import { chain } from "./chain.js";
-import {
-  constant,
-  identity,
-  extractField,
-  extractIndex,
-  tag,
-} from "./builtins.js";
+import { constant, identity, getField, getIndex, tag } from "./builtins.js";
 import { allocateResumeHandlerId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
@@ -84,11 +78,11 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
     ...(callTokens as FunctionRefs<TDefs>),
   ) as Action[];
 
-  // Branch cases: CallN → ExtractField("value") → bodyN
+  // Branch cases: CallN → GetField("value") → bodyN
   const cases: Record<string, Action> = {};
   for (let i = 0; i < bodyActions.length; i++) {
     cases[`Call${i}`] = chain(
-      extractField("value"),
+      getField("value"),
       bodyActions[i] as any,
     ) as Action;
   }
@@ -101,9 +95,9 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
       chain(all(identity, constant(UNUSED_STATE)), {
         kind: "ResumeHandle",
         resume_handler_id: resumeHandlerId,
-        body: chain(extractIndex(0), userBody as any) as Action,
+        body: chain(getIndex(0), userBody as any) as Action,
         handler: all(
-          chain(extractIndex(0), branch(cases) as any),
+          chain(getIndex(0), branch(cases) as any),
           constant(UNUSED_STATE),
         ) as Action,
       } as Action) as Action,

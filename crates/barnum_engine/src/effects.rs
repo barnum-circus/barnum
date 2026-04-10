@@ -226,10 +226,10 @@ mod tests {
         // Body invokes, then RestartPerform(1) fires — should skip inner(2), reach outer(1).
         let mut engine = engine_from(restart_handle(
             1,
-            extract_index(0), // outer handler: extract payload
+            get_index(0), // outer handler: extract payload
             restart_handle(
                 2,
-                extract_index(0), // inner handler (never reached)
+                get_index(0), // inner handler (never reached)
                 chain(invoke("./body.ts", "body"), restart_perform(1)),
             ),
         ));
@@ -242,7 +242,7 @@ mod tests {
 
         // Complete invoke → Chain trampoline → RestartPerform(1) fires.
         // Bubbles past inner RestartHandle(2), caught by outer RestartHandle(1).
-        // Handler = ExtractIndex(0) on ["body_out", "input"] → "body_out".
+        // Handler = GetIndex(0) on ["body_out", "input"] → "body_out".
         // Body re-advances with "body_out" → inner RestartHandle(2) → invoke dispatched.
         let (result, ts2) = complete_and_drive(
             &mut engine,
@@ -352,7 +352,7 @@ mod tests {
     async fn restart_handle_body_no_perform_exits_normally() {
         let mut engine = engine_from(restart_handle(
             1,
-            extract_index(0), // handler (never invoked)
+            get_index(0), // handler (never invoked)
             invoke("./body.ts", "run"),
         ));
         let root = engine.workflow_root();
@@ -481,10 +481,10 @@ mod tests {
         // Handler output becomes new body input. Body re-advances.
         let mut engine = engine_from(restart_handle(
             1,
-            extract_index(0), // outer handler (never reached)
+            get_index(0), // outer handler (never reached)
             restart_handle(
                 1,
-                extract_index(0), // inner handler: extract payload
+                get_index(0), // inner handler: extract payload
                 chain(restart_perform(1), invoke("./after.ts", "after")),
             ),
         ));
@@ -492,7 +492,7 @@ mod tests {
         advance(&mut engine, root, json!("input"), None).unwrap();
 
         // RestartPerform(1) fires during advance. Inner catches.
-        // Payload = "input". Handler = ExtractIndex(0) on [payload, state] = ["input", "input"].
+        // Payload = "input". Handler = GetIndex(0) on [payload, state] = ["input", "input"].
         // Handler produces "input". Body re-advances with "input".
         // Chain → RestartPerform fires again... infinite loop.
         //
@@ -737,7 +737,7 @@ mod tests {
                 e0,
                 resume_read_var(0),
                 chain(
-                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
                     invoke("./echo.ts", "echo"),
                 ),
             ),
@@ -855,7 +855,7 @@ mod tests {
                 e_outer,
                 resume_read_var(0),
                 chain(
-                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
                     chain(
                         parallel(vec![
                             invoke_builtin(BuiltinKind::Constant {
@@ -867,7 +867,7 @@ mod tests {
                             e_inner,
                             resume_read_var(0),
                             chain(
-                                invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                                invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
                                 chain(resume_perform(e_outer), resume_perform(e_inner)),
                             ),
                         ),
@@ -942,7 +942,7 @@ mod tests {
                 e0,
                 invoke("./handler.ts", "handler"),
                 chain(
-                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
                     resume_perform(e0),
                 ),
             ),
@@ -972,7 +972,7 @@ mod tests {
                 e0,
                 resume_read_var(1), // Extract state[1] = "b"
                 chain(
-                    invoke_builtin(BuiltinKind::ExtractIndex { value: json!(3) }),
+                    invoke_builtin(BuiltinKind::GetIndex { value: json!(3) }),
                     chain(resume_perform(e0), invoke("./echo.ts", "echo")),
                 ),
             ),

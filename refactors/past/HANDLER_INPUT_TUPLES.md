@@ -2,9 +2,9 @@
 
 ## Motivation
 
-The engine currently constructs handler input as a JSON object `{ "payload": ..., "state": ... }`. Handler DAGs extract fields using `ExtractField("payload")` and `ExtractField("state")`. The RESUME_VS_RESTART_HANDLERS refactor changes all structured data to positional tuples. Converting handler input from objects to tuples can land independently on master, shrinking the refactor diff.
+The engine currently constructs handler input as a JSON object `{ "payload": ..., "state": ... }`. Handler DAGs extract fields using `GetField("payload")` and `GetField("state")`. The RESUME_VS_RESTART_HANDLERS refactor changes all structured data to positional tuples. Converting handler input from objects to tuples can land independently on master, shrinking the refactor diff.
 
-After this change, handler input is `[payload, state]` (a 2-element JSON array). Handler DAGs use `ExtractIndex(0)` for payload and `ExtractIndex(1)` for state.
+After this change, handler input is `[payload, state]` (a 2-element JSON array). Handler DAGs use `GetIndex(0)` for payload and `GetIndex(1)` for state.
 
 ## What changes
 
@@ -33,13 +33,13 @@ The `EXTRACT_PAYLOAD` constant and `RESTART_BODY_HANDLER` extract payload from t
 // Before
 const EXTRACT_PAYLOAD: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } },
+  handler: { kind: "Builtin", builtin: { kind: "GetField", value: "payload" } },
 };
 
 // After
 const EXTRACT_PAYLOAD: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+  handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
 };
 ```
 
@@ -49,17 +49,17 @@ const EXTRACT_PAYLOAD: Action = {
 
 **File:** `libs/barnum/src/bind.ts:55-65`
 
-`readVar(n)` extracts `state[n]` from the handler input. Currently uses `ExtractField("state")`.
+`readVar(n)` extracts `state[n]` from the handler input. Currently uses `GetField("state")`.
 
 ```ts
 // Before
 function readVar(n: number): Action {
   return {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "state" } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "state" } } },
     rest: {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: n } } },
       rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
     },
   };
@@ -69,17 +69,17 @@ function readVar(n: number): Action {
 function readVar(n: number): Action {
   return {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 1 } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 1 } } },
     rest: {
       kind: "Chain",
-      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: n } } },
+      first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: n } } },
       rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Resume" } } },
     },
   };
 }
 ```
 
-`ExtractField("state")` → `ExtractIndex(1)`. The rest of the chain is unchanged.
+`GetField("state")` → `GetIndex(1)`. The rest of the chain is unchanged.
 
 ### 4. TypeScript: bind.ts comment
 
@@ -90,54 +90,54 @@ Update the doc comment on `readVar` to reflect the new structure:
 ```ts
 // Before
  * handler with `{ payload, state }`. For bind, `state` is the full All
- * Expanded AST: Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))
+ * Expanded AST: Chain(GetField("state"), Chain(GetIndex(n), Tag("Resume")))
 
 // After
  * handler with `[payload, state]`. For bind, `state` (index 1) is the full All
- * Expanded AST: Chain(ExtractIndex(1), Chain(ExtractIndex(n), Tag("Resume")))
+ * Expanded AST: Chain(GetIndex(1), Chain(GetIndex(n), Tag("Resume")))
 ```
 
 ### 5. Rust tests: handler DAGs and assertions
 
 **File:** `crates/barnum_engine/src/lib.rs`
 
-Multiple test helpers and assertions reference `ExtractField("payload")`, `ExtractField("state")`, and `json!({ "payload": ..., "state": ... })`.
+Multiple test helpers and assertions reference `GetField("payload")`, `GetField("state")`, and `json!({ "payload": ..., "state": ... })`.
 
 **Test helper `restart_body_handler()`** (line 1393):
 ```rust
 // Before
 fn restart_body_handler() -> Action {
-    chain(extract_field("payload"), tag_builtin("RestartBody"))
+    chain(get_field("payload"), tag_builtin("RestartBody"))
 }
 
 // After
 fn restart_body_handler() -> Action {
-    chain(extract_index(0), tag_builtin("RestartBody"))
+    chain(get_index(0), tag_builtin("RestartBody"))
 }
 ```
 
 **Test helper `echo_resume_handler()`** (line 1420-1427):
 ```rust
 // Before — extracts "payload", tags "Resume"
-invoke_builtin(BuiltinKind::ExtractField {
+invoke_builtin(BuiltinKind::GetField {
     value: json!("payload"),
 }),
 
 // After
-invoke_builtin(BuiltinKind::ExtractIndex {
+invoke_builtin(BuiltinKind::GetIndex {
     value: json!(0),
 }),
 ```
 
 **Test `resume_with_state()`** (line 1957-1962):
 ```rust
-// Before — handler DAG: ExtractField("state") -> Tag("Resume")
-invoke_builtin(BuiltinKind::ExtractField {
+// Before — handler DAG: GetField("state") -> Tag("Resume")
+invoke_builtin(BuiltinKind::GetField {
     value: json!("state"),
 }),
 
 // After
-invoke_builtin(BuiltinKind::ExtractIndex {
+invoke_builtin(BuiltinKind::GetIndex {
     value: json!(1),
 }),
 ```
@@ -148,13 +148,13 @@ invoke_builtin(BuiltinKind::ExtractIndex {
 - Line 2341: comment update
 - Line 2368-2372: `json!({ "payload": "input", "state": [42, "input"] })` → `json!(["input", [42, "input"]])`
 
-### 6. Not changed: ExtractField("value") in Branch
+### 6. Not changed: GetField("value") in Branch
 
-`ExtractField("value")` in `unwrapBranchCases()` (ast.ts:710, builtins.ts:328) extracts the `value` field from tagged variants (`{ kind: "Continue", value: ... }`). This is unrelated to handler input — it's the Branch routing mechanism. No change.
+`GetField("value")` in `unwrapBranchCases()` (ast.ts:710, builtins.ts:328) extracts the `value` field from tagged variants (`{ kind: "Continue", value: ... }`). This is unrelated to handler input — it's the Branch routing mechanism. No change.
 
-### 7. Not changed: extractField as a user-facing combinator
+### 7. Not changed: getField as a user-facing combinator
 
-`extractField()` in `builtins.ts` is a general-purpose combinator for extracting fields from objects. It remains available for user pipelines. The change is only to handler input construction and handler DAGs that extract from handler input.
+`getField()` in `builtins.ts` is a general-purpose combinator for extracting fields from objects. It remains available for user pipelines. The change is only to handler input construction and handler DAGs that extract from handler input.
 
 ## Verification
 

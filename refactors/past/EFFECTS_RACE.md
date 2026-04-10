@@ -43,7 +43,7 @@ Each branch chains its result into a Perform. The first Perform to fire triggers
 
 ```ts
 // Handler DAG: extract payload, tag as Discard
-Chain(ExtractField("payload"), Tag("Discard"))
+Chain(GetField("payload"), Tag("Discard"))
 ```
 
 ### TypeScript implementation
@@ -56,7 +56,7 @@ export function race<TIn, TOut>(
 
   const raceHandler: Action = {
     kind: "Chain",
-    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: "payload" } } },
+    first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "payload" } } },
     rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Discard" } } },
   };
 

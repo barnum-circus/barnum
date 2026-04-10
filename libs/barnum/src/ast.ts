@@ -91,8 +91,8 @@ export type BuiltinKind =
   | { kind: "Tag"; value: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "ExtractField"; value: string }
-  | { kind: "ExtractIndex"; value: number }
+  | { kind: "GetField"; value: string }
+  | { kind: "GetIndex"; value: number }
   | { kind: "Pick"; value: string[] }
   | { kind: "CollectSome" }
   | { kind: "SplitFirst" }
@@ -183,11 +183,11 @@ export type TypedAction<
   tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
     kind: TKind,
   ): TypedAction<In, TaggedUnion<TDef>, Refs>;
-  /** Extract a field from the output object. `a.get("name")` ≡ `pipe(a, extractField("name"))`. */
-  get<TField extends keyof Out & string>(
+  /** Extract a field from the output object. `a.getField("name")` ≡ `pipe(a, getField("name"))`. */
+  getField<TField extends keyof Out & string>(
     field: TField,
   ): TypedAction<In, Out[TField], Refs>;
-  /** Extract an element from the output tuple by index. `a.getIndex(0)` ≡ `pipe(a, extractIndex(0))`. */
+  /** Extract an element from the output tuple by index. `a.getIndex(0)` ≡ `pipe(a, getIndex(0))`. */
   getIndex<
     TIn,
     TTuple extends unknown[],
@@ -438,7 +438,7 @@ function tagMethod(this: TypedAction, kind: string): TypedAction {
   });
 }
 
-function getMethod(this: TypedAction, field: string): TypedAction {
+function getFieldMethod(this: TypedAction, field: string): TypedAction {
   return typedAction({
     kind: "Chain",
     first: this,
@@ -446,7 +446,7 @@ function getMethod(this: TypedAction, field: string): TypedAction {
       kind: "Invoke",
       handler: {
         kind: "Builtin",
-        builtin: { kind: "ExtractField", value: field },
+        builtin: { kind: "GetField", value: field },
       },
     },
   });
@@ -460,7 +460,7 @@ function getIndexMethod(this: TypedAction, index: number): TypedAction {
       kind: "Invoke",
       handler: {
         kind: "Builtin",
-        builtin: { kind: "ExtractIndex", value: index },
+        builtin: { kind: "GetIndex", value: index },
       },
     },
   });
@@ -618,7 +618,7 @@ export function typedAction<
       flatten: { value: flattenMethod, configurable: true },
       drop: { value: dropMethod, configurable: true },
       tag: { value: tagMethod, configurable: true },
-      get: { value: getMethod, configurable: true },
+      getField: { value: getFieldMethod, configurable: true },
       getIndex: { value: getIndexMethod, configurable: true },
       wrapInField: { value: wrapInFieldMethod, configurable: true },
       merge: { value: mergeMethod, configurable: true },
@@ -684,7 +684,7 @@ export function forEach<In, Out>(
 }
 
 /**
- * Insert ExtractField("value") before each case handler in a branch.
+ * Insert GetField("value") before each case handler in a branch.
  * This implements auto-unwrapping: the engine dispatches on `kind`, then
  * extracts `value` before passing to the handler. Case handlers receive
  * the payload directly, not the full `{ kind, value }` variant.
@@ -700,7 +700,7 @@ function unwrapBranchCases(
         kind: "Invoke",
         handler: {
           kind: "Builtin",
-          builtin: { kind: "ExtractField", value: "value" },
+          builtin: { kind: "GetField", value: "value" },
         },
       },
       rest: cases[key],
@@ -750,7 +750,7 @@ export type LoopResult<TContinue, TBreak> = TaggedUnion<
 
 const EXTRACT_PAYLOAD: Action = {
   kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "ExtractIndex", value: 0 } },
+  handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
 };
 
 const TAG_CONTINUE: Action = {
@@ -779,7 +779,7 @@ export const IDENTITY: Action = {
  * If the body completes normally → output is TOut.
  * If restart fires → body re-executes with the restarted value.
  *
- * Compiled form: `RestartHandle(id, ExtractIndex(0), body)`
+ * Compiled form: `RestartHandle(id, GetIndex(0), body)`
  */
 export function recur<TIn = never, TOut = any>(
   bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut>,
@@ -843,7 +843,7 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any>(
 
 /**
  * Build the restart+branch compiled form:
- * `Chain(Tag("Continue"), RestartHandle(id, ExtractIndex(0), Branch({ Continue: continueArm, Break: breakArm })))`
+ * `Chain(Tag("Continue"), RestartHandle(id, GetIndex(0), Branch({ Continue: continueArm, Break: breakArm })))`
  *
  * Input is tagged Continue so the Branch enters the continueArm on first execution.
  * Continue tag → restart → re-enters continueArm. Break tag → restart → runs breakArm, exits `RestartHandle`.

@@ -93,10 +93,10 @@ export function flatten<TElement>(): TypedAction<TElement[][], TElement[]> {
 }
 
 // ---------------------------------------------------------------------------
-// ExtractField — extract a single field from an object
+// GetField — extract a single field from an object
 // ---------------------------------------------------------------------------
 
-export function extractField<
+export function getField<
   TObj extends Record<string, unknown>,
   TField extends keyof TObj & string,
 >(field: TField): TypedAction<TObj, TObj[TField]> {
@@ -104,23 +104,23 @@ export function extractField<
     kind: "Invoke",
     handler: {
       kind: "Builtin",
-      builtin: { kind: "ExtractField", value: field },
+      builtin: { kind: "GetField", value: field },
     },
   });
 }
 
 // ---------------------------------------------------------------------------
-// ExtractIndex — extract a single element from an array by index
+// GetIndex — extract a single element from an array by index
 // ---------------------------------------------------------------------------
 
-export function extractIndex<TTuple extends unknown[], TIndex extends number>(
+export function getIndex<TTuple extends unknown[], TIndex extends number>(
   index: TIndex,
 ): TypedAction<TTuple, TTuple[TIndex]> {
   return typedAction({
     kind: "Invoke",
     handler: {
       kind: "Builtin",
-      builtin: { kind: "ExtractIndex", value: index },
+      builtin: { kind: "GetIndex", value: index },
     },
   });
 }
@@ -216,25 +216,25 @@ export function withResource<
     actions: [action as Action, identity as Action],
   });
 
-  // Step 3: all(extractIndex(0), chain(extractIndex(1), dispose)) → [TOut, unknown]
+  // Step 3: all(getIndex(0), chain(getIndex(1), dispose)) → [TOut, unknown]
   const disposeAndKeepResult = typedAction<
     [TOut, TResource & TIn],
     [TOut, unknown]
   >({
     kind: "All",
     actions: [
-      extractIndex<[TOut, TResource & TIn], 0>(0) as Action,
+      getIndex<[TOut, TResource & TIn], 0>(0) as Action,
       chain(
-        extractIndex<[TOut, TResource & TIn], 1>(1),
+        getIndex<[TOut, TResource & TIn], 1>(1),
         dispose as Pipeable<TResource & TIn, unknown>,
       ) as Action,
     ],
   });
 
-  // Step 4: extractIndex(0) → TOut
+  // Step 4: getIndex(0) → TOut
   return chain(
     chain(chain(acquireAndMerge, actionAndKeepMerged), disposeAndKeepResult),
-    extractIndex<[TOut, unknown], 0>(0),
+    getIndex<[TOut, unknown], 0>(0),
   ) as TypedAction<TIn, TOut>;
 }
 
@@ -383,7 +383,7 @@ const EXTRACT_VALUE: Action = {
   kind: "Invoke",
   handler: {
     kind: "Builtin",
-    builtin: { kind: "ExtractField", value: "value" },
+    builtin: { kind: "GetField", value: "value" },
   },
 };
 const DROP: Action = {
@@ -395,7 +395,7 @@ const IDENTITY: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Identity" } },
 };
 
-/** Wrap branch cases with ExtractField("value") auto-unwrapping. */
+/** Wrap branch cases with GetField("value") auto-unwrapping. */
 function optionBranch(someCaseBody: Action, noneCaseBody: Action): Action {
   return {
     kind: "Branch",
@@ -590,7 +590,7 @@ const TAG_ERR: Action = {
   handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
 };
 
-/** Wrap branch cases with ExtractField("value") auto-unwrapping. */
+/** Wrap branch cases with GetField("value") auto-unwrapping. */
 function resultBranch(okCaseBody: Action, errCaseBody: Action): Action {
   return {
     kind: "Branch",

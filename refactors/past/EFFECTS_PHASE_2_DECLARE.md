@@ -63,7 +63,7 @@ Chain(
   All(fetchUser, fetchConfig, Identity),       // → [User, Config, Input]
   Handle(effectId_0, readVar(0),
     Handle(effectId_1, readVar(1),
-      Chain(ExtractIndex(2), body)             // body gets pipeline_input
+      Chain(GetIndex(2), body)             // body gets pipeline_input
     )
   )
 )
@@ -71,7 +71,7 @@ Chain(
 
 `All(fetchUser, fetchConfig, Identity)` evaluates all bindings concurrently AND preserves the pipeline input (via Identity). The result is a tuple `[User, Config, pipeline_input]`.
 
-Handle initializes its state to the pipeline value (a one-line engine change: `state: None` → `state: Some(value.clone())`). All nested Handles receive the same tuple as state. Each handler extracts the bound value at its known index: `readVar(n)` does `ExtractField("state") → ExtractIndex(n) → Tag("Resume")`. The Perform carries no payload — the effectId alone identifies which binding.
+Handle initializes its state to the pipeline value (a one-line engine change: `state: None` → `state: Some(value.clone())`). All nested Handles receive the same tuple as state. Each handler extracts the bound value at its known index: `readVar(n)` does `GetField("state") → GetIndex(n) → Tag("Resume")`. The Perform carries no payload — the effectId alone identifies which binding.
 
 N bindings produce N nested Handle frames. This is the natural representation of N lexical bindings — `let a = ... in let b = ... in body`. Each `let` is a scope, each Handle is a scope.
 
@@ -91,11 +91,11 @@ When a Perform fires, the engine calls the handler with `{ payload, state }`. Fo
 
 ```ts
 function readVar(n: number): Action {
-  return pipe(extractField("state"), extractIndex(n), tag("Resume")) as Action;
+  return pipe(getField("state"), getIndex(n), tag("Resume")) as Action;
 }
 ```
 
-Type parameters on `extractField`, `extractIndex`, and `tag` are elided — this is an internal function, not user-facing. The expanded AST is `Chain(ExtractField("state"), Chain(ExtractIndex(n), Tag("Resume")))`.
+Type parameters on `getField`, `getIndex`, and `tag` are elided — this is an internal function, not user-facing. The expanded AST is `Chain(GetField("state"), Chain(GetIndex(n), Tag("Resume")))`.
 
 ### `VarRef<TValue>` — typed reference to a bound value
 
@@ -140,7 +140,7 @@ function bind<TIn, TBindings extends Pipeable<TIn, any>[], TOut>(
   // 4. Build nested Handles from inside out.
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-  let inner = chain(extractIndex(pipelineInputIndex), bodyAction);
+  let inner = chain(getIndex(pipelineInputIndex), bodyAction);
   for (let i = effectIds.length - 1; i >= 0; i--) {
     // Handle and Perform are Phase 1 AST nodes — no constructor yet.
     inner = typedAction({
@@ -284,7 +284,7 @@ ImplementAndReview: bindInput<WorktreeEnv>((env) => pipe(
 forEach(
   pipe(
     pipe(
-      extractField<FileEntry, "file">("file"),
+      getField<FileEntry, "file">("file"),
       migrate({ to: "Typescript" }),
     ).augment().pick("content", "outputPath"),
     writeFile,
@@ -292,14 +292,14 @@ forEach(
 )
 ```
 
-`augment` runs `extractField → migrate`, then merges `{ content }` back into the original `FileEntry` to produce `{ content, file, outputPath }`. Then `pick` narrows to `{ content, outputPath }` for `writeFile`.
+`augment` runs `getField → migrate`, then merges `{ content }` back into the original `FileEntry` to produce `{ content, file, outputPath }`. Then `pick` narrows to `{ content, outputPath }` for `writeFile`.
 
 #### After (with bindInput)
 
 ```ts
 forEach(
   bindInput<FileEntry>((entry) => pipe(
-    pipe(entry, extractField("file"), migrate({ to: "Typescript" })),
+    pipe(entry, getField("file"), migrate({ to: "Typescript" })),
     // Pipeline value is now { content }. entry VarRef still gives FileEntry.
     // Merge { content } with { outputPath } from the original entry.
     all(identity(), pipe(entry, pick("outputPath"))),
@@ -312,7 +312,7 @@ forEach(
 **What changed:**
 - No `augment` — data flow is explicit. `entry` VarRef provides the original `FileEntry` whenever needed.
 - `all(identity(), pipe(entry, pick("outputPath")))` collects `[{ content }, { outputPath: string }]`, then `merge()` combines them into `{ content, outputPath }`.
-- No explicit type parameters on `extractField` — `entry` produces `FileEntry`, so `extractField("file")` infers.
+- No explicit type parameters on `getField` — `entry` produces `FileEntry`, so `getField("file")` infers.
 
 ## Test strategy
 
@@ -321,18 +321,18 @@ forEach(
 These tests verify that `bind()` produces the correct AST structure. Compare the output of `bind(...)` against expected `Action` objects using `toEqual` (non-enumerable methods are invisible to `toEqual`).
 
 1. **Single binding**: `bind([exprA], ([a]) => body)` produces:
-   - `Chain(All(exprA, Identity), Handle(effectId_0, readVar(0), Chain(ExtractIndex(1), body)))`.
-   - Verify: outer All has 2 actions (binding + Identity). Handle wraps the body. ExtractIndex(1) feeds pipeline_input to body.
+   - `Chain(All(exprA, Identity), Handle(effectId_0, readVar(0), Chain(GetIndex(1), body)))`.
+   - Verify: outer All has 2 actions (binding + Identity). Handle wraps the body. GetIndex(1) feeds pipeline_input to body.
 
 2. **Two bindings**: `bind([exprA, exprB], ([a, b]) => body)` produces:
-   - `Chain(All(exprA, exprB, Identity), Handle(effectId_0, readVar(0), Handle(effectId_1, readVar(1), Chain(ExtractIndex(2), body))))`.
-   - Verify: outer All has 3 actions. Two nested Handles with distinct effectIds. readVar indices match positions. ExtractIndex(2) for pipeline_input.
+   - `Chain(All(exprA, exprB, Identity), Handle(effectId_0, readVar(0), Handle(effectId_1, readVar(1), Chain(GetIndex(2), body))))`.
+   - Verify: outer All has 3 actions. Two nested Handles with distinct effectIds. readVar indices match positions. GetIndex(2) for pipeline_input.
 
 3. **VarRef is a Perform node**: Each VarRef passed to the body callback is `{ kind: "Perform", effectId: <unique> }` with `TypedAction<never, TValue>` phantom types.
 
 4. **EffectIds are unique across bindings**: Two bindings produce two different effectIds. Two separate `bind` calls produce four distinct effectIds total.
 
-5. **readVar(n) structure**: `readVar(0)` is `Chain(ExtractField("state"), Chain(ExtractIndex(0), Tag("Resume")))`. Verify for n=0, n=1, n=2.
+5. **readVar(n) structure**: `readVar(0)` is `Chain(GetField("state"), Chain(GetIndex(0), Tag("Resume")))`. Verify for n=0, n=1, n=2.
 
 6. **bindInput compiles to bind with identity**: `bindInput(body)` produces the same AST as `bind([identity()], ([input]) => body(input))`.
 
@@ -348,7 +348,7 @@ These tests verify compile-time type safety by asserting that certain expression
 
 4. **Bind output type matches body output type**: `bind([...], ([...]) => actionReturningFoo)` has output type `Foo`.
 
-5. **bindInput infers VarRef type from context**: `bindInput<FileEntry>((entry) => pipe(entry, extractField("file")))` — `entry` is `VarRef<FileEntry>`, output type is `string` (FileEntry["file"]).
+5. **bindInput infers VarRef type from context**: `bindInput<FileEntry>((entry) => pipe(entry, getField("file")))` — `entry` is `VarRef<FileEntry>`, output type is `string` (FileEntry["file"]).
 
 ### Rust engine tests
 
@@ -356,17 +356,17 @@ These tests verify the runtime behavior of the Handle/Perform substrate when dri
 
 1. **Single binding, single read**: Construct `Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo))))`. Advance with input `"input"`. All produces `[42, "input"]`. Handle state = `[42, "input"]`. Perform fires, handler extracts state[0] = 42, resumes. Chain trampolines to echo with 42. Complete echo. Verify workflow output.
 
-2. **Single binding, body ignores VarRef**: `Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(ExtractIndex(1), Invoke(echo))))`. Body extracts pipeline_input (index 1) and passes it to echo, never Performing. Handle exits normally. Verify echo receives `"input"`.
+2. **Single binding, body ignores VarRef**: `Chain(All(Constant(42), Identity), Handle(e0, readVar(0), Chain(GetIndex(1), Invoke(echo))))`. Body extracts pipeline_input (index 1) and passes it to echo, never Performing. Handle exits normally. Verify echo receives `"input"`.
 
 3. **Two bindings, two reads**: `Chain(All(Constant("alice"), Constant(99), Identity), Handle(e0, readVar(0), Handle(e1, readVar(1), Chain(Perform(e0), Chain(Invoke(mid), Perform(e1))))))`. First Perform → handler0 → resumes with "alice". Chain to mid. Second Perform → handler1 → resumes with 99. Verify mid receives "alice", workflow exits with 99.
 
 4. **Two bindings, reads in reverse order**: Same as test 3 but body is `Chain(Perform(e1), Perform(e0))`. Perform(e1) is caught by inner Handle (effectId matches). Perform(e0) bubbles past inner Handle, caught by outer. Verify correct values returned for each.
 
-5. **Nested binds**: Outer bind binds "outer", inner bind binds "inner". Inner VarRef reads "inner" from inner Handle. Outer VarRef bubbles past inner Handle, reads "outer" from outer Handle. Verify both values correct. AST: `Handle(e_outer, readVar(0), Chain(ExtractIndex(1), Handle(e_inner, readVar(0), Chain(ExtractIndex(1), Chain(Perform(e_outer), Perform(e_inner))))))`. The outer All produces `["outer", <tuple from inner All>]`. The inner All produces `["inner", pipeline_input]`.
+5. **Nested binds**: Outer bind binds "outer", inner bind binds "inner". Inner VarRef reads "inner" from inner Handle. Outer VarRef bubbles past inner Handle, reads "outer" from outer Handle. Verify both values correct. AST: `Handle(e_outer, readVar(0), Chain(GetIndex(1), Handle(e_inner, readVar(0), Chain(GetIndex(1), Chain(Perform(e_outer), Perform(e_inner))))))`. The outer All produces `["outer", <tuple from inner All>]`. The inner All produces `["inner", pipeline_input]`.
 
 6. **Bind inside ForEach**: `ForEach(Chain(All(Identity, Identity), Handle(e0, readVar(0), Chain(Perform(e0), Invoke(echo)))))`. Input `[10, 20]`. Each iteration binds its own element. Verify echo receives 10 and 20 respectively (Handle frames are per-iteration, not shared).
 
-7. **Bind inside All (shared outer Handle)**: `Handle(e_outer, readVar(0), Chain(ExtractIndex(1), All(Chain(Perform(e_outer), Invoke(a)), Chain(Perform(e_outer), Invoke(b)))))`. All tuple = `[42, pipeline_input]`. Both branches Perform(e_outer). First dispatches handler, second stashed (Handle suspended). Handler resumes, first branch continues. Sweep retries second Perform. Verify both branches receive 42.
+7. **Bind inside All (shared outer Handle)**: `Handle(e_outer, readVar(0), Chain(GetIndex(1), All(Chain(Perform(e_outer), Invoke(a)), Chain(Perform(e_outer), Invoke(b)))))`. All tuple = `[42, pipeline_input]`. Both branches Perform(e_outer). First dispatches handler, second stashed (Handle suspended). Handler resumes, first branch continues. Sweep retries second Perform. Verify both branches receive 42.
 
 8. **Handler receives correct state shape**: Construct a Handle with a TS handler (not builtin) so we can inspect the dispatch value. Advance, trigger Perform. Verify the handler dispatch value is `{ "payload": <perform_input>, "state": <all_output_tuple> }`.
 
@@ -374,7 +374,7 @@ These tests verify the runtime behavior of the Handle/Perform substrate when dri
 
 ## No new builtins
 
-The per-binding-effectId design uses only existing builtins (`ExtractIndex`, `ExtractField`, `Tag`). No new builtins are needed.
+The per-binding-effectId design uses only existing builtins (`GetIndex`, `GetField`, `Tag`). No new builtins are needed.
 
 ## Deliverables
 

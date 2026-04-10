@@ -18,7 +18,7 @@ This document describes the **final state** after all phases are complete. The "
 | `Loop` | Repeat body until Break signal |
 | `Step` | Jump to a named step (mutual recursion) |
 
-10 builtin handler kinds: Constant, Identity, Drop, Tag, Merge, Flatten, ExtractField, ExtractIndex, Pick, CollectSome.
+10 builtin handler kinds: Constant, Identity, Drop, Tag, Merge, Flatten, GetField, GetIndex, Pick, CollectSome.
 
 ### The TS surface layer
 
@@ -64,7 +64,7 @@ Two layers, each doing what it's good at:
 
 **Rust (Effect substrate)**: Provides the structural routing mechanism. The scheduler knows nothing about what effects mean. It knows: when a Perform fires, walk parent pointers to find a matching Handle. The Handle frame stores opaque state (`serde_json::Value`). The engine constructs `{ payload, state }` and dispatches the handler DAG. When the handler DAG completes, read its tagged output (`Resume`, `Discard`, or `RestartBody`) and act accordingly — applying the `state_update` (`Unchanged` or `Updated(new_value)`). The body subgraph is naturally frozen while the handler runs (the Perform point is stuck, so no parent pointers need severing). That's it.
 
-The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal AST subgraphs executed by the Rust engine. Most are built entirely from builtins (ExtractField, Tag, etc.) and never leave Rust. Some include Invoke nodes that call TypeScript functions.
+The Rust engine is a pure structural router. It understands three universal continuation operations (Resume, Discard, RestartBody) and carries opaque state, but knows nothing about what effects mean semantically. All semantic meaning (what ReadVar does, what Throw does, what Continue does) lives in the handler DAGs, which are normal AST subgraphs executed by the Rust engine. Most are built entirely from builtins (GetField, Tag, etc.) and never leave Rust. Some include Invoke nodes that call TypeScript functions.
 
 ### Control Plane / Data Plane boundary
 
@@ -258,7 +258,7 @@ Phases 2, 3, and 4 can proceed in parallel after Phase 1. Phase 5 depends on Pha
 
 - New AST node types: `HandleAction`, `PerformAction` (no ResumeAction — resumption is internal to the Handle frame)
 - Each Handle-installing combinator gensyms a fresh `EffectId` and provides `Perform(thatId)` wrappers via HOAS callback
-- `declare()` function: array form, HOAS callback provides `VarRef<T>` nodes, compiles to `Chain(Parallel(exprs..., Identity), Handle(freshId, readVarHandler, Chain(ExtractIndex(n), body)))`
+- `declare()` function: array form, HOAS callback provides `VarRef<T>` nodes, compiles to `Chain(Parallel(exprs..., Identity), Handle(freshId, readVarHandler, Chain(GetIndex(n), body)))`
 - `tryCatch()` function: HOAS callback provides `throwError` token, compiles to Handle(freshId) + Perform(freshId)
 - `loop()` rewritten: HOAS callback provides `recur`/`done` tokens, compiles to two nested Handles
 - Standalone `recur()` / `done()` removed — tokens come from the HOAS callback only

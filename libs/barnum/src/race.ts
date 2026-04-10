@@ -53,7 +53,7 @@ function breakPerform(restartHandlerId: RestartHandlerId): Action {
  *
  * Compiled form (restart+Branch, same substrate as loop/earlyReturn):
  *   `Chain(Tag("Continue"),`
- *     `RestartHandle(id, ExtractIndex(0),`
+ *     `RestartHandle(id, GetIndex(0),`
  *       `Branch({`
  *         `Continue: All(Chain(a, breakPerform), Chain(b, breakPerform), ...),`
  *         `Break: identity,`

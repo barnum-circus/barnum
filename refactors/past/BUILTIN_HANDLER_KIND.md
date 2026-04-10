@@ -36,7 +36,7 @@ pub enum BuiltinKind {
     Tag { value: Value },
     Merge,
     Flatten,
-    ExtractField { value: Value },
+    GetField { value: Value },
 }
 ```
 
@@ -59,7 +59,7 @@ export type BuiltinKind =
   | { kind: "Tag"; value: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "ExtractField"; value: string };
+  | { kind: "GetField"; value: string };
 ```
 
 ### JSON examples
@@ -68,7 +68,7 @@ export type BuiltinKind =
 { "kind": "Builtin", "builtin": { "kind": "Constant", "value": 42 } }
 { "kind": "Builtin", "builtin": { "kind": "Identity" } }
 { "kind": "Builtin", "builtin": { "kind": "Tag", "value": "Continue" } }
-{ "kind": "Builtin", "builtin": { "kind": "ExtractField", "value": "id" } }
+{ "kind": "Builtin", "builtin": { "kind": "GetField", "value": "id" } }
 { "kind": "Builtin", "builtin": { "kind": "Drop" } }
 { "kind": "Builtin", "builtin": { "kind": "Merge" } }
 { "kind": "Builtin", "builtin": { "kind": "Flatten" } }
@@ -242,17 +242,17 @@ fn execute_builtin(builtin_kind: &BuiltinKind, input: &Value) -> Result<Value, B
             Ok(Value::Array(result))
         }
 
-        BuiltinKind::ExtractField { value: field } => {
+        BuiltinKind::GetField { value: field } => {
             let Value::String(field_name) = field else {
                 return Err(BuiltinError::TypeError {
-                    builtin: "ExtractField",
+                    builtin: "GetField",
                     expected: "string value",
                     actual: field.clone(),
                 });
             };
             let Value::Object(obj) = input else {
                 return Err(BuiltinError::TypeError {
-                    builtin: "ExtractField",
+                    builtin: "GetField",
                     expected: "object",
                     actual: input.clone(),
                 });
@@ -313,13 +313,13 @@ export function flatten<T>(): TypedAction<T[][], T[]> {
   } as TypedAction<T[][], T[]>;
 }
 
-export function extractField<
+export function getField<
   TObj extends Record<string, unknown>,
   TField extends keyof TObj & string,
 >(field: TField): TypedAction<TObj, TObj[TField]> {
   return {
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "ExtractField", value: field } },
+    handler: { kind: "Builtin", builtin: { kind: "GetField", value: field } },
   } as TypedAction<TObj, TObj[TField]>;
 }
 
@@ -352,7 +352,7 @@ export function done(): TypedAction<any, LoopResult<any, any>> {
 
 **Phase 1** (required for config desugaring): Constant, Identity
 
-**Phase 2** (fixes broken builtins): Drop, Tag, Merge, Flatten, ExtractField
+**Phase 2** (fixes broken builtins): Drop, Tag, Merge, Flatten, GetField
 
 ## Future work
 

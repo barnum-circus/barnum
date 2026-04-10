@@ -25,7 +25,7 @@ No validation of `Out` against the cases. No exhaustiveness. Any object with str
 // tests/types.test.ts:358 — works today because no input validation
 classifyErrors.branch({
   HasErrors: pipe(
-    extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+    getField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
     forEach(fix),
   ),
   Clean: drop(),  // no type param — works because .branch() doesn't check
@@ -34,7 +34,7 @@ classifyErrors.branch({
 // demos/convert-folder-to-ts/run.ts:59
 pipe(typeCheck, classifyErrors).branch({
   HasErrors: pipe(
-    extractField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
+    getField<Extract<ClassifyResult, { kind: "HasErrors" }>, "errors">("errors"),
     forEach(fix).drop(),
     recur<any>(),
   ),
@@ -51,7 +51,7 @@ branch({ HasErrors: drop<HasErrors>(), Clean: drop<Clean>() })
 // tests/steps.test.ts:87
 branch({
   HasErrors: pipe(
-    extractField<HasErrors, "errors">("errors"),
+    getField<HasErrors, "errors">("errors"),
     forEach(fix),
     recur<any>(),
   ),
@@ -158,7 +158,7 @@ classifyErrors.branch({
 ```ts
 // Works today (no input validation), keeps working (contravariant)
 classifyErrors.branch({
-  HasErrors: pipe(extractField<HasErrors, "errors">("errors"), forEach(fix)),
+  HasErrors: pipe(getField<HasErrors, "errors">("errors"), forEach(fix)),
   Clean: drop(),
 })
 ```
