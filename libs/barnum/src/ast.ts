@@ -95,6 +95,7 @@ export type BuiltinKind =
   | { kind: "ExtractIndex"; value: number }
   | { kind: "Pick"; value: string[] }
   | { kind: "CollectSome" }
+  | { kind: "SplitFirst" }
   | { kind: "WrapInField"; value: string }
   | { kind: "Sleep"; value: number };
 

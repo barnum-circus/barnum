@@ -278,6 +278,12 @@ pub enum BuiltinKind {
     /// Input: array of `{ kind: "Some", value: T }` or `{ kind: "None", value: _ }`.
     /// Output: array of unwrapped `T` values (only the `Some` entries).
     CollectSome,
+    /// Head/tail decomposition of an array.
+    ///
+    /// Input: array of values.
+    /// Output: `{ kind: "Some", value: [first, rest] }` for non-empty arrays,
+    ///         `{ kind: "None", value: null }` for empty arrays.
+    SplitFirst,
     /// Wrap input as `{ <field>: <input> }`.
     WrapInField {
         /// The field name (must be a JSON string).

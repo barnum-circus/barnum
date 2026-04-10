@@ -132,6 +132,23 @@ pub async fn execute_builtin(
 
         BuiltinKind::TagBreak => Ok(json!({ "kind": "Break", "value": input })),
 
+        BuiltinKind::SplitFirst => {
+            let Value::Array(items) = input else {
+                return Err(BuiltinError {
+                    builtin: "SplitFirst",
+                    expected: "array",
+                    actual: input.clone(),
+                });
+            };
+            if items.is_empty() {
+                Ok(json!({ "kind": "None", "value": null }))
+            } else {
+                let first = items[0].clone();
+                let rest = Value::Array(items[1..].to_vec());
+                Ok(json!({ "kind": "Some", "value": [first, rest] }))
+            }
+        }
+
         BuiltinKind::CollectSome => {
             let Value::Array(items) = input else {
                 return Err(BuiltinError {
@@ -460,6 +477,38 @@ mod tests {
     #[tokio::test]
     async fn collect_some_rejects_non_array() {
         let result = execute_builtin(&BuiltinKind::CollectSome, &json!("not array")).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn split_first_non_empty() {
+        let input = json!([1, 2, 3]);
+        let result = execute_builtin(&BuiltinKind::SplitFirst, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Some", "value": [1, [2, 3]]})
+        );
+    }
+
+    #[tokio::test]
+    async fn split_first_single_element() {
+        let input = json!(["only"]);
+        let result = execute_builtin(&BuiltinKind::SplitFirst, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Some", "value": ["only", []]})
+        );
+    }
+
+    #[tokio::test]
+    async fn split_first_empty() {
+        let result = execute_builtin(&BuiltinKind::SplitFirst, &json!([])).await;
+        assert_eq!(result.unwrap(), json!({"kind": "None", "value": null}));
+    }
+
+    #[tokio::test]
+    async fn split_first_rejects_non_array() {
+        let result = execute_builtin(&BuiltinKind::SplitFirst, &json!("not array")).await;
         assert!(result.is_err());
     }
 

@@ -15,6 +15,7 @@ export {
   withResource,
   tap,
   range,
+  splitFirst,
   wrapInField,
   Option,
   Result,

@@ -318,6 +318,31 @@ export function range(start: number, end: number): TypedAction<any, number[]> {
 }
 
 // ---------------------------------------------------------------------------
+// SplitFirst — head/tail decomposition of an array
+// ---------------------------------------------------------------------------
+
+/**
+ * Deconstruct an array into its first element and the remaining elements.
+ * `TElement[] → Option<[TElement, TElement[]]>`
+ *
+ * Returns `Some([first, rest])` for non-empty arrays, `None` for empty arrays.
+ * This is the array equivalent of cons/uncons — enables recursive iteration
+ * patterns via `loop` + `splitFirst` + `branch`.
+ *
+ * This is a builtin (SplitFirst) because it requires array-length branching
+ * that can't be composed from existing AST nodes.
+ */
+export function splitFirst<TElement>(): TypedAction<
+  TElement[],
+  OptionT<[TElement, TElement[]]>
+> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Option namespace — combinators for Option<T> tagged unions
 // ---------------------------------------------------------------------------
 
