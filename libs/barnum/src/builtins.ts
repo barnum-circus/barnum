@@ -9,6 +9,7 @@ import {
   typedAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
+import { z } from "zod";
 
 /**
  * Typed combinators for structural data transformations.
@@ -16,6 +17,53 @@ import { chain } from "./chain.js";
  * All builtins emit `{ kind: "Builtin", builtin: { kind: ... } }` handler
  * kinds. The Rust scheduler executes them inline (no subprocess).
  */
+
+// ---------------------------------------------------------------------------
+// TaggedUnion Zod schema constructor
+// ---------------------------------------------------------------------------
+
+/**
+ * Reverse of VoidToNull: maps `null` back to `void` in the def so that
+ * `taggedUnionSchema({ Clean: z.null() })` produces the same phantom __def
+ * as `TaggedUnion<{ Clean: void }>`.
+ */
+type NullToVoid<TDef> = {
+  [K in keyof TDef]: TDef[K] extends null ? void : TDef[K];
+};
+
+/**
+ * Build a Zod schema for a `TaggedUnion<TDef>` — a discriminated union of
+ * `{ kind: K; value: V }` objects.
+ *
+ * Each key in `cases` becomes a variant. The value Zod schema validates the
+ * `value` field. Use `z.null()` for void variants.
+ *
+ * ```ts
+ * const schema = taggedUnionSchema({
+ *   HasErrors: z.array(TypeErrorValidator),
+ *   Clean: z.null(),
+ * });
+ * ```
+ */
+export function taggedUnionSchema<TDef extends Record<string, z.ZodTypeAny>>(
+  cases: TDef,
+): z.ZodType<
+  TaggedUnion<NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
+> {
+  const variants = Object.entries(cases).map(([kind, valueSchema]) =>
+    z.object({ kind: z.literal(kind), value: valueSchema }),
+  );
+  if (variants.length < 2) {
+    throw new Error("taggedUnionSchema requires at least 2 variants");
+  }
+  return z.discriminatedUnion("kind", [
+    variants[0],
+    variants[1],
+    ...variants.slice(2),
+  ]) as z.ZodType<
+    TaggedUnion<NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
+  >;
+}
 
 // ---------------------------------------------------------------------------
 // Constant — produce a fixed value (takes no pipeline input)
@@ -576,6 +624,21 @@ export const Option = {
       ),
     );
   },
+
+  /**
+   * Build a Zod schema for `Option<T>`.
+   *
+   * ```ts
+   * const schema = Option.schema(z.string());
+   * // validates: { kind: "Some", value: "hello" } or { kind: "None", value: null }
+   * ```
+   */
+  schema<TValue>(valueSchema: z.ZodType<TValue>): z.ZodType<OptionT<TValue>> {
+    return z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("Some"), value: valueSchema }),
+      z.object({ kind: z.literal("None"), value: z.null() }),
+    ]) as z.ZodType<OptionT<TValue>>;
+  },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -827,5 +890,23 @@ export const Result = {
         { kind: "Chain", first: DROP, rest: constTrue },
       ),
     );
+  },
+
+  /**
+   * Build a Zod schema for `Result<TValue, TError>`.
+   *
+   * ```ts
+   * const schema = Result.schema(z.string(), z.number());
+   * // validates: { kind: "Ok", value: "hello" } or { kind: "Err", value: 42 }
+   * ```
+   */
+  schema<TValue, TError>(
+    okSchema: z.ZodType<TValue>,
+    errSchema: z.ZodType<TError>,
+  ): z.ZodType<ResultT<TValue, TError>> {
+    return z.discriminatedUnion("kind", [
+      z.object({ kind: z.literal("Ok"), value: okSchema }),
+      z.object({ kind: z.literal("Err"), value: errSchema }),
+    ]) as z.ZodType<ResultT<TValue, TError>>;
   },
 } as const;

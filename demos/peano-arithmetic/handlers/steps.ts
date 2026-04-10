@@ -1,4 +1,4 @@
-import { createHandler } from "@barnum/barnum";
+import { createHandler, taggedUnionSchema } from "@barnum/barnum";
 import { z } from "zod";
 
 /**
@@ -7,10 +7,7 @@ import { z } from "zod";
  */
 export const classifyZero = createHandler({
   inputValidator: z.number(),
-  outputValidator: z.discriminatedUnion("kind", [
-    z.object({ kind: z.literal("Zero"), value: z.null() }),
-    z.object({ kind: z.literal("NonZero"), value: z.number() }),
-  ]),
+  outputValidator: taggedUnionSchema({ Zero: z.null(), NonZero: z.number() }),
   handle: async ({ value: n }) => {
     if (n === 0) {
       return { kind: "Zero" as const, value: null };

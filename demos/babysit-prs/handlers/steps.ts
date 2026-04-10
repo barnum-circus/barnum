@@ -1,4 +1,4 @@
-import { createHandler } from "@barnum/barnum";
+import { createHandler, taggedUnionSchema } from "@barnum/barnum";
 import { z } from "zod";
 
 const ciErrors = [
@@ -13,20 +13,11 @@ const ciErrors = [
 export const checkPR = createHandler(
   {
     inputValidator: z.number(),
-    outputValidator: z.discriminatedUnion("kind", [
-      z.object({
-        kind: z.literal("ChecksFailed"),
-        value: z.object({ pr: z.number(), error: z.string() }),
-      }),
-      z.object({
-        kind: z.literal("ChecksPassed"),
-        value: z.object({ pr: z.number() }),
-      }),
-      z.object({
-        kind: z.literal("Landed"),
-        value: z.object({ pr: z.number() }),
-      }),
-    ]),
+    outputValidator: taggedUnionSchema({
+      ChecksFailed: z.object({ pr: z.number(), error: z.string() }),
+      ChecksPassed: z.object({ pr: z.number() }),
+      Landed: z.object({ pr: z.number() }),
+    }),
     handle: async ({ value: pr }) => {
       console.error(`[checkPR] Checking PR #${pr}...`);
 
@@ -80,10 +71,7 @@ export const landPR = createHandler(
 export const classifyRemaining = createHandler(
   {
     inputValidator: z.array(z.number()),
-    outputValidator: z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("HasPRs"), value: z.array(z.number()) }),
-      z.object({ kind: z.literal("AllDone"), value: z.null() }),
-    ]),
+    outputValidator: taggedUnionSchema({ HasPRs: z.array(z.number()), AllDone: z.null() }),
     handle: async ({ value }) => {
       if (value.length === 0) {
         console.error("[classifyRemaining] All PRs resolved");

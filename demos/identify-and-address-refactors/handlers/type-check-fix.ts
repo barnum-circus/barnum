@@ -10,6 +10,7 @@ import {
   pipe,
   forEach,
   loop,
+  taggedUnionSchema,
 } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -101,10 +102,7 @@ export const typeCheck = createHandler({
 
 export const classifyErrors = createHandler({
   inputValidator: z.array(TypeErrorValidator),
-  outputValidator: z.union([
-    z.object({ kind: z.literal("HasErrors"), value: z.array(TypeErrorValidator) }),
-    z.object({ kind: z.literal("Clean"), value: z.null() }),
-  ]),
+  outputValidator: taggedUnionSchema({ HasErrors: z.array(TypeErrorValidator), Clean: z.null() }),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
     console.error(`[classify-errors] Called with ${errors.length} error(s)`);
     if (errors.length > 0) {

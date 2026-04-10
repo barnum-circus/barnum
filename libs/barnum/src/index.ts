@@ -18,6 +18,7 @@ export {
   splitFirst,
   splitLast,
   wrapInField,
+  taggedUnionSchema,
   Option,
   Result,
 } from "./builtins.js";

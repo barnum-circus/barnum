@@ -13,6 +13,8 @@ import {
   loop,
   drop,
   pick,
+  Option,
+  taggedUnionSchema,
 } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -32,7 +34,7 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-import type { TaggedUnion, Option } from "@barnum/barnum";
+import type { TaggedUnion } from "@barnum/barnum";
 
 type ClassifyJudgmentResultDef = {
   Approved: void;
@@ -105,10 +107,7 @@ export const analyze = createHandler({
 
 export const assessWorthiness = createHandler({
   inputValidator: RefactorValidator,
-  outputValidator: z.union([
-    z.object({ kind: z.literal("Some"), value: RefactorValidator }),
-    z.object({ kind: z.literal("None"), value: z.null() }),
-  ]),
+  outputValidator: Option.schema(RefactorValidator),
   handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
     console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
 
@@ -258,10 +257,7 @@ export const judgeRefactor = createHandler({
 
 export const classifyJudgment = createHandler({
   inputValidator: JudgmentResultValidator,
-  outputValidator: z.union([
-    z.object({ kind: z.literal("Approved"), value: z.null() }),
-    z.object({ kind: z.literal("NeedsWork"), value: z.string() }),
-  ]),
+  outputValidator: taggedUnionSchema({ Approved: z.null(), NeedsWork: z.string() }),
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
     console.error(`[classify-judgment] Classifying judgment (approved=${judgment.approved})`);
     if (judgment.approved) {
