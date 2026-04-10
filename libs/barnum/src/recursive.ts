@@ -92,7 +92,7 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
     const userBody = entryFn(...(callTokens as FunctionRefs<TDefs>)) as Action;
 
     return typedAction<any, TOut>(
-      chain(all(identity, constant(UNUSED_STATE)), {
+      chain(all(identity(), constant(UNUSED_STATE)), {
         kind: "ResumeHandle",
         resume_handler_id: resumeHandlerId,
         body: chain(getIndex(0), userBody as any) as Action,

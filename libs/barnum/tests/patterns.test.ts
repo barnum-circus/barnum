@@ -415,7 +415,7 @@ describe("reader monad pattern", () => {
     const cfg = config(
       pipe(
         constant({ initialized: true, project: "test" }),
-        all(identity, build),
+        all(identity(), build),
         merge<[{ initialized: boolean; project: string }, { artifact: string }]>(),
       ),
     );
@@ -434,7 +434,7 @@ describe("bind", () => {
 
   it("single binding produces Chain(All(..., Identity), ResumeHandle(readVar, Chain(GetIndex, body)))", () => {
     const exprA = constant(42);
-    const bodyAction = identity;
+    const bodyAction = identity();
     const result = bind([exprA], ([_a]) => bodyAction);
 
     // Outer: Chain
@@ -474,7 +474,7 @@ describe("bind", () => {
   it("two bindings produce two nested Handles with distinct effectIds", () => {
     const exprA = constant("alice");
     const exprB = constant(99);
-    const bodyAction = identity;
+    const bodyAction = identity();
     const result = bind([exprA, exprB], ([_a, _b]) => bodyAction);
 
     const outer = result as { kind: "Chain"; first: any; rest: any };
@@ -509,7 +509,7 @@ describe("bind", () => {
     let capturedVarRef: any;
     bind([exprA], ([a]) => {
       capturedVarRef = a;
-      return identity;
+      return identity();
     });
 
     expect(capturedVarRef.kind).toBe("ResumePerform");
@@ -518,14 +518,14 @@ describe("bind", () => {
 
   it("resume_handler_ids are unique across separate bind calls", () => {
     const resumeHandlerIds: number[] = [];
-    bind([constant(1), constant(2)], ([_a, _b]) => identity);
+    bind([constant(1), constant(2)], ([_a, _b]) => identity());
     // First bind uses resume_handler_ids 0, 1
 
     let ref1: any, ref2: any;
     bind([constant(3), constant(4)], ([a, b]) => {
       ref1 = a;
       ref2 = b;
-      return identity;
+      return identity();
     });
     // Second bind uses resume_handler_ids 2, 3
     resumeHandlerIds.push(ref1.resume_handler_id, ref2.resume_handler_id);
@@ -542,7 +542,7 @@ describe("bind", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
-      ([_a, _b, _c]) => identity,
+      ([_a, _b, _c]) => identity(),
     );
 
     const outer = result as { kind: "Chain"; first: any; rest: any };

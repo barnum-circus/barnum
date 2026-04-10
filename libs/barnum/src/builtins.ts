@@ -32,10 +32,12 @@ export function constant<TValue>(value: TValue): TypedAction<any, TValue> {
 // Identity — pass input through unchanged
 // ---------------------------------------------------------------------------
 
-export const identity: TypedAction<any, any> = typedAction({
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-});
+export function identity<TValue = any>(): TypedAction<TValue, TValue> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Identity" } },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Drop — discard pipeline value
@@ -201,7 +203,7 @@ export function withResource<
   const acquireAndMerge = chain(
     typedAction<TIn, [TResource, TIn]>({
       kind: "All",
-      actions: [create as Action, identity as Action],
+      actions: [create as Action, identity() as Action],
     }),
     typedAction<[TResource, TIn], TResource & TIn>(mergeBuiltin),
   );
@@ -213,7 +215,7 @@ export function withResource<
     [TOut, TResource & TIn]
   >({
     kind: "All",
-    actions: [action as Action, identity as Action],
+    actions: [action as Action, identity() as Action],
   });
 
   // Step 3: all(getIndex(0), chain(getIndex(1), dispose)) → [TOut, unknown]

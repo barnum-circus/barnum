@@ -194,7 +194,7 @@ describe("builtin types", () => {
   });
 
   it("identity: T -> T", () => {
-    const action = identity;
+    const action = identity<{ x: number }>();
     assertExact<IsExact<ExtractInput<typeof action>, { x: number }>>();
     assertExact<IsExact<ExtractOutput<typeof action>, { x: number }>>();
     expect(action.kind).toBe("Invoke");
@@ -643,7 +643,7 @@ describe("Option namespace types", () => {
   it("Option.filter(predicate): Option<T> → Option<T>", () => {
     // Predicate that keeps strings longer than 3 chars (returns Option<string>)
     const predicate = pipe(
-      identity,
+      identity(),
       O.some<string>(), // trivial: always keep
     );
     const action = O.filter<string>(predicate);
@@ -893,7 +893,7 @@ describe("Result types", () => {
     const action = pipe(
       R.ok<string, number>(),
       R.map<string, number, number>(constant(42) as TypedAction<string, number>),
-      R.unwrapOr<number, number>(identity),
+      R.unwrapOr<number, number>(identity()),
     );
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
     assertExact<IsExact<ExtractOutput<typeof action>, number>>();
@@ -924,9 +924,9 @@ describe("tryCatch types", () => {
     tryCatch(
       (throwError) => {
         assertExact<IsExact<typeof throwError, TypedAction<string, never>>>();
-        return identity;
+        return identity();
       },
-      identity,
+      identity(),
     );
   });
 
@@ -966,7 +966,7 @@ describe("tryCatch types", () => {
   it("tryCatch produces Chain(Tag(Continue), Handle(...)) AST", () => {
     const action = tryCatch(
       (_throwError) => pipe(drop, constant("ok")),
-      identity,
+      identity(),
     );
     // Outer node is Chain(Tag("Continue"), Handle(...)) — restart+Branch pattern.
     expect(action.kind).toBe("Chain");
@@ -990,7 +990,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() infers types from this constraint", () => {
-    const resultAction = identity as TypedAction<string, Result<string, number>>;
+    const resultAction = identity() as TypedAction<string, Result<string, number>>;
     const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
@@ -998,7 +998,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() composes in tryCatch pipeline", () => {
-    const handler = identity as TypedAction<
+    const handler = identity() as TypedAction<
       { data: string },
       Result<{ data: string }, { code: number }>
     >;
@@ -1011,7 +1011,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() chains into further pipeline steps", () => {
-    const handler = identity as TypedAction<
+    const handler = identity() as TypedAction<
       { artifact: string },
       Result<{ verified: boolean }, string>
     >;
@@ -1027,7 +1027,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() produces Chain AST node", () => {
-    const resultAction = identity as TypedAction<void, Result<string, string>>;
+    const resultAction = identity() as TypedAction<void, Result<string, string>>;
     const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     expect(action.kind).toBe("Chain");

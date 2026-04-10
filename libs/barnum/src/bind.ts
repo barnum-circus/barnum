@@ -163,7 +163,10 @@ export function bind<TBindings extends Action[], TOut>(
   }
 
   // 5. All(...bindings, identity()) → nested Handles
-  const allActions = [...bindings.map((b) => b as Action), identity as Action];
+  const allActions = [
+    ...bindings.map((b) => b as Action),
+    identity() as Action,
+  ];
   return typedAction({
     kind: "Chain",
     first: { kind: "All", actions: allActions },
@@ -188,5 +191,5 @@ export function bind<TBindings extends Action[], TOut>(
 export function bindInput<TIn, TOut = any>(
   body: (input: VarRef<TIn>) => BodyResult<TOut>,
 ): TypedAction<TIn, TOut> {
-  return bind([identity], ([input]) => pipe(drop, body(input)));
+  return bind([identity()], ([input]) => pipe(drop, body(input)));
 }

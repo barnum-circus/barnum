@@ -82,7 +82,7 @@ export function pipe<T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11>(
 ): TypedAction<PipeIn<T1>, T11>;
 export function pipe(...actions: Action[]): Action {
   if (actions.length === 0) {
-    return identity;
+    return identity();
   }
   if (actions.length === 1) {
     return actions[0];

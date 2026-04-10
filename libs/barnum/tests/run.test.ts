@@ -47,7 +47,7 @@ describe.skipIf(!HAS_BINARY)("runPipeline return value", () => {
   });
 
   it("returns the input value when using identity", async () => {
-    const result = await runPipeline(identity, { data: "passthrough" });
+    const result = await runPipeline(identity(), { data: "passthrough" });
     expect(result).toEqual({ data: "passthrough" });
   });
 });
