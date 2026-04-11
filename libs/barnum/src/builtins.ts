@@ -50,19 +50,23 @@ export function taggedUnionSchema<TDef extends Record<string, z.ZodTypeAny>>(
 ): z.ZodType<
   TaggedUnion<NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
 > {
+  type Out = TaggedUnion<
+    NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>
+  >;
   const variants = Object.entries(cases).map(([kind, valueSchema]) =>
     z.object({ kind: z.literal(kind), value: valueSchema }),
   );
-  if (variants.length < 2) {
-    throw new Error("taggedUnionSchema requires at least 2 variants");
+  if (variants.length === 0) {
+    return z.never() as z.ZodType<Out>;
+  }
+  if (variants.length === 1) {
+    return variants[0] as z.ZodType<Out>;
   }
   return z.discriminatedUnion("kind", [
     variants[0],
     variants[1],
     ...variants.slice(2),
-  ]) as z.ZodType<
-    TaggedUnion<NullToVoid<{ [K in keyof TDef & string]: z.infer<TDef[K]> }>>
-  >;
+  ]) as z.ZodType<Out>;
 }
 
 // ---------------------------------------------------------------------------

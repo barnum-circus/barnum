@@ -314,6 +314,11 @@ type CaseHandler<TIn = unknown, TOut = unknown> = Action & {
  * field enables `.branch()` to decompose the union via simple indexing
  * (`keyof ExtractDef<Out>` and `ExtractDef<Out>[K]`) instead of
  * conditional types (`KindOf<Out>` and `Extract<Out, { kind: K }>`).
+ *
+ * **Void → null mapping:** Variants with `void` payload (e.g. `{ None: void }`)
+ * become `{ kind: "None"; value: null }` at runtime. This is handled by
+ * `VoidToNull` below — `void` has no runtime representation in JSON, so it
+ * serializes as `null`. Use `z.null()` in Zod schemas for void variants.
  */
 // 0 extends 1 & T detects `any` — preserve as-is to avoid collapsing.
 type VoidToNull<T> = 0 extends 1 & T

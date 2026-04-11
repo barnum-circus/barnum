@@ -11,8 +11,8 @@ import {
   pipe,
   forEach,
   resetEffectIdCounter,
-} from "../src/ast.js";
-import { constant } from "../src/builtins.js";
+  constant,
+} from "../src/index.js";
 import {
   setup,
   build,

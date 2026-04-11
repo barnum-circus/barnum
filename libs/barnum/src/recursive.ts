@@ -30,8 +30,7 @@ type BodyResult<TOut> = Action & {
   __out_contra?: (output: TOut) => void;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const UNUSED_STATE: any = undefined;
+const UNUSED_STATE = null;
 
 // ---------------------------------------------------------------------------
 // defineRecursiveFunctions

@@ -10,15 +10,13 @@ import {
   bindInput,
   resetEffectIdCounter,
   type OptionDef,
-} from "../src/ast.js";
-import {
   constant,
   drop,
   identity,
   merge,
   Option as O,
   Result as R,
-} from "../src/builtins.js";
+} from "../src/index.js";
 
 import {
   setup,

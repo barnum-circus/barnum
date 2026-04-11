@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { zodToCheckedJsonSchema } from "../src/schema.js";
+import { zodToCheckedJsonSchema } from "../src/index.js";
 
 const convert = (schema: z.ZodType) => zodToCheckedJsonSchema(schema, "test");
 
