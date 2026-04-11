@@ -38,6 +38,32 @@ Affects: `ast.ts`, `builtins.ts`, `all.ts`, `pipe.ts`, `bind.ts`, `race.ts`, `ha
 
 The `VoidToNull` type utility is an internal implementation detail, but its behavior (void variants become `null` at runtime) is user-visible. The JSDoc explaining this mapping should be on the public `TaggedUnion` type and on `Option`/`Result` type aliases, not buried on the internal utility type.
 
+### 1.4 `UNUSED_STATE` sentinel
+
+**File:** `libs/barnum/src/recursive.ts:34`
+
+```ts
+const UNUSED_STATE: any = undefined;
+```
+
+This is `undefined as any` with a name. It's used as the initial state for the ResumeHandle in `defineRecursiveFunctions`. The `any` hides what this actually is — it should be `null` with a real type, or the ResumeHandle API should support stateless handlers (no initial state required).
+
+### 1.5 Global mutable effect ID counter
+
+**File:** `libs/barnum/src/effect-id.ts:15`
+
+```ts
+let nextId = 0;
+```
+
+Module-level mutable state with `resetEffectIdCounter()` exported for test isolation. This is a code smell — tests that forget to call `resetEffectIdCounter()` in `beforeEach` produce non-deterministic IDs. The counter should be scoped to a builder/context object, or tests should not depend on specific ID values.
+
+### 1.6 Tests import from internal modules instead of index
+
+**Files:** `tests/patterns.test.ts:2-21`, `tests/round-trip.test.ts:6-15`
+
+Tests import from `../src/ast.js` and `../src/builtins.js` separately instead of from `../src/index.js`. This means the barrel export isn't being tested as a public API surface, and tests reach into internals unnecessarily. The split imports exist because `resetEffectIdCounter` is only exported from `ast.ts` (via re-export from `effect-id.ts`), not from `index.ts` — which is itself a problem (test-only function leaking into the public module).
+
 ---
 
 ## Tier 2: Stop constructing raw AST
@@ -114,7 +140,72 @@ Or better yet, since `constant({})` is a hack to produce an empty object for mer
 | `race.ts:20-41` | Shared AST constants | Delete |
 | `race.ts:65-82` | `race` | Use `chain()`, `all()` |
 | `race.ts:153-183` | `withTimeout` | Use `chain()`, `all()`, `tag()` |
-| `try-catch.ts` | Similar patterns | Same treatment |
+| `try-catch.ts:42-46` | `throwError` construction | Uses `TAG_BREAK` constant, raw `RestartPerform` node |
+| `recursive.ts:72-73` | Call token construction | `chain(tag(...), resumePerform as any) as Action` |
+| `recursive.ts:84-87` | Branch case bodies | `chain(getField("value"), bodyActions[i] as any) as Action` |
+| `recursive.ts:95-103` | ResumeHandle construction | Raw `ResumeHandle` node with `as Action` casts everywhere |
+| `bind.ts:66-96` | `readVar` function | 30 lines of raw AST for `all(chain(getIndex(1), getIndex(n)), getIndex(1))` |
+| `bind.ts:145-155` | Inner chain construction | Raw `Chain` + `Invoke` + `Builtin` + `GetIndex` for `chain(getIndex(n), body)` |
+| `bind.ts:157-163` | Nested ResumeHandle | Raw `ResumeHandle` nodes in a loop |
+| `bind.ts:166-174` | Outer chain+all | Raw `Chain` + `All` wrapping |
+| `pipe.ts:90-92` | `reduceRight` | `{ kind: "Chain", first, rest }` — should use `chain()` |
+| `handler.ts:247-267` | `createHandlerWithConfig` factory | 20 lines of raw `Chain`/`All`/`Invoke`/`Builtin` for `chain(all(identity(), constant(config)), invokeAction)` |
+| `run.ts:132` | `runPipeline` | `chain(constant(input) as Pipeable, pipeline as Pipeable) as Action` |
+
+---
+
+## Tier 2b: `as any` / `as Action` casts that aren't raw AST construction
+
+Distinct from Tier 2. These aren't about constructing raw AST nodes — they're about the type system failing to track actions through combinators. Even after Tier 2 rewrites everything to use `chain()` etc., these casts will remain unless the type signatures are fixed.
+
+### The problem
+
+The library's own combinators can't consume each other's output without casting:
+
+```ts
+// recursive.ts:73 — chain() returns TypedAction, but we need Action
+typedAction(chain(tag(`Call${i}`), resumePerform as any) as Action)
+
+// recursive.ts:86 — bodyActions[i] is Action but chain() wants Pipeable
+chain(getField("value"), bodyActions[i] as any) as Action
+
+// recursive.ts:98-103 — everything cast to Action
+chain(getIndex(0), userBody as any) as Action,
+chain(getIndex(0), branch(cases) as any),
+```
+
+The root cause: `recursive.ts`, `bind.ts`, and `try-catch.ts` work at the `Action` level (erased types), but `chain()`, `all()`, etc. accept `Pipeable` (typed). The runtime values are identical — `TypedAction` *is* `Action` plus phantom fields — but TypeScript can't assign `Action` to `Pipeable` because the phantom fields are missing.
+
+### The fix
+
+Provide untyped overloads or an internal `chainUntyped(a: Action, b: Action): Action` that skips the phantom type dance. Or accept `Action` directly in `chain()` and `all()` at the implementation level (the implementation signatures already do — it's the public overloads that are narrow). The internal modules need a way to compose actions without fighting the type system.
+
+### Locations
+
+| File | Lines | Cast |
+|------|-------|------|
+| `recursive.ts:73` | `resumePerform as any` | Action not assignable to Pipeable |
+| `recursive.ts:78` | `callTokens as FunctionRefs<TDefs>` | Same |
+| `recursive.ts:86` | `bodyActions[i] as any` | Action → Pipeable |
+| `recursive.ts:92` | `callTokens as FunctionRefs<TDefs>` | Same |
+| `recursive.ts:95-103` | Six `as Action` / `as any` casts | Everything forced through |
+| `bind.ts:140` | `body(...) as Action` | BodyResult → Action |
+| `bind.ts:167` | `b as Action` | Binding → Action |
+| `bind.ts:168` | `identity() as Action` | TypedAction → Action |
+| `run.ts:132` | `constant(input) as Pipeable, pipeline as Pipeable` | Type erasure at runtime boundary |
+
+### Duplicated `BodyResult` type
+
+`BodyResult<TOut>` is defined identically in both `recursive.ts:28-31` and `bind.ts:124-127`:
+
+```ts
+type BodyResult<TOut> = Action & {
+  __out?: () => TOut;
+  __out_contra?: (output: TOut) => void;
+};
+```
+
+Extract to a shared location (the leaf `core.ts` from Tier 2's fix).
 
 ---
 
@@ -155,6 +246,22 @@ This is lazy deserialization. Use the actual types. The `#[serde(rename = "value
 Rust has `TagContinue` and `TagBreak` as separate `BuiltinKind` variants, but no `TagSome`, `TagNone`, `TagOk`, `TagErr`. Meanwhile, the TS side already uses `Tag { value: "Continue" }` for everything — it doesn't even use `TagContinue`/`TagBreak`.
 
 Delete `TagContinue` and `TagBreak`. Use `Tag { tag: "Continue" }` and `Tag { tag: "Break" }`. One variant, one code path.
+
+### 3.5 `HandlerOutput<void> = never` is surprising
+
+**File:** `libs/barnum/src/handler.ts:95`
+
+```ts
+type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
+```
+
+The JSDoc says "fire-and-forget handlers compose without `.drop()`" — but `never` as an output type means "this handler never returns," not "this handler returns nothing useful." The correct type for "returns nothing" is `null` (consistent with how `void` maps to `null` elsewhere via `VoidToNull`). A handler that genuinely never returns (infinite loop, throws always) should be `never`. A handler that returns `void` should produce `null`.
+
+### 3.6 `bare T` type parameters in overloads
+
+**Files:** `all.ts`, `pipe.ts`
+
+`all.ts` uses `In, O1, O2, ...` and `pipe.ts` uses `T1, T2, T3, ...`. Neither follows the CLAUDE.md rule of descriptive type parameter names (`TInput`, `TOutput`, etc.). These are overload-heavy files where renaming is mechanical but improves readability at each call site's tooltip.
 
 ### 3.4 Rename `CollectSome` builtin
 
@@ -249,17 +356,17 @@ Implementation: extract keys, create `all(...values)`, then zip keys back into a
 
 ### 5.4 `first` and `last`
 
-Built atop `splitFirst`/`splitLast` + `Option.unwrapOr`:
+Return `Option<T>`, not the `[T, T[]]` tuple that `splitFirst`/`splitLast` produce:
 
 ```ts
-function first<T>(): TypedAction<ReadonlyArray<T>, T>
-// = chain(splitFirst(), Option.unwrapOr(/* panic or throw */))
+function first<T>(): TypedAction<ReadonlyArray<T>, Option<T>>
+// = chain(splitFirst(), Option.map(getIndex(0)))
 
-function last<T>(): TypedAction<ReadonlyArray<T>, T>
-// = chain(splitLast(), Option.unwrapOr(/* panic or throw */))
+function last<T>(): TypedAction<ReadonlyArray<T>, Option<T>>
+// = chain(splitLast(), Option.map(getIndex(1)))
 ```
 
-These panic on empty arrays (same as `Arr.first()` in `PRIMITIVE_BUILTINS.md`). Safe variants return `Option<T>` — which is just `splitFirst().mapOption(getIndex(0))` and `splitLast().mapOption(getIndex(1))`.
+The `splitFirst`/`splitLast` builtins return `Option<[T, T[]]>` (the element and the rest of the array). `first` and `last` are the common case where you just want the element, not the rest. Compose by mapping over the Option to extract index 0 or 1 from the tuple.
 
 ---
 
@@ -353,13 +460,14 @@ The user raises whether "list" is a better name than "array" for the collection 
 
 Items that must happen before others:
 
-1. **Tier 2 (chain constructor everywhere)** requires extracting `chain`/`typedAction` into a dependency-free file first.
-2. **Tier 4 (reduce builtin surface)** should happen after Tier 2 (since the JS implementations will use `chain()` etc.).
-3. **Tier 3.2-3.3 (Rust builtin field types, unify Tag variants)** should happen before or alongside Tier 4 (since Tier 4 removes some builtins from Rust).
-4. **Tier 5-6 (new API, new operations)** can happen independently of Tiers 2-4 but will be cleaner after them.
-5. **Tier 7 (structural)** is independent and can happen anytime.
+1. **Tier 2 (chain constructor everywhere)** requires extracting `chain`/`typedAction`/`BodyResult` into a dependency-free file first.
+2. **Tier 2b (eliminate `as any` casts)** should happen alongside or after Tier 2. The internal untyped overloads need to exist before the casts can be removed.
+3. **Tier 4 (reduce builtin surface)** should happen after Tier 2 (since the JS implementations will use `chain()` etc.).
+4. **Tier 3.2-3.3 (Rust builtin field types, unify Tag variants)** should happen before or alongside Tier 4 (since Tier 4 removes some builtins from Rust).
+5. **Tier 5-6 (new API, new operations)** can happen independently of Tiers 2-4 but will be cleaner after them.
+6. **Tier 7 (structural)** is independent and can happen anytime.
 
-Suggested execution order: 1 → 2 → 3 → 4 → 5 → 6 → 7.
+Suggested execution order: 1 → 2 → 2b → 3 → 4 → 5 → 6 → 7.
 
 ---
 
