@@ -152,48 +152,6 @@ Or better yet, since `constant({})` is a hack to produce an empty object for mer
 | `handler.ts:247-267` | `createHandlerWithConfig` factory | 20 lines of raw `Chain`/`All`/`Invoke`/`Builtin` for `chain(all(identity(), constant(config)), invokeAction)` |
 | `run.ts:132` | `runPipeline` | `chain(constant(input) as Pipeable, pipeline as Pipeable) as Action` |
 
----
-
-## Tier 2b: `as any` / `as Action` casts that aren't raw AST construction
-
-Distinct from Tier 2. These aren't about constructing raw AST nodes — they're about the type system failing to track actions through combinators. Even after Tier 2 rewrites everything to use `chain()` etc., these casts will remain unless the type signatures are fixed.
-
-### The problem
-
-The library's own combinators can't consume each other's output without casting:
-
-```ts
-// recursive.ts:73 — chain() returns TypedAction, but we need Action
-typedAction(chain(tag(`Call${i}`), resumePerform as any) as Action)
-
-// recursive.ts:86 — bodyActions[i] is Action but chain() wants Pipeable
-chain(getField("value"), bodyActions[i] as any) as Action
-
-// recursive.ts:98-103 — everything cast to Action
-chain(getIndex(0), userBody as any) as Action,
-chain(getIndex(0), branch(cases) as any),
-```
-
-The root cause: `recursive.ts`, `bind.ts`, and `try-catch.ts` work at the `Action` level (erased types), but `chain()`, `all()`, etc. accept `Pipeable` (typed). The runtime values are identical — `TypedAction` *is* `Action` plus phantom fields — but TypeScript can't assign `Action` to `Pipeable` because the phantom fields are missing.
-
-### The fix
-
-Provide untyped overloads or an internal `chainUntyped(a: Action, b: Action): Action` that skips the phantom type dance. Or accept `Action` directly in `chain()` and `all()` at the implementation level (the implementation signatures already do — it's the public overloads that are narrow). The internal modules need a way to compose actions without fighting the type system.
-
-### Locations
-
-| File | Lines | Cast |
-|------|-------|------|
-| `recursive.ts:73` | `resumePerform as any` | Action not assignable to Pipeable |
-| `recursive.ts:78` | `callTokens as FunctionRefs<TDefs>` | Same |
-| `recursive.ts:86` | `bodyActions[i] as any` | Action → Pipeable |
-| `recursive.ts:92` | `callTokens as FunctionRefs<TDefs>` | Same |
-| `recursive.ts:95-103` | Six `as Action` / `as any` casts | Everything forced through |
-| `bind.ts:140` | `body(...) as Action` | BodyResult → Action |
-| `bind.ts:167` | `b as Action` | Binding → Action |
-| `bind.ts:168` | `identity() as Action` | TypedAction → Action |
-| `run.ts:132` | `constant(input) as Pipeable, pipeline as Pipeable` | Type erasure at runtime boundary |
-
 ### Duplicated `BodyResult` type
 
 `BodyResult<TOut>` is defined identically in both `recursive.ts:28-31` and `bind.ts:124-127`:
@@ -205,7 +163,7 @@ type BodyResult<TOut> = Action & {
 };
 ```
 
-Extract to a shared location (the leaf `core.ts` from Tier 2's fix).
+Extract to the leaf `core.ts` alongside `chain`/`typedAction`.
 
 ---
 
@@ -462,14 +420,13 @@ The user raises whether "list" is a better name than "array" for the collection 
 
 Items that must happen before others:
 
-1. **Tier 2 (chain constructor everywhere)** requires extracting `chain`/`typedAction`/`BodyResult` into a dependency-free file first.
-2. **Tier 2b (eliminate `as any` casts)** should happen alongside or after Tier 2. The internal untyped overloads need to exist before the casts can be removed.
-3. **Tier 4 (reduce builtin surface)** should happen after Tier 2 (since the JS implementations will use `chain()` etc.).
-4. **Tier 3.2-3.3 (Rust builtin field types, unify Tag variants)** should happen before or alongside Tier 4 (since Tier 4 removes some builtins from Rust).
-5. **Tier 5-6 (new API, new operations)** can happen independently of Tiers 2-4 but will be cleaner after them.
-6. **Tier 7 (structural)** is independent and can happen anytime.
+1. **Tier 2 (stop constructing raw AST)** requires extracting `chain`/`typedAction`/`BodyResult` into a dependency-free file first. Once everything uses combinators that return `TypedAction`, the `as any` / `as Action` casts go away too — they exist because raw `Action` construction strips phantom types.
+2. **Tier 4 (reduce builtin surface)** should happen after Tier 2 (since the JS implementations will use `chain()` etc.).
+3. **Tier 3.2-3.3 (Rust builtin field types, unify Tag variants)** should happen before or alongside Tier 4 (since Tier 4 removes some builtins from Rust).
+4. **Tier 5-6 (new API, new operations)** can happen independently of Tiers 2-4 but will be cleaner after them.
+5. **Tier 7 (structural)** is independent and can happen anytime.
 
-Suggested execution order: 1 → 2 → 2b → 3 → 4 → 5 → 6 → 7.
+Suggested execution order: 1 → 2 → 3 → 4 → 5 → 6 → 7.
 
 ---
 
