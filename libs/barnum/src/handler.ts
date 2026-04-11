@@ -2,6 +2,9 @@ import { fileURLToPath } from "node:url";
 import type { JSONSchema7 } from "json-schema";
 import type { z } from "zod";
 import { type TypedAction, typedAction } from "./ast.js";
+import { chain } from "./chain.js";
+import { all } from "./all.js";
+import { constant, identity } from "./builtins.js";
 import { zodToCheckedJsonSchema } from "./schema.js";
 
 // ---------------------------------------------------------------------------
@@ -245,26 +248,10 @@ export function createHandlerWithConfig(
   // __definition for the worker to find (the worker imports the module
   // and accesses the named export, which is this function).
   const factory = (config: unknown): TypedAction =>
-    typedAction({
-      kind: "Chain",
-      first: {
-        kind: "All",
-        actions: [
-          {
-            kind: "Invoke",
-            handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-          },
-          {
-            kind: "Invoke",
-            handler: {
-              kind: "Builtin",
-              builtin: { kind: "Constant", value: config },
-            },
-          },
-        ],
-      },
-      rest: invokeAction,
-    });
+    chain(
+      all(identity(), constant(config)) as any,
+      invokeAction as any,
+    ) as TypedAction;
 
   Object.defineProperty(factory, HANDLER_BRAND, {
     value: true,

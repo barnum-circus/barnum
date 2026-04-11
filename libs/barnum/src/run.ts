@@ -8,7 +8,7 @@ import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Action, Config, ExtractOutput, Pipeable } from "./ast.js";
+import type { Action, Config, ExtractOutput } from "./ast.js";
 import { chain } from "./chain.js";
 import { constant } from "./builtins.js";
 
@@ -129,7 +129,7 @@ export function runPipeline<TPipeline extends Action>(
   const workflow =
     input === undefined
       ? pipeline
-      : (chain(constant(input) as Pipeable, pipeline as Pipeable) as Action);
+      : (chain(constant(input) as any, pipeline as any) as Action);
   return spawnBarnum({ workflow }, options?.logLevel);
 }
 

@@ -4,8 +4,9 @@ import {
   type TypedAction,
   typedAction,
   buildRestartBranchAction,
-  TAG_BREAK,
 } from "./ast.js";
+import { chain } from "./chain.js";
+import { tag } from "./builtins.js";
 import { allocateRestartHandlerId } from "./effect-id.js";
 
 // ---------------------------------------------------------------------------
@@ -39,11 +40,15 @@ export function tryCatch<TIn, TOut, TError>(
 ): TypedAction<TIn, TOut> {
   const restartHandlerId = allocateRestartHandlerId();
 
-  const throwError = typedAction<TError, never>({
-    kind: "Chain",
-    first: TAG_BREAK,
-    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-  });
+  const throwError = typedAction<TError, never>(
+    chain(
+      tag("Break") as any,
+      {
+        kind: "RestartPerform",
+        restart_handler_id: restartHandlerId,
+      } as any,
+    ) as Action,
+  );
 
   const bodyAction = body(throwError) as Action;
 

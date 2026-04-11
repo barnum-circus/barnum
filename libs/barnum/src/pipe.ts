@@ -1,10 +1,5 @@
-import {
-  type Action,
-  type PipeIn,
-  type Pipeable,
-  type TypedAction,
-  typedAction,
-} from "./ast.js";
+import type { Action, PipeIn, Pipeable, TypedAction } from "./ast.js";
+import { chain } from "./chain.js";
 import { identity } from "./builtins.js";
 
 export function pipe<T1, T2>(a1: Pipeable<T1, T2>): TypedAction<PipeIn<T1>, T2>;
@@ -88,6 +83,6 @@ export function pipe(...actions: Action[]): Action {
     return actions[0];
   }
   return actions.reduceRight(
-    (rest, first) => typedAction({ kind: "Chain", first, rest }) as Action,
+    (rest, first) => chain(first as any, rest as any) as Action,
   );
 }

@@ -5,27 +5,13 @@ import {
   type TypedAction,
   typedAction,
   buildRestartBranchAction,
-  TAG_BREAK,
-  IDENTITY,
 } from "./ast.js";
+import { chain } from "./chain.js";
+import { identity, tag } from "./builtins.js";
 import {
   allocateRestartHandlerId,
   type RestartHandlerId,
 } from "./effect-id.js";
-
-// ---------------------------------------------------------------------------
-// Shared AST fragments
-// ---------------------------------------------------------------------------
-
-const TAG_OK: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
-};
-
-const TAG_ERR: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
-};
 
 /**
  * `Chain(Tag("Break"), RestartPerform(id))` — shared by race branches.
@@ -33,11 +19,13 @@ const TAG_ERR: Action = {
  * restarts the body; Branch takes the Break arm (identity), `RestartHandle` exits.
  */
 function breakPerform(restartHandlerId: RestartHandlerId): Action {
-  return {
-    kind: "Chain",
-    first: TAG_BREAK,
-    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-  };
+  return chain(
+    tag("Break") as any,
+    {
+      kind: "RestartPerform",
+      restart_handler_id: restartHandlerId,
+    } as any,
+  ) as Action;
 }
 
 // ---------------------------------------------------------------------------
@@ -68,16 +56,14 @@ export function race<TIn, TOut>(
   const restartHandlerId = allocateRestartHandlerId();
   const perform = breakPerform(restartHandlerId);
 
-  const branches = actions.map((action) => ({
-    kind: "Chain" as const,
-    first: action as Action,
-    rest: perform,
-  }));
+  const branches = actions.map(
+    (action) => chain(action as any, perform as any) as Action,
+  );
 
   const allAction: Action = { kind: "All", actions: branches };
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, allAction, IDENTITY),
+    buildRestartBranchAction(restartHandlerId, allAction, identity() as Action),
   );
 }
 
@@ -157,27 +143,21 @@ export function withTimeout<TIn, TOut>(
   const restartHandlerId = allocateRestartHandlerId();
   const perform = breakPerform(restartHandlerId);
 
-  // Branch 1: body → Tag("Ok") → Tag("Break") → RestartPerform
-  const bodyBranch: Action = {
-    kind: "Chain",
-    first: { kind: "Chain", first: body as Action, rest: TAG_OK },
-    rest: perform,
-  };
+  // Branch 1: body → Tag("Ok") → Break → RestartPerform
+  const bodyBranch = chain(
+    chain(body as any, tag("Ok")),
+    perform as any,
+  ) as Action;
 
-  // Branch 2: ms → sleep() → Tag("Err") → Tag("Break") → RestartPerform
-  const sleepBranch: Action = {
-    kind: "Chain",
-    first: {
-      kind: "Chain",
-      first: { kind: "Chain", first: ms as Action, rest: DYNAMIC_SLEEP_INVOKE },
-      rest: TAG_ERR,
-    },
-    rest: perform,
-  };
+  // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
+  const sleepBranch = chain(
+    chain(chain(ms as any, DYNAMIC_SLEEP_INVOKE as any), tag("Err")),
+    perform as any,
+  ) as Action;
 
   const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, allAction, IDENTITY),
+    buildRestartBranchAction(restartHandlerId, allAction, identity() as Action),
   );
 }

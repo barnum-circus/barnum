@@ -1,4 +1,20 @@
 import type { JSONSchema7 } from "json-schema";
+import { chain } from "./chain.js";
+import {
+  drop,
+  flatten as flattenBuiltin,
+  getField,
+  getIndex,
+  identity,
+  merge,
+  Option,
+  pick,
+  Result,
+  splitFirst,
+  splitLast,
+  tag,
+  wrapInField,
+} from "./builtins.js";
 
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
@@ -388,222 +404,73 @@ function thenMethod<TIn, TOut, TRefs extends string, TNext>(
   this: TypedAction<TIn, TOut, TRefs>,
   next: Pipeable<TOut, TNext>,
 ): TypedAction<TIn, TNext, TRefs> {
-  return typedAction({ kind: "Chain", first: this, rest: next as Action });
+  return chain(this, next) as TypedAction<TIn, TNext, TRefs>;
 }
 
 function forEachMethod(this: TypedAction, action: Action): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: { kind: "ForEach", action },
-  });
+  return chain(this as any, forEach(action as any)) as TypedAction;
 }
 
 function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
 ): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: { kind: "Branch", cases: unwrapBranchCases(cases) },
-  });
+  return chain(this as any, branch(cases as any)) as TypedAction;
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Flatten" } },
-    },
-  });
+  return chain(this as any, flattenBuiltin()) as TypedAction;
 }
 
 function dropMethod(this: TypedAction): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Drop" } },
-    },
-  });
+  return chain(this as any, drop) as TypedAction;
 }
 
 function tagMethod(this: TypedAction, kind: string): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
-    },
-  });
+  return chain(this as any, tag(kind)) as TypedAction;
 }
 
 function getFieldMethod(this: TypedAction, field: string): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: {
-        kind: "Builtin",
-        builtin: { kind: "GetField", value: field },
-      },
-    },
-  });
+  return chain(this as any, getField(field)) as TypedAction;
 }
 
 function getIndexMethod(this: TypedAction, index: number): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: {
-        kind: "Builtin",
-        builtin: { kind: "GetIndex", value: index },
-      },
-    },
-  });
+  return chain(this as any, getIndex(index)) as TypedAction;
 }
 
 function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: {
-        kind: "Builtin",
-        builtin: { kind: "WrapInField", value: field },
-      },
-    },
-  });
+  return chain(this as any, wrapInField(field)) as TypedAction;
 }
 
 function mergeMethod(this: TypedAction): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Merge" } },
-    },
-  });
+  return chain(this as any, merge()) as TypedAction;
 }
 
 function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } },
-    },
-  });
+  return chain(this as any, pick(...keys)) as TypedAction;
 }
 
 function splitFirstMethod(this: TypedAction): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
-    },
-  });
+  return chain(this as any, splitFirst()) as TypedAction;
 }
 
 function splitLastMethod(this: TypedAction): TypedAction {
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
-    },
-  });
+  return chain(this as any, splitLast()) as TypedAction;
 }
 
 function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
-  // Desugars to: self.then(branch({ Some: pipe(action, tag("Some")), None: tag("None") }))
-  // But branch auto-unwraps value, so:
-  //   Some case: receives T, runs action, wraps as Some
-  //   None case: receives void, wraps as None
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Branch",
-      cases: unwrapBranchCases({
-        Some: {
-          kind: "Chain",
-          first: action,
-          rest: {
-            kind: "Invoke",
-            handler: {
-              kind: "Builtin",
-              builtin: { kind: "Tag", value: "Some" },
-            },
-          },
-        },
-        None: {
-          kind: "Invoke",
-          handler: { kind: "Builtin", builtin: { kind: "Tag", value: "None" } },
-        },
-      }),
-    },
-  });
+  return chain(this as any, Option.map(action as any)) as TypedAction;
 }
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  // Desugars to: self.then(branch({ Ok: tag("Ok"), Err: pipe(action, tag("Err")) }))
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Branch",
-      cases: unwrapBranchCases({
-        Ok: {
-          kind: "Invoke",
-          handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
-        },
-        Err: {
-          kind: "Chain",
-          first: action,
-          rest: {
-            kind: "Invoke",
-            handler: {
-              kind: "Builtin",
-              builtin: { kind: "Tag", value: "Err" },
-            },
-          },
-        },
-      }),
-    },
-  });
+  return chain(this as any, Result.mapErr(action as any)) as TypedAction;
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  // Desugars to: self.then(branch({ Ok: identity(), Err: defaultAction }))
-  return typedAction({
-    kind: "Chain",
-    first: this,
-    rest: {
-      kind: "Branch",
-      cases: unwrapBranchCases({
-        Ok: {
-          kind: "Invoke",
-          handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-        },
-        Err: defaultAction,
-      }),
-    },
-  });
+  return chain(
+    this as any,
+    Result.unwrapOr(defaultAction as any),
+  ) as TypedAction;
 }
 
 /**
@@ -699,17 +566,10 @@ function unwrapBranchCases(
 ): Record<string, Action> {
   const unwrapped: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
-    unwrapped[key] = {
-      kind: "Chain",
-      first: {
-        kind: "Invoke",
-        handler: {
-          kind: "Builtin",
-          builtin: { kind: "GetField", value: "value" },
-        },
-      },
-      rest: cases[key],
-    };
+    unwrapped[key] = chain(
+      getField("value") as any,
+      cases[key] as any,
+    ) as Action;
   }
   return unwrapped;
 }
@@ -750,30 +610,6 @@ export type LoopResult<TContinue, TBreak> = TaggedUnion<
 >;
 
 // ---------------------------------------------------------------------------
-// Shared AST constants for control flow compilation
-// ---------------------------------------------------------------------------
-
-const EXTRACT_PAYLOAD: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "GetIndex", value: 0 } },
-};
-
-const TAG_CONTINUE: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Continue" } },
-};
-
-export const TAG_BREAK: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Break" } },
-};
-
-export const IDENTITY: Action = {
-  kind: "Invoke",
-  handler: { kind: "Builtin", builtin: { kind: "Identity" } },
-};
-
-// ---------------------------------------------------------------------------
 // recur — restart body primitive
 // ---------------------------------------------------------------------------
 
@@ -802,7 +638,7 @@ export function recur<TIn = never, TOut = any>(
     kind: "RestartHandle",
     restart_handler_id: restartHandlerId,
     body,
-    handler: EXTRACT_PAYLOAD,
+    handler: getIndex(0) as Action,
   });
 }
 
@@ -829,16 +665,20 @@ export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any>(
 ): TypedAction<TIn, TEarlyReturn | TOut> {
   const restartHandlerId = allocateRestartHandlerId();
 
-  const earlyReturnAction = typedAction<TEarlyReturn, never>({
-    kind: "Chain",
-    first: TAG_BREAK,
-    rest: { kind: "RestartPerform", restart_handler_id: restartHandlerId },
-  });
+  const earlyReturnAction = typedAction<TEarlyReturn, never>(
+    chain(
+      tag("Break") as any,
+      {
+        kind: "RestartPerform",
+        restart_handler_id: restartHandlerId,
+      } as any,
+    ) as Action,
+  );
 
   const body = bodyFn(earlyReturnAction) as Action;
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, IDENTITY),
+    buildRestartBranchAction(restartHandlerId, body, identity() as Action),
   );
 }
 
@@ -860,22 +700,15 @@ export function buildRestartBranchAction(
   continueArm: Action,
   breakArm: Action,
 ): Action {
-  return {
-    kind: "Chain",
-    first: TAG_CONTINUE,
-    rest: {
+  return chain(
+    tag("Continue") as any,
+    {
       kind: "RestartHandle",
       restart_handler_id: restartHandlerId,
-      body: {
-        kind: "Branch",
-        cases: unwrapBranchCases({
-          Continue: continueArm,
-          Break: breakArm,
-        }),
-      },
-      handler: EXTRACT_PAYLOAD,
-    },
-  };
+      body: branch({ Continue: continueArm, Break: breakArm } as any) as Action,
+      handler: getIndex(0) as Action,
+    } as any,
+  ) as Action;
 }
 
 /**
@@ -900,22 +733,18 @@ export function loop<TBreak = never, TIn = never>(
     restart_handler_id: restartHandlerId,
   };
 
-  const recurAction = typedAction<TIn, never>({
-    kind: "Chain",
-    first: TAG_CONTINUE,
-    rest: perform,
-  });
+  const recurAction = typedAction<TIn, never>(
+    chain(tag("Continue") as any, perform as any) as Action,
+  );
 
-  const doneAction = typedAction<VoidToNull<TBreak>, never>({
-    kind: "Chain",
-    first: TAG_BREAK,
-    rest: perform,
-  });
+  const doneAction = typedAction<VoidToNull<TBreak>, never>(
+    chain(tag("Break") as any, perform as any) as Action,
+  );
 
   const body = bodyFn(recurAction, doneAction) as Action;
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, IDENTITY),
+    buildRestartBranchAction(restartHandlerId, body, identity() as Action),
   );
 }
 

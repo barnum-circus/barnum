@@ -5,7 +5,9 @@ import {
   type TypedAction,
   typedAction,
 } from "./ast.js";
-import { identity, drop } from "./builtins.js";
+import { chain } from "./chain.js";
+import { all } from "./all.js";
+import { identity, drop, getIndex } from "./builtins.js";
 import { allocateResumeHandlerId, type ResumeHandlerId } from "./effect-id.js";
 import { pipe } from "./pipe.js";
 
@@ -64,35 +66,10 @@ export type InferVarRefs<TBindings extends Action[]> = {
  * Expanded AST: All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))
  */
 function readVar(n: number): Action {
-  return {
-    kind: "All",
-    actions: [
-      {
-        kind: "Chain",
-        first: {
-          kind: "Invoke",
-          handler: {
-            kind: "Builtin",
-            builtin: { kind: "GetIndex", value: 1 },
-          },
-        },
-        rest: {
-          kind: "Invoke",
-          handler: {
-            kind: "Builtin",
-            builtin: { kind: "GetIndex", value: n },
-          },
-        },
-      },
-      {
-        kind: "Invoke",
-        handler: {
-          kind: "Builtin",
-          builtin: { kind: "GetIndex", value: 1 },
-        },
-      },
-    ],
-  };
+  return all(
+    chain(getIndex(1) as any, getIndex(n)),
+    getIndex(1) as any,
+  ) as Action;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,17 +119,10 @@ export function bind<TBindings extends Action[], TOut>(
   // 4. Build nested Handles from inside out.
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-  let inner: Action = {
-    kind: "Chain",
-    first: {
-      kind: "Invoke",
-      handler: {
-        kind: "Builtin",
-        builtin: { kind: "GetIndex", value: pipelineInputIndex },
-      },
-    },
-    rest: bodyAction,
-  };
+  let inner: Action = chain(
+    getIndex(pipelineInputIndex) as any,
+    bodyAction as any,
+  ) as Action;
   for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
     inner = {
       kind: "ResumeHandle",
@@ -163,15 +133,11 @@ export function bind<TBindings extends Action[], TOut>(
   }
 
   // 5. All(...bindings, identity()) → nested Handles
-  const allActions = [
-    ...bindings.map((b) => b as Action),
-    identity() as Action,
-  ];
-  return typedAction({
-    kind: "Chain",
-    first: { kind: "All", actions: allActions },
-    rest: inner,
-  });
+  const allAction: Action = {
+    kind: "All",
+    actions: [...bindings.map((b) => b as Action), identity() as Action],
+  };
+  return typedAction(chain(allAction as any, inner as any) as Action);
 }
 
 // ---------------------------------------------------------------------------
