@@ -448,6 +448,8 @@ Tests are in `libs/barnum/tests/` instead of next to their source files. This ma
 
 Move to colocated test files: `src/builtins.test.ts`, `src/ast.test.ts`, `src/schema.test.ts`, etc. The `handlers.ts` test helper can stay in a `tests/` dir or become `src/__test__/handlers.ts`.
 
+This applies to both the TS and Rust sides. `patterns.test.ts` is the worst offender — a grab-bag of AST structure tests for pipe, all, branch, loop, bind, forEach, race, tryCatch, etc. all in one file. This makes it impossible to find the tests for a given combinator without searching. Split it: `pipe.test.ts` next to `pipe.ts`, `bind.test.ts` next to `bind.ts`, etc. Each test file tests exactly the module it sits next to. Same principle on Rust: tests for builtin execution should live next to the builtin implementation, not in a separate test directory.
+
 ### 7.3 List vs Array naming
 
 The user raises whether "list" is a better name than "array" for the collection type. In JS/TS, `Array` is the native type. Using "list" would create a naming mismatch with the language. However, "list" better captures the semantics (ordered, variable-length, homogeneous) and avoids confusion with fixed-length tuples.
