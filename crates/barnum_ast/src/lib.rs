@@ -245,11 +245,6 @@ pub enum BuiltinKind {
     Identity,
     /// Discard input, return null.
     Drop,
-    /// Wrap input as `{ kind: <tag>, value: <input> }`.
-    Tag {
-        /// The tag string (e.g. `"Continue"`, `"Break"`).
-        tag: String,
-    },
     /// Merge an array of objects into a single object.
     Merge,
     /// Flatten a nested array one level.
@@ -263,11 +258,6 @@ pub enum BuiltinKind {
     GetIndex {
         /// The zero-based index to extract.
         index: usize,
-    },
-    /// Select named fields from an object, producing a new object with only those fields.
-    Pick {
-        /// The field names to keep.
-        fields: Vec<String>,
     },
     /// Collect `Some` values from an array of `Option<T>`, discarding `None`s.
     ///

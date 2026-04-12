@@ -39,8 +39,6 @@ pub async fn execute_builtin(
 
         BuiltinKind::Drop => Ok(Value::Null),
 
-        BuiltinKind::Tag { tag } => Ok(json!({ "kind": tag, "value": input })),
-
         BuiltinKind::Merge => {
             let Value::Array(items) = input else {
                 return Err(BuiltinError {
@@ -165,23 +163,6 @@ pub async fn execute_builtin(
             Ok(Value::Array(collected))
         }
 
-        BuiltinKind::Pick { fields } => {
-            let Value::Object(obj) = input else {
-                return Err(BuiltinError {
-                    builtin: "Pick",
-                    expected: "object",
-                    actual: input.clone(),
-                });
-            };
-            let mut picked = serde_json::Map::new();
-            for field in fields {
-                if let Some(value) = obj.get(field.as_str()) {
-                    picked.insert(field.clone(), value.clone());
-                }
-            }
-            Ok(Value::Object(picked))
-        }
-
         BuiltinKind::WrapInField { field } => Ok(json!({ field.as_str(): input })),
 
         BuiltinKind::Sleep { ms } => {
@@ -217,18 +198,6 @@ mod tests {
     async fn drop_returns_null() {
         let result = execute_builtin(&BuiltinKind::Drop, &json!("anything")).await;
         assert_eq!(result.unwrap(), Value::Null);
-    }
-
-    #[tokio::test]
-    async fn tag_wraps_input() {
-        let result = execute_builtin(
-            &BuiltinKind::Tag {
-                tag: "Continue".to_string(),
-            },
-            &json!(42),
-        )
-        .await;
-        assert_eq!(result.unwrap(), json!({"kind": "Continue", "value": 42}));
     }
 
     #[tokio::test]
@@ -326,51 +295,6 @@ mod tests {
         let result =
             execute_builtin(&BuiltinKind::GetIndex { index: 0 }, &json!("not array")).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn pick_selects_fields() {
-        let input = json!({"name": "Alice", "age": 30, "email": "a@b.com"});
-        let result = execute_builtin(
-            &BuiltinKind::Pick {
-                fields: vec!["name".to_string(), "age".to_string()],
-            },
-            &input,
-        )
-        .await;
-        assert_eq!(result.unwrap(), json!({"name": "Alice", "age": 30}));
-    }
-
-    #[tokio::test]
-    async fn pick_ignores_missing_fields() {
-        let input = json!({"name": "Alice"});
-        let result = execute_builtin(
-            &BuiltinKind::Pick {
-                fields: vec!["name".to_string(), "missing".to_string()],
-            },
-            &input,
-        )
-        .await;
-        assert_eq!(result.unwrap(), json!({"name": "Alice"}));
-    }
-
-    #[tokio::test]
-    async fn pick_rejects_non_object() {
-        let result = execute_builtin(
-            &BuiltinKind::Pick {
-                fields: vec!["name".to_string()],
-            },
-            &json!("not object"),
-        )
-        .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn pick_empty_keys_returns_empty_object() {
-        let input = json!({"name": "Alice", "age": 30});
-        let result = execute_builtin(&BuiltinKind::Pick { fields: vec![] }, &input).await;
-        assert_eq!(result.unwrap(), json!({}));
     }
 
     #[tokio::test]

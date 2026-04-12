@@ -117,10 +117,13 @@ export function tag<
   TDef extends Record<string, unknown>,
   TKind extends keyof TDef & string,
 >(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Tag", tag: kind } },
-  });
+  return chain(
+    all(
+      chain(constant(kind) as any, wrapInField("kind")),
+      wrapInField("value"),
+    ) as any,
+    merge(),
+  ) as TypedAction<TDef[TKind], TaggedUnion<TDef>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,10 +192,14 @@ export function pick<
   TObj extends Record<string, unknown>,
   TKeys extends (keyof TObj & string)[],
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Pick", fields: keys } },
-  });
+  const actions = keys.map(
+    (key) => chain(getField(key) as any, wrapInField(key)) as Action,
+  );
+  const allAction: Action = { kind: "All", actions };
+  return chain(allAction as any, merge() as any) as TypedAction<
+    TObj,
+    Pick<TObj, TKeys[number]>
+  >;
 }
 
 // ---------------------------------------------------------------------------

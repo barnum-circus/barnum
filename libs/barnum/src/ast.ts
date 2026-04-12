@@ -104,12 +104,10 @@ export type BuiltinKind =
   | { kind: "Constant"; value: unknown }
   | { kind: "Identity" }
   | { kind: "Drop" }
-  | { kind: "Tag"; tag: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
   | { kind: "GetField"; field: string }
   | { kind: "GetIndex"; index: number }
-  | { kind: "Pick"; fields: string[] }
   | { kind: "CollectSome" }
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }

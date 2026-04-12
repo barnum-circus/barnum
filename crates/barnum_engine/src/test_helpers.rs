@@ -10,7 +10,7 @@ use crate::{CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, Wo
 use barnum_ast::flat::flatten;
 use barnum_ast::*;
 use intern::string_key::Intern;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
 // AST construction helpers
@@ -73,10 +73,21 @@ pub fn invoke_builtin(builtin: BuiltinKind) -> Action {
     })
 }
 
-pub fn tag_builtin(kind: &str) -> Action {
-    invoke_builtin(BuiltinKind::Tag {
-        tag: kind.to_string(),
-    })
+pub fn tag_action(kind: &str) -> Action {
+    chain(
+        parallel(vec![
+            chain(
+                invoke_builtin(BuiltinKind::Constant { value: json!(kind) }),
+                invoke_builtin(BuiltinKind::WrapInField {
+                    field: "kind".to_string(),
+                }),
+            ),
+            invoke_builtin(BuiltinKind::WrapInField {
+                field: "value".to_string(),
+            }),
+        ]),
+        invoke_builtin(BuiltinKind::Merge),
+    )
 }
 
 pub fn get_field(field: &str) -> Action {
@@ -140,7 +151,7 @@ pub fn restart_perform(restart_handler_id: u16) -> Action {
 /// `Chain(Tag("Break"), RestartPerform(restart_handler_id))` —
 /// triggers restart with Break routing.
 pub fn break_restart_perform(restart_handler_id: u16) -> Action {
-    chain(tag_builtin("Break"), restart_perform(restart_handler_id))
+    chain(tag_action("Break"), restart_perform(restart_handler_id))
 }
 
 /// Handler for restart+Branch: extract payload (index 0) from `[payload, state]`.
@@ -156,7 +167,7 @@ pub fn restart_extract_payload_handler() -> Action {
 /// `})))`
 pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Action) -> Action {
     chain(
-        tag_builtin("Continue"),
+        tag_action("Continue"),
         restart_handle(
             restart_handler_id,
             restart_extract_payload_handler(),
