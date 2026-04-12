@@ -17,6 +17,8 @@ export {
   range,
   splitFirst,
   splitLast,
+  first,
+  last,
   wrapInField,
   taggedUnionSchema,
   Option,

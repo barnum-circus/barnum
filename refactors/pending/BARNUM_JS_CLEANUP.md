@@ -66,7 +66,7 @@ Tests import from `../src/ast.js` and `../src/builtins.js` separately instead of
 
 ---
 
-## Tier 2: Stop constructing raw AST
+## Tier 2: Stop constructing raw AST ✅ DONE
 
 The single biggest internal consistency issue. Throughout `builtins.ts`, `ast.ts`, and `race.ts`, code constructs Chain/Invoke/All nodes as raw object literals with `as Action` casts, bypassing the library's own `chain()`, `all()`, `constant()`, `identity()`, `drop`, etc.
 
@@ -169,7 +169,7 @@ Extract to the leaf `core.ts` alongside `chain`/`typedAction`.
 
 ## Tier 3: Naming and conceptual consistency
 
-### 3.1 Rename `Option.collect()` to `Option.flatten()` (or just `flatten`)
+### 3.1 Rename `Option.collect()` to `Option.flatten()` (or just `flatten`) ⏭️ SKIPPED
 
 **File:** `libs/barnum/src/builtins.ts:567-578`
 
@@ -179,7 +179,7 @@ Better name: `Option.flatten()` — consistent with `Option.flatten()` for `Opti
 
 Alternatively, this could be a top-level `flatten` that dispatches based on type, but that's a bigger change (see Tier 4).
 
-### 3.2 Typed builtin fields on Rust side
+### 3.2 Typed builtin fields on Rust side ✅ DONE — typed Rust builtin fields implemented
 
 **File:** `crates/barnum_ast/src/lib.rs:238-306`
 
@@ -197,7 +197,7 @@ Constant { value: Value }    // this one is correct — it IS arbitrary JSON
 
 This is lazy deserialization. Use the actual types. The `#[serde(rename = "value")]` attribute can preserve wire compatibility if needed during transition, but since we don't care about backward compat, just change the TS side's `value` key to match the new field names.
 
-### 3.3 Unify `TagContinue`/`TagBreak` into `Tag`
+### 3.3 Unify `TagContinue`/`TagBreak` into `Tag` ✅ DONE — TagContinue/TagBreak removed
 
 **File:** `crates/barnum_ast/src/lib.rs:272-275`
 
@@ -205,7 +205,7 @@ Rust has `TagContinue` and `TagBreak` as separate `BuiltinKind` variants, but no
 
 Delete `TagContinue` and `TagBreak`. Use `Tag { tag: "Continue" }` and `Tag { tag: "Break" }`. One variant, one code path.
 
-### 3.5 `HandlerOutput<void> = never` is surprising
+### 3.5 `HandlerOutput<void> = never` is surprising ⏭️ SKIPPED
 
 **File:** `libs/barnum/src/handler.ts:95`
 
@@ -215,13 +215,13 @@ type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
 
 The JSDoc says "fire-and-forget handlers compose without `.drop()`" — but `never` as an output type means "this handler never returns," not "this handler returns nothing useful." The correct type for "returns nothing" is `null` (consistent with how `void` maps to `null` elsewhere via `VoidToNull`). A handler that genuinely never returns (infinite loop, throws always) should be `never`. A handler that returns `void` should produce `null`.
 
-### 3.6 `bare T` type parameters in overloads
+### 3.6 `bare T` type parameters in overloads ✅ DONE — bare T type params renamed
 
 **Files:** `all.ts`, `pipe.ts`
 
 `all.ts` uses `In, O1, O2, ...` and `pipe.ts` uses `T1, T2, T3, ...`. Neither follows the CLAUDE.md rule of descriptive type parameter names (`TInput`, `TOutput`, etc.). These are overload-heavy files where renaming is mechanical but improves readability at each call site's tooltip.
 
-### 3.4 Rename `CollectSome` builtin
+### 3.4 Rename `CollectSome` builtin ⏭️ SKIPPED
 
 If `Option.collect()` is renamed to `Option.flatten()` (3.1), rename the Rust `CollectSome` builtin to match. Something like `FlattenOption` — it takes `Option<T>[]` and returns `T[]`.
 
@@ -231,7 +231,7 @@ If `Option.collect()` is renamed to `Option.flatten()` (3.1), rename the Rust `C
 
 The principle: on the Rust side, prefer simple primitives composed in JS over specialized builtins. Perf is irrelevant — these are workflow orchestration steps, not hot loops.
 
-### 4.1 `Pick` → `getField` + `all` + `merge`
+### 4.1 `Pick` → `getField` + `all` + `merge` ✅ DONE — Pick removed from Rust, JS composition
 
 `pick("a", "b")` on `{ a: 1, b: 2, c: 3 }` is equivalent to:
 
@@ -241,7 +241,7 @@ chain(all(getField("a").wrapInField("a"), getField("b").wrapInField("b")), merge
 
 Remove `Pick` from `BuiltinKind`. Implement `pick()` in JS as a composition.
 
-### 4.2 `Tag` → `wrapInField` + `constant` + `all` + `merge`
+### 4.2 `Tag` → `wrapInField` + `constant` + `all` + `merge` ✅ DONE — Tag removed from Rust, JS composition
 
 `tag("Ok")` wraps input as `{ kind: "Ok", value: input }`. This is:
 
@@ -283,6 +283,28 @@ The curried form composes better with `withRetries`:
 withRetries(3)(withTimeout(5000)(riskyStep))
 ```
 
+**Types and implementation sketch:**
+
+```ts
+function withTimeout(
+  ms: number,
+): <TIn, TOut>(body: Pipeable<TIn, TOut>) => TypedAction<TIn, TOut>;
+
+function withTimeout(
+  ms: number,
+) {
+  return <TIn, TOut>(body: Pipeable<TIn, TOut>): TypedAction<TIn, TOut> => {
+    // race body against a sleep that throws on timeout
+    return race(
+      body,
+      chain(drop, sleep(ms), throwError("Timeout")),
+    );
+  };
+}
+```
+
+The outer function captures the timeout duration in a closure. The inner function receives the body action and constructs the race. This is strictly better than the 2-arg form because the timeout can be partially applied and reused: `const withFiveSecondTimeout = withTimeout(5000);` then applied to multiple actions.
+
 ### 5.2 Curry `withRetries`
 
 `withRetries` doesn't exist yet. Define it as `withRetries(n)(action)`:
@@ -293,9 +315,54 @@ function withRetries<TIn, TOut>(
 ): (action: Pipeable<TIn, TOut>) => TypedAction<TIn, TOut>
 ```
 
-Implementation: loop that runs the action, catches errors, decrements counter, recurs. Uses `loop` + `tryCatch` internally.
+**Implementation sketch:**
 
-**Open question:** What does "retry" mean exactly? Does it re-execute the same action with the same input? Does it need a backoff strategy? The simplest version just re-runs with the same input `count` times.
+```ts
+function withRetries(
+  count: number,
+) {
+  return <TIn, TOut>(action: Pipeable<TIn, TOut>): TypedAction<TIn, TOut> => {
+    // Loop: state is { input: TIn, remaining: number }
+    // Each iteration: tryCatch the action.
+    //   On success: TagBreak with the result.
+    //   On error: decrement remaining.
+    //     If remaining === 0: re-throw.
+    //     Else: TagContinue with { input, remaining: remaining - 1 }.
+    return chain(
+      all(identity(), constant(count).wrapInField("remaining")),
+      merge(),
+      loop(
+        tryCatch(
+          chain(getField("input"), action, tag("Break")),
+          // error handler: check remaining, re-throw or continue
+          pipe(
+            getField("remaining"),
+            branch({
+              0: throwError(), // re-throw last error
+              _: chain(
+                all(
+                  getField("input").wrapInField("input"),
+                  chain(getField("remaining"), decrement()).wrapInField("remaining"),
+                ),
+                merge(),
+                tag("Continue"),
+              ),
+            }),
+          ),
+        ),
+      ),
+    );
+  };
+}
+```
+
+**Backoff strategy options:**
+
+1. **No backoff (v1):** Just retry immediately. Simplest, covers 90% of use cases.
+2. **Fixed delay:** `withRetries({ count: 3, delayMs: 1000 })` — sleep between retries. The config object form avoids positional arg confusion.
+3. **Exponential backoff:** `withRetries({ count: 3, backoff: "exponential", baseMs: 500 })` — sleep `baseMs * 2^attempt` between retries. Requires tracking the attempt number in loop state.
+
+Start with option 1. Options 2-3 can be added later by accepting a config object instead of a bare number (the curried form makes this backward-compatible: `withRetries(3)` still works, `withRetries({ count: 3, delayMs: 1000 })` is the extended form).
 
 ### 5.3 `allObject({ keyName: action, ... })`
 
@@ -310,9 +377,27 @@ allObject({
 // Output type: { user: User; settings: Settings; permissions: Permissions }
 ```
 
-Implementation: extract keys, create `all(...values)`, then zip keys back into an object. Done entirely in JS — desugars to `all` + `merge` + `wrapInField` per entry.
+**Implementation sketch:**
 
-### 5.4 `first` and `last`
+```ts
+function allObject<TIn, TRecord extends Record<string, Pipeable<TIn, any>>>(
+  record: TRecord,
+): TypedAction<TIn, { [K in keyof TRecord]: PipeableOutput<TRecord[K]> }> {
+  // Same pattern as pick(): for each key, wrap the action's output in a field,
+  // run all in parallel, then merge into a single object.
+  const keys = Object.keys(record);
+  const wrappedActions = keys.map((key) =>
+    chain(record[key], wrapInField(key)),
+  );
+  return chain(all(...wrappedActions), merge()) as any;
+}
+```
+
+This follows the exact same composition pattern as `pick()` (Tier 4.1) — extract keys, map each to a `wrapInField` chain, run in parallel with `all`, then `merge` the results. The only difference is that `pick` starts from `getField(key)` (extracting from the input) while `allObject` starts from arbitrary actions.
+
+Done entirely in JS — no new Rust builtins needed.
+
+### 5.4 `first` and `last` ✅ DONE
 
 Return `Option<T>`, not the `[T, T[]]` tuple that `splitFirst`/`splitLast` produce:
 

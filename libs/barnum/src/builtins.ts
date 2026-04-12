@@ -374,6 +374,48 @@ export function splitLast<TElement>(): TypedAction<
 }
 
 // ---------------------------------------------------------------------------
+// First — extract the first element of an array as Option<TElement>
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the first element of an array.
+ * `readonly TElement[] → Option<TElement>`
+ *
+ * Composes `splitFirst` (which returns `Option<[TElement, TElement[]]>`)
+ * with `Option.map(getIndex(0))` to extract just the element.
+ */
+export function first<TElement>(): TypedAction<
+  readonly TElement[],
+  OptionT<TElement>
+> {
+  return chain(
+    splitFirst() as any,
+    Option.map(getIndex(0) as any),
+  ) as TypedAction<readonly TElement[], OptionT<TElement>>;
+}
+
+// ---------------------------------------------------------------------------
+// Last — extract the last element of an array as Option<TElement>
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the last element of an array.
+ * `readonly TElement[] → Option<TElement>`
+ *
+ * Composes `splitLast` (which returns `Option<[TElement[], TElement]>`)
+ * with `Option.map(getIndex(1))` to extract just the element.
+ */
+export function last<TElement>(): TypedAction<
+  readonly TElement[],
+  OptionT<TElement>
+> {
+  return chain(
+    splitLast() as any,
+    Option.map(getIndex(1) as any),
+  ) as TypedAction<readonly TElement[], OptionT<TElement>>;
+}
+
+// ---------------------------------------------------------------------------
 // Option namespace — combinators for Option<T> tagged unions
 // ---------------------------------------------------------------------------
 
