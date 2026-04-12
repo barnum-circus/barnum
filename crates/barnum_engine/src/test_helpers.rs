@@ -10,7 +10,7 @@ use crate::{CompleteError, CompletionEvent, DispatchEvent, PendingEffectKind, Wo
 use barnum_ast::flat::flatten;
 use barnum_ast::*;
 use intern::string_key::Intern;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 // ---------------------------------------------------------------------------
 // AST construction helpers
@@ -74,19 +74,19 @@ pub fn invoke_builtin(builtin: BuiltinKind) -> Action {
 }
 
 pub fn tag_builtin(kind: &str) -> Action {
-    invoke_builtin(BuiltinKind::Tag { value: json!(kind) })
+    invoke_builtin(BuiltinKind::Tag {
+        tag: kind.to_string(),
+    })
 }
 
 pub fn get_field(field: &str) -> Action {
     invoke_builtin(BuiltinKind::GetField {
-        value: json!(field),
+        field: field.to_string(),
     })
 }
 
-pub fn get_index(index: u64) -> Action {
-    invoke_builtin(BuiltinKind::GetIndex {
-        value: json!(index),
-    })
+pub fn get_index(index: usize) -> Action {
+    invoke_builtin(BuiltinKind::GetIndex { index })
 }
 
 pub fn identity_action() -> Action {
@@ -115,7 +115,7 @@ pub fn resume_perform(resume_handler_id: u16) -> Action {
 ///
 /// Input: `[payload, state]`. Output: `[state[n], state]`.
 /// Value is `state[n]`, state is unchanged.
-pub fn resume_read_var(n: u64) -> Action {
+pub fn resume_read_var(n: usize) -> Action {
     parallel(vec![chain(get_index(1), get_index(n)), get_index(1)])
 }
 

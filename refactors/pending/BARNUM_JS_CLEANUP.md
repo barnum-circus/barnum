@@ -13,7 +13,7 @@ The overarching goals:
 
 ## Tier 1: Trivial fixes (one-liner each)
 
-### 1.1 Remove `taggedUnionSchema` 2-variant minimum
+### 1.1 ~~Remove `taggedUnionSchema` 2-variant minimum~~ ✅ DONE
 
 **File:** `libs/barnum/src/builtins.ts:56-58`
 

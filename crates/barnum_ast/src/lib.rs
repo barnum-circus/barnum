@@ -245,10 +245,10 @@ pub enum BuiltinKind {
     Identity,
     /// Discard input, return null.
     Drop,
-    /// Wrap input as `{ kind: <value>, value: <input> }`.
+    /// Wrap input as `{ kind: <tag>, value: <input> }`.
     Tag {
         /// The tag string (e.g. `"Continue"`, `"Break"`).
-        value: Value,
+        tag: String,
     },
     /// Merge an array of objects into a single object.
     Merge,
@@ -256,23 +256,19 @@ pub enum BuiltinKind {
     Flatten,
     /// Extract a named field from an object.
     GetField {
-        /// The field name to extract (must be a JSON string).
-        value: Value,
+        /// The field name to extract.
+        field: String,
     },
     /// Extract an element from an array by index.
     GetIndex {
-        /// The zero-based index to extract (must be a JSON number).
-        value: Value,
+        /// The zero-based index to extract.
+        index: usize,
     },
     /// Select named fields from an object, producing a new object with only those fields.
     Pick {
-        /// The field names to keep (must be a JSON array of strings).
-        value: Value,
+        /// The field names to keep.
+        fields: Vec<String>,
     },
-    /// Wrap input as `{ kind: "Continue", value: <input> }`.
-    TagContinue,
-    /// Wrap input as `{ kind: "Break", value: <input> }`.
-    TagBreak,
     /// Collect `Some` values from an array of `Option<T>`, discarding `None`s.
     ///
     /// Input: array of `{ kind: "Some", value: T }` or `{ kind: "None", value: _ }`.
@@ -292,16 +288,16 @@ pub enum BuiltinKind {
     SplitLast,
     /// Wrap input as `{ <field>: <input> }`.
     WrapInField {
-        /// The field name (must be a JSON string).
-        value: Value,
+        /// The field name.
+        field: String,
     },
     /// Sleep for a fixed duration, then pass input through unchanged.
     ///
     /// Unlike other builtins, execution is async — the scheduler awaits
     /// `tokio::time::sleep` before returning the input.
     Sleep {
-        /// Duration in milliseconds (must be a non-negative integer).
-        value: Value,
+        /// Duration in milliseconds.
+        ms: u64,
     },
 }
 

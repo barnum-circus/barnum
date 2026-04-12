@@ -104,17 +104,17 @@ export type BuiltinKind =
   | { kind: "Constant"; value: unknown }
   | { kind: "Identity" }
   | { kind: "Drop" }
-  | { kind: "Tag"; value: string }
+  | { kind: "Tag"; tag: string }
   | { kind: "Merge" }
   | { kind: "Flatten" }
-  | { kind: "GetField"; value: string }
-  | { kind: "GetIndex"; value: number }
-  | { kind: "Pick"; value: string[] }
+  | { kind: "GetField"; field: string }
+  | { kind: "GetIndex"; index: number }
+  | { kind: "Pick"; fields: string[] }
   | { kind: "CollectSome" }
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }
-  | { kind: "WrapInField"; value: string }
-  | { kind: "Sleep"; value: number };
+  | { kind: "WrapInField"; field: string }
+  | { kind: "Sleep"; ms: number };
 
 /**
  * When TIn is `never` (handler ignores input), produce `any` so the

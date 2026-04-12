@@ -39,7 +39,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::Drop => Ok(Value::Null),
 
-        BuiltinKind::Tag { value: tag } => Ok(json!({ "kind": tag, "value": input })),
+        BuiltinKind::Tag { tag } => Ok(json!({ "kind": tag, "value": input })),
 
         BuiltinKind::Merge => {
             let Value::Array(items) = input else {
@@ -87,14 +87,7 @@ pub async fn execute_builtin(
             Ok(Value::Array(result))
         }
 
-        BuiltinKind::GetField { value: field } => {
-            let Value::String(field_name) = field else {
-                return Err(BuiltinError {
-                    builtin: "GetField",
-                    expected: "string field name",
-                    actual: field.clone(),
-                });
-            };
+        BuiltinKind::GetField { field } => {
             let Value::Object(obj) = input else {
                 return Err(BuiltinError {
                     builtin: "GetField",
@@ -102,17 +95,10 @@ pub async fn execute_builtin(
                     actual: input.clone(),
                 });
             };
-            Ok(obj.get(field_name.as_str()).cloned().unwrap_or(Value::Null))
+            Ok(obj.get(field.as_str()).cloned().unwrap_or(Value::Null))
         }
 
-        BuiltinKind::GetIndex { value: index } => {
-            let Some(index_number) = index.as_u64() else {
-                return Err(BuiltinError {
-                    builtin: "GetIndex",
-                    expected: "non-negative integer index",
-                    actual: index.clone(),
-                });
-            };
+        BuiltinKind::GetIndex { index } => {
             let Value::Array(arr) = input else {
                 return Err(BuiltinError {
                     builtin: "GetIndex",
@@ -120,17 +106,8 @@ pub async fn execute_builtin(
                     actual: input.clone(),
                 });
             };
-            let index = usize::try_from(index_number).map_err(|_| BuiltinError {
-                builtin: "GetIndex",
-                expected: "index within usize range",
-                actual: index.clone(),
-            })?;
-            Ok(arr.get(index).cloned().unwrap_or(Value::Null))
+            Ok(arr.get(*index).cloned().unwrap_or(Value::Null))
         }
-
-        BuiltinKind::TagContinue => Ok(json!({ "kind": "Continue", "value": input })),
-
-        BuiltinKind::TagBreak => Ok(json!({ "kind": "Break", "value": input })),
 
         BuiltinKind::SplitFirst => {
             let Value::Array(items) = input else {
@@ -188,14 +165,7 @@ pub async fn execute_builtin(
             Ok(Value::Array(collected))
         }
 
-        BuiltinKind::Pick { value: keys } => {
-            let Value::Array(key_values) = keys else {
-                return Err(BuiltinError {
-                    builtin: "Pick",
-                    expected: "array of field names",
-                    actual: keys.clone(),
-                });
-            };
+        BuiltinKind::Pick { fields } => {
             let Value::Object(obj) = input else {
                 return Err(BuiltinError {
                     builtin: "Pick",
@@ -204,41 +174,18 @@ pub async fn execute_builtin(
                 });
             };
             let mut picked = serde_json::Map::new();
-            for key_value in key_values {
-                let Value::String(key) = key_value else {
-                    return Err(BuiltinError {
-                        builtin: "Pick",
-                        expected: "string field name in keys array",
-                        actual: key_value.clone(),
-                    });
-                };
-                if let Some(value) = obj.get(key.as_str()) {
-                    picked.insert(key.clone(), value.clone());
+            for field in fields {
+                if let Some(value) = obj.get(field.as_str()) {
+                    picked.insert(field.clone(), value.clone());
                 }
             }
             Ok(Value::Object(picked))
         }
 
-        BuiltinKind::WrapInField { value: field } => {
-            let Value::String(field_name) = field else {
-                return Err(BuiltinError {
-                    builtin: "WrapInField",
-                    expected: "string field name",
-                    actual: field.clone(),
-                });
-            };
-            Ok(json!({ field_name.as_str(): input }))
-        }
+        BuiltinKind::WrapInField { field } => Ok(json!({ field.as_str(): input })),
 
-        BuiltinKind::Sleep { value: ms_value } => {
-            let Some(ms) = ms_value.as_u64() else {
-                return Err(BuiltinError {
-                    builtin: "Sleep",
-                    expected: "non-negative integer milliseconds",
-                    actual: ms_value.clone(),
-                });
-            };
-            tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+        BuiltinKind::Sleep { ms } => {
+            tokio::time::sleep(std::time::Duration::from_millis(*ms)).await;
             Ok(Value::Null)
         }
     }
@@ -276,7 +223,7 @@ mod tests {
     async fn tag_wraps_input() {
         let result = execute_builtin(
             &BuiltinKind::Tag {
-                value: json!("Continue"),
+                tag: "Continue".to_string(),
             },
             &json!(42),
         )
@@ -327,7 +274,7 @@ mod tests {
         let input = json!({"name": "Alice", "age": 30});
         let result = execute_builtin(
             &BuiltinKind::GetField {
-                value: json!("name"),
+                field: "name".to_string(),
             },
             &input,
         )
@@ -340,7 +287,7 @@ mod tests {
         let input = json!({"name": "Alice"});
         let result = execute_builtin(
             &BuiltinKind::GetField {
-                value: json!("missing"),
+                field: "missing".to_string(),
             },
             &input,
         )
@@ -352,7 +299,7 @@ mod tests {
     async fn get_field_rejects_non_object() {
         let result = execute_builtin(
             &BuiltinKind::GetField {
-                value: json!("field"),
+                field: "field".to_string(),
             },
             &json!("not object"),
         )
@@ -363,36 +310,21 @@ mod tests {
     #[tokio::test]
     async fn get_index_gets_value() {
         let input = json!(["a", "b", "c"]);
-        let result = execute_builtin(&BuiltinKind::GetIndex { value: json!(1) }, &input).await;
+        let result = execute_builtin(&BuiltinKind::GetIndex { index: 1 }, &input).await;
         assert_eq!(result.unwrap(), json!("b"));
     }
 
     #[tokio::test]
     async fn get_index_out_of_bounds_returns_null() {
         let input = json!(["a"]);
-        let result = execute_builtin(&BuiltinKind::GetIndex { value: json!(5) }, &input).await;
+        let result = execute_builtin(&BuiltinKind::GetIndex { index: 5 }, &input).await;
         assert_eq!(result.unwrap(), Value::Null);
     }
 
     #[tokio::test]
     async fn get_index_rejects_non_array() {
-        let result = execute_builtin(
-            &BuiltinKind::GetIndex { value: json!(0) },
-            &json!("not array"),
-        )
-        .await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn get_index_rejects_non_integer() {
-        let result = execute_builtin(
-            &BuiltinKind::GetIndex {
-                value: json!("bad"),
-            },
-            &json!([1, 2]),
-        )
-        .await;
+        let result =
+            execute_builtin(&BuiltinKind::GetIndex { index: 0 }, &json!("not array")).await;
         assert!(result.is_err());
     }
 
@@ -401,7 +333,7 @@ mod tests {
         let input = json!({"name": "Alice", "age": 30, "email": "a@b.com"});
         let result = execute_builtin(
             &BuiltinKind::Pick {
-                value: json!(["name", "age"]),
+                fields: vec!["name".to_string(), "age".to_string()],
             },
             &input,
         )
@@ -414,7 +346,7 @@ mod tests {
         let input = json!({"name": "Alice"});
         let result = execute_builtin(
             &BuiltinKind::Pick {
-                value: json!(["name", "missing"]),
+                fields: vec!["name".to_string(), "missing".to_string()],
             },
             &input,
         )
@@ -426,7 +358,7 @@ mod tests {
     async fn pick_rejects_non_object() {
         let result = execute_builtin(
             &BuiltinKind::Pick {
-                value: json!(["name"]),
+                fields: vec!["name".to_string()],
             },
             &json!("not object"),
         )
@@ -437,20 +369,8 @@ mod tests {
     #[tokio::test]
     async fn pick_empty_keys_returns_empty_object() {
         let input = json!({"name": "Alice", "age": 30});
-        let result = execute_builtin(&BuiltinKind::Pick { value: json!([]) }, &input).await;
+        let result = execute_builtin(&BuiltinKind::Pick { fields: vec![] }, &input).await;
         assert_eq!(result.unwrap(), json!({}));
-    }
-
-    #[tokio::test]
-    async fn tag_continue_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagContinue, &json!(5)).await;
-        assert_eq!(result.unwrap(), json!({"kind": "Continue", "value": 5}));
-    }
-
-    #[tokio::test]
-    async fn tag_break_wraps_input() {
-        let result = execute_builtin(&BuiltinKind::TagBreak, &json!("done")).await;
-        assert_eq!(result.unwrap(), json!({"kind": "Break", "value": "done"}),);
     }
 
     #[tokio::test]
@@ -563,20 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn sleep_returns_null() {
-        let result =
-            execute_builtin(&BuiltinKind::Sleep { value: json!(0) }, &json!({"x": 1})).await;
+        let result = execute_builtin(&BuiltinKind::Sleep { ms: 0 }, &json!({"x": 1})).await;
         assert_eq!(result.unwrap(), Value::Null);
-    }
-
-    #[tokio::test]
-    async fn sleep_rejects_non_integer() {
-        let result = execute_builtin(
-            &BuiltinKind::Sleep {
-                value: json!("bad"),
-            },
-            &json!(null),
-        )
-        .await;
-        assert!(result.is_err());
     }
 }

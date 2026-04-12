@@ -160,7 +160,7 @@ describe("loop", () => {
     const chain = workflow as any;
     // First: Tag("Continue")
     expect(chain.first.handler.builtin.kind).toBe("Tag");
-    expect(chain.first.handler.builtin.value).toBe("Continue");
+    expect(chain.first.handler.builtin.tag).toBe("Continue");
     // Rest: RestartHandle
     expect(chain.rest.kind).toBe("RestartHandle");
     expect(typeof chain.rest.restart_handler_id).toBe("number");
@@ -170,7 +170,7 @@ describe("loop", () => {
     // RestartHandle handler: Invoke(GetIndex(0))
     expect(chain.rest.handler.kind).toBe("Invoke");
     expect(chain.rest.handler.handler.builtin.kind).toBe("GetIndex");
-    expect(chain.rest.handler.handler.builtin.value).toBe(0);
+    expect(chain.rest.handler.handler.builtin.index).toBe(0);
   });
 
   it("composes type-check loop with branch", () => {
@@ -236,7 +236,7 @@ describe("postfix operators", () => {
     expect(chain.first.kind).toBe("Invoke");
     expect(chain.rest.kind).toBe("Invoke");
     expect(chain.rest.handler.builtin.kind).toBe("Tag");
-    expect(chain.rest.handler.builtin.value).toBe("Ok");
+    expect(chain.rest.handler.builtin.tag).toBe("Ok");
   });
 
   it(".getField() produces Chain → GetField AST", () => {
@@ -246,7 +246,7 @@ describe("postfix operators", () => {
     expect(chain.first.kind).toBe("Invoke");
     expect(chain.rest.kind).toBe("Invoke");
     expect(chain.rest.handler.builtin.kind).toBe("GetField");
-    expect(chain.rest.handler.builtin.value).toBe("project");
+    expect(chain.rest.handler.builtin.field).toBe("project");
   });
 
   it("postfix methods are chainable", () => {
@@ -280,7 +280,7 @@ describe("Option namespace", () => {
     expect(action.kind).toBe("Invoke");
     const invoke = action as { kind: "Invoke"; handler: any };
     expect(invoke.handler.builtin.kind).toBe("Tag");
-    expect(invoke.handler.builtin.value).toBe("Some");
+    expect(invoke.handler.builtin.tag).toBe("Some");
   });
 
   it("Option.none() produces Tag('None') AST", () => {
@@ -288,7 +288,7 @@ describe("Option namespace", () => {
     expect(action.kind).toBe("Invoke");
     const invoke = action as { kind: "Invoke"; handler: any };
     expect(invoke.handler.builtin.kind).toBe("Tag");
-    expect(invoke.handler.builtin.value).toBe("None");
+    expect(invoke.handler.builtin.tag).toBe("None");
   });
 
   it("Option.map() produces Branch with Some and None cases", () => {
@@ -305,7 +305,7 @@ describe("Option namespace", () => {
     const noneCase = branchNode.cases["None"];
     expect(noneCase.kind).toBe("Chain");
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
-    expect(noneCase.rest.handler.builtin.value).toBe("None");
+    expect(noneCase.rest.handler.builtin.tag).toBe("None");
   });
 
   it("Option.andThen() produces Branch with action Some and Tag None", () => {
@@ -320,7 +320,7 @@ describe("Option namespace", () => {
     // None case: GetField("value") → Tag("None")
     const noneCase = branchNode.cases["None"];
     expect(noneCase.rest.handler.builtin.kind).toBe("Tag");
-    expect(noneCase.rest.handler.builtin.value).toBe("None");
+    expect(noneCase.rest.handler.builtin.tag).toBe("None");
   });
 
   it("Option.unwrapOr() produces Branch with identity Some and drop+default None", () => {
@@ -344,7 +344,7 @@ describe("Option namespace", () => {
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Identity");
     expect(branchNode.cases["None"].rest.handler.builtin.kind).toBe("Tag");
-    expect(branchNode.cases["None"].rest.handler.builtin.value).toBe("None");
+    expect(branchNode.cases["None"].rest.handler.builtin.tag).toBe("None");
   });
 
   it("Option.filter() produces Branch with predicate Some and Tag None", () => {
@@ -354,7 +354,7 @@ describe("Option namespace", () => {
     const branchNode =action as { kind: "Branch"; cases: any };
     // Some case body is the predicate (Tag "Some")
     expect(branchNode.cases["Some"].rest.handler.builtin.kind).toBe("Tag");
-    expect(branchNode.cases["Some"].rest.handler.builtin.value).toBe("Some");
+    expect(branchNode.cases["Some"].rest.handler.builtin.tag).toBe("Some");
   });
 
   it("Option.collect() produces CollectSome builtin", () => {
@@ -456,17 +456,17 @@ describe("bind", () => {
     // First action: Chain(GetIndex(1), GetIndex(0))
     expect(handle.handler.actions[0].kind).toBe("Chain");
     expect(handle.handler.actions[0].first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[0].first.handler.builtin.value).toBe(1);
+    expect(handle.handler.actions[0].first.handler.builtin.index).toBe(1);
     expect(handle.handler.actions[0].rest.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[0].rest.handler.builtin.value).toBe(0);
+    expect(handle.handler.actions[0].rest.handler.builtin.index).toBe(0);
     // Second action: GetIndex(1)
     expect(handle.handler.actions[1].handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[1].handler.builtin.value).toBe(1);
+    expect(handle.handler.actions[1].handler.builtin.index).toBe(1);
 
     // ResumeHandle body: Chain(GetIndex(1), bodyAction)
     expect(handle.body.kind).toBe("Chain");
     expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.body.first.handler.builtin.value).toBe(1);
+    expect(handle.body.first.handler.builtin.index).toBe(1);
   });
 
   it("two bindings produce two nested Handles with distinct effectIds", () => {
@@ -493,13 +493,13 @@ describe("bind", () => {
     expect(handle0.resume_handler_id).not.toBe(handle1.resume_handler_id);
 
     // readVar indices: outer=0, inner=1
-    expect(handle0.handler.actions[0].rest.handler.builtin.value).toBe(0);
-    expect(handle1.handler.actions[0].rest.handler.builtin.value).toBe(1);
+    expect(handle0.handler.actions[0].rest.handler.builtin.index).toBe(0);
+    expect(handle1.handler.actions[0].rest.handler.builtin.index).toBe(1);
 
     // Innermost body: Chain(GetIndex(2), bodyAction) — pipeline_input at index 2
     expect(handle1.body.kind).toBe("Chain");
     expect(handle1.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle1.body.first.handler.builtin.value).toBe(2);
+    expect(handle1.body.first.handler.builtin.index).toBe(2);
   });
 
   it("VarRef is a ResumePerform node with unique resume_handler_id", () => {
@@ -556,13 +556,13 @@ describe("bind", () => {
       const chainAction = handler.actions[0];
       expect(chainAction.kind).toBe("Chain");
       expect(chainAction.first.handler.builtin.kind).toBe("GetIndex");
-      expect(chainAction.first.handler.builtin.value).toBe(1);
+      expect(chainAction.first.handler.builtin.index).toBe(1);
       expect(chainAction.rest.handler.builtin.kind).toBe("GetIndex");
-      expect(chainAction.rest.handler.builtin.value).toBe(expectedIndex);
+      expect(chainAction.rest.handler.builtin.index).toBe(expectedIndex);
       // Second action: GetIndex(1)
       const extractAction = handler.actions[1];
       expect(extractAction.handler.builtin.kind).toBe("GetIndex");
-      expect(extractAction.handler.builtin.value).toBe(1);
+      expect(extractAction.handler.builtin.index).toBe(1);
     }
   });
 });
@@ -592,7 +592,7 @@ describe("bindInput", () => {
     // Handle body: Chain(GetIndex(1), Chain(Drop, bodyAction))
     expect(handle.body.kind).toBe("Chain");
     expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.body.first.handler.builtin.value).toBe(1);
+    expect(handle.body.first.handler.builtin.index).toBe(1);
 
     // The rest of the body is Chain(Drop, bodyAction)
     const bodyChain = handle.body.rest;
@@ -621,7 +621,7 @@ describe("Result combinators", () => {
     const action = R.ok();
     expect(action).toEqual({
       kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } },
+      handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Ok" } },
     });
   });
 
@@ -629,7 +629,7 @@ describe("Result combinators", () => {
     const action = R.err();
     expect(action).toEqual({
       kind: "Invoke",
-      handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } },
+      handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Err" } },
     });
   });
 
@@ -640,13 +640,13 @@ describe("Result combinators", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Ok" } } } },
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Err" } } },
         },
       },
     });
@@ -659,13 +659,13 @@ describe("Result combinators", () => {
       cases: {
         Ok: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
-          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Ok" } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Ok" } } },
         },
         Err: {
           kind: "Chain",
-          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", value: "value" } } },
-          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", value: "Err" } } } },
+          first: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "GetField", field: "value" } } },
+          rest: { kind: "Chain", first: setup, rest: { kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "Tag", tag: "Err" } } } },
         },
       },
     });
@@ -680,7 +680,7 @@ describe("Result combinators", () => {
     expect(branchNode.cases.Ok.rest).toBe(inner);
     // Err case: ExtractValue → Tag(Err)
     expect(branchNode.cases.Err.rest.handler.builtin.kind).toBe("Tag");
-    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Err");
+    expect(branchNode.cases.Err.rest.handler.builtin.tag).toBe("Err");
   });
 
   it("Result.or(fallback) desugars to Branch(Ok: Tag(Ok), Err: fallback)", () => {
@@ -688,7 +688,7 @@ describe("Result combinators", () => {
     const result = R.or(fallback);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
-    expect(branchNode.cases.Ok.rest.handler.builtin.value).toBe("Ok");
+    expect(branchNode.cases.Ok.rest.handler.builtin.tag).toBe("Ok");
     expect(branchNode.cases.Err.rest).toBe(fallback);
   });
 
@@ -718,16 +718,16 @@ describe("Result combinators", () => {
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.handler.builtin.kind).toBe("Identity");
-    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Err");
+    expect(branchNode.cases.Err.rest.handler.builtin.tag).toBe("Err");
   });
 
   it("Result.toOption() desugars to Branch(Ok: Tag(Some), Err: Chain(Drop, Tag(None)))", () => {
     const action = R.toOption();
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
-    expect(branchNode.cases.Ok.rest.handler.builtin.value).toBe("Some");
+    expect(branchNode.cases.Ok.rest.handler.builtin.tag).toBe("Some");
     expect(branchNode.cases.Err.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Err.rest.rest.handler.builtin.value).toBe("None");
+    expect(branchNode.cases.Err.rest.rest.handler.builtin.tag).toBe("None");
   });
 
   it("Result.toOptionErr() desugars to Branch(Ok: Chain(Drop, Tag(None)), Err: Tag(Some))", () => {
@@ -735,8 +735,8 @@ describe("Result combinators", () => {
     const branchNode =action as any;
     expect(branchNode.kind).toBe("Branch");
     expect(branchNode.cases.Ok.rest.first.handler.builtin.kind).toBe("Drop");
-    expect(branchNode.cases.Ok.rest.rest.handler.builtin.value).toBe("None");
-    expect(branchNode.cases.Err.rest.handler.builtin.value).toBe("Some");
+    expect(branchNode.cases.Ok.rest.rest.handler.builtin.tag).toBe("None");
+    expect(branchNode.cases.Err.rest.handler.builtin.tag).toBe("Some");
   });
 
   it("Result.isOk() desugars to Branch(Ok: Constant(true), Err: Constant(false))", () => {
@@ -767,7 +767,7 @@ describe("Result combinators", () => {
     // Err case: Tag(Err) → Tag(Some)
     const errBody = branchNode.cases.Err.rest;
     expect(errBody.kind).toBe("Chain");
-    expect(errBody.first.handler.builtin.value).toBe("Err");
-    expect(errBody.rest.handler.builtin.value).toBe("Some");
+    expect(errBody.first.handler.builtin.tag).toBe("Err");
+    expect(errBody.rest.handler.builtin.tag).toBe("Some");
   });
 });

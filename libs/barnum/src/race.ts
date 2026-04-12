@@ -82,7 +82,7 @@ export function race<TIn, TOut>(
 export function sleep(ms: number): TypedAction<any, never> {
   return typedAction<any, never>({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Sleep", value: ms } },
+    handler: { kind: "Builtin", builtin: { kind: "Sleep", ms } },
   });
 }
 

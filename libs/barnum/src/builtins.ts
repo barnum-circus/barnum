@@ -119,7 +119,7 @@ export function tag<
 >(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
   return typedAction({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Tag", value: kind } },
+    handler: { kind: "Builtin", builtin: { kind: "Tag", tag: kind } },
   });
 }
 
@@ -160,7 +160,7 @@ export function getField<
     kind: "Invoke",
     handler: {
       kind: "Builtin",
-      builtin: { kind: "GetField", value: field },
+      builtin: { kind: "GetField", field },
     },
   });
 }
@@ -176,7 +176,7 @@ export function getIndex<TTuple extends unknown[], TIndex extends number>(
     kind: "Invoke",
     handler: {
       kind: "Builtin",
-      builtin: { kind: "GetIndex", value: index },
+      builtin: { kind: "GetIndex", index },
     },
   });
 }
@@ -191,7 +191,7 @@ export function pick<
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
   return typedAction({
     kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "Pick", value: keys } },
+    handler: { kind: "Builtin", builtin: { kind: "Pick", fields: keys } },
   });
 }
 
@@ -297,7 +297,7 @@ export function wrapInField<TField extends string, TValue>(
     kind: "Invoke",
     handler: {
       kind: "Builtin",
-      builtin: { kind: "WrapInField", value: field },
+      builtin: { kind: "WrapInField", field },
     },
   });
 }

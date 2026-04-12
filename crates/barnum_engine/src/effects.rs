@@ -737,7 +737,7 @@ mod tests {
                 e0,
                 resume_read_var(0),
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
                     invoke("./echo.ts", "echo"),
                 ),
             ),
@@ -855,7 +855,7 @@ mod tests {
                 e_outer,
                 resume_read_var(0),
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
                     chain(
                         parallel(vec![
                             invoke_builtin(BuiltinKind::Constant {
@@ -867,7 +867,7 @@ mod tests {
                             e_inner,
                             resume_read_var(0),
                             chain(
-                                invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
+                                invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
                                 chain(resume_perform(e_outer), resume_perform(e_inner)),
                             ),
                         ),
@@ -942,7 +942,7 @@ mod tests {
                 e0,
                 invoke("./handler.ts", "handler"),
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { value: json!(1) }),
+                    invoke_builtin(BuiltinKind::GetIndex { index: 1 }),
                     resume_perform(e0),
                 ),
             ),
@@ -972,7 +972,7 @@ mod tests {
                 e0,
                 resume_read_var(1), // Extract state[1] = "b"
                 chain(
-                    invoke_builtin(BuiltinKind::GetIndex { value: json!(3) }),
+                    invoke_builtin(BuiltinKind::GetIndex { index: 3 }),
                     chain(resume_perform(e0), invoke("./echo.ts", "echo")),
                 ),
             ),
