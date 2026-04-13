@@ -15,6 +15,14 @@ import {
   tag,
   wrapInField,
 } from "./builtins.js";
+// Lazy import — bind.ts imports from ast.ts, but these are only called inside
+// methods (after all modules load), so the circular reference is safe at runtime.
+import {
+  bind as bindStandalone,
+  bindInput as bindInputStandalone,
+  type VarRef,
+  type InferVarRefs,
+} from "./bind.js";
 
 // ---------------------------------------------------------------------------
 // Serializable Types — mirror the Rust AST in barnum_ast
@@ -254,6 +262,15 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<TIn, TValue>;
+  /** Bind concurrent values as VarRefs available throughout the body. */
+  bind<TBindings extends Action[], TOut>(
+    bindings: [...TBindings],
+    body: (vars: InferVarRefs<TBindings>) => Action & { __out?: () => TOut },
+  ): TypedAction<In, TOut>;
+  /** Capture the pipeline input as a VarRef. */
+  bindInput<TOut>(
+    body: (input: VarRef<Out>) => Action & { __out?: () => TOut },
+  ): TypedAction<In, TOut>;
 };
 
 /**
@@ -447,6 +464,21 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   ) as TypedAction;
 }
 
+function bindMethod(
+  this: TypedAction,
+  bindings: Action[],
+  body: (vars: any) => Action,
+): TypedAction {
+  return chain(this as any, bindStandalone(bindings, body) as any) as TypedAction;
+}
+
+function bindInputMethod(
+  this: TypedAction,
+  body: (input: any) => Action,
+): TypedAction {
+  return chain(this as any, bindInputStandalone(body) as any) as TypedAction;
+}
+
 /**
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
@@ -472,6 +504,8 @@ export function typedAction<In = unknown, Out = unknown>(
       mapOption: { value: mapOptionMethod, configurable: true },
       mapErr: { value: mapErrMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },
+      bind: { value: bindMethod, configurable: true },
+      bindInput: { value: bindInputMethod, configurable: true },
     });
   }
   return action as TypedAction<In, Out>;
