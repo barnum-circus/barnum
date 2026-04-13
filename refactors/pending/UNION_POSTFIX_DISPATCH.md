@@ -101,10 +101,10 @@ Implementation: `typedAction()` does NOT copy `__union` from inputs. Only union-
 Option 1: `.map()` is always available on TypedAction, but the `this` constraint restricts it:
 
 ```ts
-map<TIn, TOut, TRefs extends string>(
-  this: TypedAction<TIn, Option<any> | Result<any, any>, TRefs>,
+map<TIn, TOut>(
+  this: TypedAction<TIn, Option<any> | Result<any, any>>,
   action: Pipeable<???, ???>,
-): TypedAction<TIn, ???, TRefs>;
+): TypedAction<TIn, ???>;
 ```
 
 Problem: the return type depends on whether it's Option or Result. TypeScript can't branch on this in a single overload.
@@ -113,16 +113,16 @@ Option 2: Overloads.
 
 ```ts
 // Option overload
-map<TIn, T, U, TRefs extends string>(
-  this: TypedAction<TIn, Option<T>, TRefs>,
+map<TIn, T, U>(
+  this: TypedAction<TIn, Option<T>>,
   action: Pipeable<T, U>,
-): TypedAction<TIn, Option<U>, TRefs>;
+): TypedAction<TIn, Option<U>>;
 
 // Result overload
-map<TIn, TValue, TOut, TError, TRefs extends string>(
-  this: TypedAction<TIn, Result<TValue, TError>, TRefs>,
+map<TIn, TValue, TOut, TError>(
+  this: TypedAction<TIn, Result<TValue, TError>>,
   action: Pipeable<TValue, TOut>,
-): TypedAction<TIn, Result<TOut, TError>, TRefs>;
+): TypedAction<TIn, Result<TOut, TError>>;
 ```
 
 TypeScript picks the right overload based on the `this` type. This works.

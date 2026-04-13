@@ -278,10 +278,10 @@ The engine suspends at `waitForPrEvent` (an Invoke). The runtime resolves it whe
 Sugar for the common case where every item is processed the same way and the stream has an explicit end signal. The source handler returns `Option<TElement>` — `Some` with the next item, or `None` when exhausted:
 
 ```ts
-function forEachStream<TIn, TElement, TOut, TRefs extends string = never>(
+function forEachStream<TIn, TElement, TOut>(
   source: Pipeable<TIn, Option<TElement>>,
-  body: Pipeable<TElement, unknown, TRefs>,
-): TypedAction<TIn, TOut[], TRefs>
+  body: Pipeable<TElement, unknown>,
+): TypedAction<TIn, TOut[]>
 ```
 
 Desugars to:
@@ -332,10 +332,10 @@ Following the existing pattern of postfix methods (`.then()`, `.forEach()`, `.br
 
 ```ts
 // On TypedAction:
-forEachStream<TIn, TElement, TOut, TRefs extends string, TRefs2 extends string = never>(
-  this: TypedAction<TIn, Option<TElement>, TRefs>,
-  body: Pipeable<TElement, TOut, TRefs2>,
-): TypedAction<TIn, TOut[], TRefs | TRefs2>;
+forEachStream<TIn, TElement, TOut>(
+  this: TypedAction<TIn, Option<TElement>>,
+  body: Pipeable<TElement, TOut>,
+): TypedAction<TIn, TOut[]>;
 ```
 
 Usage:
@@ -436,45 +436,45 @@ constant(42)
 Non-enumerable properties solve this. `JSON.stringify` skips non-enumerable properties, so they don't appear in serialized output. But `action.then(...)` still works at runtime:
 
 ```ts
-function withMethods<In, Out, Refs extends string>(
+function withMethods<In, Out>(
   action: Action,
-): TypedAction<In, Out, Refs> {
+): TypedAction<In, Out> {
   Object.defineProperties(action, {
     then: {
-      value<Next, R extends string>(
-        this: TypedAction<In, Out, Refs>,
-        next: TypedAction<Out, Next, R>,
-      ): TypedAction<In, Next, Refs | R> {
+      value<Next>(
+        this: TypedAction<In, Out>,
+        next: TypedAction<Out, Next>,
+      ): TypedAction<In, Next> {
         return chain(this, next);
       },
       enumerable: false,
     },
     attempt: {
-      value<In, Out, Refs extends string>(
-        this: TypedAction<In, Out, Refs>,
-      ): TypedAction<In, AttemptResult<Out>, Refs> {
+      value<In, Out>(
+        this: TypedAction<In, Out>,
+      ): TypedAction<In, AttemptResult<Out>> {
         return attempt(this);
       },
       enumerable: false,
     },
     forEach: {
-      value<In, Out, Refs extends string>(
-        this: TypedAction<In, Out, Refs>,
-      ): TypedAction<In[], Out[], Refs> {
+      value<In, Out>(
+        this: TypedAction<In, Out>,
+      ): TypedAction<In[], Out[]> {
         return forEach(this);
       },
       enumerable: false,
     },
     loop: {
-      value<In, Out, Refs extends string>(
-        this: TypedAction<In, Out, Refs>,
-      ): TypedAction<In, Out, Refs> {
+      value<In, Out>(
+        this: TypedAction<In, Out>,
+      ): TypedAction<In, Out> {
         return loop(this);
       },
       enumerable: false,
     },
   });
-  return action as TypedAction<In, Out, Refs>;
+  return action as TypedAction<In, Out>;
 }
 ```
 
@@ -485,19 +485,18 @@ Every combinator function (`chain`, `parallel`, `branch`, `invoke`, `constant`, 
 The `TypedAction` type gains method signatures:
 
 ```ts
-export type TypedAction<In, Out, Refs extends string = never> = Action & {
+export type TypedAction<In, Out> = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
   __in?: In;
-  __refs?: { _brand: Refs };
 
-  then<Next, R extends string>(
-    next: TypedAction<Out, Next, R>,
-  ): TypedAction<In, Next, Refs | R>;
+  then<Next>(
+    next: TypedAction<Out, Next>,
+  ): TypedAction<In, Next>;
 
-  attempt(): TypedAction<In, AttemptResult<Out>, Refs>;
-  forEach(): TypedAction<In[], Out[], Refs>;
-  loop(): TypedAction<In, Out, Refs>; // Out must be LoopResult<In, T>
+  attempt(): TypedAction<In, AttemptResult<Out>>;
+  forEach(): TypedAction<In[], Out[]>;
+  loop(): TypedAction<In, Out>; // Out must be LoopResult<In, T>
 };
 ```
 

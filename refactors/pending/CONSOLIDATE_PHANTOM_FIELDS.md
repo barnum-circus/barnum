@@ -2,7 +2,7 @@
 
 ## Motivation
 
-`TypedAction`, `Pipeable`, and `CaseHandler` each carry four phantom fields to encode input/output variance:
+`TypedAction`, `Pipeable`, and `CaseHandler` each carry four phantom fields to encode input/output variance (the `Refs` type parameter and `__refs` field have already been removed):
 
 ```ts
 __phantom_in?: (input: In) => void;   // contravariant In
@@ -15,13 +15,13 @@ The first pair (`__phantom_in` + `__in`) makes In invariant. The second pair (`_
 
 Four fields with inconsistent naming (`__in` vs `__phantom_in`), a stale comment about the deleted `WorkflowAction`, and a non-obvious variance encoding. This can be one field.
 
-Additionally, all three types carry a `Refs extends string = never` type parameter and `__refs?: { _brand: Refs }` phantom field. This is threaded through every combinator signature but never extracted or used — no `ExtractRefs` type exists, no test exercises it, no consumer reads it. Dead code.
-
 ## Design
 
-### Step 1: Remove Refs
+### Step 1: Remove Refs -- DONE
 
-Delete the `Refs` type parameter and `__refs` field from `TypedAction`, `Pipeable`, and `CaseHandler`. Remove the `TRefs` parameter from every combinator signature that threads it (`then`, `forEach`, `pipe`, `chain`, `loop`, `recur`, `earlyReturn`, `dropResult`, `augment`, `tap`, `typedAction`, etc.).
+~~Delete the `Refs` type parameter and `__refs` field from `TypedAction`, `Pipeable`, and `CaseHandler`. Remove the `TRefs` parameter from every combinator signature that threads it.~~
+
+This has been completed. `TypedAction`, `Pipeable`, and `CaseHandler` now take only `<In, Out>`.
 
 ### Step 2: Consolidate phantom fields
 
@@ -63,50 +63,35 @@ CaseHandler's `(input: TIn) => TOut` doesn't match the tuple extraction pattern,
 
 ## Current state
 
-### `TypedAction` (`libs/barnum/src/ast.ts:151-159`)
+### `TypedAction` (`libs/barnum/src/ast.ts`)
 
 ```ts
-export type TypedAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
+export type TypedAction<In = unknown, Out = unknown> = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
   __phantom_out_check?: (output: Out) => void;
   __in?: In;
-  __refs?: { _brand: Refs };
   // ...methods...
 };
 ```
 
-### `Pipeable` (`libs/barnum/src/ast.ts:276-286`)
+### `Pipeable` (`libs/barnum/src/ast.ts`)
 
 ```ts
-export type Pipeable<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
+export type Pipeable<In = unknown, Out = unknown> = Action & {
   __phantom_in?: (input: In) => void;
   __phantom_out?: () => Out;
   __phantom_out_check?: (output: Out) => void;
   __in?: In;
-  __refs?: { _brand: Refs };
 };
 ```
 
-### `CaseHandler` (`libs/barnum/src/ast.ts:308-316`)
+### `CaseHandler` (`libs/barnum/src/ast.ts`)
 
 ```ts
-type CaseHandler<
-  TIn = unknown,
-  TOut = unknown,
-  TRefs extends string = never,
-> = Action & {
+type CaseHandler<TIn = unknown, TOut = unknown> = Action & {
   __phantom_in?: (input: TIn) => void;
   __phantom_out?: () => TOut;
-  __refs?: { _brand: TRefs };
 };
 ```
 
@@ -124,29 +109,21 @@ export type ExtractOutput<T> = T extends { __phantom_out?: () => infer Out }
   : never;
 ```
 
-### `typedAction` (`libs/barnum/src/ast.ts:614-621`)
+### `typedAction` (`libs/barnum/src/ast.ts`)
 
 ```ts
-export function typedAction<In, Out, Refs extends string = never>(
+export function typedAction<In, Out>(
   action: Action,
-): TypedAction<In, Out, Refs> {
-  return action as TypedAction<In, Out, Refs>;
+): TypedAction<In, Out> {
+  return action as TypedAction<In, Out>;
 }
 ```
 
 ## Changes
 
-### 1. Remove `Refs` type parameter and `__refs` field
+### 1. Remove `Refs` type parameter and `__refs` field -- DONE
 
-Remove from:
-- `TypedAction<In, Out, Refs>` → `TypedAction<In, Out>`
-- `Pipeable<In, Out, Refs>` → `Pipeable<In, Out>`
-- `CaseHandler<TIn, TOut, TRefs>` → `CaseHandler<TIn, TOut>`
-- `typedAction<In, Out, Refs>` → `typedAction<In, Out>`
-
-Remove `TRefs` parameters from every combinator that threads them: `then`, `forEach`, `chain`/pipe implementation, `loop`, `recur`, `earlyReturn`, `dropResult`, `augment`, `tap`, and all method signatures on TypedAction.
-
-Remove `__refs` field from all three types.
+~~Removed `Refs` type parameter and `__refs` field from `TypedAction`, `Pipeable`, `CaseHandler`, `typedAction`, and all combinator signatures.~~
 
 ### 2. Replace phantom fields on TypedAction
 
@@ -217,7 +194,7 @@ If the consolidated fields pass the existing type tests, the variance behavior i
 
 ## Execution order
 
-1. Remove `Refs` from all types and combinators
+1. ~~Remove `Refs` from all types and combinators~~ -- DONE
 2. Replace phantom fields on TypedAction, Pipeable, CaseHandler
 3. Update ExtractInput / ExtractOutput
 4. Update JSDoc comments
