@@ -157,10 +157,20 @@ After this change, `void` consistently means "null at runtime" throughout the fr
 
 ---
 
-## Open questions
+## Investigation results
 
-1. **Does `void` interact correctly with invariant phantom types?** `TypedAction` uses invariant phantom fields (`__out` covariant + `__out_contra` contravariant). With `Out = void`, these become `__out?: () => void` and `__out_contra?: (output: void) => void`. TypeScript's `void` in these positions should behave as a concrete type (unlike `never`, which is the bottom type). The question is whether `chain(drop, tag("None"))` typechecks without `as any` when `drop`'s output is `void` and `tag("None")`'s input expects the None variant's payload type. This needs to be verified against the actual phantom type machinery — try the change and read the compiler errors.
+Tested by changing `drop` from `TypedAction<any, never>` to `TypedAction<any, void>` and running the typechecker.
 
-2. **Should `constant(null)` replace `drop`?** After this change, `drop` is semantically `constant(null)` with an `any` input. They differ only in that `drop` accepts any input while `constant(null)` is `TypedAction<any, null>`. If `void` maps to `null` at runtime, these are equivalent. `drop` is still worth keeping as a named concept — "discard the value" reads better than "replace with null" — but it's worth noting they converge.
+### What works
 
-3. **Test updates.** The type test in `libs/barnum/tests/types.test.ts:923` explicitly asserts `throwError` is `TypedAction<TError, never>`. No change needed there. But any tests that assert `drop` is `TypedAction<any, never>` or `sleep` is `TypedAction<any, never>` will need updating. The `.drop()` postfix tests (line 1167, 1175) assert `TypedAction<never, never>` — these become `TypedAction<never, void>`.
+- `chain(drop, constant(true))` and `chain(drop, constant(false))` typecheck cleanly — no casts needed. `constant`'s `any` input absorbs `void` output.
+- Two library signature changes required: `Option.unwrapOr` and `Result.and` parameter types change from `Pipeable<never, T>` to `Pipeable<void, T>` (contravariance: `void` is not assignable to `never`).
+
+### What doesn't work
+
+- **`chain(drop, tag("None"))` still needs `as any`.** Different error from the `never` case, but same fundamental problem: `tag("None")` has an unresolved generic input type, and the invariant output encoding of `drop` prevents inference.
+- **`mapErr(drop)` pattern breaks.** With `drop: TypedAction<any, void>`, `mapErr(drop)` produces `Result<string, void>` instead of `Result<string, never>`. The ergonomic pattern of erasing error types via `mapErr(drop)` to collapse them to `never` no longer works — `void` doesn't collapse unions the way `never` does.
+
+### Verdict
+
+The `mapErr(drop)` breakage is a real semantic loss. The `as any` casts on `chain(drop, tag("None"))` don't go away either. The change is still worth doing for honesty (`drop` doesn't halt the pipeline), but it's not a pure win — the `mapErr(drop)` pattern needs a replacement (possibly a dedicated `eraseError` combinator or keeping a `never`-typed variant for that use case).
