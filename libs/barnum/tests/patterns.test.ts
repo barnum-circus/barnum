@@ -203,15 +203,14 @@ describe("loop", () => {
         setup,
         listFiles,
         forEach(migrate),
-      // CAST: drop/recur in loop body — void output doesn't match never. Removable after output covariance.
-      ).then(loop((recur) =>
+      ).then(loop((recur, done) =>
         pipe(
           typeCheck,
           classifyErrors,
         ).branch({
-          HasErrors: pipe(forEach(fix).drop() as any, recur),
-          Clean: drop,
-        }) as any,
+          HasErrors: pipe(forEach(fix).drop(), recur),
+          Clean: done,
+        }),
       )),
     );
     expect(cfg.workflow.kind).toBe("Chain");

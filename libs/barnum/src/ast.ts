@@ -594,7 +594,7 @@ export type LoopResult<TContinue, TBreak> = TaggedUnion<
  *
  * Compiled form: `RestartHandle(id, GetIndex(0), body)`
  */
-export function recur<TIn = never, TOut = any>(
+export function recur<TIn = void, TOut = any>(
   bodyFn: (restart: TypedAction<TIn, never>) => Pipeable<TIn, TOut>,
 ): TypedAction<PipeIn<TIn>, TOut> {
   const restartHandlerId = allocateRestartHandlerId();
@@ -630,7 +630,7 @@ export function recur<TIn = never, TOut = any>(
  * a Branch. earlyReturn tags with Break and performs — the handler restarts
  * the body, Branch takes the Break path, and the value exits.
  */
-export function earlyReturn<TEarlyReturn = never, TIn = any, TOut = any>(
+export function earlyReturn<TEarlyReturn = void, TIn = any, TOut = any>(
   bodyFn: (
     earlyReturn: TypedAction<TEarlyReturn, never>,
   ) => Pipeable<TIn, TOut>,
@@ -692,7 +692,7 @@ export function buildRestartBranchAction(
  *
  * Compiles to `RestartHandle`/`RestartPerform`/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TBreak = never, TRecur = never>(
+export function loop<TBreak = void, TRecur = void>(
   bodyFn: (
     recur: TypedAction<TRecur, never>,
     done: TypedAction<VoidToNull<TBreak>, never>,

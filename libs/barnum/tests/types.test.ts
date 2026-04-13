@@ -299,20 +299,19 @@ describe("combinator types", () => {
     expect(action.kind).toBe("Chain");
   });
 
-  it("loop with branch/recur/drop: output is never when done unused", () => {
-    const action = loop((recur) =>
+  it("loop with branch/recur/done: output is null with void defaults", () => {
+    const action = loop((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
-      // CAST: drop outputs void, loop body requires never. Removable after output covariance.
       ).branch({
-        HasErrors: pipe(forEach(fix).drop() as any, recur),
-        Clean: drop,
-      }) as any,
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
     );
-    // Loop output: never (TBreak defaults to never, done not used)
+    // Loop output: null (TBreak defaults to void, VoidToNull<void> = null)
     assertExact<
-      IsExact<ExtractOutput<typeof action>, never>
+      IsExact<ExtractOutput<typeof action>, null>
     >();
     expect(action.kind).toBe("Chain");
   });
@@ -323,19 +322,18 @@ describe("combinator types", () => {
       setup,
       listFiles,
       forEach(migrate),
-    ).then(loop((recur) =>
+    ).then(loop((recur, done) =>
       pipe(
         typeCheck,
         classifyErrors,
-      // CAST: drop outputs void, loop body requires never. Removable after output covariance.
       ).branch({
-        HasErrors: pipe(forEach(fix).drop() as any, recur),
-        Clean: drop,
-      }) as any,
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
     ));
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<
-      IsExact<ExtractOutput<typeof action>, never>
+      IsExact<ExtractOutput<typeof action>, null>
     >();
     expect(action.kind).toBe("Chain");
   });
@@ -1125,16 +1123,15 @@ describe("loop type parameter constraints", () => {
 
   // -- Pattern 1: terminate loop (type-check-fix) ----------------------------
 
-  it("loop with drop in Clean case: zero type params", () => {
-    // CAST: drop/recur in loop body — void output doesn't match never. Removable after output covariance.
-    const action = loop((recur) =>
+  it("loop with done in Clean case: zero type params", () => {
+    const action = loop((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop() as any, recur),
-        Clean: drop,
-      }) as any,
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
-    assertExact<IsExact<ExtractOutput<typeof action>, never>>();
+    assertExact<IsExact<ExtractOutput<typeof action>, null>>();
   });
 
   // -- Pattern 2: retry loop (retry-on-error) --------------------------------
@@ -1160,22 +1157,22 @@ describe("loop type parameter constraints", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, { stable: true }>>();
   });
 
-  // -- done defaults to never, can't accept non-never values -----------------
+  // -- done defaults to null (VoidToNull<void>), rejects non-null values -----
 
-  it("without explicit TBreak, done has input=never (rejects void)", () => {
-    loop((_recur, done) => {
-      assertExact<IsExact<ExtractInput<typeof done>, never>>();
-      // @ts-expect-error — done: TypedAction<never, never> can't accept void from Clean
+  it("without explicit TBreak, done has input=null (accepts void variants)", () => {
+    loop((recur, done) => {
+      assertExact<IsExact<ExtractInput<typeof done>, null>>();
+      // Clean variant provides null (VoidToNull<void>), done accepts null — works
       classifyErrors.branch({ HasErrors: forEach(fix), Clean: done });
-      return done;
+      return recur;
     });
   });
 
-  it("without explicit TBreak, done has input=never (rejects objects)", () => {
-    loop((_recur, done) => {
-      // @ts-expect-error — done: TypedAction<never, never> can't accept { deployed: boolean }
+  it("without explicit TBreak, done has input=null (rejects non-null)", () => {
+    loop((recur, done) => {
+      // @ts-expect-error — done: TypedAction<null, never> can't accept { stable: true } from Break
       healthCheck.branch({ Continue: drop, Break: done });
-      return done;
+      return recur;
     });
   });
 
@@ -1185,7 +1182,7 @@ describe("loop type parameter constraints", () => {
     loop((recur, done) => {
       assertExact<IsExact<ExtractOutput<typeof recur>, never>>();
       assertExact<IsExact<ExtractOutput<typeof done>, never>>();
-      return done;
+      return recur;
     });
   });
 
@@ -1197,21 +1194,20 @@ describe("loop type parameter constraints", () => {
   });
 
   it("done's input type is TBreak", () => {
-    loop<{ stable: true }, { deployed: boolean }>((_recur, done) => {
+    loop<{ stable: true }, { deployed: boolean }>((recur, done) => {
       assertExact<IsExact<ExtractInput<typeof done>, { stable: true }>>();
-      return healthCheck.branch({ Continue: _recur, Break: done });
+      return healthCheck.branch({ Continue: recur, Break: done });
     });
   });
 
   // -- PipeIn ----------------------------------------------------------------
 
-  it("loop with TIn=never has PipeIn input (accepts any)", () => {
-    // CAST: drop/recur in loop body — void output doesn't match never. Removable after output covariance.
-    const action = loop((recur) =>
+  it("loop with TIn=void has PipeIn input (accepts any)", () => {
+    const action = loop((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop() as any, recur),
-        Clean: drop,
-      }) as any,
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
     );
     assertExact<IsExact<ExtractInput<typeof action>, any>>();
   });
@@ -1225,13 +1221,12 @@ describe("loop type parameter constraints", () => {
 
   // -- .drop() before recur in mid-pipe positions ----------------------------
 
-  it(".drop() is required before recur in mid-pipe positions", () => {
-    // CAST: drop/recur in loop body — void output doesn't match never. Removable after output covariance.
-    loop((recur) =>
+  it(".drop() before recur connects void output to void input", () => {
+    loop((recur, done) =>
       pipe(typeCheck, classifyErrors).branch({
-        HasErrors: pipe(forEach(fix).drop() as any, recur),
-        Clean: drop,
-      }) as any,
+        HasErrors: pipe(forEach(fix).drop(), recur),
+        Clean: done,
+      }),
     );
   });
 });
