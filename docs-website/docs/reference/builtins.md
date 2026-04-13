@@ -304,20 +304,6 @@ withResource({
 
 ---
 
-### `dropResult(action)`
-
-Run an action for side effects, discard its output. Returns `never` (terminates the pipeline — typically used before `drop` or another action).
-
-```ts
-function dropResult<TInput, TOutput>(
-  action: Pipeable<TInput, TOutput>,
-): TypedAction<TInput, never>
-```
-
-**Postfix:** No.
-
----
-
 ## Data manipulation
 
 ### `constant(value)`

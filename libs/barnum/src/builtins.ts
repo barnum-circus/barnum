@@ -203,16 +203,6 @@ export function pick<
 }
 
 // ---------------------------------------------------------------------------
-// DropResult — run an action for side effects, discard its output
-// ---------------------------------------------------------------------------
-
-export function dropResult<TInput, TOutput>(
-  action: Pipeable<TInput, TOutput>,
-): TypedAction<TInput, never> {
-  return chain(action, drop) as TypedAction<TInput, never>;
-}
-
-// ---------------------------------------------------------------------------
 // WithResource — RAII-style create/action/dispose
 // ---------------------------------------------------------------------------
 

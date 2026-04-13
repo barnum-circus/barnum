@@ -11,7 +11,6 @@ export {
   getField,
   getIndex,
   pick,
-  dropResult,
   withResource,
   tap,
   range,
