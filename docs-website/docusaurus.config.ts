@@ -34,6 +34,15 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
+          lastVersion: 'current',
+          versions: {
+            current: {
+              label: 'main',
+            },
+            '0.3': {
+              label: '0.3',
+            },
+          },
         },
         blog: false,
         theme: {
@@ -80,6 +89,10 @@ const config: Config = {
           sidebarId: 'documentationSidebar',
           position: 'left',
           label: 'Documentation',
+        },
+        {
+          type: 'docsVersionDropdown',
+          position: 'right',
         },
         {
           href: 'https://discord.gg/eBjM5XX6nk',
