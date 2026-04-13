@@ -97,6 +97,68 @@ These stay `TypedAction<..., never>`. They perform `RestartPerform` effects that
 
 ---
 
+## Redundant `drop` elimination
+
+With `drop` typed honestly as `void` output, several `chain(drop, X)` patterns become unnecessary. Full audit of all `drop` usage in the codebase:
+
+### Redundant — remove after void change
+
+**`chain(drop, constant(true/false))` → `constant(true/false)`** (8 call sites in `builtins.ts`)
+
+`constant` has input `any` — it ignores whatever it receives. The `drop` is a no-op.
+
+- `builtins.ts:498-499` — `Option.isSome` / `Option.isNone`
+- `builtins.ts:506-507` — `Option.isNone` / `Option.isSome` (inverted)
+- `builtins.ts:673-674` — `Result.isOk` / `Result.isErr`
+- `builtins.ts:681-682` — `Result.isErr` / `Result.isOk` (inverted)
+
+**`chain(drop, defaultAction)` in `Option.unwrapOr` → `defaultAction`** (1 call site in `builtins.ts:459`)
+
+The None branch payload is already `void`/`null` (via VoidToNull). Discarding null to produce null is a no-op. `defaultAction` can accept the None payload directly. Requires `defaultAction: Pipeable<never, T>` → `Pipeable<void, T>`.
+
+**`mapErr(drop)` type hack** (1 call site in `demos/retry-on-error/run.ts:41`)
+
+`stepA.mapErr(drop).unwrapOr(done)` — erases error type to `never` so `done` fits. With covariant output (from `CONSOLIDATE_PHANTOM_FIELDS.md`), `done` works in `Pipeable` slots directly. The `mapErr(drop)` is unnecessary.
+
+### Still needed — discarding a real value
+
+**`chain(drop, other)` in `Result.and`** (`builtins.ts:590`)
+
+Ok branch payload is `TValue`, not void. `drop` genuinely discards the Ok value before calling `other`.
+
+**`drop.tag("None")`** (3 call sites in `builtins.ts`)
+
+Discards the branch payload (e.g., `TError` in `Result.toOption`) before wrapping as `{ kind: "None", value: null }`. Without `drop`, the payload would become the None value — wrong.
+
+**`pipe(drop, body(input))` in `bindInput`** (`bind.ts:160`)
+
+Discards the bind result so the body pipeline starts fresh. Input is accessed through VarRef.
+
+**`.drop().then(X)` in demos** — discards handler output before continuing with a new value:
+
+- `babysit-prs/run.ts:46` — `fixIssues.drop().then(prNumber)`
+- `babysit-prs/run.ts:49` — `landPR.drop().then(Option.none())`
+- `identify-and-address-refactors/handlers/refactor.ts:305-307` — `applyFeedback.drop().then(...).then(recur)`
+
+**`.drop()` for pipeline sequencing** — discards handler output so the next pipe step receives void. The value is genuinely discarded, not already void:
+
+- `retry-on-error/run.ts:32` — `stepB.unwrapOr(throwError).drop()`
+- `retry-on-error/run.ts:41,47` — `unwrapOr(done).drop()`, `unwrapOr(throwError).drop()`
+- `identify-and-address-refactors/handlers/refactor.ts:299-300,310,313` — `implement.drop()`, `typeCheckFix.drop()`, `commit.drop()`
+- `convert-folder-to-ts/run.ts:27` — handler output discarded
+
+**`drop` as branch case handler** — discards variant payload entirely:
+
+- `babysit-prs/run.ts:50` — `Landed: drop`
+- `identify-and-address-refactors/handlers/refactor.ts:308` — `Approved: drop`
+
+**`forEach(fix).drop().then(recur)` pattern** — discards forEach output before recursing:
+
+- `identify-and-address-refactors/handlers/type-check-fix.ts:146`
+- `convert-folder-to-ts/handlers/type-check-fix.ts:147`
+
+---
+
 ## Impact on `as any` casts
 
 Three call sites in `builtins.ts` previously used `chain(drop as any, tag("None"))`. These have already been replaced with postfix `drop.tag("None")`, which avoids the cast entirely (the `as any` is internal to the postfix method implementation).
