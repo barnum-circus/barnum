@@ -6,11 +6,17 @@
 
 1. **Genuinely unreachable** — the pipeline halts or diverges. Execution does not continue past this point. Examples: `throwError` (performs a restart effect), `recur`/`done` in `loop` (perform restart effects), `RestartPerform`.
 
-2. **No useful value** — the action completes and the pipeline continues, but the output is meaningless (null at runtime). Examples: `drop` (discards input, returns null), `sleep` (waits, returns null), `dropResult` (runs an action for side effects, returns null).
+2. **No useful value** — the action completes and the pipeline continues, but the output is meaningless (null at runtime). Examples: `drop` (discards input, returns null), `sleep` (waits, returns null), postfix `.drop()` (runs an action for side effects, returns null).
 
 These are semantically distinct. A `TypedAction<X, never>` should mean "placing this in a pipeline terminates that branch of execution." But `drop` doesn't terminate anything — it's a normal pipeline step that produces null. The `never` output type forces `as any` casts when composing `drop` with subsequent steps, because `never` as an invariant phantom type doesn't unify with downstream input types the way a concrete type would.
 
 The fix: use `void` (mapped to `null` at runtime via the existing `VoidToNull` machinery) for "no useful value," and reserve `never` for genuinely unreachable code paths.
+
+**Dependency on `CONSOLIDATE_PHANTOM_FIELDS.md`:** Several issues identified in the investigation below are caused by output invariance, not by `never` vs `void` specifically. The output covariance change proposed in `CONSOLIDATE_PHANTOM_FIELDS.md` (remove `__out_contra`, make output covariant-only) resolves them:
+
+- **`chain(drop, tag("None"))` casts:** With invariant output, `void` doesn't unify with `tag("None")`'s generic input. With covariant output, `void extends T` passes, so the cast may become unnecessary. (Postfix `drop.tag("None")` already avoids the cast regardless.)
+- **`mapErr(drop)` producing `Result<V, void>` instead of `Result<V, never>`:** This concern disappears because `mapErr(drop)` was a type-level hack to erase error types via `never`'s bottom-type behavior. It's not a real use case — if you want to handle the error, use `unwrapOr`. The `void` error type is honest.
+- **`Option.unwrapOr` / `Result.and` signature changes (`Pipeable<never, T>` → `Pipeable<void, T>`):** With covariant output, `void extends T` passes naturally, so these signatures may not need changing at all. Needs verification after the covariance change lands.
 
 ---
 
@@ -51,41 +57,21 @@ export function sleep(ms: number): TypedAction<any, void> {...}
 
 Same reasoning as `drop`. Sleep completes and the pipeline continues with null.
 
-### 3. `dropResult(action)`: `TypedAction<TInput, never>` → `TypedAction<TInput, void>`
+### 3. `.drop()` postfix method: return `TypedAction<In, never>` → `TypedAction<In, void>`
 
-**File:** `libs/barnum/src/builtins.ts:209-212`
-
-```ts
-// Before
-export function dropResult<TInput, TOutput>(
-  action: Pipeable<TInput, TOutput>,
-): TypedAction<TInput, never> {
-  return chain(action, drop) as TypedAction<TInput, never>;
-}
-
-// After
-export function dropResult<TInput, TOutput>(
-  action: Pipeable<TInput, TOutput>,
-): TypedAction<TInput, void> {
-  return chain(action, drop) as TypedAction<TInput, void>;
-}
-```
-
-`dropResult` is `chain(action, drop)`. Once `drop` returns `void`, the `as` cast here might even become unnecessary (depends on how invariant phantom types resolve — see open questions).
-
-### 4. `.drop()` postfix method: return `TypedAction<In, never>` → `TypedAction<In, void>`
-
-**File:** `libs/barnum/src/ast.ts:195`
+**File:** `libs/barnum/src/ast.ts`
 
 ```ts
 // Before
-drop(): TypedAction<In, never, Refs>;
+drop(): TypedAction<In, never>;
 
 // After
-drop(): TypedAction<In, void, Refs>;
+drop(): TypedAction<In, void>;
 ```
 
-### 5. `HandlerOutput<void>`: `never` → `void`
+(`dropResult` has been removed — use postfix `.drop()` or `chain(action, drop)` instead.)
+
+### 4. `HandlerOutput<void>`: `never` → `void`
 
 **File:** `libs/barnum/src/handler.ts:98`
 
@@ -101,7 +87,7 @@ Currently, a handler returning `Promise<void>` produces `TypedAction<TIn, never>
 
 The original JSDoc says this exists so fire-and-forget handlers "compose without `.drop()`". With `void` output they still compose — `void` (null) flows into any downstream step that accepts its input type. The difference is that `void` is an honest type rather than a lie (`never` promises the handler never returns, but it does).
 
-### 6. Unchanged: `throwError`, `recur`, `done`
+### 5. Unchanged: `throwError`, `recur`, `done`
 
 These stay `TypedAction<..., never>`. They perform `RestartPerform` effects that transfer control to a restart handler — execution genuinely does not continue past them in the current branch.
 
@@ -113,32 +99,18 @@ These stay `TypedAction<..., never>`. They perform `RestartPerform` effects that
 
 ## Impact on `as any` casts
 
-Three call sites in `builtins.ts` use `drop as any` today:
+Three call sites in `builtins.ts` previously used `chain(drop as any, tag("None"))`. These have already been replaced with postfix `drop.tag("None")`, which avoids the cast entirely (the `as any` is internal to the postfix method implementation).
+
+Several call sites use `chain(drop, ...)` without `as any`:
 
 ```ts
-// builtins.ts:645 — Result.toOption
-Err: chain(drop as any, tag("None")),
-
-// builtins.ts:655 — Result.toOptionErr
-Ok: chain(drop as any, tag("None")),
-
-// builtins.ts:671 — Result.transpose
-None: chain(drop as any, tag("None")),
-```
-
-The `as any` is needed because `drop` is `TypedAction<any, never>`, `tag("None")` expects a specific input type, and `never` as an invariant output doesn't unify with that input. With `drop` typed as `TypedAction<any, void>`, the output is `void` (null). Whether this eliminates the cast depends on whether `void` satisfies the invariant phantom constraints on `tag("None")`'s input — the `None` variant payload is `void`, and `VoidToNull<void>` is `null`, so the chain would be `void → null → tag("None")`. This needs verification (see open questions).
-
-Several other call sites use `chain(drop, ...)` without `as any`:
-
-```ts
-// builtins.ts:469, 508-509, 516-517, 600, 683-684, 691-692
 chain(drop, constant(true))
 chain(drop, constant(false))
 chain(drop, defaultAction)
 chain(drop, other)
 ```
 
-These already work because `chain` infers the intermediate type, and `constant`'s input is `any`. After the change, `chain<any, void, boolean>(drop, constant(true))` — still fine.
+These already work because `constant`'s input is `any`. After the change to `void` output, `chain<any, void, boolean>(drop, constant(true))` — still fine.
 
 ---
 
@@ -173,4 +145,9 @@ Tested by changing `drop` from `TypedAction<any, never>` to `TypedAction<any, vo
 
 ### Verdict
 
-The `mapErr(drop)` breakage is a real semantic loss. The `as any` casts on `chain(drop, tag("None"))` don't go away either. The change is still worth doing for honesty (`drop` doesn't halt the pipeline), but it's not a pure win — the `mapErr(drop)` pattern needs a replacement (possibly a dedicated `eraseError` combinator or keeping a `never`-typed variant for that use case).
+With the current invariant output, this change has friction — casts don't go away and `mapErr(drop)` breaks. However, the output covariance change in `CONSOLIDATE_PHANTOM_FIELDS.md` resolves most issues. The recommended order is:
+
+1. Land output covariance first (remove `__out_contra`)
+2. Then change `drop`/`sleep` to `void` output — most friction disappears
+
+The `mapErr(drop)` pattern is not a real use case — it was type gymnastics to erase error types via `never`'s bottom-type behavior. With covariant output, `throwError` and `done` work directly in `Pipeable` slots without `CaseHandler`, making the error-erasure hack unnecessary.
