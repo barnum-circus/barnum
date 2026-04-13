@@ -8,7 +8,6 @@ import {
   createHandler,
   forEach,
   loop,
-  drop,
   taggedUnionSchema,
 } from "@barnum/barnum";
 import { spawnSync } from "node:child_process";
@@ -142,9 +141,9 @@ export const fix = createHandler({
 
 // --- Pipeline ---
 
-export const typeCheckFix = loop<never, never>((recur) =>
+export const typeCheckFix = loop<void, void>((recur, done) =>
   typeCheck.then(classifyErrors).branch({
     HasErrors: forEach(fix).drop().then(recur),
-    Clean: drop,
+    Clean: done,
   }),
 );

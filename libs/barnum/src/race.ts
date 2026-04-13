@@ -79,8 +79,8 @@ export function race<TIn, TOut>(
  *
  * To preserve data across a sleep, use `bindInput`.
  */
-export function sleep(ms: number): TypedAction<any, never> {
-  return typedAction<any, never>({
+export function sleep(ms: number): TypedAction<any, void> {
+  return typedAction<any, void>({
     kind: "Invoke",
     handler: { kind: "Builtin", builtin: { kind: "Sleep", ms } },
   });

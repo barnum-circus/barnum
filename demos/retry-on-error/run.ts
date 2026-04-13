@@ -14,7 +14,6 @@ import {
   tryCatch,
   withTimeout,
   constant,
-  drop,
 } from "@barnum/barnum";
 import type { TypedAction } from "@barnum/barnum";
 import { stepA, stepB, stepC, logError } from "./handlers/steps";
@@ -33,18 +32,18 @@ function stepBWithTimeout(
 }
 
 runPipeline(
-  loop((recur, done) =>
+  loop<string, void>((recur, done) =>
     tryCatch(
       (throwError) =>
         pipe(
           // stepA may fail catastrophically — exit the loop immediately
-          stepA.mapErr(drop).unwrapOr(done).drop(),
+          stepA.unwrapOr(done).drop(),
 
           // stepB may fail and may take unreasonably long
           stepBWithTimeout(throwError),
 
-          // stepC may fail — retry via catch
-          stepC.unwrapOr(throwError).drop(),
+          // stepC may fail — retry via catch; success breaks the loop
+          stepC.unwrapOr(throwError).then(done),
         ),
 
       // An error occurred — log it and retry the loop

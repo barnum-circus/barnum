@@ -97,7 +97,7 @@ export function identity<TValue = any>(): TypedAction<TValue, TValue> {
 // Drop — discard pipeline value
 // ---------------------------------------------------------------------------
 
-export const drop: TypedAction<any, never> = typedAction({
+export const drop: TypedAction<any, void> = typedAction({
   kind: "Invoke",
   handler: { kind: "Builtin", builtin: { kind: "Drop" } },
 });
@@ -450,13 +450,13 @@ export const Option = {
    * Extract the Some value or produce a default from an action.
    * `Option<T> → T`
    *
-   * The None branch drops its void payload before calling defaultAction,
-   * matching Rust's `unwrap_or_else(|| default)`.
+   * The None payload is void (null at runtime). defaultAction receives
+   * void and produces the default value.
    */
-  unwrapOr<T>(defaultAction: Pipeable<never, T>): TypedAction<OptionT<T>, T> {
+  unwrapOr<T>(defaultAction: Pipeable<void, T>): TypedAction<OptionT<T>, T> {
     return branch({
       Some: identity(),
-      None: chain(drop, defaultAction),
+      None: defaultAction,
     }) as TypedAction<OptionT<T>, T>;
   },
 
@@ -495,16 +495,16 @@ export const Option = {
   /** Test if the value is Some. `Option<T> → boolean` */
   isSome<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
-      Some: chain(drop, constant(true)),
-      None: chain(drop, constant(false)),
+      Some: constant(true),
+      None: constant(false),
     }) as TypedAction<OptionT<T>, boolean>;
   },
 
   /** Test if the value is None. `Option<T> → boolean` */
   isNone<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
-      Some: chain(drop, constant(false)),
-      None: chain(drop, constant(true)),
+      Some: constant(false),
+      None: constant(true),
     }) as TypedAction<OptionT<T>, boolean>;
   },
 
@@ -584,7 +584,7 @@ export const Result = {
 
   /** Replace Ok value with another Result. If Ok, discard value and return other. */
   and<TValue, TOut, TError>(
-    other: Pipeable<never, ResultT<TOut, TError>>,
+    other: Pipeable<void, ResultT<TOut, TError>>,
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return branch({
       Ok: chain(drop, other),
@@ -670,16 +670,16 @@ export const Result = {
   /** Test if the value is Ok. `Result<TValue, TError> → boolean` */
   isOk<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
     return branch({
-      Ok: chain(drop, constant(true)),
-      Err: chain(drop, constant(false)),
+      Ok: constant(true),
+      Err: constant(false),
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
 
   /** Test if the value is Err. `Result<TValue, TError> → boolean` */
   isErr<TValue, TError>(): TypedAction<ResultT<TValue, TError>, boolean> {
     return branch({
-      Ok: chain(drop, constant(false)),
-      Err: chain(drop, constant(true)),
+      Ok: constant(false),
+      Err: constant(true),
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
 

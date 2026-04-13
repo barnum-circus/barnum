@@ -87,21 +87,21 @@ function getCallerFilePath(): string {
 }
 
 // ---------------------------------------------------------------------------
-// HandlerOutput — maps void → never so fire-and-forget handlers compose
+// HandlerOutput — maps void → void (null at runtime)
 // ---------------------------------------------------------------------------
 
 /**
- * Handlers that return `Promise<void>` produce `never` output. This means
- * they naturally compose in pipes without needing `.drop()` — a handler
- * that returns nothing produces a value no one can observe.
+ * Handlers that return `Promise<void>` produce `void` output (null at
+ * runtime). This is honest — the handler completes and returns nothing
+ * useful, but execution continues.
  */
-type HandlerOutput<TOutput> = [TOutput] extends [void] ? never : TOutput;
+type HandlerOutput<TOutput> = [TOutput] extends [void] ? void : TOutput;
 
 // ---------------------------------------------------------------------------
 // createHandler — single overload, validators optional
 // ---------------------------------------------------------------------------
 
-export function createHandler<TValue = never, TOutput = unknown>(
+export function createHandler<TValue = void, TOutput = unknown>(
   definition: {
     inputValidator?: z.ZodType<TValue>;
     outputValidator?: z.ZodType<NoInfer<TOutput>>;
@@ -161,7 +161,7 @@ export function createHandler(
 // ---------------------------------------------------------------------------
 
 export function createHandlerWithConfig<
-  TValue = never,
+  TValue = void,
   TOutput = unknown,
   TStepConfig = unknown,
 >(

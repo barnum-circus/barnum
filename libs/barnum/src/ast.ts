@@ -115,10 +115,11 @@ export type BuiltinKind =
   | { kind: "Sleep"; ms: number };
 
 /**
- * When TIn is `never` (handler ignores input), produce `any` so the
- * combinator/pipe can sit in any pipeline position.
+ * When T is `never` or `void` (handler ignores input / recur doesn't
+ * thread state), produce `any` so the combinator can sit in any
+ * pipeline position.
  */
-export type PipeIn<T> = [T] extends [never] ? any : T;
+export type PipeIn<T> = [T] extends [never] ? any : [T] extends [void] ? any : T;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -186,7 +187,7 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     Out extends (infer TElement)[][] ? TElement[] : Out
   >;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
-  drop(): TypedAction<In, never>;
+  drop(): TypedAction<In, void>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
   tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
     kind: TKind,
@@ -701,12 +702,12 @@ export function buildRestartBranchAction(
  *
  * Compiles to `RestartHandle`/`RestartPerform`/Branch — same effect substrate as tryCatch and earlyReturn.
  */
-export function loop<TBreak = never, TIn = never>(
+export function loop<TBreak = never, TRecur = never>(
   bodyFn: (
-    recur: TypedAction<TIn, never>,
+    recur: TypedAction<TRecur, never>,
     done: TypedAction<VoidToNull<TBreak>, never>,
-  ) => Pipeable<TIn, never>,
-): TypedAction<PipeIn<TIn>, VoidToNull<TBreak>> {
+  ) => Pipeable<TRecur, never>,
+): TypedAction<PipeIn<TRecur>, VoidToNull<TBreak>> {
   const restartHandlerId = allocateRestartHandlerId();
 
   const perform: Action = {
@@ -714,7 +715,7 @@ export function loop<TBreak = never, TIn = never>(
     restart_handler_id: restartHandlerId,
   };
 
-  const recurAction = typedAction<TIn, never>(
+  const recurAction = typedAction<TRecur, never>(
     chain(tag("Continue") as any, perform as any) as Action,
   );
 

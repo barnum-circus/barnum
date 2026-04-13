@@ -11,7 +11,6 @@ import {
   bindInput,
   pipe,
   loop,
-  drop,
   pick,
   Option,
   taggedUnionSchema,
@@ -300,12 +299,12 @@ export const implementAndReview = bindInput<ImplementAndReviewParams>((implement
   implementAndReviewParams.pick("worktreePath").then(typeCheckFix).drop(),
 
   // Judge quality; revise and re-check if needed.
-  loop((recur) =>
+  loop<void, void>((recur, done) =>
     judgeRefactor.then(classifyJudgment).branch({
       NeedsWork: applyFeedback.drop()
         .then(implementAndReviewParams.pick("worktreePath")).then(typeCheckFix)
         .drop().then(recur),
-      Approved: drop,
+      Approved: done,
     }),
   ).drop(),
 
