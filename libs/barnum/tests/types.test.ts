@@ -589,9 +589,9 @@ describe("Option namespace types", () => {
     assertExact<IsExact<ExtractOutput<typeof action>, Option<string>>>();
   });
 
-  it("Option.none(): never → Option<T>", () => {
+  it("Option.none(): any → Option<T>", () => {
     const action = O.none<number>();
-    assertExact<IsExact<ExtractInput<typeof action>, never>>();
+    assertExact<IsExact<ExtractInput<typeof action>, any>>();
     assertExact<IsExact<ExtractOutput<typeof action>, Option<number>>>();
   });
 
@@ -703,9 +703,9 @@ describe("bind types", () => {
     const computeName = pipe(setup, getField<{ initialized: boolean; project: string }, "project">("project"));
 
     bind([computeName], ([name]) => {
-      // name should be VarRef<string> = TypedAction<never, string>
+      // name should be VarRef<string> = TypedAction<any, string>
       assertExact<IsExact<typeof name, VarRef<string>>>();
-      assertExact<IsExact<ExtractInput<typeof name>, never>>();
+      assertExact<IsExact<ExtractInput<typeof name>, any>>();
       assertExact<IsExact<ExtractOutput<typeof name>, string>>();
       return drop;
     });
@@ -777,12 +777,10 @@ describe("bindInput types", () => {
     assertExact<IsExact<ExtractInput<typeof action>, { project: string }>>();
   });
 
-  it("body pipeline input is never (must use VarRef)", () => {
-    // The body function signature requires Pipeable<never, TOut>
-    // A pipeline starting from a VarRef has input never, so it works
+  it("body pipeline input is any (VarRef ignores pipeline input)", () => {
     bindInput<string, string>((input) => {
-      // input: VarRef<string> = TypedAction<never, string>
-      assertExact<IsExact<ExtractInput<typeof input>, never>>();
+      // input: VarRef<string> = TypedAction<any, string>
+      assertExact<IsExact<ExtractInput<typeof input>, any>>();
       return input;
     });
   });

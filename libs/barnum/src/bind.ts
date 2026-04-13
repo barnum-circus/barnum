@@ -22,7 +22,7 @@ import { pipe } from "./pipe.js";
  * action like `pick` or `getField` — pipe overloads can't infer
  * the generic's type parameter from the VarRef's output.
  */
-export type VarRef<TValue> = TypedAction<never, TValue>;
+export type VarRef<TValue> = TypedAction<any, TValue>;
 
 function createVarRef<TValue>(
   resumeHandlerId: ResumeHandlerId,
@@ -41,12 +41,9 @@ function createVarRef<TValue>(
  * Maps each binding's output type to a VarRef. TypeScript resolves
  * ExtractOutput from each binding expression.
  *
- * Constraint is `Action[]` (not `Pipeable<any, any>[]`) because
- * `TypedAction<never, X>` (e.g. from `constant()`) fails the invariant
- * `__in` check against `Pipeable<any, any>` on the 9-variant
- * Action union. Using raw `Action[]` avoids the phantom field
- * assignability issue while `ExtractOutput` still extracts the correct
- * output type from the phantom fields on the concrete types.
+ * Constraint is `Action[]` (not `Pipeable<any, any>[]`) so that
+ * `ExtractOutput` extracts the correct output type from the phantom
+ * fields on the concrete types without fighting invariant `__in` checks.
  */
 export type InferVarRefs<TBindings extends Action[]> = {
   [K in keyof TBindings]: VarRef<ExtractOutput<TBindings[K]>>;

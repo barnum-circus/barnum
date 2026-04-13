@@ -420,9 +420,9 @@ export const Option = {
     return tag("Some") as TypedAction<T, OptionT<T>>;
   },
 
-  /** Produce a None. `never → Option<T>` */
-  none<T>(): TypedAction<never, OptionT<T>> {
-    return tag("None") as TypedAction<never, OptionT<T>>;
+  /** Produce a None. `any → Option<T>` */
+  none<T>(): TypedAction<any, OptionT<T>> {
+    return tag("None") as TypedAction<any, OptionT<T>>;
   },
 
   /** Transform the Some value. `Option<T> → Option<U>` */
