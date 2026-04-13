@@ -632,7 +632,7 @@ export const Result = {
   > {
     return branch({
       Ok: tag("Some"),
-      Err: chain(drop as any, tag("None")),
+      Err: drop.tag("None"),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>;
   },
 
@@ -642,7 +642,7 @@ export const Result = {
     OptionT<TError>
   > {
     return branch({
-      Ok: chain(drop as any, tag("None")),
+      Ok: drop.tag("None"),
       Err: tag("Some"),
     }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>;
   },
@@ -658,7 +658,7 @@ export const Result = {
     return branch({
       Ok: branch({
         Some: chain(tag("Ok") as any, tag("Some")),
-        None: chain(drop as any, tag("None")),
+        None: drop.tag("None"),
       }),
       Err: chain(tag("Err") as any, tag("Some")),
     }) as TypedAction<

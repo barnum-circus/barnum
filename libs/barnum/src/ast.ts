@@ -160,23 +160,18 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
  * Data crosses serialization boundaries to handlers in arbitrary languages
  * (Rust, Python, etc.), so extra/missing fields are runtime errors.
  */
-export type TypedAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
-> = Action & {
+export type TypedAction<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
   __out_contra?: (output: Out) => void;
-  __refs?: { _brand: Refs };
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
-  then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext, Refs>;
+  then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
-  forEach<TIn, TElement, TNext, TRefs extends string>(
-    this: TypedAction<TIn, TElement[], TRefs>,
+  forEach<TIn, TElement, TNext>(
+    this: TypedAction<TIn, TElement[]>,
     action: Pipeable<TElement, TNext>,
-  ): TypedAction<TIn, TNext[], TRefs>;
+  ): TypedAction<TIn, TNext[]>;
   /** Dispatch on a tagged union output. Auto-unwraps `value` before each case handler. */
   branch<
     TCases extends {
@@ -184,59 +179,53 @@ export type TypedAction<
     },
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
-  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>, Refs>;
+  ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>>;
   /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
   flatten(): TypedAction<
     In,
-    Out extends (infer TElement)[][] ? TElement[] : Out,
-    Refs
+    Out extends (infer TElement)[][] ? TElement[] : Out
   >;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
-  drop(): TypedAction<In, never, Refs>;
+  drop(): TypedAction<In, never>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
   tag<TDef extends Record<string, unknown>, TKind extends keyof TDef & string>(
     kind: TKind,
-  ): TypedAction<In, TaggedUnion<TDef>, Refs>;
+  ): TypedAction<In, TaggedUnion<TDef>>;
   /** Extract a field from the output object. `a.getField("name")` ≡ `pipe(a, getField("name"))`. */
   getField<TField extends keyof Out & string>(
     field: TField,
-  ): TypedAction<In, Out[TField], Refs>;
+  ): TypedAction<In, Out[TField]>;
   /** Extract an element from the output tuple by index. `a.getIndex(0)` ≡ `pipe(a, getIndex(0))`. */
-  getIndex<
-    TIn,
-    TTuple extends unknown[],
-    TIndex extends number,
-    TRefs extends string,
-  >(
-    this: TypedAction<TIn, TTuple, TRefs>,
+  getIndex<TIn, TTuple extends unknown[], TIndex extends number>(
+    this: TypedAction<TIn, TTuple>,
     index: TIndex,
-  ): TypedAction<TIn, TTuple[TIndex], TRefs>;
+  ): TypedAction<TIn, TTuple[TIndex]>;
   /** Wrap output in an object under a field name. `a.wrapInField("foo")` ≡ `pipe(a, wrapInField("foo"))`. */
   wrapInField<TField extends string>(
     field: TField,
-  ): TypedAction<In, Record<TField, Out>, Refs>;
+  ): TypedAction<In, Record<TField, Out>>;
   /** Merge a tuple of objects into a single object. `a.merge()` ≡ `pipe(a, merge())`. */
-  merge(): TypedAction<In, MergeTuple<Out>, Refs>;
+  merge(): TypedAction<In, MergeTuple<Out>>;
   /** Select fields from the output. `a.pick("x", "y")` ≡ `pipe(a, pick("x", "y"))`. */
   pick<TKeys extends (keyof Out & string)[]>(
     ...keys: TKeys
-  ): TypedAction<In, Pick<Out, TKeys[number]>, Refs>;
+  ): TypedAction<In, Pick<Out, TKeys[number]>>;
   /** Head/tail decomposition. Only callable when Out is TElement[]. */
-  splitFirst<TIn, TElement, TRefs extends string>(
-    this: TypedAction<TIn, TElement[], TRefs>,
-  ): TypedAction<TIn, Option<[TElement, TElement[]]>, TRefs>;
+  splitFirst<TIn, TElement>(
+    this: TypedAction<TIn, TElement[]>,
+  ): TypedAction<TIn, Option<[TElement, TElement[]]>>;
   /** Init/last decomposition. Only callable when Out is TElement[]. */
-  splitLast<TIn, TElement, TRefs extends string>(
-    this: TypedAction<TIn, TElement[], TRefs>,
-  ): TypedAction<TIn, Option<[TElement[], TElement]>, TRefs>;
+  splitLast<TIn, TElement>(
+    this: TypedAction<TIn, TElement[]>,
+  ): TypedAction<TIn, Option<[TElement[], TElement]>>;
   /**
    * Transform the Some value inside an Option output. Only callable when
    * Out is Option<T>. Uses `this` parameter constraint to gate availability.
    */
-  mapOption<TIn, T, U, TRefs extends string>(
-    this: TypedAction<TIn, Option<T>, TRefs>,
+  mapOption<TIn, T, U>(
+    this: TypedAction<TIn, Option<T>>,
     action: Pipeable<T, U>,
-  ): TypedAction<TIn, Option<U>, TRefs>;
+  ): TypedAction<TIn, Option<U>>;
   /**
    * Transform the Err value of a Result output.
    * `Result<TValue, TError> → Result<TValue, TErrorOut>`
@@ -244,9 +233,9 @@ export type TypedAction<
    * Only callable when Out is Result<TValue, TError>.
    */
   mapErr<TIn, TValue, TError, TErrorOut>(
-    this: TypedAction<TIn, Result<TValue, TError>, any>,
+    this: TypedAction<TIn, Result<TValue, TError>>,
     action: Pipeable<TError, TErrorOut>,
-  ): TypedAction<TIn, Result<TValue, TErrorOut>, Refs>;
+  ): TypedAction<TIn, Result<TValue, TErrorOut>>;
   /**
    * Unwrap a Result output. If Ok, pass through the value. If Err, apply
    * the default action. Only callable when Out is Result<TValue, TError>.
@@ -257,15 +246,11 @@ export type TypedAction<
    *
    * Uses CaseHandler for defaultAction (covariant output only) so that
    * `TypedAction<TError, never>` is assignable to `CaseHandler<TError, TValue>`.
-   *
-   * Refs position uses `any` in the `this` constraint to avoid TS
-   * falling back to the constraint bound `string` when Refs = never.
-   * The return type uses the enclosing TypedAction's `Refs` directly.
    */
   unwrapOr<TIn, TValue, TError>(
-    this: TypedAction<TIn, Result<TValue, TError>, any>,
+    this: TypedAction<TIn, Result<TValue, TError>>,
     defaultAction: CaseHandler<TError, TValue>,
-  ): TypedAction<TIn, TValue, Refs>;
+  ): TypedAction<TIn, TValue>;
 };
 
 /**
@@ -398,11 +383,11 @@ type BranchPayload<Out, K extends string> = [ExtractDef<Out>] extends [never]
 // ---------------------------------------------------------------------------
 
 // Shared implementations (one closure, not per-instance)
-function thenMethod<TIn, TOut, TRefs extends string, TNext>(
-  this: TypedAction<TIn, TOut, TRefs>,
+function thenMethod<TIn, TOut, TNext>(
+  this: TypedAction<TIn, TOut>,
   next: Pipeable<TOut, TNext>,
-): TypedAction<TIn, TNext, TRefs> {
-  return chain(this, next) as TypedAction<TIn, TNext, TRefs>;
+): TypedAction<TIn, TNext> {
+  return chain(this, next) as TypedAction<TIn, TNext>;
 }
 
 function forEachMethod(this: TypedAction, action: Action): TypedAction {
@@ -475,11 +460,9 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
  * Attach `.then()` and `.forEach()` methods to a plain Action object.
  * Methods are non-enumerable: invisible to JSON.stringify and toEqual.
  */
-export function typedAction<
-  In = unknown,
-  Out = unknown,
-  Refs extends string = never,
->(action: Action): TypedAction<In, Out, Refs> {
+export function typedAction<In = unknown, Out = unknown>(
+  action: Action,
+): TypedAction<In, Out> {
   if (!("then" in action)) {
     Object.defineProperties(action, {
       then: { value: thenMethod, configurable: true },
@@ -500,7 +483,7 @@ export function typedAction<
       unwrapOr: { value: unwrapOrMethod, configurable: true },
     });
   }
-  return action as TypedAction<In, Out, Refs>;
+  return action as TypedAction<In, Out>;
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +494,7 @@ export function typedAction<
  * Extract the input type from a TypedAction.
  *
  * Uses direct phantom field extraction (not full TypedAction matching) to
- * avoid the `TypedAction<any, any, any>` constraint which fails for In=never
+ * avoid a full `TypedAction<any, any>` constraint which fails for In=never
  * due to __in contravariance.
  */
 export type ExtractInput<T> = T extends {
