@@ -200,16 +200,8 @@ Tested by changing `drop` from `TypedAction<any, never>` to `TypedAction<any, vo
 - `chain(drop, constant(true))` and `chain(drop, constant(false))` typecheck cleanly — no casts needed. `constant`'s `any` input absorbs `void` output.
 - Two library signature changes required: `Option.unwrapOr` and `Result.and` parameter types change from `Pipeable<never, T>` to `Pipeable<void, T>` (contravariance: `void` is not assignable to `never`).
 
-### What doesn't work
+## Status: LANDED
 
-- **`chain(drop, tag("None"))` still needs `as any`.** Different error from the `never` case, but same fundamental problem: `tag("None")` has an unresolved generic input type, and the invariant output encoding of `drop` prevents inference.
-- **`mapErr(drop)` pattern breaks.** With `drop: TypedAction<any, void>`, `mapErr(drop)` produces `Result<string, void>` instead of `Result<string, never>`. The ergonomic pattern of erasing error types via `mapErr(drop)` to collapse them to `never` no longer works — `void` doesn't collapse unions the way `never` does.
+All changes above have been implemented (commit 7c78e87d). The original investigation suggested landing output covariance first, but in practice the change landed cleanly with a small number of `as any` casts in loop bodies where `drop` outputs `void` but loop bodies require `never`. These casts are annotated "Removable after output covariance" and will be cleaned up when `CONSOLIDATE_PHANTOM_FIELDS.md` lands.
 
-### Verdict
-
-With the current invariant output, this change has friction — casts don't go away and `mapErr(drop)` breaks. However, the output covariance change in `CONSOLIDATE_PHANTOM_FIELDS.md` resolves most issues. The recommended order is:
-
-1. Land output covariance first (remove `__out_contra`)
-2. Then change `drop`/`sleep` to `void` output — most friction disappears
-
-The `mapErr(drop)` pattern is not a real use case — it was type gymnastics to erase error types via `never`'s bottom-type behavior. With covariant output, `throwError` and `done` work directly in `Pipeable` slots without `CaseHandler`, making the error-erasure hack unnecessary.
+The `mapErr(drop)` pattern was retired — `unwrapOr(done)` and `unwrapOr(throwError)` replace it directly.
