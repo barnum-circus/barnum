@@ -150,22 +150,24 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
 // ---------------------------------------------------------------------------
 
 /**
- * An action with tracked input/output types. Phantom fields enforce invariance
+ * An action with tracked input/output types. Phantom fields enforce variance
  * and are never set at runtime — they exist only for the TypeScript compiler.
  *
- * Each type variable gets a contravariant + covariant field pair:
  *   In:  __in (contravariant) + __in_co (covariant) → invariant
- *   Out: __out (covariant) + __out_contra (contravariant) → invariant
+ *   Out: __out (covariant only)
  *
- * This ensures exact type matching at every pipeline connection point.
+ * Input invariance ensures exact type matching at pipeline connection points.
  * Data crosses serialization boundaries to handlers in arbitrary languages
  * (Rust, Python, etc.), so extra/missing fields are runtime errors.
+ *
+ * Output covariance is safe — a step producing Dog where Animal is expected
+ * downstream works. `never` (throwError, recur, done) is assignable to any
+ * output slot via standard subtyping.
  */
 export type TypedAction<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
-  __out_contra?: (output: Out) => void;
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
@@ -245,29 +247,23 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
    * (Out=never) work without explicit type parameters:
    *   `handler.unwrapOr(throwError)`
    *
-   * Uses CaseHandler for defaultAction (covariant output only) so that
-   * `TypedAction<TError, never>` is assignable to `CaseHandler<TError, TValue>`.
+   * With covariant output, `TypedAction<TError, never>` (throwError, done)
+   * is assignable to `Pipeable<TError, TValue>` because `never extends TValue`.
    */
   unwrapOr<TIn, TValue, TError>(
     this: TypedAction<TIn, Result<TValue, TError>>,
-    defaultAction: CaseHandler<TError, TValue>,
+    defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<TIn, TValue>;
 };
 
 /**
- * Parameter type for pipe and combinators. Contains the same phantom fields
- * as TypedAction but without methods.
- *
- * Invariance: Both In and Out are invariant, matching TypedAction:
- *   In:  __in (contravariant) + __in_co (covariant) → invariant
- *   Out: __out (covariant) + __out_contra (contravariant) → invariant
+ * Parameter type for pipe and combinators. Same phantom fields as TypedAction
+ * but without methods.
  *
  * Why no methods: TypedAction's methods (then, branch, etc.) participate in
  * TS assignability checks in complex, recursive ways that interfere with
  * generic inference in pipe overloads. Pipeable strips methods so that only
- * phantom fields drive inference — predictable covariant/contravariant
- * resolution, with invariance enforced when TS checks candidates from
- * both sides of a connection.
+ * phantom fields drive inference.
  *
  * TypedAction (with methods) is assignable to Pipeable because Pipeable
  * only requires a subset of properties.
@@ -276,25 +272,19 @@ export type Pipeable<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
-  __out_contra?: (output: Out) => void;
 };
 
 /**
- * Contravariant-only input checking for branch case handler positions.
+ * Contravariant input + covariant output for branch case handler positions.
  *
- * Omits __in_co (covariant input) and __out_contra (contravariant output)
- * compared to TypedAction/Pipeable. This gives:
+ * Omits __in_co (covariant input) compared to Pipeable. This gives:
  *   In:  contravariant only (via __in)
  *   Out: covariant only (via __out)
  *
  * Why contravariant input: a handler that accepts `unknown` (like drop)
  * can handle any variant. (input: unknown) => void is assignable to
  * (input: HasErrors) => void because HasErrors extends unknown.
- *
- * Why covariant output: the constraint doesn't restrict output types —
- * they're inferred from the actual case handlers via ExtractOutput.
- * TypedAction's invariant __out_contra with Out=unknown would
- * reject any handler with a specific output type, so we omit it.
+ * Pipeable's invariant input (__in_co) would reject this.
  *
  * TypedAction is assignable to CaseHandler because CaseHandler only
  * requires a subset of TypedAction's phantom fields.

@@ -92,12 +92,11 @@ function readVar(n: number): Action {
  */
 /**
  * Constraint for the body callback return type. Only requires the output
- * phantom fields — omits `__in` and `__in_co` so that body actions with
- * `In = never` (e.g. pipelines starting from a VarRef) are assignable.
+ * phantom field — omits `__in` and `__in_co` so that body actions with
+ * any input type (e.g. pipelines starting from a VarRef) are assignable.
  */
 type BodyResult<TOut> = Action & {
   __out?: () => TOut;
-  __out_contra?: (output: TOut) => void;
 };
 
 export function bind<TBindings extends Action[], TOut>(

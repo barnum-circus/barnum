@@ -22,12 +22,11 @@ type FunctionRefs<TDefs extends FunctionDef[]> = {
 
 /**
  * Constraint for the entry-point callback return type. Only requires the
- * output phantom fields — omits __in and __in_co so that actions with
- * In = never (e.g. pipelines starting from a call token) are assignable.
+ * output phantom field — omits __in and __in_co so that actions with
+ * any input type (e.g. pipelines starting from a call token) are assignable.
  */
 type BodyResult<TOut> = Action & {
   __out?: () => TOut;
-  __out_contra?: (output: TOut) => void;
 };
 
 const UNUSED_STATE = null;

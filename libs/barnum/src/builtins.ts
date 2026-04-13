@@ -595,15 +595,12 @@ export const Result = {
   /**
    * Extract Ok or compute default from Err. `Result<TValue, TError> → TValue`
    *
-   * Uses covariant output checking so throw tokens (Out=never) are assignable.
-   * For inference-free usage with throw tokens, prefer the postfix method:
-   * `handler.unwrapOr(throwError)`.
+   * With covariant output, throw tokens (Out=never) are assignable to
+   * Pipeable<TError, TValue>. For inference-free usage with throw tokens,
+   * prefer the postfix method: `handler.unwrapOr(throwError)`.
    */
   unwrapOr<TValue, TError>(
-    defaultAction: Action & {
-      __in?: (input: TError) => void;
-      __out?: () => TValue;
-    },
+    defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<ResultT<TValue, TError>, TValue> {
     return branch({
       Ok: identity(),
