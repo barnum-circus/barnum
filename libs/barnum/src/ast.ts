@@ -7,14 +7,14 @@ import {
   getIndex,
   identity,
   merge,
-  Option,
   pick,
-  Result,
   splitFirst,
   splitLast,
   tag,
   wrapInField,
 } from "./builtins.js";
+import { Option } from "./option.js";
+import { Result } from "./result.js";
 // Lazy import — bind.ts imports from ast.ts, but these are only called inside
 // methods (after all modules load), so the circular reference is safe at runtime.
 import {

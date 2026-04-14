@@ -40,9 +40,9 @@ import {
   getField,
   range,
   tag,
-  Option as O,
-  Result as R,
 } from "../src/builtins.js";
+import { Option as O } from "../src/option.js";
+import { Result as R } from "../src/result.js";
 import {
   setup,
   build,
