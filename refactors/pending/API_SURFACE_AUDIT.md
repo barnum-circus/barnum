@@ -67,7 +67,9 @@ Operations that work regardless of what's in the pipeline.
 
 ---
 
-## Self: `Record` / Object
+## Self: Struct (typed object with known fields)
+
+Objects in barnum are **structs** — fields are known at compile time. This is distinct from hashmaps (dynamic string-keyed bags). Struct operations take literal keys as type parameters.
 
 | Name | Signature | Notes |
 |------|-----------|-------|
@@ -78,15 +80,23 @@ Operations that work regardless of what's in the pipeline.
 
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `Obj.omit(...keys)` | `T → Omit<T, Keys>` | Complement of pick |
-| `Obj.has(key)` | `Record → boolean` | |
-| `Obj.set(key, value)` | `T → T & { K: V }` | Add/overwrite constant field |
-| `Obj.keys()` | `Record → string[]` | |
-| `Obj.values()` | `Record<K, T> → T[]` | |
-| `Obj.entries()` | `Record<K, T> → {key, value}[]` | |
-| `Obj.fromEntries()` | `{key, value}[] → Record` | Self: `{key, value}[]` not Record |
-| `Obj.size()` | `Record → number` | |
-| `template(tpl)` | `{...} → string` | `"${field}"` interpolation from object fields |
+| `omit(...keys)` | `T → Omit<T, Keys>` | Complement of pick |
+| `set(key, value)` | `T → T & { K: V }` | Add/overwrite a field with a constant value |
+
+## Self: HashMap (`Record<string, T>`)
+
+Not yet supported. Hashmaps are dynamic string-keyed bags — fundamentally different from structs. If/when we need them, they get their own self type with their own operations:
+
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `keys()` | `Record<string, T> → string[]` | |
+| `values()` | `Record<string, T> → T[]` | |
+| `entries()` | `Record<string, T> → {key: string, value: T}[]` | |
+| `fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
+| `has(key)` | `Record<string, T> → boolean` | Dynamic key lookup |
+| `size()` | `Record<string, T> → number` | |
+
+None of these are proposed for the current release. They belong to a future where barnum has first-class hashmap support with a distinct type (not conflated with structs).
 
 ---
 
@@ -276,7 +286,6 @@ Convention: `try` prefix always means `Result<T, E>`, never `Option<T>`.
 | Namespace | Self type |
 |-----------|-----------|
 | `Arr` | `T[]` |
-| `Obj` | `Record` |
 | `Option` | `Option<T>` |
 | `Result` | `Result<T, E>` |
 
@@ -294,11 +303,10 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - `getField`/`getIndex` return `Option` by default
 - Control flow: `allObject`, `withRetries`, curried `withTimeout`
 - Array: `Arr.length`, `Arr.isEmpty`, `Arr.join`
-- Object: `Obj.omit`, `Obj.set`, `Obj.has`
+- Struct: `omit`, `set`
 
 ### Tier 2
 - Remaining Arr (reverse, take, skip, contains, enumerate, sortBy, unique, zip, append)
-- Remaining Obj (keys, values, entries, fromEntries, size)
 
 ---
 
