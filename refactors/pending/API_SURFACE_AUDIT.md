@@ -231,16 +231,9 @@ Postfix `.flatten()` could dispatch based on self type (see UNION_POSTFIX_DISPAT
 | `tap` | Subsumed by `bind`/`bindInput` | Remove from public exports, delete postfix `.tap()` |
 | `merge` | See below | Remove JS export, delete postfix `.merge()` |
 
-### `merge` is a code smell
+### `merge` → `allObject`
 
-`merge` (self: `[...objects]` → flat object) is used by four unrelated functions: `tag`, `pick`, `withResource`, `tap`. All four follow the same `all(...) → merge()` pattern. This is suspicious — three unrelated self types (`T`, `Obj`, `TIn`) share a dependency on a tuple-flattening operation.
-
-Root cause: `tag` and `pick` were recently moved from Rust builtins to JS compositions via `all + wrapInField + merge`. This turned single Rust operations (`json!({"kind": k, "value": input})` for tag, field subset for pick) into multi-node AST trees. The `merge` dependency is an artifact of that decomposition.
-
-Options:
-1. **Restore `Tag` and `Pick` as Rust builtins.** Then `merge` is only needed by `withResource` and the proposed `allObject`. Simpler ASTs, fewer nodes to traverse at runtime.
-2. **Keep JS composition, accept the pattern.** `allObject` becomes the canonical abstraction for `all(...) → merge()`. Internal uses in `tag`/`pick`/`withResource` are implementation details.
-3. **Hybrid.** Restore `Tag` as a Rust builtin (it's a fundamental operation), keep `pick` as JS composition (it's just `allObject` with `getField` per key).
+`merge` is internal plumbing used by `tag`, `pick`, `withResource`, `tap` — all follow `all(...) → merge()`. `allObject` is the canonical abstraction for this pattern. Internal uses of `merge` become implementation details of `allObject`, `tag`, `pick`, `withResource`.
 
 ---
 
@@ -331,8 +324,9 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### New: Option
 - [ ] `Option.okOr(action)` — `Option<T> → Result<T, E>` (composable)
 
-### Resolve: merge code smell
-- [ ] Decide: restore `Tag`/`Pick` as Rust builtins, or accept `all() → merge()` pattern with `allObject` as canonical abstraction
+### Resolve: merge → allObject
+- [ ] Implement `allObject` as the canonical abstraction for `all() → merge()`
+- [ ] Refactor `tag`, `pick`, `withResource` to use `allObject` internally
 
 ### Lower priority (tier 2)
 - [ ] Arr: reverse, take, skip, contains, enumerate, sortBy, unique, zip, append
