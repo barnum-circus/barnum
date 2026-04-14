@@ -36,11 +36,15 @@ This is a trait system. `UnionMethods` is the trait. `optionMethods` and `result
 
 ---
 
-## Open design question: are shared method names a "trait"?
+## Design question: are shared method names a "trait"?
 
 Currently `map`, `andThen`, `flatten`, `unwrapOr` share a single `UnionMethods` dispatch table. This implies they're methods on a shared trait (like Haskell's `Functor`/`Monad`). But Rust doesn't have these traits — `Option::map`, `Result::map`, and `Iterator::map` are just methods that happen to share a name. There's no `Mappable` trait.
 
-Two framings:
+However, some methods really are trait methods in Rust:
+- `flatten` is a method on the `Iterator` trait (provided method). `Option::flatten` and `Result::flatten` are inherent methods that happen to share the name.
+- In barnum, `flatten` dispatches through `__union` for Option/Result and falls back to the array builtin. This makes it behave like a trait method in our system.
+
+Three framings:
 
 **Framing A — Single dispatch table (current):** `UnionMethods` is one big interface with all possible methods. Each type fills in its subset. Simple, works today. Downside: the interface grows unboundedly as we add types (Iterator adds `find`, `count`, `collect`; future types add more).
 
@@ -49,6 +53,8 @@ Two framings:
 **Framing C — Named traits with explicit impl:** Define actual trait interfaces (`Mappable`, `Flattenable`, `IntoIterator`) and types register which traits they implement. Most principled, but heavy machinery for what amounts to "these three types all have a `.map()` method."
 
 Current approach (A) works and is pragmatic. The shared `UnionMethods` interface is effectively a vtable — it's a bag of optional method slots. This is fine as long as the number of types stays small (Option, Result, Iterator). If we ever add many more types, we'd want to refactor toward B or C.
+
+**Update:** `__union` is now `{ name: string, methods: UnionMethods } | null` — always present, with a name identifying the type for error messages. This is a step toward Framing B but stays within A's single-table approach.
 
 **Recommendation:** Keep A for now. If Iterator makes the interface unwieldy, refactor to B (per-type dispatch tables, `__union: OptionMethods | ResultMethods | IteratorMethods`). Don't build trait infrastructure (C) until we need it.
 
@@ -147,45 +153,53 @@ Once you have `Iterator<T>`, these methods are available via `iteratorMethods` d
 
 All iterator methods unwrap `{ kind: "Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `chain(getField("value"), <array operation>, tag("Iterator"))`.
 
-| Method | Signature | Implementation | Notes |
-|--------|-----------|----------------|-------|
-| `.map(f)` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
-| `.filter(pred)` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` |
-| `.find(pred)` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option |
-| `.andThen(f)` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Map + flatten (Rust: `flat_map`) |
-| `.flatten()` | `Iterator<Iterator<T>> → Iterator<T>` | Unwrap outer → forEach(unwrap inner) → flatten → rewrap | Flatten one level |
-| `.collect()` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator, get plain array |
-| `.first()` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → map getIndex(0) | Exit Iterator, enter Option |
-| `.last()` | `Iterator<T> → Option<T>` | Unwrap → splitLast → map getIndex(1) | Exit Iterator, enter Option |
-| `.count()` | `Iterator<T> → number` | Unwrap → Arr.length | Needs builtin |
-| `.any(pred)` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting |
-| `.all(pred)` | `Iterator<T> → boolean` | Needs design | Name collision with `all()` combinator |
+These align with Rust's `Iterator` trait provided methods:
+
+| Method | Rust equivalent | Signature | Implementation | Notes |
+|--------|----------------|-----------|----------------|-------|
+| `.map(f)` | `Iterator::map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
+| `.filter(pred)` | `Iterator::filter` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` (see open questions) |
+| `.find(pred)` | `Iterator::find` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option. Not short-circuiting (see open questions) |
+| `.andThen(f)` | `Iterator::flat_map` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Rust calls this `flat_map`; we use `andThen` for consistency with Option/Result |
+| `.flatten()` | `Iterator::flatten` | `Iterator<Iterator<T>> → Iterator<T>` | Unwrap outer → forEach(unwrap inner) → flatten → rewrap | Trait method in Rust, dispatched in barnum |
+| `.collect()` | `Iterator::collect` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator. Rust's collect is generic over destination; ours always returns `T[]` |
+| `.first()` | `Iterator::next` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → map getIndex(0) | Exit Iterator, enter Option. Rust equivalent is `next()` |
+| `.last()` | `Iterator::last` | `Iterator<T> → Option<T>` | Unwrap → splitLast → map getIndex(1) | Exit Iterator, enter Option. Consumes iterator in Rust |
+| `.count()` | `Iterator::count` | `Iterator<T> → number` | Unwrap → Arr.length | Needs builtin. Consumes iterator in Rust |
+| `.any(pred)` | `Iterator::any` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting (see open questions) |
+| `.all(pred)` | `Iterator::all` | `Iterator<T> → boolean` | Needs design | Name collision with `all()` combinator. Not short-circuiting |
 
 ### Needs new builtins
 
-| Method | Signature | Notes |
-|--------|-----------|-------|
-| `.enumerate()` | `Iterator<T> → Iterator<{index: number, value: T}>` | New Rust builtin |
-| `.take(n)` | `Iterator<T> → Iterator<T>` | New Rust builtin |
-| `.skip(n)` | `Iterator<T> → Iterator<T>` | New Rust builtin |
-| `.reverse()` | `Iterator<T> → Iterator<T>` | New Rust builtin |
-| `.join(sep)` | `Iterator<string> → string` | New Rust builtin |
-| `.zip(other)` | Needs design | |
+| Method | Rust equivalent | Signature | Notes |
+|--------|----------------|-----------|-------|
+| `.enumerate()` | `Iterator::enumerate` | `Iterator<T> → Iterator<{index: number, value: T}>` | New Rust builtin |
+| `.take(n)` | `Iterator::take` | `Iterator<T> → Iterator<T>` | New Rust builtin |
+| `.skip(n)` | `Iterator::skip` | `Iterator<T> → Iterator<T>` | New Rust builtin |
+| `.reverse()` | `Iterator::rev` | `Iterator<T> → Iterator<T>` | Rust: `rev()`. Needs `DoubleEndedIterator` in Rust, but always available on our eager arrays |
+| `.join(sep)` | `slice::join` | `Iterator<string> → string` | Not on Iterator trait in Rust — it's on slices. Include for ergonomics |
+| `.zip(other)` | `Iterator::zip` | Needs design | |
+| `.chain(other)` | `Iterator::chain` | `Iterator<T> → Iterator<T>` | **Name collision** with barnum's `chain()` (sequential composition). Needs rename or resolution |
+| `.nth(n)` | `Iterator::nth` | `Iterator<T> → Option<T>` | Indexed access. Trivial: unwrap → getIndex → Option wrap |
 
 ### Family transitions
 
 Iterator methods that return a new collection type **change the dispatch table**:
 
-| Method | Returns | Dispatch after |
-|--------|---------|----------------|
-| `.map(f)` | `Iterator<U>` | `iteratorMethods` (stay in Iterator) |
-| `.filter(pred)` | `Iterator<T>` | `iteratorMethods` (stay) |
-| `.collect()` | `T[]` | None (plain array) |
-| `.first()` | `Option<T>` | `optionMethods` (enter Option) |
-| `.last()` | `Option<T>` | `optionMethods` (enter Option) |
-| `.find(pred)` | `Option<T>` | `optionMethods` (enter Option) |
-| `.count()` | `number` | None (exit) |
-| `.any(pred)` | `boolean` | None (exit) |
+| Method | Returns | Dispatch after | Notes |
+|--------|---------|----------------|-------|
+| `.map(f)` | `Iterator<U>` | `iteratorMethods` (stay) | |
+| `.filter(pred)` | `Iterator<T>` | `iteratorMethods` (stay) | |
+| `.flatten()` | `Iterator<T>` | `iteratorMethods` (stay) | Dispatched (trait method), not hardcoded |
+| `.andThen(f)` | `Iterator<U>` | `iteratorMethods` (stay) | |
+| `.collect()` | `T[]` | null (exit) | |
+| `.first()` | `Option<T>` | `optionMethods` (enter Option) | |
+| `.last()` | `Option<T>` | `optionMethods` (enter Option) | |
+| `.find(pred)` | `Option<T>` | `optionMethods` (enter Option) | |
+| `.nth(n)` | `Option<T>` | `optionMethods` (enter Option) | |
+| `.count()` | `number` | null (exit) | |
+| `.any(pred)` | `boolean` | null (exit) | |
+| `.all(pred)` | `boolean` | null (exit) | |
 
 ---
 
@@ -219,19 +233,37 @@ users                      // User[]
 
 ```ts
 const iteratorMethods: UnionMethods = {
+  // Stay in Iterator family (dispatched):
   map: (action) => Iter.map(action),
   filter: (predicate) => Iter.filter(predicate),
   andThen: (action) => Iter.andThen(action),  // Rust: flat_map
-  flatten: () => Iter.flatten(),
-  // find, first, last exit Iterator — return Option with optionMethods
-  // collect exits Iterator — returns plain T[]
-  // count, any, all exit Iterator — return primitive
+  flatten: () => Iter.flatten(),               // Trait method — dispatched, not hardcoded
+
+  // Exit to Option (dispatched):
+  find: (predicate) => Iter.find(predicate),
+  first: () => Iter.first(),
+  last: () => Iter.last(),
+
+  // Exit to plain value (dispatched):
+  collect: () => Iter.collect(),
+  count: () => Iter.count(),
+  any: (predicate) => Iter.any(predicate),
 };
 ```
+
+Note: `flatten` is notable because it's one of the methods that is dispatched for **all three** families:
+- `Option<Option<T>>.flatten()` → dispatched via `optionMethods.flatten`
+- `Result<Result<T,E>,E>.flatten()` → dispatched via `resultMethods.flatten`
+- `Iterator<Iterator<T>>.flatten()` → dispatched via `iteratorMethods.flatten`
+- `T[][].flatten()` → fallback (array builtin, no dispatch)
+
+In Rust, `flatten` on Iterator is a provided trait method. In barnum, it's a dispatched method on all union types, with a fallback for plain arrays.
 
 ---
 
 ## `UnionMethods` expansion
+
+`__union` is now `{ name: string, methods: UnionMethods } | null`. The `name` field identifies the type for error messages (e.g. "Option", "Result", "Iterator"). `methods` is the dispatch table.
 
 Current `UnionMethods` needs new fields for Iterator-specific methods:
 
@@ -242,17 +274,21 @@ export interface UnionMethods {
   // IntoIterator (Option + Result implement this)
   intoIter?: () => Action;
 
-  // Iterator-only
-  // map, filter, flatten, andThen are shared names — dispatch handles them
-  // These are NEW:
+  // Iterator-only (new):
   find?: (predicate: Action) => Action;
+  first?: () => Action;
+  last?: () => Action;
   count?: () => Action;
-  collect?: () => Action;  // Iterator.collect exits to T[]
+  any?: (predicate: Action) => Action;
+  nth?: (n: Action) => Action;
   // ... etc
 }
 ```
 
-`map`, `filter`, `flatten`, `andThen` are already in `UnionMethods` (shared by Option/Result). Iterator provides different implementations. `collect` already exists (Option.collect) — Iterator.collect is different (unwrap the tagged wrapper), but the same dispatch field works.
+Shared method names that already exist in `UnionMethods`:
+- `map`, `andThen`, `flatten` — already dispatched for Option/Result. Iterator provides different implementations via the same dispatch field.
+- `collect` — already used by Option (collect Some values). Iterator.collect is different (unwrap the tagged wrapper), but the same dispatch field works since dispatch selects the right implementation based on which methods table is attached.
+- `filter` — already used by Option. Iterator.filter has different semantics (filter a sequence vs. filter a single value).
 
 ---
 
@@ -260,48 +296,54 @@ export interface UnionMethods {
 
 1. **Naming**: `.intoIter()` vs `.iter()` vs `.iterator()`?
    - `.iter()` is concise
-   - `.intoIter()` is the Rust convention
+   - `.intoIter()` is the Rust convention (consumes self)
    - `.iterator()` is what was originally suggested
 
-2. **Array → Iterator**: How does `.intoIter()` work on `T[]`? Arrays don't have `__union`. Options:
+2. **Array → Iterator**: How does `.intoIter()` work on `T[]`? Arrays have `__union: null`. Options:
    - Postfix `.intoIter()` on any TypedAction with `T[]` output (hardcoded, not dispatched — wraps in tag("Iterator") and attaches iteratorMethods)
    - Standalone `Iter.fromArray()` combinator
    - Both?
 
-3. **`filter` predicate type**: Rust's filter takes `T → bool`. Barnum has no boolean-to-conditional. Two options:
+3. **`filter` predicate type**: Rust's `Iterator::filter` takes `&T → bool`. Barnum has no boolean-to-conditional. Two options:
    - `T → Option<T>` (consistent with `Option.filter`, composable as `forEach(pred).collectSome()`)
    - `T → bool` (requires a new `FilterByBool` builtin in Rust)
    - Recommendation: `T → Option<T>`. Different from Rust but internally consistent.
 
-4. **Short-circuit semantics**: `find`, `any`, `all` in Rust short-circuit. In barnum, `forEach` processes all elements. True short-circuit needs engine support (early exit from ForEach). For now, compose eagerly.
+4. **Short-circuit semantics**: Rust's `Iterator::find`, `Iterator::any`, `Iterator::all` all short-circuit. In barnum, `forEach` processes all elements eagerly. True short-circuit needs engine support (early exit from ForEach). For now, compose eagerly. This is a deliberate semantic difference from Rust.
 
-5. **`collect` destination types**: In Rust, `.collect()` is generic over the destination type. Possible barnum equivalents:
+5. **`collect` destination types**: Rust's `Iterator::collect` is generic over the destination type via `FromIterator`. Possible barnum equivalents:
    - `.collect()` → `T[]` (default, like `Vec`)
    - `.toResult()` where `self: Iterator<Result<T, E>>` → `Result<T[], E>` (stop on first Err)
    - `.toOption()` where `self: Iterator<Option<T>>` → `Option<T[]>` (stop on first None)
    - These are separate methods, not generic collect. Each has a `this` constraint.
 
-6. **`.forEach()` vs `.map()` naming**: Current `.forEach(f)` on arrays returns `U[]`. On `Iterator<T>`, `.map(f)` is the same operation but returns `Iterator<U>`. Resolution:
+6. **`.forEach()` vs `.map()` naming**: Current `.forEach(f)` on arrays returns `U[]`. Rust's `Iterator::map` is the equivalent. Resolution:
    - `.forEach()` stays on plain arrays (no dispatch needed)
    - `.map()` on Iterator dispatches via `__union` — different from array's `.forEach()`
-   - No ambiguity since arrays don't have `__union`
+   - No ambiguity since arrays have `__union: null`
+
+7. **`chain` naming collision**: Rust's `Iterator::chain` concatenates two iterators. Barnum's `chain()` is sequential composition (the fundamental AST combinator). Options:
+   - Rename barnum Iterator's chain to `.concat()` or `.append()`
+   - Accept the collision since `chain()` standalone and `.chain()` postfix are different call sites
+   - Recommendation: use `.concat()` to avoid confusion
 
 ---
 
 ## Priority
 
-**Phase 0** (done): `mapOption→map`, `unwrapOr` widening, `mapErr→dispatch`, `Option.transpose`, `flatten` dispatch
+**Phase 0** (done): `mapOption→map`, `unwrapOr` widening, `mapErr→dispatch`, `Option.transpose`, `flatten` dispatch, `unwrap` (panicking), `Panic` builtin, `__union` → `{ name, methods }` shape
 
 **Phase 1** (Iterator foundation):
 - `Iterator<T>` tagged wrapper type + `IteratorDef`
-- `iteratorMethods` dispatch table
+- `iteratorMethods` dispatch table (with `name: "Iterator"`)
 - `Option.intoIter()`, `Result.intoIter()`, array `.intoIter()`
 - `.map()`, `.filter()`, `.collect()`, `.find()`, `.first()`, `.last()`
 
 **Phase 2** (Iterator expansion):
 - `.andThen()` (flat_map), `.flatten()`, `.enumerate()`, `.take()`, `.skip()`
-- `.any()`, `.count()`
+- `.any()`, `.all()`, `.count()`, `.nth()`
 - Typed collect destinations: `.toResult()`, `.toOption()`
+- Resolve `chain` naming collision (probably `.concat()`)
 
 **Phase 3** (builtins):
 - `Arr.length`, `Arr.reverse`, `Arr.join`, etc.
