@@ -52,40 +52,37 @@ This is a trait system. `UnionMethods` is the trait. `optionMethods` and `result
 
 Dispatch keeps them straight. `.intoIter()` switches from Option/Result dispatch to Iterator dispatch.
 
-### Runtime representation
+### Runtime representation — tagged wrapper
 
-Handlers only accept JSON. There's no lazy iterator in JSON-land. At runtime, `Iterator<T>` **must** be `T[]` — the only sequence type in JSON.
+`Iterator<T>` is a tagged union wrapper, consistent with Option and Result:
 
-The wrapping is purely at the type level + AST dispatch level:
-- `__union` lives on the TypedAction (AST node), not on the runtime value
-- `.intoIter()` produces a TypedAction with `__union: iteratorMethods`
-- TypeScript `this` constraints gate which methods are available
-- `.collect()` is identity at runtime — it just changes the type back to `T[]` and drops the iterator dispatch
-
-Two options for the type-level representation:
-
-**Option A — Branded phantom type:**
 ```ts
-type Iterator<T> = T[] & { __iter?: T };
-```
-Runtime value is `T[]`. Phantom `__iter` brand distinguishes it from plain arrays for TypeScript overload resolution. No runtime overhead.
-
-**Option B — Tagged wrapper:**
-```ts
-type Iterator<T> = TaggedUnion<{ Iterator: T[] }>;
+type IteratorDef<T> = { Iterator: T[] };
+type Iterator<T> = TaggedUnion<IteratorDef<T>>;
 // Runtime: { kind: "Iterator", value: [1, 2, 3] }
 ```
-Consistent with barnum's tagged union convention. Adds wrap/unwrap overhead at every step.
 
-**Recommendation: Option A (phantom brand).** The dispatch is on the AST node (`__union`), not the runtime value. Wrapping/unwrapping at every `.map()` step is pure overhead. The brand is enough for TypeScript to distinguish Iterator from plain array.
+This means:
+- `.intoIter()` wraps the array: `[1, 2, 3]` → `{ kind: "Iterator", value: [1, 2, 3] }`
+- Iterator methods operate on `.value` (the inner array), then re-wrap
+- `.collect()` unwraps: `{ kind: "Iterator", value: [1, 2, 3] }` → `[1, 2, 3]`
+- `__union: iteratorMethods` is attached to the TypedAction for dispatch
+
+Why tagged wrapper over phantom brand:
+- Consistent with every other barnum type (Option, Result, all TaggedUnion)
+- `.branch()` works on it (you can pattern-match on `{ kind: "Iterator" }`)
+- The Rust engine can recognize and optimize it
+- Handlers that receive an Iterator see a proper `{ kind, value }` object, not a bare array that happens to be branded
+
+The wrap/unwrap overhead is real but small — it's a Rust builtin (WrapInField/GetField), not a subprocess call.
 
 ### IntoIterator — conversion to Iterator
 
 | Self type | `.intoIter()` | Runtime behavior |
 |-----------|---------------|------------------|
-| `Option<T>` | `Option<T> → Iterator<T>` | Branch: Some → `[value]`, None → `[]` |
-| `Result<T, E>` | `Result<T, E> → Iterator<T>` | Branch: Ok → `[value]`, Err → `[]` |
-| `T[]` | `T[] → Iterator<T>` | Identity (already an array, just changes dispatch) |
+| `Option<T>` | `Option<T> → Iterator<T>` | Branch: Some → `[value]`, None → `[]`, then wrap |
+| `Result<T, E>` | `Result<T, E> → Iterator<T>` | Branch: Ok → `[value]`, Err → `[]`, then wrap |
+| `T[]` | `T[] → Iterator<T>` | Wrap in `{ kind: "Iterator", value: array }` |
 
 `intoIter` is a dispatched method on Option and Result. For arrays, it could be a standalone function or a postfix on any `T[]` output (no dispatch needed — just attach `iteratorMethods`).
 
@@ -96,17 +93,30 @@ Consistent with barnum's tagged union convention. Adds wrap/unwrap overhead at e
 // all(identity()) produces [T] from T — no new builtin needed
 const wrapInArray = all(identity());
 
+// wrapAsIterator: T[] → Iterator<T>
+// tag("Iterator") wraps as { kind: "Iterator", value: T[] }
+const wrapAsIterator = tag("Iterator");
+
 // Option.intoIter: Option<T> → Iterator<T>
 const optionIntoIter = withUnion(
-  branch({ Some: wrapInArray, None: constant([]) }),
+  chain(
+    branch({ Some: wrapInArray, None: constant([]) }),
+    wrapAsIterator,
+  ),
   iteratorMethods,
 );
 
 // Result.intoIter: Result<T, E> → Iterator<T>
 const resultIntoIter = withUnion(
-  branch({ Ok: wrapInArray, Err: constant([]) }),
+  chain(
+    branch({ Ok: wrapInArray, Err: constant([]) }),
+    wrapAsIterator,
+  ),
   iteratorMethods,
 );
+
+// T[].intoIter: T[] → Iterator<T>
+const arrayIntoIter = withUnion(wrapAsIterator, iteratorMethods);
 ```
 
 ---
@@ -117,18 +127,20 @@ Once you have `Iterator<T>`, these methods are available via `iteratorMethods` d
 
 ### Core (compose from existing AST nodes)
 
+All iterator methods unwrap `{ kind: "Iterator", value: T[] }` → operate on `T[]` → re-wrap. The pattern is: `chain(getField("value"), <array operation>, tag("Iterator"))`.
+
 | Method | Signature | Implementation | Notes |
 |--------|-----------|----------------|-------|
-| `.map(f)` | `Iterator<T> → Iterator<U>` | `forEach(f)` | Per-element transform. Returns Iterator, not plain array. |
-| `.filter(pred)` | `Iterator<T> → Iterator<T>` | `forEach(pred).then(collectSome())` | pred: `T → Option<T>`. Keeps Somes, drops Nones. |
-| `.find(pred)` | `Iterator<T> → Option<T>` | `filter(pred).collect().first()` | First match. Exits Iterator, enters Option. |
-| `.flatMap(f)` | `Iterator<T> → Iterator<U>` | `forEach(f).then(flatten())` | Map + flatten one level |
-| `.flatten()` | `Iterator<Iterator<T>> → Iterator<T>` | Flatten builtin | Flatten one level of nesting |
-| `.collect()` | `Iterator<T> → T[]` | Identity at runtime | Exit Iterator, get plain array. Drops iteratorMethods dispatch. |
-| `.first()` | `Iterator<T> → Option<T>` | splitFirst + map getIndex(0) | Exit Iterator, enter Option. |
-| `.last()` | `Iterator<T> → Option<T>` | splitLast + map getIndex(1) | Exit Iterator, enter Option. |
-| `.count()` | `Iterator<T> → number` | Needs `Arr.length` builtin | |
-| `.any(pred)` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting (evaluates all elements) |
+| `.map(f)` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → rewrap | Per-element transform |
+| `.filter(pred)` | `Iterator<T> → Iterator<T>` | Unwrap → `forEach(pred)` → collectSome → rewrap | pred: `T → Option<T>` |
+| `.find(pred)` | `Iterator<T> → Option<T>` | Unwrap → `forEach(pred)` → collectSome → first | Exits Iterator, enters Option |
+| `.andThen(f)` | `Iterator<T> → Iterator<U>` | Unwrap → `forEach(f)` → flatten → rewrap | Map + flatten (Rust: `flat_map`) |
+| `.flatten()` | `Iterator<Iterator<T>> → Iterator<T>` | Unwrap outer → forEach(unwrap inner) → flatten → rewrap | Flatten one level |
+| `.collect()` | `Iterator<T> → T[]` | Unwrap (getField("value")) | Exit Iterator, get plain array |
+| `.first()` | `Iterator<T> → Option<T>` | Unwrap → splitFirst → map getIndex(0) | Exit Iterator, enter Option |
+| `.last()` | `Iterator<T> → Option<T>` | Unwrap → splitLast → map getIndex(1) | Exit Iterator, enter Option |
+| `.count()` | `Iterator<T> → number` | Unwrap → Arr.length | Needs builtin |
+| `.any(pred)` | `Iterator<T> → boolean` | `find(pred).isSome()` | Not short-circuiting |
 | `.all(pred)` | `Iterator<T> → boolean` | Needs design | Name collision with `all()` combinator |
 
 ### Needs new builtins
@@ -150,7 +162,7 @@ Iterator methods that return a new collection type **change the dispatch table**
 |--------|---------|----------------|
 | `.map(f)` | `Iterator<U>` | `iteratorMethods` (stay in Iterator) |
 | `.filter(pred)` | `Iterator<T>` | `iteratorMethods` (stay) |
-| `.collect()` | `T[]` | None (plain array, use `.forEach()` etc. directly) |
+| `.collect()` | `T[]` | None (plain array) |
 | `.first()` | `Option<T>` | `optionMethods` (enter Option) |
 | `.last()` | `Option<T>` | `optionMethods` (enter Option) |
 | `.find(pred)` | `Option<T>` | `optionMethods` (enter Option) |
@@ -164,14 +176,14 @@ Iterator methods that return a new collection type **change the dispatch table**
 ```ts
 // Option → Iterator → collect
 foo.getField("name")      // Option<string>
-  .intoIter()              // Iterator<string>
+  .intoIter()              // Iterator<string> = { kind: "Iterator", value: string[] }
   .map(validate)           // Iterator<ValidResult>
   .collect()               // ValidResult[]
 
 // Result → Iterator → find
 result                     // Result<User[], Error>
   .intoIter()              // Iterator<User[]>
-  .flatMap(identity())     // Iterator<User>  (flatten the inner array)
+  .andThen(identity())     // Iterator<User>  (flatMap: map + flatten)
   .find(isAdmin)           // Option<User>
   .unwrapOr(defaultAdmin)  // User
 
@@ -191,7 +203,7 @@ users                      // User[]
 const iteratorMethods: UnionMethods = {
   map: (action) => Iter.map(action),
   filter: (predicate) => Iter.filter(predicate),
-  flatMap: (action) => Iter.flatMap(action),
+  andThen: (action) => Iter.andThen(action),  // Rust: flat_map
   flatten: () => Iter.flatten(),
   // find, first, last exit Iterator — return Option with optionMethods
   // collect exits Iterator — returns plain T[]
@@ -212,17 +224,17 @@ export interface UnionMethods {
   // IntoIterator (Option + Result implement this)
   intoIter?: () => Action;
 
-  // Iterator-only (iteratorMethods implements these)
-  // map, filter, flatten are shared names — dispatch handles them
+  // Iterator-only
+  // map, filter, flatten, andThen are shared names — dispatch handles them
   // These are NEW:
-  flatMap?: (action: Action) => Action;
   find?: (predicate: Action) => Action;
   count?: () => Action;
+  collect?: () => Action;  // Iterator.collect exits to T[]
   // ... etc
 }
 ```
 
-Note: `map`, `filter`, `flatten` are already in `UnionMethods` (shared by Option/Result). Iterator just provides different implementations for them. No new interface fields needed for those — just different values in the dispatch table.
+`map`, `filter`, `flatten`, `andThen` are already in `UnionMethods` (shared by Option/Result). Iterator provides different implementations. `collect` already exists (Option.collect) — Iterator.collect is different (unwrap the tagged wrapper), but the same dispatch field works.
 
 ---
 
@@ -234,40 +246,44 @@ Note: `map`, `filter`, `flatten` are already in `UnionMethods` (shared by Option
    - `.iterator()` is what was originally suggested
 
 2. **Array → Iterator**: How does `.intoIter()` work on `T[]`? Arrays don't have `__union`. Options:
-   - Standalone `intoIter()` combinator that attaches `iteratorMethods` (identity at runtime)
-   - Postfix `.intoIter()` on any TypedAction with `T[]` output (hardcoded, not dispatched)
-   - Skip it — arrays already have `.forEach()`, `.first()`, `.last()` as postfix methods. Only Option/Result need `.intoIter()`.
+   - Postfix `.intoIter()` on any TypedAction with `T[]` output (hardcoded, not dispatched — wraps in tag("Iterator") and attaches iteratorMethods)
+   - Standalone `Iter.fromArray()` combinator
+   - Both?
 
 3. **`filter` predicate type**: Rust's filter takes `T → bool`. Barnum has no boolean-to-conditional. Two options:
-   - `T → Option<T>` (consistent with `Option.filter`, composable as `forEach(pred).collect()`)
+   - `T → Option<T>` (consistent with `Option.filter`, composable as `forEach(pred).collectSome()`)
    - `T → bool` (requires a new `FilterByBool` builtin in Rust)
    - Recommendation: `T → Option<T>`. Different from Rust but internally consistent.
 
 4. **Short-circuit semantics**: `find`, `any`, `all` in Rust short-circuit. In barnum, `forEach` processes all elements. True short-circuit needs engine support (early exit from ForEach). For now, compose eagerly.
 
-5. **`collect` destination**: In Rust, `.collect()` is generic over the destination type (`collect::<Vec<_>>()`, `collect::<HashMap<_, _>>()`). In barnum, `.collect()` always produces `T[]`. If we later add HashMap, we might want `collectInto<HashMap>()` or similar. Cross that bridge when we get there.
+5. **`collect` destination types**: In Rust, `.collect()` is generic over the destination type. Possible barnum equivalents:
+   - `.collect()` → `T[]` (default, like `Vec`)
+   - `.toResult()` where `self: Iterator<Result<T, E>>` → `Result<T[], E>` (stop on first Err)
+   - `.toOption()` where `self: Iterator<Option<T>>` → `Option<T[]>` (stop on first None)
+   - These are separate methods, not generic collect. Each has a `this` constraint.
 
-6. **`.forEach()` ambiguity**: Current `.forEach(f)` on arrays returns `U[]`. On `Iterator<T>`, `.map(f)` is the same operation but returns `Iterator<U>`. Should we:
-   - Keep `.forEach()` on plain arrays, `.map()` on Iterator (different names for same operation)?
-   - Rename array `.forEach()` to `.map()` via dispatch?
-   - For now: `.forEach()` stays on arrays (no dispatch needed). `.map()` is Iterator-only via dispatch.
+6. **`.forEach()` vs `.map()` naming**: Current `.forEach(f)` on arrays returns `U[]`. On `Iterator<T>`, `.map(f)` is the same operation but returns `Iterator<U>`. Resolution:
+   - `.forEach()` stays on plain arrays (no dispatch needed)
+   - `.map()` on Iterator dispatches via `__union` — different from array's `.forEach()`
+   - No ambiguity since arrays don't have `__union`
 
 ---
 
 ## Priority
 
-**Phase 0** (independent, do now): `mapOption→map`, `unwrapOr` widening, `mapErr→dispatch`, `Option.transpose`
+**Phase 0** (done): `mapOption→map`, `unwrapOr` widening, `mapErr→dispatch`, `Option.transpose`, `flatten` dispatch
 
 **Phase 1** (Iterator foundation):
-- `Iterator<T>` type (branded phantom)
+- `Iterator<T>` tagged wrapper type + `IteratorDef`
 - `iteratorMethods` dispatch table
-- `Option.intoIter()`, `Result.intoIter()`
+- `Option.intoIter()`, `Result.intoIter()`, array `.intoIter()`
 - `.map()`, `.filter()`, `.collect()`, `.find()`, `.first()`, `.last()`
 
 **Phase 2** (Iterator expansion):
-- `.flatMap()`, `.flatten()`, `.enumerate()`, `.take()`, `.skip()`
+- `.andThen()` (flat_map), `.flatten()`, `.enumerate()`, `.take()`, `.skip()`
 - `.any()`, `.count()`
-- Array `.intoIter()` (if needed)
+- Typed collect destinations: `.toResult()`, `.toOption()`
 
 **Phase 3** (builtins):
 - `Arr.length`, `Arr.reverse`, `Arr.join`, etc.
