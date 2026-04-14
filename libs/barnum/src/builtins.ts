@@ -331,6 +331,7 @@ export function splitFirst<TElement>(): TypedAction<
       kind: "Invoke",
       handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
     }),
+    "Option",
     optionMethods,
   );
 }
@@ -358,6 +359,7 @@ export function splitLast<TElement>(): TypedAction<
       kind: "Invoke",
       handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
     }),
+    "Option",
     optionMethods,
   );
 }

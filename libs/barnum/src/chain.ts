@@ -16,8 +16,9 @@ export function chain<T1, T2, T3>(
   });
   // Propagate __union from the output-determining action so that
   // x.then(Option.map(f)).isSome() works without explicit withUnion.
-  if ((rest as TypedAction).__union) {
-    result.__union = (rest as TypedAction).__union;
+  const restUnion = (rest as TypedAction).__union;
+  if (restUnion) {
+    result.__union = restUnion;
   }
   return result;
 }

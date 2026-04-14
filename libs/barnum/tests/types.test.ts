@@ -554,14 +554,14 @@ describe("postfix .map() type safety", () => {
   it("rejects .map() when Out is not Option<T> or Result<T,E>", () => {
     // verify outputs { verified: boolean } — not an Option or Result
     // @ts-expect-error — map requires Option or Result output
-    expect(() => verify.map(deploy)).toThrow(".map() requires Option or Result output");
+    expect(() => verify.map(deploy)).toThrow(".map() requires a union type (Option or Result)");
   });
 
   it("rejects .map() when Out is a different tagged union", () => {
     // classifyErrors outputs ClassifyResult = { kind: "HasErrors"; ... } | { kind: "Clean"; ... }
     // Not Option<T> (which has kind "Some" | "None")
     // @ts-expect-error — map requires Option or Result output
-    expect(() => classifyErrors.map(deploy)).toThrow(".map() requires Option or Result output");
+    expect(() => classifyErrors.map(deploy)).toThrow(".map() requires a union type (Option or Result)");
   });
 
   it("preserves input type through map on Option", () => {
@@ -989,7 +989,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   it(".unwrapOr() infers types from this constraint", () => {
     const resultAction = withUnion(
       identity() as TypedAction<string, Result<string, number>>,
-      resultMethods,
+      "Result", resultMethods,
     );
     const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
@@ -1003,7 +1003,7 @@ describe("Result.unwrapOr with throw tokens", () => {
         { data: string },
         Result<{ data: string }, { code: number }>
       >,
-      resultMethods,
+      "Result", resultMethods,
     );
     const action = tryCatch(
       (throwError) => handler.unwrapOr(throwError),
@@ -1019,7 +1019,7 @@ describe("Result.unwrapOr with throw tokens", () => {
         { artifact: string },
         Result<{ verified: boolean }, string>
       >,
-      resultMethods,
+      "Result", resultMethods,
     );
     const action = tryCatch(
       (throwError) => pipe(
@@ -1035,7 +1035,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   it(".unwrapOr() produces Chain AST node", () => {
     const resultAction = withUnion(
       identity() as TypedAction<void, Result<string, string>>,
-      resultMethods,
+      "Result", resultMethods,
     );
     const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
@@ -1045,7 +1045,7 @@ describe("Result.unwrapOr with throw tokens", () => {
   it("rejects .unwrapOr() on non-Result output", () => {
     // deploy outputs { deployed: boolean } — not an Option or Result
     // @ts-expect-error — unwrapOr requires Option or Result output
-    expect(() => deploy.unwrapOr(drop)).toThrow(".unwrapOr() requires Option or Result output");
+    expect(() => deploy.unwrapOr(drop)).toThrow(".unwrapOr() requires a union type (Option or Result)");
   });
 });
 

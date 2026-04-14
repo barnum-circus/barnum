@@ -41,7 +41,7 @@ export const Result = {
   ok<TValue, TError>(): TypedAction<TValue, ResultT<TValue, TError>> {
     return withUnion(
       tag("Ok") as TypedAction<TValue, ResultT<TValue, TError>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -49,7 +49,7 @@ export const Result = {
   err<TValue, TError>(): TypedAction<TError, ResultT<TValue, TError>> {
     return withUnion(
       tag("Err") as TypedAction<TError, ResultT<TValue, TError>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -62,7 +62,7 @@ export const Result = {
         Ok: chain(action as any, tag("Ok")),
         Err: tag("Err"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -75,7 +75,7 @@ export const Result = {
         Ok: tag("Ok"),
         Err: chain(action as any, tag("Err")),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -91,7 +91,7 @@ export const Result = {
         Ok: action,
         Err: tag("Err"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -104,7 +104,7 @@ export const Result = {
         Ok: tag("Ok"),
         Err: fallback,
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -117,7 +117,7 @@ export const Result = {
         Ok: chain(drop, other),
         Err: tag("Err"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -161,7 +161,7 @@ export const Result = {
         ResultT<ResultT<TValue, TError>, TError>,
         ResultT<TValue, TError>
       >,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 
@@ -179,7 +179,7 @@ export const Result = {
         Ok: tag("Some"),
         Err: drop.tag("None"),
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -197,7 +197,7 @@ export const Result = {
         Ok: drop.tag("None"),
         Err: tag("Some"),
       }) as TypedAction<ResultT<TValue, TError>, OptionT<TError>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -222,7 +222,7 @@ export const Result = {
         ResultT<OptionT<TValue>, TError>,
         OptionT<ResultT<TValue, TError>>
       >,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 

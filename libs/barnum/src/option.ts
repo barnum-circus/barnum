@@ -52,14 +52,14 @@ export const optionMethods: UnionMethods = {
 export const Option = {
   /** Wrap a value as Some. `T → Option<T>` */
   some<T>(): TypedAction<T, OptionT<T>> {
-    return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, optionMethods);
+    return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, "Option", optionMethods);
   },
 
   /** Produce a None. `any → Option<T>` */
   none<T>(): TypedAction<any, OptionT<T>> {
     return withUnion(
       tag("None") as TypedAction<any, OptionT<T>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -70,7 +70,7 @@ export const Option = {
         Some: chain(action as any, tag("Some")),
         None: tag("None"),
       }) as TypedAction<OptionT<T>, OptionT<U>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -86,7 +86,7 @@ export const Option = {
         Some: action,
         None: tag("None"),
       }) as TypedAction<OptionT<T>, OptionT<U>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -123,7 +123,7 @@ export const Option = {
         Some: identity(),
         None: tag("None"),
       }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -139,7 +139,7 @@ export const Option = {
         Some: predicate,
         None: tag("None"),
       }) as TypedAction<OptionT<T>, OptionT<T>>,
-      optionMethods,
+      "Option", optionMethods,
     );
   },
 
@@ -205,7 +205,7 @@ export const Option = {
         OptionT<ResultT<TValue, TError>>,
         ResultT<OptionT<TValue>, TError>
       >,
-      resultMethods,
+      "Result", resultMethods,
     );
   },
 

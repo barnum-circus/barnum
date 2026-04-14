@@ -159,13 +159,9 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
 // ---------------------------------------------------------------------------
 
 /**
- * Runtime dispatch table attached to TypedActions whose output is a union
- * type (Option or Result). Constructors attach it, family-preserving
- * combinators propagate it, and postfix methods dispatch through it.
- *
- * Each method is optional — Option and Result provide different subsets.
- * The TypedAction type signatures gate availability at compile time;
- * this table handles runtime dispatch.
+ * Runtime dispatch table for union postfix methods. Each method is optional —
+ * Option and Result provide different subsets. TypedAction type signatures
+ * gate availability at compile time; this table handles runtime dispatch.
  */
 export interface UnionMethods {
   // Shared (Option + Result)
@@ -191,16 +187,27 @@ export interface UnionMethods {
 }
 
 /**
+ * Runtime dispatch info attached to every TypedAction. Non-null when the
+ * output is a union type (Option, Result). `name` identifies the type for
+ * error messages; `methods` is the dispatch table.
+ */
+export interface UnionDispatch {
+  name: string;
+  methods: UnionMethods;
+}
+
+/**
  * Attach a union dispatch table to a TypedAction. Used by constructors
  * and family-preserving combinators so postfix methods can dispatch
  * to the correct implementation.
  */
 export function withUnion<In, Out>(
   action: TypedAction<In, Out>,
+  name: string,
   methods: UnionMethods,
 ): TypedAction<In, Out> {
   Object.defineProperty(action, "__union", {
-    value: methods,
+    value: { name, methods },
     configurable: true,
     enumerable: false,
     writable: true,
@@ -231,8 +238,8 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
-  /** Runtime dispatch table for Option/Result postfix methods. */
-  __union?: UnionMethods;
+  /** Runtime dispatch info for union postfix methods (Option/Result). Null for non-union outputs. */
+  __union: UnionDispatch | null;
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
@@ -563,9 +570,9 @@ function branchMethod(
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (methods?.flatten) {
-    return chain(this, methods.flatten()) as TypedAction;
+  const dispatch = this.__union;
+  if (dispatch?.methods.flatten) {
+    return chain(this, dispatch.methods.flatten()) as TypedAction;
   }
   // Fall back to array flatten
   return chain(this as any, flattenBuiltin()) as TypedAction;
@@ -607,54 +614,65 @@ function splitLastMethod(this: TypedAction): TypedAction {
   return chain(this as any, splitLast()) as TypedAction;
 }
 
+/**
+ * Require a dispatch method, throwing a descriptive error if missing.
+ * Uses the union's type name for context.
+ */
+function requireDispatch<TResult>(
+  dispatch: UnionDispatch | null,
+  methodName: string,
+  accessor: (methods: UnionMethods) => TResult | undefined,
+): TResult {
+  if (!dispatch) {
+    throw new Error(`.${methodName}() requires a union type (Option or Result)`);
+  }
+  const method = accessor(dispatch.methods);
+  if (!method) {
+    throw new Error(`.${methodName}() is not available on ${dispatch.name}`);
+  }
+  return method;
+}
+
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.map) throw new Error(".map() requires Option or Result output");
-  return chain(this, methods.map(action)) as TypedAction;
+  const map = requireDispatch(this.__union, "map", (m) => m.map);
+  return chain(this, map(action)) as TypedAction;
 }
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.mapErr) throw new Error(".mapErr() requires Result output");
-  return chain(this, methods.mapErr(action)) as TypedAction;
+  const mapErr = requireDispatch(this.__union, "mapErr", (m) => m.mapErr);
+  return chain(this, mapErr(action)) as TypedAction;
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.unwrap) throw new Error(".unwrap() requires Option or Result output");
-  return chain(this, methods.unwrap()) as TypedAction;
+  const unwrap = requireDispatch(this.__union, "unwrap", (m) => m.unwrap);
+  return chain(this, unwrap()) as TypedAction;
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.unwrapOr) throw new Error(".unwrapOr() requires Option or Result output");
-  return chain(this, methods.unwrapOr(defaultAction)) as TypedAction;
+  const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
+  return chain(this, unwrapOr(defaultAction)) as TypedAction;
 }
 
 // --- Dispatched postfix methods (via __union) ---
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.andThen) throw new Error(".andThen() requires Option or Result output");
-  return chain(this, methods.andThen(action)) as TypedAction;
+  const andThen = requireDispatch(this.__union, "andThen", (m) => m.andThen);
+  return chain(this, andThen(action)) as TypedAction;
 }
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.filter) throw new Error(".filter() requires Option output");
-  return chain(this, methods.filter(predicate)) as TypedAction;
+  const filter = requireDispatch(this.__union, "filter", (m) => m.filter);
+  return chain(this, filter(predicate)) as TypedAction;
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.isSome) throw new Error(".isSome() requires Option output");
-  return chain(this, methods.isSome()) as TypedAction;
+  const isSome = requireDispatch(this.__union, "isSome", (m) => m.isSome);
+  return chain(this, isSome()) as TypedAction;
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.isNone) throw new Error(".isNone() requires Option output");
-  return chain(this, methods.isNone()) as TypedAction;
+  const isNone = requireDispatch(this.__union, "isNone", (m) => m.isNone);
+  return chain(this, isNone()) as TypedAction;
 }
 
 function collectMethod(this: TypedAction): TypedAction {
@@ -662,45 +680,38 @@ function collectMethod(this: TypedAction): TypedAction {
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.or) throw new Error(".or() requires Result output");
-  return chain(this, methods.or(fallback)) as TypedAction;
+  const or = requireDispatch(this.__union, "or", (m) => m.or);
+  return chain(this, or(fallback)) as TypedAction;
 }
 
 function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.and) throw new Error(".and() requires Result output");
-  return chain(this, methods.and(other)) as TypedAction;
+  const and = requireDispatch(this.__union, "and", (m) => m.and);
+  return chain(this, and(other)) as TypedAction;
 }
 
 function toOptionMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.toOption) throw new Error(".toOption() requires Result output");
-  return chain(this, methods.toOption()) as TypedAction;
+  const toOption = requireDispatch(this.__union, "toOption", (m) => m.toOption);
+  return chain(this, toOption()) as TypedAction;
 }
 
 function toOptionErrMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.toOptionErr) throw new Error(".toOptionErr() requires Result output");
-  return chain(this, methods.toOptionErr()) as TypedAction;
+  const toOptionErr = requireDispatch(this.__union, "toOptionErr", (m) => m.toOptionErr);
+  return chain(this, toOptionErr()) as TypedAction;
 }
 
 function isOkMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.isOk) throw new Error(".isOk() requires Result output");
-  return chain(this, methods.isOk()) as TypedAction;
+  const isOk = requireDispatch(this.__union, "isOk", (m) => m.isOk);
+  return chain(this, isOk()) as TypedAction;
 }
 
 function isErrMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.isErr) throw new Error(".isErr() requires Result output");
-  return chain(this, methods.isErr()) as TypedAction;
+  const isErr = requireDispatch(this.__union, "isErr", (m) => m.isErr);
+  return chain(this, isErr()) as TypedAction;
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  const methods = this.__union;
-  if (!methods?.transpose) throw new Error(".transpose() requires Option<Result> or Result<Option> output");
-  return chain(this, methods.transpose()) as TypedAction;
+  const transpose = requireDispatch(this.__union, "transpose", (m) => m.transpose);
+  return chain(this, transpose()) as TypedAction;
 }
 
 function bindMethod(
@@ -727,6 +738,7 @@ export function typedAction<In = unknown, Out = unknown>(
 ): TypedAction<In, Out> {
   if (!("then" in action)) {
     Object.defineProperties(action, {
+      __union: { value: null, configurable: true, enumerable: false, writable: true },
       then: { value: thenMethod, configurable: true },
       forEach: { value: forEachMethod, configurable: true },
       branch: { value: branchMethod, configurable: true },
