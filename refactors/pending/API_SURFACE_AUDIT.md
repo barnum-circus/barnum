@@ -118,7 +118,6 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `splitLast()` | `T[] → Option<[T[], T]>` | Postfix. Init/last decomposition |
 | `first()` | `T[] → Option<T>` | Postfix. Safe first element |
 | `last()` | `T[] → Option<T>` | Postfix. Safe last element |
-| `Option.collect()` | `Option<T>[] → T[]` | Filter + extract Somes |
 
 ### Proposed
 
@@ -151,9 +150,10 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind |
 | `Option.unwrapOr(action)` | `Option<T> → T` | exists, postfix | |
 | `flattenOption()` | `Option<Option<T>> → Option<T>` | rename | Currently `Option.flatten()` — add top-level alias |
-| `Option.filter(pred)` | `Option<T> → Option<T>` | exists | |
-| `Option.isSome()` | `Option<T> → boolean` | exists | |
-| `Option.isNone()` | `Option<T> → boolean` | exists | |
+| `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | |
+| `Option.isSome()` | `Option<T> → boolean` | exists, postfix | |
+| `Option.isNone()` | `Option<T> → boolean` | exists, postfix | |
+| `Option.collect()` | `Option<T>[] → T[]` | exists, postfix | Filter + extract Somes |
 
 ### Proposed
 
@@ -161,7 +161,7 @@ Not proposed for the current release. Belongs to a future where barnum has first
 |------|-----------|--------|-------|
 | `Option.okOr(action)` | `Option<T> → Result<T, E>` | composable | Branch → tag |
 | `Option.zip` | `(Option<T>, Option<U>) → Option<[T, U]>` | composable | Low priority |
-| `Option.transpose` | `Option<Result<T, E>> → Result<Option<T>, E>` | composable | Low priority |
+| `Option.transpose` | `Option<Result<T, E>> → Result<Option<T>, E>` | composable | Deferred from union dispatch — needs optionMethods.transpose |
 
 ---
 
@@ -174,15 +174,15 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Result.map(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | |
 | `Result.mapErr(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | |
 | `Result.andThen(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Monadic bind |
-| `Result.or(action)` | `Result<T, E> → Result<T, F>` | exists | Fallback on Err |
-| `Result.and(action)` | `Result<T, E> → Result<U, E>` | exists | Replace Ok |
+| `Result.or(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | Fallback on Err |
+| `Result.and(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Replace Ok |
 | `Result.unwrapOr(action)` | `Result<T, E> → T` | exists, postfix | |
 | `flattenResult()` | `Result<Result<T,E>,E> → Result<T,E>` | rename | Currently `Result.flatten()` — add top-level alias |
-| `Result.toOption()` | `Result<T, E> → Option<T>` | exists | |
-| `Result.toOptionErr()` | `Result<T, E> → Option<E>` | exists | |
-| `Result.transpose()` | `Result<Option<T>, E> → Option<Result<T, E>>` | exists | |
-| `Result.isOk()` | `Result<T, E> → boolean` | exists | |
-| `Result.isErr()` | `Result<T, E> → boolean` | exists | |
+| `Result.toOption()` | `Result<T, E> → Option<T>` | exists, postfix | |
+| `Result.toOptionErr()` | `Result<T, E> → Option<E>` | exists, postfix | |
+| `Result.transpose()` | `Result<Option<T>, E> → Option<Result<T, E>>` | exists, postfix | |
+| `Result.isOk()` | `Result<T, E> → boolean` | exists, postfix | |
+| `Result.isErr()` | `Result<T, E> → boolean` | exists, postfix | |
 
 ---
 
@@ -257,26 +257,28 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [ ] `getField(key)` returns `Option<Obj[K]>` instead of raw value
 - [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
 
-### Concrete type dispatch (do first — see UNION_POSTFIX_DISPATCH.md)
-- [ ] Implement `__union` runtime tag on TypedAction
-- [ ] Option/Result constructors attach tag
-- [ ] Union-aware combinators propagate tag
+### Union postfix dispatch (done — see past/UNION_POSTFIX_DISPATCH.md)
+- [x] Implement `__union` runtime tag on TypedAction
+- [x] Option/Result constructors attach tag
+- [x] Union-aware combinators propagate tag
+- [x] `chain()` propagates `__union` from rest action
+- [x] `.andThen()` — dispatch to Option.andThen / Result.andThen
+- [x] `.filter()` — Option.filter
+- [x] `.isSome()`, `.isNone()` — Option-only
+- [x] `.collect()` — Option.collect
+- [x] `.mapErr()` — Result-only
+- [x] `.or()`, `.and()` — Result-only
+- [x] `.toOption()`, `.toOptionErr()` — Result-only
+- [x] `.transpose()` — Result.transpose (Option.transpose deferred)
+- [x] `.isOk()`, `.isErr()` — Result-only
 
-With dispatch, postfix methods use clean unsuffixed names (`.map()`, `.flatten()`, `.unwrapOr()`, `.andThen()`) and dispatch to the correct implementation based on self type. No `fooOption`/`fooResult` suffixes needed.
+### Phase 2 renames (pending — requires union dispatch, which is done)
+- [ ] Rename `.mapOption()` → `.map()` — dispatch to Option.map / Result.map
+- [ ] Widen `.unwrapOr()` — dispatch to Option.unwrapOr / Result.unwrapOr (currently Result-only)
+- [ ] Widen `.flatten()` — dispatch to flattenArray / flattenOption / flattenResult
+- [ ] Add `Option.transpose` — `Option<Result<T, E>> → Result<Option<T>, E>` (needs optionMethods.transpose)
 
-### Postfix: after dispatch lands
-- [ ] `.map()` — dispatch to Option.map / Result.map
-- [ ] `.andThen()` — dispatch to Option.andThen / Result.andThen
-- [ ] `.unwrapOr()` — dispatch to Option.unwrapOr / Result.unwrapOr
-- [ ] `.flatten()` — dispatch to flattenArray / flattenOption / flattenResult
-- [ ] `.filter()` — Option.filter (add Array.filter when implemented)
-- [ ] `.collect()` — Option.collect
-- [ ] `.isSome()`, `.isNone()` — Option-only
-- [ ] `.mapErr()` — exists ✓, Result-only
-- [ ] `.or()`, `.and()` — Result-only
-- [ ] `.toOption()`, `.toOptionErr()` — Result-only
-- [ ] `.transpose()` — dispatch to Option.transpose / Result.transpose
-- [ ] `.isOk()`, `.isErr()` — Result-only
+### Postfix: future
 - [ ] `.omit()` — Struct-only (when implemented)
 - [ ] `.flatMap()` — Array-only (when implemented)
 
@@ -304,5 +306,5 @@ With dispatch, postfix methods use clean unsuffixed names (`.map()`, `.flatten()
 
 ### Lower priority (tier 2)
 - [ ] Arr: reverse, take, skip, contains, enumerate, sortBy, unique, zip, append
-- [ ] Option: zip, transpose
+- [ ] Option: zip
 - [ ] HashMap: first-class support as distinct type from struct
