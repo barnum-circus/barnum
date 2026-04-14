@@ -195,39 +195,6 @@ Not proposed for the current release. Belongs to a future where barnum has first
 
 ---
 
-## Handler & Execution
-
-| Name | Status | Notes |
-|------|--------|-------|
-| `createHandler` | exists | Define TS handler with Zod validators |
-| `createHandlerWithConfig` | exists | Handler with step config |
-| `runPipeline` | exists | Run pipeline to completion |
-| `config` | exists | Config factory |
-| `zodToCheckedJsonSchema` | exists | Zod → JSON Schema |
-| `taggedUnionSchema` | exists | Zod schema for TaggedUnion |
-| `Option.schema` | exists | Zod schema for Option |
-| `Result.schema` | exists | Zod schema for Result |
-
----
-
-## Types
-
-| Name | Status | Notes |
-|------|--------|-------|
-| `TypedAction<In, Out>` | exists | Core pipeline-typed action |
-| `Pipeable<In, Out>` | exists | Parameter type for combinators |
-| `Action` | exists | Untyped AST union |
-| `Config` | exists | Top-level workflow config |
-| `TaggedUnion<TDef>` | exists | `{ kind, value }` discriminated union |
-| `Option<T>` | exists | Some/None |
-| `Result<TValue, TError>` | exists | Ok/Err |
-| `LoopResult<TC, TB>` | exists | Continue/Break |
-| `VarRef<TValue>` | exists | Bound variable reference |
-| `ExtractInput<T>` | exists | |
-| `ExtractOutput<T>` | exists | |
-| `PipeIn<T>` | exists | Maps never/void → any |
-| `Handler<V, O>` | exists | Opaque handler reference |
-
 ---
 
 ## Naming Collisions & Renames
