@@ -18,25 +18,11 @@ Complete inventory of everything exposed from the JS library, organized by **sel
 
 ---
 
-## Constructors (self: n/a — these produce values)
-
-| Name | Output | Status | Notes |
-|------|--------|--------|-------|
-| `constant(v)` | `T` | exists | Fixed value, ignores input |
-| `range(start, end)` | `number[]` | exists | Constant integer array |
-| `tag(kind)` | `TaggedUnion<{K: T}>` | exists | Wrap value as union variant |
-| `Option.some()` | `Option<T>` | exists | |
-| `Option.none()` | `Option<T>` | exists | |
-| `Result.ok()` | `Result<T, E>` | exists | |
-| `Result.err()` | `Result<T, E>` | exists | |
-| `sleep(ms)` | `void` | exists | Rust builtin, takes number input |
-
----
-
 ## Control Flow (self: determined by context)
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `sleep(ms)` | `number → void` | exists | Rust builtin, timing primitive |
 | `pipe` | Variadic sequential (1–11 steps) | exists | |
 | `chain` | `(A→B, B→C) → A→C` | exists | Binary sequential |
 | `all` | Variadic concurrent (0–10 branches) | exists | |
@@ -67,6 +53,7 @@ Operations that work regardless of what's in the pipeline.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `constant(v)` | `any → T` | exists | Fixed value, ignores input |
 | `identity` | `T → T` | exists | Pass through |
 | `drop` | `T → void` | exists, postfix | Discard value |
 | `wrapInField(key)` | `T → { K: T }` | exists | Wrap under a key |
@@ -201,6 +188,7 @@ Nothing exists today.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `range(start, end)` | `any → number[]` | exists | Constant integer array, ignores input |
 | `forEach(action)` | `T[] → U[]` | exists, postfix | Map over elements |
 | `flattenArray()` | `T[][] → T[]` | rename | Currently `flatten()` — rename to disambiguate from Option/Result |
 | `splitFirst()` | `T[] → Option<[T, T[]]>` | exists, postfix | Head/tail decomposition |
@@ -239,6 +227,8 @@ Nothing exists today.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `Option.some()` | `T → Option<T>` | exists | Constructor |
+| `Option.none()` | `any → Option<T>` | exists | Constructor, ignores input |
 | `Option.map(action)` | `Option<T> → Option<U>` | exists, postfix | |
 | `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind |
 | `Option.unwrapOr(action)` | `Option<T> → T` | exists, postfix | |
@@ -261,6 +251,8 @@ Nothing exists today.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `Result.ok()` | `T → Result<T, E>` | exists | Constructor |
+| `Result.err()` | `E → Result<T, E>` | exists | Constructor |
 | `Result.map(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | |
 | `Result.mapErr(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | |
 | `Result.andThen(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Monadic bind |
@@ -280,6 +272,7 @@ Nothing exists today.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
+| `tag(kind)` | `T → TaggedUnion<{K: T}>` | exists | Constructor — wrap value as variant |
 | `branch(cases)` | `TaggedUnion<T> → Out` | exists, postfix | Dispatch on discriminant |
 
 ---
