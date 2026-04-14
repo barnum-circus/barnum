@@ -14,6 +14,7 @@ import {
   drop,
   getIndex,
   identity,
+  panic,
   splitFirst,
   splitLast,
   tag,
@@ -29,6 +30,7 @@ import { z } from "zod";
 export const optionMethods: UnionMethods = {
   map: (action) => Option.map(action),
   andThen: (action) => Option.andThen(action),
+  unwrap: () => Option.unwrap(),
   unwrapOr: (action) => Option.unwrapOr(action),
   flatten: () => Option.flatten(),
   filter: (predicate) => Option.filter(predicate),
@@ -86,6 +88,19 @@ export const Option = {
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       optionMethods,
     );
+  },
+
+  /**
+   * Extract the Some value or panic. `Option<T> → T`
+   *
+   * Exits the Option family — result has no __union.
+   * Panics (fatal, not caught by tryCatch) if the value is None.
+   */
+  unwrap<T>(): TypedAction<OptionT<T>, T> {
+    return branch({
+      Some: identity(),
+      None: panic("called unwrap on None"),
+    }) as TypedAction<OptionT<T>, T>;
   },
 
   /**

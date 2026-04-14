@@ -5,6 +5,7 @@ export {
   constant,
   identity,
   drop,
+  panic,
   tag,
   merge,
   flatten,

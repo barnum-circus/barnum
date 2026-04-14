@@ -9,16 +9,25 @@
 use barnum_ast::BuiltinKind;
 use serde_json::{Value, json};
 
-/// Errors from builtin execution (type mismatches).
+/// Errors from builtin execution.
 #[derive(Debug, thiserror::Error)]
-#[error("{builtin}: expected {expected}, got {actual}")]
-pub struct BuiltinError {
-    /// Which builtin failed.
-    pub builtin: &'static str,
-    /// What type was expected.
-    pub expected: &'static str,
-    /// The actual value received.
-    pub actual: Value,
+pub enum BuiltinError {
+    /// A builtin received an input of the wrong type.
+    #[error("{builtin}: expected {expected}, got {actual}")]
+    TypeMismatch {
+        /// Which builtin failed.
+        builtin: &'static str,
+        /// What type was expected.
+        expected: &'static str,
+        /// The actual value received.
+        actual: Value,
+    },
+    /// A `Panic` builtin was executed. Fatal, not caught by tryCatch.
+    #[error("panic: {message}")]
+    Panic {
+        /// The panic message.
+        message: String,
+    },
 }
 
 /// Execute a builtin operation.
@@ -41,7 +50,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::Merge => {
             let Value::Array(items) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "Merge",
                     expected: "array",
                     actual: input.clone(),
@@ -50,7 +59,7 @@ pub async fn execute_builtin(
             let mut merged = serde_json::Map::new();
             for item in items {
                 let Value::Object(obj) = item else {
-                    return Err(BuiltinError {
+                    return Err(BuiltinError::TypeMismatch {
                         builtin: "Merge",
                         expected: "object in array",
                         actual: item.clone(),
@@ -65,7 +74,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::Flatten => {
             let Value::Array(outer) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "Flatten",
                     expected: "array",
                     actual: input.clone(),
@@ -74,7 +83,7 @@ pub async fn execute_builtin(
             let mut result = Vec::new();
             for item in outer {
                 let Value::Array(inner) = item else {
-                    return Err(BuiltinError {
+                    return Err(BuiltinError::TypeMismatch {
                         builtin: "Flatten",
                         expected: "array element",
                         actual: item.clone(),
@@ -87,7 +96,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::GetField { field } => {
             let Value::Object(obj) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "GetField",
                     expected: "object",
                     actual: input.clone(),
@@ -98,7 +107,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::GetIndex { index } => {
             let Value::Array(arr) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "GetIndex",
                     expected: "array",
                     actual: input.clone(),
@@ -109,7 +118,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::SplitFirst => {
             let Value::Array(items) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "SplitFirst",
                     expected: "array",
                     actual: input.clone(),
@@ -126,7 +135,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::SplitLast => {
             let Value::Array(items) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "SplitLast",
                     expected: "array",
                     actual: input.clone(),
@@ -143,7 +152,7 @@ pub async fn execute_builtin(
 
         BuiltinKind::CollectSome => {
             let Value::Array(items) = input else {
-                return Err(BuiltinError {
+                return Err(BuiltinError::TypeMismatch {
                     builtin: "CollectSome",
                     expected: "array",
                     actual: input.clone(),
@@ -169,6 +178,10 @@ pub async fn execute_builtin(
             tokio::time::sleep(std::time::Duration::from_millis(*ms)).await;
             Ok(Value::Null)
         }
+
+        BuiltinKind::Panic { message } => Err(BuiltinError::Panic {
+            message: message.clone(),
+        }),
     }
 }
 

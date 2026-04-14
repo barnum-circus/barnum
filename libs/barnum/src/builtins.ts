@@ -104,6 +104,23 @@ export const drop: TypedAction<any, void> = typedAction({
 });
 
 // ---------------------------------------------------------------------------
+// Panic — halt execution with an error message
+// ---------------------------------------------------------------------------
+
+/**
+ * Halt execution with a fatal error. Not caught by tryCatch.
+ * Analogous to Rust's `panic!`.
+ *
+ * Output type is `never` — a panic never produces a value.
+ */
+export function panic(message: string): TypedAction<any, never> {
+  return typedAction({
+    kind: "Invoke",
+    handler: { kind: "Builtin", builtin: { kind: "Panic", message } },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tag — wrap input as a tagged union variant
 // ---------------------------------------------------------------------------
 

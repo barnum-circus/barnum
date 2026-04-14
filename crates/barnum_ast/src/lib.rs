@@ -289,6 +289,12 @@ pub enum BuiltinKind {
         /// Duration in milliseconds.
         ms: u64,
     },
+    /// Halt execution with a fatal error. Not caught by tryCatch.
+    /// Analogous to Rust's `panic!`.
+    Panic {
+        /// The error message.
+        message: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

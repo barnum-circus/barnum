@@ -120,7 +120,8 @@ export type BuiltinKind =
   | { kind: "SplitFirst" }
   | { kind: "SplitLast" }
   | { kind: "WrapInField"; field: string }
-  | { kind: "Sleep"; ms: number };
+  | { kind: "Sleep"; ms: number }
+  | { kind: "Panic"; message: string };
 
 /**
  * When T is `never` or `void` (handler ignores input / recur doesn't
@@ -170,6 +171,7 @@ export interface UnionMethods {
   // Shared (Option + Result)
   map?: (action: Action) => Action;
   andThen?: (action: Action) => Action;
+  unwrap?: () => Action;
   unwrapOr?: (action: Action) => Action;
   flatten?: () => Action;
   // Option-only
@@ -309,6 +311,19 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     action: Pipeable<TError, TErrorOut>,
   ): TypedAction<TIn, Result<TValue, TErrorOut>>;
+  /**
+   * Unwrap or panic. Dispatches: Option.unwrap, Result.unwrap.
+   *
+   * Option: If Some, pass through value. If None, panic.
+   * Result: If Ok, pass through value. If Err, panic.
+   */
+  unwrap<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+  ): TypedAction<TIn, TValue>;
+  unwrap<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, TValue>;
+
   /**
    * Unwrap a union output. Dispatches: Option.unwrapOr, Result.unwrapOr.
    *
@@ -604,6 +619,12 @@ function mapErrMethod(this: TypedAction, action: Action): TypedAction {
   return chain(this, methods.mapErr(action)) as TypedAction;
 }
 
+function unwrapMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.unwrap) throw new Error(".unwrap() requires Option or Result output");
+  return chain(this, methods.unwrap()) as TypedAction;
+}
+
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   const methods = this.__union;
   if (!methods?.unwrapOr) throw new Error(".unwrapOr() requires Option or Result output");
@@ -721,6 +742,7 @@ export function typedAction<In = unknown, Out = unknown>(
       splitLast: { value: splitLastMethod, configurable: true },
       map: { value: mapMethod, configurable: true },
       mapErr: { value: mapErrMethod, configurable: true },
+      unwrap: { value: unwrapMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },
       andThen: { value: andThenMethod, configurable: true },
       filter: { value: filterMethod, configurable: true },

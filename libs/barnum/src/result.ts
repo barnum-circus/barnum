@@ -8,7 +8,7 @@ import {
   branch,
 } from "./ast.js";
 import { chain } from "./chain.js";
-import { constant, drop, identity, tag } from "./builtins.js";
+import { constant, drop, identity, panic, tag } from "./builtins.js";
 import { optionMethods } from "./option.js";
 import { z } from "zod";
 
@@ -19,6 +19,7 @@ import { z } from "zod";
 export const resultMethods: UnionMethods = {
   map: (action) => Result.map(action),
   andThen: (action) => Result.andThen(action),
+  unwrap: () => Result.unwrap(),
   unwrapOr: (action) => Result.unwrapOr(action),
   flatten: () => Result.flatten(),
   mapErr: (action) => Result.mapErr(action),
@@ -118,6 +119,19 @@ export const Result = {
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       resultMethods,
     );
+  },
+
+  /**
+   * Extract the Ok value or panic. `Result<TValue, TError> → TValue`
+   *
+   * Exits the Result family — result has no __union.
+   * Panics (fatal, not caught by tryCatch) if the value is Err.
+   */
+  unwrap<TValue, TError>(): TypedAction<ResultT<TValue, TError>, TValue> {
+    return branch({
+      Ok: identity(),
+      Err: panic("called unwrap on Err"),
+    }) as TypedAction<ResultT<TValue, TError>, TValue>;
   },
 
   /**
