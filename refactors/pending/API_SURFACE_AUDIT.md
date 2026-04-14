@@ -81,22 +81,26 @@ Objects in barnum are **structs** — fields are known at compile time. This is 
 | Name | Signature | Notes |
 |------|-----------|-------|
 | `omit(...keys)` | `T → Omit<T, Keys>` | Complement of pick |
-| `set(key, value)` | `T → T & { K: V }` | Add/overwrite a field with a constant value |
 
 ## Self: HashMap (`Record<string, T>`)
 
-Not yet supported. Hashmaps are dynamic string-keyed bags — fundamentally different from structs. If/when we need them, they get their own self type with their own operations:
+Not yet supported. Hashmaps are dynamic string-keyed bags — fundamentally different from structs. When we add them, they get their own self type following Rust's `HashMap` API:
 
 | Name | Signature | Notes |
 |------|-----------|-------|
+| `HashMap.new()` | `any → Record<string, T>` | Constructor (empty map) |
+| `HashMap.fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
+| `get(key)` | `Record<string, T> → Option<T>` | Lookup by key |
+| `insert(key, value)` | `Record<string, T> → Record<string, T>` | Add/overwrite entry |
+| `remove(key)` | `Record<string, T> → Record<string, T>` | Remove entry |
+| `containsKey(key)` | `Record<string, T> → boolean` | |
 | `keys()` | `Record<string, T> → string[]` | |
 | `values()` | `Record<string, T> → T[]` | |
-| `entries()` | `Record<string, T> → {key: string, value: T}[]` | |
-| `fromEntries()` | `{key: string, value: T}[] → Record<string, T>` | Constructor |
-| `has(key)` | `Record<string, T> → boolean` | Dynamic key lookup |
-| `size()` | `Record<string, T> → number` | |
+| `entries()` | `Record<string, T> → {key: string, value: T}[]` | Rust: `iter()` |
+| `len()` | `Record<string, T> → number` | |
+| `isEmpty()` | `Record<string, T> → boolean` | |
 
-None of these are proposed for the current release. They belong to a future where barnum has first-class hashmap support with a distinct type (not conflated with structs).
+Not proposed for the current release. Belongs to a future where barnum has first-class hashmap support with a distinct type (not conflated with structs).
 
 ---
 
@@ -303,7 +307,7 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - `getField`/`getIndex` return `Option` by default
 - Control flow: `allObject`, `withRetries`, curried `withTimeout`
 - Array: `Arr.length`, `Arr.isEmpty`, `Arr.join`
-- Struct: `omit`, `set`
+- Struct: `omit`
 
 ### Tier 2
 - Remaining Arr (reverse, take, skip, contains, enumerate, sortBy, unique, zip, append)
