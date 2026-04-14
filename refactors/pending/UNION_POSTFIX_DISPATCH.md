@@ -180,29 +180,29 @@ interface UnionMethods {
 }
 
 const optionMethods: UnionMethods = {
-  map: (action) => Option.map(action as any) as any,
-  andThen: (action) => Option.andThen(action as any) as any,
-  unwrapOr: (action) => Option.unwrapOr(action as any) as any,
-  flatten: () => Option.flatten() as any,
-  filter: (predicate) => Option.filter(predicate as any) as any,
-  collect: () => Option.collect() as any,
-  isSome: () => Option.isSome() as any,
-  isNone: () => Option.isNone() as any,
+  map: (action) => Option.map(action),
+  andThen: (action) => Option.andThen(action),
+  unwrapOr: (action) => Option.unwrapOr(action),
+  flatten: () => Option.flatten(),
+  filter: (predicate) => Option.filter(predicate),
+  collect: () => Option.collect(),
+  isSome: () => Option.isSome(),
+  isNone: () => Option.isNone(),
 };
 
 const resultMethods: UnionMethods = {
-  map: (action) => Result.map(action as any) as any,
-  andThen: (action) => Result.andThen(action as any) as any,
-  unwrapOr: (action) => Result.unwrapOr(action as any) as any,
-  flatten: () => Result.flatten() as any,
-  mapErr: (action) => Result.mapErr(action as any) as any,
-  and: (other) => Result.and(other as any) as any,
-  or: (fallback) => Result.or(fallback as any) as any,
-  toOption: () => Result.toOption() as any,
-  toOptionErr: () => Result.toOptionErr() as any,
-  transpose: () => Result.transpose() as any,
-  isOk: () => Result.isOk() as any,
-  isErr: () => Result.isErr() as any,
+  map: (action) => Result.map(action),
+  andThen: (action) => Result.andThen(action),
+  unwrapOr: (action) => Result.unwrapOr(action),
+  flatten: () => Result.flatten(),
+  mapErr: (action) => Result.mapErr(action),
+  and: (other) => Result.and(other),
+  or: (fallback) => Result.or(fallback),
+  toOption: () => Result.toOption(),
+  toOptionErr: () => Result.toOptionErr(),
+  transpose: () => Result.transpose(),
+  isOk: () => Result.isOk(),
+  isErr: () => Result.isErr(),
 };
 ```
 
@@ -215,10 +215,12 @@ const resultMethods: UnionMethods = {
 **After:**
 ```ts
 function withUnion<In, Out>(action: TypedAction<In, Out>, methods: UnionMethods): TypedAction<In, Out> {
-  (action as any).__union = methods;
+  action.__union = methods;
   return action;
 }
 ```
+
+Since `__union` is declared on `TypedAction`, no cast needed.
 
 ---
 
@@ -342,80 +344,78 @@ Same for `splitLast`, `first`, `last`.
 
 ### New postfix method implementations (`ast.ts`)
 
-All new postfix methods follow the same dispatch pattern:
+All new postfix methods follow the same dispatch pattern. Only one cast per method: `as TypedAction` on the return (the overloaded type signature on `TypedAction` handles the real return type; the implementation just builds AST). Since `__union` is on the `TypedAction` type, `this.__union` works directly.
 
 ```ts
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.andThen) throw new Error(".andThen() requires Option or Result output");
-  return chain(this as any, methods.andThen(action) as any) as TypedAction;
+  return chain(this, methods.andThen(action)) as TypedAction;
 }
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.filter) throw new Error(".filter() requires Option output");
-  return chain(this as any, methods.filter(predicate) as any) as TypedAction;
+  return chain(this, methods.filter(predicate)) as TypedAction;
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.isSome) throw new Error(".isSome() requires Option output");
-  return chain(this as any, methods.isSome() as any) as TypedAction;
+  return chain(this, methods.isSome()) as TypedAction;
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.isNone) throw new Error(".isNone() requires Option output");
-  return chain(this as any, methods.isNone() as any) as TypedAction;
+  return chain(this, methods.isNone()) as TypedAction;
 }
 
 function collectMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
-  // collect dispatches on element type, not self type — check __union of a representative element?
-  // Actually: collect is always Option.collect(). No dispatch needed.
-  return chain(this as any, Option.collect() as any) as TypedAction;
+  // collect is always Option.collect(). No dispatch needed.
+  return chain(this, Option.collect()) as TypedAction;
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.or) throw new Error(".or() requires Result output");
-  return chain(this as any, methods.or(fallback) as any) as TypedAction;
+  return chain(this, methods.or(fallback)) as TypedAction;
 }
 
 function andMethod(this: TypedAction, other: Action): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.and) throw new Error(".and() requires Result output");
-  return chain(this as any, methods.and(other) as any) as TypedAction;
+  return chain(this, methods.and(other)) as TypedAction;
 }
 
 function toOptionMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.toOption) throw new Error(".toOption() requires Result output");
-  return chain(this as any, methods.toOption() as any) as TypedAction;
+  return chain(this, methods.toOption()) as TypedAction;
 }
 
 function toOptionErrMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.toOptionErr) throw new Error(".toOptionErr() requires Result output");
-  return chain(this as any, methods.toOptionErr() as any) as TypedAction;
+  return chain(this, methods.toOptionErr()) as TypedAction;
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.transpose) throw new Error(".transpose() requires Option<Result> or Result<Option> output");
-  return chain(this as any, methods.transpose() as any) as TypedAction;
+  return chain(this, methods.transpose()) as TypedAction;
 }
 
 function isOkMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.isOk) throw new Error(".isOk() requires Result output");
-  return chain(this as any, methods.isOk() as any) as TypedAction;
+  return chain(this, methods.isOk()) as TypedAction;
 }
 
 function isErrMethod(this: TypedAction): TypedAction {
-  const methods = (this as any).__union;
+  const methods = this.__union;
   if (!methods?.isErr) throw new Error(".isErr() requires Result output");
-  return chain(this as any, methods.isErr() as any) as TypedAction;
+  return chain(this, methods.isErr()) as TypedAction;
 }
 ```
 
