@@ -76,8 +76,8 @@ Operations that work regardless of what's in the pipeline.
 
 | Name | Signature | Status | Notes |
 |------|-----------|--------|-------|
-| `getField(key)` | `Obj → Obj[K]` | exists, postfix | |
-| `getIndex(n)` | `Tuple → Tuple[N]` | exists | |
+| `getField(key)` | `Obj → Option<Obj[K]>` | exists (change) | Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present fields. |
+| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | exists (change) | Same: should return `Option` |
 | `pick(...keys)` | `Obj → Pick<Obj, Keys>` | exists, postfix | |
 | `Obj.omit(...keys)` | `T → Omit<T, Keys>` | proposed | Complement of pick |
 | `Obj.has(key)` | `Record → boolean` | proposed | |
@@ -88,8 +88,6 @@ Operations that work regardless of what's in the pipeline.
 | `Obj.fromEntries()` | `{key, value}[] → Record` | proposed | Self: `{key, value}[]` not Record |
 | `Obj.size()` | `Record → number` | proposed | |
 | `Str.template(tpl)` | `{...} → string` | proposed | `"${field}"` interpolation from object fields |
-| `tryGetField(key)` | `Obj → Option<Obj[K]>` | proposed | Fallible field access |
-| `tryGetIndex(n)` | `Tuple → Option<Tuple[N]>` | proposed | Fallible index access |
 
 ---
 
@@ -113,7 +111,7 @@ Nothing exists today.
 | `Num.ceil()` | `number → number` | proposed | |
 | `Num.round()` | `number → number` | proposed | |
 | `Num.clamp(min, max)` | `number → number` | proposed | |
-| `Num.tryDiv(n)` | `number → Option<number>` | proposed | Safe div by zero |
+| `Num.tryDiv(n)` | `number → Result<number, void>` | proposed | Safe div by zero |
 | `Cmp.lt(n)` | `number → boolean` | proposed | |
 | `Cmp.lte(n)` | `number → boolean` | proposed | |
 | `Cmp.gt(n)` | `number → boolean` | proposed | |
@@ -160,9 +158,9 @@ Nothing exists today.
 | `Str.padEnd(len, fill?)` | `string → string` | proposed | |
 | `Str.parseNumber()` | `string → number` | proposed | Panics on non-numeric |
 | `Str.parseJson()` | `string → unknown` | proposed | Panics on malformed |
-| `Str.tryParseNumber()` | `string → Option<number>` | proposed | Safe variant |
+| `Str.tryParseNumber()` | `string → Result<number, string>` | proposed | Safe variant; Err contains original string |
 | `Convert.fromJson()` | `string → unknown` | proposed | JSON.parse |
-| `Convert.tryFromJson()` | `string → Option<unknown>` | proposed | Safe JSON parse |
+| `Convert.tryFromJson()` | `string → Result<unknown, string>` | proposed | Safe JSON parse; Err contains original string |
 
 ---
 
@@ -344,7 +342,18 @@ Postfix `.flatten()` could dispatch based on self type (see UNION_POSTFIX_DISPAT
 | Name | Reason | Action |
 |------|--------|--------|
 | `tap` | Subsumed by `bind`/`bindInput` | Remove from public exports, delete postfix `.tap()` |
-| `merge` | Internal plumbing for `pick`/`allObject`/`withResource` | Keep Rust builtin, remove JS export, delete postfix `.merge()` |
+| `merge` | See below | Remove JS export, delete postfix `.merge()` |
+
+### `merge` is a code smell
+
+`merge` (self: `[...objects]` → flat object) is used by four unrelated functions: `tag`, `pick`, `withResource`, `tap`. All four follow the same `all(...) → merge()` pattern. This is suspicious — three unrelated self types (`T`, `Obj`, `TIn`) share a dependency on a tuple-flattening operation.
+
+Root cause: `tag` and `pick` were recently moved from Rust builtins to JS compositions via `all + wrapInField + merge`. This turned single Rust operations (`json!({"kind": k, "value": input})` for tag, field subset for pick) into multi-node AST trees. The `merge` dependency is an artifact of that decomposition.
+
+Options:
+1. **Restore `Tag` and `Pick` as Rust builtins.** Then `merge` is only needed by `withResource` and the proposed `allObject`. Simpler ASTs, fewer nodes to traverse at runtime.
+2. **Keep JS composition, accept the pattern.** `allObject` becomes the canonical abstraction for `all(...) → merge()`. Internal uses in `tag`/`pick`/`withResource` are implementation details.
+3. **Hybrid.** Restore `Tag` as a Rust builtin (it's a fundamental operation), keep `pick` as JS composition (it's just `allObject` with `getField` per key).
 
 ---
 
@@ -360,9 +369,11 @@ Overloaded in TypeScript: presence of arg determines which form.
 
 ### Error handling in builtins
 
-Builtins that fail at runtime (div by zero, parse non-numeric, index OOB) are Byzantine faults. Scheduler panics the workflow.
+Builtins that can fail at runtime (div by zero, parse non-numeric) panic the workflow — Byzantine fault.
 
-For fallible operations, provide `Option`-returning `try*` variants.
+For fallible operations, provide `Result`-returning `try*` variants. Convention: `try` prefix always means `Result<T, E>`, never `Option<T>`.
+
+For field/index access, the primitive itself returns `Option` (safe by default). Compose `.unwrap()` for known-present access. No separate `tryGetField` — `getField` IS the safe version.
 
 ### Namespace naming
 
@@ -411,9 +422,13 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - Bool.and, Bool.or
 - All Convert operations
 
-### Tier 3 — safe `try*` variants
+### Tier 3 — safe `try*` variants (return `Result`)
 - `Num.tryDiv`, `Str.tryParseNumber`, `Convert.tryFromJson`
-- `tryGetField`, `tryGetIndex`
+
+### Also tier 1 — `getField`/`getIndex` return `Option`
+- Breaking change: `getField`/`getIndex` return `Option` by default
+- Compose `.unwrap()` for known-present access
+- Internal engine uses need unsafe accessor or compose unwrap
 
 ### Tier 4 — binary overloads
 - Binary forms of all Num and Cmp builtins
