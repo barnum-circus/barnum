@@ -272,11 +272,15 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [x] `.transpose()` — Result.transpose (Option.transpose deferred)
 - [x] `.isOk()`, `.isErr()` — Result-only
 
-### Phase 2 renames (pending — requires union dispatch, which is done)
-- [ ] Rename `.mapOption()` → `.map()` — dispatch to Option.map / Result.map
-- [ ] Widen `.unwrapOr()` — dispatch to Option.unwrapOr / Result.unwrapOr (currently Result-only)
-- [ ] Widen `.flatten()` — dispatch to flattenArray / flattenOption / flattenResult
-- [ ] Add `Option.transpose` — `Option<Result<T, E>> → Result<Option<T>, E>` (needs optionMethods.transpose)
+### Phase 0 — obvious mechanical wiring (dispatch infra + namespace methods exist, just connect them)
+- [ ] `mapOption` → `map` — rename postfix, convert hardcoded → dispatch (Option.map + Result.map both exist)
+- [ ] `mapErr` → convert hardcoded → dispatch for consistency (Result-only, no new functionality)
+- [ ] `unwrapOr` — widen to Option + Result, convert hardcoded → dispatch (both implementations exist)
+- [ ] `Option.transpose` — implement combinator, add to optionMethods dispatch table
+
+### Phase 2 — needs design
+- [ ] `.flatten()` widening — three-way dispatch: array (no `__union`), Option, Result. Naming: `flattenArray`/`flattenOption`/`flattenResult` as standalone vs dispatched `.flatten()`
+- [ ] `IntoIterator` / `.intoIter()` — convert Option/Result/Array to common iterable form so array methods (forEach, filter, etc.) work uniformly. See design notes below.
 
 ### Postfix: future
 - [ ] `.omit()` — Struct-only (when implemented)
