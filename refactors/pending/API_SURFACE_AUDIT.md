@@ -197,30 +197,18 @@ Not proposed for the current release. Belongs to a future where barnum has first
 
 ---
 
-## Naming Collisions & Renames
+## Naming Collisions
 
-Operations that exist for multiple self types need explicit names to avoid ambiguity:
+Standalone functions that share a name across self types need explicit disambiguation:
 
-| Current name | Self type | Proposed name | Notes |
-|--------------|-----------|---------------|-------|
-| `flatten()` | `T[][]` | `flattenArray()` | Currently standalone + postfix `.flatten()` |
-| `Option.flatten()` | `Option<Option<T>>` | `flattenOption()` | Currently namespace-only |
-| `Result.flatten()` | `Result<Result<T,E>,E>` | `flattenResult()` | Currently namespace-only |
+| Current name | Self type | Standalone name | Postfix |
+|--------------|-----------|-----------------|---------|
+| `flatten()` | `T[][]` | `flattenArray()` | `.flatten()` via dispatch |
+| `Option.flatten()` | `Option<Option<T>>` | `flattenOption()` | `.flatten()` via dispatch |
+| `Result.flatten()` | `Result<Result<T,E>,E>` | `flattenResult()` | `.flatten()` via dispatch |
 
-The namespace forms (`Option.flatten()`, `Result.flatten()`) can remain as aliases, but the canonical name should be self-type-explicit. The standalone `flatten()` must be renamed to `flattenArray()` since there's no namespace to disambiguate.
-
-Postfix `.flatten()` could dispatch based on self type (see UNION_POSTFIX_DISPATCH.md) or be split into `.flattenArray()`, `.flattenOption()`, `.flattenResult()`.
-
-### Other potential collisions
-
-| Operation | Self types | Currently disambiguated? |
-|-----------|-----------|--------------------------|
-| `map` | Option, Result | Yes — `Option.map()`, `Result.map()` (array uses `forEach`) |
-| `andThen` | Option, Result | Yes — namespaced |
-| `unwrapOr` | Option, Result | Yes — namespaced |
-| `collect` | Option (on `Option<T>[]`) | Yes — `Option.collect()` only |
-| `first`/`last` | Array | No collision — only array |
-| `isEmpty` | array | No collision now — only array |
+Standalone functions: use self-type-explicit names (`flattenArray`, `flattenOption`, `flattenResult`).
+Postfix methods: dispatch on concrete type — `.flatten()` just works.
 
 ---
 
@@ -268,43 +256,29 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Breaking changes
 - [ ] `getField(key)` returns `Option<Obj[K]>` instead of raw value
 - [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
-- [ ] Rename `flatten()` → `flattenArray()`, postfix `.flatten()` → `.flattenArray()`
-- [ ] Rename `Option.flatten()` → `flattenOption()`
-- [ ] Rename `Result.flatten()` → `flattenResult()`
-- [ ] Rename postfix `.unwrapOr()` → `.unwrapOrOption()` (currently ambiguous)
 
-### Postfix: Option (convention: `fooOption`)
-- [ ] `.mapOption()` — exists ✓
-- [ ] `.andThenOption()` — add (currently no postfix for `Option.andThen`)
-- [ ] `.unwrapOrOption()` — rename from `.unwrapOr()`
-- [ ] `.flattenOption()` — add
-- [ ] `.filterOption()` — add
-- [ ] `.collectOption()` — add (for `Option<T>[]` self type)
-- [ ] `.isSome()` — add (unique to Option, no suffix needed)
-- [ ] `.isNone()` — add (unique to Option, no suffix needed)
-- [ ] `.okOrOption()` — add when `Option.okOr` is implemented
+### Concrete type dispatch (do first — see UNION_POSTFIX_DISPATCH.md)
+- [ ] Implement `__union` runtime tag on TypedAction
+- [ ] Option/Result constructors attach tag
+- [ ] Union-aware combinators propagate tag
 
-### Postfix: Result (convention: `fooResult`)
-- [ ] `.mapResult()` — add (currently no postfix for `Result.map`)
-- [ ] `.mapErr()` — exists ✓ (unique to Result, no suffix needed)
-- [ ] `.andThenResult()` — add
-- [ ] `.unwrapOrResult()` — add
-- [ ] `.flattenResult()` — add
-- [ ] `.orResult()` — add (for `Result.or`)
-- [ ] `.andResult()` — add (for `Result.and`)
-- [ ] `.toOption()` — add (unique to Result, no suffix needed)
-- [ ] `.toOptionErr()` — add (unique to Result, no suffix needed)
-- [ ] `.transposeResult()` — add
-- [ ] `.isOk()` — add (unique to Result, no suffix needed)
-- [ ] `.isErr()` — add (unique to Result, no suffix needed)
+With dispatch, postfix methods use clean unsuffixed names (`.map()`, `.flatten()`, `.unwrapOr()`, `.andThen()`) and dispatch to the correct implementation based on self type. No `fooOption`/`fooResult` suffixes needed.
 
-### Postfix: Array
-- [ ] `.flattenArray()` — rename from `.flatten()`
-- [ ] `.filter()` — add when `filter` is implemented
-- [ ] `.flatMap()` — add when `flatMap` is implemented
-
-### Postfix: Struct
-- [ ] `.omit()` — add when `omit` is implemented
+### Postfix: after dispatch lands
+- [ ] `.map()` — dispatch to Option.map / Result.map
+- [ ] `.andThen()` — dispatch to Option.andThen / Result.andThen
+- [ ] `.unwrapOr()` — dispatch to Option.unwrapOr / Result.unwrapOr
+- [ ] `.flatten()` — dispatch to flattenArray / flattenOption / flattenResult
+- [ ] `.filter()` — Option.filter (add Array.filter when implemented)
+- [ ] `.collect()` — Option.collect
+- [ ] `.isSome()`, `.isNone()` — Option-only
+- [ ] `.mapErr()` — exists ✓, Result-only
+- [ ] `.or()`, `.and()` — Result-only
+- [ ] `.toOption()`, `.toOptionErr()` — Result-only
+- [ ] `.transpose()` — dispatch to Option.transpose / Result.transpose
+- [ ] `.isOk()`, `.isErr()` — Result-only
+- [ ] `.omit()` — Struct-only (when implemented)
+- [ ] `.flatMap()` — Array-only (when implemented)
 
 ### New: control flow
 - [ ] `allObject` — `Record<K, Action> → { [K]: Out }` (composable)
