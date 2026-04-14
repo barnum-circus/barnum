@@ -260,31 +260,6 @@ export function withResource<
 }
 
 // ---------------------------------------------------------------------------
-// Tap — run an action for side effects, preserve original input
-// ---------------------------------------------------------------------------
-
-/**
- * Run `action` on the input for its side effects, then discard the action's
- * output and return the original input unchanged. The action must accept
- * exactly `TInput`. Use `pick` inside the action's pipe if the inner
- * handler needs a subset.
- *
- * Constraint: input must be an object (uses all + merge internally).
- *
- * Example:
- *   pipe(tap(pipe(pick("worktreePath", "description"), implement)), createPR)
- */
-export function tap<TInput extends Record<string, unknown>>(
-  action: Pipeable<TInput, any>,
-): TypedAction<TInput, TInput> {
-  // all(chain(action, constant({})), identity) → merge
-  return chain(
-    all(chain(action, constant({})), identity()) as any,
-    merge(),
-  ) as TypedAction<TInput, TInput>;
-}
-
-// ---------------------------------------------------------------------------
 // WrapInField — wrap input as { <field>: <input> }
 // ---------------------------------------------------------------------------
 

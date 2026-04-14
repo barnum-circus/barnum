@@ -12,7 +12,6 @@ export {
   getIndex,
   pick,
   withResource,
-  tap,
   range,
   splitFirst,
   splitLast,
