@@ -308,9 +308,43 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 ### Breaking changes
 - [ ] `getField(key)` returns `Option<Obj[K]>` instead of raw value
 - [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
-- [ ] Rename `flatten()` → `flattenArray()`
-- [ ] Rename `Option.flatten()` → `flattenOption()` (keep namespace alias)
-- [ ] Rename `Result.flatten()` → `flattenResult()` (keep namespace alias)
+- [ ] Rename `flatten()` → `flattenArray()`, postfix `.flatten()` → `.flattenArray()`
+- [ ] Rename `Option.flatten()` → `flattenOption()`
+- [ ] Rename `Result.flatten()` → `flattenResult()`
+- [ ] Rename postfix `.unwrapOr()` → `.unwrapOrOption()` (currently ambiguous)
+
+### Postfix: Option (convention: `fooOption`)
+- [ ] `.mapOption()` — exists ✓
+- [ ] `.andThenOption()` — add (currently no postfix for `Option.andThen`)
+- [ ] `.unwrapOrOption()` — rename from `.unwrapOr()`
+- [ ] `.flattenOption()` — add
+- [ ] `.filterOption()` — add
+- [ ] `.collectOption()` — add (for `Option<T>[]` self type)
+- [ ] `.isSome()` — add (unique to Option, no suffix needed)
+- [ ] `.isNone()` — add (unique to Option, no suffix needed)
+- [ ] `.okOrOption()` — add when `Option.okOr` is implemented
+
+### Postfix: Result (convention: `fooResult`)
+- [ ] `.mapResult()` — add (currently no postfix for `Result.map`)
+- [ ] `.mapErr()` — exists ✓ (unique to Result, no suffix needed)
+- [ ] `.andThenResult()` — add
+- [ ] `.unwrapOrResult()` — add
+- [ ] `.flattenResult()` — add
+- [ ] `.orResult()` — add (for `Result.or`)
+- [ ] `.andResult()` — add (for `Result.and`)
+- [ ] `.toOption()` — add (unique to Result, no suffix needed)
+- [ ] `.toOptionErr()` — add (unique to Result, no suffix needed)
+- [ ] `.transposeResult()` — add
+- [ ] `.isOk()` — add (unique to Result, no suffix needed)
+- [ ] `.isErr()` — add (unique to Result, no suffix needed)
+
+### Postfix: Array
+- [ ] `.flattenArray()` — rename from `.flatten()`
+- [ ] `.filter()` — add when `filter` is implemented
+- [ ] `.flatMap()` — add when `flatMap` is implemented
+
+### Postfix: Struct
+- [ ] `.omit()` — add when `omit` is implemented
 
 ### New: control flow
 - [ ] `allObject` — `Record<K, Action> → { [K]: Out }` (composable)
