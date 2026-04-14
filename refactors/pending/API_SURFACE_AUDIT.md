@@ -51,17 +51,12 @@ Complete inventory of everything exposed from the JS library, organized by **sel
 
 Operations that work regardless of what's in the pipeline.
 
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `constant(v)` | `any → T` | exists | Fixed value, ignores input |
-| `identity` | `T → T` | exists | Pass through |
-| `drop` | `T → void` | exists, postfix | Discard value |
-| `wrapInField(key)` | `T → { K: T }` | exists | Wrap under a key |
-| `Cmp.eq(v)` | `T → boolean` | proposed | Deep JSON equality |
-| `Cmp.neq(v)` | `T → boolean` | proposed | |
-| `Convert.toString()` | `T → string` | proposed | |
-| `Convert.toBool()` | `T → boolean` | proposed | JS truthiness |
-| `Convert.toJson()` | `T → string` | proposed | JSON.stringify |
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `constant(v)` | `any → T` | Fixed value, ignores input |
+| `identity` | `T → T` | Pass through |
+| `drop` | `T → void` | Postfix `.drop()` |
+| `wrapInField(key)` | `T → { K: T }` | Wrap under a key |
 
 ### Removed
 
@@ -74,150 +69,61 @@ Operations that work regardless of what's in the pipeline.
 
 ## Self: `Record` / Object
 
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `getField(key)` | `Obj → Option<Obj[K]>` | exists (change) | Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present fields. |
-| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | exists (change) | Same: should return `Option` |
-| `pick(...keys)` | `Obj → Pick<Obj, Keys>` | exists, postfix | |
-| `Obj.omit(...keys)` | `T → Omit<T, Keys>` | proposed | Complement of pick |
-| `Obj.has(key)` | `Record → boolean` | proposed | |
-| `Obj.set(key, value)` | `T → T & { K: V }` | proposed | Add/overwrite constant field |
-| `Obj.keys()` | `Record → string[]` | proposed | |
-| `Obj.values()` | `Record<K, T> → T[]` | proposed | |
-| `Obj.entries()` | `Record<K, T> → {key, value}[]` | proposed | |
-| `Obj.fromEntries()` | `{key, value}[] → Record` | proposed | Self: `{key, value}[]` not Record |
-| `Obj.size()` | `Record → number` | proposed | |
-| `Str.template(tpl)` | `{...} → string` | proposed | `"${field}"` interpolation from object fields |
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `getField(key)` | `Obj → Option<Obj[K]>` | Postfix `.getField()`. Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present fields. |
+| `pick(...keys)` | `Obj → Pick<Obj, Keys>` | Postfix `.pick()` |
 
----
-
-## Self: `number`
-
-Nothing exists today.
-
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `Num.add(n)` | `number → number` | proposed | |
-| `Num.sub(n)` | `number → number` | proposed | |
-| `Num.mul(n)` | `number → number` | proposed | |
-| `Num.div(n)` | `number → number` | proposed | Panics on div by zero |
-| `Num.mod(n)` | `number → number` | proposed | |
-| `Num.pow(n)` | `number → number` | proposed | |
-| `Num.min(n)` | `number → number` | proposed | |
-| `Num.max(n)` | `number → number` | proposed | |
-| `Num.negate()` | `number → number` | proposed | |
-| `Num.abs()` | `number → number` | proposed | |
-| `Num.floor()` | `number → number` | proposed | |
-| `Num.ceil()` | `number → number` | proposed | |
-| `Num.round()` | `number → number` | proposed | |
-| `Num.clamp(min, max)` | `number → number` | proposed | |
-| `Num.tryDiv(n)` | `number → Result<number, void>` | proposed | Safe div by zero |
-| `Cmp.lt(n)` | `number → boolean` | proposed | |
-| `Cmp.lte(n)` | `number → boolean` | proposed | |
-| `Cmp.gt(n)` | `number → boolean` | proposed | |
-| `Cmp.gte(n)` | `number → boolean` | proposed | |
-| `Convert.toNumber()` | `string → number` | proposed | (self: string, listed here for discoverability) |
-
-### Binary forms (self: `[number, number]`)
-
-When both operands come from the pipeline via `all`:
+### Proposed
 
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `Num.add()` | `[number, number] → number` | No-arg = binary overload |
-| `Num.sub()` | `[number, number] → number` | |
-| `Num.mul()` | `[number, number] → number` | |
-| `Num.div()` | `[number, number] → number` | |
-| `Num.min()` | `[number, number] → number` | |
-| `Num.max()` | `[number, number] → number` | |
-| `Cmp.eq()` | `[T, T] → boolean` | |
-| `Cmp.lt()` | `[number, number] → boolean` | |
-| etc. | | |
+| `Obj.omit(...keys)` | `T → Omit<T, Keys>` | Complement of pick |
+| `Obj.has(key)` | `Record → boolean` | |
+| `Obj.set(key, value)` | `T → T & { K: V }` | Add/overwrite constant field |
+| `Obj.keys()` | `Record → string[]` | |
+| `Obj.values()` | `Record<K, T> → T[]` | |
+| `Obj.entries()` | `Record<K, T> → {key, value}[]` | |
+| `Obj.fromEntries()` | `{key, value}[] → Record` | Self: `{key, value}[]` not Record |
+| `Obj.size()` | `Record → number` | |
+| `template(tpl)` | `{...} → string` | `"${field}"` interpolation from object fields |
 
 ---
-
-## Self: `string`
-
-Nothing exists today.
-
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `Str.length()` | `string → number` | proposed | |
-| `Str.isEmpty()` | `string → boolean` | proposed | |
-| `Str.concat(s)` | `string → string` | proposed | Also binary |
-| `Str.includes(s)` | `string → boolean` | proposed | |
-| `Str.trim()` | `string → string` | proposed | |
-| `Str.toUpperCase()` | `string → string` | proposed | |
-| `Str.toLowerCase()` | `string → string` | proposed | |
-| `Str.startsWith(s)` | `string → boolean` | proposed | |
-| `Str.endsWith(s)` | `string → boolean` | proposed | |
-| `Str.split(sep)` | `string → string[]` | proposed | |
-| `Str.replace(pat, rep)` | `string → string` | proposed | |
-| `Str.slice(start, end?)` | `string → string` | proposed | |
-| `Str.padStart(len, fill?)` | `string → string` | proposed | |
-| `Str.padEnd(len, fill?)` | `string → string` | proposed | |
-| `Str.parseNumber()` | `string → number` | proposed | Panics on non-numeric |
-| `Str.parseJson()` | `string → unknown` | proposed | Panics on malformed |
-| `Str.tryParseNumber()` | `string → Result<number, string>` | proposed | Safe variant; Err contains original string |
-| `Convert.fromJson()` | `string → unknown` | proposed | JSON.parse |
-| `Convert.tryFromJson()` | `string → Result<unknown, string>` | proposed | Safe JSON parse; Err contains original string |
-
----
-
-## Self: `boolean`
-
-Nothing exists today.
-
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `Bool.not()` | `boolean → boolean` | proposed | |
-| `Bool.branch(t, f)` | `boolean → Out` | proposed | Dispatch on bool; desugars to BoolToTagged + branch |
-
-### Binary forms (self: `[boolean, boolean]`)
-
-| Name | Signature | Notes |
-|------|-----------|-------|
-| `Bool.and()` | `[boolean, boolean] → boolean` | |
-| `Bool.or()` | `[boolean, boolean] → boolean` | |
 
 ---
 
 ## Self: `T[]` (array)
 
-| Name | Signature | Status | Notes |
-|------|-----------|--------|-------|
-| `range(start, end)` | `any → number[]` | exists | Constant integer array, ignores input |
-| `forEach(action)` | `T[] → U[]` | exists, postfix | Map over elements |
-| `flattenArray()` | `T[][] → T[]` | rename | Currently `flatten()` — rename to disambiguate from Option/Result |
-| `splitFirst()` | `T[] → Option<[T, T[]]>` | exists, postfix | Head/tail decomposition |
-| `splitLast()` | `T[] → Option<[T[], T]>` | exists, postfix | Init/last decomposition |
-| `first()` | `T[] → Option<T>` | exists, postfix | Safe first element |
-| `last()` | `T[] → Option<T>` | exists, postfix | Safe last element |
-| `Option.collect()` | `Option<T>[] → T[]` | exists | Filter + extract Somes |
-| `Arr.length()` | `T[] → number` | proposed | |
-| `Arr.isEmpty()` | `T[] → boolean` | proposed | |
-| `Arr.join(sep)` | `string[] → string` | proposed | |
-| `Arr.reverse()` | `T[] → T[]` | proposed | New Rust builtin (can't compose) |
-| `Arr.take(n)` | `T[] → T[]` | proposed | |
-| `Arr.skip(n)` | `T[] → T[]` | proposed | |
-| `Arr.contains(v)` | `T[] → boolean` | proposed | |
-| `Arr.enumerate()` | `T[] → {index, value}[]` | proposed | |
-| `Arr.sortBy(field)` | `T[] → T[]` | proposed | |
-| `Arr.unique()` | `T[] → T[]` | proposed | |
+| Name | Signature | Notes |
+|------|-----------|-------|
+| `range(start, end)` | `any → number[]` | Constant integer array, ignores input |
+| `forEach(action)` | `T[] → U[]` | Postfix. Map over elements |
+| `getIndex(n)` | `Tuple → Option<Tuple[N]>` | Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present. |
+| `flattenArray()` | `T[][] → T[]` | Currently `flatten()` — rename to disambiguate from Option/Result |
+| `splitFirst()` | `T[] → Option<[T, T[]]>` | Postfix. Head/tail decomposition |
+| `splitLast()` | `T[] → Option<[T[], T]>` | Postfix. Init/last decomposition |
+| `first()` | `T[] → Option<T>` | Postfix. Safe first element |
+| `last()` | `T[] → Option<T>` | Postfix. Safe last element |
+| `Option.collect()` | `Option<T>[] → T[]` | Filter + extract Somes |
 
-### Binary forms (self: `[T[], U[]]`)
+### Proposed
 
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `Arr.zip()` | `[T[], U[]] → [T, U][]` | |
-| `Arr.append()` | `[T[], T[]] → T[]` | Concat |
-
-### Composable (no new Rust builtins)
-
-| Name | Composition | Notes |
-|------|-------------|-------|
-| `filter(pred)` | `forEach(pred).then(Option.collect())` | `pred: T → Option<T>` |
-| `flatMap(action)` | `forEach(action).then(flattenArray())` | |
+| `Arr.length()` | `T[] → number` | |
+| `Arr.isEmpty()` | `T[] → boolean` | |
+| `Arr.join(sep)` | `string[] → string` | |
+| `Arr.reverse()` | `T[] → T[]` | New Rust builtin (can't compose) |
+| `Arr.take(n)` | `T[] → T[]` | |
+| `Arr.skip(n)` | `T[] → T[]` | |
+| `Arr.contains(v)` | `T[] → boolean` | |
+| `Arr.enumerate()` | `T[] → {index, value}[]` | |
+| `Arr.sortBy(field)` | `T[] → T[]` | |
+| `Arr.unique()` | `T[] → T[]` | |
+| `Arr.zip()` | `[T[], U[]] → [T, U][]` | Binary |
+| `Arr.append()` | `[T[], T[]] → T[]` | Binary concat |
+| `filter(pred)` | `T[] → T[]` | Composable: `forEach(pred).then(Option.collect())` |
+| `flatMap(action)` | `T[] → U[]` | Composable: `forEach(action).then(flattenArray())` |
 
 ---
 
@@ -333,7 +239,7 @@ Postfix `.flatten()` could dispatch based on self type (see UNION_POSTFIX_DISPAT
 | `unwrapOr` | Option, Result | Yes — namespaced |
 | `collect` | Option (on `Option<T>[]`) | Yes — `Option.collect()` only |
 | `first`/`last` | Array | No collision — only array |
-| `isEmpty` | string, array | Would collide if both are standalone — use `Str.isEmpty()`, `Arr.isEmpty()` |
+| `isEmpty` | array | No collision now — only array |
 
 ---
 
@@ -359,41 +265,20 @@ Options:
 
 ## Design Decisions
 
-### Parameterized vs binary builtins
+### Error handling
 
-All numeric, comparison, and string builtins support two forms:
-- **Parameterized** `Num.add(5)`: `number → number` (pipeline value + constant)
-- **Binary** `Num.add()`: `[number, number] → number` (both from pipeline via `all`)
+For field/index access, the primitive returns `Option` (safe by default). Compose `.unwrap()` for known-present access. No separate `tryGetField` — `getField` IS the safe version.
 
-Overloaded in TypeScript: presence of arg determines which form.
-
-### Error handling in builtins
-
-Builtins that can fail at runtime (div by zero, parse non-numeric) panic the workflow — Byzantine fault.
-
-For fallible operations, provide `Result`-returning `try*` variants. Convention: `try` prefix always means `Result<T, E>`, never `Option<T>`.
-
-For field/index access, the primitive itself returns `Option` (safe by default). Compose `.unwrap()` for known-present access. No separate `tryGetField` — `getField` IS the safe version.
+Convention: `try` prefix always means `Result<T, E>`, never `Option<T>`.
 
 ### Namespace naming
 
-Use `Num` not `Math` (avoids shadowing JS global).
-
 | Namespace | Self type |
 |-----------|-----------|
-| `Num` | `number` |
-| `Bool` | `boolean` |
-| `Cmp` | `T` or `number` |
-| `Str` | `string` |
 | `Arr` | `T[]` |
 | `Obj` | `Record` |
-| `Convert` | varies |
 | `Option` | `Option<T>` |
 | `Result` | `Result<T, E>` |
-
-### Postfix methods for primitive namespaces
-
-Defer. Namespace form is clear. Postfix on TypedAction reserved for structural operations.
 
 ### Thunk builtins
 
@@ -403,35 +288,17 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 
 ## Priority Tiers
 
-### Tier 1 — basic pipeline logic
-- Comparison: `Cmp.eq`, `Cmp.neq`, `Cmp.gt`, `Cmp.lt`, `Cmp.gte`, `Cmp.lte`
-- Boolean: `Bool.not`, `Bool.branch`
-- Numeric: `Num.add`, `Num.sub`, `Num.mul`
-- Array: `Arr.length`, `Arr.isEmpty`, `Arr.join`
-- String: `Str.length`, `Str.isEmpty`, `Str.concat`, `Str.includes`, `Str.template`
-- Object: `Obj.omit`, `Obj.set`, `Obj.has`
-- Control flow: `allObject`, `withRetries`, curried `withTimeout`
+### Tier 1
 - Renames: `flatten` → `flattenArray`, add `flattenOption`, `flattenResult`
 - Removals: `tap`, `merge` (from public API)
+- `getField`/`getIndex` return `Option` by default
+- Control flow: `allObject`, `withRetries`, curried `withTimeout`
+- Array: `Arr.length`, `Arr.isEmpty`, `Arr.join`
+- Object: `Obj.omit`, `Obj.set`, `Obj.has`
 
-### Tier 2 — data shaping
-- Remaining Num (div, mod, pow, min, max, negate, abs, floor, ceil, round, clamp)
-- Remaining Str (trim, case, startsWith, endsWith, split, replace, slice, pad, parse)
+### Tier 2
 - Remaining Arr (reverse, take, skip, contains, enumerate, sortBy, unique, zip, append)
 - Remaining Obj (keys, values, entries, fromEntries, size)
-- Bool.and, Bool.or
-- All Convert operations
-
-### Tier 3 — safe `try*` variants (return `Result`)
-- `Num.tryDiv`, `Str.tryParseNumber`, `Convert.tryFromJson`
-
-### Also tier 1 — `getField`/`getIndex` return `Option`
-- Breaking change: `getField`/`getIndex` return `Option` by default
-- Compose `.unwrap()` for known-present access
-- Internal engine uses need unsafe accessor or compose unwrap
-
-### Tier 4 — binary overloads
-- Binary forms of all Num and Cmp builtins
 
 ---
 
