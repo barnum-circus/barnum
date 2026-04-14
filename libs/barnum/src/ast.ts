@@ -154,6 +154,59 @@ export type MergeTuple<TTuple> = TTuple extends unknown[]
   : never;
 
 // ---------------------------------------------------------------------------
+// Union dispatch — runtime method table for Option/Result postfix methods
+// ---------------------------------------------------------------------------
+
+/**
+ * Runtime dispatch table attached to TypedActions whose output is a union
+ * type (Option or Result). Constructors attach it, family-preserving
+ * combinators propagate it, and postfix methods dispatch through it.
+ *
+ * Each method is optional — Option and Result provide different subsets.
+ * The TypedAction type signatures gate availability at compile time;
+ * this table handles runtime dispatch.
+ */
+export interface UnionMethods {
+  // Shared (Option + Result)
+  map?: (action: Action) => Action;
+  andThen?: (action: Action) => Action;
+  unwrapOr?: (action: Action) => Action;
+  flatten?: () => Action;
+  // Option-only
+  filter?: (predicate: Action) => Action;
+  collect?: () => Action;
+  isSome?: () => Action;
+  isNone?: () => Action;
+  // Result-only
+  mapErr?: (action: Action) => Action;
+  and?: (other: Action) => Action;
+  or?: (fallback: Action) => Action;
+  toOption?: () => Action;
+  toOptionErr?: () => Action;
+  transpose?: () => Action;
+  isOk?: () => Action;
+  isErr?: () => Action;
+}
+
+/**
+ * Attach a union dispatch table to a TypedAction. Used by constructors
+ * and family-preserving combinators so postfix methods can dispatch
+ * to the correct implementation.
+ */
+export function withUnion<In, Out>(
+  action: TypedAction<In, Out>,
+  methods: UnionMethods,
+): TypedAction<In, Out> {
+  Object.defineProperty(action, "__union", {
+    value: methods,
+    configurable: true,
+    enumerable: false,
+    writable: true,
+  });
+  return action;
+}
+
+// ---------------------------------------------------------------------------
 // Phantom Types — type-safe input/output tracking
 // ---------------------------------------------------------------------------
 
@@ -176,6 +229,8 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   __in?: (input: In) => void;
   __in_co?: In;
   __out?: () => Out;
+  /** Runtime dispatch table for Option/Result postfix methods. */
+  __union?: UnionMethods;
   /** Chain this action with another. `a.then(b)` ≡ `chain(a, b)`. */
   then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
   /** Apply an action to each element of an array output. `a.forEach(b)` ≡ `a.then(forEach(b))`. */
@@ -262,6 +317,80 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, Result<TValue, TError>>,
     defaultAction: Pipeable<TError, TValue>,
   ): TypedAction<TIn, TValue>;
+
+  // --- Dispatched postfix methods (via __union) ---
+
+  /** Monadic bind. Option: `Option<T> → Option<U>`. Result: `Result<T,E> → Result<U,E>`. */
+  andThen<TIn, TValue, TOut>(
+    this: TypedAction<TIn, Option<TValue>>,
+    action: Pipeable<TValue, Option<TOut>>,
+  ): TypedAction<TIn, Option<TOut>>;
+  andThen<TIn, TValue, TOut, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    action: Pipeable<TValue, Result<TOut, TError>>,
+  ): TypedAction<TIn, Result<TOut, TError>>;
+
+  /** Conditional keep. If Some, apply predicate. If None, stay None. */
+  filter<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+    predicate: Pipeable<TValue, Option<TValue>>,
+  ): TypedAction<TIn, Option<TValue>>;
+
+  /** Test if the value is Some. `Option<T> → boolean` */
+  isSome<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+  ): TypedAction<TIn, boolean>;
+
+  /** Test if the value is None. `Option<T> → boolean` */
+  isNone<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+  ): TypedAction<TIn, boolean>;
+
+  /** Collect Some values from an array, discarding Nones. `Option<T>[] → T[]` */
+  collect<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>[]>,
+  ): TypedAction<TIn, TValue[]>;
+
+  /** Fallback on Err. `Result<T,E> → Result<T,F>` */
+  or<TIn, TValue, TError, TErrorOut>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    fallback: Pipeable<TError, Result<TValue, TErrorOut>>,
+  ): TypedAction<TIn, Result<TValue, TErrorOut>>;
+
+  /** Replace Ok value with another Result. `Result<T,E> → Result<U,E>` */
+  and<TIn, TValue, TOut, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    other: Pipeable<void, Result<TOut, TError>>,
+  ): TypedAction<TIn, Result<TOut, TError>>;
+
+  /** Convert Ok to Some, Err to None. `Result<T,E> → Option<T>` */
+  toOption<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, Option<TValue>>;
+
+  /** Convert Err to Some, Ok to None. `Result<T,E> → Option<E>` */
+  toOptionErr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, Option<TError>>;
+
+  /** Test if the value is Ok. `Result<T,E> → boolean` */
+  isOk<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, boolean>;
+
+  /** Test if the value is Err. `Result<T,E> → boolean` */
+  isErr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, boolean>;
+
+  /** Swap nesting. `Option<Result<T,E>> → Result<Option<T>,E>` or `Result<Option<T>,E> → Option<Result<T,E>>`. */
+  transpose<TIn, TValue, TError>(
+    this: TypedAction<TIn, Option<Result<TValue, TError>>>,
+  ): TypedAction<TIn, Result<Option<TValue>, TError>>;
+  transpose<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<Option<TValue>, TError>>,
+  ): TypedAction<TIn, Option<Result<TValue, TError>>>;
+
   /** Bind concurrent values as VarRefs available throughout the body. */
   bind<TBindings extends Action[], TOut>(
     bindings: [...TBindings],
@@ -464,6 +593,78 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   ) as TypedAction;
 }
 
+// --- Dispatched postfix methods (via __union) ---
+
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  const methods = this.__union;
+  if (!methods?.andThen) throw new Error(".andThen() requires Option or Result output");
+  return chain(this, methods.andThen(action)) as TypedAction;
+}
+
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  const methods = this.__union;
+  if (!methods?.filter) throw new Error(".filter() requires Option output");
+  return chain(this, methods.filter(predicate)) as TypedAction;
+}
+
+function isSomeMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.isSome) throw new Error(".isSome() requires Option output");
+  return chain(this, methods.isSome()) as TypedAction;
+}
+
+function isNoneMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.isNone) throw new Error(".isNone() requires Option output");
+  return chain(this, methods.isNone()) as TypedAction;
+}
+
+function collectMethod(this: TypedAction): TypedAction {
+  return chain(this as any, Option.collect()) as TypedAction;
+}
+
+function orMethod(this: TypedAction, fallback: Action): TypedAction {
+  const methods = this.__union;
+  if (!methods?.or) throw new Error(".or() requires Result output");
+  return chain(this, methods.or(fallback)) as TypedAction;
+}
+
+function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
+  const methods = this.__union;
+  if (!methods?.and) throw new Error(".and() requires Result output");
+  return chain(this, methods.and(other)) as TypedAction;
+}
+
+function toOptionMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.toOption) throw new Error(".toOption() requires Result output");
+  return chain(this, methods.toOption()) as TypedAction;
+}
+
+function toOptionErrMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.toOptionErr) throw new Error(".toOptionErr() requires Result output");
+  return chain(this, methods.toOptionErr()) as TypedAction;
+}
+
+function isOkMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.isOk) throw new Error(".isOk() requires Result output");
+  return chain(this, methods.isOk()) as TypedAction;
+}
+
+function isErrMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.isErr) throw new Error(".isErr() requires Result output");
+  return chain(this, methods.isErr()) as TypedAction;
+}
+
+function transposeMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (!methods?.transpose) throw new Error(".transpose() requires Option<Result> or Result<Option> output");
+  return chain(this, methods.transpose()) as TypedAction;
+}
+
 function bindMethod(
   this: TypedAction,
   bindings: Action[],
@@ -504,6 +705,18 @@ export function typedAction<In = unknown, Out = unknown>(
       mapOption: { value: mapOptionMethod, configurable: true },
       mapErr: { value: mapErrMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },
+      andThen: { value: andThenMethod, configurable: true },
+      filter: { value: filterMethod, configurable: true },
+      isSome: { value: isSomeMethod, configurable: true },
+      isNone: { value: isNoneMethod, configurable: true },
+      collect: { value: collectMethod, configurable: true },
+      or: { value: orMethod, configurable: true },
+      and: { value: andPostfixMethod, configurable: true },
+      toOption: { value: toOptionMethod, configurable: true },
+      toOptionErr: { value: toOptionErrMethod, configurable: true },
+      isOk: { value: isOkMethod, configurable: true },
+      isErr: { value: isErrMethod, configurable: true },
+      transpose: { value: transposeMethod, configurable: true },
       bind: { value: bindMethod, configurable: true },
       bindInput: { value: bindInputMethod, configurable: true },
     });

@@ -6,9 +6,12 @@ import {
   type TaggedUnion,
   type TypedAction,
   typedAction,
+  withUnion,
 } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
+// Lazy: optionMethods is only accessed inside function bodies, not at module init.
+import { optionMethods } from "./option.js";
 import { z } from "zod";
 
 /**
@@ -331,10 +334,13 @@ export function splitFirst<TElement>(): TypedAction<
   TElement[],
   OptionT<[TElement, TElement[]]>
 > {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
-  });
+  return withUnion(
+    typedAction({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } },
+    }),
+    optionMethods,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -355,9 +361,12 @@ export function splitLast<TElement>(): TypedAction<
   TElement[],
   OptionT<[TElement[], TElement]>
 > {
-  return typedAction({
-    kind: "Invoke",
-    handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
-  });
+  return withUnion(
+    typedAction({
+      kind: "Invoke",
+      handler: { kind: "Builtin", builtin: { kind: "SplitLast" } },
+    }),
+    optionMethods,
+  );
 }
 

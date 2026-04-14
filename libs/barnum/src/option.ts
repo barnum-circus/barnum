@@ -2,7 +2,9 @@ import {
   type Option as OptionT,
   type Pipeable,
   type TypedAction,
+  type UnionMethods,
   typedAction,
+  withUnion,
   branch,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -17,6 +19,21 @@ import {
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
+// Option dispatch table
+// ---------------------------------------------------------------------------
+
+export const optionMethods: UnionMethods = {
+  map: (action) => Option.map(action),
+  andThen: (action) => Option.andThen(action),
+  unwrapOr: (action) => Option.unwrapOr(action),
+  flatten: () => Option.flatten(),
+  filter: (predicate) => Option.filter(predicate),
+  collect: () => Option.collect(),
+  isSome: () => Option.isSome(),
+  isNone: () => Option.isNone(),
+};
+
+// ---------------------------------------------------------------------------
 // Option namespace — combinators for Option<T> tagged unions
 // ---------------------------------------------------------------------------
 
@@ -28,20 +45,26 @@ import { z } from "zod";
 export const Option = {
   /** Wrap a value as Some. `T → Option<T>` */
   some<T>(): TypedAction<T, OptionT<T>> {
-    return tag("Some") as TypedAction<T, OptionT<T>>;
+    return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, optionMethods);
   },
 
   /** Produce a None. `any → Option<T>` */
   none<T>(): TypedAction<any, OptionT<T>> {
-    return tag("None") as TypedAction<any, OptionT<T>>;
+    return withUnion(
+      tag("None") as TypedAction<any, OptionT<T>>,
+      optionMethods,
+    );
   },
 
   /** Transform the Some value. `Option<T> → Option<U>` */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
-    return branch({
-      Some: chain(action as any, tag("Some")),
-      None: tag("None"),
-    }) as TypedAction<OptionT<T>, OptionT<U>>;
+    return withUnion(
+      branch({
+        Some: chain(action as any, tag("Some")),
+        None: tag("None"),
+      }) as TypedAction<OptionT<T>, OptionT<U>>,
+      optionMethods,
+    );
   },
 
   /**
@@ -51,18 +74,20 @@ export const Option = {
   andThen<T, U>(
     action: Pipeable<T, OptionT<U>>,
   ): TypedAction<OptionT<T>, OptionT<U>> {
-    return branch({
-      Some: action,
-      None: tag("None"),
-    }) as TypedAction<OptionT<T>, OptionT<U>>;
+    return withUnion(
+      branch({
+        Some: action,
+        None: tag("None"),
+      }) as TypedAction<OptionT<T>, OptionT<U>>,
+      optionMethods,
+    );
   },
 
   /**
    * Extract the Some value or produce a default from an action.
    * `Option<T> → T`
    *
-   * The None payload is void (null at runtime). defaultAction receives
-   * void and produces the default value.
+   * Exits the Option family — result has no __union.
    */
   unwrapOr<T>(defaultAction: Pipeable<void, T>): TypedAction<OptionT<T>, T> {
     return branch({
@@ -73,10 +98,13 @@ export const Option = {
 
   /** Unwrap a nested Option. `Option<Option<T>> → Option<T>` */
   flatten<T>(): TypedAction<OptionT<OptionT<T>>, OptionT<T>> {
-    return branch({
-      Some: identity(),
-      None: tag("None"),
-    }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>;
+    return withUnion(
+      branch({
+        Some: identity(),
+        None: tag("None"),
+      }) as TypedAction<OptionT<OptionT<T>>, OptionT<T>>,
+      optionMethods,
+    );
   },
 
   /**
@@ -86,15 +114,20 @@ export const Option = {
   filter<T>(
     predicate: Pipeable<T, OptionT<T>>,
   ): TypedAction<OptionT<T>, OptionT<T>> {
-    return branch({
-      Some: predicate,
-      None: tag("None"),
-    }) as TypedAction<OptionT<T>, OptionT<T>>;
+    return withUnion(
+      branch({
+        Some: predicate,
+        None: tag("None"),
+      }) as TypedAction<OptionT<T>, OptionT<T>>,
+      optionMethods,
+    );
   },
 
   /**
    * Collect Some values from an array, discarding Nones.
    * `Option<T>[] → T[]`
+   *
+   * Exits the Option family — result is T[], not Option.
    */
   collect<T = any>(): TypedAction<OptionT<T>[], T[]> {
     return typedAction({
@@ -103,7 +136,11 @@ export const Option = {
     });
   },
 
-  /** Test if the value is Some. `Option<T> → boolean` */
+  /**
+   * Test if the value is Some. `Option<T> → boolean`
+   *
+   * Exits the Option family — result is boolean, not Option.
+   */
   isSome<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
       Some: constant(true),
@@ -111,7 +148,11 @@ export const Option = {
     }) as TypedAction<OptionT<T>, boolean>;
   },
 
-  /** Test if the value is None. `Option<T> → boolean` */
+  /**
+   * Test if the value is None. `Option<T> → boolean`
+   *
+   * Exits the Option family — result is boolean, not Option.
+   */
   isNone<T>(): TypedAction<OptionT<T>, boolean> {
     return branch({
       Some: constant(false),
@@ -145,6 +186,8 @@ export const Option = {
  *
  * Composes `splitFirst` (which returns `Option<[TElement, TElement[]]>`)
  * with `Option.map(getIndex(0))` to extract just the element.
+ *
+ * Output carries optionMethods via chain propagation from Option.map.
  */
 export function first<TElement>(): TypedAction<
   readonly TElement[],
@@ -166,6 +209,8 @@ export function first<TElement>(): TypedAction<
  *
  * Composes `splitLast` (which returns `Option<[TElement[], TElement]>`)
  * with `Option.map(getIndex(1))` to extract just the element.
+ *
+ * Output carries optionMethods via chain propagation from Option.map.
  */
 export function last<TElement>(): TypedAction<
   readonly TElement[],
