@@ -36,6 +36,24 @@ This is a trait system. `UnionMethods` is the trait. `optionMethods` and `result
 
 ---
 
+## Open design question: are shared method names a "trait"?
+
+Currently `map`, `andThen`, `flatten`, `unwrapOr` share a single `UnionMethods` dispatch table. This implies they're methods on a shared trait (like Haskell's `Functor`/`Monad`). But Rust doesn't have these traits — `Option::map`, `Result::map`, and `Iterator::map` are just methods that happen to share a name. There's no `Mappable` trait.
+
+Two framings:
+
+**Framing A — Single dispatch table (current):** `UnionMethods` is one big interface with all possible methods. Each type fills in its subset. Simple, works today. Downside: the interface grows unboundedly as we add types (Iterator adds `find`, `count`, `collect`; future types add more).
+
+**Framing B — Per-type dispatch tables:** Each type has its own interface (`OptionMethods`, `ResultMethods`, `IteratorMethods`). `__union` is typed as their union. Method names can overlap without being part of a shared trait — the dispatch table is type-specific.
+
+**Framing C — Named traits with explicit impl:** Define actual trait interfaces (`Mappable`, `Flattenable`, `IntoIterator`) and types register which traits they implement. Most principled, but heavy machinery for what amounts to "these three types all have a `.map()` method."
+
+Current approach (A) works and is pragmatic. The shared `UnionMethods` interface is effectively a vtable — it's a bag of optional method slots. This is fine as long as the number of types stays small (Option, Result, Iterator). If we ever add many more types, we'd want to refactor toward B or C.
+
+**Recommendation:** Keep A for now. If Iterator makes the interface unwieldy, refactor to B (per-type dispatch tables, `__union: OptionMethods | ResultMethods | IteratorMethods`). Don't build trait infrastructure (C) until we need it.
+
+---
+
 ## Iterator<T> — a wrapper type with its own dispatch
 
 ### What is Iterator<T>?
