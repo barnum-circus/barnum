@@ -2,147 +2,485 @@
 
 ## Problem
 
-Postfix methods like `.map()`, `.andThen()`, `.unwrapOr()` exist on both Option and Result. Currently we disambiguate with suffixes (`.mapOption()`, `.mapResult()`). This is ugly. Ideally `.map()` just works regardless of whether the output is an Option or a Result.
+Postfix methods like `.map()`, `.flatten()`, `.unwrapOr()` exist for both Option and Result. Currently we either suffix them (`.mapOption()`, `.mapErr()`) or only support one type (`.unwrapOr()` is Result-only). This is inconsistent and ugly.
 
-## Idea: runtime union identity tag
+With dispatch, `.map()` just works regardless of whether the output is Option or Result.
 
-Every TypedAction already carries phantom types (`__phantom_out`, etc.) for compile-time checking. We could add a **runtime** (non-phantom) tag that identifies which union family the output belongs to. Postfix methods check this tag and dispatch to the correct implementation.
+## Two phases
 
-### How constructors attach the tag
+**Phase 1 (this doc):** Add `__union` plumbing, constructors attach it, combinators propagate it, add new dispatched postfix methods. Existing `mapOption`, `mapErr`, `unwrapOr`, `flatten` stay as-is.
 
-Every union constructor (`Option.some()`, `Option.none()`, `Result.ok()`, `Result.err()`) would attach a union identity tag to the TypedAction it produces:
+**Phase 2 (separate):** Rename `mapOption` → `map`, widen `unwrapOr`/`flatten` to dispatch, remove old names. This is a breaking change to the postfix API.
 
+## Design
+
+Every TypedAction gets an optional `__union` property — a reference to a methods object. Constructors (`Option.some`, `Result.ok`, etc.) attach it. New postfix methods check it and dispatch to the correct implementation.
+
+## Overload validation
+
+TypeScript `this`-constrained overloads resolve correctly for all dispatched methods. Validated with a scratch typecheck: `flatten` (Array/Option/Result), `map` (Option/Result), `andThen` (Option/Result), `unwrapOr` (Option/Result), `collect` (Option[]), `transpose` (both directions). Zero type errors, all overloads pick the correct signature based on self type.
+
+---
+
+## Phase 1: Before / After
+
+### TypedAction type (`ast.ts`)
+
+**Before:**
 ```ts
-Option.some<T>()
-// Returns a TypedAction with:
-//   - Phantom: TypedAction<T, Option<T>>
-//   - Runtime tag: { __union: optionMethods }
-
-Result.ok<TValue, TError>()
-// Returns a TypedAction with:
-//   - Phantom: TypedAction<TValue, Result<TValue, TError>>
-//   - Runtime tag: { __union: resultMethods }
+export type TypedAction<In = unknown, Out = unknown> = Action & {
+  __in?: (input: In) => void;
+  __in_co?: In;
+  __out?: () => Out;
+  then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
+  forEach<TIn, TElement, TNext>(
+    this: TypedAction<TIn, TElement[]>,
+    action: Pipeable<TElement, TNext>,
+  ): TypedAction<TIn, TNext[]>;
+  branch<TCases extends ...>(cases: TCases): TypedAction<In, ...>;
+  flatten(): TypedAction<In, Out extends (infer T)[][] ? T[] : Out>;
+  drop(): TypedAction<In, void>;
+  // ... structural methods ...
+  mapOption<TIn, T, U>(
+    this: TypedAction<TIn, Option<T>>,
+    action: Pipeable<T, U>,
+  ): TypedAction<TIn, Option<U>>;
+  mapErr<TIn, TValue, TError, TErrorOut>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    action: Pipeable<TError, TErrorOut>,
+  ): TypedAction<TIn, Result<TValue, TErrorOut>>;
+  unwrapOr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    defaultAction: Pipeable<TError, TValue>,
+  ): TypedAction<TIn, TValue>;
+};
 ```
 
-The tag is a reference to a **methods object** — a lookup table of implementations for that union family.
-
-### The methods objects
-
+**After:**
 ```ts
-const optionMethods = {
-  map: (action) => /* Option.map desugaring */,
-  andThen: (action) => /* Option.andThen desugaring */,
-  unwrapOr: (action) => /* Option.unwrapOr desugaring */,
-  filter: (predicate) => /* Option.filter desugaring */,
-  flatten: () => /* Option.flatten desugaring */,
-  isSome: () => /* ... */,
-  isNone: () => /* ... */,
-};
+export type TypedAction<In = unknown, Out = unknown> = Action & {
+  __in?: (input: In) => void;
+  __in_co?: In;
+  __out?: () => Out;
+  __union?: UnionMethods;                              // NEW — runtime dispatch table
+  then<TNext>(next: Pipeable<Out, TNext>): TypedAction<In, TNext>;
+  forEach<TIn, TElement, TNext>(
+    this: TypedAction<TIn, TElement[]>,
+    action: Pipeable<TElement, TNext>,
+  ): TypedAction<TIn, TNext[]>;
+  branch<TCases extends ...>(cases: TCases): TypedAction<In, ...>;
+  flatten(): TypedAction<In, Out extends (infer T)[][] ? T[] : Out>;
+  drop(): TypedAction<In, void>;
+  // ... structural methods ...
 
-const resultMethods = {
-  map: (action) => /* Result.map desugaring */,
-  mapErr: (action) => /* Result.mapErr desugaring */,
-  andThen: (action) => /* Result.andThen desugaring */,
-  or: (fallback) => /* Result.or desugaring */,
-  unwrapOr: (action) => /* Result.unwrapOr desugaring */,
-  flatten: () => /* Result.flatten desugaring */,
-  isOk: () => /* ... */,
-  isErr: () => /* ... */,
-  ok: () => /* Result → Option<TValue> */,
-  err: () => /* Result → Option<TError> */,
-  transpose: () => /* ... */,
+  // --- Existing (unchanged) ---
+  mapOption<TIn, T, U>(
+    this: TypedAction<TIn, Option<T>>,
+    action: Pipeable<T, U>,
+  ): TypedAction<TIn, Option<U>>;
+  mapErr<TIn, TValue, TError, TErrorOut>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    action: Pipeable<TError, TErrorOut>,
+  ): TypedAction<TIn, Result<TValue, TErrorOut>>;
+  unwrapOr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    defaultAction: Pipeable<TError, TValue>,
+  ): TypedAction<TIn, TValue>;
+
+  // --- NEW dispatched methods ---
+
+  // Option
+  andThen<TIn, TValue, TOut>(
+    this: TypedAction<TIn, Option<TValue>>,
+    action: Pipeable<TValue, Option<TOut>>,
+  ): TypedAction<TIn, Option<TOut>>;
+  // Result
+  andThen<TIn, TValue, TOut, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    action: Pipeable<TValue, Result<TOut, TError>>,
+  ): TypedAction<TIn, Result<TOut, TError>>;
+
+  // Option-only
+  filter<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+    predicate: Pipeable<TValue, Option<TValue>>,
+  ): TypedAction<TIn, Option<TValue>>;
+  isSome<TIn, TValue>(this: TypedAction<TIn, Option<TValue>>): TypedAction<TIn, boolean>;
+  isNone<TIn, TValue>(this: TypedAction<TIn, Option<TValue>>): TypedAction<TIn, boolean>;
+  collect<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>[]>,
+  ): TypedAction<TIn, TValue[]>;
+
+  // Result-only
+  or<TIn, TValue, TError, TErrorOut>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    fallback: Pipeable<TError, Result<TValue, TErrorOut>>,
+  ): TypedAction<TIn, Result<TValue, TErrorOut>>;
+  and<TIn, TValue, TOut, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    other: Pipeable<void, Result<TOut, TError>>,
+  ): TypedAction<TIn, Result<TOut, TError>>;
+  toOption<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, Option<TValue>>;
+  toOptionErr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, Option<TError>>;
+  isOk<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, boolean>;
+  isErr<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+  ): TypedAction<TIn, boolean>;
+
+  // Transpose (dispatched — both directions)
+  // Option<Result<T, E>> → Result<Option<T>, E>
+  transpose<TIn, TValue, TError>(
+    this: TypedAction<TIn, Option<Result<TValue, TError>>>,
+  ): TypedAction<TIn, Result<Option<TValue>, TError>>;
+  // Result<Option<T>, E> → Option<Result<T, E>>
+  transpose<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<Option<TValue>, TError>>,
+  ): TypedAction<TIn, Option<Result<TValue, TError>>>;
 };
 ```
 
-### How postfix dispatch works
+Key changes:
+- `mapOption`, `mapErr`, `unwrapOr`, `flatten` **stay as-is** (renamed in Phase 2)
+- `__union` property added
+- New postfix methods: `andThen`, `filter`, `isSome`, `isNone`, `collect`, `or`, `and`, `toOption`, `toOptionErr`, `transpose` (overloaded), `isOk`, `isErr`
 
-The generic `.map()` method on TypedAction:
+---
 
+### Methods objects (`builtins.ts`)
+
+**Before:** doesn't exist.
+
+**After:**
 ```ts
-function mapMethod(this: TypedAction, action: Action): TypedAction {
-  const methods = this.__union;
-  if (!methods?.map) {
-    throw new Error("No .map() available — output is not a tagged union with map support");
-  }
-  return this.then(methods.map(action));
+interface UnionMethods {
+  map?: (action: Action) => Action;
+  andThen?: (action: Action) => Action;
+  unwrapOr?: (action: Action) => Action;
+  flatten?: () => Action;
+  // Option-only
+  filter?: (predicate: Action) => Action;
+  collect?: () => Action;
+  isSome?: () => Action;
+  isNone?: () => Action;
+  // Result-only
+  mapErr?: (action: Action) => Action;
+  and?: (other: Action) => Action;
+  or?: (fallback: Action) => Action;
+  toOption?: () => Action;
+  toOptionErr?: () => Action;
+  transpose?: () => Action;
+  isOk?: () => Action;
+  isErr?: () => Action;
+}
+
+const optionMethods: UnionMethods = {
+  map: (action) => Option.map(action as any) as any,
+  andThen: (action) => Option.andThen(action as any) as any,
+  unwrapOr: (action) => Option.unwrapOr(action as any) as any,
+  flatten: () => Option.flatten() as any,
+  filter: (predicate) => Option.filter(predicate as any) as any,
+  collect: () => Option.collect() as any,
+  isSome: () => Option.isSome() as any,
+  isNone: () => Option.isNone() as any,
+};
+
+const resultMethods: UnionMethods = {
+  map: (action) => Result.map(action as any) as any,
+  andThen: (action) => Result.andThen(action as any) as any,
+  unwrapOr: (action) => Result.unwrapOr(action as any) as any,
+  flatten: () => Result.flatten() as any,
+  mapErr: (action) => Result.mapErr(action as any) as any,
+  and: (other) => Result.and(other as any) as any,
+  or: (fallback) => Result.or(fallback as any) as any,
+  toOption: () => Result.toOption() as any,
+  toOptionErr: () => Result.toOptionErr() as any,
+  transpose: () => Result.transpose() as any,
+  isOk: () => Result.isOk() as any,
+  isErr: () => Result.isErr() as any,
+};
+```
+
+---
+
+### `withUnion()` helper (`builtins.ts`)
+
+**Before:** doesn't exist.
+
+**After:**
+```ts
+function withUnion<In, Out>(action: TypedAction<In, Out>, methods: UnionMethods): TypedAction<In, Out> {
+  (action as any).__union = methods;
+  return action;
 }
 ```
 
-Or more concretely — the postfix method constructs a new TypedAction by chaining `this` with the desugared combinator from the methods table.
+---
 
-### Tag propagation
+### Constructors attach `__union` (`builtins.ts`)
 
-When combinators produce a union output, the tag must propagate. For example:
-
+**Before:**
 ```ts
-pipe(someAction, Result.map(transform))
-// Result.map returns Result<U, E> — the output is still a Result.
-// The tag must carry through.
+export const Option = {
+  some<T>(): TypedAction<T, OptionT<T>> {
+    return tag("Some") as TypedAction<T, OptionT<T>>;
+  },
+  none<T>(): TypedAction<any, OptionT<T>> {
+    return tag("None") as TypedAction<any, OptionT<T>>;
+  },
+  // ...
+};
 ```
 
-Each combinator in the methods table knows its output family. `Result.map` produces a Result, so the returned TypedAction carries `__union: resultMethods`. `Result.toOption` produces an Option, so it carries `__union: optionMethods`.
-
-Combinators that DON'T produce a union (like `Result.unwrapOr`, which extracts the raw value) would NOT attach `__union`. So calling `.map()` after `.unwrapOr()` would fail — correct behavior.
-
-### What about `.then()` and other generic combinators?
-
-`pipe(Result.ok(), someHandler)` — the output of `someHandler` isn't necessarily a union. The `__union` tag from `Result.ok()` shouldn't propagate through arbitrary chains.
-
-The tag should only be set by:
-1. Union constructors (`Option.some`, `Result.ok`, etc.)
-2. Union combinators that preserve the family (`Result.map`, `Option.andThen`, etc.)
-
-Generic combinators like `pipe`, `.then()`, `.branch()` do NOT propagate the tag. The tag lives on the **output** of the most recent union-aware operation.
-
-Implementation: `typedAction()` does NOT copy `__union` from inputs. Only union-aware functions set it explicitly.
-
-### Type-level: how does TypeScript know `.map()` is available?
-
-Option 1: `.map()` is always available on TypedAction, but the `this` constraint restricts it:
-
+**After:**
 ```ts
-map<TIn, TOut>(
-  this: TypedAction<TIn, Option<any> | Result<any, any>>,
-  action: Pipeable<???, ???>,
-): TypedAction<TIn, ???>;
+export const Option = {
+  some<T>(): TypedAction<T, OptionT<T>> {
+    return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, optionMethods);
+  },
+  none<T>(): TypedAction<any, OptionT<T>> {
+    return withUnion(tag("None") as TypedAction<any, OptionT<T>>, optionMethods);
+  },
+  // ...
+};
 ```
 
-Problem: the return type depends on whether it's Option or Result. TypeScript can't branch on this in a single overload.
+Same pattern for `Result.ok`, `Result.err`.
 
-Option 2: Overloads.
+---
 
+### Combinators propagate `__union` (`builtins.ts`)
+
+#### Classification: which combinators propagate?
+
+**Propagate same family** (wrap output with `withUnion(result, sameMethods)`):
+- `Option.map`, `Option.andThen`, `Option.flatten`, `Option.filter`
+- `Result.map`, `Result.mapErr`, `Result.andThen`, `Result.flatten`, `Result.or`, `Result.and`
+
+**Change family** (wrap output with `withUnion(result, newMethods)`):
+- `Result.toOption` → `optionMethods`
+- `Result.toOptionErr` → `optionMethods`
+- `Result.transpose` → `optionMethods` (output is `Option<Result<...>>`)
+
+**Exit union** (do NOT attach `__union`):
+- `Option.unwrapOr`, `Option.isSome`, `Option.isNone`, `Option.collect`
+- `Result.unwrapOr`, `Result.isOk`, `Result.isErr`
+
+**Example — family-preserving:**
 ```ts
-// Option overload
-map<TIn, T, U>(
-  this: TypedAction<TIn, Option<T>>,
-  action: Pipeable<T, U>,
-): TypedAction<TIn, Option<U>>;
+// Before
+map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
+  return branch({
+    Some: chain(action as any, tag("Some")),
+    None: tag("None"),
+  }) as TypedAction<OptionT<T>, OptionT<U>>;
+},
 
-// Result overload
-map<TIn, TValue, TOut, TError>(
-  this: TypedAction<TIn, Result<TValue, TError>>,
-  action: Pipeable<TValue, TOut>,
-): TypedAction<TIn, Result<TOut, TError>>;
+// After
+map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
+  return withUnion(
+    branch({
+      Some: chain(action as any, tag("Some")),
+      None: tag("None"),
+    }) as TypedAction<OptionT<T>, OptionT<U>>,
+    optionMethods,
+  );
+},
 ```
 
-TypeScript picks the right overload based on the `this` type. This works.
+**Example — family-changing:**
+```ts
+// Before
+toOption<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TValue>> {
+  return branch({
+    Ok: tag("Some"),
+    Err: drop.tag("None"),
+  }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>;
+},
 
-### What needs to be a "real thing"
+// After
+toOption<TValue, TError>(): TypedAction<ResultT<TValue, TError>, OptionT<TValue>> {
+  return withUnion(
+    branch({
+      Ok: tag("Some"),
+      Err: drop.tag("None"),
+    }) as TypedAction<ResultT<TValue, TError>, OptionT<TValue>>,
+    optionMethods,  // output is Option, not Result
+  );
+},
+```
 
-For this to work, each union family needs:
+---
 
-1. **A methods object** — maps method names to implementations. This is the runtime dispatch table.
-2. **Constructors that attach the tag** — every `Option.some()`, `Result.ok()`, etc. sets `__union` on the TypedAction.
-3. **The `__union` property** — non-enumerable (invisible to JSON/toEqual), like the existing postfix methods.
+### Standalone functions that produce Options (`builtins.ts`)
 
-The methods object is also the identity — `optionMethods === optionMethods` works for identity checks if needed.
+These are not in the Option namespace but produce `Option<T>` — they need `withUnion`:
 
-### Open questions
+```ts
+// Before
+export function splitFirst<TElement>(): TypedAction<TElement[], OptionT<[TElement, TElement[]]>> {
+  return typedAction({ kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } } });
+}
 
-**Can user-defined unions get postfix methods?** If a user defines `type StatusDef = { Pending: void; Active: Data; Closed: string }` and creates constructors via `tag()`, could they also provide a methods object? This would make the system extensible beyond Option and Result. Probably not needed now, but the architecture supports it.
+// After
+export function splitFirst<TElement>(): TypedAction<TElement[], OptionT<[TElement, TElement[]]>> {
+  return withUnion(
+    typedAction({ kind: "Invoke", handler: { kind: "Builtin", builtin: { kind: "SplitFirst" } } }),
+    optionMethods,
+  );
+}
+```
 
-**Performance of overloads.** Every shared postfix method (`.map`, `.andThen`, `.unwrapOr`, `.flatten`) needs N overloads on TypedAction (one per union family). With Option + Result that's 2 overloads per method. If we add more union families, this grows. Probably fine for a small number of known union types.
+Same for `splitLast`, `first`, `last`.
 
-**Flatten collision.** `.flatten()` already exists unconditionally for arrays. Can we add `this`-constrained overloads that fire when the output is `Option<Option<T>>` or `Result<Result<T, E>, E>`? The array overload checks `Out extends (infer TElement)[][] ? ...`. If we add Option/Result overloads, TypeScript would need to pick between them. The array overload uses a conditional type on `Out`, so it might not interfere — but this needs testing. If it doesn't work, flatten stays namespace-only.
+---
 
-**Collect collision.** `.collect()` doesn't exist on TypedAction today. If we add it as a postfix method for `Option<T>[]` and `Result<T, E>[]` outputs, there's no collision. The `this` constraint gates it to array-of-union outputs.
+### New postfix method implementations (`ast.ts`)
+
+All new postfix methods follow the same dispatch pattern:
+
+```ts
+function andThenMethod(this: TypedAction, action: Action): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.andThen) throw new Error(".andThen() requires Option or Result output");
+  return chain(this as any, methods.andThen(action) as any) as TypedAction;
+}
+
+function filterMethod(this: TypedAction, predicate: Action): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.filter) throw new Error(".filter() requires Option output");
+  return chain(this as any, methods.filter(predicate) as any) as TypedAction;
+}
+
+function isSomeMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.isSome) throw new Error(".isSome() requires Option output");
+  return chain(this as any, methods.isSome() as any) as TypedAction;
+}
+
+function isNoneMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.isNone) throw new Error(".isNone() requires Option output");
+  return chain(this as any, methods.isNone() as any) as TypedAction;
+}
+
+function collectMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  // collect dispatches on element type, not self type — check __union of a representative element?
+  // Actually: collect is always Option.collect(). No dispatch needed.
+  return chain(this as any, Option.collect() as any) as TypedAction;
+}
+
+function orMethod(this: TypedAction, fallback: Action): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.or) throw new Error(".or() requires Result output");
+  return chain(this as any, methods.or(fallback) as any) as TypedAction;
+}
+
+function andMethod(this: TypedAction, other: Action): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.and) throw new Error(".and() requires Result output");
+  return chain(this as any, methods.and(other) as any) as TypedAction;
+}
+
+function toOptionMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.toOption) throw new Error(".toOption() requires Result output");
+  return chain(this as any, methods.toOption() as any) as TypedAction;
+}
+
+function toOptionErrMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.toOptionErr) throw new Error(".toOptionErr() requires Result output");
+  return chain(this as any, methods.toOptionErr() as any) as TypedAction;
+}
+
+function transposeMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.transpose) throw new Error(".transpose() requires Option<Result> or Result<Option> output");
+  return chain(this as any, methods.transpose() as any) as TypedAction;
+}
+
+function isOkMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.isOk) throw new Error(".isOk() requires Result output");
+  return chain(this as any, methods.isOk() as any) as TypedAction;
+}
+
+function isErrMethod(this: TypedAction): TypedAction {
+  const methods = (this as any).__union;
+  if (!methods?.isErr) throw new Error(".isErr() requires Result output");
+  return chain(this as any, methods.isErr() as any) as TypedAction;
+}
+```
+
+Registered in `typedAction()`:
+```ts
+Object.defineProperties(action, {
+  // ... existing methods ...
+  andThen: { value: andThenMethod, configurable: true },
+  filter: { value: filterMethod, configurable: true },
+  isSome: { value: isSomeMethod, configurable: true },
+  isNone: { value: isNoneMethod, configurable: true },
+  collect: { value: collectMethod, configurable: true },
+  or: { value: orMethod, configurable: true },
+  and: { value: andMethod, configurable: true },
+  toOption: { value: toOptionMethod, configurable: true },
+  toOptionErr: { value: toOptionErrMethod, configurable: true },
+  transpose: { value: transposeMethod, configurable: true },
+  isOk: { value: isOkMethod, configurable: true },
+  isErr: { value: isErrMethod, configurable: true },
+});
+```
+
+---
+
+### `typedAction()` does NOT propagate `__union` (`ast.ts`)
+
+Same as before — `typedAction()` only attaches postfix methods, never `__union`. The tag is set explicitly by `withUnion()` in constructors and combinators.
+
+`.then()` also does NOT propagate `__union`. If you chain an arbitrary action after an Option-producing one, the output is no longer necessarily an Option:
+```ts
+Option.some().then(someHandler)  // __union is NOT copied to the result
+```
+
+---
+
+## Phase 2: Rename (separate doc/commit)
+
+After Phase 1 lands and is stable:
+
+| Old postfix | New postfix | Notes |
+|-------------|-------------|-------|
+| `mapOption(action)` | `map(action)` | Overloaded: Option + Result |
+| `mapErr(action)` | stays `mapErr(action)` | Result-only, no collision |
+| `unwrapOr(action)` | stays `unwrapOr(action)` | Overloaded: Option + Result |
+| `flatten()` | stays `flatten()` | Overloaded: Array + Option + Result |
+
+The rename phase changes `mapOption` → `map` as an overloaded method and widens `unwrapOr` to accept Option (currently Result-only). `flatten` gets additional overloads for Option/Result. Existing `mapErr` stays as-is (Result-only, no naming conflict).
+
+---
+
+## What changes in Phase 1 (summary)
+
+| Component | Before | After |
+|-----------|--------|-------|
+| `TypedAction` type | `mapOption`, `mapErr`, `unwrapOr` (Result-only) | Same + `__union`, `andThen`, `filter`, `isSome`, `isNone`, `collect`, `or`, `and`, `toOption`, `toOptionErr`, `transpose`, `isOk`, `isErr` |
+| `__union` property | doesn't exist | `UnionMethods` reference on TypedAction |
+| Option constructors | return plain TypedAction | attach `__union: optionMethods` |
+| Result constructors | return plain TypedAction | attach `__union: resultMethods` |
+| Option/Result combinators | return plain TypedAction | attach `__union` per classification above |
+| `splitFirst`, `splitLast`, `first`, `last` | return plain TypedAction | attach `__union: optionMethods` |
+| `.then()` | propagates nothing | still propagates nothing (correct) |
+| `mapOption`, `mapErr`, `unwrapOr`, `flatten` | as-is | unchanged (Phase 2) |
+
+## Files touched
+
+1. **`ast.ts`** — Add `__union` to TypedAction type. Add new dispatched postfix method types and implementations. Register them in `typedAction()`.
+2. **`builtins.ts`** — Add `UnionMethods` interface, `optionMethods`, `resultMethods` objects, `withUnion()` helper. Wrap all Option/Result constructors and family-preserving combinators with `withUnion()`. Wrap `splitFirst`, `splitLast`, `first`, `last` with `withUnion()`.
+3. **`index.ts`** — No changes (no new exports needed; `UnionMethods` is internal).
