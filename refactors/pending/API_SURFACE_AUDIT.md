@@ -299,30 +299,41 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 
 ---
 
-## Priority Tiers
+## TODOs
 
-### Tier 1
-- Renames: `flatten` → `flattenArray`, add `flattenOption`, `flattenResult`
-- Removals: `tap`, `merge` (from public API)
-- `getField`/`getIndex` return `Option` by default
-- Control flow: `allObject`, `withRetries`, curried `withTimeout`
-- Array: `Arr.length`, `Arr.isEmpty`, `Arr.join`
-- Struct: `omit`
+### Removals
+- [ ] Remove `tap` from public exports, delete postfix `.tap()`
+- [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
 
-### Tier 2
-- Remaining Arr (reverse, take, skip, contains, enumerate, sortBy, unique, zip, append)
+### Breaking changes
+- [ ] `getField(key)` returns `Option<Obj[K]>` instead of raw value
+- [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
+- [ ] Rename `flatten()` → `flattenArray()`
+- [ ] Rename `Option.flatten()` → `flattenOption()` (keep namespace alias)
+- [ ] Rename `Result.flatten()` → `flattenResult()` (keep namespace alias)
 
----
+### New: control flow
+- [ ] `allObject` — `Record<K, Action> → { [K]: Out }` (composable)
+- [ ] `withRetries(n)` — retry on error (composable: loop + tryCatch)
+- [ ] Curry `withTimeout` — `(ms) → (body) → Result<Out, void>`
 
-## What this doc consolidates
+### New: struct
+- [ ] `omit(...keys)` — complement of `pick`
 
-Content from these docs was folded in here:
-- `PRIMITIVE_BUILTINS.md` — All content (deleted)
-- `BARNUM_NEXT.md` sections 1–4 — curried withTimeout, withRetries, allObject, array ops (removed; structural/architectural retained)
-- `OPTION_RETURNING_EXTRACTORS.md` — All content (deleted)
+### New: array
+- [ ] `Arr.length()` — `T[] → number`
+- [ ] `Arr.isEmpty()` — `T[] → boolean`
+- [ ] `Arr.join(sep)` — `string[] → string`
+- [ ] `filter(pred)` — composable: `forEach(pred).then(Option.collect())`
+- [ ] `flatMap(action)` — composable: `forEach(action).then(flattenArray())`
 
-Related docs kept separate (different concerns):
-- `THUNK_BUILTINS.md` — `ActionLike` ergonomics for zero-arg builtins
-- `INLINE_BUILTINS.md` — Execution model (resolve builtins in advance phase)
-- `UNION_POSTFIX_DISPATCH.md` — Runtime dispatch for postfix `.map()` etc. across union families
-- `VOID_INPUTS.md` — Type convention for pipeline-ignoring actions
+### New: Option
+- [ ] `Option.okOr(action)` — `Option<T> → Result<T, E>` (composable)
+
+### Resolve: merge code smell
+- [ ] Decide: restore `Tag`/`Pick` as Rust builtins, or accept `all() → merge()` pattern with `allObject` as canonical abstraction
+
+### Lower priority (tier 2)
+- [ ] Arr: reverse, take, skip, contains, enumerate, sortBy, unique, zip, append
+- [ ] Option: zip, transpose
+- [ ] HashMap: first-class support as distinct type from struct
