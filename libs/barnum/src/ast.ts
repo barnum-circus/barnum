@@ -246,11 +246,17 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   >(
     cases: [BranchKeys<Out>] extends [never] ? never : TCases,
   ): TypedAction<In, ExtractOutput<TCases[keyof TCases & string]>>;
-  /** Flatten a nested array output. `a.flatten()` ≡ `pipe(a, flatten())`. */
-  flatten(): TypedAction<
-    In,
-    Out extends (infer TElement)[][] ? TElement[] : Out
-  >;
+  /** Flatten one level of nesting. Dispatches: Array, Option, Result. */
+  flatten<TIn, TElement>(
+    this: TypedAction<TIn, TElement[][]>,
+  ): TypedAction<TIn, TElement[]>;
+  flatten<TIn, TValue>(
+    this: TypedAction<TIn, Option<Option<TValue>>>,
+  ): TypedAction<TIn, Option<TValue>>;
+  flatten<TIn, TValue, TError>(
+    this: TypedAction<TIn, Result<Result<TValue, TError>, TError>>,
+  ): TypedAction<TIn, Result<TValue, TError>>;
+  flatten(): TypedAction<In, unknown>;
   /** Discard output. `a.drop()` ≡ `pipe(a, drop)`. */
   drop(): TypedAction<In, void>;
   /** Wrap output as a tagged union member. Requires full variant map TDef so __def is carried. */
@@ -285,34 +291,37 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
     this: TypedAction<TIn, TElement[]>,
   ): TypedAction<TIn, Option<[TElement[], TElement]>>;
   /**
-   * Transform the Some value inside an Option output. Only callable when
-   * Out is Option<T>. Uses `this` parameter constraint to gate availability.
+   * Transform the inner value. Dispatches: Option.map, Result.map.
    */
-  mapOption<TIn, T, U>(
+  map<TIn, T, U>(
     this: TypedAction<TIn, Option<T>>,
     action: Pipeable<T, U>,
   ): TypedAction<TIn, Option<U>>;
+  map<TIn, TValue, TOut, TError>(
+    this: TypedAction<TIn, Result<TValue, TError>>,
+    action: Pipeable<TValue, TOut>,
+  ): TypedAction<TIn, Result<TOut, TError>>;
   /**
    * Transform the Err value of a Result output.
    * `Result<TValue, TError> → Result<TValue, TErrorOut>`
-   *
-   * Only callable when Out is Result<TValue, TError>.
    */
   mapErr<TIn, TValue, TError, TErrorOut>(
     this: TypedAction<TIn, Result<TValue, TError>>,
     action: Pipeable<TError, TErrorOut>,
   ): TypedAction<TIn, Result<TValue, TErrorOut>>;
   /**
-   * Unwrap a Result output. If Ok, pass through the value. If Err, apply
-   * the default action. Only callable when Out is Result<TValue, TError>.
+   * Unwrap a union output. Dispatches: Option.unwrapOr, Result.unwrapOr.
    *
-   * The `this` constraint provides TValue from context, so throw tokens
-   * (Out=never) work without explicit type parameters:
+   * Option: If Some, pass through value. If None, apply default.
+   * Result: If Ok, pass through value. If Err, apply default.
+   *
+   * Covariant output makes throw tokens (Out=never) work:
    *   `handler.unwrapOr(throwError)`
-   *
-   * With covariant output, `TypedAction<TError, never>` (throwError, done)
-   * is assignable to `Pipeable<TError, TValue>` because `never extends TValue`.
    */
+  unwrapOr<TIn, TValue>(
+    this: TypedAction<TIn, Option<TValue>>,
+    defaultAction: Pipeable<void, TValue>,
+  ): TypedAction<TIn, TValue>;
   unwrapOr<TIn, TValue, TError>(
     this: TypedAction<TIn, Result<TValue, TError>>,
     defaultAction: Pipeable<TError, TValue>,
@@ -539,6 +548,11 @@ function branchMethod(
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
+  const methods = this.__union;
+  if (methods?.flatten) {
+    return chain(this, methods.flatten()) as TypedAction;
+  }
+  // Fall back to array flatten
   return chain(this as any, flattenBuiltin()) as TypedAction;
 }
 
@@ -578,19 +592,22 @@ function splitLastMethod(this: TypedAction): TypedAction {
   return chain(this as any, splitLast()) as TypedAction;
 }
 
-function mapOptionMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(this as any, Option.map(action as any)) as TypedAction;
+function mapMethod(this: TypedAction, action: Action): TypedAction {
+  const methods = this.__union;
+  if (!methods?.map) throw new Error(".map() requires Option or Result output");
+  return chain(this, methods.map(action)) as TypedAction;
 }
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(this as any, Result.mapErr(action as any)) as TypedAction;
+  const methods = this.__union;
+  if (!methods?.mapErr) throw new Error(".mapErr() requires Result output");
+  return chain(this, methods.mapErr(action)) as TypedAction;
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(
-    this as any,
-    Result.unwrapOr(defaultAction as any),
-  ) as TypedAction;
+  const methods = this.__union;
+  if (!methods?.unwrapOr) throw new Error(".unwrapOr() requires Option or Result output");
+  return chain(this, methods.unwrapOr(defaultAction)) as TypedAction;
 }
 
 // --- Dispatched postfix methods (via __union) ---
@@ -702,7 +719,7 @@ export function typedAction<In = unknown, Out = unknown>(
       pick: { value: pickMethod, configurable: true },
       splitFirst: { value: splitFirstMethod, configurable: true },
       splitLast: { value: splitLastMethod, configurable: true },
-      mapOption: { value: mapOptionMethod, configurable: true },
+      map: { value: mapMethod, configurable: true },
       mapErr: { value: mapErrMethod, configurable: true },
       unwrapOr: { value: unwrapOrMethod, configurable: true },
       andThen: { value: andThenMethod, configurable: true },

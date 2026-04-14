@@ -12,7 +12,6 @@ import {
   type ExtractOutput,
   type LoopResult,
   type Option,
-  type OptionDef,
   type Result,
   type VarRef,
   typedAction,
@@ -29,6 +28,7 @@ import {
   race,
   sleep,
   withTimeout,
+  withUnion,
 } from "../src/ast.js";
 import { allocateRestartHandlerId } from "../src/effect-id.js";
 import {
@@ -39,10 +39,9 @@ import {
   flatten,
   getField,
   range,
-  tag,
 } from "../src/builtins.js";
 import { Option as O } from "../src/option.js";
-import { Result as R } from "../src/result.js";
+import { Result as R, resultMethods } from "../src/result.js";
 import {
   setup,
   build,
@@ -539,40 +538,39 @@ describe("config entry point", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Postfix .mapOption() — this-parameter constraint prototype
+// Postfix .map() — dispatched via __union for Option and Result
 // ---------------------------------------------------------------------------
 
-describe("postfix .mapOption() type safety", () => {
+describe("postfix .map() type safety", () => {
   it("compiles when Out is Option<T>", () => {
-    // Construct an action whose output is Option<{ verified: boolean }>
-    const optionAction = verify.tag<OptionDef<{ verified: boolean }>, "Some">("Some");
-    // mapOption should accept a handler that transforms the Some payload
-    const mapped = optionAction.mapOption(deploy);
-    assertExact<IsExact<ExtractInput<typeof mapped>, { artifact: string }>>();
+    // Option.some() attaches __union: optionMethods, enabling .map() dispatch
+    const optionAction = O.some<{ verified: boolean }>();
+    const mapped = optionAction.map(deploy);
+    assertExact<IsExact<ExtractInput<typeof mapped>, { verified: boolean }>>();
     assertExact<IsExact<ExtractOutput<typeof mapped>, Option<{ deployed: boolean }>>>();
     expect(mapped.kind).toBe("Chain");
   });
 
-  it("rejects .mapOption() when Out is not Option<T>", () => {
-    // verify outputs { verified: boolean } — not an Option
-    // @ts-expect-error — mapOption requires Out to be Option<T>
-    verify.mapOption(deploy);
+  it("rejects .map() when Out is not Option<T> or Result<T,E>", () => {
+    // verify outputs { verified: boolean } — not an Option or Result
+    // @ts-expect-error — map requires Option or Result output
+    expect(() => verify.map(deploy)).toThrow(".map() requires Option or Result output");
   });
 
-  it("rejects .mapOption() when Out is a different tagged union", () => {
+  it("rejects .map() when Out is a different tagged union", () => {
     // classifyErrors outputs ClassifyResult = { kind: "HasErrors"; ... } | { kind: "Clean"; ... }
     // Not Option<T> (which has kind "Some" | "None")
-    // @ts-expect-error — mapOption requires Out to be Option<T>
-    classifyErrors.mapOption(deploy);
+    // @ts-expect-error — map requires Option or Result output
+    expect(() => classifyErrors.map(deploy)).toThrow(".map() requires Option or Result output");
   });
 
-  it("preserves input type through mapOption", () => {
+  it("preserves input type through map on Option", () => {
     const optionAction = pipe(
       constant({ artifact: "test" }),
       verify,
-      tag<OptionDef<{ verified: boolean }>, "Some">("Some"),
+      O.some<{ verified: boolean }>(),
     );
-    const mapped = optionAction.mapOption(deploy);
+    const mapped = optionAction.map(deploy);
     assertExact<IsExact<ExtractInput<typeof mapped>, any>>();
     assertExact<IsExact<ExtractOutput<typeof mapped>, Option<{ deployed: boolean }>>>();
   });
@@ -989,7 +987,10 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() infers types from this constraint", () => {
-    const resultAction = identity() as TypedAction<string, Result<string, number>>;
+    const resultAction = withUnion(
+      identity() as TypedAction<string, Result<string, number>>,
+      resultMethods,
+    );
     const throwToken = typedAction<number, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     assertExact<IsExact<ExtractInput<typeof action>, string>>();
@@ -997,10 +998,13 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() composes in tryCatch pipeline", () => {
-    const handler = identity() as TypedAction<
-      { data: string },
-      Result<{ data: string }, { code: number }>
-    >;
+    const handler = withUnion(
+      identity() as TypedAction<
+        { data: string },
+        Result<{ data: string }, { code: number }>
+      >,
+      resultMethods,
+    );
     const action = tryCatch(
       (throwError) => handler.unwrapOr(throwError),
       pipe(drop, constant({ data: "fallback" })),
@@ -1010,10 +1014,13 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() chains into further pipeline steps", () => {
-    const handler = identity() as TypedAction<
-      { artifact: string },
-      Result<{ verified: boolean }, string>
-    >;
+    const handler = withUnion(
+      identity() as TypedAction<
+        { artifact: string },
+        Result<{ verified: boolean }, string>
+      >,
+      resultMethods,
+    );
     const action = tryCatch(
       (throwError) => pipe(
         handler.unwrapOr(throwError),
@@ -1026,16 +1033,19 @@ describe("Result.unwrapOr with throw tokens", () => {
   });
 
   it(".unwrapOr() produces Chain AST node", () => {
-    const resultAction = identity() as TypedAction<void, Result<string, string>>;
+    const resultAction = withUnion(
+      identity() as TypedAction<void, Result<string, string>>,
+      resultMethods,
+    );
     const throwToken = typedAction<string, never>({ kind: "RestartPerform", restart_handler_id: allocateRestartHandlerId() });
     const action = resultAction.unwrapOr(throwToken);
     expect(action.kind).toBe("Chain");
   });
 
   it("rejects .unwrapOr() on non-Result output", () => {
-    // deploy outputs { deployed: boolean } — not a Result
-    // @ts-expect-error — unwrapOr requires Out to be Result<TValue, TError>
-    deploy.unwrapOr(drop);
+    // deploy outputs { deployed: boolean } — not an Option or Result
+    // @ts-expect-error — unwrapOr requires Option or Result output
+    expect(() => deploy.unwrapOr(drop)).toThrow(".unwrapOr() requires Option or Result output");
   });
 });
 

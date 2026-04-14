@@ -1,6 +1,7 @@
 import {
   type Option as OptionT,
   type Pipeable,
+  type Result as ResultT,
   type TypedAction,
   type UnionMethods,
   typedAction,
@@ -10,12 +11,15 @@ import {
 import { chain } from "./chain.js";
 import {
   constant,
+  drop,
   getIndex,
   identity,
   splitFirst,
   splitLast,
   tag,
 } from "./builtins.js";
+// Lazy: resultMethods is only accessed inside function bodies, not at module init.
+import { resultMethods } from "./result.js";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -31,6 +35,7 @@ export const optionMethods: UnionMethods = {
   collect: () => Option.collect(),
   isSome: () => Option.isSome(),
   isNone: () => Option.isNone(),
+  transpose: () => Option.transpose(),
 };
 
 // ---------------------------------------------------------------------------
@@ -158,6 +163,35 @@ export const Option = {
       Some: constant(false),
       None: constant(true),
     }) as TypedAction<OptionT<T>, boolean>;
+  },
+
+  /**
+   * Swap Option/Result nesting.
+   * `Option<Result<TValue, TError>> → Result<Option<TValue>, TError>`
+   *
+   * - Some(Ok(t))  → Ok(Some(t))
+   * - Some(Err(e)) → Err(e)
+   * - None         → Ok(None)
+   *
+   * Changes family — result carries resultMethods.
+   */
+  transpose<TValue, TError>(): TypedAction<
+    OptionT<ResultT<TValue, TError>>,
+    ResultT<OptionT<TValue>, TError>
+  > {
+    return withUnion(
+      branch({
+        Some: branch({
+          Ok: chain(tag("Some") as any, tag("Ok")),
+          Err: tag("Err"),
+        }),
+        None: chain(drop.tag("None") as any, tag("Ok")),
+      }) as TypedAction<
+        OptionT<ResultT<TValue, TError>>,
+        ResultT<OptionT<TValue>, TError>
+      >,
+      resultMethods,
+    );
   },
 
   /**

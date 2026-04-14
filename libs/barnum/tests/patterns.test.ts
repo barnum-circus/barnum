@@ -9,7 +9,6 @@ import {
   bind,
   bindInput,
   resetEffectIdCounter,
-  type OptionDef,
   constant,
   drop,
   identity,
@@ -398,9 +397,10 @@ describe("Option namespace", () => {
     expect(branchNode.cases["None"].rest.handler.builtin.value).toBe(true);
   });
 
-  it("postfix .mapOption() produces Chain → Branch AST", () => {
-    const optionAction = verify.tag<OptionDef<{ verified: boolean }>, "Some">("Some");
-    const mapped = optionAction.mapOption(deploy);
+  it("postfix .map() dispatches to Option.map and produces Chain → Branch AST", () => {
+    // Option.some() attaches __union: optionMethods, enabling .map() dispatch
+    const optionAction = O.some<{ verified: boolean }>();
+    const mapped = optionAction.map(deploy);
     expect(mapped.kind).toBe("Chain");
     const chain = mapped as { kind: "Chain"; first: any; rest: any };
     expect(chain.first.kind).toBe("Chain");
