@@ -192,15 +192,20 @@ export function getField<
 
 export function getIndex<TTuple extends unknown[], TIndex extends number>(
   index: TIndex,
-): TypedAction<TTuple, TTuple[TIndex]> {
-  return typedAction({
-    kind: "Invoke",
-    handler: {
-      kind: "Builtin",
-      builtin: { kind: "GetIndex", index },
-    },
-  });
+): TypedAction<TTuple, OptionT<TTuple[TIndex]>> {
+  return withUnion(
+    typedAction({
+      kind: "Invoke",
+      handler: {
+        kind: "Builtin",
+        builtin: { kind: "GetIndex", index },
+      },
+    }),
+    "Option",
+    optionMethods,
+  );
 }
+
 
 // ---------------------------------------------------------------------------
 // Pick — select named fields from an object
@@ -260,19 +265,19 @@ export function withResource<
   // Step 2: all(action, identity) → [TOut, TResource & TIn]
   const actionAndKeepMerged = all(action as any, identity());
 
-  // Step 3: all(getIndex(0), chain(getIndex(1), dispose)) → [TOut, unknown]
+  // Step 3: all(getIndex(0).unwrap(), chain(getIndex(1).unwrap(), dispose)) → [TOut, unknown]
   const disposeAndKeepResult = all(
-    getIndex(0) as any,
-    chain(getIndex(1) as any, dispose),
+    getIndex(0).unwrap() as any,
+    chain(getIndex(1).unwrap() as any, dispose),
   );
 
-  // Step 4: getIndex(0) → TOut
+  // Step 4: getIndex(0).unwrap() → TOut
   return chain(
     chain(
       chain(acquireAndMerge, actionAndKeepMerged) as any,
       disposeAndKeepResult,
     ),
-    getIndex(0) as any,
+    getIndex(0).unwrap() as any,
   ) as TypedAction<TIn, TOut>;
 }
 

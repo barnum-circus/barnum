@@ -244,7 +244,7 @@ export function first<TElement>(): TypedAction<
 > {
   return chain(
     splitFirst() as any,
-    Option.map(getIndex(0) as any),
+    Option.map(getIndex(0).unwrap() as any),
   ) as TypedAction<readonly TElement[], OptionT<TElement>>;
 }
 
@@ -267,6 +267,6 @@ export function last<TElement>(): TypedAction<
 > {
   return chain(
     splitLast() as any,
-    Option.map(getIndex(1) as any),
+    Option.map(getIndex(1).unwrap() as any),
   ) as TypedAction<readonly TElement[], OptionT<TElement>>;
 }

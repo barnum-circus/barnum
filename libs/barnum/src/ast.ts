@@ -276,11 +276,11 @@ export type TypedAction<In = unknown, Out = unknown> = Action & {
   getField<TField extends keyof Out & string>(
     field: TField,
   ): TypedAction<In, Out[TField]>;
-  /** Extract an element from the output tuple by index. `a.getIndex(0)` ≡ `pipe(a, getIndex(0))`. */
+  /** Extract an element from the output array by index. Returns Option. */
   getIndex<TIn, TTuple extends unknown[], TIndex extends number>(
     this: TypedAction<TIn, TTuple>,
     index: TIndex,
-  ): TypedAction<TIn, TTuple[TIndex]>;
+  ): TypedAction<TIn, Option<TTuple[TIndex]>>;
   /** Wrap output in an object under a field name. `a.wrapInField("foo")` ≡ `pipe(a, wrapInField("foo"))`. */
   wrapInField<TField extends string>(
     field: TField,
@@ -908,7 +908,7 @@ export function recur<TIn = void, TOut = any>(
     kind: "RestartHandle",
     restart_handler_id: restartHandlerId,
     body,
-    handler: getIndex(0) as Action,
+    handler: getIndex(0).unwrap() as Action,
   });
 }
 
@@ -976,7 +976,7 @@ export function buildRestartBranchAction(
       kind: "RestartHandle",
       restart_handler_id: restartHandlerId,
       body: branch({ Continue: continueArm, Break: breakArm } as any) as Action,
-      handler: getIndex(0) as Action,
+      handler: getIndex(0).unwrap() as Action,
     } as any,
   ) as Action;
 }

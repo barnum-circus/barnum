@@ -189,10 +189,11 @@ describe("loop", () => {
     // RestartHandle body: Branch with Continue/Break cases
     expect(chain.rest.body.kind).toBe("Branch");
     expect(Object.keys(chain.rest.body.cases).toSorted()).toEqual(["Break", "Continue"]);
-    // RestartHandle handler: Invoke(GetIndex(0))
-    expect(chain.rest.handler.kind).toBe("Invoke");
-    expect(chain.rest.handler.handler.builtin.kind).toBe("GetIndex");
-    expect(chain.rest.handler.handler.builtin.index).toBe(0);
+    // RestartHandle handler: Chain(Invoke(GetIndex(0)), Branch(unwrap))
+    expect(chain.rest.handler.kind).toBe("Chain");
+    expect(chain.rest.handler.first.kind).toBe("Invoke");
+    expect(chain.rest.handler.first.handler.builtin.kind).toBe("GetIndex");
+    expect(chain.rest.handler.first.handler.builtin.index).toBe(0);
   });
 
   it("composes type-check loop with branch", () => {
@@ -458,23 +459,28 @@ describe("bind", () => {
     const handle = outer.rest as { kind: "ResumeHandle"; resume_handler_id: number; handler: any; body: any };
     expect(typeof handle.resume_handler_id).toBe("number");
 
-    // ResumeHandle handler: readVar(0) = All(Chain(GetIndex(1), GetIndex(0)), GetIndex(1))
+    // ResumeHandle handler: readVar(0) = All(Chain(GetIndex(1).unwrap(), GetIndex(0).unwrap()), GetIndex(1).unwrap())
+    // Each getIndex(n).unwrap() is Chain(Invoke(GetIndex(n)), Branch(unwrap))
     expect(handle.handler.kind).toBe("All");
     expect(handle.handler.actions).toHaveLength(2);
-    // First action: Chain(GetIndex(1), GetIndex(0))
+    // First action: Chain(Chain(GetIndex(1), unwrap), Chain(GetIndex(0), unwrap))
     expect(handle.handler.actions[0].kind).toBe("Chain");
-    expect(handle.handler.actions[0].first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[0].first.handler.builtin.index).toBe(1);
-    expect(handle.handler.actions[0].rest.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[0].rest.handler.builtin.index).toBe(0);
-    // Second action: GetIndex(1)
-    expect(handle.handler.actions[1].handler.builtin.kind).toBe("GetIndex");
-    expect(handle.handler.actions[1].handler.builtin.index).toBe(1);
+    expect(handle.handler.actions[0].first.kind).toBe("Chain");
+    expect(handle.handler.actions[0].first.first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle.handler.actions[0].first.first.handler.builtin.index).toBe(1);
+    expect(handle.handler.actions[0].rest.kind).toBe("Chain");
+    expect(handle.handler.actions[0].rest.first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle.handler.actions[0].rest.first.handler.builtin.index).toBe(0);
+    // Second action: Chain(GetIndex(1), unwrap)
+    expect(handle.handler.actions[1].kind).toBe("Chain");
+    expect(handle.handler.actions[1].first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle.handler.actions[1].first.handler.builtin.index).toBe(1);
 
-    // ResumeHandle body: Chain(GetIndex(1), bodyAction)
+    // ResumeHandle body: Chain(Chain(GetIndex(1), unwrap), bodyAction)
     expect(handle.body.kind).toBe("Chain");
-    expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.body.first.handler.builtin.index).toBe(1);
+    expect(handle.body.first.kind).toBe("Chain");
+    expect(handle.body.first.first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle.body.first.first.handler.builtin.index).toBe(1);
   });
 
   it("two bindings produce two nested Handles with distinct effectIds", () => {
@@ -501,13 +507,17 @@ describe("bind", () => {
     expect(handle0.resume_handler_id).not.toBe(handle1.resume_handler_id);
 
     // readVar indices: outer=0, inner=1
-    expect(handle0.handler.actions[0].rest.handler.builtin.index).toBe(0);
-    expect(handle1.handler.actions[0].rest.handler.builtin.index).toBe(1);
+    // Each getIndex(n).unwrap() is Chain(Invoke(GetIndex(n)), Branch(unwrap))
+    // readVar's first action is Chain(getIndex(1).unwrap(), getIndex(n).unwrap())
+    // So .rest is getIndex(n).unwrap() = Chain(Invoke(GetIndex(n)), Branch(unwrap))
+    expect(handle0.handler.actions[0].rest.first.handler.builtin.index).toBe(0);
+    expect(handle1.handler.actions[0].rest.first.handler.builtin.index).toBe(1);
 
-    // Innermost body: Chain(GetIndex(2), bodyAction) — pipeline_input at index 2
+    // Innermost body: Chain(getIndex(2).unwrap(), bodyAction) — pipeline_input at index 2
     expect(handle1.body.kind).toBe("Chain");
-    expect(handle1.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle1.body.first.handler.builtin.index).toBe(2);
+    expect(handle1.body.first.kind).toBe("Chain");
+    expect(handle1.body.first.first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle1.body.first.first.handler.builtin.index).toBe(2);
   });
 
   it("VarRef is a ResumePerform node with unique resume_handler_id", () => {
@@ -544,7 +554,7 @@ describe("bind", () => {
     expect(ref1.resume_handler_id).not.toBe(ref2.resume_handler_id);
   });
 
-  it("readVar(n) structure is All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))", () => {
+  it("readVar(n) structure is All(Chain(GetIndex(1).unwrap(), GetIndex(n).unwrap()), GetIndex(1).unwrap())", () => {
     // Verify readVar structure for n=0, n=1, n=2 by inspecting handles in a 3-binding bind
     const result = bind(
       [constant("a"), constant("b"), constant("c")],
@@ -560,17 +570,21 @@ describe("bind", () => {
       const handler = handle.handler;
       expect(handler.kind).toBe("All");
       expect(handler.actions).toHaveLength(2);
-      // First action: Chain(GetIndex(1), GetIndex(n))
+      // First action: Chain(Chain(GetIndex(1), unwrap), Chain(GetIndex(n), unwrap))
+      // Each getIndex(x).unwrap() is Chain(Invoke(GetIndex(x)), Branch(unwrap))
       const chainAction = handler.actions[0];
       expect(chainAction.kind).toBe("Chain");
-      expect(chainAction.first.handler.builtin.kind).toBe("GetIndex");
-      expect(chainAction.first.handler.builtin.index).toBe(1);
-      expect(chainAction.rest.handler.builtin.kind).toBe("GetIndex");
-      expect(chainAction.rest.handler.builtin.index).toBe(expectedIndex);
-      // Second action: GetIndex(1)
+      expect(chainAction.first.kind).toBe("Chain");
+      expect(chainAction.first.first.handler.builtin.kind).toBe("GetIndex");
+      expect(chainAction.first.first.handler.builtin.index).toBe(1);
+      expect(chainAction.rest.kind).toBe("Chain");
+      expect(chainAction.rest.first.handler.builtin.kind).toBe("GetIndex");
+      expect(chainAction.rest.first.handler.builtin.index).toBe(expectedIndex);
+      // Second action: Chain(GetIndex(1), unwrap)
       const extractAction = handler.actions[1];
-      expect(extractAction.handler.builtin.kind).toBe("GetIndex");
-      expect(extractAction.handler.builtin.index).toBe(1);
+      expect(extractAction.kind).toBe("Chain");
+      expect(extractAction.first.handler.builtin.kind).toBe("GetIndex");
+      expect(extractAction.first.handler.builtin.index).toBe(1);
     }
   });
 });
@@ -597,10 +611,12 @@ describe("bindInput", () => {
     expect(outer.rest.kind).toBe("ResumeHandle");
     const handle = outer.rest;
 
-    // Handle body: Chain(GetIndex(1), Chain(Drop, bodyAction))
+    // Handle body: Chain(Chain(GetIndex(1), unwrap), Chain(Drop, bodyAction))
+    // getIndex(1).unwrap() is Chain(Invoke(GetIndex(1)), Branch(unwrap))
     expect(handle.body.kind).toBe("Chain");
-    expect(handle.body.first.handler.builtin.kind).toBe("GetIndex");
-    expect(handle.body.first.handler.builtin.index).toBe(1);
+    expect(handle.body.first.kind).toBe("Chain");
+    expect(handle.body.first.first.handler.builtin.kind).toBe("GetIndex");
+    expect(handle.body.first.first.handler.builtin.index).toBe(1);
 
     // The rest of the body is Chain(Drop, bodyAction)
     const bodyChain = handle.body.rest;

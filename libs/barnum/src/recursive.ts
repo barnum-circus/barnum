@@ -93,9 +93,9 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
       chain(all(identity(), constant(UNUSED_STATE)), {
         kind: "ResumeHandle",
         resume_handler_id: resumeHandlerId,
-        body: chain(getIndex(0), userBody as any) as Action,
+        body: chain(getIndex(0).unwrap(), userBody as any) as Action,
         handler: all(
-          chain(getIndex(0), branch(cases) as any),
+          chain(getIndex(0).unwrap(), branch(cases) as any),
           constant(UNUSED_STATE),
         ) as Action,
       } as Action) as Action,

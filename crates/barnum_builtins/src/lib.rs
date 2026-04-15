@@ -113,7 +113,10 @@ pub async fn execute_builtin(
                     actual: input.clone(),
                 });
             };
-            Ok(arr.get(*index).cloned().unwrap_or(Value::Null))
+            match arr.get(*index) {
+                Some(value) => Ok(json!({ "kind": "Some", "value": value })),
+                None => Ok(json!({ "kind": "None", "value": null })),
+            }
         }
 
         BuiltinKind::SplitFirst => {
@@ -290,17 +293,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_index_gets_value() {
+    async fn get_index_returns_some() {
         let input = json!(["a", "b", "c"]);
         let result = execute_builtin(&BuiltinKind::GetIndex { index: 1 }, &input).await;
-        assert_eq!(result.unwrap(), json!("b"));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Some", "value": "b"})
+        );
     }
 
     #[tokio::test]
-    async fn get_index_out_of_bounds_returns_null() {
+    async fn get_index_out_of_bounds_returns_none() {
         let input = json!(["a"]);
         let result = execute_builtin(&BuiltinKind::GetIndex { index: 5 }, &input).await;
-        assert_eq!(result.unwrap(), Value::Null);
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "None", "value": null})
+        );
     }
 
     #[tokio::test]

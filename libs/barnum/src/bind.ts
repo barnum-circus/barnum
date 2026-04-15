@@ -60,12 +60,12 @@ export type InferVarRefs<TBindings extends Action[]> = {
  * `state` (index 1) is the full All output tuple. The handler produces
  * `[state[n], state]` — value is state[n], new_state is state (unchanged).
  *
- * Expanded AST: All(Chain(GetIndex(1), GetIndex(n)), GetIndex(1))
+ * Expanded AST: All(Chain(GetIndex(1).unwrap(), GetIndex(n).unwrap()), GetIndex(1).unwrap())
  */
 function readVar(n: number): Action {
   return all(
-    chain(getIndex(1) as any, getIndex(n)),
-    getIndex(1) as any,
+    chain(getIndex(1).unwrap() as any, getIndex(n).unwrap()),
+    getIndex(1).unwrap() as any,
   ) as Action;
 }
 
@@ -116,7 +116,7 @@ export function bind<TBindings extends Action[], TOut>(
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
   let inner: Action = chain(
-    getIndex(pipelineInputIndex) as any,
+    getIndex(pipelineInputIndex).unwrap() as any,
     bodyAction as any,
   ) as Action;
   for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
