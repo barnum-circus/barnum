@@ -56,14 +56,15 @@ Operations that work regardless of what's in the pipeline.
 | `constant(v)` | `any → T` | Fixed value, ignores input |
 | `identity` | `T → T` | Pass through |
 | `drop` | `T → void` | Postfix `.drop()` |
+| `panic(msg)` | `any → never` | Fatal error, not caught by tryCatch. Rust builtin. |
 | `wrapInField(key)` | `T → { K: T }` | Wrap under a key |
 
 ### Removed
 
-| Name | Reason |
-|------|--------|
-| `tap(action)` | Subsumed by `bind`/`bindInput`. Remove from public API. |
-| `merge()` | Internal plumbing for `pick`, `allObject`, `withResource`. Not user-facing. Keep Rust builtin, remove JS export. |
+| Name | Reason | Status |
+|------|--------|--------|
+| `tap(action)` | Subsumed by `bind`/`bindInput` | **done** |
+| `merge()` | Internal plumbing for `pick`, `allObject`, `withResource`. Not user-facing. Keep Rust builtin, remove JS export. | pending |
 
 ---
 
@@ -73,7 +74,7 @@ Objects in barnum are **structs** — fields are known at compile time. This is 
 
 | Name | Signature | Notes |
 |------|-----------|-------|
-| `getField(key)` | `Obj → Option<Obj[K]>` | Postfix `.getField()`. Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present fields. |
+| `getField(key)` | `Obj → Obj[K]` | Postfix `.getField()`. Struct fields are known at compile time — returning raw value is correct. `Option` semantics belong on HashMap.get, not struct field access. |
 | `pick(...keys)` | `Obj → Pick<Obj, Keys>` | Postfix `.pick()` |
 
 ### Proposed
@@ -113,7 +114,7 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `range(start, end)` | `any → number[]` | Constant integer array, ignores input |
 | `forEach(action)` | `T[] → U[]` | Postfix. Map over elements |
 | `getIndex(n)` | `Tuple → Option<Tuple[N]>` | Currently returns raw value; should return `Option`. Compose `.unwrap()` for known-present. |
-| `flattenArray()` | `T[][] → T[]` | Currently `flatten()` — rename to disambiguate from Option/Result |
+| `flatten()` | `T[][] → T[]` | Postfix `.flatten()` dispatches: Option/Result via `__union`, array via builtin fallback. Single name, no rename needed. |
 | `splitFirst()` | `T[] → Option<[T, T[]]>` | Postfix. Head/tail decomposition |
 | `splitLast()` | `T[] → Option<[T[], T]>` | Postfix. Init/last decomposition |
 | `first()` | `T[] → Option<T>` | Postfix. Safe first element |
@@ -148,12 +149,15 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Option.none()` | `any → Option<T>` | exists | Constructor, ignores input |
 | `Option.map(action)` | `Option<T> → Option<U>` | exists, postfix | |
 | `Option.andThen(action)` | `Option<T> → Option<U>` | exists, postfix | Monadic bind |
+| `Option.unwrap()` | `Option<T> → T` | exists, postfix | Panics on None (fatal, not caught by tryCatch) |
 | `Option.unwrapOr(action)` | `Option<T> → T` | exists, postfix | |
-| `flattenOption()` | `Option<Option<T>> → Option<T>` | rename | Currently `Option.flatten()` — add top-level alias |
+| `Option.flatten()` | `Option<Option<T>> → Option<T>` | exists, postfix | Dispatched via `.flatten()` |
 | `Option.filter(pred)` | `Option<T> → Option<T>` | exists, postfix | |
 | `Option.isSome()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.isNone()` | `Option<T> → boolean` | exists, postfix | |
 | `Option.collect()` | `Option<T>[] → T[]` | exists, postfix | Filter + extract Somes |
+
+| `Option.transpose()` | `Option<Result<T,E>> → Result<Option<T>,E>` | exists, postfix | Swaps nesting, changes family to Result |
 
 ### Proposed
 
@@ -161,7 +165,6 @@ Not proposed for the current release. Belongs to a future where barnum has first
 |------|-----------|--------|-------|
 | `Option.okOr(action)` | `Option<T> → Result<T, E>` | composable | Branch → tag |
 | `Option.zip` | `(Option<T>, Option<U>) → Option<[T, U]>` | composable | Low priority |
-| `Option.transpose` | `Option<Result<T, E>> → Result<Option<T>, E>` | composable | Deferred from union dispatch — needs optionMethods.transpose |
 
 ---
 
@@ -176,8 +179,9 @@ Not proposed for the current release. Belongs to a future where barnum has first
 | `Result.andThen(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Monadic bind |
 | `Result.or(action)` | `Result<T, E> → Result<T, F>` | exists, postfix | Fallback on Err |
 | `Result.and(action)` | `Result<T, E> → Result<U, E>` | exists, postfix | Replace Ok |
+| `Result.unwrap()` | `Result<T, E> → T` | exists, postfix | Panics on Err (fatal, not caught by tryCatch) |
 | `Result.unwrapOr(action)` | `Result<T, E> → T` | exists, postfix | |
-| `flattenResult()` | `Result<Result<T,E>,E> → Result<T,E>` | rename | Currently `Result.flatten()` — add top-level alias |
+| `Result.flatten()` | `Result<Result<T,E>,E> → Result<T,E>` | exists, postfix | Dispatched via `.flatten()` |
 | `Result.toOption()` | `Result<T, E> → Option<T>` | exists, postfix | |
 | `Result.toOptionErr()` | `Result<T, E> → Option<E>` | exists, postfix | |
 | `Result.transpose()` | `Result<Option<T>, E> → Option<Result<T, E>>` | exists, postfix | |
@@ -197,27 +201,26 @@ Not proposed for the current release. Belongs to a future where barnum has first
 
 ---
 
-## Naming Collisions
+## `flatten` — unified name, dispatched
 
-Standalone functions that share a name across self types need explicit disambiguation:
+`flatten` is a single name for all types. The postfix `.flatten()` dispatches:
 
-| Current name | Self type | Standalone name | Postfix |
-|--------------|-----------|-----------------|---------|
-| `flatten()` | `T[][]` | `flattenArray()` | `.flatten()` via dispatch |
-| `Option.flatten()` | `Option<Option<T>>` | `flattenOption()` | `.flatten()` via dispatch |
-| `Result.flatten()` | `Result<Result<T,E>,E>` | `flattenResult()` | `.flatten()` via dispatch |
+| Self type | Dispatch | Implementation |
+|-----------|----------|----------------|
+| `T[][]` | Fallback (no `__union`) | Array builtin |
+| `Option<Option<T>>` | `optionMethods.flatten` | Branch: Some → identity, None → tag None |
+| `Result<Result<T,E>,E>` | `resultMethods.flatten` | Branch: Ok → identity, Err → tag Err |
 
-Standalone functions: use self-type-explicit names (`flattenArray`, `flattenOption`, `flattenResult`).
-Postfix methods: dispatch on concrete type — `.flatten()` just works.
+No `flattenArray`/`flattenOption`/`flattenResult` standalone names needed. The standalone `flatten()` export from builtins is the array version (used as the fallback).
 
 ---
 
 ## Removals
 
-| Name | Reason | Action |
+| Name | Reason | Status |
 |------|--------|--------|
-| `tap` | Subsumed by `bind`/`bindInput` | Remove from public exports, delete postfix `.tap()` |
-| `merge` | See below | Remove JS export, delete postfix `.merge()` |
+| `tap` | Subsumed by `bind`/`bindInput` | **done** — removed from exports and postfix |
+| `merge` | See below | pending |
 
 ### `merge` → `allObject`
 
@@ -249,42 +252,26 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 
 ## TODOs
 
-### Removals
-- [ ] Remove `tap` from public exports, delete postfix `.tap()`
-- [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
+### Done
+- [x] Remove `tap` from public exports
+- [x] `mapOption` → `map` — renamed, converted to dispatch
+- [x] `mapErr` → converted to dispatch
+- [x] `unwrapOr` — widened to Option + Result, converted to dispatch
+- [x] `Option.transpose` — implemented, dispatched
+- [x] `.flatten()` — three-way dispatch: Option/Result via `__union`, array via builtin fallback. No rename.
+- [x] `unwrap` — panicking unwrap for Option and Result
+- [x] `panic(msg)` — Panic builtin (TS + Rust)
+- [x] `__union` → `{ name, methods }` shape with type name in error messages
 
 ### Breaking changes
-- [ ] `getField(key)` returns `Option<Obj[K]>` instead of raw value
 - [ ] `getIndex(n)` returns `Option<Tuple[N]>` instead of raw value
 
-### Union postfix dispatch (done — see past/UNION_POSTFIX_DISPATCH.md)
-- [x] Implement `__union` runtime tag on TypedAction
-- [x] Option/Result constructors attach tag
-- [x] Union-aware combinators propagate tag
-- [x] `chain()` propagates `__union` from rest action
-- [x] `.andThen()` — dispatch to Option.andThen / Result.andThen
-- [x] `.filter()` — Option.filter
-- [x] `.isSome()`, `.isNone()` — Option-only
-- [x] `.collect()` — Option.collect
-- [x] `.mapErr()` — Result-only
-- [x] `.or()`, `.and()` — Result-only
-- [x] `.toOption()`, `.toOptionErr()` — Result-only
-- [x] `.transpose()` — Result.transpose (Option.transpose deferred)
-- [x] `.isOk()`, `.isErr()` — Result-only
-
-### Phase 0 — obvious mechanical wiring (dispatch infra + namespace methods exist, just connect them)
-- [ ] `mapOption` → `map` — rename postfix, convert hardcoded → dispatch (Option.map + Result.map both exist)
-- [ ] `mapErr` → convert hardcoded → dispatch for consistency (Result-only, no new functionality)
-- [ ] `unwrapOr` — widen to Option + Result, convert hardcoded → dispatch (both implementations exist)
-- [ ] `Option.transpose` — implement combinator, add to optionMethods dispatch table
-
-### Phase 2 — needs design
-- [ ] `.flatten()` widening — three-way dispatch: array (no `__union`), Option, Result. Naming: `flattenArray`/`flattenOption`/`flattenResult` as standalone vs dispatched `.flatten()`
-- [ ] `IntoIterator` / `.intoIter()` — convert Option/Result/Array to common iterable form so array methods (forEach, filter, etc.) work uniformly. See design notes below.
+### Pending
+- [ ] Remove `merge` from JS export, delete postfix `.merge()` (keep Rust builtin)
+- [ ] `IntoIterator` / `.intoIter()` — see TRAIT_DISPATCH_AND_ITERATORS.md
 
 ### Postfix: future
 - [ ] `.omit()` — Struct-only (when implemented)
-- [ ] `.flatMap()` — Array-only (when implemented)
 
 ### New: control flow
 - [ ] `allObject` — `Record<K, Action> → { [K]: Out }` (composable)
@@ -299,7 +286,6 @@ Ergonomic improvement where zero-arg builtins can be passed as bare references. 
 - [ ] `Arr.isEmpty()` — `T[] → boolean`
 - [ ] `Arr.join(sep)` — `string[] → string`
 - [ ] `filter(pred)` — composable: `forEach(pred).then(Option.collect())`
-- [ ] `flatMap(action)` — composable: `forEach(action).then(flattenArray())`
 
 ### New: Option
 - [ ] `Option.okOr(action)` — `Option<T> → Result<T, E>` (composable)
