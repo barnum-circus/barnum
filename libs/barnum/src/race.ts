@@ -3,6 +3,7 @@ import {
   type Pipeable,
   type Result,
   type TypedAction,
+  toAction,
   typedAction,
   buildRestartBranchAction,
 } from "./ast.js";
@@ -19,13 +20,10 @@ import {
  * restarts the body; Branch takes the Break arm (identity), `RestartHandle` exits.
  */
 function breakPerform(restartHandlerId: RestartHandlerId): Action {
-  return chain(
-    tag("Break") as any,
-    {
-      kind: "RestartPerform",
-      restart_handler_id: restartHandlerId,
-    } as any,
-  ) as Action;
+  return toAction(chain(
+    toAction(tag("Break")),
+    { kind: "RestartPerform", restart_handler_id: restartHandlerId },
+  ));
 }
 
 // ---------------------------------------------------------------------------
@@ -57,13 +55,13 @@ export function race<TIn, TOut>(
   const perform = breakPerform(restartHandlerId);
 
   const branches = actions.map(
-    (action) => chain(action as any, perform as any) as Action,
+    (action) => toAction(chain(toAction(action), toAction(perform))),
   );
 
   const allAction: Action = { kind: "All", actions: branches };
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, allAction, identity() as Action),
+    buildRestartBranchAction(restartHandlerId, allAction, toAction(identity())),
   );
 }
 
@@ -144,20 +142,20 @@ export function withTimeout<TIn, TOut>(
   const perform = breakPerform(restartHandlerId);
 
   // Branch 1: body → Tag("Ok") → Break → RestartPerform
-  const bodyBranch = chain(
-    chain(body as any, tag("Ok")),
-    perform as any,
-  ) as Action;
+  const bodyBranch = toAction(chain(
+    toAction(chain(toAction(body), toAction(tag("Ok")))),
+    toAction(perform),
+  ));
 
   // Branch 2: ms → sleep() → Tag("Err") → Break → RestartPerform
-  const sleepBranch = chain(
-    chain(chain(ms as any, DYNAMIC_SLEEP_INVOKE as any), tag("Err")),
-    perform as any,
-  ) as Action;
+  const sleepBranch = toAction(chain(
+    toAction(chain(toAction(chain(toAction(ms), toAction(DYNAMIC_SLEEP_INVOKE))), toAction(tag("Err")))),
+    toAction(perform),
+  ));
 
   const allAction: Action = { kind: "All", actions: [bodyBranch, sleepBranch] };
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, allAction, identity() as Action),
+    buildRestartBranchAction(restartHandlerId, allAction, toAction(identity())),
   );
 }

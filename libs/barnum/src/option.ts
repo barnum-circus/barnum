@@ -4,6 +4,7 @@ import {
   type Result as ResultT,
   type TypedAction,
   type UnionMethods,
+  toAction,
   typedAction,
   withUnion,
   branch,
@@ -67,7 +68,7 @@ export const Option = {
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return withUnion(
       branch({
-        Some: chain(action as any, tag("Some")),
+        Some: chain(toAction(action), toAction(tag("Some"))),
         None: tag("None"),
       }) as TypedAction<OptionT<T>, OptionT<U>>,
       "Option", optionMethods,
@@ -197,10 +198,10 @@ export const Option = {
     return withUnion(
       branch({
         Some: branch({
-          Ok: chain(tag("Some") as any, tag("Ok")),
+          Ok: chain(toAction(tag("Some")), toAction(tag("Ok"))),
           Err: tag("Err"),
         }),
-        None: chain(drop.tag("None") as any, tag("Ok")),
+        None: chain(toAction(drop.tag("None")), toAction(tag("Ok"))),
       }) as TypedAction<
         OptionT<ResultT<TValue, TError>>,
         ResultT<OptionT<TValue>, TError>
@@ -243,8 +244,8 @@ export function first<TElement>(): TypedAction<
   OptionT<TElement>
 > {
   return chain(
-    splitFirst() as any,
-    Option.map(getIndex(0).unwrap() as any),
+    toAction(splitFirst()),
+    toAction(Option.map(toAction(getIndex(0).unwrap()))),
   ) as TypedAction<readonly TElement[], OptionT<TElement>>;
 }
 
@@ -266,7 +267,7 @@ export function last<TElement>(): TypedAction<
   OptionT<TElement>
 > {
   return chain(
-    splitLast() as any,
-    Option.map(getIndex(1).unwrap() as any),
+    toAction(splitLast()),
+    toAction(Option.map(toAction(getIndex(1).unwrap()))),
   ) as TypedAction<readonly TElement[], OptionT<TElement>>;
 }

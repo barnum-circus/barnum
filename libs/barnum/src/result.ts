@@ -4,6 +4,7 @@ import {
   type Result as ResultT,
   type TypedAction,
   type UnionMethods,
+  toAction,
   withUnion,
   branch,
 } from "./ast.js";
@@ -59,7 +60,7 @@ export const Result = {
   ): TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>> {
     return withUnion(
       branch({
-        Ok: chain(action as any, tag("Ok")),
+        Ok: chain(toAction(action), toAction(tag("Ok"))),
         Err: tag("Err"),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TOut, TError>>,
       "Result", resultMethods,
@@ -73,7 +74,7 @@ export const Result = {
     return withUnion(
       branch({
         Ok: tag("Ok"),
-        Err: chain(action as any, tag("Err")),
+        Err: chain(toAction(action), toAction(tag("Err"))),
       }) as TypedAction<ResultT<TValue, TError>, ResultT<TValue, TErrorOut>>,
       "Result", resultMethods,
     );
@@ -214,10 +215,10 @@ export const Result = {
     return withUnion(
       branch({
         Ok: branch({
-          Some: chain(tag("Ok") as any, tag("Some")),
+          Some: chain(toAction(tag("Ok")), toAction(tag("Some"))),
           None: drop.tag("None"),
         }),
-        Err: chain(tag("Err") as any, tag("Some")),
+        Err: chain(toAction(tag("Err")), toAction(tag("Some"))),
       }) as TypedAction<
         ResultT<OptionT<TValue>, TError>,
         OptionT<ResultT<TValue, TError>>

@@ -452,6 +452,17 @@ export type Pipeable<In = unknown, Out = unknown> = Action & {
 };
 
 /**
+ * Strip phantom types from a Pipeable, returning a plain Action.
+ *
+ * Replaces `x as Action` casts throughout the codebase. The constraint
+ * ensures the argument is structurally a Pipeable — unlike a bare cast,
+ * `toAction(123)` is a type error.
+ */
+export function toAction<TIn, TOut>(pipeable: Pipeable<TIn, TOut>): Action {
+  return pipeable;
+}
+
+/**
  * Contravariant input + covariant output for branch case handler positions.
  *
  * Omits __in_co (covariant input) compared to Pipeable. This gives:
@@ -559,59 +570,59 @@ function thenMethod<TIn, TOut, TNext>(
 }
 
 function forEachMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(this as any, forEach(action as any)) as TypedAction;
+  return chain(toAction(this), toAction(forEach(action)));
 }
 
 function branchMethod(
   this: TypedAction,
   cases: Record<string, Action>,
 ): TypedAction {
-  return chain(this as any, branch(cases as any)) as TypedAction;
+  return chain(toAction(this), toAction(branch(cases)));
 }
 
 function flattenMethod(this: TypedAction): TypedAction {
   const dispatch = this.__union;
   if (dispatch?.methods.flatten) {
-    return chain(this, dispatch.methods.flatten()) as TypedAction;
+    return chain(toAction(this), toAction(dispatch.methods.flatten()));
   }
   // Fall back to array flatten
-  return chain(this as any, flattenBuiltin()) as TypedAction;
+  return chain(toAction(this), toAction(flattenBuiltin()));
 }
 
 function dropMethod(this: TypedAction): TypedAction {
-  return chain(this as any, drop) as TypedAction;
+  return chain(toAction(this), toAction(drop));
 }
 
 function tagMethod(this: TypedAction, kind: string): TypedAction {
-  return chain(this as any, tag(kind)) as TypedAction;
+  return chain(toAction(this), toAction(tag(kind)));
 }
 
 function getFieldMethod(this: TypedAction, field: string): TypedAction {
-  return chain(this as any, getField(field)) as TypedAction;
+  return chain(toAction(this), toAction(getField(field)));
 }
 
 function getIndexMethod(this: TypedAction, index: number): TypedAction {
-  return chain(this as any, getIndex(index)) as TypedAction;
+  return chain(toAction(this), toAction(getIndex(index)));
 }
 
 function wrapInFieldMethod(this: TypedAction, field: string): TypedAction {
-  return chain(this as any, wrapInField(field)) as TypedAction;
+  return chain(toAction(this), toAction(wrapInField(field)));
 }
 
 function mergeMethod(this: TypedAction): TypedAction {
-  return chain(this as any, merge()) as TypedAction;
+  return chain(toAction(this), toAction(merge()));
 }
 
 function pickMethod(this: TypedAction, ...keys: string[]): TypedAction {
-  return chain(this as any, pick(...keys)) as TypedAction;
+  return chain(toAction(this), toAction(pick(...keys)));
 }
 
 function splitFirstMethod(this: TypedAction): TypedAction {
-  return chain(this as any, splitFirst()) as TypedAction;
+  return chain(toAction(this), toAction(splitFirst()));
 }
 
 function splitLastMethod(this: TypedAction): TypedAction {
-  return chain(this as any, splitLast()) as TypedAction;
+  return chain(toAction(this), toAction(splitLast()));
 }
 
 /**
@@ -635,83 +646,83 @@ function requireDispatch<TResult>(
 
 function mapMethod(this: TypedAction, action: Action): TypedAction {
   const map = requireDispatch(this.__union, "map", (m) => m.map);
-  return chain(this, map(action)) as TypedAction;
+  return chain(toAction(this), toAction(map(action)));
 }
 
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
   const mapErr = requireDispatch(this.__union, "mapErr", (m) => m.mapErr);
-  return chain(this, mapErr(action)) as TypedAction;
+  return chain(toAction(this), toAction(mapErr(action)));
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
   const unwrap = requireDispatch(this.__union, "unwrap", (m) => m.unwrap);
-  return chain(this, unwrap()) as TypedAction;
+  return chain(toAction(this), toAction(unwrap()));
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
   const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
-  return chain(this, unwrapOr(defaultAction)) as TypedAction;
+  return chain(toAction(this), toAction(unwrapOr(defaultAction)));
 }
 
 // --- Dispatched postfix methods (via __union) ---
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
   const andThen = requireDispatch(this.__union, "andThen", (m) => m.andThen);
-  return chain(this, andThen(action)) as TypedAction;
+  return chain(toAction(this), toAction(andThen(action)));
 }
 
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
   const filter = requireDispatch(this.__union, "filter", (m) => m.filter);
-  return chain(this, filter(predicate)) as TypedAction;
+  return chain(toAction(this), toAction(filter(predicate)));
 }
 
 function isSomeMethod(this: TypedAction): TypedAction {
   const isSome = requireDispatch(this.__union, "isSome", (m) => m.isSome);
-  return chain(this, isSome()) as TypedAction;
+  return chain(toAction(this), toAction(isSome()));
 }
 
 function isNoneMethod(this: TypedAction): TypedAction {
   const isNone = requireDispatch(this.__union, "isNone", (m) => m.isNone);
-  return chain(this, isNone()) as TypedAction;
+  return chain(toAction(this), toAction(isNone()));
 }
 
 function collectMethod(this: TypedAction): TypedAction {
-  return chain(this as any, Option.collect()) as TypedAction;
+  return chain(toAction(this), toAction(Option.collect()));
 }
 
 function orMethod(this: TypedAction, fallback: Action): TypedAction {
   const or = requireDispatch(this.__union, "or", (m) => m.or);
-  return chain(this, or(fallback)) as TypedAction;
+  return chain(toAction(this), toAction(or(fallback)));
 }
 
 function andPostfixMethod(this: TypedAction, other: Action): TypedAction {
   const and = requireDispatch(this.__union, "and", (m) => m.and);
-  return chain(this, and(other)) as TypedAction;
+  return chain(toAction(this), toAction(and(other)));
 }
 
 function toOptionMethod(this: TypedAction): TypedAction {
   const toOption = requireDispatch(this.__union, "toOption", (m) => m.toOption);
-  return chain(this, toOption()) as TypedAction;
+  return chain(toAction(this), toAction(toOption()));
 }
 
 function toOptionErrMethod(this: TypedAction): TypedAction {
   const toOptionErr = requireDispatch(this.__union, "toOptionErr", (m) => m.toOptionErr);
-  return chain(this, toOptionErr()) as TypedAction;
+  return chain(toAction(this), toAction(toOptionErr()));
 }
 
 function isOkMethod(this: TypedAction): TypedAction {
   const isOk = requireDispatch(this.__union, "isOk", (m) => m.isOk);
-  return chain(this, isOk()) as TypedAction;
+  return chain(toAction(this), toAction(isOk()));
 }
 
 function isErrMethod(this: TypedAction): TypedAction {
   const isErr = requireDispatch(this.__union, "isErr", (m) => m.isErr);
-  return chain(this, isErr()) as TypedAction;
+  return chain(toAction(this), toAction(isErr()));
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
   const transpose = requireDispatch(this.__union, "transpose", (m) => m.transpose);
-  return chain(this, transpose()) as TypedAction;
+  return chain(toAction(this), toAction(transpose()));
 }
 
 function bindMethod(
@@ -719,14 +730,14 @@ function bindMethod(
   bindings: Action[],
   body: (vars: any) => Action,
 ): TypedAction {
-  return chain(this as any, bindStandalone(bindings, body) as any) as TypedAction;
+  return chain(toAction(this), toAction(bindStandalone(bindings, body)));
 }
 
 function bindInputMethod(
   this: TypedAction,
   body: (input: any) => Action,
 ): TypedAction {
-  return chain(this as any, bindInputStandalone(body) as any) as TypedAction;
+  return chain(toAction(this), toAction(bindInputStandalone(body)));
 }
 
 /**
@@ -822,7 +833,7 @@ export { race, sleep, withTimeout } from "./race.js";
 export function forEach<In, Out>(
   action: Pipeable<In, Out>,
 ): TypedAction<In[], Out[]> {
-  return typedAction({ kind: "ForEach", action: action as Action });
+  return typedAction({ kind: "ForEach", action: toAction(action) });
 }
 
 /**
@@ -836,10 +847,10 @@ function unwrapBranchCases(
 ): Record<string, Action> {
   const unwrapped: Record<string, Action> = {};
   for (const key of Object.keys(cases)) {
-    unwrapped[key] = chain(
-      getField("value") as any,
-      cases[key] as any,
-    ) as Action;
+    unwrapped[key] = toAction(chain(
+      toAction(getField("value")),
+      toAction(cases[key]),
+    ));
   }
   return unwrapped;
 }
@@ -902,13 +913,13 @@ export function recur<TIn = void, TOut = any>(
     restart_handler_id: restartHandlerId,
   });
 
-  const body = bodyFn(restartAction) as Action;
+  const body = toAction(bodyFn(restartAction));
 
   return typedAction({
     kind: "RestartHandle",
     restart_handler_id: restartHandlerId,
     body,
-    handler: getIndex(0).unwrap() as Action,
+    handler: toAction(getIndex(0).unwrap()),
   });
 }
 
@@ -936,19 +947,16 @@ export function earlyReturn<TEarlyReturn = void, TIn = any, TOut = any>(
   const restartHandlerId = allocateRestartHandlerId();
 
   const earlyReturnAction = typedAction<TEarlyReturn, never>(
-    chain(
-      tag("Break") as any,
-      {
-        kind: "RestartPerform",
-        restart_handler_id: restartHandlerId,
-      } as any,
-    ) as Action,
+    toAction(chain(
+      toAction(tag("Break")),
+      { kind: "RestartPerform", restart_handler_id: restartHandlerId },
+    )),
   );
 
-  const body = bodyFn(earlyReturnAction) as Action;
+  const body = toAction(bodyFn(earlyReturnAction));
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, identity() as Action),
+    buildRestartBranchAction(restartHandlerId, body, toAction(identity())),
   );
 }
 
@@ -970,15 +978,15 @@ export function buildRestartBranchAction(
   continueArm: Action,
   breakArm: Action,
 ): Action {
-  return chain(
-    tag("Continue") as any,
+  return toAction(chain(
+    toAction(tag("Continue")),
     {
       kind: "RestartHandle",
       restart_handler_id: restartHandlerId,
-      body: branch({ Continue: continueArm, Break: breakArm } as any) as Action,
-      handler: getIndex(0).unwrap() as Action,
-    } as any,
-  ) as Action;
+      body: toAction(branch({ Continue: continueArm, Break: breakArm })),
+      handler: toAction(getIndex(0).unwrap()),
+    },
+  ));
 }
 
 /**
@@ -1004,17 +1012,17 @@ export function loop<TBreak = void, TRecur = void>(
   };
 
   const recurAction = typedAction<TRecur, never>(
-    chain(tag("Continue") as any, perform as any) as Action,
+    toAction(chain(toAction(tag("Continue")), toAction(perform))),
   );
 
   const doneAction = typedAction<VoidToNull<TBreak>, never>(
-    chain(tag("Break") as any, perform as any) as Action,
+    toAction(chain(toAction(tag("Break")), toAction(perform))),
   );
 
-  const body = bodyFn(recurAction, doneAction) as Action;
+  const body = toAction(bodyFn(recurAction, doneAction));
 
   return typedAction(
-    buildRestartBranchAction(restartHandlerId, body, identity() as Action),
+    buildRestartBranchAction(restartHandlerId, body, toAction(identity())),
   );
 }
 

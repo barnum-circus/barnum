@@ -2,6 +2,7 @@ import {
   type Action,
   type Pipeable,
   type TypedAction,
+  toAction,
   typedAction,
   branch,
 } from "./ast.js";
@@ -68,37 +69,37 @@ export function defineRecursiveFunctions<TDefs extends FunctionDef[]>(
   // Call tokens: Chain(Tag("CallN"), ResumePerform(resumeHandlerId))
   const fnCount = bodiesFn.length;
   const callTokens = Array.from({ length: fnCount }, (_, i) =>
-    typedAction(chain(tag(`Call${i}`), resumePerform as any) as Action),
+    typedAction(toAction(chain(toAction(tag(`Call${i}`)), toAction(resumePerform)))),
   );
 
   // Get function body ASTs
-  const bodyActions = bodiesFn(
+  const bodyActions = (bodiesFn(
     ...(callTokens as FunctionRefs<TDefs>),
-  ) as Action[];
+  ) as Pipeable[]).map(toAction);
 
   // Branch cases: CallN → GetField("value") → bodyN
   const cases: Record<string, Action> = {};
   for (let i = 0; i < bodyActions.length; i++) {
-    cases[`Call${i}`] = chain(
-      getField("value"),
-      bodyActions[i] as any,
-    ) as Action;
+    cases[`Call${i}`] = toAction(chain(
+      toAction(getField("value")),
+      toAction(bodyActions[i]),
+    ));
   }
 
   // Return curried entry-point combinator
   return <TOut>(entryFn: (...fns: FunctionRefs<TDefs>) => BodyResult<TOut>) => {
-    const userBody = entryFn(...(callTokens as FunctionRefs<TDefs>)) as Action;
+    const userBody = toAction(entryFn(...(callTokens as FunctionRefs<TDefs>)));
 
     return typedAction<any, TOut>(
-      chain(all(identity(), constant(UNUSED_STATE)), {
+      toAction(chain(toAction(all(identity(), constant(UNUSED_STATE))), {
         kind: "ResumeHandle",
         resume_handler_id: resumeHandlerId,
-        body: chain(getIndex(0).unwrap(), userBody as any) as Action,
-        handler: all(
-          chain(getIndex(0).unwrap(), branch(cases) as any),
+        body: toAction(chain(toAction(getIndex(0).unwrap()), toAction(userBody))),
+        handler: toAction(all(
+          chain(toAction(getIndex(0).unwrap()), toAction(branch(cases))),
           constant(UNUSED_STATE),
-        ) as Action,
-      } as Action) as Action,
+        )),
+      })),
     );
   };
 }

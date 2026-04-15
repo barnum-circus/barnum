@@ -3,6 +3,7 @@ import {
   type ExtractInput,
   type ExtractOutput,
   type TypedAction,
+  toAction,
   typedAction,
 } from "./ast.js";
 import { chain } from "./chain.js";
@@ -63,10 +64,10 @@ export type InferVarRefs<TBindings extends Action[]> = {
  * Expanded AST: All(Chain(GetIndex(1).unwrap(), GetIndex(n).unwrap()), GetIndex(1).unwrap())
  */
 function readVar(n: number): Action {
-  return all(
-    chain(getIndex(1).unwrap() as any, getIndex(n).unwrap()),
-    getIndex(1).unwrap() as any,
-  ) as Action;
+  return toAction(all(
+    chain(toAction(getIndex(1).unwrap()), toAction(getIndex(n).unwrap())),
+    toAction(getIndex(1).unwrap()),
+  ));
 }
 
 // ---------------------------------------------------------------------------
@@ -110,15 +111,15 @@ export function bind<TBindings extends Action[], TOut>(
   const varRefs = resumeHandlerIds.map((id) => createVarRef(id));
 
   // 3. Invoke the body callback with the VarRefs.
-  const bodyAction = body(varRefs as InferVarRefs<TBindings>) as Action;
+  const bodyAction = toAction(body(varRefs as InferVarRefs<TBindings>));
 
   // 4. Build nested Handles from inside out.
   //    Innermost: extract pipeline_input (last All element) → user body
   const pipelineInputIndex = bindings.length;
-  let inner: Action = chain(
-    getIndex(pipelineInputIndex).unwrap() as any,
-    bodyAction as any,
-  ) as Action;
+  let inner: Action = toAction(chain(
+    toAction(getIndex(pipelineInputIndex).unwrap()),
+    toAction(bodyAction),
+  ));
   for (let i = resumeHandlerIds.length - 1; i >= 0; i--) {
     inner = {
       kind: "ResumeHandle",
@@ -131,9 +132,9 @@ export function bind<TBindings extends Action[], TOut>(
   // 5. All(...bindings, identity()) → nested Handles
   const allAction: Action = {
     kind: "All",
-    actions: [...bindings.map((b) => b as Action), identity() as Action],
+    actions: [...bindings.map((b) => toAction(b)), toAction(identity())],
   };
-  return typedAction(chain(allAction as any, inner as any) as Action);
+  return typedAction(toAction(chain(toAction(allAction), toAction(inner))));
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import {
   type Pipeable,
   type TaggedUnion,
   type TypedAction,
+  toAction,
   typedAction,
   withUnion,
 } from "./ast.js";
@@ -136,11 +137,11 @@ export function tag<
   TKind extends keyof TDef & string,
 >(kind: TKind): TypedAction<TDef[TKind], TaggedUnion<TDef>> {
   return chain(
-    all(
-      chain(constant(kind) as any, wrapInField("kind")),
+    toAction(all(
+      chain(toAction(constant(kind)), toAction(wrapInField("kind"))),
       wrapInField("value"),
-    ) as any,
-    merge(),
+    )),
+    toAction(merge()),
   ) as TypedAction<TDef[TKind], TaggedUnion<TDef>>;
 }
 
@@ -216,10 +217,10 @@ export function pick<
   TKeys extends (keyof TObj & string)[],
 >(...keys: TKeys): TypedAction<TObj, Pick<TObj, TKeys[number]>> {
   const actions = keys.map(
-    (key) => chain(getField(key) as any, wrapInField(key)) as Action,
+    (key) => toAction(chain(toAction(getField(key)), toAction(wrapInField(key)))),
   );
   const allAction: Action = { kind: "All", actions };
-  return chain(allAction as any, merge() as any) as TypedAction<
+  return chain(toAction(allAction), toAction(merge())) as TypedAction<
     TObj,
     Pick<TObj, TKeys[number]>
   >;
@@ -260,24 +261,24 @@ export function withResource<
   dispose: Pipeable<TResource, TDisposeOut>;
 }): TypedAction<TIn, TOut> {
   // Step 1: all(create, identity) → [TResource, TIn] → merge → TResource & TIn
-  const acquireAndMerge = chain(all(create, identity()) as any, merge());
+  const acquireAndMerge = chain(toAction(all(create, identity())), toAction(merge()));
 
   // Step 2: all(action, identity) → [TOut, TResource & TIn]
-  const actionAndKeepMerged = all(action as any, identity());
+  const actionAndKeepMerged = all(toAction(action), toAction(identity()));
 
   // Step 3: all(getIndex(0).unwrap(), chain(getIndex(1).unwrap(), dispose)) → [TOut, unknown]
   const disposeAndKeepResult = all(
-    getIndex(0).unwrap() as any,
-    chain(getIndex(1).unwrap() as any, dispose),
+    toAction(getIndex(0).unwrap()),
+    chain(toAction(getIndex(1).unwrap()), toAction(dispose)),
   );
 
   // Step 4: getIndex(0).unwrap() → TOut
   return chain(
-    chain(
-      chain(acquireAndMerge, actionAndKeepMerged) as any,
-      disposeAndKeepResult,
-    ),
-    getIndex(0).unwrap() as any,
+    toAction(chain(
+      toAction(chain(toAction(acquireAndMerge), toAction(actionAndKeepMerged))),
+      toAction(disposeAndKeepResult),
+    )),
+    toAction(getIndex(0).unwrap()),
   ) as TypedAction<TIn, TOut>;
 }
 

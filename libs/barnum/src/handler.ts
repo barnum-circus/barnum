@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { JSONSchema7 } from "json-schema";
 import type { z } from "zod";
-import { type TypedAction, typedAction } from "./ast.js";
+import { type TypedAction, toAction, typedAction } from "./ast.js";
 import { chain } from "./chain.js";
 import { all } from "./all.js";
 import { constant, identity } from "./builtins.js";
@@ -249,9 +249,9 @@ export function createHandlerWithConfig(
   // and accesses the named export, which is this function).
   const factory = (config: unknown): TypedAction =>
     chain(
-      all(identity(), constant(config)) as any,
-      invokeAction as any,
-    ) as TypedAction;
+      toAction(all(identity(), constant(config))),
+      toAction(invokeAction),
+    );
 
   Object.defineProperty(factory, HANDLER_BRAND, {
     value: true,

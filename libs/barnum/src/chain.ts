@@ -1,7 +1,7 @@
 import {
-  type Action,
   type Pipeable,
   type TypedAction,
+  toAction,
   typedAction,
 } from "./ast.js";
 
@@ -11,8 +11,8 @@ export function chain<T1, T2, T3>(
 ): TypedAction<T1, T3> {
   const result = typedAction<T1, T3>({
     kind: "Chain",
-    first: first as Action,
-    rest: rest as Action,
+    first: toAction(first),
+    rest: toAction(rest),
   });
   // Propagate __union from the output-determining action so that
   // x.then(Option.map(f)).isSome() works without explicit withUnion.

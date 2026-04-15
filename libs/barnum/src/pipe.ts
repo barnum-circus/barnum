@@ -1,4 +1,4 @@
-import type { Action, PipeIn, Pipeable, TypedAction } from "./ast.js";
+import { type Action, type PipeIn, type Pipeable, type TypedAction, toAction } from "./ast.js";
 import { chain } from "./chain.js";
 import { identity } from "./builtins.js";
 
@@ -127,6 +127,6 @@ export function pipe(...actions: Action[]): Action {
     return actions[0];
   }
   return actions.reduceRight(
-    (rest, first) => chain(first as any, rest as any) as Action,
+    (rest, first) => toAction(chain(toAction(first), toAction(rest))),
   );
 }
