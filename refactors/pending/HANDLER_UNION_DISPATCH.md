@@ -48,7 +48,7 @@ Any approach that annotates `createHandler` (like `returns: Result` or `createRe
 
 ---
 
-## Approach A: `Result.from(action)` — explicit wrapper at the consumption site
+## Approach A: `Result.from(action)` — explicit wrapper
 
 ```ts
 // Handler returns a bare Result
@@ -79,7 +79,6 @@ Pros:
 - Works everywhere: handlers, getField, branch, identity, any source
 - Compositional — not tied to createHandler
 - Type-safe — constrains the input to actually be a `Result<T, E>`
-- One mechanism, not two
 - No magic, no inference, no markers
 
 Cons:
@@ -87,55 +86,107 @@ Cons:
 - Verbose: `Result.from(handler.getField("foo"))` vs just `handler.getField("foo")`
 - Easy to forget (runtime error)
 
-## Approach B: `Result.from()` for the general case, plus `returns: Result` on createHandler for the common case
+---
 
-Keep `returns: Result` on createHandler as sugar for the common case (handler's top-level output is a Result). Add `Result.from()` for everything else.
+## Approach B: Globally unique kind values — eliminate `__union` entirely
+
+Instead of `{ kind: "Ok" }` and `{ kind: "Some" }`, use globally unique kind strings: `{ kind: "ResultOk" }`, `{ kind: "OptionSome" }`.
+
+The kind string itself identifies which union family a value belongs to. No `__union` dispatch table needed — the postfix methods can determine the family from the kind prefix at runtime, or a global registry maps kind strings to dispatch tables.
 
 ```ts
-// Common case: handler returns Result directly
-const stepA = createHandler({
-  returns: Result,
-  handle: async (): Promise<StepResult> => ok("validated"),
-});
-stepA.unwrapOr(done)
+// Handler body uses runtime constructors
+handle: async (): Promise<StepResult> => Result.ok("validated")
+// Produces: { kind: "ResultOk", value: "validated" }
 
-// General case: Result extracted from a struct
-const myHandler = createHandler({
-  handle: async () => ({ foo: ok("hello"), bar: 42 }),
-});
-Result.from(myHandler.getField("foo")).unwrapOr(fallback)
+// Branch cases use prefixed kind values
+stepA.branch({ ResultOk: ..., ResultErr: ... })
+
+// Postfix methods work without annotation — kind string is self-describing
+handler.getField("foo").unwrapOr(fallback)  // inspects kind at pipeline construction? No...
 ```
 
+Wait — this still doesn't work at pipeline construction time. `getField("foo")` creates a GetField node. At construction time, no values exist yet. The postfix method `.unwrapOr()` needs to know *now* (at construction time) which Branch to emit, but the value's kind string only exists at runtime.
+
+### The real version: runtime dispatch in the Rust engine
+
+The globally unique kind approach works if dispatch happens in the **engine** rather than in the **pipeline graph**. Instead of `.unwrapOr()` emitting a `Branch({ Ok: identity, Err: defaultAction })` at construction time, it would emit a generic `UnwrapOr(defaultAction)` node, and the Rust engine resolves the branch at runtime by inspecting the value's kind string.
+
+This is a much deeper change — it moves union semantics from the TypeScript SDK into the Rust engine.
+
 Pros:
-- Ergonomic for the common case (handler returns bare Result)
-- General mechanism available for the struct case
+- Eliminates `__union` entirely — no dispatch tables, no `withUnion`, no `returns`, no `Result.from()`
+- The `{ foo: Result }` problem vanishes — the engine inspects the value, not the pipeline node
+- Handlers just return values with the right kind strings; everything works automatically
+- Kind strings are self-documenting in JSON logs/traces
 
 Cons:
-- Two mechanisms for the same concept
-- `returns: Result` only covers the top-level-output case, creating a false sense of completeness
+- **Breaks existing JSON ergonomics.** `{ kind: "Ok" }` → `{ kind: "ResultOk" }`. Uglier to write and read in handler bodies, though runtime constructors (`Result.ok("validated")`) mitigate this.
+- **Namespace pollution.** Every union variant must be globally unique. User-defined unions can't reuse `Ok`/`Err`/`Some`/`None`. In practice, prefixing handles this.
+- **Branch cases become verbose.** `branch({ Ok: ..., Err: ... })` → `branch({ ResultOk: ..., ResultErr: ... })`. Though sugar could restore the short form.
+- **Rust engine changes.** The engine currently dispatches Branch by exact kind match. It would need to understand union families, either via a registry or kind-string convention (prefix parsing).
+- **`branch()` becomes ambiguous.** A bare `branch({ A: ..., B: ... })` works for any tagged union. With globally unique kinds, how does the engine know whether `{ kind: "A" }` is part of this branch's union or some other union? Answer: it doesn't need to — branch still matches on exact kind. The global uniqueness only matters for *postfix methods* that need to know the family.
+
+### Variant: global registry instead of prefixed kind strings
+
+Keep `{ kind: "Ok" }`, but register kind-to-family mappings:
+
+```ts
+// At module init
+registerUnionKind("Ok", Result);
+registerUnionKind("Err", Result);
+registerUnionKind("Some", Option);
+registerUnionKind("None", Option);
+```
+
+Postfix methods look up the registry. No kind string changes.
+
+Cons:
+- `Ok` / `Err` are now globally reserved — user unions can't use them
+- Registry is mutable global state
+- Collisions are silent bugs
+
+### Variant: runtime introspection by the postfix method
+
+The postfix method could defer dispatch to runtime. Instead of `.unwrapOr()` emitting a concrete `Branch` at construction time, it emits a generic node:
+
+```ts
+function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
+  // Don't need __union — emit a node the engine resolves at runtime
+  return chain(toAction(this), {
+    kind: "UnwrapOr",
+    default_action: toAction(defaultAction),
+  });
+}
+```
+
+The Rust engine sees `UnwrapOr`, inspects the runtime value's kind (`Ok` → pass through value, `Err` → run default; `Some` → pass through, `None` → run default), and dispatches.
+
+This adds new AST node types to the Rust engine for each union operation (`Map`, `MapErr`, `UnwrapOr`, `AndThen`, etc.) but eliminates the entire `__union` mechanism from the TypeScript side.
+
+Pros:
+- No kind string changes — keeps `{ kind: "Ok" }`
+- No `__union`, no `Result.from()`, no `returns`
+- Works for the `{ foo: Result }` case automatically
+- Postfix methods always work — no annotation needed
+
+Cons:
+- Significant Rust engine changes — new AST variants for every union operation
+- The engine now knows about Result/Option semantics, breaking the current abstraction where the engine only knows about generic Branch
+- Harder to extend with user-defined unions (engine needs to know each family's kind→arm mapping)
 
 ---
 
-## Recommendation
+## Summary
 
-**Approach B: `returns: Result` on createHandler for the common case, `Result.from()` / `Option.from()` as the general escape hatch.**
+| Approach | Solves `{ foo: Result }`? | Needs annotation? | Engine changes? |
+|----------|--------------------------|-------------------|-----------------|
+| A. `Result.from()` | Yes (explicit) | Yes, every time | None |
+| B. Globally unique kinds | Yes (automatic) | No | Yes (significant) |
+| B variant: runtime introspection | Yes (automatic) | No | Yes (new AST nodes) |
 
-The `{ foo: Result }` case is real but uncommon. It's solvable at the consumption site — it's a tax, not a blocker:
+### Open questions
 
-```ts
-// Extract the field and annotate
-handler.getField("foo").asResult().unwrapOr(fallback)
-
-// Or destructure with bindInput
-handler.bindInput(input =>
-  mapObject({ foo: Result.from(input.getField("foo")), bar: input.getField("bar") })
-)
-```
-
-Most handlers return bare Result or Option as their top-level output. `returns: Result` handles that 80% case with zero ceremony. Making 100% of cases equally verbose (`Result.from(createHandler({...}))`) to maintain "one mechanism" purity isn't worth the ergonomic cost.
-
-### What to implement
-
-1. Keep `returns: Result` on `createHandler` / `createHandlerWithConfig` (already done)
-2. Add `Result.from()` / `Option.from()` as general wrappers for non-handler sources
-3. Optionally add `.asResult()` / `.asOption()` as postfix sugar for `Result.from()` — reads better in chains
+1. Is the `__union` mechanism worth keeping if the only general solution (approach A) requires explicit annotation at every consumption site? Or does that tax justify the engine investment of approach B?
+2. If we go with runtime introspection (B variant), how do user-defined unions work? The engine would need a way to register custom kind→family mappings.
+3. Could runtime introspection be limited to just `unwrapOr` and `map` (the most common operations), keeping `Branch` for everything else?
