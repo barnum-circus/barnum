@@ -43,18 +43,18 @@ Tagged union values gain an `enumKind` field:
 
 Branch matching is unchanged — still matches on `kind`. `enumKind` is read only by the new union-aware AST nodes.
 
-### 2. Runtime value constructors for handler bodies
+### 2. `Result.ok()` becomes the value constructor
 
-Handlers currently return bare objects. Add constructors that inject `enumKind`:
+`Result.ok("nice")` produces the runtime value `{ kind: "Ok", enumKind: "Result", value: "nice" }`. Same for all constructors:
 
 ```ts
-Result.create.ok("nice")   // → { kind: "Ok", enumKind: "Result", value: "nice" }
-Result.create.err("bad")   // → { kind: "Err", enumKind: "Result", value: "bad" }
-Option.create.some(42)     // → { kind: "Some", enumKind: "Option", value: 42 }
-Option.create.none()       // → { kind: "None", enumKind: "Option", value: null }
+Result.ok("nice")    // → { kind: "Ok", enumKind: "Result", value: "nice" }
+Result.err("bad")    // → { kind: "Err", enumKind: "Result", value: "bad" }
+Option.some(42)      // → { kind: "Some", enumKind: "Option", value: 42 }
+Option.none()        // → { kind: "None", enumKind: "Option", value: null }
 ```
 
-Separate from the pipeline combinators (`Result.ok()` etc.), which remain as `TypedAction` constructors.
+Currently `Result.ok()` is a pipeline combinator (returns a `TypedAction` that emits `Tag("Ok")`). That pipeline usage is internal — `withTimeout`, `Result.map()`, etc. use it to re-tag values. Those internal uses switch to `tag("Ok", "Result")` or the new Tag builtin with `enum_kind`. The public `Result.ok(value)` becomes the value constructor that handlers use.
 
 ### 3. Tag builtin gets `enum_kind`
 
@@ -70,9 +70,9 @@ Builtin::Tag { kind: String, enum_kind: Option<String> }
 // → { "kind": "Ok", "enumKind": "Result", "value": ... }
 ```
 
-SDK-side:
-- `Result.ok()` → emits `Tag { kind: "Ok", enum_kind: Some("Result") }`
-- `Option.some()` → emits `Tag { kind: "Some", enum_kind: Some("Option") }`
+SDK-side, internal pipeline re-tagging uses the enhanced Tag builtin:
+- `tag("Ok", "Result")` → emits `Tag { kind: "Ok", enum_kind: Some("Result") }`
+- `tag("Some", "Option")` → emits `Tag { kind: "Some", enum_kind: Some("Option") }`
 - `tag("Foo")` → emits `Tag { kind: "Foo", enum_kind: None }` (user-defined unions, no dispatch)
 
 ### 4. New AST nodes replace Branch-based dispatch
@@ -172,14 +172,14 @@ For user-defined enums, the config could carry additional family registrations.
 
 ### 8. Migration
 
-Existing handlers return bare `{ kind: "Ok", value: ... }` without `enumKind`. These must change to use runtime constructors:
+Existing handlers return bare `{ kind: "Ok", value: ... }` without `enumKind`. These must change to use constructors:
 
 ```ts
 // Before
 handle: async () => ({ kind: "Ok", value: "validated" })
 
 // After
-handle: async () => Result.create.ok("validated")
+handle: async () => Result.ok("validated")
 ```
 
 The output validator (`Result.schema(...)`) could be enhanced to inject `enumKind` during validation — values without `enumKind` get it added. This would ease migration: handlers returning bare objects would still work if they have validators. But this is optional sugar, not required.
