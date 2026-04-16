@@ -11,8 +11,6 @@ import {
 import { chain } from "./chain.js";
 import { constant, drop, identity, panic, tag } from "./builtins.js";
 import { optionMethods } from "./option.js";
-import { z } from "zod";
-
 // ---------------------------------------------------------------------------
 // Result dispatch table
 // ---------------------------------------------------------------------------
@@ -38,22 +36,6 @@ export const resultMethods: UnionMethods = {
 // ---------------------------------------------------------------------------
 
 export const Result = {
-  /** Wrap a value as Ok. `TValue → Result<TValue, TError>` */
-  ok<TValue, TError>(): TypedAction<TValue, ResultT<TValue, TError>> {
-    return withUnion(
-      tag("Ok") as TypedAction<TValue, ResultT<TValue, TError>>,
-      "Result", resultMethods,
-    );
-  },
-
-  /** Wrap a value as Err. `TError → Result<TValue, TError>` */
-  err<TValue, TError>(): TypedAction<TError, ResultT<TValue, TError>> {
-    return withUnion(
-      tag("Err") as TypedAction<TError, ResultT<TValue, TError>>,
-      "Result", resultMethods,
-    );
-  },
-
   /** Transform the Ok value. `Result<TValue, TError> → Result<TOut, TError>` */
   map<TValue, TOut, TError>(
     action: Pipeable<TValue, TOut>,
@@ -251,21 +233,4 @@ export const Result = {
     }) as TypedAction<ResultT<TValue, TError>, boolean>;
   },
 
-  /**
-   * Build a Zod schema for `Result<TValue, TError>`.
-   *
-   * ```ts
-   * const schema = Result.schema(z.string(), z.number());
-   * // validates: { kind: "Ok", value: "hello" } or { kind: "Err", value: 42 }
-   * ```
-   */
-  schema<TValue, TError>(
-    okSchema: z.ZodType<TValue>,
-    errSchema: z.ZodType<TError>,
-  ): z.ZodType<ResultT<TValue, TError>> {
-    return z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("Ok"), value: okSchema }),
-      z.object({ kind: z.literal("Err"), value: errSchema }),
-    ]) as z.ZodType<ResultT<TValue, TError>>;
-  },
 } as const;

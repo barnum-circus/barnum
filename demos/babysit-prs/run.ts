@@ -22,10 +22,12 @@ import {
   forEach,
   loop,
   drop,
+  tag,
   Option,
   bindInput,
   sleep,
 } from "@barnum/barnum/pipeline";
+import type { OptionDef } from "@barnum/barnum/pipeline";
 import {
   checkPR,
   fixIssues,
@@ -45,9 +47,9 @@ runPipeline(
             ChecksFailed: fixIssues
               .drop()
               .then(prNumber)
-              .then(Option.some<number>()),
-            ChecksPassed: landPR.drop().then(Option.none<number>()),
-            Landed: drop.then(Option.none<number>()),
+              .then(tag<OptionDef<number>, "Some">("Some")),
+            ChecksPassed: landPR.drop().then(tag<OptionDef<number>, "None">("None")),
+            Landed: drop.then(tag<OptionDef<number>, "None">("None")),
           }),
         ),
       ),

@@ -26,7 +26,7 @@ export type TypeError = {
   message: string;
 };
 
-import type { TaggedUnion } from "@barnum/barnum/runtime";
+import type { TaggedUnion } from "@barnum/barnum/pipeline";
 
 type ClassifyResultDef = {
   HasErrors: TypeError[];

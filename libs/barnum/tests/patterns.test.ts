@@ -13,9 +13,11 @@ import {
   drop,
   identity,
   merge,
+  tag,
   Option as O,
   Result as R,
 } from "../src/index.js";
+import type { OptionDef, ResultDef } from "../src/ast.js";
 
 import {
   setup,
@@ -297,16 +299,6 @@ describe("postfix operators", () => {
 // -----------------------------------------------------------------------
 
 describe("Option namespace", () => {
-  it("Option.some() produces tag('Some') composition AST", () => {
-    const action = O.some<string>();
-    expect(action).toEqual(expectedTagAst("Some"));
-  });
-
-  it("Option.none() produces tag('None') composition AST", () => {
-    const action = O.none<string>();
-    expect(action).toEqual(expectedTagAst("None"));
-  });
-
   it("Option.map() produces Branch with Some and None cases", () => {
     const action = O.map(verify);
     expect(action.kind).toBe("Branch");
@@ -324,7 +316,7 @@ describe("Option namespace", () => {
   });
 
   it("Option.andThen() produces Branch with action Some and tag None", () => {
-    const action = O.andThen(pipe(verify, O.some<{ verified: boolean }>()));
+    const action = O.andThen(pipe(verify, tag<OptionDef<{ verified: boolean }>, "Some">("Some")));
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
     expect(Object.keys(branchNode.cases).toSorted()).toEqual(["None", "Some"]);
@@ -359,7 +351,7 @@ describe("Option namespace", () => {
   });
 
   it("Option.filter() produces Branch with predicate Some and tag None", () => {
-    const predicate = O.some<string>();
+    const predicate = tag<OptionDef<string>, "Some">("Some");
     const action = O.filter(predicate);
     expect(action.kind).toBe("Branch");
     const branchNode =action as { kind: "Branch"; cases: any };
@@ -398,16 +390,6 @@ describe("Option namespace", () => {
     expect(branchNode.cases["None"].rest.handler.builtin.value).toBe(true);
   });
 
-  it("postfix .map() dispatches to Option.map and produces Chain → Branch AST", () => {
-    // Option.some() attaches __union: optionMethods, enabling .map() dispatch
-    const optionAction = O.some<{ verified: boolean }>();
-    const mapped = optionAction.map(deploy);
-    expect(mapped.kind).toBe("Chain");
-    const chain = mapped as { kind: "Chain"; first: any; rest: any };
-    expect(chain.first.kind).toBe("Chain");
-    expect(chain.rest.kind).toBe("Branch");
-    expect(Object.keys(chain.rest.cases).toSorted()).toEqual(["None", "Some"]);
-  });
 });
 
 // -----------------------------------------------------------------------
@@ -641,16 +623,6 @@ describe("bindInput", () => {
 // ---------------------------------------------------------------------------
 
 describe("Result combinators", () => {
-  it("Result.ok() produces tag('Ok') composition", () => {
-    const action = R.ok();
-    expect(action).toEqual(expectedTagAst("Ok"));
-  });
-
-  it("Result.err() produces tag('Err') composition", () => {
-    const action = R.err();
-    expect(action).toEqual(expectedTagAst("Err"));
-  });
-
   it("Result.map(action) desugars to Branch(Ok: Chain(action, tag(Ok)), Err: tag(Err))", () => {
     const action = R.map(setup);
     expect(action).toEqual({
@@ -690,7 +662,7 @@ describe("Result combinators", () => {
   });
 
   it("Result.andThen(action) desugars to Branch(Ok: action, Err: tag(Err))", () => {
-    const inner = R.ok<string, string>();
+    const inner = tag<ResultDef<string, string>, "Ok">("Ok");
     const result = R.andThen(inner);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
@@ -701,7 +673,7 @@ describe("Result combinators", () => {
   });
 
   it("Result.or(fallback) desugars to Branch(Ok: tag(Ok), Err: fallback)", () => {
-    const fallback = R.ok<string, string>();
+    const fallback = tag<ResultDef<string, string>, "Ok">("Ok");
     const result = R.or(fallback);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");
@@ -710,7 +682,7 @@ describe("Result combinators", () => {
   });
 
   it("Result.and(other) desugars to Branch(Ok: Chain(Drop, other), Err: Tag(Err))", () => {
-    const other = pipe(constant("replacement"), R.ok<string, string>());
+    const other = pipe(constant("replacement"), tag<ResultDef<string, string>, "Ok">("Ok"));
     const result = R.and(other);
     const branchNode =result as any;
     expect(branchNode.kind).toBe("Branch");

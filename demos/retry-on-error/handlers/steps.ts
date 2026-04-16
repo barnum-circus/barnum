@@ -6,25 +6,17 @@
  * Step B also occasionally takes a long time, demonstrating timeout handling.
  */
 
-import { createHandler, Result } from "@barnum/barnum/runtime";
-import type { Result as ResultT } from "@barnum/barnum/runtime";
+import { createHandler, ok, err, resultSchema } from "@barnum/barnum/runtime";
+import type { Result } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-type StepResult = ResultT<string, string>;
+type StepResult = Result<string, string>;
 
-const StepResultValidator = Result.schema(z.string(), z.string());
-
-function ok(value: string): StepResult {
-  return { kind: "Ok", value };
-}
-
-function err(message: string): StepResult {
-  return { kind: "Err", value: message };
-}
+const StepResultValidator = resultSchema(z.string(), z.string());
 
 // ---------------------------------------------------------------------------
 // Handlers

@@ -22,8 +22,6 @@ import {
 } from "./builtins.js";
 // Lazy: resultMethods is only accessed inside function bodies, not at module init.
 import { resultMethods } from "./result.js";
-import { z } from "zod";
-
 // ---------------------------------------------------------------------------
 // Option dispatch table
 // ---------------------------------------------------------------------------
@@ -51,19 +49,6 @@ export const optionMethods: UnionMethods = {
  * CollectSome builtin.
  */
 export const Option = {
-  /** Wrap a value as Some. `T → Option<T>` */
-  some<T>(): TypedAction<T, OptionT<T>> {
-    return withUnion(tag("Some") as TypedAction<T, OptionT<T>>, "Option", optionMethods);
-  },
-
-  /** Produce a None. `any → Option<T>` */
-  none<T>(): TypedAction<any, OptionT<T>> {
-    return withUnion(
-      tag("None") as TypedAction<any, OptionT<T>>,
-      "Option", optionMethods,
-    );
-  },
-
   /** Transform the Some value. `Option<T> → Option<U>` */
   map<T, U>(action: Pipeable<T, U>): TypedAction<OptionT<T>, OptionT<U>> {
     return withUnion(
@@ -210,20 +195,6 @@ export const Option = {
     );
   },
 
-  /**
-   * Build a Zod schema for `Option<T>`.
-   *
-   * ```ts
-   * const schema = Option.schema(z.string());
-   * // validates: { kind: "Some", value: "hello" } or { kind: "None", value: null }
-   * ```
-   */
-  schema<TValue>(valueSchema: z.ZodType<TValue>): z.ZodType<OptionT<TValue>> {
-    return z.discriminatedUnion("kind", [
-      z.object({ kind: z.literal("Some"), value: valueSchema }),
-      z.object({ kind: z.literal("None"), value: z.null() }),
-    ]) as z.ZodType<OptionT<TValue>>;
-  },
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -9,13 +9,13 @@
 import {
   createHandler,
   taggedUnionSchema,
+  optionSchema,
 } from "@barnum/barnum/runtime";
 import {
   bindInput,
   pipe,
   loop,
   pick,
-  Option,
 } from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
@@ -35,7 +35,7 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-import type { TaggedUnion } from "@barnum/barnum/runtime";
+import type { TaggedUnion, Option } from "@barnum/barnum/runtime";
 
 type ClassifyJudgmentResultDef = {
   Approved: void;
@@ -108,7 +108,7 @@ export const analyze = createHandler({
 
 export const assessWorthiness = createHandler({
   inputValidator: RefactorValidator,
-  outputValidator: Option.schema(RefactorValidator),
+  outputValidator: optionSchema(RefactorValidator),
   handle: async ({ value: refactor }): Promise<Option<Refactor>> => {
     console.error(`[assess-worthiness] Evaluating: ${refactor.description}`);
 

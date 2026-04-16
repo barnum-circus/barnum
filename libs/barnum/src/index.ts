@@ -21,7 +21,6 @@ export {
 } from "./builtins.js";
 export { Option, first, last } from "./option.js";
 export { Result } from "./result.js";
-export * from "./handler.js";
 export { runPipeline, type RunPipelineOptions, type LogLevel } from "./run.js";
 export { zodToCheckedJsonSchema } from "./schema.js";
 
