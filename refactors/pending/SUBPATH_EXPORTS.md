@@ -189,6 +189,6 @@ Pipeline files: no change (they already import from `@barnum/barnum`).
 
 ## Open questions
 
-1. Should `@barnum/barnum` re-export `createHandler` for backward compat, or is a clean break fine? (Clean break — no one is using this.)
-2. Should `/runtime` export the `z` from zod for convenience, or let handler authors import zod directly?
-3. Should `Result.schema()` / `Option.schema()` be removed from the pipeline namespaces, or kept as aliases? Removing is cleaner — they're handler-authoring concerns.
+~~1. Should `@barnum/barnum` re-export `createHandler` for backward compat, or is a clean break fine?~~ Clean break.
+~~2. Should `/runtime` export the `z` from zod for convenience, or let handler authors import zod directly?~~ No. Handler authors import zod directly.
+~~3. Should `Result.schema()` / `Option.schema()` be removed from the pipeline namespaces, or kept as aliases?~~ Removed.
