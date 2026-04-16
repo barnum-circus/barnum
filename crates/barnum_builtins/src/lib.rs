@@ -9,6 +9,28 @@
 use barnum_ast::BuiltinKind;
 use serde_json::{Value, json};
 
+/// Construct a tagged union value: `{ "kind": "{enum_name}.{variant}", "value": value }`.
+#[must_use]
+pub fn tagged_value(variant: &str, enum_name: &str, value: Value) -> Value {
+    json!({ "kind": format!("{enum_name}.{variant}"), "value": value })
+}
+
+/// Check whether a JSON value is a specific tagged union variant.
+#[must_use]
+pub fn is_variant(value: &Value, variant: &str, enum_name: &str) -> bool {
+    let expected = format!("{enum_name}.{variant}");
+    value
+        .get("kind")
+        .and_then(Value::as_str)
+        .is_some_and(|k| k == expected)
+}
+
+/// Extract the `"value"` field from a tagged union value.
+#[must_use]
+pub fn extract_tagged_value(value: &Value) -> Option<&Value> {
+    value.get("value")
+}
+
 /// Errors from builtin execution.
 #[derive(Debug, thiserror::Error)]
 pub enum BuiltinError {
@@ -113,10 +135,10 @@ pub async fn execute_builtin(
                     actual: input.clone(),
                 });
             };
-            match arr.get(*index) {
-                Some(value) => Ok(json!({ "kind": "Some", "value": value })),
-                None => Ok(json!({ "kind": "None", "value": null })),
-            }
+            arr.get(*index).map_or_else(
+                || Ok(tagged_value("None", "Option", Value::Null)),
+                |value| Ok(tagged_value("Some", "Option", value.clone())),
+            )
         }
 
         BuiltinKind::SplitFirst => {
@@ -128,11 +150,11 @@ pub async fn execute_builtin(
                 });
             };
             if items.is_empty() {
-                Ok(json!({ "kind": "None", "value": null }))
+                Ok(tagged_value("None", "Option", Value::Null))
             } else {
                 let first = items[0].clone();
                 let rest = Value::Array(items[1..].to_vec());
-                Ok(json!({ "kind": "Some", "value": [first, rest] }))
+                Ok(tagged_value("Some", "Option", json!([first, rest])))
             }
         }
 
@@ -145,11 +167,11 @@ pub async fn execute_builtin(
                 });
             };
             if items.is_empty() {
-                Ok(json!({ "kind": "None", "value": null }))
+                Ok(tagged_value("None", "Option", Value::Null))
             } else {
                 let last = items[items.len() - 1].clone();
                 let init = Value::Array(items[..items.len() - 1].to_vec());
-                Ok(json!({ "kind": "Some", "value": [init, last] }))
+                Ok(tagged_value("Some", "Option", json!([init, last])))
             }
         }
 
@@ -167,7 +189,7 @@ pub async fn execute_builtin(
                     // Skip non-object entries (e.g. null from drop)
                     continue;
                 };
-                if obj.get("kind").and_then(Value::as_str) == Some("Some") {
+                if is_variant(item, "Some", "Option") {
                     collected.push(obj.get("value").cloned().unwrap_or(Value::Null));
                 }
                 // Skip None and anything else
@@ -296,14 +318,20 @@ mod tests {
     async fn get_index_returns_some() {
         let input = json!(["a", "b", "c"]);
         let result = execute_builtin(&BuiltinKind::GetIndex { index: 1 }, &input).await;
-        assert_eq!(result.unwrap(), json!({"kind": "Some", "value": "b"}));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.Some", "value": "b"})
+        );
     }
 
     #[tokio::test]
     async fn get_index_out_of_bounds_returns_none() {
         let input = json!(["a"]);
         let result = execute_builtin(&BuiltinKind::GetIndex { index: 5 }, &input).await;
-        assert_eq!(result.unwrap(), json!({"kind": "None", "value": null}));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.None", "value": null})
+        );
     }
 
     #[tokio::test]
@@ -316,9 +344,9 @@ mod tests {
     #[tokio::test]
     async fn collect_some_extracts_some_values() {
         let input = json!([
-            {"kind": "Some", "value": 1},
-            {"kind": "None", "value": null},
-            {"kind": "Some", "value": 2},
+            {"kind": "Option.Some", "value": 1},
+            {"kind": "Option.None", "value": null},
+            {"kind": "Option.Some", "value": 2},
         ]);
         let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!([1, 2]));
@@ -327,8 +355,8 @@ mod tests {
     #[tokio::test]
     async fn collect_some_handles_all_none() {
         let input = json!([
-            {"kind": "None", "value": null},
-            {"kind": "None", "value": null},
+            {"kind": "Option.None", "value": null},
+            {"kind": "Option.None", "value": null},
         ]);
         let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!([]));
@@ -337,9 +365,9 @@ mod tests {
     #[tokio::test]
     async fn collect_some_skips_null_entries() {
         let input = json!([
-            {"kind": "Some", "value": "a"},
+            {"kind": "Option.Some", "value": "a"},
             null,
-            {"kind": "None", "value": null},
+            {"kind": "Option.None", "value": null},
         ]);
         let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
         assert_eq!(result.unwrap(), json!(["a"]));
@@ -363,7 +391,7 @@ mod tests {
         let result = execute_builtin(&BuiltinKind::SplitFirst, &input).await;
         assert_eq!(
             result.unwrap(),
-            json!({"kind": "Some", "value": [1, [2, 3]]})
+            json!({"kind": "Option.Some", "value": [1, [2, 3]]})
         );
     }
 
@@ -373,14 +401,17 @@ mod tests {
         let result = execute_builtin(&BuiltinKind::SplitFirst, &input).await;
         assert_eq!(
             result.unwrap(),
-            json!({"kind": "Some", "value": ["only", []]})
+            json!({"kind": "Option.Some", "value": ["only", []]})
         );
     }
 
     #[tokio::test]
     async fn split_first_empty() {
         let result = execute_builtin(&BuiltinKind::SplitFirst, &json!([])).await;
-        assert_eq!(result.unwrap(), json!({"kind": "None", "value": null}));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.None", "value": null})
+        );
     }
 
     #[tokio::test]
@@ -395,7 +426,7 @@ mod tests {
         let result = execute_builtin(&BuiltinKind::SplitLast, &input).await;
         assert_eq!(
             result.unwrap(),
-            json!({"kind": "Some", "value": [[1, 2], 3]})
+            json!({"kind": "Option.Some", "value": [[1, 2], 3]})
         );
     }
 
@@ -405,14 +436,17 @@ mod tests {
         let result = execute_builtin(&BuiltinKind::SplitLast, &input).await;
         assert_eq!(
             result.unwrap(),
-            json!({"kind": "Some", "value": [[], "only"]})
+            json!({"kind": "Option.Some", "value": [[], "only"]})
         );
     }
 
     #[tokio::test]
     async fn split_last_empty() {
         let result = execute_builtin(&BuiltinKind::SplitLast, &json!([])).await;
-        assert_eq!(result.unwrap(), json!({"kind": "None", "value": null}));
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option.None", "value": null})
+        );
     }
 
     #[tokio::test]
@@ -427,83 +461,4 @@ mod tests {
         assert_eq!(result.unwrap(), Value::Null);
     }
 
-    // -- Regression tests: builtins must produce namespaced kind prefixes --
-    // These document the bug: builtins currently produce "Some"/"None" instead
-    // of "Option.Some"/"Option.None". #[should_panic] until fixed.
-
-    #[tokio::test]
-    #[should_panic]
-    async fn get_index_returns_namespaced_option_some() {
-        let input = json!(["a", "b", "c"]);
-        let result = execute_builtin(&BuiltinKind::GetIndex { index: 1 }, &input).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.Some", "value": "b"})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn get_index_returns_namespaced_option_none() {
-        let input = json!(["a"]);
-        let result = execute_builtin(&BuiltinKind::GetIndex { index: 5 }, &input).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.None", "value": null})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn split_first_returns_namespaced_option_some() {
-        let input = json!([1, 2, 3]);
-        let result = execute_builtin(&BuiltinKind::SplitFirst, &input).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.Some", "value": [1, [2, 3]]})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn split_first_returns_namespaced_option_none() {
-        let result = execute_builtin(&BuiltinKind::SplitFirst, &json!([])).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.None", "value": null})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn split_last_returns_namespaced_option_some() {
-        let input = json!([1, 2, 3]);
-        let result = execute_builtin(&BuiltinKind::SplitLast, &input).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.Some", "value": [[1, 2], 3]})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn split_last_returns_namespaced_option_none() {
-        let result = execute_builtin(&BuiltinKind::SplitLast, &json!([])).await;
-        assert_eq!(
-            result.unwrap(),
-            json!({"kind": "Option.None", "value": null})
-        );
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn collect_some_accepts_namespaced_option_some() {
-        let input = json!([
-            {"kind": "Option.Some", "value": 1},
-            {"kind": "Option.None", "value": null},
-            {"kind": "Option.Some", "value": 2},
-        ]);
-        let result = execute_builtin(&BuiltinKind::CollectSome, &input).await;
-        assert_eq!(result.unwrap(), json!([1, 2]));
-    }
 }
