@@ -230,24 +230,140 @@ Cons:
 
 ---
 
+## The real problem: `{ foo: Result, bar: string }`
+
+All of the above approaches assume the handler's *top-level* output is a Result or Option. But what if the handler returns a struct that *contains* a Result?
+
+```ts
+const myHandler = createHandler({
+  handle: async (): Promise<{ foo: Result<string, string>; bar: number }> => {
+    return { foo: { kind: "Ok", value: "hello" }, bar: 42 };
+  },
+});
+
+// User extracts the Result field
+myHandler.getField("foo")  // TypedAction<..., Result<string, string>> — but __union is null
+  .unwrapOr(fallback)       // RUNTIME ERROR
+```
+
+This kills approaches 2, 3, 5, and 6. The handler's output isn't a Result — it has a Result *inside* it. `returns: Result` is wrong, `createResultHandler` is wrong, type-level overloads can't match, validator inference sees an object schema.
+
+The problem isn't about `createHandler` at all. It's about **any TypedAction whose output happens to be a Result or Option, regardless of how it got there**. Sources of union-typed outputs that lack `__union`:
+
+- `handler.getField("foo")` where `foo` is a Result
+- `handler.getIndex(0)` where the element is an Option (getIndex already wraps in Option, but other indexing patterns might not)
+- `branch({ A: ..., B: ... })` where a case returns a Result
+- `identity()` when the input is a Result
+- Any generic combinator that passes through or restructures data
+
+Chain propagation (copying `__union` from the `rest` arg of `chain`) handles cases where the final step in a chain is a union-aware combinator like `Result.map()`. But it can't help when a non-union-aware combinator (`getField`, `identity`, `branch`) produces a union-typed output.
+
+### The only general answer: explicit annotation at the consumption site
+
+There is no way to automatically bridge TypeScript compile-time type knowledge into runtime `__union` dispatch. The compiler knows `getField("foo")` returns `Result<string, string>`, but that information doesn't exist at runtime.
+
+This means the annotation must happen wherever a Result/Option-typed value *enters the pipeline from a non-union-aware source*. The question is what that annotation looks like.
+
+---
+
+## Revised approaches
+
+Given the `{ foo: Result }` problem, only two patterns survive:
+
+### A. `Result.from(action)` — explicit wrapper at the consumption site
+
+```ts
+// Handler returns a struct containing a Result
+const myHandler = createHandler({ handle: async () => ({ foo: ok("hello"), bar: 42 }) });
+
+// User wraps after extracting the Result field
+Result.from(myHandler.getField("foo")).unwrapOr(fallback)
+```
+
+```ts
+// Handler returns a bare Result — same pattern
+const stepA = createHandler({ handle: async () => ok("validated") });
+Result.from(stepA).unwrapOr(done)
+```
+
+Implementation: `Result.from()` takes a `Pipeable<TIn, Result<TValue, TError>>` and returns a `TypedAction` with `__union` set. It's identity at the AST level — no new nodes, just attaches dispatch.
+
+```ts
+// In result.ts
+from<TIn, TValue, TError>(
+  action: Pipeable<TIn, Result<TValue, TError>>,
+): TypedAction<TIn, Result<TValue, TError>> {
+  return withUnion(typedAction(toAction(action)), "Result", resultMethods);
+}
+```
+
+Pros:
+- Works everywhere: handlers, getField, branch, identity, any source
+- Compositional — not tied to createHandler
+- Type-safe — constrains the input to actually be a `Result<T, E>`
+- No magic, no inference, no markers
+
+Cons:
+- Every Result/Option-producing action needs explicit wrapping
+- Verbose: `Result.from(handler.getField("foo"))` vs just `handler.getField("foo")`
+- Easy to forget (runtime error)
+
+### B. `createHandler({ returns: Result })` — for the common case, plus `Result.from()` for everything else
+
+Keep `returns: Result` on createHandler for the common case (handler's top-level output is a Result). Add `Result.from()` for the general case (any TypedAction that produces a Result).
+
+```ts
+// Common case: handler returns Result directly
+const stepA = createHandler({
+  returns: Result,
+  handle: async (): Promise<StepResult> => ok("validated"),
+});
+stepA.unwrapOr(done)  // works
+
+// General case: Result extracted from a struct
+const myHandler = createHandler({ handle: async () => ({ foo: ok("hello"), bar: 42 }) });
+Result.from(myHandler.getField("foo")).unwrapOr(fallback)
+```
+
+Pros:
+- Ergonomic for the common case (handler returns bare Result)
+- General mechanism available for the struct case
+- Doesn't break existing code
+
+Cons:
+- Two mechanisms for the same concept
+- `returns: Result` only covers the top-level-output case, creating a false sense of completeness
+
+---
+
 ## Recommendation
 
-None yet. The tradeoffs are:
+**Approach A: `Result.from()` / `Option.from()` as the sole mechanism.** Remove `returns` from createHandler.
 
-| Approach | Forgettable? | Combinatorial? | Extensible? | Compile-time safe? |
-|----------|-------------|----------------|-------------|-------------------|
-| 1. ok() embeds | N/A — doesn't work for pipeline nodes | — | — | — |
-| 2. createResultHandler | Same as forgetting to use the right function | Yes (4+ functions) | No | Yes (signature enforces) |
-| 3. returns: Result | Yes (runtime error) | No | Yes | No |
-| 4. Result.from(handler) | Yes (runtime error) | No | Yes | Partially (type narrows) |
-| 5. Type-level overloads | Compile-time — but runtime is still broken | No | No (hard-coded) | Yes |
-| 6. Validator + fallback | Less (auto when validator present) | No | Yes | No |
+Rationale:
+- One mechanism, not two. It works for handlers returning bare Results, handlers returning structs containing Results, getField, branch, and any other source.
+- `Result.from(stepA)` is barely more verbose than `returns: Result` and is much more honest — it tells you exactly where the annotation happens instead of hiding it inside createHandler.
+- Having `returns` on createHandler creates a false expectation that handlers "just work" with postfix methods. They do for the top-level case, then break for the struct case. Better to have one consistent pattern.
+- `Result.from()` / `Option.from()` are useful independently of handlers — they solve the general problem.
 
-The fundamental tension: the "ideal" (type info embedded in the value) doesn't work because `__union` is a pipeline-node property and handler output is a runtime value. Every approach is some form of explicit annotation.
+Usage:
+```ts
+// Handler returning bare Result
+const stepA = Result.from(createHandler({
+  handle: async (): Promise<StepResult> => ok("validated"),
+}));
+stepA.unwrapOr(done)
 
-### Open questions
+// Handler returning struct with Result field
+const myHandler = createHandler({
+  handle: async () => ({ foo: ok("hello"), bar: 42 }),
+});
+Result.from(myHandler.getField("foo")).unwrapOr(fallback)
 
-1. How common are handlers without output validators? If rare, approach 6 (validator inference) covers most cases automatically.
-2. Should forgetting `returns` be a compile-time error? If so, we need overloads or a separate function (approaches 2 or 5).
-3. Is `returns: Result` confusing because `Result` is both a type and a value? If so, a more explicit name like `Result.dispatch` might be better, though it's less readable.
-4. Do we want `Result.from()` (approach 4) regardless, for non-handler cases where a generic TypedAction needs `__union` attached?
+// withTimeout already sets __union internally — no wrapping needed
+withTimeout(constant(5000), body).unwrapOr(fallback)
+```
+
+### Open question
+
+Is `Result.from(createHandler({...}))` too much ceremony for the common case? If most handlers return bare Result/Option, the wrapping is annoying boilerplate. If that's the case, keeping `returns` as sugar for the common case (approach B) is justified — just document clearly that it only covers the top-level output.
