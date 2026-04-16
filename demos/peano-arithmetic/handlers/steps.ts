@@ -7,12 +7,12 @@ import { z } from "zod";
  */
 export const classifyZero = createHandler({
   inputValidator: z.number(),
-  outputValidator: taggedUnionSchema({ Zero: z.null(), NonZero: z.number() }),
+  outputValidator: taggedUnionSchema("Nat", { Zero: z.null(), NonZero: z.number() }),
   handle: async ({ value: n }) => {
     if (n === 0) {
-      return { kind: "Zero" as const, value: null };
+      return { kind: "Nat.Zero" as const, value: null };
     }
-    return { kind: "NonZero" as const, value: n };
+    return { kind: "Nat.NonZero" as const, value: n };
   },
 }, "classifyZero");
 

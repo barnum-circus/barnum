@@ -47,9 +47,9 @@ runPipeline(
             ChecksFailed: fixIssues
               .drop()
               .then(prNumber)
-              .then(tag<OptionDef<number>, "Some">("Some")),
-            ChecksPassed: landPR.drop().then(tag<OptionDef<number>, "None">("None")),
-            Landed: drop.then(tag<OptionDef<number>, "None">("None")),
+              .then(tag<"Option", OptionDef<number>, "Some">("Some", "Option")),
+            ChecksPassed: landPR.drop().then(tag<"Option", OptionDef<number>, "None">("None", "Option")),
+            Landed: drop.then(tag<"Option", OptionDef<number>, "None">("None", "Option")),
           }),
         ),
       ),

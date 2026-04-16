@@ -13,7 +13,7 @@ const ciErrors = [
 export const checkPR = createHandler(
   {
     inputValidator: z.number(),
-    outputValidator: taggedUnionSchema({
+    outputValidator: taggedUnionSchema("CheckPRResult", {
       ChecksFailed: z.object({ pr: z.number(), error: z.string() }),
       ChecksPassed: z.object({ pr: z.number() }),
       Landed: z.object({ pr: z.number() }),
@@ -25,16 +25,16 @@ export const checkPR = createHandler(
       if (roll < 0.5) {
         const error = ciErrors[Math.floor(Math.random() * ciErrors.length)]!;
         console.error(`[checkPR] PR #${pr}: checks failed — ${error}`);
-        return { kind: "ChecksFailed" as const, value: { pr, error } };
+        return { kind: "CheckPRResult.ChecksFailed" as const, value: { pr, error } };
       }
 
       if (roll < 0.8) {
         console.error(`[checkPR] PR #${pr}: checks passed`);
-        return { kind: "ChecksPassed" as const, value: { pr } };
+        return { kind: "CheckPRResult.ChecksPassed" as const, value: { pr } };
       }
 
       console.error(`[checkPR] PR #${pr}: already landed`);
-      return { kind: "Landed" as const, value: { pr } };
+      return { kind: "CheckPRResult.Landed" as const, value: { pr } };
     },
   },
   "checkPR",
@@ -71,16 +71,16 @@ export const landPR = createHandler(
 export const classifyRemaining = createHandler(
   {
     inputValidator: z.array(z.number()),
-    outputValidator: taggedUnionSchema({ HasPRs: z.array(z.number()), AllDone: z.null() }),
+    outputValidator: taggedUnionSchema("ClassifyRemainingResult", { HasPRs: z.array(z.number()), AllDone: z.null() }),
     handle: async ({ value }) => {
       if (value.length === 0) {
         console.error("[classifyRemaining] All PRs resolved");
-        return { kind: "AllDone" as const, value: null };
+        return { kind: "ClassifyRemainingResult.AllDone" as const, value: null };
       }
       console.error(
         `[classifyRemaining] ${value.length} PR(s) still need attention: #${value.join(", #")}`,
       );
-      return { kind: "HasPRs" as const, value };
+      return { kind: "ClassifyRemainingResult.HasPRs" as const, value };
     },
   },
   "classifyRemaining",

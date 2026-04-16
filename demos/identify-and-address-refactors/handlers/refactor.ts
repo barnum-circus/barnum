@@ -41,7 +41,7 @@ type ClassifyJudgmentResultDef = {
   Approved: void;
   NeedsWork: string;
 };
-export type ClassifyJudgmentResult = TaggedUnion<ClassifyJudgmentResultDef>;
+export type ClassifyJudgmentResult = TaggedUnion<"ClassifyJudgmentResult", ClassifyJudgmentResultDef>;
 
 // --- Validators ---
 
@@ -131,14 +131,14 @@ export const assessWorthiness = createHandler({
       const result = JSON.parse(cleaned);
       if (result.worthwhile) {
         console.error(`[assess-worthiness] Worth it — proceeding`);
-        return { kind: "Some", value: refactor };
+        return { kind: "Option.Some", value: refactor };
       }
       console.error(`[assess-worthiness] Skipping: ${result.reason ?? "not worth it"}`);
-      return { kind: "None", value: null };
+      return { kind: "Option.None", value: null };
     } catch {
       // If we can't parse, include it (demo safety)
       console.error("[assess-worthiness] Could not parse response, including by default");
-      return { kind: "Some", value: refactor };
+      return { kind: "Option.Some", value: refactor };
     }
   },
 }, "assessWorthiness");
@@ -258,15 +258,15 @@ export const judgeRefactor = createHandler({
 
 export const classifyJudgment = createHandler({
   inputValidator: JudgmentResultValidator,
-  outputValidator: taggedUnionSchema({ Approved: z.null(), NeedsWork: z.string() }),
+  outputValidator: taggedUnionSchema("ClassifyJudgmentResult", { Approved: z.null(), NeedsWork: z.string() }),
   handle: async ({ value: judgment }): Promise<ClassifyJudgmentResult> => {
     console.error(`[classify-judgment] Classifying judgment (approved=${judgment.approved})`);
     if (judgment.approved) {
       console.error("[classify-judgment] Approved");
-      return { kind: "Approved", value: null };
+      return { kind: "ClassifyJudgmentResult.Approved", value: null };
     }
     console.error(`[classify-judgment] Needs work: ${judgment.instructions}`);
-    return { kind: "NeedsWork", value: judgment.instructions };
+    return { kind: "ClassifyJudgmentResult.NeedsWork", value: judgment.instructions };
   },
 }, "classifyJudgment");
 

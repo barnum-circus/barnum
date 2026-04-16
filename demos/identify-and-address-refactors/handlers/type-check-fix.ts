@@ -34,7 +34,7 @@ type ClassifyResultDef = {
   HasErrors: TypeError[];
   Clean: void;
 };
-export type ClassifyResult = TaggedUnion<ClassifyResultDef>;
+export type ClassifyResult = TaggedUnion<"ClassifyResult", ClassifyResultDef>;
 
 // --- Helpers ---
 
@@ -104,15 +104,15 @@ export const typeCheck = createHandler({
 
 export const classifyErrors = createHandler({
   inputValidator: z.array(TypeErrorValidator),
-  outputValidator: taggedUnionSchema({ HasErrors: z.array(TypeErrorValidator), Clean: z.null() }),
+  outputValidator: taggedUnionSchema("ClassifyResult", { HasErrors: z.array(TypeErrorValidator), Clean: z.null() }),
   handle: async ({ value: errors }): Promise<ClassifyResult> => {
     console.error(`[classify-errors] Called with ${errors.length} error(s)`);
     if (errors.length > 0) {
       console.error(`[classify-errors] ${errors.length} error(s) to fix`);
-      return { kind: "HasErrors", value: errors };
+      return { kind: "ClassifyResult.HasErrors", value: errors };
     }
     console.error("[classify-errors] Clean — no type errors");
-    return { kind: "Clean", value: null };
+    return { kind: "ClassifyResult.Clean", value: null };
   },
 }, "classifyErrors");
 
