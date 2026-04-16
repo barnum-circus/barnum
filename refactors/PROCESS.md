@@ -193,16 +193,21 @@ Every change goes directly on master as a small, focused commit. Each commit sho
 
 Run `cargo test` (and `pnpm test` if TS changed) locally before committing. Use `--no-verify` to skip the pre-commit hook when it's too slow, but run `cargo fmt` and `cargo clippy` manually first.
 
-### Test-first pattern for bug fixes
+### Test-first: always
 
-**When fixing bugs or changing behavior, write the test first.**
+**Every implementation task — bug fixes, new features, refactors — follows the same test-first pattern.** No exceptions. Write the test that asserts the desired behavior before the behavior exists.
 
 The pattern:
-1. **First commit: Add test with `#[should_panic]`** - The test demonstrates the bug by asserting the correct behavior and panicking because the current code is broken
-2. **Second commit: Fix the bug** - Implement the fix
-3. **Third commit: Remove `#[should_panic]`** - The test now passes without panicking
+1. **First commit: Add failing test** - The test asserts the correct/desired behavior. It fails because the implementation doesn't exist yet. Use `#[should_panic]` (Rust) or mark the assertion as expected-to-fail in whatever way the test framework supports.
+2. **Second commit: Implement the change** - Write the code that makes the test pass.
+3. **Third commit: Remove the failure marker** - Drop `#[should_panic]` / equivalent. The test now passes cleanly.
 
-Example:
+This applies to everything:
+- **Bug fixes:** test asserts the correct behavior, panics because the bug exists, fix the bug, remove panic marker.
+- **New features:** test exercises the new API or behavior, fails because it doesn't exist yet, implement the feature, remove failure marker.
+- **Refactors:** test asserts the post-refactor behavior (same observable behavior, new structure), fails against the old structure, apply the refactor, remove failure marker.
+
+Example (bug fix):
 ```rust
 // Commit 1: Test that documents the bug
 #[test]
@@ -217,6 +222,26 @@ fn test_hook_ordering() {
 // Commit 3: Remove should_panic
 #[test]
 fn test_hook_ordering() {
+    // Same test, now passes
+}
+```
+
+Example (new feature):
+```rust
+// Commit 1: Test the feature that doesn't exist yet
+#[test]
+#[should_panic]
+fn test_split_last_returns_last_element() {
+    let result = split_last(vec![1, 2, 3]);
+    assert_eq!(result.last, 3);
+    assert_eq!(result.rest, vec![1, 2]);
+}
+
+// Commit 2: Implement split_last
+
+// Commit 3: Remove should_panic
+#[test]
+fn test_split_last_returns_last_element() {
     // Same test, now passes
 }
 ```
