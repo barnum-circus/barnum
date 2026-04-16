@@ -97,17 +97,28 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
 
 The Result inside `foo` carries `enumKind: "Result"` in its value. After `getField("foo")`, the extracted value still has `enumKind`. No annotation needed — the value is self-describing.
 
-### Dual meaning of `Result.ok()`
+### Runtime constructors for handler bodies
 
-Currently `Result.ok()` is a pipeline node constructor (produces `Tag("Ok")` AST node). Under this approach, it's also (or instead) a runtime value factory used inside handler bodies. These are different things:
+`Result.ok()` is already a pipeline combinator — it returns a `TypedAction` that emits a `Tag("Ok")` node. Handlers don't use it; they return bare JS objects (`{ kind: "Ok", value: "validated" }`).
 
-- **Pipeline node**: `Result.ok()` → `TypedAction` that tags a pipeline value as `Ok`
-- **Runtime constructor**: `Result.ok("nice")` → plain JS object `{ kind: "Ok", enumKind: "Result", value: "nice" }`
+Under this approach, we add runtime value constructors for handler bodies:
 
-Options:
-1. **Two separate functions**: `Result.ok()` stays as the pipeline node. Add `Result.create.ok("nice")` or `Result.value.ok("nice")` as the runtime constructor.
-2. **Overloaded**: `Result.ok()` (no args) returns a pipeline node. `Result.ok("nice")` (with arg) returns a runtime value. Risky — easy to confuse.
-3. **Collapse to one**: `Result.ok()` is always the runtime constructor. The pipeline combinator for tagging becomes `tag("Ok")` or a new `Result.tag.ok()`. This is cleaner — the dual meaning disappears.
+```ts
+// New: runtime value constructor (plain JS object, not a pipeline node)
+Result.create.ok("nice")
+// → { kind: "Ok", enumKind: "Result", value: "nice" }
+
+Result.create.err("bad")
+// → { kind: "Err", enumKind: "Result", value: "bad" }
+
+Option.create.some(42)
+// → { kind: "Some", enumKind: "Option", value: 42 }
+
+Option.create.none()
+// → { kind: "None", enumKind: "Option", value: null }
+```
+
+These are separate from the pipeline combinators. No overloading, no ambiguity.
 
 ### Pipeline-level Tag nodes also need `enumKind`
 
