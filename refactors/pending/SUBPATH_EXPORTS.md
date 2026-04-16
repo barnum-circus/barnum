@@ -34,13 +34,13 @@ Exports:
 - `taggedUnionSchema` — for user-defined unions
 - Types: `Result`, `Option`, `Handler`
 
-### `@barnum/barnum` — pipeline construction
+### `@barnum/barnum/pipeline` — pipeline construction
 
-Everything for building the workflow DAG (current top-level export, minus handler-authoring stuff):
+Everything for building the workflow DAG:
 
 ```ts
-import { pipe, loop, tryCatch, withTimeout, constant, Result, runPipeline } from "@barnum/barnum";
-import type { TypedAction } from "@barnum/barnum";
+import { pipe, loop, tryCatch, withTimeout, constant, Result, runPipeline } from "@barnum/barnum/pipeline";
+import type { TypedAction } from "@barnum/barnum/pipeline";
 import { stepA, stepB } from "./handlers/steps";
 
 runPipeline(
@@ -145,7 +145,7 @@ export function optionSchema<TValue>(
 ```json
 {
   "exports": {
-    ".": {
+    "./pipeline": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
@@ -158,7 +158,7 @@ export function optionSchema<TValue>(
 }
 ```
 
-### 5. Clean up `src/index.ts` — top-level IS pipeline
+### 5. Clean up `src/index.ts` — this becomes the pipeline export
 
 The top-level export becomes purely pipeline construction. No handler-authoring code leaks through. Changes:
 
@@ -176,7 +176,7 @@ Add a section (to `docs-website/docs/quickstart.md` or as a standalone `docs-web
 
 > **`@barnum/barnum/runtime`** — for handler files. Import `createHandler`, `createHandlerWithConfig`, value constructors (`ok`, `err`, `some`, `none`), schema builders (`resultSchema`, `optionSchema`, `taggedUnionSchema`), and types (`Result`, `Option`, `Handler`).
 >
-> **`@barnum/barnum`** — for pipeline files. Import combinators (`pipe`, `loop`, `tryCatch`, `forEach`, etc.), builtins (`constant`, `identity`, `drop`, etc.), namespaces (`Result`, `Option`), `runPipeline`, and pipeline types (`TypedAction`, `Pipeable`, etc.).
+> **`@barnum/barnum/pipeline`** — for pipeline files. Import combinators (`pipe`, `loop`, `tryCatch`, `forEach`, etc.), builtins (`constant`, `identity`, `drop`, etc.), namespaces (`Result`, `Option`), `runPipeline`, and pipeline types (`TypedAction`, `Pipeable`, etc.).
 >
 > Handler files define what runs — they produce runtime values. Pipeline files define the workflow DAG — they compose `TypedAction` nodes. The two never need each other's exports.
 
@@ -184,7 +184,7 @@ The quickstart should show both imports side-by-side early, so the split is clea
 
 #### Update existing import lines
 
-All docs that import `createHandler` from `@barnum/barnum` need to switch to `@barnum/barnum/runtime`:
+All docs that import `createHandler` from `@barnum/barnum` need to switch to `@barnum/barnum/runtime`. All pipeline imports switch to `@barnum/barnum/pipeline`.
 
 - `README.md` — handler example imports `createHandler` from `@barnum/barnum`
 - `docs-website/docs/index.md` — same
@@ -193,7 +193,7 @@ All docs that import `createHandler` from `@barnum/barnum` need to switch to `@b
 - `docs-website/versioned_docs/version-0.3/index.md` — same
 - `docs-website/versioned_docs/version-0.3/quickstart.md` — same
 
-Pipeline imports (`runPipeline`, `pipe`, etc.) stay as `@barnum/barnum`.
+Pipeline imports (`runPipeline`, `pipe`, etc.) switch to `@barnum/barnum/pipeline`.
 
 ### 7. Update demo handler files
 
@@ -211,7 +211,7 @@ All demo handler files should use `@barnum/barnum/runtime` — demos are best-pr
 - `demos/identify-and-address-refactors/handlers/type-check-fix.ts` — same
 - `demos/convert-folder-to-ts/handlers/type-check-fix.ts` — same
 
-Pipeline files (`run.ts`) stay as `@barnum/barnum` — no changes needed.
+Pipeline files (`run.ts`) switch to `@barnum/barnum/pipeline`.
 
 ## Migration
 
@@ -230,10 +230,10 @@ import type { Result } from "@barnum/barnum/runtime";
 handle: async () => ok("validated")
 ```
 
-Pipeline files: no change (they already import from `@barnum/barnum`).
+Pipeline files: switch `@barnum/barnum` → `@barnum/barnum/pipeline`.
 
 ## Open questions
 
-~~1. Should `@barnum/barnum` re-export `createHandler` for backward compat, or is a clean break fine?~~ Clean break.
+~~1. Should there be a bare `@barnum/barnum` top-level export?~~ No. Two subpath exports only: `/runtime` and `/pipeline`.
 ~~2. Should `/runtime` export the `z` from zod for convenience, or let handler authors import zod directly?~~ No. Handler authors import zod directly.
 ~~3. Should `Result.schema()` / `Option.schema()` be removed from the pipeline namespaces, or kept as aliases?~~ Removed.
