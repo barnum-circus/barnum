@@ -73,7 +73,8 @@ pub fn invoke_builtin(builtin: BuiltinKind) -> Action {
     })
 }
 
-pub fn tag_action(kind: &str) -> Action {
+pub fn tag_action(variant: &str, enum_name: &str) -> Action {
+    let kind = format!("{enum_name}.{variant}");
     chain(
         parallel(vec![
             chain(
@@ -96,7 +97,16 @@ pub fn get_field(field: &str) -> Action {
     })
 }
 
+/// `GetIndex` that unwraps the `Option`. Errors (`BranchNoMatch`) if `None`.
 pub fn get_index(index: usize) -> Action {
+    chain(
+        get_index_option(index),
+        branch(vec![("Some", get_field("value"))]),
+    )
+}
+
+/// Raw `GetIndex` that returns `Option<T>` (namespaced: `Option.Some` / `Option.None`).
+pub fn get_index_option(index: usize) -> Action {
     invoke_builtin(BuiltinKind::GetIndex { index })
 }
 
@@ -151,7 +161,10 @@ pub fn restart_perform(restart_handler_id: u16) -> Action {
 /// `Chain(Tag("Break"), RestartPerform(restart_handler_id))` —
 /// triggers restart with Break routing.
 pub fn break_restart_perform(restart_handler_id: u16) -> Action {
-    chain(tag_action("Break"), restart_perform(restart_handler_id))
+    chain(
+        tag_action("Break", "LoopResult"),
+        restart_perform(restart_handler_id),
+    )
 }
 
 /// Handler for restart+Branch: extract payload (index 0) from `[payload, state]`.
@@ -167,7 +180,7 @@ pub fn restart_extract_payload_handler() -> Action {
 /// `})))`
 pub fn restart_branch(restart_handler_id: u16, continue_arm: Action, break_arm: Action) -> Action {
     chain(
-        tag_action("Continue"),
+        tag_action("Continue", "LoopResult"),
         restart_handle(
             restart_handler_id,
             restart_extract_payload_handler(),
