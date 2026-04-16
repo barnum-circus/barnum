@@ -168,6 +168,37 @@ The top-level export becomes purely pipeline construction. No handler-authoring 
 - **Remove `Result.schema`, `Option.schema`** from the namespaces — these are handler-authoring concerns, now `resultSchema` / `optionSchema` in `/runtime`.
 - **Do NOT re-export from `./runtime.ts`** — the two entry points are independent.
 
+### 6. Update docs and README
+
+All docs that import `createHandler` from `@barnum/barnum` need to switch to `@barnum/barnum/runtime`. Files to update:
+
+- `README.md` — handler example imports `createHandler` from `@barnum/barnum`
+- `docs-website/docs/index.md` — same
+- `docs-website/docs/quickstart.md` — same
+- `docs-website/docs/reference/handlers.md` — imports `createHandler` and `createHandlerWithConfig`
+- `docs-website/versioned_docs/version-0.3/index.md` — same
+- `docs-website/versioned_docs/version-0.3/quickstart.md` — same
+
+Pipeline imports (`runPipeline`, `pipe`, etc.) stay as `@barnum/barnum`.
+
+### 7. Update demo handler files
+
+All demo handler files should use `@barnum/barnum/runtime` — demos are best-practice examples. Handler files to migrate:
+
+- `demos/workflow-output/handlers/steps.ts` — `createHandler`
+- `demos/analyze-file/handlers/analyze.ts` — `createHandler`
+- `demos/simple-workflow/handlers/steps.ts` — `createHandler`
+- `demos/identify-and-address-refactors/handlers/git.ts` — `createHandler`
+- `demos/convert-folder-to-ts/handlers/convert.ts` — `createHandler`, `createHandlerWithConfig`
+- `demos/babysit-prs/handlers/steps.ts` — `createHandler`, `taggedUnionSchema`
+- `demos/peano-arithmetic/handlers/steps.ts` — `createHandler`, `taggedUnionSchema`
+- `demos/retry-on-error/handlers/steps.ts` — `createHandler`, `Result` (→ `resultSchema`), type `Result`
+- `demos/identify-and-address-refactors/handlers/refactor.ts` — `createHandler`, `createHandlerWithConfig`, `taggedUnionSchema`, type `TaggedUnion`
+- `demos/identify-and-address-refactors/handlers/type-check-fix.ts` — same
+- `demos/convert-folder-to-ts/handlers/type-check-fix.ts` — same
+
+Pipeline files (`run.ts`) stay as `@barnum/barnum` — no changes needed.
+
 ## Migration
 
 Handler files:
