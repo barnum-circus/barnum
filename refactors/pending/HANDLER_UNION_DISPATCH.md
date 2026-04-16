@@ -118,13 +118,24 @@ Cons:
 
 ## Recommendation
 
-**Approach A: `Result.from()` / `Option.from()` as the sole mechanism.** Remove `returns` from createHandler.
+**Approach B: `returns: Result` on createHandler for the common case, `Result.from()` / `Option.from()` as the general escape hatch.**
 
-Rationale:
-- One mechanism, not two. It works for handlers, getField, branch, and any other source.
-- `Result.from(stepA)` is barely more verbose than `returns: Result` and is more honest — it tells you exactly where the annotation happens.
-- Having `returns` on createHandler creates a false expectation that handlers "just work" with postfix methods. They do for the top-level case, then break for the struct case. Better to have one consistent pattern.
+The `{ foo: Result }` case is real but uncommon. It's solvable at the consumption site — it's a tax, not a blocker:
 
-### Open question
+```ts
+// Extract the field and annotate
+handler.getField("foo").asResult().unwrapOr(fallback)
 
-Is `Result.from(createHandler({...}))` too much ceremony for the common case? If most handlers return bare Result/Option, the wrapping is repetitive. If that's the case, keeping `returns` as sugar for the common case (approach B) is justified — just document clearly that it only covers the top-level output.
+// Or destructure with bindInput
+handler.bindInput(input =>
+  mapObject({ foo: Result.from(input.getField("foo")), bar: input.getField("bar") })
+)
+```
+
+Most handlers return bare Result or Option as their top-level output. `returns: Result` handles that 80% case with zero ceremony. Making 100% of cases equally verbose (`Result.from(createHandler({...}))`) to maintain "one mechanism" purity isn't worth the ergonomic cost.
+
+### What to implement
+
+1. Keep `returns: Result` on `createHandler` / `createHandlerWithConfig` (already done)
+2. Add `Result.from()` / `Option.from()` as general wrappers for non-handler sources
+3. Optionally add `.asResult()` / `.asOption()` as postfix sugar for `Result.from()` — reads better in chains
