@@ -1,6 +1,6 @@
 # Remove __union Dispatch
 
-Replace the `__union` dispatch table mechanism with direct polymorphic branches in postfix methods. Zero new Rust AST nodes. Everything desugars to existing primitives.
+Replace the `__union` dispatch table mechanism with a single new builtin (`ExtractPrefix`) composed with existing `Branch`. The AST encodes the dynamic dispatch — family info (Option vs Result) is only known at execution time from the kind prefix, so the dispatch must live in the AST.
 
 **Depends on:** NAMESPACED_KIND_PREFIXES.md (completed)
 
@@ -12,31 +12,51 @@ This means postfix methods like `.unwrapOr()` throw at runtime when called on ha
 
 ## Approach
 
-With namespaced kind prefixes (completed), values self-describe their family at runtime: `{ kind: "Result.Ok", value: 42 }`. The Rust engine already strips the prefix when matching branch cases (`"Result.Ok"` → `"Ok"`).
+With namespaced kind prefixes (completed), values self-describe their family at runtime: `{ kind: "Result.Ok", value: 42 }`. We add one new builtin — `ExtractPrefix` — that restructures a tagged value so its prefix becomes the dispatchable `kind`. Composed with existing `Branch`, this gives two-level dispatch: first on the family (prefix), then on the variant.
 
-Postfix methods emit **polymorphic branches** — branches that include case keys for all applicable families. At runtime, the engine matches the one case that corresponds to the actual value's kind. Unmatched cases are dead branches, never entered.
+### ExtractPrefix builtin
+
+Transforms a tagged value by extracting the prefix from `kind`:
+
+```
+Input:  { kind: "Result.Ok", value: 42 }
+Output: { kind: "Result", value: { kind: "Result.Ok", value: 42 } }
+```
+
+The original value is preserved intact as the `value` field. The prefix becomes the new `kind`.
+
+### matchPrefix combinator (TS SDK)
+
+`matchPrefix` is a TS-level combinator, not an AST node. It composes `extractPrefix()` with `branch()`:
 
 ```ts
-// Before: requires __union, fails on createHandler output
-function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  const unwrapOr = requireDispatch(this.__union, "unwrapOr", (m) => m.unwrapOr);
-  return chain(toAction(this), toAction(unwrapOr(defaultAction)));
-}
-
-// After: works on any TypedAction regardless of provenance
-function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: identity(),        // Result path
-    Err: defaultAction,    // Result path
-    Some: identity(),      // Option path
-    None: defaultAction,   // Option path
-  })));
+function matchPrefix<TCases extends Record<string, Action>>(
+  cases: TCases,
+): TypedAction<...> {
+  return chain(extractPrefix(), branch(cases));
 }
 ```
 
-Family-specific methods (`.mapErr()`, `.isSome()`, etc.) include only their family's case keys. If called on the wrong family at runtime, the branch fails with "no match" — correct behavior.
+The outer `branch` dispatches on the prefix (`"Result"`, `"Option"`), auto-unwraps the value, and passes the original tagged value to the case handler. The case handler is typically an inner `branch` that dispatches on the variant:
 
-TypeScript overload signatures on `TypedAction` continue to gate method availability at compile time: `.mapErr()` requires `this: TypedAction<TIn, Result<...>>`, so calling it on an Option is a type error. The runtime-level "no match" is a safety net, not the primary enforcement.
+```ts
+// unwrapOr(f) — shared between Option and Result
+matchPrefix({
+  Result: branch({ Ok: identity(), Err: f }),
+  Option: branch({ Some: identity(), None: f }),
+})
+```
+
+Execution trace for `{ kind: "Result.Ok", value: 42 }` through `unwrapOr(f)`:
+
+1. `ExtractPrefix` → `{ kind: "Result", value: { kind: "Result.Ok", value: 42 } }`
+2. Outer `Branch` matches `"Result"`, auto-unwraps → `{ kind: "Result.Ok", value: 42 }`
+3. Inner `Branch` strips prefix `"Result."` → matches `"Ok"`, auto-unwraps → `42`
+4. `identity()` → `42`
+
+### AST size
+
+The AST encodes the dynamic dispatch: each postfix method emits branches for all applicable families. With 2 built-in families, shared methods get 2 inner branches. The user-provided action (`f`) appears once per family in the flat AST, but only one copy executes per invocation. The growth is bounded by the number of families and negligible for a workflow engine.
 
 ## Deletions
 
@@ -59,68 +79,86 @@ From `option.ts`:
 From `chain.ts`:
 - `__union` propagation (lines 18–22)
 
+## Rust changes
+
+### New builtin: `ExtractPrefix`
+
+Add to `BuiltinKind`:
+
+```rust
+{ kind: "ExtractPrefix" }
+```
+
+Implementation: read `kind` string, split on `'.'`, produce `{ kind: prefix, value: original_input }`. If the kind contains no `'.'`, the entire kind string becomes the prefix (handles non-namespaced kinds gracefully).
+
+No new structural AST nodes. No new engine dispatch logic. ExtractPrefix goes through the existing Invoke → Builtin path like `GetField`, `Identity`, etc.
+
 ## Postfix method rewrites
 
-### Shared methods (Option + Result) — polymorphic branch
+### Shared methods (Option + Result)
 
-These include case keys for both families. Exactly one pair matches at runtime.
+These dispatch on the prefix first, then on the variant within each family.
 
 ```ts
 function mapMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
-    Err: tag("Err", "Result"),
-    Some: chain(toAction(action), toAction(tag("Some", "Option"))),
-    None: tag("None", "Option"),
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({
+      Ok: chain(toAction(action), toAction(tag("Ok", "Result"))),
+      Err: tag("Err", "Result"),
+    }),
+    Option: branch({
+      Some: chain(toAction(action), toAction(tag("Some", "Option"))),
+      None: tag("None", "Option"),
+    }),
   })));
 }
 
 function unwrapMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: identity(),
-    Err: panic("called unwrap on Err"),
-    Some: identity(),
-    None: panic("called unwrap on None"),
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: identity(), Err: panic("called unwrap on Err") }),
+    Option: branch({ Some: identity(), None: panic("called unwrap on None") }),
   })));
 }
 
 function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: identity(),
-    Err: defaultAction,
-    Some: identity(),
-    None: defaultAction,
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: identity(), Err: defaultAction }),
+    Option: branch({ Some: identity(), None: defaultAction }),
   })));
 }
 
 function andThenMethod(this: TypedAction, action: Action): TypedAction {
-  return chain(toAction(this), toAction(branch({
-    Ok: action,
-    Err: tag("Err", "Result"),
-    Some: action,
-    None: tag("None", "Option"),
+  return chain(toAction(this), toAction(matchPrefix({
+    Result: branch({ Ok: action, Err: tag("Err", "Result") }),
+    Option: branch({ Some: action, None: tag("None", "Option") }),
   })));
 }
 
 function transposeMethod(this: TypedAction): TypedAction {
-  return chain(toAction(this), toAction(branch({
+  return chain(toAction(this), toAction(matchPrefix({
     // Option<Result<T,E>> → Result<Option<T>,E>
-    Some: branch({
-      Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
-      Err: tag("Err", "Result"),
+    Option: branch({
+      Some: branch({
+        Ok: chain(toAction(tag("Some", "Option")), toAction(tag("Ok", "Result"))),
+        Err: tag("Err", "Result"),
+      }),
+      None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
     }),
-    None: chain(toAction(drop.tag("None", "Option")), toAction(tag("Ok", "Result"))),
     // Result<Option<T>,E> → Option<Result<T,E>>
-    Ok: branch({
-      Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
-      None: drop.tag("None", "Option"),
+    Result: branch({
+      Ok: branch({
+        Some: chain(toAction(tag("Ok", "Result")), toAction(tag("Some", "Option"))),
+        None: drop.tag("None", "Option"),
+      }),
+      Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
     }),
-    Err: chain(toAction(tag("Err", "Result")), toAction(tag("Some", "Option"))),
   })));
 }
 ```
 
 ### Result-only methods
+
+No prefix dispatch needed — only Result cases. If called on Option at runtime, the inner branch fails with "no match" (TypeScript types prevent this at compile time).
 
 ```ts
 function mapErrMethod(this: TypedAction, action: Action): TypedAction {
@@ -173,6 +211,8 @@ function isErrMethod(this: TypedAction): TypedAction {
 
 ### Option-only methods
 
+Same pattern as Result-only: no prefix dispatch, just Option branch cases.
+
 ```ts
 function filterMethod(this: TypedAction, predicate: Action): TypedAction {
   return chain(toAction(this), toAction(branch({
@@ -200,7 +240,7 @@ function isNoneMethod(this: TypedAction): TypedAction {
 
 ## Standalone namespace methods
 
-`Result.map()`, `Option.unwrapOr()`, etc. drop their `withUnion(...)` wrappers. The branch AST they emit is already correct:
+`Result.map()`, `Option.unwrapOr()`, etc. drop their `withUnion(...)` wrappers. The branch AST they emit is already correct — they just lose the dispatch table attachment:
 
 ```ts
 // Before
@@ -220,7 +260,7 @@ map(action) {
 }
 ```
 
-The standalone methods remain useful for explicit `pipeline.then(Result.map(f))` patterns where the family is known.
+The standalone methods remain useful for explicit `pipeline.then(Result.map(f))` patterns where the family is known at the call site. They produce smaller ASTs than the postfix equivalents (no prefix dispatch overhead).
 
 ## Flatten: split array vs union
 
@@ -244,10 +284,3 @@ flatten<TIn, TElement>(
   this: TypedAction<TIn, TElement[][]>,
 ): TypedAction<TIn, TElement[]>;
 ```
-
-## No Rust changes
-
-Zero new Rust AST nodes. The engine already handles everything:
-- `Branch` with prefix-stripping dispatch (from NAMESPACED_KIND_PREFIXES)
-- `GetField("value")` auto-unwrap via `unwrapBranchCases`
-- `Chain`, `Tag`, `Constant`, `Identity`, `Panic`, `Drop` composition
