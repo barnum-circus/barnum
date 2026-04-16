@@ -256,4 +256,3 @@ For postfix dispatch on user-defined enums, the engine would need the family reg
 ## Open questions
 
 1. **Flatten ambiguity.** `.flatten()` currently dispatches for arrays, Option, and Result. With prefixed kinds, the engine can distinguish Option/Result flatten from array flatten by checking whether `kind` has a prefix. But this means the engine inspects values to decide behavior — is that acceptable?
-2. **Does `GetField`, `Identity`, etc. need to do anything special?** No — they pass values through unchanged, and `kind` is just a field on the JSON object. The prefix is preserved automatically.
