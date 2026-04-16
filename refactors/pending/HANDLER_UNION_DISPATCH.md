@@ -21,9 +21,81 @@ The engine reads `enumKind` at runtime to dispatch union operations. `__union` i
 
 One field instead of two: `{ kind: "Result.Ok", value: "nice" }`.
 
+```ts
+ok("nice")    // → { kind: "Result.Ok", value: "nice" }
+err("bad")    // → { kind: "Result.Err", value: "bad" }
+some(42)      // → { kind: "Option.Some", value: 42 }
+none()        // → { kind: "Option.None", value: null }
+```
+
 The engine extracts the enum name by splitting on `.`. Branch strips the prefix when matching: value `kind: "Result.Ok"` matches case key `"Ok"`.
 
-**TS type divergence problem:** `TaggedUnion` currently produces `kind: "Ok"`. Changing to `kind: "Result.Ok"` means either (a) TS types diverge from wire format, or (b) branch cases must use full names: `branch({ "Result.Ok": ... })`. Neither is great. With `enumKind` as a separate field, `kind` stays `"Ok"` everywhere — no divergence.
+**Advantages over `enumKind`:**
+- One field instead of two — simpler wire format, less noise in JSON
+- Self-describing: the kind string alone tells you everything
+- No phantom `enumKind` field polluting the type system
+- Reads naturally: `"Result.Ok"` is immediately clear
+
+**The branch matching question:**
+
+Currently the Rust engine does exact string matching (`advance.rs:143`):
+```rust
+.find(|(key, _)| key.lookup() == kind_str)
+```
+
+With namespaced kinds, the engine strips the prefix before matching:
+```rust
+// Extract suffix after last '.'
+let match_str = kind_str.rsplit_once('.').map_or(kind_str, |(_, suffix)| suffix);
+.find(|(key, _)| key.lookup() == match_str)
+```
+
+This is a one-line change. Branch case keys stay short: `branch({ Ok: ..., Err: ... })`. The TS SDK `branch()` function is unchanged — case keys are bare variant names.
+
+**TS types reflect reality — no divergence:**
+
+`TaggedUnion` changes to produce `kind: "Result.Ok"` to match the wire format exactly:
+
+```ts
+// TaggedUnion needs the enum name to produce namespaced kinds
+type TaggedUnion<TEnumName extends string, TDef extends Record<string, unknown>> = {
+  [K in keyof TDef & string]: {
+    kind: `${TEnumName}.${K}`;
+    value: VoidToNull<TDef[K]>;
+  };
+}[keyof TDef & string];
+
+type Result<TValue, TError> = TaggedUnion<"Result", { Ok: TValue; Err: TError }>;
+// = { kind: "Result.Ok"; value: TValue } | { kind: "Result.Err"; value: TError }
+```
+
+**Branch uses short keys — type-level prefix stripping:**
+
+Users write `branch({ Ok: ..., Err: ... })` with bare variant names. The branch type strips the prefix:
+
+```ts
+type StripPrefix<T extends string> = T extends `${string}.${infer Suffix}` ? Suffix : T;
+
+// branch's type signature extracts short keys from the union
+function branch<TUnion extends { kind: string }>(
+  cases: { [K in StripPrefix<TUnion["kind"]>]: Pipeable<...> }
+): TypedAction<TUnion, ...>;
+```
+
+`branch({ Ok: identity(), Err: fallback })` works on `Result<T, E>` where `kind` is `"Result.Ok" | "Result.Err"` — `StripPrefix` maps those to `"Ok" | "Err"` for the case keys.
+
+**Invisible to users who use constructors:**
+
+- `ok("nice")` returns `{ kind: "Result.Ok", value: "nice" }` typed as `Result<string, unknown>`
+- `err("bad")` returns `{ kind: "Result.Err", value: "bad" }` typed as `Result<unknown, string>`
+- Handler authors use these constructors and never think about the prefix
+- `resultSchema(okSchema, errSchema)` internally uses `z.literal("Result.Ok")` / `z.literal("Result.Err")` — also invisible to the user
+
+**Where it matters:**
+
+- User code doing `if (value.kind === "Ok")` would need `if (value.kind === "Result.Ok")` — but TS would catch this since the type says `"Result.Ok"`. Autocomplete works.
+- `switch (value.kind) { case "Result.Ok": ... }` — more verbose but fully self-documenting
+- For user-defined enums, users need to pick an enum name: `defineEnum("TaskStatus", { Done: ..., Failed: ... })` → `kind: "TaskStatus.Done"`
 
 ---
 
