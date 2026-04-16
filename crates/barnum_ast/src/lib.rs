@@ -289,6 +289,13 @@ pub enum BuiltinKind {
         /// Duration in milliseconds.
         ms: u64,
     },
+    /// Extract the enum prefix from a tagged value's `kind` field.
+    ///
+    /// Input: `{ kind: "Result.Ok", value: 42 }`
+    /// Output: `{ kind: "Result", value: { kind: "Result.Ok", value: 42 } }`
+    ///
+    /// If `kind` contains no `'.'`, the entire kind string becomes the prefix.
+    ExtractPrefix,
     /// Halt execution with a fatal error. Not caught by tryCatch.
     /// Analogous to Rust's `panic!`.
     Panic {

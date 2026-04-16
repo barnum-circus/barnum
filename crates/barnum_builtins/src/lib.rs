@@ -204,6 +204,23 @@ pub async fn execute_builtin(
             Ok(Value::Null)
         }
 
+        BuiltinKind::ExtractPrefix => {
+            let kind_str = input
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| BuiltinError::TypeMismatch {
+                    builtin: "ExtractPrefix",
+                    expected: "object with string 'kind' field",
+                    actual: input.clone(),
+                })?;
+            let prefix = kind_str
+                .split_once('.')
+                .map_or(kind_str, |(prefix, _)| prefix);
+            // Output is a dispatch envelope, not a standard tagged union value.
+            // kind = prefix string, value = original input preserved intact.
+            Ok(json!({ "kind": prefix, "value": input }))
+        }
+
         BuiltinKind::Panic { message } => Err(BuiltinError::Panic {
             message: message.clone(),
         }),
@@ -461,4 +478,46 @@ mod tests {
         assert_eq!(result.unwrap(), Value::Null);
     }
 
+    #[tokio::test]
+    async fn extract_prefix_with_dot() {
+        let input = json!({"kind": "Result.Ok", "value": 42});
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Result", "value": {"kind": "Result.Ok", "value": 42}})
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_option() {
+        let input = json!({"kind": "Option.Some", "value": "hello"});
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Option", "value": {"kind": "Option.Some", "value": "hello"}})
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_no_dot() {
+        let input = json!({"kind": "Standalone", "value": true});
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &input).await;
+        assert_eq!(
+            result.unwrap(),
+            json!({"kind": "Standalone", "value": {"kind": "Standalone", "value": true}})
+        );
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_rejects_missing_kind() {
+        let result = execute_builtin(&BuiltinKind::ExtractPrefix, &json!({"value": 1})).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn extract_prefix_rejects_non_string_kind() {
+        let result =
+            execute_builtin(&BuiltinKind::ExtractPrefix, &json!({"kind": 123})).await;
+        assert!(result.is_err());
+    }
 }
