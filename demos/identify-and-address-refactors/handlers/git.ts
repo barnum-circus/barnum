@@ -4,7 +4,7 @@
 // deleteWorktree: remove a git worktree
 // createPR: push branch and create a pull request (simulated for demo)
 
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 import { spawnSync } from "node:child_process";
 import { z } from "zod";
 import { baseDir } from "./lib";

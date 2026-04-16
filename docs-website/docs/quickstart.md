@@ -18,7 +18,7 @@ Handlers are async functions wrapped in `createHandler`. Start with simple stubs
 
 ```ts
 // handlers/steps.ts
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 import { z } from "zod";
 import { readdirSync, readFileSync, writeFileSync } from "fs";
 
@@ -52,7 +52,7 @@ Each handler runs in its own isolated subprocess. It only sees its own input —
 
 ```ts
 // run.ts
-import { runPipeline } from "@barnum/barnum";
+import { runPipeline } from "@barnum/barnum/pipeline";
 import { listFiles, migrateComponent } from "./handlers/steps.js";
 
 runPipeline(

@@ -8,13 +8,15 @@
 
 import {
   createHandler,
+  taggedUnionSchema,
+} from "@barnum/barnum/runtime";
+import {
   bindInput,
   pipe,
   loop,
   pick,
   Option,
-  taggedUnionSchema,
-} from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -33,7 +35,7 @@ export type JudgmentResult =
   | { approved: true }
   | { approved: false; instructions: string };
 
-import type { TaggedUnion } from "@barnum/barnum";
+import type { TaggedUnion } from "@barnum/barnum/runtime";
 
 type ClassifyJudgmentResultDef = {
   Approved: void;

@@ -6,8 +6,8 @@
  * Step B also occasionally takes a long time, demonstrating timeout handling.
  */
 
-import { createHandler, Result } from "@barnum/barnum";
-import type { Result as ResultT } from "@barnum/barnum";
+import { createHandler, Result } from "@barnum/barnum/runtime";
+import type { Result as ResultT } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------

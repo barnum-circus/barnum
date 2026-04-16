@@ -4,7 +4,7 @@
 // listFiles: scan input dir for JS source files
 // migrate: invoke Claude to convert a JS file to TypeScript (reads source, writes output)
 
-import { createHandler, createHandlerWithConfig } from "@barnum/barnum";
+import { createHandler, createHandlerWithConfig } from "@barnum/barnum/runtime";
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";

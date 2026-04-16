@@ -25,7 +25,7 @@ import {
   Option,
   bindInput,
   sleep,
-} from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
 import {
   checkPR,
   fixIssues,

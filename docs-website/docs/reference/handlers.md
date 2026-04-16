@@ -13,7 +13,7 @@ Handlers run in isolated subprocesses. Each invocation gets its own process — 
 ## `createHandler`
 
 ```ts
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 
 function createHandler<TValue = never, TOutput = unknown>(
   definition: {
@@ -139,7 +139,7 @@ export const implement = createHandler({
 For handlers that need configuration at composition time (not at runtime), use `createHandlerWithConfig`. It returns a factory function that takes the config and produces a `TypedAction`.
 
 ```ts
-import { createHandlerWithConfig } from "@barnum/barnum";
+import { createHandlerWithConfig } from "@barnum/barnum/runtime";
 
 function createHandlerWithConfig<
   TValue = never,

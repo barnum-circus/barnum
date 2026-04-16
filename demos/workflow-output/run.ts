@@ -8,7 +8,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, pipe, constant } from "@barnum/barnum";
+import { runPipeline, pipe, constant } from "@barnum/barnum/pipeline";
 import { double, addLabel } from "./handlers/steps";
 
 async function main() {

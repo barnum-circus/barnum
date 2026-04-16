@@ -5,7 +5,7 @@ import HomepageHeader from '../components/Header';
 import styles from './index.module.css';
 
 const handlersExample = `// handlers/steps.ts
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 export const listFiles = createHandler({
@@ -29,7 +29,7 @@ components with functional components using hooks.\`,
 // ... typeCheck, fix, commit, createPR`;
 
 const workflowExample = `// run.ts
-import { runPipeline, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum/pipeline";
 import {
   listFiles, refactor, typeCheck, fix, commit, createPR,
 } from "./handlers/steps.js";

@@ -1,4 +1,4 @@
-import { createHandler, taggedUnionSchema } from "@barnum/barnum";
+import { createHandler, taggedUnionSchema } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 /**

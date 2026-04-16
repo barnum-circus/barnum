@@ -14,8 +14,8 @@ import {
   tryCatch,
   withTimeout,
   constant,
-} from "@barnum/barnum";
-import type { TypedAction } from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
+import type { TypedAction } from "@barnum/barnum/pipeline";
 import { stepA, stepB, stepC, logError } from "./handlers/steps";
 
 console.error("=== Retry-on-error demo ===\n");

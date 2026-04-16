@@ -12,7 +12,7 @@ import {
   constant,
   runPipeline,
   defineRecursiveFunctions,
-} from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
 import { classifyZero, subtractOne } from "./handlers/steps";
 
 runPipeline(

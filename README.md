@@ -16,7 +16,7 @@ Handlers are the building blocks of a Barnum workflow. Today, handlers are eithe
 
 ```ts
 // handlers/steps.ts
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 export const listFiles = createHandler({
@@ -43,7 +43,7 @@ You compose handlers into a workflow using combinators like `pipe` (sequential) 
 
 ```ts
 // run.ts
-import { runPipeline, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum/pipeline";
 import { listFiles, refactor, typeCheck, fix, commit, createPR } from "./handlers/steps.js";
 
 runPipeline(

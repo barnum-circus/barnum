@@ -6,12 +6,14 @@
 
 import {
   createHandler,
+  taggedUnionSchema,
+} from "@barnum/barnum/runtime";
+import {
   bindInput,
   pipe,
   forEach,
   loop,
-  taggedUnionSchema,
-} from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
 import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -26,7 +28,7 @@ export type TypeError = {
   message: string;
 };
 
-import type { TaggedUnion } from "@barnum/barnum";
+import type { TaggedUnion } from "@barnum/barnum/runtime";
 
 type ClassifyResultDef = {
   HasErrors: TypeError[];

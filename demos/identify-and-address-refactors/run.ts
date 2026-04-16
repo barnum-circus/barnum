@@ -29,7 +29,7 @@ import {
   constant,
   withResource,
   Option,
-} from "@barnum/barnum";
+} from "@barnum/barnum/pipeline";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.resolve(__dirname, "src");

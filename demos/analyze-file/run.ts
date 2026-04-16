@@ -6,7 +6,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, all } from "@barnum/barnum";
+import { runPipeline, all } from "@barnum/barnum/pipeline";
 import {
   analyzeClassComponents,
   analyzeImpossibleStates,

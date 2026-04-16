@@ -1,4 +1,4 @@
-import { createHandler } from "@barnum/barnum";
+import { createHandler } from "@barnum/barnum/runtime";
 import { z } from "zod";
 
 export const double = createHandler({

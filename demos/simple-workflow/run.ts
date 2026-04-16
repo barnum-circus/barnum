@@ -4,7 +4,7 @@
  * Usage: pnpm exec tsx run.ts
  */
 
-import { runPipeline, pipe } from "@barnum/barnum";
+import { runPipeline, pipe } from "@barnum/barnum/pipeline";
 import {
   listFiles,
   implementRefactor,
