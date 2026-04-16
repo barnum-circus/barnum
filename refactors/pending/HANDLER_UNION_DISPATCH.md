@@ -43,18 +43,18 @@ Tagged union values gain an `enumKind` field:
 
 Branch matching is unchanged — still matches on `kind`. `enumKind` is read only by the new union-aware AST nodes.
 
-### 2. `Result.ok()` becomes the value constructor
+### 2. Runtime constructors inject `enumKind`
 
-`Result.ok("nice")` produces the runtime value `{ kind: "Ok", enumKind: "Result", value: "nice" }`. Same for all constructors:
+The `ok`/`err`/`some`/`none` constructors from `@barnum/barnum/runtime` (added by the subpath exports pre-factor) produce values with `enumKind`:
 
 ```ts
-Result.ok("nice")    // → { kind: "Ok", enumKind: "Result", value: "nice" }
-Result.err("bad")    // → { kind: "Err", enumKind: "Result", value: "bad" }
-Option.some(42)      // → { kind: "Some", enumKind: "Option", value: 42 }
-Option.none()        // → { kind: "None", enumKind: "Option", value: null }
+ok("nice")    // → { kind: "Ok", enumKind: "Result", value: "nice" }
+err("bad")    // → { kind: "Err", enumKind: "Result", value: "bad" }
+some(42)      // → { kind: "Some", enumKind: "Option", value: 42 }
+none()        // → { kind: "None", enumKind: "Option", value: null }
 ```
 
-Currently `Result.ok()` is a pipeline combinator (returns a `TypedAction` that emits `Tag("Ok")`). That pipeline usage is internal — `withTimeout`, `Result.map()`, etc. use it to re-tag values. Those internal uses switch to `tag("Ok", "Result")` or the new Tag builtin with `enum_kind`. The public `Result.ok(value)` becomes the value constructor that handlers use.
+The pipeline `Result` and `Option` namespaces (`@barnum/barnum/pipeline`) no longer have `.ok()`/`.err()`/`.some()`/`.none()` — those were removed in the subpath exports pre-factor. Pipeline re-tagging uses `tag("Ok", "Result")` or the new Tag builtin with `enum_kind`.
 
 ### 3. Tag builtin gets `enum_kind`
 
@@ -107,7 +107,8 @@ Delete:
 - `resultMethods` dispatch table from result.ts
 - `optionMethods` dispatch table from option.ts
 - `dispatch` property from Result and Option namespaces
-- `returns` field from `createHandler` / `createHandlerWithConfig`
+- `Result.ok`, `Result.err`, `Option.some`, `Option.none` (already removed by subpath exports pre-factor)
+- `Result.schema`, `Option.schema` (already moved to `/runtime` by subpath exports pre-factor)
 - Chain propagation of `__union` in chain.ts
 
 Postfix method implementations simplify from dispatch-table lookup to direct AST node emission:
@@ -179,10 +180,10 @@ Existing handlers return bare `{ kind: "Ok", value: ... }` without `enumKind`. T
 handle: async () => ({ kind: "Ok", value: "validated" })
 
 // After
-handle: async () => Result.ok("validated")
+handle: async () => ok("validated")
 ```
 
-The output validator (`Result.schema(...)`) could be enhanced to inject `enumKind` during validation — values without `enumKind` get it added. This would ease migration: handlers returning bare objects would still work if they have validators. But this is optional sugar, not required.
+The output validator (`resultSchema(...)` from `@barnum/barnum/runtime`) could be enhanced to inject `enumKind` during validation — values without `enumKind` get it added. This would ease migration: handlers returning bare objects would still work if they have validators. But this is optional sugar, not required.
 
 ---
 
