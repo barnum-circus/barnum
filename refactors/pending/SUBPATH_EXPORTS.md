@@ -170,7 +170,21 @@ The top-level export becomes purely pipeline construction. No handler-authoring 
 
 ### 6. Update docs and README
 
-All docs that import `createHandler` from `@barnum/barnum` need to switch to `@barnum/barnum/runtime`. Files to update:
+#### Add "Imports" section to docs
+
+Add a section (to `docs-website/docs/quickstart.md` or as a standalone `docs-website/docs/imports.md` page) explaining the two import paths:
+
+> **`@barnum/barnum/runtime`** — for handler files. Import `createHandler`, `createHandlerWithConfig`, value constructors (`ok`, `err`, `some`, `none`), schema builders (`resultSchema`, `optionSchema`, `taggedUnionSchema`), and types (`Result`, `Option`, `Handler`).
+>
+> **`@barnum/barnum`** — for pipeline files. Import combinators (`pipe`, `loop`, `tryCatch`, `forEach`, etc.), builtins (`constant`, `identity`, `drop`, etc.), namespaces (`Result`, `Option`), `runPipeline`, and pipeline types (`TypedAction`, `Pipeable`, etc.).
+>
+> Handler files define what runs — they produce runtime values. Pipeline files define the workflow DAG — they compose `TypedAction` nodes. The two never need each other's exports.
+
+The quickstart should show both imports side-by-side early, so the split is clear from the start. The handlers reference page should import from `/runtime`.
+
+#### Update existing import lines
+
+All docs that import `createHandler` from `@barnum/barnum` need to switch to `@barnum/barnum/runtime`:
 
 - `README.md` — handler example imports `createHandler` from `@barnum/barnum`
 - `docs-website/docs/index.md` — same
