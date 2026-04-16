@@ -59,7 +59,7 @@ runPipeline(
 Exports:
 - Combinators: `pipe`, `chain`, `all`, `forEach`, `branch`, `loop`, `tryCatch`, `earlyReturn`, `recur`, `race`, `withTimeout`, `sleep`, `bind`, `bindInput`, `defineRecursiveFunctions`
 - Builtins: `constant`, `identity`, `drop`, `tag`, `getField`, `getIndex`, `pick`, `merge`, `wrapInField`, `flatten`, `splitFirst`, `splitLast`, `range`, `withResource`, `first`, `last`, `panic`
-- Namespaces: `Result` (pipeline combinators: `.ok`, `.err`, `.map`, `.andThen`, etc.), `Option` (`.some`, `.none`, `.map`, etc.)
+- Namespaces: `Result` (pipeline combinators: `.map`, `.andThen`, `.mapErr`, `.unwrap`, `.unwrapOr`, etc.), `Option` (`.map`, `.andThen`, `.unwrap`, `.unwrapOr`, `.filter`, `.collect`, etc.)
 - `runPipeline`
 - Types: `TypedAction`, `Pipeable`, `Action`, `Config`, `ExtractInput`, `ExtractOutput`, `TaggedUnion`, etc.
 - `resetEffectIdCounter` (test utility)
@@ -158,13 +158,15 @@ export function optionSchema<TValue>(
 }
 ```
 
-### 5. Existing `src/index.ts` stays as-is
+### 5. Clean up `src/index.ts` — top-level IS pipeline
 
-The top-level export continues to export everything it does today. It does NOT re-export from `./runtime.ts` — the two entry points are independent. Pipeline files don't need `ok`/`err`/`some`/`none`.
+The top-level export becomes purely pipeline construction. No handler-authoring code leaks through. Changes:
 
-### 6. Move `createHandler` out of top-level export
-
-Currently `src/index.ts` has `export * from "./handler.js"`. Remove this — `createHandler` is only needed in handler files, which import from `/runtime`. Pipeline files import handler *instances* (the exported `TypedAction` values), not `createHandler` itself.
+- **Remove `export * from "./handler.js"`** — `createHandler` moves to `/runtime` only. Pipeline files import handler *instances* (the exported `TypedAction` values), not `createHandler` itself.
+- **Remove `Result.ok`, `Result.err`** from the `Result` namespace — dead code, never called anywhere. All pipeline re-tagging uses bare `tag("Ok")` / `tag("Err")`.
+- **Remove `Option.some`, `Option.none`** from the `Option` namespace — same, dead code. Pipeline uses `tag("Some")` / `tag("None")`.
+- **Remove `Result.schema`, `Option.schema`** from the namespaces — these are handler-authoring concerns, now `resultSchema` / `optionSchema` in `/runtime`.
+- **Do NOT re-export from `./runtime.ts`** — the two entry points are independent.
 
 ## Migration
 
