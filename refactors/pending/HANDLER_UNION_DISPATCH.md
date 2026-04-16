@@ -1,25 +1,47 @@
-# Union Dispatch via `enumKind`
+# Union Dispatch via Namespaced Kind Prefixes
 
-Replace `__union` dispatch tables on pipeline nodes with self-describing values that carry their enum identity.
+Replace `__union` dispatch tables on pipeline nodes with self-describing values whose `kind` field carries the enum name.
 
 ## Problem
 
 Postfix methods (`.unwrapOr()`, `.map()`, `.mapErr()`) need to know the union family (Result vs Option) to dispatch. Currently this is tracked via `__union` on TypedAction pipeline nodes, but most ways of producing a union-typed output don't set it: `createHandler`, `getField`, `branch`, `identity`. There's no general fix — `__union` is a property of the static pipeline graph, and TypeScript compile-time type knowledge doesn't exist at runtime.
 
-## Approach: `enumKind` in the wire format
+## Approach: namespaced kind strings
 
-Values carry their enum identity:
+Values carry their enum identity in the `kind` field itself:
 
 ```
-{ kind: "Ok", enumKind: "Result", value: "nice" }
-{ kind: "Some", enumKind: "Option", value: 42 }
+{ kind: "Result.Ok", value: "nice" }
+{ kind: "Option.Some", value: 42 }
 ```
 
-The engine reads `enumKind` at runtime to dispatch union operations. `__union` is eliminated entirely.
+The engine reads the prefix from `kind` at runtime to dispatch union operations. `__union` is eliminated entirely. One field, no extras.
 
-### Alternative: namespaced kind strings
+**Advantages:**
+- One field instead of two — simpler wire format, less noise in JSON
+- Self-describing: the kind string alone tells you everything
+- No phantom field polluting the type system
+- Reads naturally: `"Result.Ok"` is immediately clear
 
-One field instead of two: `{ kind: "Result.Ok", value: "nice" }`.
+## Changes
+
+### 1. Wire format
+
+Tagged union values use namespaced kind strings:
+
+```
+// Before
+{ kind: "Ok", value: "nice" }
+
+// After
+{ kind: "Result.Ok", value: "nice" }
+```
+
+Branch matching strips the prefix — still matches on bare variant names.
+
+### 2. Runtime constructors produce namespaced kinds
+
+The `ok`/`err`/`some`/`none` constructors from `@barnum/barnum/runtime` produce values with prefixed kinds:
 
 ```ts
 ok("nice")    // → { kind: "Result.Ok", value: "nice" }
@@ -28,36 +50,11 @@ some(42)      // → { kind: "Option.Some", value: 42 }
 none()        // → { kind: "Option.None", value: null }
 ```
 
-The engine extracts the enum name by splitting on `.`. Branch strips the prefix when matching: value `kind: "Result.Ok"` matches case key `"Ok"`.
+### 3. TS types reflect the wire format
 
-**Advantages over `enumKind`:**
-- One field instead of two — simpler wire format, less noise in JSON
-- Self-describing: the kind string alone tells you everything
-- No phantom `enumKind` field polluting the type system
-- Reads naturally: `"Result.Ok"` is immediately clear
-
-**The branch matching question:**
-
-Currently the Rust engine does exact string matching (`advance.rs:143`):
-```rust
-.find(|(key, _)| key.lookup() == kind_str)
-```
-
-With namespaced kinds, the engine strips the prefix before matching:
-```rust
-// Extract suffix after last '.'
-let match_str = kind_str.rsplit_once('.').map_or(kind_str, |(_, suffix)| suffix);
-.find(|(key, _)| key.lookup() == match_str)
-```
-
-This is a one-line change. Branch case keys stay short: `branch({ Ok: ..., Err: ... })`. The TS SDK `branch()` function is unchanged — case keys are bare variant names.
-
-**TS types reflect reality — no divergence:**
-
-`TaggedUnion` changes to produce `kind: "Result.Ok"` to match the wire format exactly:
+`TaggedUnion` gains an enum name parameter and produces namespaced `kind` literals:
 
 ```ts
-// TaggedUnion needs the enum name to produce namespaced kinds
 type TaggedUnion<TEnumName extends string, TDef extends Record<string, unknown>> = {
   [K in keyof TDef & string]: {
     kind: `${TEnumName}.${K}`;
@@ -67,16 +64,27 @@ type TaggedUnion<TEnumName extends string, TDef extends Record<string, unknown>>
 
 type Result<TValue, TError> = TaggedUnion<"Result", { Ok: TValue; Err: TError }>;
 // = { kind: "Result.Ok"; value: TValue } | { kind: "Result.Err"; value: TError }
+
+type Option<T> = TaggedUnion<"Option", { Some: T; None: void }>;
+// = { kind: "Option.Some"; value: T } | { kind: "Option.None"; value: null }
 ```
 
-**Branch uses short keys — type-level prefix stripping:**
+User-defined enums work the same way:
+```ts
+type ClassifyResultDef = { HasErrors: TypeError[]; Clean: void };
+type ClassifyResult = TaggedUnion<"ClassifyResult", ClassifyResultDef>;
+// = { kind: "ClassifyResult.HasErrors"; value: TypeError[] } | { kind: "ClassifyResult.Clean"; value: null }
+```
+
+This means the existing `taggedUnionSchema` needs to accept the enum name too.
+
+### 4. Branch uses short keys — type-level prefix stripping
 
 Users write `branch({ Ok: ..., Err: ... })` with bare variant names. The branch type strips the prefix:
 
 ```ts
 type StripPrefix<T extends string> = T extends `${string}.${infer Suffix}` ? Suffix : T;
 
-// branch's type signature extracts short keys from the union
 function branch<TUnion extends { kind: string }>(
   cases: { [K in StripPrefix<TUnion["kind"]>]: Pipeable<...> }
 ): TypedAction<TUnion, ...>;
@@ -84,53 +92,19 @@ function branch<TUnion extends { kind: string }>(
 
 `branch({ Ok: identity(), Err: fallback })` works on `Result<T, E>` where `kind` is `"Result.Ok" | "Result.Err"` — `StripPrefix` maps those to `"Ok" | "Err"` for the case keys.
 
-**Invisible to users who use constructors:**
+**Rust engine change:** one-line change in `advance.rs`:
+```rust
+// Current
+.find(|(key, _)| key.lookup() == kind_str)
 
-- `ok("nice")` returns `{ kind: "Result.Ok", value: "nice" }` typed as `Result<string, unknown>`
-- `err("bad")` returns `{ kind: "Result.Err", value: "bad" }` typed as `Result<unknown, string>`
-- Handler authors use these constructors and never think about the prefix
-- `resultSchema(okSchema, errSchema)` internally uses `z.literal("Result.Ok")` / `z.literal("Result.Err")` — also invisible to the user
-
-**Where it matters:**
-
-- User code doing `if (value.kind === "Ok")` would need `if (value.kind === "Result.Ok")` — but TS would catch this since the type says `"Result.Ok"`. Autocomplete works.
-- `switch (value.kind) { case "Result.Ok": ... }` — more verbose but fully self-documenting
-- For user-defined enums, users need to pick an enum name: `defineEnum("TaskStatus", { Done: ..., Failed: ... })` → `kind: "TaskStatus.Done"`
-
----
-
-## Changes
-
-### 1. Wire format
-
-Tagged union values gain an `enumKind` field:
-
-```
-// Before
-{ kind: "Ok", value: "nice" }
-
-// After
-{ kind: "Ok", enumKind: "Result", value: "nice" }
+// New: strip prefix before matching
+let match_str = kind_str.rsplit_once('.').map_or(kind_str, |(_, suffix)| suffix);
+.find(|(key, _)| key.lookup() == match_str)
 ```
 
-Branch matching is unchanged — still matches on `kind`. `enumKind` is read only by the new union-aware AST nodes.
+### 5. Tag builtin gets enum name
 
-### 2. Runtime constructors inject `enumKind`
-
-The `ok`/`err`/`some`/`none` constructors from `@barnum/barnum/runtime` (added by the subpath exports pre-factor) produce values with `enumKind`:
-
-```ts
-ok("nice")    // → { kind: "Ok", enumKind: "Result", value: "nice" }
-err("bad")    // → { kind: "Err", enumKind: "Result", value: "bad" }
-some(42)      // → { kind: "Some", enumKind: "Option", value: 42 }
-none()        // → { kind: "None", enumKind: "Option", value: null }
-```
-
-The pipeline `Result` and `Option` namespaces (`@barnum/barnum/pipeline`) no longer have `.ok()`/`.err()`/`.some()`/`.none()` — those were removed in the subpath exports pre-factor. Pipeline re-tagging uses `tag("Ok", "Result")` or the new Tag builtin with `enum_kind`.
-
-### 3. Tag builtin gets `enum_kind`
-
-The Rust Tag builtin must inject `enumKind` when producing tagged values in the pipeline:
+The Rust Tag builtin produces namespaced kinds:
 
 ```rust
 // Current
@@ -138,18 +112,18 @@ Builtin::Tag { kind: String }
 // → { "kind": "Ok", "value": ... }
 
 // New
-Builtin::Tag { kind: String, enum_kind: Option<String> }
-// → { "kind": "Ok", "enumKind": "Result", "value": ... }
+Builtin::Tag { kind: String, enum_name: Option<String> }
+// → { "kind": "Result.Ok", "value": ... }
 ```
 
-SDK-side, internal pipeline re-tagging uses the enhanced Tag builtin:
-- `tag("Ok", "Result")` → emits `Tag { kind: "Ok", enum_kind: Some("Result") }`
-- `tag("Some", "Option")` → emits `Tag { kind: "Some", enum_kind: Some("Option") }`
-- `tag("Foo")` → emits `Tag { kind: "Foo", enum_kind: None }` (user-defined unions, no dispatch)
+SDK-side `tag` gains an optional enum name parameter:
+- `tag("Ok", "Result")` → emits `Tag { kind: "Ok", enum_name: Some("Result") }` → Rust produces `{ kind: "Result.Ok", value: ... }`
+- `tag("Some", "Option")` → same pattern
+- `tag("Foo")` → emits `Tag { kind: "Foo", enum_name: None }` → Rust produces `{ kind: "Foo", value: ... }` (no prefix)
 
-### 4. New AST nodes replace Branch-based dispatch
+### 6. New AST nodes replace Branch-based dispatch
 
-Postfix methods stop using `__union` dispatch tables. Instead they emit new AST node types that the engine interprets at runtime using `enumKind`:
+Postfix methods stop using `__union` dispatch tables. Instead they emit new AST node types that the engine interprets at runtime by reading the prefix from `kind`:
 
 | TypeScript postfix | Current (Branch-based) | New AST node |
 |-------------------|------------------------|--------------|
@@ -166,11 +140,24 @@ Postfix methods stop using `__union` dispatch tables. Instead they emit new AST 
 | `.toOptionErr()` | `Branch({ Ok: Drop+Tag("None"), Err: Tag("Some") })` | `ToOptionErr {}` |
 | `.transpose()` | nested Branch | `Transpose {}` |
 
-The engine reads `enumKind` from the runtime value, looks up the enum family's variant mapping (`Result → { success: "Ok", failure: "Err" }`, `Option → { success: "Some", failure: "None" }`), and dispatches.
+The engine reads the prefix from `kind` (e.g., `"Result"` from `"Result.Ok"`), looks up the enum family's variant mapping, and dispatches. The family registry maps prefix to success/failure variants:
 
-The new nodes also handle re-tagging: `MapInner` on a Result runs the action on the Ok value and re-wraps as `{ kind: "Ok", enumKind: "Result", value: result }`. The engine preserves `enumKind` through the re-tag.
+```rust
+// Built-in families
+"Result" → { success: "Ok", failure: "Err" }
+"Option" → { success: "Some", failure: "None" }
+```
 
-### 5. Remove `__union` from the TypeScript SDK
+When the engine encounters `UnwrapOr { default_action }`:
+1. Read `kind` from the input value → `"Result.Ok"`
+2. Extract prefix → `"Result"`, variant → `"Ok"`
+3. Look up family → `{ success: "Ok", failure: "Err" }`
+4. `"Ok"` matches success → pass through `value`
+5. If it matched failure → run `default_action`
+
+Re-tagging preserves the prefix: `MapInner` on a Result runs the action on the Ok value and re-wraps as `{ kind: "Result.Ok", value: result }`.
+
+### 7. Remove `__union` from the TypeScript SDK
 
 Delete:
 - `UnionMethods`, `UnionDispatch`, `withUnion` from ast.ts
@@ -178,9 +165,6 @@ Delete:
 - `requireDispatch` helper
 - `resultMethods` dispatch table from result.ts
 - `optionMethods` dispatch table from option.ts
-- `dispatch` property from Result and Option namespaces
-- `Result.ok`, `Result.err`, `Option.some`, `Option.none` (already removed by subpath exports pre-factor)
-- `Result.schema`, `Option.schema` (already moved to `/runtime` by subpath exports pre-factor)
 - Chain propagation of `__union` in chain.ts
 
 Postfix method implementations simplify from dispatch-table lookup to direct AST node emission:
@@ -201,7 +185,7 @@ function unwrapOrMethod(this: TypedAction, defaultAction: Action): TypedAction {
 }
 ```
 
-### 6. Result/Option namespace simplification
+### 8. Result/Option namespace simplification
 
 Standalone combinators (`Result.map()`, `Result.unwrapOr()`, etc.) become thin wrappers that emit the new AST nodes:
 
@@ -217,35 +201,11 @@ map<T, U>(action: Pipeable<T, U>): TypedAction<ResultT<T, E>, ResultT<U, E>> {
 }
 ```
 
-The dispatch tables (`resultMethods`, `optionMethods`) go away. The Result and Option namespaces shrink to constructors + thin AST wrappers.
+The dispatch tables (`resultMethods`, `optionMethods`) go away. The Result and Option namespaces shrink to thin AST wrappers.
 
-### 7. Rust engine: enum family registry
+### 9. Migration
 
-The engine needs a mapping from `enumKind` string to variant names:
-
-```rust
-struct EnumFamily {
-    success_variant: &'static str,  // "Ok" for Result, "Some" for Option
-    failure_variant: &'static str,  // "Err" for Result, "None" for Option
-}
-
-// Built-in families
-"Result" → EnumFamily { success_variant: "Ok", failure_variant: "Err" }
-"Option" → EnumFamily { success_variant: "Some", failure_variant: "None" }
-```
-
-When the engine encounters `UnwrapOr { default_action }`:
-1. Read `enumKind` from the input value → `"Result"`
-2. Look up family → `{ success: "Ok", failure: "Err" }`
-3. Read `kind` from the input value → `"Ok"`
-4. `kind` matches success → pass through `value`
-5. If `kind` matched failure → run `default_action`
-
-For user-defined enums, the config could carry additional family registrations.
-
-### 8. Migration
-
-Existing handlers return bare `{ kind: "Ok", value: ... }` without `enumKind`. These must change to use constructors:
+Existing handlers return bare `{ kind: "Ok", value: ... }` without prefixes. These must change to use constructors:
 
 ```ts
 // Before
@@ -255,14 +215,45 @@ handle: async () => ({ kind: "Ok", value: "validated" })
 handle: async () => ok("validated")
 ```
 
-The output validator (`resultSchema(...)` from `@barnum/barnum/runtime`) could be enhanced to inject `enumKind` during validation — values without `enumKind` get it added. This would ease migration: handlers returning bare objects would still work if they have validators. But this is optional sugar, not required.
+The output validator (`resultSchema(...)`) could be enhanced to inject the prefix during validation — values with bare `"Ok"` get rewritten to `"Result.Ok"`. Optional migration sugar, not required.
+
+### 10. User-defined enums
+
+User-defined enums already exist (e.g., `ClassifyResult`, Peano `Nat`). They currently use `taggedUnionSchema` + `TaggedUnion` to define their types.
+
+With namespaced prefixes, users provide an enum name when defining the union:
+
+```ts
+// In handler file
+import { taggedUnionSchema } from "@barnum/barnum/runtime";
+import type { TaggedUnion } from "@barnum/barnum/runtime";
+
+type ClassifyResultDef = { HasErrors: TypeError[]; Clean: void };
+type ClassifyResult = TaggedUnion<"ClassifyResult", ClassifyResultDef>;
+
+const ClassifyResultValidator = taggedUnionSchema("ClassifyResult", {
+  HasErrors: z.array(TypeErrorValidator),
+  Clean: z.null(),
+});
+```
+
+```ts
+// In pipeline file
+import { branch } from "@barnum/barnum/pipeline";
+
+classifyErrors.branch({
+  HasErrors: fixLoop,
+  Clean: done,
+})
+```
+
+The engine doesn't need a pre-registered family for user-defined enums unless they want to use postfix dispatch (`.unwrapOr()`, `.map()`, etc.). For simple `branch`, the prefix is stripped automatically.
+
+For postfix dispatch on user-defined enums, the engine would need the family registered. This could be part of the pipeline config or derived from the `taggedUnionSchema` call. **Deferred — not needed for initial implementation.**
 
 ---
 
 ## Open questions
 
-1. **User-defined enums.** How does a user register a custom enum family? Something like `defineEnum("TaskStatus", { success: "Done", failure: "Failed" })`? Or is this only for Result/Option?
-2. **`enumKind` required or optional?** If optional, values without it can't use postfix methods (runtime error, same as today). If required, all tagged union values need it. Recommend: optional, with good error messages.
-3. **Naming.** `enumKind` vs `enum` vs `unionKind` vs `family`. `enumKind` parallels `kind` and is explicit.
-4. **Flatten ambiguity.** `.flatten()` currently dispatches for arrays, Option, and Result. With `enumKind`, the engine can distinguish Option/Result flatten from array flatten by checking whether the input has `enumKind`. But this means the engine inspects values to decide behavior — is that acceptable?
-5. **Does the engine need to preserve `enumKind` through all transformations?** E.g., after `MapInner`, the output must still have `enumKind`. The Tag builtin handles this for re-tagging. But does `GetField`, `Identity`, etc. need to do anything? No — they pass values through unchanged, and `enumKind` is just a field on the JSON object.
+1. **Flatten ambiguity.** `.flatten()` currently dispatches for arrays, Option, and Result. With prefixed kinds, the engine can distinguish Option/Result flatten from array flatten by checking whether `kind` has a prefix. But this means the engine inspects values to decide behavior — is that acceptable?
+2. **Does `GetField`, `Identity`, etc. need to do anything special?** No — they pass values through unchanged, and `kind` is just a field on the JSON object. The prefix is preserved automatically.
