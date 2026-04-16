@@ -4,7 +4,7 @@ Split `@barnum/barnum` into two subpath exports to separate handler-authoring co
 
 ## Motivation
 
-Handler files and pipeline files are different contexts. Handler files define what runs when the engine invokes a handler — they produce runtime values. Pipeline files define the static DAG of actions — they compose TypedAction nodes. Currently both import from `@barnum/barnum`, making it unclear what belongs where. With `enumKind`, we'll have runtime value constructors (`ok`, `err`, `some`, `none`) that are specifically for handler bodies. These should not live alongside pipeline combinators.
+Handler files and pipeline files are different contexts. Handler files define what runs when the engine invokes a handler — they produce runtime values. Pipeline files define the static DAG of actions — they compose TypedAction nodes. Currently both import from `@barnum/barnum`, making it unclear what belongs where. Convenience constructors like `ok`, `err`, `some`, `none` are for handler bodies — they should not live alongside pipeline combinators. Separating now also gives us a clean place to put handler-authoring utilities as the API evolves.
 
 ## Subpath exports
 
@@ -28,8 +28,8 @@ export const stepA = createHandler({
 
 Exports:
 - `createHandler`, `createHandlerWithConfig`
-- `ok`, `err` — runtime value constructors: `ok("foo")` → `{ kind: "Ok", enumKind: "Result", value: "foo" }`
-- `some`, `none` — runtime value constructors for Option
+- `ok`, `err` — runtime value constructors: `ok("foo")` → `{ kind: "Ok", value: "foo" }`
+- `some`, `none` — runtime value constructors for Option: `some(42)` → `{ kind: "Some", value: 42 }`
 - `resultSchema`, `optionSchema` — schema builders (currently `Result.schema()`, `Option.schema()`)
 - `taggedUnionSchema` — for user-defined unions
 - Types: `Result`, `Option`, `Handler`
@@ -87,29 +87,27 @@ export type { Result, Option } from "./ast.js";
 
 ### 2. New file: `src/values.ts`
 
-Runtime value constructors that inject `enumKind`:
+Convenience constructors so handler authors don't hand-write `{ kind, value }` objects:
 
 ```ts
 import type { Result, Option } from "./ast.js";
 
 export function ok<TValue, TError = unknown>(value: TValue): Result<TValue, TError> {
-  return { kind: "Ok", enumKind: "Result", value } as Result<TValue, TError>;
+  return { kind: "Ok", value } as Result<TValue, TError>;
 }
 
 export function err<TValue = unknown, TError>(error: TError): Result<TValue, TError> {
-  return { kind: "Err", enumKind: "Result", value: error } as Result<TValue, TError>;
+  return { kind: "Err", value: error } as Result<TValue, TError>;
 }
 
 export function some<T>(value: T): Option<T> {
-  return { kind: "Some", enumKind: "Option", value } as Option<T>;
+  return { kind: "Some", value } as Option<T>;
 }
 
 export function none<T = unknown>(): Option<T> {
-  return { kind: "None", enumKind: "Option", value: null } as Option<T>;
+  return { kind: "None", value: null } as Option<T>;
 }
 ```
-
-Note: `enumKind` doesn't exist in the types yet. The `TaggedUnion` type needs an `enumKind` field added, or the constructors cast through `as`. This is part of the `enumKind` wire format change — this doc can land first without `enumKind`, then `enumKind` is added when that work happens. Initially, the constructors just produce `{ kind, value }` without `enumKind`.
 
 ### 3. Extract schemas from Result/Option namespaces
 
